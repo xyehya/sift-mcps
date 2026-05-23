@@ -1,0 +1,92 @@
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+agentir-core = { workspace = true }
+forensic-knowledge = { workspace = true }
+sift-common = { workspace = true }
+sift-gateway = { workspace = true }
+forensic-mcp = { workspace = true }
+case-mcp = { workspace = true }
+sift-mcp = { workspace = true }
+report-mcp = { workspace = true }
+opensearch-mcp = { workspace = true }
+rag-mcp = { workspace = true }
+opencti-mcp = { workspace = true }
+case-dashboard = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sift-mcps"
+version = "0.1.0"
+description = "Portable MCP runtime for the Hermes forensic investigation agent (SIFT Workstation)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "AppliedIncidentResponse.com" }]
+keywords = ["mcp", "forensics", "incident-response", "dfir", "security"]
+
+[project.optional-dependencies]
+core = [
+    "agentir-core",
+    "forensic-knowledge",
+    "sift-common",
+    "sift-gateway",
+    "forensic-mcp",
+    "case-mcp",
+    "sift-mcp",
+    "report-mcp",
+]
+full = [
+    "sift-mcps[core]",
+    "opensearch-mcp",
+    "rag-mcp",
+    "opencti-mcp",
+]
+dev = [
+    "pytest>=9.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+    "ruff>=0.15",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = []
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",
+    "E402",
+    "SIM102",
+    "SIM103",
+    "SIM105",
+    "SIM108",
+    "SIM115",
+    "SIM117",
+    "UP017",
+    "UP036",
+    "UP041",
+    "UP046",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011", "B017", "B018", "F841", "B007", "E741", "E722", "F811"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "packages"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["packages/*/src"]
+branch = true

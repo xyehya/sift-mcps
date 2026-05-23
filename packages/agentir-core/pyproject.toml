@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentir-core"
+version = "0.1.0"
+description = "Shared core library for agentir: case I/O, identity, approval auth, HMAC verification"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "AppliedIncidentResponse.com" }]
+keywords = ["forensics", "incident-response", "dfir", "security"]
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "pytest-cov>=4.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentir_core"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
