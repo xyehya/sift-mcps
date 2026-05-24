@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from agentir_core.verification import (
+    PBKDF2_ITERATIONS,
     compute_hmac,
     copy_ledger_to_case,
     derive_hmac_key,
@@ -21,15 +24,36 @@ def _patch_verification_dir(tmp_path, monkeypatch):
     monkeypatch.setattr("agentir_core.verification.VERIFICATION_DIR", tmp_path)
 
 
-def test_derive_hmac_key():
-    """Deterministic key derivation with known inputs."""
-    key1 = derive_hmac_key("1234", b"salt")
-    key2 = derive_hmac_key("1234", b"salt")
-    assert key1 == key2
-    assert len(key1) == 32  # SHA-256 output
+class TestDeriveHmacKey:
+    """Phase 12-pre R8: derive_hmac_key must use derive_ledger_key internally (not raw PBKDF2)."""
 
-    key3 = derive_hmac_key("5678", b"salt")
-    assert key3 != key1
+    def test_deterministic(self):
+        k1 = derive_hmac_key("1234", b"salt")
+        k2 = derive_hmac_key("1234", b"salt")
+        assert k1 == k2
+
+    def test_output_length(self):
+        key = derive_hmac_key("1234", b"salt")
+        assert len(key) == 32  # HMAC-SHA256 output
+
+    def test_different_passwords_differ(self):
+        k1 = derive_hmac_key("password1", b"salt")
+        k2 = derive_hmac_key("password2", b"salt")
+        assert k1 != k2
+
+    def test_different_salts_differ(self):
+        k1 = derive_hmac_key("password", b"salt1")
+        k2 = derive_hmac_key("password", b"salt2")
+        assert k1 != k2
+
+    def test_key_differs_from_raw_pbkdf2_output(self):
+        """R8: derive_hmac_key must NOT return the raw PBKDF2 bytes directly.
+        The ledger key is a domain-separated sub-key derived from the stored hash."""
+        password = "testpassword"
+        salt = b"testsalt"
+        raw_pbkdf2 = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS)
+        ledger_key = derive_hmac_key(password, salt)
+        assert ledger_key != raw_pbkdf2
 
 
 def test_compute_hmac():

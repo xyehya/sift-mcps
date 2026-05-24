@@ -147,7 +147,7 @@ These fixes were completed in TASKS.md Phase 2b.
 
 ---
 
-## Current State (as of Session 10 — 2026-05-24)
+## Current State (as of Session 14 — 2026-05-24)
 
 ### What Is Done ✅
 - **Phase 0 COMPLETE** — all blocking bugs fixed, namespace sweep finished, verification gate passed
@@ -155,40 +155,50 @@ These fixes were completed in TASKS.md Phase 2b.
 - **Phase 2b COMPLETE** — agentir-core library hardening done
 - **Phase 3 COMPLETE** — portal HTTPS/CORS/nonce/error hardening done
 - **Phase 4a-4d COMPLETE** — shared auth helper, token expiry, examiner rate limit, Origin validation, extractor dedupe done
-- **Phase 4e RESEARCH DONE / IMPLEMENTATION DEFERRED** — current Python MCP SDK `mcp==1.27.1` has `ServerSession.send_tool_list_changed()`, but `StreamableHTTPSessionManager` exposes no public active-session lifecycle hook
+- **Phase 4e RESEARCH DONE / IMPLEMENTATION DEFERRED** — `mcp==1.27.1` has `ServerSession.send_tool_list_changed()` but `StreamableHTTPSessionManager` exposes no public session lifecycle hook
 - **Phase 5 COMPLETE** — forensic-rag-mcp migrated to FastMCP
 - **Phase 6 COMPLETE** — sift-mcp argument sanitizer now rejects null bytes, rejects >4096-char args, and NFC-normalizes Unicode
-- **Documentation tracking unified** — plan is spec, task tracker is execution ledger, AGENTS is operating brief
-- **Final workflow clarified** — installer prepares SIFT VM; portal creates cases; Hermes uses aggregate `/mcp`; gateway separates identities and enriches responses
+- **Phase 7 COMPLETE** — `install.sh` foundation: TLS gen, token gen, default examiner, systemd, gateway config render; live VM run still pending
+- **Phase 8 COMPLETE** — `docker-compose.yml`: OpenSearch 2.18.0, localhost-only, snapshots bind mount, `agentir-opensearch` container name
+- **Phase 9 COMPLETE** — `configs/gateway.yaml.template`, `configs/hermes-forensics-profile.yaml`, `configs/systemd/sift-gateway.service`
+- **Threat model complete (Session 14)** — 9 security guards (R1-R9) specified for Phase 12-15; see SIFT-MCPS-PLAN.md §Phase 12 Security Requirements
 - **agentir-core tests: 125/125 passing**
 - `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → **0 lines**
-- case-dashboard now imports from agentir-core (no more duplicated logic)
-- gateway config propagates `AGENTIR_CASE_DIR`; `_get_active_case()` dead code deleted
-- opensearch-mcp TLS fix: configurable `verify_certs` + `ca_cert_path`
-- `agentir_plugin.py` replaces `vhir_plugin.py` with correct entry point group
 
 ### What Needs Fixing Next (See TASKS.md)
 
-**Priority 1 — Phase 7+: deployment foundation**
-- Phase 7 install script
-- Phase 8 OpenSearch compose
-- Phase 9 config templates
+**Priority 1 — Phase 12: Portal authentication backend**
+- `session_jwt.py`, `PortalSessionMiddleware`, auth endpoints, `portal_session_secret` config wiring
+- Phase 13b (agent→403 on portal) co-ships with Phase 12 — see R4 below
+- All 9 security guards must be baked in during implementation, not added as patches
+- See TASKS.md Phase 12 + SIFT-MCPS-PLAN.md §Phase 12 Security Requirements for full specs
 
-**Priority 2 — Phase 4e implementation decision**
-- Current SDK finding: `mcp==1.27.1` is current and `uv pip install --upgrade mcp --dry-run` found no newer MCP SDK.
-- `StreamableHTTPSessionManager` exposes only `run()` and `handle_request()`; it privately tracks transports, not active `ServerSession` objects.
-- `ServerSession.send_tool_list_changed()` exists, but implementing active-session notification requires deferring for SDK hooks or adding a local session-tracking `Server` wrapper/subclass.
+**Priority 2 — Phase 13/14/15: RBAC, dashboard rewiring, session hardening**
+- Portal RBAC, service-token lifecycle, dashboard auth rewiring, login screen, case-init modal, secure headers
 
 **Priority 3 — Audit invariant / regression guard**
-- The central audit repository is the active case `audit/` directory. `sift_common.audit.AuditWriter` writes append-only JSONL there (`AGENTIR_AUDIT_DIR` or `AGENTIR_CASE_DIR/audit/`), one file per writer/MCP, with flush + fsync.
-- Existing evidence/provenance readers aggregate `audit/*.jsonl`; backend `audit_id`s are canonical evidence IDs used by findings and reports. Do not replace or stop returning them.
-- The HMAC verification ledger is separate at `/var/lib/agentir/verification/{case-id}.jsonl`; it proves examiner-approved findings/timeline entries, not raw tool execution.
-- Tool actions are audited today, but not yet in the final gateway-envelope shape for every backend. Stdio backends write detailed per-backend evidence logs; gateway proxy audit is currently centralized for `HttpMCPBackend` paths, which are not part of the final normal SIFT backend set.
-- Phase 13/integration must close the remaining gap so every aggregate `/mcp` `call_tool` writes a minimal `sift-gateway.jsonl` envelope: request/correlation id, role, token id, agent id or examiner, source IP, active case, aggregate tool, resolved backend, status, duration, and result/truncation summary. Link to backend logs with `backend_audit_id` when available. Never log raw tokens or HMAC responses.
+- Tool actions are audited today, but not yet in the final gateway-envelope shape for every backend.
+- Phase 13 must close the gap: every aggregate `/mcp` `call_tool` writes a minimal `sift-gateway.jsonl` envelope (role, token id, agent id/examiner, source IP, active case, tool, backend, status, duration). Link to backend `audit_id` via `backend_audit_id`. Never log raw tokens or HMAC responses.
 
-**Priority 4 — Phase 12-15: Portal auth (login UI + sessions)**
-- JWT sessions, forced first-login reset, portal case creation, service token lifecycle, RBAC
-- See TASKS.md Phase 12-15 for full design
+**Priority 4 — Phase 7 live validation (non-blocking for Phase 12)**
+- Run `install.sh` on clean Ubuntu/SIFT VM, verify `docker compose up -d` → OpenSearch healthy, `https://127.0.0.1:4508/health` responds.
+
+**Phase 4e — Deferred**
+- `notifications/tools/list_changed` requires SDK session lifecycle hooks not yet exposed by `mcp==1.27.1`.
+
+### Pre-Implementation Security Requirements (R1–R9)
+
+These guards are non-negotiable additions to Phase 12-15. Full specs in SIFT-MCPS-PLAN.md §Phase 12 Security Requirements. One-line summaries for quick reference:
+
+- **R1** `must_reset_password` re-read from disk before every write operation — JWT is a UI hint only
+- **R2** Separate lockout counter namespace: `login:{examiner}` vs. `commit:{examiner}` — never cross-pollute
+- **R3** Fake challenge for unknown examiners — always return a valid-looking challenge to prevent user enumeration
+- **R4** Agent→403 on `/portal/api/` co-ships with Phase 12 — not deferred to Phase 13
+- **R5** `os.path.realpath` symlink guard + `threading.Lock` on case create — prevent path escape and race
+- **R6** Login challenge pool capped at 200 entries, per-examiner limit of 5 in-flight
+- **R7** Enrichment appended as `_agentir_context` metadata key only — never interpolated into tool result text (prompt injection defense)
+- **R8** Domain-separated HMAC sub-keys before any production case data: `derive_auth_key()` for login, `derive_ledger_key()` for verification ledger
+- **R9** `getattr(request.state, "examiner", None)` everywhere — never direct attribute access
 
 ---
 
@@ -226,17 +236,17 @@ OpenSearch, and forensic-rag without granting the agent direct backend or shell 
 
 | Package | Purpose | State |
 |---------|---------|-------|
-| `agentir-core` | Shared library: case I/O, auth, HMAC, identity | ✅ Phase 2b hardening done |
-| `sift-gateway` | HTTP gateway, auth, routing, portal mount | ✅ Phase 3/4a-4d done — Phase 4e/13/15 next |
-| `case-dashboard` | Examiner Portal Starlette sub-app | ✅ Phase 3 done — Phase 12/14/15 auth+UI next |
+| `agentir-core` | Shared library: case I/O, auth, HMAC, identity | R8 key-derivation helpers needed before Phase 12 ships |
+| `sift-gateway` | HTTP gateway, auth, routing, portal mount | Phase 12 wiring: `portal_session_secret` in config, agent→403 guard (R4) |
+| `case-dashboard` | Examiner Portal Starlette sub-app | Phase 12-15: new `session_jwt.py`, `auth.py` middleware, auth endpoints, dashboard rewire |
 | `forensic-mcp` | Record findings, timeline events | ✅ No changes needed |
 | `case-mcp` | Case lifecycle (init, status, join) | ✅ Imports fixed |
-| `sift-mcp` | Run forensic tools via shell=False | Phase 6 arg hardening needed |
+| `sift-mcp` | Run forensic tools via shell=False | ✅ Phase 6 complete |
 | `report-mcp` | Generate final case report | ✅ Imports fixed |
-| `forensic-rag-mcp` | Semantic search over forensic knowledge | Phase 5: FastMCP migration needed |
+| `forensic-rag-mcp` | Semantic search over forensic knowledge | ✅ Phase 5 complete |
 | `opencti-mcp` | Threat intel enrichment via OpenCTI | ✅ No changes needed |
-| `opensearch-mcp` | SIEM evidence indexing and search | ✅ TLS fix done (Phase 0d) |
-| `sift-common` | AuditWriter, oplog, parsers | `resolve_examiner()` duplicates identity — fix on touch |
+| `opensearch-mcp` | SIEM evidence indexing and search | ✅ TLS fix + OPENSEARCH_CONFIG env done |
+| `sift-common` | AuditWriter, oplog, parsers | `resolve_examiner()` duplicates identity — fix on touch only |
 | `forensic-knowledge` | YAML forensic knowledge data | ✅ Unchanged |
 
 ---

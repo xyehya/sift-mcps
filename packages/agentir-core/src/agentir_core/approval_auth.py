@@ -8,6 +8,7 @@ expect-style automation.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -48,6 +49,16 @@ class LockoutError(AuthError):
     """Account is locked due to too many failed attempts."""
 
 _EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
+
+
+def derive_auth_key(stored_hash_hex: str) -> bytes:
+    """Sub-key for login HMAC verification. Domain-separated from ledger signing."""
+    return hmac.new(bytes.fromhex(stored_hash_hex), b"agentir-auth-v1", hashlib.sha256).digest()
+
+
+def derive_ledger_key(stored_hash_hex: str) -> bytes:
+    """Sub-key for approval HMAC ledger. Domain-separated from login auth."""
+    return hmac.new(bytes.fromhex(stored_hash_hex), b"agentir-signing-v1", hashlib.sha256).digest()
 
 
 def _validate_examiner_name(analyst: str) -> None:

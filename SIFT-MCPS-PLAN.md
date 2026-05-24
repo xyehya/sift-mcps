@@ -1113,6 +1113,59 @@ No external JWT library needed — implement directly with `hmac` + `json` + `ba
 - After reset, `must_reset_password` is cleared atomically.
 - After first user exists, endpoint returns 409 Conflict
 
+#### Security Requirements for Phase 12 Implementation
+
+These guards must be wired in during initial implementation. AGENTS.md has one-line summaries; this section has the binding behavioral spec.
+
+**R1 — must_reset_password is a persistent gate, not a login-time flag**
+
+The JWT may carry `must_reset: true` as a UI hint, but it is NOT the authoritative source. Before executing any write operation — commit, case create, token create, token revoke, reset-password itself — the route handler calls `_load_pw_entry(passwords_dir, examiner).get("must_reset_password")` directly. If `True`, the response is 403 `{"error": "Password reset required before this action"}`. The 8h JWT lifetime must never grant write access on installer credentials.
+
+**R2 — Separate lockout counter namespace**
+
+Login failure counter key: `login:{examiner}`. Commit failure counter key: `commit:{examiner}`. Both share `_LOCKOUT_SECONDS` and `_MAX_PASSWORD_ATTEMPTS`, but `_record_commit_failure`, `_check_commit_lockout`, and `_clear_commit_failures` accept an explicit `namespace` parameter (default `"commit"`) so the same helpers serve both paths without sharing state.
+
+**R3 — Fake challenge prevents examiner enumeration**
+
+`GET /api/auth/challenge?examiner=<name>` always returns a syntactically valid challenge. When the examiner does not exist in `_PASSWORDS_DIR`, generate a random nonce + random salt (32 bytes each) and store the entry in `_login_challenges` with `_fake: True`. The subsequent `POST /api/auth/login` always fails with `{"error": "Invalid credentials"}` — same HTTP status (401), same response shape as a real HMAC mismatch. The failure path for fake challenges must not be measurably faster than for real ones.
+
+**R4 — Agent→403 on `/portal/api/` co-ships with Phase 12**
+
+This is not deferred to Phase 13. Add to `auth.py::AuthMiddleware.dispatch()` immediately after `key_info` is resolved:
+
+```python
+if request.url.path.startswith("/portal/api/") and key_info.get("role") == "agent":
+    return JSONResponse({"error": "Agent tokens cannot access portal"}, status_code=403)
+```
+
+Without this, any holder of a Hermes service token can write to portal API endpoints from day one of Phase 12 deployment.
+
+**R6 — Login challenge pool cap**
+
+`_login_challenges` is capped at 200 total entries. Before inserting a new challenge, if `len(_login_challenges) >= 200`, evict the entry with the smallest `created_at`. Additionally, per examiner: if the examiner already has ≥ 5 in-flight challenges (including fake ones), evict the oldest for that examiner before inserting. This bounds memory growth from unauthenticated flooding.
+
+**R8 — Domain-separated HMAC sub-keys (apply before any production case data)**
+
+The stored PBKDF2 hash (`entry["hash"]`) must never be used directly as a cryptographic key. Add to `agentir_core/approval_auth.py`:
+
+```python
+def derive_auth_key(stored_hash_hex: str) -> bytes:
+    """Sub-key for login HMAC verification. Domain-separated from ledger signing."""
+    return hmac.new(bytes.fromhex(stored_hash_hex), b"agentir-auth-v1", hashlib.sha256).digest()
+
+def derive_ledger_key(stored_hash_hex: str) -> bytes:
+    """Sub-key for approval HMAC ledger. Domain-separated from login auth."""
+    return hmac.new(bytes.fromhex(stored_hash_hex), b"agentir-signing-v1", hashlib.sha256).digest()
+```
+
+- Phase 12 login HMAC verification uses `derive_auth_key(entry["hash"])` as the HMAC key.
+- `verification.py::derive_hmac_key()` delegates to `derive_ledger_key()` internally.
+- This change must ship before any production HMAC verification ledger entries are written. Development test entries are acceptable to discard. There is no migration path for entries written with the old direct-hash derivation.
+
+**R9 — Safe examiner state access**
+
+Every location that reads examiner identity from request state uses `getattr(request.state, "examiner", None)`. Never `request.state.examiner` directly. `PortalSessionMiddleware` sets this for portal paths, but test fixtures, edge-case middleware ordering, or future route additions may leave it unset. `AttributeError` at this callsite would produce an unhandled 500.
+
 #### New endpoints in `case_dashboard/routes.py`
 
 ```python
@@ -1184,12 +1237,14 @@ Token records must include stable metadata: `token_id`, `role`, `agent_id`, `lab
 | `/mcp` — `call_tool` (read-only) | ✅ | ✅ | ❌ 403 |
 | `/mcp` — `call_tool` (write) | ✅ | ✅ | ❌ 403 |
 
-**Role enforcement in gateway:**
+**Role enforcement in gateway (R4 — co-ships with Phase 12):**
 
-`auth.py::AuthMiddleware.dispatch()` — after resolving role, for portal paths:
+The agent→403 portal block is added to `auth.py::AuthMiddleware.dispatch()` in the same PR as Phase 12. It is not deferred to Phase 13 in practice. Full spec in §Phase 12 Security Requirements R4.
+
+`mcp_endpoint.py::MCPAuthASGIApp.__call__()` — readonly role block:
 ```python
-if request.url.path.startswith("/portal/api/") and role == "agent":
-    return JSONResponse({"error": "Agent tokens cannot access portal API"}, status_code=403)
+if role == "readonly":
+    return JSONResponse({"error": "Readonly role cannot call MCP tools"}, status_code=403)
 ```
 
 `mcp_endpoint.py::MCPAuthASGIApp.__call__()` — for readonly role:
@@ -1238,8 +1293,7 @@ For all gateway-routed MCP calls:
 - log principal separation: `role`, `examiner` or `agent_id`, `token_id`, source IP, active case
 - log route decision: aggregate tool name, resolved backend, status, duration, output truncation
 - never log raw bearer token or HMAC response
-- include contextual enrichment in responses only through structured metadata or clearly delimited
-  guidance so raw backend output remains distinguishable
+- enrichment additions are appended as a distinct `_agentir_context` key in the MCP response metadata dict — never interpolated into the tool result content string. This is the primary defense against prompt injection via enrichment (R7): malicious artifacts processed by `sift-mcp` may be indexed into OpenSearch or forensic-rag, which are enrichment sources. If enrichment content is injected into the tool result string, adversarial text in case data can reach Hermes as apparent tool output. Hermes prompt engineering must treat `_agentir_context` as advisory secondary context, explicitly subordinate to the primary tool result.
 
 Current audit storage model (verified during Session 10):
 - `sift_common.audit.AuditWriter` is the shared writer. It writes append-only JSONL files to the
@@ -1378,6 +1432,30 @@ POST /api/v1/case/create
 → {case_id, title, examiner, dir}
 ← {ok: true, case_dir: "/cases/..."}
 ```
+
+**R5 — Symlink guard and serialized case creation**
+
+Input validation in this endpoint is stricter than a pattern check:
+
+```python
+import os, threading
+
+_case_create_lock = threading.Lock()  # module-level in rest.py
+
+# Inside handler, before touching the filesystem:
+real_root     = Path(os.path.realpath(case_root))
+real_requested = Path(os.path.realpath(requested_dir))
+# Symlink escape check — realpath resolves all symlinks before comparing
+if not str(real_requested).startswith(str(real_root) + os.sep):
+    return JSONResponse({"error": "Directory must be under case root"}, status_code=400)
+
+with _case_create_lock:
+    if real_requested.exists():
+        return JSONResponse({"error": "Case directory already exists"}, status_code=409)
+    # create dir, write canonical files, update gateway.yaml atomically, update env, restart backends
+```
+
+The lock serializes: YAML write + `os.environ["AGENTIR_CASE_DIR"]` update + backend restart. Without it, two simultaneous create requests can both pass the existence check, leaving the gateway in inconsistent state between the YAML file and the process environment.
 
 Note: This supersedes the "manual edit gateway.yaml" workflow for new deployments. The manual
 method remains valid for advanced users. This is additive, not replacing R4.

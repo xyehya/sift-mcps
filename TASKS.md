@@ -56,10 +56,10 @@ Functional, resilience, and security tests must prove this workflow. No shortcut
    ```bash
    uv run pytest packages/agentir-core/tests/ -v --tb=short -q   # must be 125/125
    grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."  # must be 0 lines
-   uv run python -c "from case_dashboard.routes import create_dashboard_app; print('OK')"
+   uv run python -c "from case_dashboard.routes import create_dashboard_v2_app; print('OK')"
    uv run python -c "from case_mcp.server import create_server; print('OK')"
    ```
-6. **Next task: Phase 7/8 live validation** — test installer on clean Ubuntu/SIFT VM or container and run live Docker/OpenSearch health check.
+6. **Next task: Phase 12a** — JWT helpers (`session_jwt.py`) in `case-dashboard`. Phase 12-pre (R8) is complete. See SIFT-MCPS-PLAN.md §Phase 12.
 
 ---
 
@@ -370,6 +370,24 @@ All test suites verified passing in Session 3:
 
 ---
 
+## Phase 12-pre — Security Prerequisites (R8) ✅ (Complete — Session 15)
+
+> Target: `packages/agentir-core/src/agentir_core/approval_auth.py`,
+>         `packages/agentir-core/src/agentir_core/verification.py`
+> Rationale: the stored PBKDF2 hash must never be used directly as a cryptographic key.
+> Full spec in SIFT-MCPS-PLAN.md §Phase 12 Security Requirements R8.
+
+- [x] Add `derive_auth_key(stored_hash_hex: str) -> bytes` to `approval_auth.py`
+  - `hmac.new(bytes.fromhex(stored_hash_hex), b"agentir-auth-v1", hashlib.sha256).digest()`
+- [x] Add `derive_ledger_key(stored_hash_hex: str) -> bytes` to `approval_auth.py`
+  - `hmac.new(bytes.fromhex(stored_hash_hex), b"agentir-signing-v1", hashlib.sha256).digest()`
+- [x] Update `verification.py::derive_hmac_key()` to call `derive_ledger_key()` internally (lazy import to avoid circular) instead of using the hash bytes directly
+- [x] Added `TestKeyDerivation` class in `test_approval_auth.py` (10 tests): existence, output length, domain separation, determinism, different-input-different-output, key ≠ raw hash
+- [x] Replaced stale `test_derive_hmac_key` in `test_verification.py` with `TestDeriveHmacKey` class (5 tests): determinism, length, different-passwords-differ, different-salts-differ, key ≠ raw PBKDF2 output (R8 guard)
+- [x] `pytest packages/agentir-core/tests/ -v --tb=short` → 139/139 passed (125 original + 14 new)
+
+---
+
 ## Phase 12 — Portal Authentication: Login UI, Session JWT, Registration
 
 > See SIFT-MCPS-PLAN.md Phase 12 for full design spec.
@@ -408,21 +426,40 @@ All test suites verified passing in Session 3:
 
 ### 12d. Backend: auth endpoints (add to `routes.py`)
 
-- [ ] `GET  /api/auth/setup-required` — no auth; returns `{"required": bool}` based on whether any password file exists in `/var/lib/agentir/passwords/`
+- [ ] `GET  /api/auth/setup-required` — no auth; returns `{"required": bool}` based on whether any password file exists in `_PASSWORDS_DIR`
 - [ ] `POST /api/auth/setup` — no auth; only when `setup-required` is true; body: `{examiner, password}` (plaintext, hashed server-side with PBKDF2); creates password file; returns 409 if already set up
-- [ ] `GET  /api/auth/challenge` — `?examiner=<name>`; same logic as `get_commit_challenge` but stores in separate `_login_challenges` dict
-- [ ] `POST /api/auth/login` — `{challenge_id, examiner, response}`; verifies HMAC same as commit; on success: set `agentir_session` cookie with 8h JWT; returns `{examiner, role, expires_at}`
-- [ ] `POST /api/auth/reset-password` — required for installer-created users with `must_reset_password: true`; clears flag atomically after success
+- [ ] `GET  /api/auth/challenge` — `?examiner=<name>`; uses separate `_login_challenges` dict (not `_challenges`)
+  - **R3** Always return a valid challenge regardless of whether examiner exists; fake entries marked `_fake: True`
+  - **R6** Cap `_login_challenges` at 200 total; per-examiner limit 5 in-flight; evict oldest on overflow
+- [ ] `POST /api/auth/login` — `{challenge_id, examiner, response}`
+  - Uses `derive_auth_key(entry["hash"])` (from Phase 12-pre) as HMAC key — not raw stored hash
+  - **R3** Fake challenges always fail with "Invalid credentials" — same error path and same HTTP 401 as real mismatch
+  - **R2** Login failures recorded under `login:{examiner}` namespace, not `commit:{examiner}`
+  - On success: set `agentir_session` cookie (HttpOnly, Secure, SameSite=Strict, path=/portal); returns `{examiner, role, expires_at, must_reset}`
+- [ ] `POST /api/auth/reset-password` — clears `must_reset_password` atomically; requires valid login challenge + current password
 - [ ] `POST /api/auth/logout` — clears `agentir_session` cookie (Max-Age=0); returns 200
-- [ ] `GET  /api/auth/me` — reads session cookie/state; returns `{examiner, role, expires_at}` or 401
-- [ ] Test each endpoint: 401 on missing session, 200+cookie on valid login, 200 on logout clears cookie
-- [ ] Test default examiner cannot create cases, generate tokens, or commit approvals until password reset is complete
+- [ ] `GET  /api/auth/me` — reads session cookie/state; returns `{examiner, role, expires_at, must_reset}` or 401
+- [ ] Test: 401 on missing session, 200+cookie on valid login, 200 on logout clears cookie
+- [ ] Test: **R2** exhausting login lockout does not affect commit lockout counter and vice versa
+- [ ] Test: **R3** challenge for non-existent examiner returns 200 with valid-looking challenge; login with that challenge returns 401 "Invalid credentials"
+- [ ] Test: **R1** default examiner (must_reset_password=true) cannot commit, create case, or create tokens — returns 403
 
 ### 12e. Backend: update existing route guards
 
-- [ ] `_resolve_examiner()` in `routes.py`: read from `request.state.examiner` (set by middleware) — remove the `VHIR_EXAMINER` env var fallback (that's the 0a namespace fix too)
+- [ ] `_resolve_examiner()` in `routes.py`: `getattr(request.state, "examiner", None)` — **R9** never `request.state.examiner` directly; remove env var fallback
 - [ ] All routes that require auth: return 401 if `_resolve_examiner()` returns None
+- [ ] **R1** All write operations (commit, case create, token create/revoke): call `_load_pw_entry(passwords_dir, examiner).get("must_reset_password")` and return 403 if True
 - [ ] Commit endpoint: remains password-gated on top of session (session proves identity, password proves presence)
+
+### 12f. Gateway: R4 agent→portal block (co-ships with Phase 12)
+
+- [ ] `auth.py::AuthMiddleware.dispatch()`: after `key_info` resolved, before route handling:
+  ```python
+  if request.url.path.startswith("/portal/api/") and key_info.get("role") == "agent":
+      return JSONResponse({"error": "Agent tokens cannot access portal"}, status_code=403)
+  ```
+- [ ] Test: Hermes service token (`agentir_svc_*`) → 403 on any `/portal/api/` endpoint
+- [ ] Test: Examiner bearer token (`agentir_gw_*`) → still passes through to portal
 
 ---
 
@@ -442,8 +479,9 @@ All test suites verified passing in Session 3:
 
 ### 13b. Role enforcement in auth middleware
 
-- [ ] `auth.py::AuthMiddleware.dispatch()`: after resolving role, add:
-  - If `request.url.path.startswith("/portal/api/")` and `role == "agent"` → return 403 `{"error": "Agent tokens cannot access portal"}`
+> **Note:** The agent→403 portal block (R4) already ships in Phase 12f above. The items here extend that to readonly and complete the role matrix.
+
+- [ ] `auth.py::AuthMiddleware.dispatch()`: add readonly portal write block:
   - If `request.url.path.startswith("/portal/api/")` and `role == "readonly"` and request method not in ("GET", "HEAD") → return 403
 - [ ] `mcp_endpoint.py::MCPAuthASGIApp.__call__()`: add:
   - If `role == "readonly"` → return 403 `{"error": "Readonly role cannot call MCP tools"}`
@@ -553,12 +591,16 @@ All test suites verified passing in Session 3:
   - Create button → `POST /api/v1/case/create` (gateway REST, not portal API)
   - Status/error display
 - [ ] Backend (`rest.py`): `POST /api/v1/case/create` (examiner auth required):
-  - Validates inputs (no path traversal, case_id pattern)
+  - Validates `case_id` pattern (`[a-z0-9][a-z0-9_-]{0,39}`)
+  - **R5** `realpath` symlink guard: `Path(os.path.realpath(requested_dir))` must start with `Path(os.path.realpath(case_root)) + os.sep`; return 400 if not
+  - **R5** Module-level `_case_create_lock = threading.Lock()`; entire (existence check + dir create + YAML write + env update + backend restart) is inside `with _case_create_lock:`
   - Creates directory + CASE.yaml + empty findings.json/timeline.json/evidence.json/todos.json/iocs.json/approvals.jsonl/audit/
-  - Updates `gateway.yaml → case.dir` with atomic write
-  - Sets `AGENTIR_CASE_DIR` in process env
-  - Signals backends to reload (restart stdio subprocesses) via `Gateway.restart_backends()`
+  - Updates `gateway.yaml → case.dir` with atomic write (`mkstemp` + `os.replace`)
+  - Sets `AGENTIR_CASE_DIR` in `os.environ` inside the lock
+  - Signals backends to reload via `Gateway.restart_backends()`
   - Returns `{ok: true, case_dir: "..."}`
+- [ ] Test: **R5** symlink pointing outside case_root → 400
+- [ ] Test: **R5** two simultaneous requests → one 200, one 409 (not both succeed or crash)
 - [ ] On success: close modal, reload dashboard data
 
 ### 14g. Agent token management UI
@@ -636,6 +678,48 @@ All test suites verified passing in Session 3:
 ---
 
 ## Session Notes
+
+### Session 15 (2026-05-24)
+
+**Completed:**
+- Phase 12-pre COMPLETE — R8 domain-separated HMAC sub-keys landed.
+  - `derive_auth_key()` and `derive_ledger_key()` added to `agentir_core/approval_auth.py`.
+  - `verification.py::derive_hmac_key()` now delegates to `derive_ledger_key()` internally (lazy import, no circular dependency). The raw PBKDF2 output is no longer used directly as a HMAC key anywhere.
+  - 14 new plan-aligned tests added; existing obsolete test replaced.
+  - 139/139 passing.
+- Clarified that existing tests are NOT the driver — plan and tasks are. Tests must be rewritten to match plan requirements when they diverge.
+
+**Next session starts at Phase 12a** — JWT helpers (`session_jwt.py`) in `case-dashboard`.
+
+---
+
+### Session 14 (2026-05-24)
+
+**Completed:**
+- Full threat model pass against the portal auth design before any Phase 12 code was written.
+- Identified 9 security guards (R1–R9) relevant to the IR pipeline attack surface.
+- Updated AGENTS.md, SIFT-MCPS-PLAN.md, and TASKS.md to embed guards as implementation requirements — not post-hoc patches.
+
+**Key findings from threat model:**
+- R1: `must_reset_password` requires disk re-read on every write operation — JWT alone is insufficient as a gate.
+- R2: Login and commit lockout counters must be namespaced separately to prevent cross-interference.
+- R3: Challenge endpoint must return fake challenges for unknown examiners to prevent user enumeration.
+- R4: Agent→portal block cannot be deferred to Phase 13 — it ships with Phase 12 as Phase 12f.
+- R5: Case create endpoint needs `realpath` symlink guard and a serialization lock.
+- R6: Login challenge pool needs a size cap (200 entries, 5 per examiner) to bound memory DoS.
+- R7: Enrichment must be appended as `_agentir_context` metadata — never interpolated into tool result text.
+- R8: Stored PBKDF2 hash must be domain-separated into `auth_key` vs. `ledger_key` before any production case data exists.
+- R9: All request.state.examiner access must use `getattr` with default None.
+- XSS confirmed NOT a risk — `escapeHtml()` is applied consistently across all 47 data-driven `innerHTML` assignments.
+
+**Documentation changes:**
+- AGENTS.md: current state updated to Session 14; Phase 7/8/9 marked done; R1–R9 added as Pre-Implementation Security Requirements; package table updated.
+- SIFT-MCPS-PLAN.md: `#### Security Requirements for Phase 12 Implementation` section added with binding behavioral specs for R1–R4, R6, R8, R9. R4 co-ship note added to Phase 13 role enforcement section. R5 symlink+lock spec added to Phase 14e. R7 enrichment isolation strengthened in Phase 13 audit section.
+- TASKS.md: Phase 12-pre block added for R8 agentir-core key derivation. Phase 12d/12e/12f updated with per-guard checklist items. Phase 13b updated to note R4 is already handled. Phase 14f updated with R5 guards and tests.
+
+**Next session starts at Phase 12-pre** — `derive_auth_key()` / `derive_ledger_key()` in agentir-core, then Phase 12 backend.
+
+---
 
 ### Session 12 (2026-05-24)
 

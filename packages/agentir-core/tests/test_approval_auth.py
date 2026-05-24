@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
+import hashlib
+
 from agentir_core.approval_auth import (
     _LOCKOUT_SECONDS,
     _MAX_PASSWORD_ATTEMPTS,
@@ -18,6 +20,8 @@ from agentir_core.approval_auth import (
     _validate_examiner_name,
     AuthError,
     LockoutError,
+    derive_auth_key,
+    derive_ledger_key,
     get_analyst_salt,
     has_password,
     require_confirmation,
@@ -386,3 +390,60 @@ class TestPasswordLockout:
         _record_failure("analyst1")
         assert isolate_lockout_file.exists()
         assert (isolate_lockout_file.stat().st_mode & 0o777) == 0o600
+
+
+class TestKeyDerivation:
+    """Phase 12-pre — R8: domain-separated HMAC sub-keys (plan §Phase 12 Security Requirements R8)."""
+
+    _SAMPLE_HASH_HEX = hashlib.pbkdf2_hmac(
+        "sha256", b"testpassword", b"testsalt", 1
+    ).hex()
+
+    def test_derive_auth_key_returns_bytes(self):
+        key = derive_auth_key(self._SAMPLE_HASH_HEX)
+        assert isinstance(key, bytes)
+
+    def test_derive_ledger_key_returns_bytes(self):
+        key = derive_ledger_key(self._SAMPLE_HASH_HEX)
+        assert isinstance(key, bytes)
+
+    def test_derive_auth_key_output_length(self):
+        key = derive_auth_key(self._SAMPLE_HASH_HEX)
+        assert len(key) == 32  # HMAC-SHA256 output
+
+    def test_derive_ledger_key_output_length(self):
+        key = derive_ledger_key(self._SAMPLE_HASH_HEX)
+        assert len(key) == 32
+
+    def test_domain_separation_keys_differ(self):
+        """auth_key and ledger_key must differ for the same stored hash — domain separation is real."""
+        auth_key = derive_auth_key(self._SAMPLE_HASH_HEX)
+        ledger_key = derive_ledger_key(self._SAMPLE_HASH_HEX)
+        assert auth_key != ledger_key
+
+    def test_derive_auth_key_is_deterministic(self):
+        k1 = derive_auth_key(self._SAMPLE_HASH_HEX)
+        k2 = derive_auth_key(self._SAMPLE_HASH_HEX)
+        assert k1 == k2
+
+    def test_derive_ledger_key_is_deterministic(self):
+        k1 = derive_ledger_key(self._SAMPLE_HASH_HEX)
+        k2 = derive_ledger_key(self._SAMPLE_HASH_HEX)
+        assert k1 == k2
+
+    def test_different_stored_hashes_produce_different_keys(self):
+        hash2 = hashlib.pbkdf2_hmac("sha256", b"otherpassword", b"testsalt", 1).hex()
+        assert derive_auth_key(self._SAMPLE_HASH_HEX) != derive_auth_key(hash2)
+        assert derive_ledger_key(self._SAMPLE_HASH_HEX) != derive_ledger_key(hash2)
+
+    def test_auth_key_differs_from_raw_stored_hash(self):
+        """auth_key must not equal the raw stored hash bytes — it is a sub-key."""
+        raw_bytes = bytes.fromhex(self._SAMPLE_HASH_HEX)
+        auth_key = derive_auth_key(self._SAMPLE_HASH_HEX)
+        assert auth_key != raw_bytes
+
+    def test_ledger_key_differs_from_raw_stored_hash(self):
+        """ledger_key must not equal the raw stored hash bytes — it is a sub-key."""
+        raw_bytes = bytes.fromhex(self._SAMPLE_HASH_HEX)
+        ledger_key = derive_ledger_key(self._SAMPLE_HASH_HEX)
+        assert ledger_key != raw_bytes

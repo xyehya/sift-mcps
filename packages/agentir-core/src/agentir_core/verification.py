@@ -27,7 +27,9 @@ def _validate_case_id(case_id: str) -> None:
 
 
 def derive_hmac_key(password: str, salt: bytes) -> bytes:
-    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS)
+    from agentir_core.approval_auth import derive_ledger_key
+    raw_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS)
+    return derive_ledger_key(raw_hash.hex())
 
 
 def compute_hmac(derived_key: bytes, description: str) -> str:
