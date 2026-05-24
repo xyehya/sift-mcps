@@ -65,7 +65,11 @@ Functional, resilience, and security tests must prove this workflow. No shortcut
    uv run python -c "from case_mcp.server import create_server; print('OK')"
    uv run python -c "from windows_triage_mcp.server import WindowsTriageServer; print('OK')"
    ```
-6. **Next task: Phase 13** — Separate Agent Credentials & Role-Based Access Control. Phase 11 and Phase 12 are complete. See SIFT-MCPS-PLAN.md §Phase 13.
+6. **Next task: Phase 14** — Dashboard Rewiring (14a namespace cleanup, 14b auth flow rewiring, 14c login screen HTML/CSS, 14d login JS, 14e header additions, 14f case init modal, 14g agent token management UI). Phase 13 is complete. See SIFT-MCPS-PLAN.md §Phase 14.
+   **Key settled decision (Session 22):** `POST /portal/api/case/create` lives in
+   `routes.py` (portal package), NOT `rest.py` (gateway package). Auth is via
+   `PortalSessionMiddleware` cookie session. The lock (`_case_create_lock`) and R5 symlink
+   guard are in `routes.py`. See SIFT-MCPS-PLAN.md §14e for the full rationale.
 
 > Newly created feature spec: Phase 16 adds evidence manifest + evidence ledger enforcement.
 > It is not implemented yet. Preserve the current Phase 13-15 order unless the user explicitly
@@ -569,52 +573,47 @@ All test suites verified passing in Session 3:
 
 ---
 
-## Phase 13 — Separate Agent Credentials + Role-Based Access Control
+## Phase 13 — Separate Agent Credentials + Role-Based Access Control ✅
 
 > See SIFT-MCPS-PLAN.md Phase 13 for full design spec.
 > Target files: `packages/sift-gateway/src/sift_gateway/token_gen.py`,
 >               `packages/sift-gateway/src/sift_gateway/auth.py`,
 >               `packages/sift-gateway/src/sift_gateway/mcp_endpoint.py`
 
-### 13a. Token generation
+### 13a. Token generation ✅
 
-- [ ] `token_gen.py`: add `generate_service_token() -> str` → `f"agentir_svc_{secrets.token_hex(24)}"`
-- [ ] `token_gen.py`: fix existing `generate_gateway_token()` → `f"agentir_gw_{secrets.token_hex(24)}"` (192-bit entropy, correct prefix)
-- [ ] Update `install.sh` (Phase 7) to generate BOTH tokens and write both to `gateway.yaml`
-- [ ] Add stable token metadata: `token_id`, `agent_id`, `label`, `role`, `created_by`, `created_at`, `expires_at`, `revoked_at`, last-used metadata
+- [x] `token_gen.py`: `generate_service_token() -> str` → `f"agentir_svc_{secrets.token_hex(24)}"`
+- [x] `token_gen.py`: `generate_gateway_token()` → `f"agentir_gw_{secrets.token_hex(24)}"` (192-bit entropy)
+- [x] `install.sh` generates BOTH tokens and writes both to `gateway.yaml`
+- [x] Stable token metadata schema: `token_id`, `agent_id`, `label`, `role`, `created_by`, `created_at`, `expires_at`, `revoked_at`, last-used metadata — defined in gateway.yaml.template
 
-### 13b. Role enforcement in auth middleware
+### 13b. Role enforcement in auth middleware ✅
 
-> **Note:** The agent→403 portal block (R4) already ships in Phase 12f above. The items here extend that to readonly and complete the role matrix.
+- [x] `auth.py::AuthMiddleware.dispatch()`: readonly portal write block (403 on non-GET/HEAD)
+- [x] `mcp_endpoint.py::MCPAuthASGIApp.__call__()`: `role == "readonly"` → 403 before session manager
+- [x] Production Hermes workflow uses only `/mcp`
 
-- [ ] `auth.py::AuthMiddleware.dispatch()`: add readonly portal write block:
-  - If `request.url.path.startswith("/portal/api/")` and `role == "readonly"` and request method not in ("GET", "HEAD") → return 403
-- [ ] `mcp_endpoint.py::MCPAuthASGIApp.__call__()`: add:
-  - If `role == "readonly"` → return 403 `{"error": "Readonly role cannot call MCP tools"}`
-- [ ] Production Hermes workflow uses only `/mcp`; per-backend endpoints are disabled or diagnostic opt-in and protected by the same auth/audit path
+### 13c. Role enforcement in portal routes ✅
 
-### 13c. Role enforcement in portal routes
+- [x] `_require_examiner_role(request) -> JSONResponse | None` helper in routes.py
+- [x] Applied to: `post_delta`, `delete_delta_item`, `post_commit`, `get_commit_challenge`, `verify_evidence`
+- [x] Applied to token create/revoke/rotate endpoints (Phase 13f)
 
-- [ ] Create `_require_examiner_role(request) -> JSONResponse | None` helper: returns 403 if role not "examiner", else None
-- [ ] Apply to: `post_delta`, `delete_delta_item`, `post_commit`, `get_commit_challenge`, `verify_evidence`
-- [ ] Apply equivalent examiner-role enforcement to gateway REST `POST /api/v1/case/create`
-- [ ] Apply examiner-role enforcement to portal token create/revoke/rotate endpoints
-- [ ] `get_findings`, `get_timeline`, `get_case`, `get_delta`, etc.: allow "examiner" and "readonly"
+### 13d. `gateway.yaml` template with two tokens ✅
 
-### 13d. `gateway.yaml` template with two tokens
+- [x] `configs/gateway.yaml.template` shows both `agentir_gw_*` (examiner) and `agentir_svc_*` (agent) keys with role/label/metadata comments
+- [x] `configs/hermes-forensics-profile.yaml` shows `agentir_svc_*` token in mcp.json example
 
-- [ ] Update `configs/gateway.yaml.template` to show both `agentir_gw_*` (examiner) and `agentir_svc_*` (agent) keys with comments
-- [ ] Update `configs/hermes-forensics-profile.yaml` to show `agentir_svc_*` token in mcp.json example
-- [ ] Document in template: which token goes where, how to rotate
+### 13f. Portal service-token lifecycle ✅
 
-### 13f. Portal service-token lifecycle
-
-- [ ] `GET /portal/api/tokens` lists token metadata only; never returns raw token values
-- [ ] `POST /portal/api/tokens` creates an additional `agentir_svc_*` token with `agent_id`, label, optional expiry; raw token returned once
-- [ ] `DELETE /portal/api/tokens/{token_id}` revokes a token
-- [ ] `POST /portal/api/tokens/{token_id}/rotate` revokes old token and returns replacement once
-- [ ] Gateway rejects revoked/expired tokens and records audit event
-- [ ] Tests: two different agent tokens produce separable gateway logs
+- [x] `GET /api/tokens` — lists agent/readonly token metadata; never returns raw token values; sorted by created_at
+- [x] `POST /api/tokens` — creates `agentir_svc_*` token; validates agent_id, label, role, expires_at; blocks duplicate active agent_id; raw token returned once
+- [x] `DELETE /api/tokens/{token_id}` — revokes token (sets revoked_at); blocks double-revoke (409); guards against revoking examiner tokens
+- [x] `POST /api/tokens/{token_id}/rotate` — revokes old + creates new atomically; returns new raw token once
+- [x] All write endpoints: examiner role + must_reset checks
+- [x] `_token_config_write()` writes gateway.yaml atomically (mkstemp+fsync+os.replace, 0o600) and updates `_API_KEYS` in-memory — no restart needed
+- [x] `create_dashboard_v2_app()` accepts `gateway_config_path`; `server.py` injects `AGENTIR_GATEWAY_CONFIG` or `~/.agentir/gateway.yaml`
+- [x] 28 tests in `test_token_lifecycle.py`: list/create/revoke/rotate, RBAC guards, input validation, disk persistence, in-memory update, token separability
 
 ### 13e. Token expiry enforcement ✅ (Satisfied by Phase 4a)
 
@@ -694,20 +693,28 @@ All test suites verified passing in Session 3:
   - Case ID input (validated: `[a-z0-9_-]+`)
   - Title input
   - Directory input (pre-populated as `/cases/<case-id>`)
-  - Create button → `POST /api/v1/case/create` (gateway REST, not portal API)
+  - Create button → `POST /portal/api/case/create` (portal routes.py — NOT gateway rest.py)
   - Status/error display
-- [ ] Backend (`rest.py`): `POST /api/v1/case/create` (examiner auth required):
+- [ ] Backend (`routes.py`): `POST /portal/api/case/create` (examiner auth via cookie session):
+  - **Decision (Session 22):** in `routes.py`, not `rest.py`. Uses `_require_examiner_role()`,
+    `must_reset` re-read, `_resolve_examiner()` — all already available in routes.py.
+    Avoids circular cross-package dep (case-dashboard → sift-gateway) that `rest.py` placement
+    would require.
   - Validates `case_id` pattern (`[a-z0-9][a-z0-9_-]{0,39}`)
-  - **R5** `realpath` symlink guard: `Path(os.path.realpath(requested_dir))` must start with `Path(os.path.realpath(case_root)) + os.sep`; return 400 if not
-  - **R5** Module-level `_case_create_lock = threading.Lock()`; entire (existence check + dir create + YAML write + env update + backend restart) is inside `with _case_create_lock:`
-  - Creates directory + CASE.yaml + empty findings.json/timeline.json/evidence.json/evidence-manifest.json/evidence-ledger.jsonl/todos.json/iocs.json/approvals.jsonl/audit/evidence/
-  - Initializes `evidence-manifest.json` as unsealed/empty and `evidence-ledger.jsonl` as empty; agent MCP calls remain blocked until examiner seals the initial evidence state
-  - Updates `gateway.yaml → case.dir` with atomic write (`mkstemp` + `os.replace`)
+  - **R5** `realpath` symlink guard: `Path(os.path.realpath(requested_dir))` must start with
+    `Path(os.path.realpath(case_root)) + os.sep`; return 400 if not
+  - **R5** Module-level `_case_create_lock = threading.Lock()` in `routes.py`; entire
+    (existence check + dir create + YAML write + env update + backend restart) is inside lock
+  - Creates directory + CASE.yaml + empty findings.json/timeline.json/evidence.json/
+    evidence-manifest.json/evidence-ledger.jsonl/todos.json/iocs.json/approvals.jsonl/audit/evidence/
+  - Initializes `evidence-manifest.json` as unsealed/empty; `evidence-ledger.jsonl` as empty
+  - Updates `gateway.yaml → case.dir` with atomic write (same `_token_config_write()` pattern)
   - Sets `AGENTIR_CASE_DIR` in `os.environ` inside the lock
-  - Signals backends to reload via `Gateway.restart_backends()`
+  - Signals backends to reload via gateway reference from portal app state
   - Returns `{ok: true, case_dir: "..."}`
 - [ ] Test: **R5** symlink pointing outside case_root → 400
 - [ ] Test: **R5** two simultaneous requests → one 200, one 409 (not both succeed or crash)
+- [ ] Test: no session / wrong role / must_reset → 401/403
 - [ ] On success: close modal, reload dashboard data
 
 ### 14g. Agent token management UI
@@ -996,6 +1003,56 @@ All test suites verified passing in Session 3:
   - Namespace verification gate passed: `vhir` namespace search returns 0 python files.
 
 **Next task:** Proceed with Phase 13 (Separate Agent Credentials & Role-Based Access Control) as both Phase 11 and Phase 12 are fully complete.
+
+### Session 23 (2026-05-24)
+
+**Completed Phase 13 — Separate Agent Credentials + RBAC:**
+
+- Confirmed 13a/13b/13c/13d were already done in prior sessions.
+- Implemented Phase 13f — Portal service-token lifecycle in `case_dashboard/routes.py`:
+  - `GET /api/tokens` — lists agent/readonly token metadata, never raw token values
+  - `POST /api/tokens` — validates agent_id, label, role, expires_at; checks for duplicate active agent_id (409); raw token returned once; 201
+  - `DELETE /api/tokens/{token_id}` — sets revoked_at; 409 on double-revoke; 403 on examiner tokens
+  - `POST /api/tokens/{token_id}/rotate` — atomically revokes old + creates new; raw new token returned once; 201
+  - `_token_config_write()` — atomic gateway.yaml write (mkstemp + fsync + os.replace, 0o600) + in-memory `_API_KEYS` update
+  - `_GATEWAY_CONFIG_PATH` + `_GATEWAY_CONFIG_LOCK` module-level state wired via `create_dashboard_v2_app(gateway_config_path=...)`
+  - `server.py::create_app()` passes `AGENTIR_GATEWAY_CONFIG` env var or `~/.agentir/gateway.yaml` to portal app
+  - 28 tests in `test_token_lifecycle.py` — all 28 passing
+
+**Verification:**
+- `uv run pytest packages/agentir-core/tests/ packages/case-dashboard/tests/ packages/sift-gateway/tests/ -q --import-mode=importlib` → 259/259 passed
+- `grep -rn "vhir|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → 0 lines
+
+**Next task:** Phase 14 — Dashboard Rewiring (login screen, namespace cleanup, auth flow) or Audit Invariant gap (gateway envelope on every /mcp call_tool).
+
+### Session 24 (2026-05-24)
+
+**Phase 14 planning — Design decision settled:**
+
+- Read TASKS.md and SIFT-MCPS-PLAN.md; confirmed Phase 13 complete, all 105 dashboard tests and
+  139 agentir-core tests passing, namespace gate clean.
+- Analyzed Phase 14 scope: namespace cleanup, auth rewiring, login screen, header UX, case init
+  modal, agent token management modal.
+- Identified architectural ambiguity in Phase 14f (case create endpoint location) and resolved:
+  - **Decision:** `POST /portal/api/case/create` lives in `routes.py` (portal package), **not**
+    `rest.py` (gateway package).
+  - Rationale: `PortalSessionMiddleware` cookie-session auth only applies to portal sub-app.
+    Placing in `rest.py` would require importing `session_jwt.verify_jwt` from `case-dashboard`
+    into `sift-gateway` — a circular cross-package dependency that must not be created.
+    `routes.py` already has `_require_examiner_role()`, `must_reset` re-read, `_resolve_examiner()`,
+    and the `_token_config_write()` atomic YAML write pattern used by token lifecycle.
+  - The `_case_create_lock = threading.Lock()` (R5) and `os.path.realpath` symlink guard (R5) go
+    into `routes.py`.
+- Updated SIFT-MCPS-PLAN.md §Phase 14e and TASKS.md §14f to reflect this decision.
+- Did **not** begin implementation; next session starts from Phase 14a (namespace cleanup).
+
+**State at end of session:**
+- All tests still green (no code changes made).
+- Documentation up to date.
+
+**Next task:** Phase 14 — start implementation from 14a (namespace/branding sweep of index.html +
+icon rename), then 14b (auth rewiring), 14c/14d (login screen + JS), 14e (header), 14f
+(case create backend + modal), 14g (agent token management UI).
 
 ### Session 21 (2026-05-24)
 

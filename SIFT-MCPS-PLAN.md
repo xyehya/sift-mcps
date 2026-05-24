@@ -1689,17 +1689,28 @@ Login JS flow:
 └─────────────────────────────────────┘
 ```
 
-Calls `POST /api/v1/case/create`:
+Calls `POST /portal/api/case/create`:
 - Creates the directory structure (CASE.yaml, findings.json, etc.)
-- Updates `gateway.yaml → case.dir` atomically
-- Sets `AGENTIR_CASE_DIR` for the current gateway process
-- Triggers gateway backend reload/restart
+- Updates `gateway.yaml → case.dir` atomically (same `_token_config_write()` pattern
+  already used for service-token lifecycle in `routes.py`)
+- Sets `AGENTIR_CASE_DIR` in the gateway process environment
+- Triggers gateway backend reload/restart via `request.app.state.gateway.restart_backends()`
 - On success: reloads dashboard data
 
-Backend endpoint in `rest.py` (not `routes.py` — this is a gateway-level operation):
+**Decision (Session 22):** This endpoint lives in `routes.py` (portal package), **not** in
+`rest.py` (gateway package). Rationale:
+- Examiner cookie-session auth (`PortalSessionMiddleware`) only applies to the portal sub-app;
+  adding it to `rest.py` would require a cross-package import of `session_jwt` from
+  `case-dashboard` into `sift-gateway`, creating an unacceptable circular dependency.
+- The portal already performs atomic YAML writes for token lifecycle (`_token_config_write()`);
+  case creation is the same pattern.
+- `_require_examiner_role()`, `must_reset` re-read, and `_resolve_examiner()` are all
+  already available in `routes.py`.
+
+Endpoint spec:
 ```python
-POST /api/v1/case/create
-→ {case_id, title, examiner, dir}
+POST /portal/api/case/create
+→ {case_id, title, dir}   # examiner comes from portal session
 ← {ok: true, case_dir: "/cases/..."}
 ```
 
@@ -1710,10 +1721,10 @@ Input validation in this endpoint is stricter than a pattern check:
 ```python
 import os, threading
 
-_case_create_lock = threading.Lock()  # module-level in rest.py
+_case_create_lock = threading.Lock()  # module-level in routes.py
 
 # Inside handler, before touching the filesystem:
-real_root     = Path(os.path.realpath(case_root))
+real_root      = Path(os.path.realpath(case_root))
 real_requested = Path(os.path.realpath(requested_dir))
 # Symlink escape check — realpath resolves all symlinks before comparing
 if not str(real_requested).startswith(str(real_root) + os.sep):
@@ -1725,7 +1736,9 @@ with _case_create_lock:
     # create dir, write canonical files, update gateway.yaml atomically, update env, restart backends
 ```
 
-The lock serializes: YAML write + `os.environ["AGENTIR_CASE_DIR"]` update + backend restart. Without it, two simultaneous create requests can both pass the existence check, leaving the gateway in inconsistent state between the YAML file and the process environment.
+The lock serializes: existence check + directory creation + YAML write +
+`os.environ["AGENTIR_CASE_DIR"]` update + backend restart. Without it, two simultaneous create
+requests can both pass the existence check, leaving the gateway in inconsistent state.
 
 Note: This supersedes the "manual edit gateway.yaml" workflow for new deployments. The manual
 method remains valid for advanced users. This is additive, not replacing R4.
