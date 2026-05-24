@@ -16,6 +16,9 @@ The required end-user workflow is installer-first and portal-first:
 4. Portal case creation writes the complete case directory from the submitted `CASE.yaml` metadata,
    updates the gateway's active case, and restarts/reloads backends as needed.
 5. Hermes connects only to the gateway aggregate MCP endpoint with a service token.
+6. The examiner copies or mounts case evidence into the case `evidence/` directory, then uses the
+   portal evidence intake flow to hash, manifest, and ledger-seal the evidence set before agent
+   investigation proceeds.
 
 ```
 Analyst Machine                        SIFT VM (sift-mcps installed)
@@ -79,6 +82,7 @@ and per-command audit logging.
 - Atomic writes (`tempfile.mkstemp` + `os.replace`) for all case files
 - `chmod 444` protection on findings.json, timeline.json after write
 - SHA-256 content hashes on every finding/timeline event
+- SHA-256 hashes on every registered evidence file, recorded in a versioned evidence manifest
 - Append-only `approvals.jsonl` — never modified, only appended
 - HMAC verification ledger at `/var/lib/agentir/verification/{case-id}.jsonl`
 - All the above is implemented in `agentir-core` — do not duplicate in other packages
@@ -89,6 +93,15 @@ The examiner reviews, optionally modifies, and commits via HMAC-SHA256 challenge
 Only committed findings are APPROVED and included in the final report.
 The examiner/operator starts each investigation in the portal by creating or selecting the case.
 The CLI (`agentir`) is a maintenance/emergency fallback, not the primary interface.
+
+### R3b. Evidence intake is examiner-controlled and append-only
+Evidence may be discovered after the case is created. The system must allow legitimate additions
+without breaking the case, but only through an explicit examiner-controlled chain-of-custody flow.
+Manual files copied into `evidence/` are not automatically trusted. The portal must detect
+unregistered files, show a clear warning, and let the examiner either register/seal them or mark
+them unintended. Registering new evidence appends a new manifest version and ledger event; it never
+silently rewrites historical evidence state. Existing registered evidence that is modified or
+missing must be treated as a chain-of-custody violation until resolved by the examiner.
 
 ### R4. Portal-created case directory is the primary workflow
 The installer prepares the VM, but the examiner/operator creates each new case from the portal.
@@ -147,7 +160,7 @@ These fixes were completed in TASKS.md Phase 2b.
 
 ---
 
-## Current State (as of Session 14 — 2026-05-24)
+## Current State (as of Session 16 — 2026-05-24)
 
 ### What Is Done ✅
 - **Phase 0 COMPLETE** — all blocking bugs fixed, namespace sweep finished, verification gate passed
@@ -162,6 +175,8 @@ These fixes were completed in TASKS.md Phase 2b.
 - **Phase 8 COMPLETE** — `docker-compose.yml`: OpenSearch 2.18.0, localhost-only, snapshots bind mount, `agentir-opensearch` container name
 - **Phase 9 COMPLETE** — `configs/gateway.yaml.template`, `configs/hermes-forensics-profile.yaml`, `configs/systemd/sift-gateway.service`
 - **Threat model complete (Session 14)** — 9 security guards (R1-R9) specified for Phase 12-15; see SIFT-MCPS-PLAN.md §Phase 12 Security Requirements
+- **Evidence chain-of-custody feature newly specified (Session 16)** — Phase 16 adds versioned
+  evidence manifest, evidence ledger, portal warnings/actions, and gateway MCP fail-closed gate
 - **agentir-core tests: 125/125 passing**
 - `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → **0 lines**
 
@@ -183,6 +198,13 @@ These fixes were completed in TASKS.md Phase 2b.
 **Priority 4 — Phase 7 live validation (non-blocking for Phase 12)**
 - Run `install.sh` on clean Ubuntu/SIFT VM, verify `docker compose up -d` → OpenSearch healthy, `https://127.0.0.1:4508/health` responds.
 
+**Priority 5 — New Phase 16: Evidence manifest + evidence ledger chain gate**
+- Implement after/alongside portal case creation and auth, because it depends on authenticated
+  examiner actions and active `AGENTIR_CASE_DIR`.
+- Manual files copied into `evidence/` must trigger portal warnings until registered/sealed.
+- Agent MCP calls must verify the evidence chain before backend routing and block with a structured
+  human-remediation warning on unsealed, unregistered, modified, missing, or ledger-mismatched evidence.
+
 **Phase 4e — Deferred**
 - `notifications/tools/list_changed` requires SDK session lifecycle hooks not yet exposed by `mcp==1.27.1`.
 
@@ -199,6 +221,9 @@ These guards are non-negotiable additions to Phase 12-15. Full specs in SIFT-MCP
 - **R7** Enrichment appended as `_agentir_context` metadata key only — never interpolated into tool result text (prompt injection defense)
 - **R8** Domain-separated HMAC sub-keys before any production case data: `derive_auth_key()` for login, `derive_ledger_key()` for verification ledger
 - **R9** `getattr(request.state, "examiner", None)` everywhere — never direct attribute access
+- **R10** Evidence chain gate before MCP operations — gateway verifies evidence manifest/ledger state
+  before routing agent tool calls; mismatch, missing registered evidence, or unregistered files
+  blocks the call and returns a structured warning for human-in-the-loop remediation.
 
 ---
 
@@ -230,19 +255,29 @@ portal actions. MCP responses returned through the aggregate gateway can be enri
 forensic guidance, provenance reminders, and next-step suggestions sourced from forensic-knowledge,
 OpenSearch, and forensic-rag without granting the agent direct backend or shell access.
 
+### Evidence manifest and chain-of-custody gate
+The case-local `evidence/` directory is a controlled intake area. Operators may copy or mount newly
+discovered evidence there, but the runtime must not treat those files as trusted until the examiner
+uses the portal evidence security chain to register and seal them. The evidence chain creates
+`evidence-manifest.json` plus append-only evidence ledger events recording file path, size, SHA-256,
+source notes, examiner, timestamp, previous manifest hash, and new manifest hash. Gateway MCP calls
+must verify that the live `evidence/` tree matches the latest sealed manifest before routing agent
+operations. If verification fails, the agent receives a structured block response instructing the
+human operator to use the portal; the gateway does not run the backend tool.
+
 ---
 
 ## Package Summary
 
 | Package | Purpose | State |
 |---------|---------|-------|
-| `agentir-core` | Shared library: case I/O, auth, HMAC, identity | R8 key-derivation helpers needed before Phase 12 ships |
-| `sift-gateway` | HTTP gateway, auth, routing, portal mount | Phase 12 wiring: `portal_session_secret` in config, agent→403 guard (R4) |
-| `case-dashboard` | Examiner Portal Starlette sub-app | Phase 12-15: new `session_jwt.py`, `auth.py` middleware, auth endpoints, dashboard rewire |
+| `agentir-core` | Shared library: case I/O, auth, HMAC, identity, evidence chain | Evidence manifest/ledger helpers needed for new Phase 16 |
+| `sift-gateway` | HTTP gateway, auth, routing, portal mount | Phase 12 wiring plus new evidence chain gate before MCP routing |
+| `case-dashboard` | Examiner Portal Starlette sub-app | Phase 12-15 plus evidence intake warnings/actions in new Phase 16 |
 | `forensic-mcp` | Record findings, timeline events | ✅ No changes needed |
-| `case-mcp` | Case lifecycle (init, status, join) | ✅ Imports fixed |
-| `sift-mcp` | Run forensic tools via shell=False | ✅ Phase 6 complete |
-| `report-mcp` | Generate final case report | ✅ Imports fixed |
+| `case-mcp` | Case lifecycle (init, status, join, evidence registry) | Needs evidence-chain-aware register/list/verify behavior |
+| `sift-mcp` | Run forensic tools via shell=False | Must stay behind gateway evidence chain gate |
+| `report-mcp` | Generate final case report | Must include evidence manifest/ledger status and fail/warn on evidence mismatch |
 | `forensic-rag-mcp` | Semantic search over forensic knowledge | ✅ Phase 5 complete |
 | `opencti-mcp` | Threat intel enrichment via OpenCTI | ✅ No changes needed |
 | `opensearch-mcp` | SIEM evidence indexing and search | ✅ TLS fix + OPENSEARCH_CONFIG env done |

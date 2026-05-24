@@ -63,22 +63,37 @@ This workflow is the product contract. Implementation phases, tests, and docs mu
      and restarts/reloads backends.
    - Manual `gateway.yaml` case edits are administrator fallback only.
 
-4. **Hermes connects to the gateway aggregate MCP endpoint**
+4. **Examiner seals the evidence intake state**
+   - Operator/examiner copies or read-only-mounts disk images, memory dumps, logs, pcaps, archives,
+     and other acquired artifacts under the active case `evidence/` directory.
+   - Portal detects any unregistered files under `evidence/` and shows a blocking warning before
+     agent investigation proceeds.
+   - Examiner runs the portal evidence security chain to register intended files, capture SHA-256,
+     source notes, size, timestamps, and examiner identity, then appends a new evidence manifest
+     version and evidence ledger event.
+   - Later-discovered evidence is allowed through the same append-only workflow. Existing sealed
+     evidence may not change silently; modified or missing evidence creates a chain-of-custody
+     violation that blocks agent MCP operations until the examiner resolves it.
+
+5. **Hermes connects to the gateway aggregate MCP endpoint**
    - Hermes uses `https://SIFT_VM:4508/mcp` with an `agentir_svc_*` token.
    - Per-backend URLs are not the supported agent workflow and must not be emitted by installer/templates.
    - Gateway performs auth, role enforcement, request audit, response enrichment, and identity injection.
+   - Before routing each agent tool call, gateway verifies the active case evidence manifest and
+     evidence ledger. If the live `evidence/` tree does not match the latest sealed state, the call
+     is blocked and a structured warning is returned for human-in-the-loop action.
 
-5. **Investigation and enrichment**
+6. **Investigation and enrichment**
    - Gateway routes aggregate tool calls to stdio backends.
    - `sift-mcp` is the only command-execution gate and always uses `shell=False`.
    - OpenSearch indexing/search, forensic-rag semantic context, OpenCTI enrichment, and forensic-knowledge
      guidance are exposed through gateway-mediated MCP tools and/or contextual MCP response enrichment.
 
-6. **Review, approval, report**
+7. **Review, approval, report**
    - Hermes can propose findings/timeline events but cannot approve them.
    - Examiner reviews in the portal, edits if needed, and commits via HMAC challenge-response.
    - Report generation includes only approved items and preserves hashes, approvals, verification ledger,
-     and gateway/backend audit trail.
+     evidence manifest/ledger state, and gateway/backend audit trail.
 
 ---
 
@@ -128,6 +143,8 @@ This workflow is the product contract. Implementation phases, tests, and docs mu
 | Portal case creation | Normal examiner workflow; avoids shell/SSH dependency |
 | Content hash + stale detection | Detects post-review tampering |
 | Append-only `approvals.jsonl` | Immutable approval audit trail |
+| Versioned evidence manifest + ledger | Allows legitimate evidence additions while detecting tampering |
+| MCP evidence chain gate | Prevents the agent from operating on unsealed or tampered evidence |
 
 ---
 
@@ -160,6 +177,8 @@ Manual `gateway.yaml → case.dir` editing remains an administrator fallback for
 ├── findings.json       # AI-proposed findings (DRAFT → APPROVED/REJECTED)
 ├── timeline.json       # Timeline events
 ├── evidence.json       # Evidence registry {files: [...]}
+├── evidence-manifest.json # Latest sealed evidence manifest snapshot
+├── evidence-ledger.jsonl # Append-only manifest/version chain-of-custody events
 ├── todos.json          # Investigation todos
 ├── iocs.json           # Indicators of Compromise
 ├── pending-reviews.json # Agent's proposed review batch (delta)
@@ -177,6 +196,142 @@ title: "Ransomware investigation — Contoso"
 examiner: alice
 created_at: "2026-05-23T10:00:00Z"
 ```
+
+## Evidence Manifest and Chain-of-Custody Design (New)
+
+This feature is newly created and must be wired into Phase 16. Existing `evidence.json` only records
+registered files and hashes; it is not enough to protect the case from manual additions, missing
+evidence, or silent replacement. The new design adds a versioned evidence manifest, an append-only
+ledger, portal warnings, and a gateway fail-closed MCP gate.
+
+### Evidence intake workflow
+
+1. Case creation creates an empty `evidence/` directory, `evidence.json`,
+   `evidence-manifest.json`, and `evidence-ledger.jsonl`.
+2. The operator copies or read-only-mounts acquired evidence under `case/evidence/`.
+3. The portal continuously compares the live `evidence/` tree to the latest sealed manifest:
+   - New unregistered files: show "Unregistered evidence detected" warning.
+   - Registered file missing: show "Registered evidence missing" violation.
+   - Registered file hash mismatch: show "Evidence hash mismatch" violation.
+   - Ledger/manifest hash-chain mismatch: show "Evidence ledger verification failed" violation.
+4. Examiner opens the evidence intake panel and chooses one action per unregistered file:
+   - Register and seal as new evidence.
+   - Ignore/mark unintended with an audited reason.
+   - Remove outside the app, then rescan.
+5. Registering new evidence requires examiner session plus HMAC password confirmation, then appends
+   a new manifest version. Existing manifest versions are never silently overwritten.
+6. If later-discovered evidence is valid, the system creates manifest version `N+1` and a ledger
+   event linking `previous_manifest_hash` to `new_manifest_hash`. This preserves the earlier chain
+   while allowing the investigation scope to grow.
+
+### Data files
+
+`evidence-manifest.json` is the latest sealed state:
+```json
+{
+  "version": 3,
+  "case_id": "case-2026-001",
+  "created_at": "2026-05-24T12:00:00Z",
+  "created_by": "alice",
+  "previous_manifest_hash": "sha256:...",
+  "manifest_hash": "sha256:...",
+  "files": [
+    {
+      "path": "evidence/host1/disk.E01",
+      "sha256": "...",
+      "bytes": 123456789,
+      "mtime_ns": 1770000000000000000,
+      "registered_at": "2026-05-24T12:00:00Z",
+      "registered_by": "alice",
+      "source": "USB evidence drive serial ABC123",
+      "description": "Host1 acquired disk image",
+      "status": "ACTIVE"
+    }
+  ]
+}
+```
+
+`evidence-ledger.jsonl` is append-only and records every evidence-chain event:
+```json
+{
+  "event": "EVIDENCE_ADDED",
+  "case_id": "case-2026-001",
+  "version": 3,
+  "path": "evidence/host2/memory.raw",
+  "sha256": "...",
+  "bytes": 34359738368,
+  "previous_manifest_hash": "sha256:...",
+  "new_manifest_hash": "sha256:...",
+  "approved_by": "alice",
+  "approved_at": "2026-05-24T12:00:00Z",
+  "hmac_version": 2,
+  "hmac": "..."
+}
+```
+
+The manifest hash is computed from canonical JSON with `manifest_hash` excluded. Ledger events are
+line-delimited JSON, fsynced after each append, and chmodded `0444` after writes where the filesystem
+supports POSIX permissions. If the filesystem does not support permissions, the portal must show a
+degraded-protection warning.
+
+### Required controls
+
+- `agentir-core` owns all evidence manifest, evidence ledger, scan, diff, append, and verify logic.
+  Do not duplicate this logic in `case-dashboard`, `case-mcp`, `sift-gateway`, or `report-mcp`.
+- Evidence paths are stored relative to `case_dir` and must resolve under `case_dir/evidence/` via
+  `os.path.realpath`; symlink escapes are rejected.
+- Directories are not registered as evidence. Register individual files, container archives, disk
+  images, or memory images.
+- Unknown files under `evidence/` do not automatically become trusted; they create a portal warning
+  and an MCP block until examiner action.
+- A modified or missing registered file is a chain-of-custody violation, not an automatic manifest
+  update. The examiner must explicitly decide how to handle it.
+- MCP agent tool calls are fail-closed on evidence-chain violations. The gateway returns a structured
+  result with `blocked: true`, `reason: "evidence_chain_violation"`, issue counts, and portal
+  remediation guidance; backend tools are not invoked.
+- Examiner portal endpoints that mutate the evidence chain require session auth, role `examiner`,
+  `must_reset_password == false`, and HMAC password confirmation.
+- The evidence-chain gate is applied before aggregate `/mcp` `call_tool` routing. Read-only portal
+  display endpoints may still show the violation so the examiner can remediate.
+- Gateway audit logs include both successful evidence-chain checks and blocked tool-call checks,
+  but never raw bearer tokens or HMAC responses.
+- Report generation includes evidence manifest version/hash and refuses or prominently warns when
+  evidence-chain verification fails.
+
+### Affected modules
+
+- `agentir-core`: new `evidence_chain.py` helpers for scanning, manifest canonicalization, ledger
+  append, HMAC signing, hash-chain verification, and diff generation. Existing `evidence_ops.py`
+  should delegate to this module or be migrated without changing public tool semantics abruptly.
+- `case-dashboard`: add evidence intake/status panel, warning banner, rescan endpoint, register/seal
+  endpoint, ignore unintended file endpoint, and violation display.
+- `sift-gateway`: call `verify_evidence_chain()` before agent `/mcp` tool calls; emit structured
+  block responses and audit entries.
+- `case-mcp`: update `evidence_register`, `evidence_list`, and `evidence_verify` to use the evidence
+  chain data model. Agent calls may read status, but only examiner-authorized portal actions may seal
+  new evidence.
+- `sift-mcp`, `opensearch-mcp`, `forensic-mcp`, `forensic-rag-mcp`, `opencti-mcp`: no direct evidence
+  chain writes; they rely on gateway gating. Where they log input files, preserve `input_sha256s`.
+- `report-mcp`: reconcile approved findings/timeline ledger plus evidence manifest/ledger state.
+- Installer/config: case creation must create new evidence-chain files; no active case starts with a
+  sealed manifest until the examiner runs initial evidence intake or explicitly seals an empty case.
+
+### Compatibility and breakage risks
+
+- Existing tests and tools assume `evidence.json` is the only evidence registry. Keep `evidence.json`
+  as a compatibility view during migration, but make `evidence-manifest.json` the authority for
+  integrity checks.
+- Current `case-mcp` and `report-mcp` still consult `~/.agentir/active_case` in some paths. Phase 16
+  must not deepen that dependency; use `AGENTIR_CASE_DIR`.
+- Blocking every MCP call before any sealed manifest exists may break first-run usability. Required
+  behavior: case with no sealed manifest returns a clear `evidence_chain_unsealed` block for agent
+  tools and a portal prompt to seal an empty or populated evidence set.
+- OpenSearch ingest currently writes ingest manifests under `audit/ingest-manifests/`. Do not move
+  those into `evidence/`; they are processing provenance, not acquired evidence.
+- Large evidence files can be expensive to hash. Hashing must stream in chunks and portal UI should
+  support progress or asynchronous jobs before production use.
+- Mounted evidence on NTFS/exFAT/FUSE may not honor `chmod`; detection must warn without pretending
+  tamper-prevention is enforced.
 
 ### Removed Legacy Behavior
 
@@ -1607,10 +1762,25 @@ Portal authentication:
 
 Portal case creation:
 - `POST /api/v1/case/create` creates the full canonical case tree from valid metadata.
+- New case tree includes `evidence/`, `evidence-manifest.json`, and `evidence-ledger.jsonl`.
 - Invalid case ids, path traversal, relative paths, existing non-empty directories, and unwritable roots are rejected.
 - `gateway.yaml → case.dir` update is atomic; simulated failure cannot leave partial YAML.
 - `AGENTIR_CASE_DIR` updates in process and reaches all restarted backends.
 - Concurrent case-create requests serialize safely; one wins and the other returns a clear conflict.
+
+Evidence manifest and chain-of-custody:
+- New case with no sealed manifest shows portal warning and blocks agent MCP analysis tools.
+- Manually copied file under `evidence/` appears as unregistered evidence in portal status.
+- Examiner can seal an empty evidence state or register/seal intended files with HMAC confirmation.
+- Later-discovered evidence can be appended as a new manifest version without invalidating older versions.
+- Existing sealed evidence modification returns `modified` and blocks agent MCP tool routing.
+- Existing sealed evidence deletion returns `missing` and blocks agent MCP tool routing.
+- Unregistered files return `unregistered` and block agent MCP tool routing until examiner action.
+- Manifest or ledger tampering returns a ledger/manifest error and blocks agent MCP tool routing.
+- Gateway block response is structured for Hermes and includes human-remediation guidance, not a raw traceback.
+- Gateway writes a `sift-gateway.jsonl` audit entry for every evidence-chain block.
+- `report-mcp` includes evidence manifest version/hash and warns or refuses when evidence-chain status is not OK.
+- OpenSearch ingest manifests remain under `audit/ingest-manifests/`; they are not treated as acquired evidence.
 
 Aggregate MCP gateway:
 - Hermes config contains only `https://SIFT_VM:4508/mcp`.

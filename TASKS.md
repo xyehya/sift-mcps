@@ -41,6 +41,9 @@ Everything in this project must support this workflow:
 5. Hermes connects only to the gateway aggregate MCP endpoint (`/mcp`) using an `agentir_svc_*` token.
 6. Gateway separates examiner and agent identities in auth, audit logs, and response enrichment.
 7. Examiner reviews/approves in the portal; report generation includes only approved, signed findings.
+8. Examiner uses the portal evidence security chain to seal evidence before agent investigation:
+   manual files copied into `evidence/` are detected as unregistered, legitimate additions append a
+   new evidence manifest/ledger version, and tampered/missing evidence blocks agent MCP operations.
 
 Functional, resilience, and security tests must prove this workflow. No shortcuts or one-off workarounds.
 
@@ -60,6 +63,10 @@ Functional, resilience, and security tests must prove this workflow. No shortcut
    uv run python -c "from case_mcp.server import create_server; print('OK')"
    ```
 6. **Next task: Phase 12a** — JWT helpers (`session_jwt.py`) in `case-dashboard`. Phase 12-pre (R8) is complete. See SIFT-MCPS-PLAN.md §Phase 12.
+
+> Newly created feature spec: Phase 16 adds evidence manifest + evidence ledger enforcement.
+> It is not implemented yet. Preserve the current Phase 12-15 order unless the user explicitly
+> reprioritizes, but do not design new MCP/report/portal behavior that conflicts with Phase 16.
 
 ---
 
@@ -596,7 +603,8 @@ All test suites verified passing in Session 3:
   - Validates `case_id` pattern (`[a-z0-9][a-z0-9_-]{0,39}`)
   - **R5** `realpath` symlink guard: `Path(os.path.realpath(requested_dir))` must start with `Path(os.path.realpath(case_root)) + os.sep`; return 400 if not
   - **R5** Module-level `_case_create_lock = threading.Lock()`; entire (existence check + dir create + YAML write + env update + backend restart) is inside `with _case_create_lock:`
-  - Creates directory + CASE.yaml + empty findings.json/timeline.json/evidence.json/todos.json/iocs.json/approvals.jsonl/audit/
+  - Creates directory + CASE.yaml + empty findings.json/timeline.json/evidence.json/evidence-manifest.json/evidence-ledger.jsonl/todos.json/iocs.json/approvals.jsonl/audit/evidence/
+  - Initializes `evidence-manifest.json` as unsealed/empty and `evidence-ledger.jsonl` as empty; agent MCP calls remain blocked until examiner seals the initial evidence state
   - Updates `gateway.yaml → case.dir` with atomic write (`mkstemp` + `os.replace`)
   - Sets `AGENTIR_CASE_DIR` in `os.environ` inside the lock
   - Signals backends to reload via `Gateway.restart_backends()`
@@ -650,6 +658,166 @@ All test suites verified passing in Session 3:
 
 ---
 
+## Phase 16 — Evidence Manifest, Evidence Ledger, and MCP Chain Gate (NEW)
+
+> Newly created from user chain-of-custody review on 2026-05-24.
+> Normative design: SIFT-MCPS-PLAN.md §Evidence Manifest and Chain-of-Custody Design.
+> Goal: legitimate later evidence additions are allowed, but unregistered, modified, missing, or
+> ledger-mismatched evidence blocks agent operations until the examiner takes portal action.
+
+### 16a. agentir-core evidence chain module
+
+- [ ] Add `packages/agentir-core/src/agentir_core/evidence_chain.py`
+- [ ] Data model:
+  - `EvidenceFile`: relative path under `evidence/`, sha256, bytes, mtime_ns, registered_at, registered_by, source, description, status
+  - `EvidenceManifest`: version, case_id, created_at, created_by, previous_manifest_hash, manifest_hash, files
+  - `EvidenceLedgerEvent`: event, case_id, version, path(s), previous_manifest_hash, new_manifest_hash, approved_by, approved_at, hmac_version, hmac
+- [ ] Implement chunked SHA-256 hashing for large files; never load full evidence into memory
+- [ ] Implement canonical manifest hash with `manifest_hash` excluded
+- [ ] Implement `scan_evidence_tree(case_dir) -> list[EvidenceFileCandidate]`
+  - Walks only `case_dir/evidence/`
+  - Rejects symlink escapes via `os.path.realpath`
+  - Skips directories as evidence records; files only
+  - Handles unreadable files as explicit scan errors
+- [ ] Implement `diff_evidence_manifest(case_dir) -> EvidenceChainStatus`
+  - `unregistered`: live files absent from manifest
+  - `missing`: manifest files absent from disk
+  - `modified`: live hash differs from sealed hash
+  - `ledger_errors`: manifest hash-chain/HMAC/parse problems
+  - `ok`: no issues
+- [ ] Implement `seal_evidence_manifest(case_dir, examiner, additions, ignored, source_notes, derived_key)`
+  - Requires explicit additions/ignored decisions from portal
+  - Appends new manifest version, never silently rewrites prior state
+  - Writes `evidence-manifest.json` atomically
+  - Appends one or more `evidence-ledger.jsonl` events with fsync
+  - chmods manifest/ledger to `0444` after writes where supported
+- [ ] Implement `verify_evidence_chain(case_dir) -> EvidenceChainStatus`
+  - Verifies latest manifest hash
+  - Verifies ledger hash chain
+  - Verifies every sealed file hash
+  - Reports unregistered files as blocking issues
+- [ ] Keep `evidence.json` as compatibility view until all consumers migrate
+- [ ] Tests in `packages/agentir-core/tests/test_evidence_chain.py`
+  - Empty unsealed case reports `evidence_chain_unsealed`
+  - Seal empty evidence set succeeds and creates version 1
+  - Add file → unregistered warning before seal
+  - Seal file → OK
+  - Modify sealed file → modified violation
+  - Delete sealed file → missing violation
+  - Add later file → unregistered warning, then version increments after seal
+  - Symlink escape under `evidence/` is rejected
+  - Ledger event tamper produces ledger error
+  - Manifest tamper produces manifest hash error
+  - Large file hashing is chunked
+  - Non-POSIX chmod failure returns degraded warning, not false success
+
+### 16b. Portal evidence intake UI and API
+
+- [ ] Add evidence-chain status banner to dashboard header:
+  - Green: evidence chain verified
+  - Amber: unsealed or unregistered evidence exists
+  - Red: registered evidence modified/missing or ledger verification failed
+- [ ] Portal must clearly show when files were manually copied into `evidence/` but are unregistered
+- [ ] Add Evidence Security Chain panel:
+  - Rescan evidence directory
+  - Show unregistered files with size/hash/path
+  - Register intended files with source/description notes
+  - Mark unintended files with reason
+  - Show modified/missing registered evidence separately from new additions
+  - Show latest manifest version/hash and last sealed by/at
+- [ ] Add portal endpoints:
+  - `GET /api/evidence-chain/status`
+  - `POST /api/evidence-chain/rescan`
+  - `POST /api/evidence-chain/seal` with HMAC confirmation
+  - `POST /api/evidence-chain/ignore` with HMAC confirmation and reason
+- [ ] Write actions require:
+  - Valid portal session
+  - role `examiner`
+  - `must_reset_password == false` re-read from disk
+  - HMAC password challenge/response
+- [ ] Tests:
+  - Unregistered file appears in API status and UI data
+  - Seal endpoint rejects readonly/agent role
+  - Seal endpoint rejects `must_reset_password`
+  - Seal endpoint rejects bad HMAC
+  - Seal endpoint appends ledger event and clears warning
+  - Modified/missing evidence cannot be auto-sealed without explicit examiner decision
+  - Ignore action is audited and does not trust the file
+
+### 16c. Gateway aggregate MCP evidence gate
+
+- [ ] In aggregate `/mcp` `call_tool`, before routing to backend, call `verify_evidence_chain(case_dir)`
+- [ ] Gate applies to agent service tokens and examiner API tool calls that invoke MCP backends
+- [ ] Allowlist only remediation-safe tools if needed:
+  - `case_status`
+  - `evidence_chain_status` / `evidence_verify` read-only status tools
+  - health/list tools that do not analyze case evidence
+- [ ] On violation, do not invoke backend. Return structured MCP content:
+  - `blocked: true`
+  - `reason: evidence_chain_violation` or `evidence_chain_unsealed`
+  - counts for unregistered/missing/modified/ledger_errors
+  - portal remediation URL/path
+  - message for Hermes to ask the human examiner to resolve evidence intake
+- [ ] Audit every block to `audit/sift-gateway.jsonl`
+  - role, token_id, agent_id/examiner, source IP, active case, requested tool, status=`blocked`, reason, issue counts
+  - never log raw bearer tokens or HMAC responses
+- [ ] Tests:
+  - No sealed manifest → agent tool call blocked
+  - Unregistered new file → agent tool call blocked
+  - Modified sealed evidence → agent tool call blocked
+  - Missing sealed evidence → agent tool call blocked
+  - Verified chain → backend tool invoked
+  - Block audit envelope written
+  - Read-only evidence status tool remains available
+
+### 16d. case-mcp evidence tools migration
+
+- [ ] Add/read tools:
+  - `evidence_chain_status`
+  - `evidence_manifest_get`
+  - `evidence_verify` returns evidence-chain status, not only legacy `evidence.json` hash checks
+- [ ] Keep existing `evidence_register` compatible but redirect examiner users toward portal sealing
+- [ ] Agent role must not be able to seal or mutate evidence chain via MCP
+- [ ] Tests:
+  - Legacy `evidence_list` still returns registered files
+  - New status includes manifest version/hash and issue counts
+  - Agent cannot mutate evidence chain
+
+### 16e. Report and export integration
+
+- [ ] `report-mcp` includes:
+  - latest evidence manifest version/hash
+  - evidence file count and total bytes
+  - evidence-chain verification status
+  - ledger mismatch warnings
+- [ ] Report generation refuses or returns prominent `integrity_warning` if evidence chain is not OK
+- [ ] Export bundle includes evidence manifest metadata, not raw evidence files
+- [ ] Tests:
+  - Verified evidence chain appears in report data
+  - Modified evidence produces report integrity warning or refusal
+  - Missing ledger produces report integrity warning
+
+### 16f. OpenSearch ingest and processing provenance compatibility
+
+- [ ] Keep OpenSearch ingest manifests in `audit/ingest-manifests/`; do not move processing manifests into `evidence/`
+- [ ] Ingest tools must rely on gateway gate before processing evidence
+- [ ] Preserve `input_files` and `input_sha256s` in backend audit records
+- [ ] Tests:
+  - OpenSearch ingest of verified evidence proceeds
+  - OpenSearch ingest with evidence-chain violation is blocked at gateway before backend call
+  - Ingest manifest remains under `audit/ingest-manifests/`
+
+### 16g. Filesystem and operational hardening
+
+- [ ] Detect filesystems that do not honor POSIX chmod (`ntfs`, `exfat`, `vfat`, `fuseblk`) and surface degraded warning in portal
+- [ ] Optional admin-only hardening plan: document when `chattr +i` can be used and why it is not the default for evidence growth
+- [ ] Ensure manual additions are allowed operationally but never trusted until sealed
+- [ ] Tests:
+  - chmod failure path returns degraded protection warning
+  - Later legitimate evidence addition creates version `N+1` without invalidating prior versions
+
+---
+
 ## Phase 11 — Integration Verification
 
 > (Moved below new phases — run last)
@@ -659,8 +827,14 @@ All test suites verified passing in Session 3:
 - [ ] Enrichment/RAG assets are present and either healthy or report clear degraded mode
 - [ ] Default examiner login forces password reset before case/token/commit operations
 - [ ] Portal creates a full case directory and activates it through `AGENTIR_CASE_DIR`
+- [ ] Case init creates `evidence/`, `evidence-manifest.json`, and `evidence-ledger.jsonl`
 - [ ] Invalid case create inputs are rejected: traversal, relative paths, bad id, unwritable root, existing non-empty directory
 - [ ] Backend reload after case create propagates active case to all MCP backends
+- [ ] Portal shows unsealed evidence warning after new case creation until examiner seals evidence state
+- [ ] Portal detects manually copied unregistered files under `evidence/`
+- [ ] Examiner can register later-discovered evidence without breaking prior manifest versions
+- [ ] Modified/missing registered evidence blocks agent MCP tool calls
+- [ ] Unregistered evidence blocks agent MCP tool calls and returns human-remediation guidance
 - [ ] Hermes profile uses only aggregate `/mcp`
 - [ ] Service token can use aggregate MCP but cannot access portal APIs
 - [ ] Per-backend MCP URLs are disabled in production or diagnostic opt-in only
@@ -676,10 +850,24 @@ All test suites verified passing in Session 3:
 - [ ] Role enforcement: agent token → 403 on portal API
 - [ ] Session expiry: expired cookie → redirected to login screen
 - [ ] Logout: old session cookie rejected after logout (revocation works)
+- [ ] Report output includes evidence manifest version/hash and warns/refuses on evidence-chain mismatch
 
 ---
 
 ## Session Notes
+
+### Session 16 (2026-05-24)
+
+**Planning update only:**
+- Created new Phase 16 specification for evidence manifest, evidence ledger, portal evidence intake,
+  and gateway MCP chain-of-custody gate.
+- Updated `AGENTS.md`, `SIFT-MCPS-PLAN.md`, and `TASKS.md` to require:
+  - Manual evidence copied into `evidence/` is detected but not trusted automatically.
+  - Portal shows clear warnings for unregistered, modified, missing, or ledger-mismatched evidence.
+  - Examiner can append legitimate later-discovered evidence through an authenticated/HMAC-confirmed flow.
+  - Agent MCP calls verify evidence chain before backend routing and fail closed with structured
+    human-remediation guidance when the evidence chain is not OK.
+- No code implementation yet.
 
 ### Session 15 (2026-05-24)
 
