@@ -164,8 +164,9 @@ def test_successful_case_creation(client, case_env, passwords_dir):
     
     with open(requested_dir / "evidence-manifest.json") as f:
         manifest = json.load(f)
-    assert manifest["version"] == 1
-    assert manifest["sealed"] is False
+    assert manifest["version"] == 0
+    assert manifest["files"] == []
+    assert manifest["manifest_hash"].startswith("sha256:")
     
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)

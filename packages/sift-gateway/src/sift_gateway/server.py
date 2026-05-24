@@ -670,6 +670,12 @@ class Gateway:
             _gw_config_path: str | None = _os.environ.get("AGENTIR_GATEWAY_CONFIG") or str(
                 _Path.home() / ".agentir" / "gateway.yaml"
             )
+            from sift_gateway.evidence_gate import invalidate_evidence_cache
+            from sift_gateway.response_guard import (
+                cancel_override,
+                enable_override,
+                get_override_status,
+            )
             routes.append(
                 Mount(
                     "/portal",
@@ -678,6 +684,10 @@ class Gateway:
                         session_max_age=portal_max_age,
                         api_keys=api_keys,
                         gateway_config_path=_gw_config_path,
+                        on_chain_mutation=invalidate_evidence_cache,
+                        on_override_get_status=get_override_status,
+                        on_override_enable=enable_override,
+                        on_override_cancel=cancel_override,
                     ),
                 )
             )

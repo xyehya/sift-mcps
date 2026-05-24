@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import Sequence
 from typing import Any
@@ -34,7 +35,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from sift_gateway.auth import verify_api_key
+from sift_gateway.evidence_gate import build_block_response, check_evidence_gate
 from sift_gateway.rate_limit import check_examiner_rate_limit, check_rate_limit
+from sift_gateway.response_guard import get_override_status, is_override_active, redact_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +265,28 @@ def create_mcp_server(gateway: Any) -> Server:
     async def _call_tool(name: str, arguments: dict) -> Sequence[TextContent]:
         examiner = _extract_examiner(server)
 
+        # Evidence chain gate — fail-closed before any backend routing
+        case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+        gate = check_evidence_gate(case_dir_str)
+        if gate["blocked"]:
+            try:
+                await asyncio.to_thread(
+                    gateway._audit.log,
+                    tool=name,
+                    params={},
+                    result_summary=f"blocked: evidence_chain_{gate['status']}",
+                    source="gateway_evidence_gate",
+                    extra={
+                        "examiner": examiner,
+                        "evidence_chain_status": gate["status"],
+                        "issues": gate["issues"],
+                        "manifest_version": gate["manifest_version"],
+                    },
+                )
+            except Exception as exc:
+                logger.warning("evidence_gate: audit write failed: %s", exc)
+            return [TextContent(type="text", text=json.dumps(build_block_response(name, gate), indent=2))]
+
         try:
             result = await gateway.call_tool(name, arguments, examiner=examiner)
         except KeyError as e:
@@ -308,16 +333,58 @@ def create_mcp_server(gateway: Any) -> Server:
             ]
 
         # Normalise to list of TextContent for the MCP protocol
-        contents: list[TextContent] = []
+        raw_contents: list[TextContent] = []
         for item in result:
             if isinstance(item, TextContent):
-                contents.append(item)
+                raw_contents.append(item)
             elif hasattr(item, "model_dump"):
-                contents.append(
+                raw_contents.append(
                     TextContent(type="text", text=json.dumps(item.model_dump()))
                 )
             else:
-                contents.append(TextContent(type="text", text=str(item)))
+                raw_contents.append(TextContent(type="text", text=str(item)))
+
+        # Response guard: redact critical+high secrets before forwarding to Hermes
+        override = is_override_active(case_dir_str)
+        contents: list[TextContent] = []
+        all_findings: list[dict] = []
+        for tc in raw_contents:
+            redacted_text, findings = redact_tool_result(tc.text, override_active=override)
+            all_findings.extend(findings)
+            contents.append(TextContent(type="text", text=redacted_text))
+
+        if all_findings:
+            warning_names = sorted({f["pattern_name"] for f in all_findings})
+            try:
+                await asyncio.to_thread(
+                    gateway._audit.log,
+                    tool=name,
+                    params={},
+                    result_summary=f"response_guard: {len(all_findings)} pattern(s) detected",
+                    source="gateway_response_guard",
+                    extra={
+                        "examiner": examiner,
+                        "findings": [
+                            {"pattern_name": f["pattern_name"], "severity": f["severity"],
+                             "char_offset": f["char_offset"]}
+                            for f in all_findings
+                        ],
+                        "redact_override_active": override,
+                        **({"override_by": get_override_status(case_dir_str).get("enabled_by")} if override else {}),
+                    },
+                )
+            except Exception as exc:
+                logger.warning("response_guard: audit write failed: %s", exc)
+            # Inject _agentir_context metadata into the first TextContent
+            if contents:
+                ctx_note = json.dumps({
+                    "_agentir_context": {
+                        "secret_warning": warning_names,
+                        "redact_override_active": override,
+                    }
+                })
+                contents.append(TextContent(type="text", text=ctx_note))
+
         return contents
 
     return server

@@ -11,6 +11,7 @@ import secrets
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,8 +27,17 @@ from agentir_core.approval_auth import (
     _load_password_entry as _load_pw_entry,
     _save_password_entry as _save_pw_entry,
     derive_auth_key,
+    derive_ledger_key,
 )
 from agentir_core.case_io import _protected_write, compute_content_hash
+from agentir_core.evidence_chain import (
+    chain_status,
+    diff_manifest,
+    ignore_file,
+    init_evidence_chain,
+    load_manifest,
+    seal_manifest,
+)
 from agentir_core.verification import compute_hmac, write_ledger_entry
 from case_dashboard.session_jwt import (
     COOKIE_NAME,
@@ -124,6 +134,21 @@ _MAX_LOGIN_CHALLENGES_PER_EXAMINER = 5  # R6 per-examiner in-flight limit
 _case_create_lock = threading.Lock()
 _CASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 
+# Evidence chain challenge store — domain-separated from commit challenges (R2)
+_evidence_challenges: dict[str, dict] = {}
+_EVIDENCE_CHALLENGE_TTL = 30  # seconds
+
+# Callback invoked after every successful evidence chain mutation (seal/ignore).
+# Set by create_dashboard_v2_app() — the gateway passes invalidate_evidence_cache.
+_ON_CHAIN_MUTATION: Callable[[str], None] | None = None
+
+# Response-guard override callbacks — set by create_dashboard_v2_app().
+# The gateway passes the three functions from sift_gateway.response_guard.
+_OVERRIDE_GET_STATUS: Callable[[str], dict] | None = None
+_OVERRIDE_ENABLE: Callable[[str, str, int], dict] | None = None
+_OVERRIDE_CANCEL: Callable[[str], None] | None = None
+
+_DEFAULT_OVERRIDE_TTL = 600  # 10 minutes
 
 
 def _resolve_case_dir() -> Path | None:
@@ -392,6 +417,426 @@ def _must_reset_check(examiner: str) -> JSONResponse | None:
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Evidence chain helpers (Phase 16a)
+# ---------------------------------------------------------------------------
+
+_WRITE_BLOCK_WARNING = (
+    "Evidence directory is not write-protected. "
+    "Forensic best practice requires mounting acquired evidence read-only "
+    "via hardware write-blocker or 'mount -o ro,noatime'."
+)
+
+
+def _detect_write_block(evidence_dir: Path) -> dict:
+    """Detect whether evidence/ is on a read-only mount.
+
+    Returns {write_protected: bool, mount_point?: str, warning?: str}.
+    mtime is not used for integrity — this is for display purposes only.
+    """
+    if not evidence_dir.exists():
+        return {"write_protected": False, "warning": "Evidence directory does not exist"}
+
+    resolved = str(evidence_dir.resolve())
+
+    # Primary: /proc/mounts (Linux)
+    try:
+        mounts_text = Path("/proc/mounts").read_text()
+        best_mp: str | None = None
+        best_opts: list[str] = []
+        for line in mounts_text.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            mp = parts[1]
+            if (resolved == mp or resolved.startswith(mp + "/")) and len(mp) > len(best_mp or ""):
+                best_mp = mp
+                best_opts = parts[3].split(",")
+        if best_mp:
+            if "ro" in best_opts:
+                return {"write_protected": True, "mount_point": best_mp}
+            return {"write_protected": False, "mount_point": best_mp, "warning": _WRITE_BLOCK_WARNING}
+    except OSError:
+        pass
+
+    # Fallback: statvfs ST_RDONLY flag (0x0001)
+    try:
+        vfs = os.statvfs(str(evidence_dir))
+        if vfs.f_flag & 0x0001:
+            return {"write_protected": True}
+    except (OSError, AttributeError):
+        pass
+
+    return {"write_protected": False, "warning": _WRITE_BLOCK_WARNING}
+
+
+def _build_evidence_chain_status(case_dir: Path) -> dict:
+    """Assemble the full evidence chain status payload for portal display."""
+    status = chain_status(case_dir)
+    manifest = load_manifest(case_dir)
+    diff: dict = {}
+    if manifest and manifest.get("version", 0) > 0:
+        diff = diff_manifest(case_dir, manifest)
+
+    evidence_dir = case_dir / "evidence"
+    wb = _detect_write_block(evidence_dir)
+    return {
+        "status": status["status"],
+        "issues": status["issues"],
+        "manifest_version": status["manifest_version"],
+        "ok_count": status.get("ok_count", 0),
+        "unregistered": diff.get("unregistered", []),
+        "missing": diff.get("missing", []),
+        "modified": diff.get("modified", []),
+        "ok": diff.get("ok", []),
+        "write_protected": wb.get("write_protected", False),
+        "write_block_warning": wb.get("warning"),
+        "write_block_mount_point": wb.get("mount_point"),
+    }
+
+
+def _verify_evidence_hmac(
+    examiner: str,
+    challenge_id: str,
+    response_hmac: str,
+    client_ip: str,
+) -> tuple[str | None, bytes | None]:
+    """Verify an evidence chain HMAC challenge. Returns (error_msg | None, derived_key | None)."""
+    now = time.time()
+    challenge = _evidence_challenges.pop(challenge_id, None)
+    if not challenge:
+        return "Invalid or expired challenge", None
+    if now - challenge["created_at"] > _EVIDENCE_CHALLENGE_TTL:
+        return "Challenge expired", None
+    if challenge.get("bound_ip") != client_ip:
+        return "Challenge IP mismatch", None
+    if challenge["examiner"] != examiner:
+        return "Challenge/examiner mismatch", None
+
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    if not entry:
+        return "No password configured", None
+    try:
+        stored_hash = bytes.fromhex(entry["hash"])
+    except (ValueError, KeyError):
+        return "Password data corrupted", None
+
+    expected = hmac_mod.new(stored_hash, challenge["nonce"].encode(), "sha256").hexdigest()
+    if not hmac_mod.compare_digest(expected, response_hmac):
+        _record_commit_failure(f"evidence:{examiner}")
+        return "Incorrect password", None
+
+    _clear_commit_failures(f"evidence:{examiner}")
+    return None, derive_ledger_key(entry["hash"])
+
+
+# ---------------------------------------------------------------------------
+# Evidence chain endpoint handlers (Phase 16a)
+# ---------------------------------------------------------------------------
+
+
+async def get_evidence_chain_status(request: Request) -> JSONResponse:
+    """Return evidence chain status, diff, and write-block detection. No mutation."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    return JSONResponse(_build_evidence_chain_status(case_dir))
+
+
+async def post_evidence_chain_rescan(request: Request) -> JSONResponse:
+    """Drop the evidence gate cache and return a fresh status."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    if _ON_CHAIN_MUTATION and case_dir_str:
+        try:
+            _ON_CHAIN_MUTATION(case_dir_str)
+        except Exception as exc:
+            logger.warning("evidence rescan: cache invalidation failed: %s", exc)
+
+    return JSONResponse(_build_evidence_chain_status(case_dir))
+
+
+async def get_evidence_chain_challenge(request: Request) -> JSONResponse:
+    """Issue a challenge nonce for evidence seal/ignore operations."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    lockout_msg = _check_commit_lockout(f"evidence:{examiner}")
+    if lockout_msg:
+        return JSONResponse({"error": lockout_msg}, status_code=429)
+
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    if not entry:
+        return JSONResponse({"error": "No password configured"}, status_code=403)
+
+    # Purge expired evidence challenges
+    now = time.time()
+    expired = [k for k, v in _evidence_challenges.items() if now - v["created_at"] > _EVIDENCE_CHALLENGE_TTL]
+    for k in expired:
+        del _evidence_challenges[k]
+
+    challenge_id = secrets.token_hex(16)
+    nonce = secrets.token_hex(32)
+    _evidence_challenges[challenge_id] = {
+        "nonce": nonce,
+        "examiner": examiner,
+        "created_at": now,
+        "bound_ip": request.client.host,
+    }
+
+    return JSONResponse({
+        "challenge_id": challenge_id,
+        "nonce": nonce,
+        "salt": entry["salt"],
+        "iterations": 600000,
+        "hash_algorithm": "SHA-256",
+    })
+
+
+async def post_evidence_chain_seal(request: Request) -> JSONResponse:
+    """Seal a new evidence manifest version with HMAC confirmation.
+
+    Body: {challenge_id, response, file_specs: [{path, source?, description?}]}
+    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
+    """
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    challenge_id = str(body.get("challenge_id", ""))
+    response_hmac = str(body.get("response", ""))
+    file_specs = body.get("file_specs", [])
+
+    if not challenge_id or not response_hmac:
+        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
+    if not isinstance(file_specs, list):
+        return JSONResponse({"error": "file_specs must be a list"}, status_code=400)
+
+    err_msg, derived_key = _verify_evidence_hmac(
+        examiner, challenge_id, response_hmac, request.client.host
+    )
+    if err_msg:
+        return JSONResponse({"error": err_msg}, status_code=401)
+
+    # Validate file_specs entries
+    for spec in file_specs:
+        if not isinstance(spec, dict) or "path" not in spec:
+            return JSONResponse({"error": "Each file_spec must have a 'path' key"}, status_code=400)
+
+    try:
+        new_manifest = seal_manifest(case_dir, file_specs, examiner, derived_key)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception:
+        logger.exception("Evidence seal failed")
+        return JSONResponse({"error": "Seal failed — check gateway logs"}, status_code=500)
+
+    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    if _ON_CHAIN_MUTATION and case_dir_str:
+        try:
+            _ON_CHAIN_MUTATION(case_dir_str)
+        except Exception as exc:
+            logger.warning("evidence seal: cache invalidation failed: %s", exc)
+
+    return JSONResponse({
+        "sealed": True,
+        "manifest_version": new_manifest["version"],
+        "files_added": [s["path"] for s in file_specs],
+    })
+
+
+async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
+    """Mark an unregistered evidence file as intentionally ignored with HMAC confirmation.
+
+    Body: {challenge_id, response, path, reason}
+    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
+    """
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    challenge_id = str(body.get("challenge_id", ""))
+    response_hmac = str(body.get("response", ""))
+    rel_path = str(body.get("path", "")).strip()
+    reason = str(body.get("reason", "")).strip()
+
+    if not challenge_id or not response_hmac:
+        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
+    if not rel_path:
+        return JSONResponse({"error": "Missing path"}, status_code=400)
+    if not reason:
+        return JSONResponse({"error": "Missing reason"}, status_code=400)
+
+    err_msg, derived_key = _verify_evidence_hmac(
+        examiner, challenge_id, response_hmac, request.client.host
+    )
+    if err_msg:
+        return JSONResponse({"error": err_msg}, status_code=401)
+
+    try:
+        ignore_file(case_dir, rel_path, examiner, derived_key, reason)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception:
+        logger.exception("Evidence ignore failed")
+        return JSONResponse({"error": "Ignore failed — check gateway logs"}, status_code=500)
+
+    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    if _ON_CHAIN_MUTATION and case_dir_str:
+        try:
+            _ON_CHAIN_MUTATION(case_dir_str)
+        except Exception as exc:
+            logger.warning("evidence ignore: cache invalidation failed: %s", exc)
+
+    return JSONResponse({
+        "ignored": True,
+        "path": rel_path,
+        "manifest_version": (load_manifest(case_dir) or {}).get("version", -1),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Response-guard override endpoints (Approach C / Phase 16a-guard)
+# ---------------------------------------------------------------------------
+
+
+async def get_response_guard_status(request: Request) -> JSONResponse:
+    """Return current response-guard override status. Session auth, no HMAC."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    if _OVERRIDE_GET_STATUS is None:
+        return JSONResponse({"active": False, "seconds_remaining": 0, "enabled_by": None,
+                             "warning": "Response guard not wired (non-gateway context)"})
+    return JSONResponse(_OVERRIDE_GET_STATUS(case_dir_str))
+
+
+async def post_response_guard_override(request: Request) -> JSONResponse:
+    """Enable response-guard override with HMAC confirmation (default TTL: 10 min).
+
+    Body: {challenge_id, response, ttl_seconds?}
+    """
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    if not case_dir_str:
+        return _no_case_response()
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    challenge_id = str(body.get("challenge_id", ""))
+    response_hmac = str(body.get("response", ""))
+    ttl = int(body.get("ttl_seconds", _DEFAULT_OVERRIDE_TTL))
+
+    if not challenge_id or not response_hmac:
+        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
+    if ttl < 1 or ttl > 3600:
+        return JSONResponse({"error": "ttl_seconds must be 1–3600"}, status_code=400)
+
+    err_msg, _ = _verify_evidence_hmac(examiner, challenge_id, response_hmac, request.client.host)
+    if err_msg:
+        return JSONResponse({"error": err_msg}, status_code=401)
+
+    if _OVERRIDE_ENABLE is None:
+        return JSONResponse({"error": "Response guard not wired"}, status_code=503)
+
+    status = _OVERRIDE_ENABLE(case_dir_str, examiner, ttl)
+    logger.warning(
+        "response_guard override ENABLED: examiner=%s case=%s ttl=%ds",
+        examiner, case_dir_str, ttl,
+    )
+    return JSONResponse({"enabled": True, **status})
+
+
+async def post_response_guard_override_cancel(request: Request) -> JSONResponse:
+    """Cancel an active response-guard override. Session auth only (no HMAC)."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    examiner = _resolve_examiner(request)
+
+    if _OVERRIDE_CANCEL is None:
+        return JSONResponse({"error": "Response guard not wired"}, status_code=503)
+
+    _OVERRIDE_CANCEL(case_dir_str)
+    logger.info("response_guard override CANCELLED: examiner=%s case=%s", examiner, case_dir_str)
+    return JSONResponse({"cancelled": True})
 
 
 def _apply_note(item: dict, note: str, identity: dict) -> None:
@@ -2316,8 +2761,6 @@ async def post_case_create(request: Request) -> JSONResponse:
             ("findings.json", "[]"),
             ("timeline.json", "[]"),
             ("evidence.json", '{"files": []}'),
-            ("evidence-manifest.json", '{"version": 1, "sealed": false, "files": []}'),
-            ("evidence-ledger.jsonl", ""),
             ("todos.json", "[]"),
             ("iocs.json", "[]"),
             ("approvals.jsonl", ""),
@@ -2327,6 +2770,9 @@ async def post_case_create(request: Request) -> JSONResponse:
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())
+
+        # Evidence chain: write evidence-manifest.json (v0) + evidence-ledger.jsonl
+        init_evidence_chain(real_requested)
 
         # Update gateway.yaml config atomically if configured
         if _GATEWAY_CONFIG_PATH is not None:
@@ -2378,6 +2824,16 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/{path:path}/verify", verify_evidence, methods=["POST"]),
         Route("/api/commit/challenge", get_commit_challenge, methods=["GET"]),
         Route("/api/commit", post_commit, methods=["POST"]),
+        # Phase 16a: evidence chain intake
+        Route("/api/evidence/chain/status", get_evidence_chain_status, methods=["GET"]),
+        Route("/api/evidence/chain/rescan", post_evidence_chain_rescan, methods=["POST"]),
+        Route("/api/evidence/chain/challenge", get_evidence_chain_challenge, methods=["GET"]),
+        Route("/api/evidence/chain/seal", post_evidence_chain_seal, methods=["POST"]),
+        Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
+        # Approach C: response-guard override
+        Route("/api/response-guard/status", get_response_guard_status, methods=["GET"]),
+        Route("/api/response-guard/override", post_response_guard_override, methods=["POST"]),
+        Route("/api/response-guard/override/cancel", post_response_guard_override_cancel, methods=["POST"]),
         # Phase 12d: auth endpoints
         Route("/api/auth/setup-required", get_auth_setup_required, methods=["GET"]),
         Route("/api/auth/setup", post_auth_setup, methods=["POST"]),
@@ -2435,6 +2891,10 @@ def create_dashboard_v2_app(
     session_max_age: int = 28800,
     api_keys: dict | None = None,
     gateway_config_path: str | None = None,
+    on_chain_mutation: Callable[[str], None] | None = None,
+    on_override_get_status: Callable[[str], dict] | None = None,
+    on_override_enable: Callable[[str, str, int], dict] | None = None,
+    on_override_cancel: Callable[[str], None] | None = None,
 ) -> Starlette:
     """Create the v2 dashboard sub-app for mounting on the gateway.
 
@@ -2446,14 +2906,26 @@ def create_dashboard_v2_app(
             honoured by the auth middleware without a restart.
         gateway_config_path: Absolute path to gateway.yaml. Required for
             token lifecycle endpoints; if absent they return 503.
+        on_chain_mutation: Called with case_dir_str after every evidence chain
+            seal or ignore. The gateway passes invalidate_evidence_cache so the
+            30s TTL cache is dropped immediately on portal seal.
+        on_override_get_status / on_override_enable / on_override_cancel:
+            Bound to response_guard.get_override_status / enable_override /
+            cancel_override by the gateway. Required for response-guard portal
+            endpoints; absent in tests returns a 503 / warning response.
     """
     from case_dashboard.auth import PortalSessionMiddleware
 
     global _SESSION_SECRET, _SESSION_MAX_AGE, _API_KEYS, _GATEWAY_CONFIG_PATH
+    global _ON_CHAIN_MUTATION, _OVERRIDE_GET_STATUS, _OVERRIDE_ENABLE, _OVERRIDE_CANCEL
     _SESSION_SECRET = session_secret
     _SESSION_MAX_AGE = session_max_age
     _API_KEYS = api_keys if api_keys is not None else {}
     _GATEWAY_CONFIG_PATH = Path(gateway_config_path) if gateway_config_path else None
+    _ON_CHAIN_MUTATION = on_chain_mutation
+    _OVERRIDE_GET_STATUS = on_override_get_status
+    _OVERRIDE_ENABLE = on_override_enable
+    _OVERRIDE_CANCEL = on_override_cancel
     routes = _dashboard_api_routes()
     routes.append(Route("/{filename}", serve_v2_static, methods=["GET"]))
     routes.append(Route("/", serve_v2_index, methods=["GET"]))

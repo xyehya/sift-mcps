@@ -22,6 +22,7 @@ from agentir_core.case_io import (
     load_timeline,
     load_todos,
 )
+from agentir_core.evidence_chain import init_evidence_chain
 
 
 def case_status_data(case_dir) -> dict:
@@ -163,6 +164,8 @@ def case_init_data(
         json.dump({"files": []}, f)
         f.flush()
         os.fsync(f.fileno())
+
+    init_evidence_chain(case_dir)
 
     # Detect non-POSIX filesystems before trying chmod
     fs_warning = ""

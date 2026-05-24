@@ -45,6 +45,7 @@ generates the final signed deliverable. Chain of custody is preserved at every s
 - `/home/yk/AI/SIFTHACK/Valhuntir/sift-mcp/` — original sift-mcp monorepo
 - `/home/yk/AI/SIFTHACK/Valhuntir/opensearch-mcp/` — original opensearch-mcp
 - `/home/yk/AI/SIFTHACK/hermes-agent/` — Hermes agent
+- `/home/yk/AI/SIFTHACK/liquefy/` — Agent workspace archival + sentinel protection tool (deploy on analyst machine, not SIFT VM — see §Liquefy Integration in SIFT-MCPS-PLAN.md)
 
 Valhuntir's README is useful context for the original workflow, but sift-mcps is not a direct
 replication. We cherry-pick useful functions and ideas, then improve, decouple, harden, and make
@@ -189,82 +190,6 @@ These fixes were completed in TASKS.md Phase 2b.
 
 ---
 
-## Current State (as of Session 22 — 2026-05-24)
-
-### What Is Done ✅
-- **Phase 0 COMPLETE** — all blocking bugs fixed, namespace sweep finished, verification gate passed
-- **Phase 1 COMPLETE** — uv workspace scaffold, all packages, agentir-core extracted
-- **Phase 2b COMPLETE** — agentir-core library hardening done
-- **Phase 3 COMPLETE** — portal HTTPS/CORS/nonce/error hardening done
-- **Phase 4a-4d COMPLETE** — shared auth helper, token expiry, examiner rate limit, Origin validation, extractor dedupe done
-- **Phase 4e RESEARCH DONE / IMPLEMENTATION DEFERRED** — `mcp==1.27.1` has `ServerSession.send_tool_list_changed()` but `StreamableHTTPSessionManager` exposes no public session lifecycle hook
-- **Phase 5 COMPLETE** — forensic-rag-mcp migrated to FastMCP
-- **Phase 6 COMPLETE** — sift-mcp argument sanitizer now rejects null bytes, rejects >4096-char args, and NFC-normalizes Unicode
-- **Phase 7 COMPLETE** — `install.sh` foundation: TLS gen, token gen, default examiner, systemd, gateway config render; live VM run still pending
-- **Phase 8 COMPLETE** — `docker-compose.yml`: OpenSearch 2.18.0, localhost-only, snapshots bind mount, `agentir-opensearch` container name
-- **Phase 9 COMPLETE** — `configs/gateway.yaml.template`, `configs/hermes-forensics-profile.yaml`, `configs/systemd/sift-gateway.service`
-- **Phase 11 COMPLETE** — SQLite-backed `windows-triage-mcp` restored from original source, DB downloader integrated, health/degraded handling implemented, and all 8 unit tests verified passing.
-- **Phase 12-pre COMPLETE** — R8 domain-separated HMAC sub-keys (`derive_auth_key`, `derive_ledger_key`)
-- **Phase 12a-12c COMPLETE** — `session_jwt.py`, `portal_session_secret` wiring, `PortalSessionMiddleware`
-- **Phase 12d COMPLETE** — 7 auth endpoints (setup, challenge, login, reset-password, logout, me); R1/R2/R3/R6/R8 guards; 36 tests
-- **Phase 12e COMPLETE** — `_resolve_examiner` env-var fallback removed (R9); must_reset checks on all write routes (R1)
-- **Phase 12f COMPLETE** — gateway R4 agent→portal block; portal paths bypass gateway auth; 8 tests
-- **Threat model complete (Session 14)** — 9 security guards (R1-R9) specified; all guards from Phase 12 are now implemented
-- **Evidence chain-of-custody feature newly specified (Session 16)** — Phase 16 adds versioned evidence manifest, evidence ledger, portal warnings/actions, and gateway MCP fail-closed gate
-- **Windows baseline correction newly specified (Session 18)** — restore `windows-triage-mcp` as a SIFT-local baseline/enrichment backend; continue dropping only `wintools-mcp`
-- **Windows baseline source audit corrected (Session 21)** — original SQLite-backed source exists at `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage`; Phase 11 must port that implementation and DB downloader, not keep the JSON scaffold
-- **agentir-core tests: 139/139 passing**
-- **case-dashboard tests: 75/75 passing**
-- **sift-gateway tests: 8/8 passing**
-- `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → **0 lines**
-
-### What Needs Fixing Next (See TASKS.md)
-
-**Priority 0 — Phase 13: RBAC, agent credentials, portal route guards**
-- 13a: `token_gen.py` — `generate_service_token()` and fix `generate_gateway_token()`
-- 13b: readonly→403 on MCP writes (R4 agent→portal already done in Phase 12f)
-- 13c: `_require_examiner_role()` helper; apply to delta/commit/token/case-create routes
-- 13f: Portal service-token lifecycle endpoints
-
-**Priority 2 — Phase 13/14/15: RBAC, dashboard rewiring, session hardening**
-- Portal RBAC, service-token lifecycle, dashboard auth rewiring, login screen, case-init modal, secure headers
-
-**Priority 3 — Audit invariant / regression guard**
-- Tool actions are audited today, but not yet in the final gateway-envelope shape for every backend.
-- Phase 13 must close the gap: every aggregate `/mcp` `call_tool` writes a minimal `sift-gateway.jsonl` envelope (role, token id, agent id/examiner, source IP, active case, tool, backend, status, duration). Link to backend `audit_id` via `backend_audit_id`. Never log raw tokens or HMAC responses.
-
-**Priority 4 — Phase 7 live validation (non-blocking for Phase 12)**
-- Run `install.sh` on clean Ubuntu/SIFT VM, verify `docker compose up -d` → OpenSearch healthy, `https://127.0.0.1:4508/health` responds.
-
-**Priority 5 — New Phase 16: Evidence manifest + evidence ledger chain gate**
-- Implement after/alongside portal case creation and auth, because it depends on authenticated
-  examiner actions and active `AGENTIR_CASE_DIR`.
-- Manual files copied into `evidence/` must trigger portal warnings until registered/sealed.
-- Agent MCP calls must verify the evidence chain before backend routing and block with a structured
-  human-remediation warning on unsealed, unregistered, modified, missing, or ledger-mismatched evidence.
-
-**Phase 4e — Deferred**
-- `notifications/tools/list_changed` requires SDK session lifecycle hooks not yet exposed by `mcp==1.27.1`.
-
-### Pre-Implementation Security Requirements (R1–R9)
-
-These guards are non-negotiable additions to Phase 12-15. Full specs in SIFT-MCPS-PLAN.md §Phase 12 Security Requirements. One-line summaries for quick reference:
-
-- **R1** `must_reset_password` re-read from disk before every write operation — JWT is a UI hint only
-- **R2** Separate lockout counter namespace: `login:{examiner}` vs. `commit:{examiner}` — never cross-pollute
-- **R3** Fake challenge for unknown examiners — always return a valid-looking challenge to prevent user enumeration
-- **R4** Agent→403 on `/portal/api/` co-ships with Phase 12 — not deferred to Phase 13
-- **R5** `os.path.realpath` symlink guard + `threading.Lock` on case create — prevent path escape and race
-- **R6** Login challenge pool capped at 200 entries, per-examiner limit of 5 in-flight
-- **R7** Enrichment appended as `_agentir_context` metadata key only — never interpolated into tool result text (prompt injection defense)
-- **R8** Domain-separated HMAC sub-keys before any production case data: `derive_auth_key()` for login, `derive_ledger_key()` for verification ledger
-- **R9** `getattr(request.state, "examiner", None)` everywhere — never direct attribute access
-- **R10** Evidence chain gate before MCP operations — gateway verifies evidence manifest/ledger state
-  before routing agent tool calls; mismatch, missing registered evidence, or unregistered files
-  blocks the call and returns a structured warning for human-in-the-loop remediation.
-
----
-
 ## Key Architectural Decisions
 
 ### Gateway as aggregator
@@ -309,19 +234,20 @@ human operator to use the portal; the gateway does not run the backend tool.
 
 | Package | Purpose | State |
 |---------|---------|-------|
-| `agentir-core` | Shared library: case I/O, auth, HMAC, identity, evidence chain | Evidence manifest/ledger helpers needed for new Phase 16 |
-| `sift-gateway` | HTTP gateway, auth, routing, portal mount | Phase 12 wiring plus new evidence chain gate before MCP routing |
-| `case-dashboard` | Examiner Portal Starlette sub-app | Phase 12-15 plus evidence intake warnings/actions in new Phase 16 |
+| `agentir-core` | Shared library: case I/O, auth, HMAC, identity, evidence chain | Phase 16: new `evidence_chain.py` (scan, seal, HMAC, hash-chain verify). Phase 16+: optional `anchor_manifest()` (Solana). |
+| `sift-gateway` | HTTP gateway, auth, routing, portal mount | Phase 16b complete (evidence gate). Approach C next: `response_guard.py` — redacts critical+high secrets inline before forwarding to Hermes; examiner can enable 10-min HMAC-confirmed override from portal. |
+| `case-dashboard` | Examiner Portal Starlette sub-app | Phase 16a complete (evidence intake: status/rescan/challenge/seal/ignore + write-block detection). Approach C: 3 response-guard endpoints. Phase 16f: anchor status display. |
 | `forensic-mcp` | Record findings, timeline events | ✅ No changes needed |
-| `case-mcp` | Case lifecycle (init, status, join, evidence registry) | Needs evidence-chain-aware register/list/verify behavior |
+| `case-mcp` | Case lifecycle (init, status, join, evidence registry) | Phase 16: evidence-chain-aware `evidence_register`, `evidence_list`, `evidence_verify`. |
 | `sift-mcp` | Run forensic tools via shell=False | Must stay behind gateway evidence chain gate |
-| `report-mcp` | Generate final case report | Must include evidence manifest/ledger status and fail/warn on evidence mismatch |
+| `report-mcp` | Generate final case report | Phase 16: include evidence manifest/ledger status; warn/fail on chain violation. |
 | `forensic-rag-mcp` | Semantic search over forensic knowledge | ✅ Phase 5 complete |
-| `windows-triage-mcp` | Local Windows known-good baseline validation and OpenSearch enrichment support | Must port original SQLite-backed implementation + DB downloader from `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage`; current JSON scaffold is temporary |
+| `windows-triage-mcp` | Local Windows known-good baseline validation and OpenSearch enrichment support | ✅ Phase 11 complete. SQLite-backed, 13 tools, 3 DBs, DB downloader, health/degraded mode; 8 tests. |
 | `opencti-mcp` | Threat intel enrichment via OpenCTI | ✅ No changes needed |
 | `opensearch-mcp` | SIEM evidence indexing and search | ✅ TLS fix + OPENSEARCH_CONFIG env done |
 | `sift-common` | AuditWriter, oplog, parsers | `resolve_examiner()` duplicates identity — fix on touch only |
 | `forensic-knowledge` | YAML forensic knowledge data | ✅ Unchanged |
+| `liquefy` (external) | Agent workspace archival, sentinel protection, vault encryption — for Hermes on analyst machine | At `/home/yk/AI/SIFTHACK/liquefy/`. Deploy on analyst machine only. See SIFT-MCPS-PLAN.md §Liquefy Integration. |
 
 ---
 
@@ -333,11 +259,17 @@ cd /home/yk/AI/SIFTHACK/sift-mcps
 # Install all packages
 uv sync --all-packages
 
-# Run agentir-core tests
+# Run all tests (primary gate)
+uv run pytest packages/agentir-core/tests/ packages/case-dashboard/ packages/sift-gateway/ -v --tb=short
+
+# Run agentir-core tests only
 uv run pytest packages/agentir-core/tests/ -v --tb=short
 
 # Run opensearch-mcp tests (many, all parser/ingest)
 uv run pytest packages/opensearch-mcp/tests/ -v --tb=short
+
+# Namespace sweep gate (must return 0 lines)
+grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."
 
 # Import smoke test
 uv run python -c "from case_mcp.server import create_server; print('OK')"

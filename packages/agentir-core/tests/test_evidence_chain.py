@@ -1,0 +1,468 @@
+"""Tests for agentir_core.evidence_chain."""
+
+import hashlib
+import json
+import os
+
+import pytest
+
+from agentir_core.evidence_chain import (
+    ChainStatus,
+    chain_status,
+    compute_manifest_hash,
+    diff_manifest,
+    hash_file,
+    ignore_file,
+    init_evidence_chain,
+    load_ledger,
+    load_manifest,
+    scan_evidence_dir,
+    seal_manifest,
+    verify_chain_hmac,
+    verify_chain_integrity,
+)
+
+_KEY = b"test-derived-key-32bytes-padding!"  # 32-byte test key
+
+
+@pytest.fixture
+def case_dir(tmp_path):
+    (tmp_path / "evidence").mkdir()
+    (tmp_path / "CASE.yaml").write_text("case_id: test-case-001\ntitle: Test\nexaminer: alice\n")
+    return tmp_path
+
+
+@pytest.fixture
+def initialized(case_dir):
+    init_evidence_chain(case_dir)
+    return case_dir
+
+
+# ---------------------------------------------------------------------------
+# init_evidence_chain
+# ---------------------------------------------------------------------------
+
+class TestInitEvidenceChain:
+    def test_creates_manifest(self, case_dir):
+        init_evidence_chain(case_dir)
+        assert (case_dir / "evidence-manifest.json").exists()
+
+    def test_creates_ledger(self, case_dir):
+        init_evidence_chain(case_dir)
+        assert (case_dir / "evidence-ledger.jsonl").exists()
+
+    def test_manifest_version_zero(self, case_dir):
+        init_evidence_chain(case_dir)
+        m = load_manifest(case_dir)
+        assert m["version"] == 0
+        assert m["files"] == []
+
+    def test_manifest_hash_is_valid(self, case_dir):
+        init_evidence_chain(case_dir)
+        m = load_manifest(case_dir)
+        assert m["manifest_hash"] == compute_manifest_hash(m)
+
+    def test_idempotent(self, case_dir):
+        init_evidence_chain(case_dir)
+        original = load_manifest(case_dir)["manifest_hash"]
+        init_evidence_chain(case_dir)  # second call
+        assert load_manifest(case_dir)["manifest_hash"] == original
+
+
+# ---------------------------------------------------------------------------
+# compute_manifest_hash
+# ---------------------------------------------------------------------------
+
+class TestComputeManifestHash:
+    def test_deterministic(self, initialized):
+        m = load_manifest(initialized)
+        assert compute_manifest_hash(m) == compute_manifest_hash(m)
+
+    def test_excludes_manifest_hash_field(self):
+        m = {"version": 1, "files": [], "manifest_hash": "sha256:ignored", "case_id": "x",
+             "created_at": "t", "created_by": "a", "previous_manifest_hash": ""}
+        h1 = compute_manifest_hash(m)
+        m2 = dict(m)
+        m2["manifest_hash"] = "sha256:different"
+        assert compute_manifest_hash(m2) == h1
+
+    def test_sensitive_to_content(self):
+        m1 = {"version": 1, "files": [], "manifest_hash": "", "case_id": "a",
+              "created_at": "t", "created_by": "x", "previous_manifest_hash": ""}
+        m2 = dict(m1)
+        m2["case_id"] = "b"
+        assert compute_manifest_hash(m1) != compute_manifest_hash(m2)
+
+    def test_returns_sha256_prefix(self):
+        m = {"version": 0, "files": [], "manifest_hash": "", "case_id": "x",
+             "created_at": "t", "created_by": "", "previous_manifest_hash": ""}
+        assert compute_manifest_hash(m).startswith("sha256:")
+
+
+# ---------------------------------------------------------------------------
+# hash_file
+# ---------------------------------------------------------------------------
+
+class TestHashFile:
+    def test_matches_hashlib(self, tmp_path):
+        f = tmp_path / "file.bin"
+        f.write_bytes(b"hello evidence")
+        expected = hashlib.sha256(b"hello evidence").hexdigest()
+        assert hash_file(f) == expected
+
+    def test_large_file_streams(self, tmp_path):
+        f = tmp_path / "large.bin"
+        data = b"x" * (200 * 1024)
+        f.write_bytes(data)
+        expected = hashlib.sha256(data).hexdigest()
+        assert hash_file(f) == expected
+
+
+# ---------------------------------------------------------------------------
+# scan_evidence_dir
+# ---------------------------------------------------------------------------
+
+class TestScanEvidenceDir:
+    def test_finds_files(self, case_dir):
+        (case_dir / "evidence" / "disk.E01").write_bytes(b"image data")
+        result = scan_evidence_dir(case_dir)
+        assert len(result) == 1
+        assert result[0]["path"] == "evidence/disk.E01"
+        assert result[0]["bytes"] == len(b"image data")
+
+    def test_skips_directories(self, case_dir):
+        (case_dir / "evidence" / "subdir").mkdir()
+        result = scan_evidence_dir(case_dir)
+        assert result == []
+
+    def test_skips_symlinks(self, case_dir, tmp_path):
+        target = tmp_path / "external.bin"
+        target.write_bytes(b"data")
+        link = case_dir / "evidence" / "link.bin"
+        link.symlink_to(target)
+        result = scan_evidence_dir(case_dir)
+        assert result == []
+
+    def test_recursive(self, case_dir):
+        (case_dir / "evidence" / "host1").mkdir()
+        (case_dir / "evidence" / "host1" / "mem.raw").write_bytes(b"mem")
+        result = scan_evidence_dir(case_dir)
+        assert any("host1/mem.raw" in r["path"] for r in result)
+
+    def test_no_evidence_dir(self, tmp_path):
+        assert scan_evidence_dir(tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# diff_manifest
+# ---------------------------------------------------------------------------
+
+class TestDiffManifest:
+    def _make_manifest(self, case_dir, files):
+        return {
+            "version": 1,
+            "files": [
+                {"path": f["path"], "bytes": f["bytes"], "sha256": "x", "status": "ACTIVE"}
+                for f in files
+            ],
+        }
+
+    def test_ok_when_all_match(self, case_dir):
+        ev = case_dir / "evidence" / "a.bin"
+        ev.write_bytes(b"data")
+        m = self._make_manifest(case_dir, [{"path": "evidence/a.bin", "bytes": 4}])
+        result = diff_manifest(case_dir, m)
+        assert result["status"] == ChainStatus.OK
+        assert "evidence/a.bin" in result["ok"]
+
+    def test_missing(self, case_dir):
+        m = self._make_manifest(case_dir, [{"path": "evidence/gone.bin", "bytes": 10}])
+        result = diff_manifest(case_dir, m)
+        assert result["status"] == ChainStatus.MISSING
+        assert "evidence/gone.bin" in result["missing"]
+
+    def test_modified_on_size_change(self, case_dir):
+        ev = case_dir / "evidence" / "b.bin"
+        ev.write_bytes(b"newdata")
+        m = self._make_manifest(case_dir, [{"path": "evidence/b.bin", "bytes": 100}])
+        result = diff_manifest(case_dir, m)
+        assert result["status"] == ChainStatus.MODIFIED
+        assert "evidence/b.bin" in result["modified"]
+
+    def test_unregistered(self, case_dir):
+        (case_dir / "evidence" / "extra.bin").write_bytes(b"x")
+        m = {"version": 1, "files": []}
+        result = diff_manifest(case_dir, m)
+        assert result["status"] == ChainStatus.UNREGISTERED
+        assert "evidence/extra.bin" in result["unregistered"]
+
+    def test_ignored_entries_excluded(self, case_dir):
+        m = {"version": 1, "files": [
+            {"path": "evidence/ignored.bin", "bytes": 0, "sha256": "", "status": "IGNORED"}
+        ]}
+        result = diff_manifest(case_dir, m)
+        assert result["status"] == ChainStatus.OK
+
+    def test_priority_missing_over_unregistered(self, case_dir):
+        (case_dir / "evidence" / "extra.bin").write_bytes(b"x")
+        m = self._make_manifest(case_dir, [{"path": "evidence/gone.bin", "bytes": 10}])
+        result = diff_manifest(case_dir, m)
+        assert result["status"] == ChainStatus.MISSING
+
+
+# ---------------------------------------------------------------------------
+# chain_status
+# ---------------------------------------------------------------------------
+
+class TestChainStatus:
+    def test_unsealed_on_v0(self, initialized):
+        result = chain_status(initialized)
+        assert result["status"] == ChainStatus.UNSEALED
+
+    def test_ok_after_seal(self, initialized):
+        ev = initialized / "evidence" / "disk.E01"
+        ev.write_bytes(b"disk image")
+        seal_manifest(initialized, [{"path": "evidence/disk.E01"}], "alice", _KEY)
+        result = chain_status(initialized)
+        assert result["status"] == ChainStatus.OK
+        assert result["manifest_version"] == 1
+
+    def test_ledger_error_on_manifest_hash_tamper(self, initialized):
+        ev = initialized / "evidence" / "x.bin"
+        ev.write_bytes(b"data")
+        seal_manifest(initialized, [{"path": "evidence/x.bin"}], "alice", _KEY)
+        # Tamper with manifest
+        m = load_manifest(initialized)
+        m["files"][0]["sha256"] = "tampered"
+        (initialized / "evidence-manifest.json").write_text(json.dumps(m))
+        result = chain_status(initialized)
+        assert result["status"] == ChainStatus.LEDGER_ERROR
+
+    def test_missing_after_file_removed(self, initialized):
+        ev = initialized / "evidence" / "del.bin"
+        ev.write_bytes(b"data")
+        seal_manifest(initialized, [{"path": "evidence/del.bin"}], "alice", _KEY)
+        ev.unlink()
+        result = chain_status(initialized)
+        assert result["status"] == ChainStatus.MISSING
+
+    def test_unregistered_file_detected(self, initialized):
+        seal_manifest(initialized, [], "alice", _KEY)
+        (initialized / "evidence" / "surprise.bin").write_bytes(b"unknown")
+        result = chain_status(initialized)
+        assert result["status"] == ChainStatus.UNREGISTERED
+
+    def test_no_manifest_file(self, case_dir):
+        result = chain_status(case_dir)
+        assert result["status"] == ChainStatus.UNSEALED
+
+
+# ---------------------------------------------------------------------------
+# seal_manifest
+# ---------------------------------------------------------------------------
+
+class TestSealManifest:
+    def test_increments_version(self, initialized):
+        seal_manifest(initialized, [], "alice", _KEY)
+        m = load_manifest(initialized)
+        assert m["version"] == 1
+
+    def test_hashes_file_correctly(self, initialized):
+        ev = initialized / "evidence" / "sample.bin"
+        ev.write_bytes(b"forensic data")
+        seal_manifest(initialized, [{"path": "evidence/sample.bin"}], "alice", _KEY)
+        m = load_manifest(initialized)
+        entry = m["files"][0]
+        assert entry["sha256"] == hashlib.sha256(b"forensic data").hexdigest()
+
+    def test_records_examiner(self, initialized):
+        ev = initialized / "evidence" / "f.bin"
+        ev.write_bytes(b"x")
+        seal_manifest(initialized, [{"path": "evidence/f.bin", "source": "USB-123"}], "alice", _KEY)
+        m = load_manifest(initialized)
+        assert m["files"][0]["registered_by"] == "alice"
+        assert m["files"][0]["source"] == "USB-123"
+
+    def test_appends_ledger_event(self, initialized):
+        ev = initialized / "evidence" / "ev.bin"
+        ev.write_bytes(b"evidence")
+        seal_manifest(initialized, [{"path": "evidence/ev.bin"}], "alice", _KEY)
+        ledger = load_ledger(initialized)
+        assert len(ledger) == 1
+        assert ledger[0]["event"] == "MANIFEST_SEALED"
+        assert "evidence/ev.bin" in ledger[0]["files_added"]
+
+    def test_ledger_has_hmac(self, initialized):
+        seal_manifest(initialized, [], "alice", _KEY)
+        ledger = load_ledger(initialized)
+        assert "hmac" in ledger[0]
+        assert len(ledger[0]["hmac"]) == 64
+
+    def test_manifest_hash_chain(self, initialized):
+        ev1 = initialized / "evidence" / "a.bin"
+        ev1.write_bytes(b"a")
+        seal_manifest(initialized, [{"path": "evidence/a.bin"}], "alice", _KEY)
+        m1_hash = load_manifest(initialized)["manifest_hash"]
+
+        ev2 = initialized / "evidence" / "b.bin"
+        ev2.write_bytes(b"b")
+        seal_manifest(initialized, [{"path": "evidence/b.bin"}], "alice", _KEY)
+        m2 = load_manifest(initialized)
+
+        assert m2["previous_manifest_hash"] == m1_hash
+        assert m2["version"] == 2
+
+    def test_seal_empty_case(self, initialized):
+        m = seal_manifest(initialized, [], "alice", _KEY)
+        assert m["version"] == 1
+        assert m["files"] == []
+        ledger = load_ledger(initialized)
+        assert ledger[0]["files_added"] == []
+
+    def test_file_not_found_raises(self, initialized):
+        with pytest.raises(FileNotFoundError):
+            seal_manifest(initialized, [{"path": "evidence/ghost.bin"}], "alice", _KEY)
+
+    def test_directory_rejected(self, initialized):
+        (initialized / "evidence" / "subdir").mkdir()
+        with pytest.raises(ValueError, match="directory"):
+            seal_manifest(initialized, [{"path": "evidence/subdir"}], "alice", _KEY)
+
+    def test_path_traversal_rejected(self, initialized):
+        with pytest.raises(ValueError):
+            seal_manifest(initialized, [{"path": "../../etc/passwd"}], "alice", _KEY)
+
+    def test_carries_ignored_entries(self, initialized):
+        ev = initialized / "evidence" / "real.bin"
+        ev.write_bytes(b"real")
+        seal_manifest(initialized, [{"path": "evidence/real.bin"}], "alice", _KEY)
+        ignore_file(initialized, "evidence/noise.txt", "alice", _KEY, "not evidence")
+        ev2 = initialized / "evidence" / "real2.bin"
+        ev2.write_bytes(b"real2")
+        seal_manifest(initialized, [{"path": "evidence/real2.bin"}], "alice", _KEY)
+        m = load_manifest(initialized)
+        statuses = {f["path"]: f["status"] for f in m["files"]}
+        assert statuses.get("evidence/noise.txt") == "IGNORED"
+        assert statuses.get("evidence/real2.bin") == "ACTIVE"
+
+
+# ---------------------------------------------------------------------------
+# ignore_file
+# ---------------------------------------------------------------------------
+
+class TestIgnoreFile:
+    def test_adds_ignored_entry_to_manifest(self, initialized):
+        ignore_file(initialized, "evidence/noise.bin", "alice", _KEY, "not evidence")
+        m = load_manifest(initialized)
+        assert m["version"] == 1
+        ignored = [f for f in m["files"] if f["status"] == "IGNORED"]
+        assert len(ignored) == 1
+        assert ignored[0]["path"] == "evidence/noise.bin"
+        assert ignored[0]["description"] == "not evidence"
+
+    def test_appends_file_ignored_event(self, initialized):
+        ignore_file(initialized, "evidence/noise.bin", "alice", _KEY, "stray file")
+        ledger = load_ledger(initialized)
+        assert ledger[0]["event"] == "FILE_IGNORED"
+        assert ledger[0]["path"] == "evidence/noise.bin"
+
+    def test_ignored_file_not_flagged_as_unregistered(self, initialized):
+        (initialized / "evidence" / "noise.bin").write_bytes(b"noise")
+        ignore_file(initialized, "evidence/noise.bin", "alice", _KEY, "noise")
+        result = chain_status(initialized)
+        assert "evidence/noise.bin" not in result.get("issues", [])
+
+    def test_raises_without_manifest(self, case_dir):
+        with pytest.raises(ValueError, match="init_evidence_chain"):
+            ignore_file(case_dir, "evidence/x.bin", "alice", _KEY, "reason")
+
+
+# ---------------------------------------------------------------------------
+# verify_chain_integrity
+# ---------------------------------------------------------------------------
+
+class TestVerifyChainIntegrity:
+    def test_ok_after_seal(self, initialized):
+        ev = initialized / "evidence" / "f.bin"
+        ev.write_bytes(b"data")
+        seal_manifest(initialized, [{"path": "evidence/f.bin"}], "alice", _KEY)
+        result = verify_chain_integrity(initialized)
+        assert result["ok"] is True
+        assert result["events"] == 1
+
+    def test_fails_on_manifest_hash_tamper(self, initialized):
+        seal_manifest(initialized, [], "alice", _KEY)
+        m = load_manifest(initialized)
+        m["version"] = 99  # tamper without updating hash
+        (initialized / "evidence-manifest.json").write_text(json.dumps(m))
+        result = verify_chain_integrity(initialized)
+        assert result["ok"] is False
+
+    def test_fails_on_ledger_hash_chain_break(self, initialized):
+        ev = initialized / "evidence" / "f.bin"
+        ev.write_bytes(b"x")
+        seal_manifest(initialized, [{"path": "evidence/f.bin"}], "alice", _KEY)
+        ev2 = initialized / "evidence" / "g.bin"
+        ev2.write_bytes(b"y")
+        seal_manifest(initialized, [{"path": "evidence/g.bin"}], "alice", _KEY)
+        # Tamper with first ledger event
+        ledger = load_ledger(initialized)
+        ledger[0]["new_manifest_hash"] = "sha256:tampered"
+        ledger_path = initialized / "evidence-ledger.jsonl"
+        os.chmod(ledger_path, 0o644)
+        ledger_path.write_text("\n".join(json.dumps(e) for e in ledger) + "\n")
+        result = verify_chain_integrity(initialized)
+        assert result["ok"] is False
+
+    def test_no_manifest_returns_error(self, case_dir):
+        result = verify_chain_integrity(case_dir)
+        assert result["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# verify_chain_hmac
+# ---------------------------------------------------------------------------
+
+class TestVerifyChainHmac:
+    def test_ok_with_correct_key(self, initialized):
+        seal_manifest(initialized, [], "alice", _KEY)
+        result = verify_chain_hmac(initialized, _KEY)
+        assert result["ok"] is True
+        assert result["verified"] == 1
+
+    def test_fails_with_wrong_key(self, initialized):
+        seal_manifest(initialized, [], "alice", _KEY)
+        wrong_key = b"wrong-key-32-bytes-padding-here!"
+        result = verify_chain_hmac(initialized, wrong_key)
+        assert result["ok"] is False
+        assert result["failed"] == 1
+
+    def test_multiple_events(self, initialized):
+        seal_manifest(initialized, [], "alice", _KEY)
+        ignore_file(initialized, "evidence/x.bin", "alice", _KEY, "noise")
+        result = verify_chain_hmac(initialized, _KEY)
+        assert result["ok"] is True
+        assert result["verified"] == 2
+
+    def test_empty_ledger(self, initialized):
+        result = verify_chain_hmac(initialized, _KEY)
+        assert result["ok"] is True
+        assert result["verified"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Path safety
+# ---------------------------------------------------------------------------
+
+class TestPathSafety:
+    def test_path_traversal_blocked(self, initialized):
+        from agentir_core.evidence_chain import _resolve_evidence_path
+        with pytest.raises(ValueError):
+            _resolve_evidence_path(initialized, "../../etc/passwd")
+
+    def test_valid_nested_path_ok(self, initialized):
+        from agentir_core.evidence_chain import _resolve_evidence_path
+        (initialized / "evidence" / "sub").mkdir()
+        (initialized / "evidence" / "sub" / "file.bin").write_bytes(b"x")
+        resolved = _resolve_evidence_path(initialized, "evidence/sub/file.bin")
+        assert resolved.exists()
