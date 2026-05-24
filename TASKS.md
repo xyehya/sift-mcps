@@ -395,18 +395,18 @@ All test suites verified passing in Session 3:
 >               `packages/case-dashboard/src/case_dashboard/auth.py` (session middleware — new file),
 >               `packages/sift-gateway/src/sift_gateway/config.py` (portal_session_secret loading)
 
-### 12a. Backend: JWT helpers (new file `case_dashboard/session_jwt.py`)
+### 12a. Backend: JWT helpers (new file `case_dashboard/session_jwt.py`) ✅
 
-- [ ] `generate_jwt(sub, role, secret, max_age=28800) -> str`
-  - Header: `{"alg": "HS256", "typ": "JWT"}` base64url-encoded
+- [x] `generate_jwt(sub, role, secret, max_age=28800) -> str`
+  - Header: `{"alg": "HS256", "typ": "JWT"}` base64url-encoded (module-level constant)
   - Payload: `{sub, role, iat, exp, jti}` base64url-encoded
   - Signature: `HMAC-SHA256(secret, header + "." + payload)` base64url-encoded
   - Returns `header.payload.signature`
-- [ ] `verify_jwt(token, secret) -> dict | None`
-  - Splits on `.`, decodes, checks signature (timing-safe), checks `exp > now`
+- [x] `verify_jwt(token, secret) -> dict | None`
+  - Splits on `.`, decodes, checks signature (timing-safe via `hmac.compare_digest`), checks `exp > now`
   - Returns payload dict or None on any failure (never raises)
-- [ ] `COOKIE_NAME = "agentir_session"`, `COOKIE_PATH = "/portal"`, `COOKIE_SAME_SITE = "strict"`
-- [ ] Test: `generate_jwt` → `verify_jwt` round-trip passes; tampered signature returns None; expired token returns None
+- [x] `COOKIE_NAME = "agentir_session"`, `COOKIE_PATH = "/portal"`, `COOKIE_SAME_SITE = "strict"`
+- [x] 19 tests in `packages/case-dashboard/tests/test_session_jwt.py`: round-trip, tampered sig, tampered payload, wrong secret, expired, malformed, never-raises, jti uniqueness, cookie constants
 
 ### 12b. Backend: `portal_session_secret` config
 
@@ -689,7 +689,7 @@ All test suites verified passing in Session 3:
   - 139/139 passing.
 - Clarified that existing tests are NOT the driver — plan and tasks are. Tests must be rewritten to match plan requirements when they diverge.
 
-**Next session starts at Phase 12a** — JWT helpers (`session_jwt.py`) in `case-dashboard`.
+**Phase 12a complete.** Next session starts at **Phase 12b** — `portal_session_secret` config wiring in `sift-gateway/config.py`.
 
 ---
 
