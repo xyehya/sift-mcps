@@ -81,4 +81,11 @@ def load_config(path: str) -> dict:
         os.environ["AGENTIR_CASE_DIR"] = case_dir
         logger.debug("AGENTIR_CASE_DIR set to %s from gateway config", case_dir)
 
+    # Warn early if portal session secret is absent — portal auth will fail at runtime.
+    portal_secret = config.get("portal", {}).get("session_secret", "")
+    if not portal_secret:
+        logger.warning(
+            "portal.session_secret is not set in %s — portal login will not function", path
+        )
+
     return config

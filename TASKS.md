@@ -408,11 +408,11 @@ All test suites verified passing in Session 3:
 - [x] `COOKIE_NAME = "agentir_session"`, `COOKIE_PATH = "/portal"`, `COOKIE_SAME_SITE = "strict"`
 - [x] 19 tests in `packages/case-dashboard/tests/test_session_jwt.py`: round-trip, tampered sig, tampered payload, wrong secret, expired, malformed, never-raises, jti uniqueness, cookie constants
 
-### 12b. Backend: `portal_session_secret` config
+### 12b. Backend: `portal_session_secret` config ✅
 
-- [ ] `packages/sift-gateway/src/sift_gateway/config.py`: read `portal.session_secret` and `portal.session_max_age` (default 28800) from loaded config
-- [ ] Pass `portal_session_secret` into `create_dashboard_v2_app()` constructor
-- [ ] `case_dashboard/routes.py`: accept `session_secret` param in `create_dashboard_v2_app()`; store as module-level `_SESSION_SECRET`
+- [x] `packages/sift-gateway/src/sift_gateway/config.py`: log warning if `portal.session_secret` is absent/empty after config load
+- [x] `packages/sift-gateway/src/sift_gateway/server.py::create_app()`: reads `portal.session_secret` and `portal.session_max_age` (default 28800) from config; passes both to `create_dashboard_v2_app()`
+- [x] `case_dashboard/routes.py::create_dashboard_v2_app(session_secret, session_max_age)`: stores as module-level `_SESSION_SECRET` / `_SESSION_MAX_AGE`; 6 wiring tests in `test_session_wiring.py`
 
 ### 12c. Backend: session middleware (`case_dashboard/auth.py`)
 
@@ -689,7 +689,7 @@ All test suites verified passing in Session 3:
   - 139/139 passing.
 - Clarified that existing tests are NOT the driver — plan and tasks are. Tests must be rewritten to match plan requirements when they diverge.
 
-**Phase 12a complete.** Next session starts at **Phase 12b** — `portal_session_secret` config wiring in `sift-gateway/config.py`.
+**Phase 12b complete.** Next session starts at **Phase 12c** — `PortalSessionMiddleware` in `case_dashboard/auth.py`.
 
 ---
 

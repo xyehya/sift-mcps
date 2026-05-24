@@ -628,7 +628,18 @@ class Gateway:
                 create_dashboard_v2_app,
             )
 
-            routes.append(Mount("/portal", app=create_dashboard_v2_app()))
+            portal_cfg = self.config.get("portal", {})
+            portal_secret: str = portal_cfg.get("session_secret", "")
+            portal_max_age: int = int(portal_cfg.get("session_max_age", 28800))
+            routes.append(
+                Mount(
+                    "/portal",
+                    app=create_dashboard_v2_app(
+                        session_secret=portal_secret,
+                        session_max_age=portal_max_age,
+                    ),
+                )
+            )
             routes.append(Mount("/dashboard", app=create_dashboard_app()))
         except ImportError:
             pass
