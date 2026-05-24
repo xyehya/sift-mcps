@@ -103,6 +103,12 @@ them unintended. Registering new evidence appends a new manifest version and led
 silently rewrites historical evidence state. Existing registered evidence that is modified or
 missing must be treated as a chain-of-custody violation until resolved by the examiner.
 
+The original/current `case-mcp` evidence tools are retained as compatibility surfaces, not as the
+final authority. `evidence_register`, `evidence_list`, and `evidence_verify` currently manage
+`evidence.json`; Phase 16 upgrades them to delegate to the evidence manifest/ledger model. Agent
+tokens may read evidence-chain status but must not seal, ignore, or mutate evidence state through
+MCP.
+
 ### R4. Portal-created case directory is the primary workflow
 The installer prepares the VM, but the examiner/operator creates each new case from the portal.
 The portal accepts case metadata, creates the chosen case directory and canonical files, atomically
@@ -139,8 +145,31 @@ management flow for creating, listing metadata for, revoking, and rotating addit
 Gateway audit logs must preserve principal separation (`examiner`, `agent_id`, `role`, token id)
 for every request.
 
-### R7. windows-triage-mcp is dropped
-Do not reference, restore, or link to it anywhere.
+### R7. windows-triage-mcp is retained; wintools-mcp is dropped
+`windows-triage-mcp` is the local/offline Windows baseline validation and enrichment backend
+from the original SIFT package. It provides deterministic known-good lookups for files, process
+trees, services, scheduled tasks, autoruns, registry keys, LOLDrivers hashes, LOLBins, hijackable
+DLLs, named pipes, and filename deception. It runs on the SIFT VM as a gateway-managed stdio
+backend and must be restored under the `agentir` namespace.
+
+The real original implementation lives at `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage/`
+and is SQLite-backed, not JSON-backed. Its runtime databases are:
+- `known_good.db` — Windows file/path/hash plus service/task/autorun baselines
+- `context.db` — LOLBAS, LOLDrivers, HijackLibs, process expectations, suspicious filenames/pipes
+- `known_good_registry.db` — optional full registry baseline
+
+The package includes a release downloader (`windows_triage.scripts.download_databases`) that pulls
+`known_good.db.zst`, `context.db.zst`, and `checksums.sha256` from `AppliedIR/sift-mcp`
+`triage-db-*` GitHub releases, verifies checksums and row-count thresholds, then decompresses the
+SQLite databases. It also includes builder/import scripts under `scripts/` for rebuilding from
+VanillaWindowsReference, VanillaWindowsRegistryHives, LOLBAS, LOLDrivers, and HijackLibs. Phase 11
+must port this SQLite-backed behavior. The current reconstructed JSON-backed scaffold is not
+sufficient for acceptance; use it only as temporary test scaffolding until replaced.
+
+`wintools-mcp` is different: it is the separate Windows host execution backend that runs forensic
+tools on a dedicated Windows machine. That backend remains out of scope for this portable SIFT VM
+runtime. Do not restore Windows host execution, SMB share orchestration, or direct Windows command
+execution.
 
 ### R7b. Gateway aggregate MCP is the only agent MCP entry point
 Hermes and other agents connect only to `/mcp`. Per-backend MCP endpoints may exist internally for
@@ -160,7 +189,7 @@ These fixes were completed in TASKS.md Phase 2b.
 
 ---
 
-## Current State (as of Session 16 — 2026-05-24)
+## Current State (as of Session 21 — 2026-05-24)
 
 ### What Is Done ✅
 - **Phase 0 COMPLETE** — all blocking bugs fixed, namespace sweep finished, verification gate passed
@@ -174,19 +203,35 @@ These fixes were completed in TASKS.md Phase 2b.
 - **Phase 7 COMPLETE** — `install.sh` foundation: TLS gen, token gen, default examiner, systemd, gateway config render; live VM run still pending
 - **Phase 8 COMPLETE** — `docker-compose.yml`: OpenSearch 2.18.0, localhost-only, snapshots bind mount, `agentir-opensearch` container name
 - **Phase 9 COMPLETE** — `configs/gateway.yaml.template`, `configs/hermes-forensics-profile.yaml`, `configs/systemd/sift-gateway.service`
-- **Threat model complete (Session 14)** — 9 security guards (R1-R9) specified for Phase 12-15; see SIFT-MCPS-PLAN.md §Phase 12 Security Requirements
-- **Evidence chain-of-custody feature newly specified (Session 16)** — Phase 16 adds versioned
-  evidence manifest, evidence ledger, portal warnings/actions, and gateway MCP fail-closed gate
-- **agentir-core tests: 125/125 passing**
+- **Phase 12-pre COMPLETE** — R8 domain-separated HMAC sub-keys (`derive_auth_key`, `derive_ledger_key`)
+- **Phase 12a-12c COMPLETE** — `session_jwt.py`, `portal_session_secret` wiring, `PortalSessionMiddleware`
+- **Phase 12d COMPLETE** — 7 auth endpoints (setup, challenge, login, reset-password, logout, me); R1/R2/R3/R6/R8 guards; 36 tests
+- **Phase 12e COMPLETE** — `_resolve_examiner` env-var fallback removed (R9); must_reset checks on all write routes (R1)
+- **Phase 12f COMPLETE** — gateway R4 agent→portal block; portal paths bypass gateway auth; 8 tests
+- **Threat model complete (Session 14)** — 9 security guards (R1-R9) specified; all guards from Phase 12 are now implemented
+- **Evidence chain-of-custody feature newly specified (Session 16)** — Phase 16 adds versioned evidence manifest, evidence ledger, portal warnings/actions, and gateway MCP fail-closed gate
+- **Windows baseline correction newly specified (Session 18)** — restore `windows-triage-mcp` as a SIFT-local baseline/enrichment backend; continue dropping only `wintools-mcp`
+- **Windows baseline source audit corrected (Session 21)** — original SQLite-backed source exists at `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage`; Phase 11 must port that implementation and DB downloader, not keep the JSON scaffold
+- **agentir-core tests: 139/139 passing**
+- **case-dashboard tests: 75/75 passing**
+- **sift-gateway tests: 8/8 passing**
 - `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → **0 lines**
 
 ### What Needs Fixing Next (See TASKS.md)
 
-**Priority 1 — Phase 12: Portal authentication backend**
-- `session_jwt.py`, `PortalSessionMiddleware`, auth endpoints, `portal_session_secret` config wiring
-- Phase 13b (agent→403 on portal) co-ships with Phase 12 — see R4 below
-- All 9 security guards must be baked in during implementation, not added as patches
-- See TASKS.md Phase 12 + SIFT-MCPS-PLAN.md §Phase 12 Security Requirements for full specs
+**Priority 0 — Phase 11: Restore Windows baseline backend**
+- Replace the temporary JSON scaffold with the original SQLite-backed `windows-triage-mcp` implementation from `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage`
+- Port the prebuilt DB downloader for `known_good.db.zst` and `context.db.zst` into the installer flow, targeting `/var/lib/agentir/windows-triage`
+- Preserve clear degraded behavior when DB assets are absent or invalid; never stamp false trusted enrichment
+- Keep dropping only `wintools-mcp`, the separate Windows host execution backend
+- Cross-check restored tool calls against `Reference MCP Toolsfrom original Valhuntir Documentation.md`
+- Verify `opensearch-mcp::idx_enrich_triage` uses the restored backend through the gateway path
+
+**Priority 1 — Phase 13: RBAC, agent credentials, portal route guards**
+- 13a: `token_gen.py` — `generate_service_token()` and fix `generate_gateway_token()`
+- 13b: readonly→403 on MCP writes (R4 agent→portal already done in Phase 12f)
+- 13c: `_require_examiner_role()` helper; apply to delta/commit/token/case-create routes
+- 13f: Portal service-token lifecycle endpoints
 
 **Priority 2 — Phase 13/14/15: RBAC, dashboard rewiring, session hardening**
 - Portal RBAC, service-token lifecycle, dashboard auth rewiring, login screen, case-init modal, secure headers
@@ -279,6 +324,7 @@ human operator to use the portal; the gateway does not run the backend tool.
 | `sift-mcp` | Run forensic tools via shell=False | Must stay behind gateway evidence chain gate |
 | `report-mcp` | Generate final case report | Must include evidence manifest/ledger status and fail/warn on evidence mismatch |
 | `forensic-rag-mcp` | Semantic search over forensic knowledge | ✅ Phase 5 complete |
+| `windows-triage-mcp` | Local Windows known-good baseline validation and OpenSearch enrichment support | Must port original SQLite-backed implementation + DB downloader from `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage`; current JSON scaffold is temporary |
 | `opencti-mcp` | Threat intel enrichment via OpenCTI | ✅ No changes needed |
 | `opensearch-mcp` | SIEM evidence indexing and search | ✅ TLS fix + OPENSEARCH_CONFIG env done |
 | `sift-common` | AuditWriter, oplog, parsers | `resolve_examiner()` duplicates identity — fix on touch only |

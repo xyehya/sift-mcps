@@ -94,7 +94,7 @@ GATEWAY = (
     "sift-mcp (SIFT tool execution), "
     "windows-triage (baseline validation), "
     "forensic-rag (knowledge search), "
-    "and optionally opensearch-mcp, wintools-mcp, and opencti-mcp. "
+    "and optionally opensearch-mcp and opencti-mcp. "
     "Each backend provides its own detailed instructions. "
     "Most forensic tools are available via run_command including curl, "
     "wget, dd, and python3. "

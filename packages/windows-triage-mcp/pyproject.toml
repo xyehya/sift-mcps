@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "windows-triage-mcp"
+version = "0.1.0"
+description = "SIFT-local Windows baseline validation MCP backend"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "AppliedIncidentResponse.com"}]
+dependencies = [
+    "mcp>=1.26",
+    "sift-common",
+]
+
+[project.scripts]
+windows-triage-mcp = "windows_triage_mcp.server:main"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/windows_triage_mcp"]
+

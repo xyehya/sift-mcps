@@ -36,7 +36,7 @@ improve, decouple, harden, and make the package portable/flexible.
 - Granting the agent direct shell access (sift-mcp is the sandboxed gate)
 - Replacing the portal with CLI approval (portal is the primary interface)
 - Requiring SSH or shell access for normal examiner case creation
-- Building for Windows (SIFT is Linux-only; windows-triage-mcp is permanently dropped)
+- Building or controlling a Windows execution host. `wintools-mcp` remains out of scope.
 - Copying the source repos as-is (we are refactoring, hardening, decoupling)
 
 ## Final Required Workflow
@@ -86,8 +86,9 @@ This workflow is the product contract. Implementation phases, tests, and docs mu
 6. **Investigation and enrichment**
    - Gateway routes aggregate tool calls to stdio backends.
    - `sift-mcp` is the only command-execution gate and always uses `shell=False`.
-   - OpenSearch indexing/search, forensic-rag semantic context, OpenCTI enrichment, and forensic-knowledge
-     guidance are exposed through gateway-mediated MCP tools and/or contextual MCP response enrichment.
+   - OpenSearch indexing/search, forensic-rag semantic context, Windows baseline validation,
+     OpenCTI enrichment, and forensic-knowledge guidance are exposed through gateway-mediated
+     MCP tools and/or contextual MCP response enrichment.
 
 7. **Review, approval, report**
    - Hermes can propose findings/timeline events but cannot approve them.
@@ -115,10 +116,10 @@ This workflow is the product contract. Implementation phases, tests, and docs mu
 │  │forensic  │ │case-mcp │ │sift-mcp  │ │report-mcp         │  │
 │  │-mcp      │ │         │ │shell=F   │ │                   │  │
 │  └──────────┘ └─────────┘ └──────────┘ └───────────────────┘  │
-│  ┌──────────┐ ┌─────────┐ ┌──────────┐                        │
-│  │opensearch│ │forensic │ │opencti   │                        │
-│  │-mcp      │ │-rag-mcp │ │-mcp      │                        │
-│  └──────────┘ └─────────┘ └──────────┘                        │
+│  ┌──────────┐ ┌─────────┐ ┌──────────┐ ┌───────────────────┐  │
+│  │opensearch│ │forensic │ │opencti   │ │windows-triage-mcp │  │
+│  │-mcp      │ │-rag-mcp │ │-mcp      │ │baseline lookups   │  │
+│  └──────────┘ └─────────┘ └──────────┘ └───────────────────┘  │
 │                                                                 │
 │  agentir-core library ──▶ /var/lib/agentir/                    │
 │                           passwords/, verification/             │
@@ -145,6 +146,7 @@ This workflow is the product contract. Implementation phases, tests, and docs mu
 | Append-only `approvals.jsonl` | Immutable approval audit trail |
 | Versioned evidence manifest + ledger | Allows legitimate evidence additions while detecting tampering |
 | MCP evidence chain gate | Prevents the agent from operating on unsealed or tampered evidence |
+| `windows-triage-mcp` baseline validation | Deterministic local Windows known-good enrichment without Windows host execution |
 
 ---
 
@@ -197,12 +199,26 @@ examiner: alice
 created_at: "2026-05-23T10:00:00Z"
 ```
 
-## Evidence Manifest and Chain-of-Custody Design (New)
+## Evidence Manifest and Chain-of-Custody Design (Upgrade)
 
-This feature is newly created and must be wired into Phase 16. Existing `evidence.json` only records
-registered files and hashes; it is not enough to protect the case from manual additions, missing
-evidence, or silent replacement. The new design adds a versioned evidence manifest, an append-only
-ledger, portal warnings, and a gateway fail-closed MCP gate.
+This feature upgrades the existing evidence registry rather than inventing evidence tracking from
+nothing. The original/current `case-mcp` contract already exposes `evidence_register`,
+`evidence_list`, and `evidence_verify`, and `agentir_core.evidence_ops` already records SHA-256
+hashes in `evidence.json` and can re-hash registered files on demand.
+
+That legacy registry is still not enough for the portal-first runtime. It is a mutable point-in-time
+registry, not a sealed chain of custody:
+- It only knows files that were explicitly registered; it does not detect new files manually copied
+  into `evidence/`.
+- It verifies registered files only when a tool or portal route is explicitly called; it does not
+  automatically warn the portal or block agent/backend analysis.
+- Current same-path re-registration may update a changed hash, which is useful as a maintenance
+  convenience but is not acceptable as an evidence-chain authority.
+- It is not versioned, not hash-chained, and not HMAC-signed as an append-only evidence decision log.
+
+Phase 16 therefore makes `evidence-manifest.json` plus `evidence-ledger.jsonl` the authority while
+keeping `evidence.json` as a compatibility view for existing tools. The new design adds versioned
+sealing, append-only evidence decisions, portal warnings, and a gateway fail-closed MCP gate.
 
 ### Evidence intake workflow
 
@@ -286,6 +302,9 @@ degraded-protection warning.
   and an MCP block until examiner action.
 - A modified or missing registered file is a chain-of-custody violation, not an automatic manifest
   update. The examiner must explicitly decide how to handle it.
+- Legacy `evidence_register` must not silently bless a changed same-path file as the new authoritative
+  chain state. Under Phase 16 it either delegates to the evidence-chain sealing workflow for an
+  authenticated examiner or returns a portal-remediation response for agent/service-token callers.
 - MCP agent tool calls are fail-closed on evidence-chain violations. The gateway returns a structured
   result with `blocked: true`, `reason: "evidence_chain_violation"`, issue counts, and portal
   remediation guidance; backend tools are not invoked.
@@ -308,8 +327,8 @@ degraded-protection warning.
 - `sift-gateway`: call `verify_evidence_chain()` before agent `/mcp` tool calls; emit structured
   block responses and audit entries.
 - `case-mcp`: update `evidence_register`, `evidence_list`, and `evidence_verify` to use the evidence
-  chain data model. Agent calls may read status, but only examiner-authorized portal actions may seal
-  new evidence.
+  chain data model. Agent calls may read status and request remediation guidance, but only
+  examiner-authorized portal actions may seal new evidence or resolve modified/missing evidence.
 - `sift-mcp`, `opensearch-mcp`, `forensic-mcp`, `forensic-rag-mcp`, `opencti-mcp`: no direct evidence
   chain writes; they rely on gateway gating. Where they log input files, preserve `input_sha256s`.
 - `report-mcp`: reconcile approved findings/timeline ledger plus evidence manifest/ledger state.
@@ -1136,6 +1155,7 @@ not be configured with per-backend URLs.
 | forensic-mcp | `record_finding` | `mcp_forensic_mcp_record_finding` |
 | case-mcp | `case_init` | `mcp_case_mcp_case_init` |
 | sift-mcp | `run_command` | `mcp_sift_mcp_run_command` |
+| windows-triage-mcp | `check_file` | `mcp_windows_triage_mcp_check_file` |
 | opensearch-mcp | `idx_search` | `mcp_opensearch_mcp_idx_search` |
 | forensic-rag-mcp | `search_knowledge` | `mcp_forensic_rag_mcp_search_knowledge` |
 
@@ -1192,6 +1212,103 @@ def _extract_examiner(server: Server) -> str | None:
 ```
 
 Used in both `create_mcp_server` and `create_backend_mcp_server`.
+
+---
+
+### Phase 11 — Restore Windows Baseline Validation Backend
+
+#### Problem
+
+The original `windows-triage-mcp` was misclassified as Windows host tooling and dropped with
+`wintools-mcp`. That was incorrect. `windows-triage-mcp` is a SIFT-local/offline baseline
+validation backend that supports deterministic enrichment for Windows artifacts and OpenSearch
+post-ingest triage.
+
+Session 21 corrected the source audit: the original implementation exists locally at
+`/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage/`. It is not a JSON lookup service. It is a
+SQLite-backed MCP backend with three database files:
+
+- `known_good.db` — file path/hash baselines plus service, scheduled task, and autorun baselines
+- `context.db` — LOLBAS, LOLDrivers, HijackLibs, process expectations, suspicious filename and pipe
+  patterns, protected process names, and Windows named pipes
+- `known_good_registry.db` — optional full registry baseline used by `check_registry`
+
+The current `sift-mcps/packages/windows-triage-mcp` reconstruction is an interim scaffold only. It
+is useful for proving workspace/gateway wiring, but it does not satisfy Phase 11 acceptance until it
+is replaced or upgraded with the original SQLite-backed behavior.
+
+`wintools-mcp` remains out of scope because it requires a dedicated Windows workstation, SMB share
+orchestration, and Windows command execution. The restored backend must not reintroduce those
+execution paths.
+
+#### Required Tool Contract
+
+Restore the 13 baseline tools under the `agentir` namespace:
+
+| Tool | Purpose |
+|------|---------|
+| `check_file` | Validate Windows file path/hash against known-good baseline |
+| `check_process_tree` | Validate process parent/child/path/user context |
+| `check_service` | Validate Windows service name/path by OS version |
+| `check_scheduled_task` | Validate scheduled task path by OS version |
+| `check_autorun` | Validate registry autorun entry by OS version |
+| `check_registry` | Validate registry key/value against full baseline database |
+| `check_hash` | Check LOLDrivers vulnerable driver hashes |
+| `analyze_filename` | Detect homoglyphs, typosquatting, double extensions |
+| `check_lolbin` | Identify LOLBins and expected paths/capabilities |
+| `check_hijackable_dll` | Identify DLL search-order hijack risk |
+| `check_pipe` | Check named pipe baseline and C2 patterns |
+| `get_db_stats` | Report baseline database coverage and versions |
+| `get_health` | Report backend/database health |
+
+#### Implementation Requirements
+
+- Add `packages/windows-triage-mcp/` as a SIFT-local stdio backend. FastMCP is preferred for new
+  code, but preserving the original low-level MCP server is acceptable if it keeps the exact tool
+  contract, audit envelope, and gateway integration stable.
+- Port the original `windows_triage` modules from
+  `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage/src/windows_triage/`, including
+  `analysis/`, `db/`, `importers/`, `tool_metadata.py`, and database scripts needed for runtime
+  installation and validation.
+- Preserve the original SQLite schema and lookup semantics for `known_good.db`, `context.db`, and
+  optional `known_good_registry.db`.
+- Port the release downloader from
+  `src/windows_triage/scripts/download_databases.py`: download `known_good.db.zst`,
+  `context.db.zst`, and `checksums.sha256` from `AppliedIR/sift-mcp` `triage-db-*` releases,
+  verify checksums, decompress with `zstandard`, and verify row-count thresholds before enabling
+  trusted baseline results.
+- Preserve the builder/import workflow under `scripts/` for maintainers:
+  `init_databases.py`, `import_files.py`, `import_context.py`, `import_registry_extractions.py`,
+  `import_registry_full.py`, `update_sources.py`, and `build-release.sh`, adapted only as needed for
+  `agentir` paths/config.
+- Rename any legacy `vhir` paths/config/env to `agentir`; keep the global grep gate clean.
+- Store/download baseline DB assets under `/var/lib/agentir/windows-triage/` by default, with env
+  overrides for tests and non-root installs.
+- Add the package to the uv workspace, root optional dependencies, installer provisioning, and
+  `configs/gateway.yaml.template`.
+- Add runtime dependencies used by the original implementation (`zstandard`, `python-registry`,
+  PyYAML if still needed).
+- Add gateway instruction text for `windows-triage-mcp`, but keep Hermes configured only for the
+  aggregate `/mcp` endpoint.
+- Wire `opensearch-mcp::idx_enrich_triage` to call the restored backend through the gateway path.
+  If the backend or DB is absent, return a clear degraded result rather than stamping false
+  enrichment.
+- Add tests for all tool contracts, missing DB behavior, namespace/path configuration, gateway
+  tool listing, and OpenSearch enrichment degradation.
+- Do not add `wintools-mcp`, SMB share setup, Windows command execution, or Windows host join flows
+  to installer/templates.
+
+#### Acceptance
+
+- Runtime uses the original SQLite-backed data model, not the temporary JSON scaffold.
+- Installer or setup path can fetch and verify prebuilt `known_good.db` and `context.db` into
+  `/var/lib/agentir/windows-triage`, or clearly support an air-gapped equivalent.
+- `get_health` and `get_db_stats` report database presence, row counts, and degraded state when the
+  required databases are absent or invalid.
+- Gateway aggregate tool listing includes all 13 restored `windows-triage-mcp` tools when enabled.
+- `idx_enrich_triage` can enrich indexed Windows artifacts using the restored backend.
+- `wintools-mcp` remains absent from Hermes templates and supported installer output.
+- `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` returns 0 lines.
 
 ---
 

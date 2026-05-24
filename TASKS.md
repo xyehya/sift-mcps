@@ -44,6 +44,8 @@ Everything in this project must support this workflow:
 8. Examiner uses the portal evidence security chain to seal evidence before agent investigation:
    manual files copied into `evidence/` are detected as unregistered, legitimate additions append a
    new evidence manifest/ledger version, and tampered/missing evidence blocks agent MCP operations.
+9. Windows baseline validation is provided by a SIFT-local `windows-triage-mcp` backend. This is
+   distinct from `wintools-mcp`; only the separate Windows host execution backend remains dropped.
 
 Functional, resilience, and security tests must prove this workflow. No shortcuts or one-off workarounds.
 
@@ -67,6 +69,9 @@ Functional, resilience, and security tests must prove this workflow. No shortcut
 > Newly created feature spec: Phase 16 adds evidence manifest + evidence ledger enforcement.
 > It is not implemented yet. Preserve the current Phase 12-15 order unless the user explicitly
 > reprioritizes, but do not design new MCP/report/portal behavior that conflicts with Phase 16.
+>
+> Correction from Session 18: `windows-triage-mcp` was wrongly dropped. It must be restored as
+> Phase 11 because it is a SIFT-local offline baseline/enrichment backend, not `wintools-mcp`.
 
 ---
 
@@ -371,9 +376,111 @@ All test suites verified passing in Session 3:
 - [ ] `_cascade_iocs(iocs, item_by_id, examiner, now) -> (iocs_modified, log_entries, approved_items)`
 - [ ] `_write_commit_results(...)` — handles disk writes with correct ordering
 
-### 10c. wintools references cleanup
-- [ ] `grep -rn "wintools" packages/sift-gateway/` — find and remove any remaining dead references
-- [ ] Same in `packages/case-mcp/`, `packages/sift-common/`
+### 10c. Windows backend split cleanup
+- [ ] Remove dead `wintools-mcp` supported-workflow references from `packages/sift-gateway/`, `packages/case-mcp/`, and `packages/sift-common/`
+- [ ] Preserve/add `windows-triage-mcp` references where they mean local baseline validation
+- [ ] Replace stale case-mcp wording that says "Windows-triage support has been dropped"
+- [ ] Ensure `case_status()` reports separate capabilities for `windows_triage` and `wintools`
+
+---
+
+## Phase 11 — Restore Windows Baseline Validation Backend (NEW)
+
+> See `SIFT-MCPS-PLAN.md` Phase 11. This corrects the earlier misinterpretation:
+> `windows-triage-mcp` is local/offline Windows baseline validation and OpenSearch enrichment support.
+> `wintools-mcp` is the separate Windows host execution backend and remains out of scope.
+
+### 11a. Source audit and package scaffold
+- [x] Locate/verify original `windows-triage-mcp` source or reconstruct from original docs/source lineage
+- [x] Add `packages/windows-triage-mcp/pyproject.toml`
+- [x] Add FastMCP stdio entry point `windows-triage-mcp`
+- [x] Add package to root `pyproject.toml` workspace members and optional dependencies
+- [x] Rename all legacy paths/env/config from `vhir` to `agentir`
+
+> Session 21 correction: the original source does exist at
+> `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage/`. The current JSON-backed package is
+> temporary scaffolding only and must be replaced/upgraded with the original SQLite-backed runtime.
+
+### 11a2. Port original SQLite-backed windows-triage implementation
+- [ ] Port `src/windows_triage/analysis/` from original source
+- [ ] Port `src/windows_triage/db/` with `KnownGoodDB`, `ContextDB`, `RegistryDB`, and schemas
+- [ ] Port `src/windows_triage/importers/` and `data/process_expectations.yaml`
+- [ ] Port `tool_metadata.py`, audit/oplog behavior, and response caveats/interpretation constraints
+- [ ] Decide whether to keep original low-level MCP `Server` or adapt to FastMCP without changing tool schemas/behavior
+- [ ] Replace temporary JSON DB loader with SQLite paths:
+  - `known_good.db`
+  - `context.db`
+  - optional `known_good_registry.db`
+- [ ] Support installer-facing `AGENTIR_WINDOWS_TRIAGE_DB_DIR` while preserving compatibility aliases for original `WT_*` env vars if useful
+- [ ] Add dependencies from original package: `zstandard`, `python-registry`, and `pyyaml` if needed
+- [ ] Ensure missing/invalid required DBs produce clear degraded health and no trusted EXPECTED verdicts
+
+### 11b. Baseline database asset contract
+- [x] Define default DB root `/var/lib/agentir/windows-triage/`
+- [x] Add env override for tests/non-root installs, e.g. `AGENTIR_WINDOWS_TRIAGE_DB_DIR`
+- [~] Add installer provisioning/download/extract step for baseline DB assets
+- [x] Add clear missing-DB health/error responses; never silently return trusted verdicts when DBs are absent
+- [ ] Document expected disk footprint and air-gapped install behavior
+- [ ] Port `windows_triage.scripts.download_databases` release downloader:
+  - download `known_good.db.zst`, `context.db.zst`, and `checksums.sha256`
+  - source release repo/tag pattern: `AppliedIR/sift-mcp`, `triage-db-*`
+  - verify SHA-256 checksums before decompressing
+  - decompress with `zstandard`
+  - verify minimum row counts (`baseline_files`, `lolbins`, `vulnerable_drivers`)
+- [ ] Wire installer to run downloader into `/var/lib/agentir/windows-triage` unless explicitly skipped/offline
+- [ ] Preserve maintainer build scripts for rebuilding DBs from upstream sources:
+  - `init_databases.py`
+  - `import_files.py`
+  - `import_context.py`
+  - `import_registry_extractions.py`
+  - `import_registry_full.py`
+  - `update_sources.py`
+  - `build-release.sh`
+
+### 11c. Restore 13 baseline tools
+- [~] `check_file` — scaffolded; must be backed by original SQLite `KnownGoodDB` + `ContextDB`
+- [~] `check_process_tree` — scaffolded; must use original process expectations/context DB logic
+- [~] `check_service` — scaffolded; must use original service baseline semantics
+- [~] `check_scheduled_task` — scaffolded; must use original task baseline semantics
+- [~] `check_autorun` — scaffolded; must use original autorun baseline semantics
+- [~] `check_registry` — scaffolded; must use optional original `known_good_registry.db`
+- [~] `check_hash` — scaffolded; must use original LOLDrivers context DB
+- [~] `analyze_filename` — scaffolded; must use original filename/unicode/path analysis
+- [~] `check_lolbin` — scaffolded; must use original LOLBAS context DB
+- [~] `check_hijackable_dll` — scaffolded; must use original HijackLibs context DB
+- [~] `check_pipe` — scaffolded; must use original Windows pipe + C2 pattern context DB
+- [~] `get_db_stats` — scaffolded; must report original SQLite DB stats/coverage
+- [~] `get_health` — scaffolded; must report original SQLite DB health/cache/degraded state
+
+### 11d. Gateway and installer integration
+- [x] Add `windows-triage-mcp` backend to `configs/gateway.yaml.template`
+- [x] Add backend instructions in `sift_gateway/mcp_endpoint.py`
+- [x] Ensure Hermes profile still exposes only aggregate `/mcp`, not per-backend URLs
+- [x] Update systemd/env template if DB path env vars are needed
+- [x] Add gateway list-tools test proving 13 tools appear when backend is enabled
+
+### 11e. OpenSearch enrichment integration
+- [x] Audit `opensearch_mcp.triage_remote` and `idx_enrich_triage`
+- [x] Ensure calls go through the gateway/backend abstraction, not stale direct client assumptions
+- [x] Add degraded-mode tests for missing backend or missing baseline DB
+- [~] Add successful enrichment fixture test for EXPECTED/SUSPICIOUS/UNKNOWN verdict stamping
+
+### 11f. Explicitly keep Windows host execution out of scope
+- [x] Do not add `wintools-mcp` to Hermes templates
+- [x] Do not add SMB share orchestration or Windows join flow to installer-first workflow
+- [~] Remove or quarantine stale `wintools` hot-load/join code if it conflicts with the supported contract
+- [~] Keep only compatibility stubs if needed for old config detection, with warnings that it is unsupported
+
+### 11g. Verification
+- [x] `uv sync --all-packages`
+- [x] `uv run pytest packages/windows-triage-mcp/tests/ -v --tb=short`
+- [x] `uv run pytest packages/opensearch-mcp/tests/ -v --tb=short`
+- [x] `uv run pytest packages/agentir-core/tests/ -v --tb=short`
+- [x] `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → 0 lines
+- [ ] After SQLite port: run restored `windows-triage-mcp` tests against fixture SQLite DBs
+- [ ] After downloader port: test release-download failure/degraded path without network
+- [ ] After downloader port: test checksum/row-count verification with local fixture `.zst` assets
+- [ ] After SQLite port: verify `idx_enrich_triage` stamps EXPECTED/SUSPICIOUS/UNKNOWN through gateway-backed calls
 
 ---
 
@@ -433,42 +540,34 @@ All test suites verified passing in Session 3:
 - [x] `server.py` passes `api_keys` to `create_dashboard_v2_app()`
 - [x] 14 tests in `test_session_middleware.py`: cookie auth, tampered/expired cookie, Bearer examiner/agent distinction, no-auth state, middleware-never-returns-401, R9 getattr access
 
-### 12d. Backend: auth endpoints (add to `routes.py`)
+### 12d. Backend: auth endpoints (add to `routes.py`) ✅
 
-- [ ] `GET  /api/auth/setup-required` — no auth; returns `{"required": bool}` based on whether any password file exists in `_PASSWORDS_DIR`
-- [ ] `POST /api/auth/setup` — no auth; only when `setup-required` is true; body: `{examiner, password}` (plaintext, hashed server-side with PBKDF2); creates password file; returns 409 if already set up
-- [ ] `GET  /api/auth/challenge` — `?examiner=<name>`; uses separate `_login_challenges` dict (not `_challenges`)
-  - **R3** Always return a valid challenge regardless of whether examiner exists; fake entries marked `_fake: True`
-  - **R6** Cap `_login_challenges` at 200 total; per-examiner limit 5 in-flight; evict oldest on overflow
-- [ ] `POST /api/auth/login` — `{challenge_id, examiner, response}`
-  - Uses `derive_auth_key(entry["hash"])` (from Phase 12-pre) as HMAC key — not raw stored hash
-  - **R3** Fake challenges always fail with "Invalid credentials" — same error path and same HTTP 401 as real mismatch
-  - **R2** Login failures recorded under `login:{examiner}` namespace, not `commit:{examiner}`
-  - On success: set `agentir_session` cookie (HttpOnly, Secure, SameSite=Strict, path=/portal); returns `{examiner, role, expires_at, must_reset}`
-- [ ] `POST /api/auth/reset-password` — clears `must_reset_password` atomically; requires valid login challenge + current password
-- [ ] `POST /api/auth/logout` — clears `agentir_session` cookie (Max-Age=0); returns 200
-- [ ] `GET  /api/auth/me` — reads session cookie/state; returns `{examiner, role, expires_at, must_reset}` or 401
-- [ ] Test: 401 on missing session, 200+cookie on valid login, 200 on logout clears cookie
-- [ ] Test: **R2** exhausting login lockout does not affect commit lockout counter and vice versa
-- [ ] Test: **R3** challenge for non-existent examiner returns 200 with valid-looking challenge; login with that challenge returns 401 "Invalid credentials"
-- [ ] Test: **R1** default examiner (must_reset_password=true) cannot commit, create case, or create tokens — returns 403
+- [x] `GET  /api/auth/setup-required` — returns `{"required": bool}` based on passwords dir
+- [x] `POST /api/auth/setup` — creates first examiner; 409 if already set up; validates name + password length
+- [x] `GET  /api/auth/challenge` — uses `_login_challenges` (separate from `_challenges`)
+  - **R3** Always returns 200 with valid-looking challenge even for unknown examiners (fake entries)
+  - **R6** Cap 200 total, 5 per examiner; evicts oldest on overflow
+- [x] `POST /api/auth/login` — PBKDF2 challenge-response; R8 derive_auth_key; sets session cookie
+  - **R3** Fake challenges always fail "Invalid credentials" — same path as real mismatch
+  - **R2** Login failures under `login:{examiner}` namespace
+  - On success: HttpOnly Secure SameSite=Strict `agentir_session` cookie; returns `{examiner, role, expires_at, must_reset}`
+- [x] `POST /api/auth/reset-password` — requires session + login challenge + new password; clears must_reset_password
+- [x] `POST /api/auth/logout` — Max-Age=0 cookie clear
+- [x] `GET  /api/auth/me` — returns session info or 401; R1 re-reads must_reset from disk
+- [x] 36 tests in `test_auth_endpoints.py`: setup/challenge/login/logout/me, R1/R2/R3/R6/R8
 
-### 12e. Backend: update existing route guards
+### 12e. Backend: update existing route guards ✅
 
-- [ ] `_resolve_examiner()` in `routes.py`: `getattr(request.state, "examiner", None)` — **R9** never `request.state.examiner` directly; remove env var fallback
-- [ ] All routes that require auth: return 401 if `_resolve_examiner()` returns None
-- [ ] **R1** All write operations (commit, case create, token create/revoke): call `_load_pw_entry(passwords_dir, examiner).get("must_reset_password")` and return 403 if True
-- [ ] Commit endpoint: remains password-gated on top of session (session proves identity, password proves presence)
+- [x] `_resolve_examiner()` — removed env var fallback; R9 getattr only
+- [x] `post_delta`, `delete_delta_item`, `verify_evidence` — 401 if no examiner, 403 if must_reset
+- [x] `get_commit_challenge`, `post_commit` — added must_reset check (R1)
+- [x] `_login_challenges` separate dict from `_challenges` (commit challenges); login lockout helpers with `login:{examiner}` namespace
 
-### 12f. Gateway: R4 agent→portal block (co-ships with Phase 12)
+### 12f. Gateway: R4 agent→portal block ✅
 
-- [ ] `auth.py::AuthMiddleware.dispatch()`: after `key_info` resolved, before route handling:
-  ```python
-  if request.url.path.startswith("/portal/api/") and key_info.get("role") == "agent":
-      return JSONResponse({"error": "Agent tokens cannot access portal"}, status_code=403)
-  ```
-- [ ] Test: Hermes service token (`agentir_svc_*`) → 403 on any `/portal/api/` endpoint
-- [ ] Test: Examiner bearer token (`agentir_gw_*`) → still passes through to portal
+- [x] `auth.py::AuthMiddleware.dispatch()`: agent tokens → 403 on `/portal/api/` paths
+- [x] Portal paths (`/portal/...`) now bypass gateway auth (portal handles own auth via `PortalSessionMiddleware`)
+- [x] 8 tests in `packages/sift-gateway/tests/test_portal_agent_block.py`
 
 ---
 
@@ -658,12 +757,32 @@ All test suites verified passing in Session 3:
 
 ---
 
-## Phase 16 — Evidence Manifest, Evidence Ledger, and MCP Chain Gate (NEW)
+## Phase 16 — Evidence Manifest, Evidence Ledger, and MCP Chain Gate (UPGRADE)
 
-> Newly created from user chain-of-custody review on 2026-05-24.
+> Upgrades the existing `evidence_register` / `evidence_list` / `evidence_verify` registry model
+> from the original case-mcp contract. The original/current tools hash and verify registered files,
+> but they do not provide a sealed, append-only, portal-visible, gateway-enforced evidence chain.
 > Normative design: SIFT-MCPS-PLAN.md §Evidence Manifest and Chain-of-Custody Design.
 > Goal: legitimate later evidence additions are allowed, but unregistered, modified, missing, or
 > ledger-mismatched evidence blocks agent operations until the examiner takes portal action.
+
+### 16-pre. Legacy evidence behavior audit
+
+- [ ] Document current `agentir_core.evidence_ops` behavior:
+  - `register_evidence_data()` writes file path + SHA-256 to mutable `evidence.json`
+  - `verify_evidence_data()` detects modified/missing registered files only when called
+  - unregistered files under `evidence/` are not detected by legacy verification
+  - same-path changed hash currently updates the registry, which must not become authoritative chain behavior
+- [ ] Document current portal behavior:
+  - `GET /api/evidence` lists only `evidence.json`
+  - `POST /api/evidence/{path}/verify` verifies one registered file on demand
+  - no automatic portal warning for unregistered, modified, missing, or ledger-mismatched evidence
+- [ ] Document current gateway behavior:
+  - aggregate `/mcp` does not verify evidence state before routing backend tool calls
+  - tools can analyze files in `evidence/` even if they are unregistered or modified
+- [ ] Keep the original tool names for compatibility, but redefine authority:
+  - `evidence.json` = compatibility view
+  - `evidence-manifest.json` + `evidence-ledger.jsonl` = authoritative evidence chain
 
 ### 16a. agentir-core evidence chain module
 
@@ -697,6 +816,7 @@ All test suites verified passing in Session 3:
   - Verifies every sealed file hash
   - Reports unregistered files as blocking issues
 - [ ] Keep `evidence.json` as compatibility view until all consumers migrate
+- [ ] Ensure same-path changed evidence cannot be silently re-registered as trusted; it must appear as `modified` until examiner resolution
 - [ ] Tests in `packages/agentir-core/tests/test_evidence_chain.py`
   - Empty unsealed case reports `evidence_chain_unsealed`
   - Seal empty evidence set succeeds and creates version 1
@@ -776,11 +896,14 @@ All test suites verified passing in Session 3:
   - `evidence_chain_status`
   - `evidence_manifest_get`
   - `evidence_verify` returns evidence-chain status, not only legacy `evidence.json` hash checks
-- [ ] Keep existing `evidence_register` compatible but redirect examiner users toward portal sealing
-- [ ] Agent role must not be able to seal or mutate evidence chain via MCP
+- [ ] Keep existing `evidence_register` compatible, but it must not silently update authoritative chain state for modified same-path files
+- [ ] For agent/service-token callers, `evidence_register` returns a structured portal-remediation response instead of sealing evidence
+- [ ] For examiner callers, either delegate to the same HMAC-confirmed seal path as the portal or return a clear "use portal evidence intake" response
+- [ ] Agent role must not be able to seal, ignore, modify, or otherwise mutate evidence chain via MCP
 - [ ] Tests:
   - Legacy `evidence_list` still returns registered files
   - New status includes manifest version/hash and issue counts
+  - Same-path hash change is reported as modified, not auto-updated
   - Agent cannot mutate evidence chain
 
 ### 16e. Report and export integration
@@ -855,6 +978,175 @@ All test suites verified passing in Session 3:
 ---
 
 ## Session Notes
+
+### Session 21 (2026-05-24)
+
+**Critical Phase 11 source correction:**
+- User pointed to the actual original source path:
+  `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage/`.
+- Confirmed the original package exists there and is substantially more complete than the temporary
+  JSON-backed scaffold added in Session 20.
+- Original runtime is SQLite-backed:
+  - `known_good.db` contains file/path/hash baselines plus service/task/autorun baselines.
+  - `context.db` contains LOLBAS, LOLDrivers, HijackLibs, process expectations, suspicious
+    filename/pipe patterns, protected process names, and Windows named pipes.
+  - `known_good_registry.db` is optional and supports full registry validation for
+    `check_registry`.
+- Original DB creation/import workflow:
+  - `scripts/init_databases.py` initializes `known_good.db` and `context.db`.
+  - `scripts/import_all.py` imports VanillaWindowsReference, VanillaWindowsRegistryHives, LOLBAS,
+    LOLDrivers, and HijackLibs.
+  - `scripts/update_sources.py` incrementally updates DBs from upstream git sources.
+  - `scripts/build-release.sh` creates `.zst` release assets and checksums.
+- Original install/runtime workflow:
+  - `windows_triage.scripts.download_databases` downloads `known_good.db.zst`, `context.db.zst`,
+    and `checksums.sha256` from `AppliedIR/sift-mcp` `triage-db-*` GitHub releases.
+  - It verifies checksums, decompresses with `zstandard`, and validates minimum row counts before
+    declaring DB install success.
+- Original MCP exposure:
+  - Uses low-level MCP `Server("windows-triage")`, manual `list_tools`, and a single `call_tool`
+    dispatcher with validation, audit wrapping, caveats, and interpretation constraints.
+  - FastMCP remains preferred for this repo, but exact behavior/tool contract is more important
+    than forcing a framework migration during the port.
+
+**Documentation updates:**
+- `AGENTS.md`, `SIFT-MCPS-PLAN.md`, and `TASKS.md` now state that the Session 20 JSON-backed
+  implementation is an interim scaffold only.
+- Phase 11 now explicitly requires porting the original SQLite-backed implementation and release
+  downloader before acceptance.
+
+**Next implementation direction:**
+- Replace or upgrade `packages/windows-triage-mcp` using the original source from
+  `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage/`.
+- Preserve the overall `sift-mcps` design changes: `agentir` namespace, installer-first runtime,
+  gateway aggregate `/mcp`, no `wintools-mcp`, no Windows host execution, no per-backend Hermes
+  URLs, and fail/degrade clearly when DB assets are missing.
+- Do not continue Phase 13/14/15 until Phase 11 is real-code parity with the original backend,
+  integrated, and tested.
+
+### Session 20 (2026-05-24)
+
+**Completed / partially completed Phase 11 implementation:**
+- Audited local reference material for `windows-triage-mcp`. No original package source exists in
+  the local Valhuntir checkout; reconstruction is based on the documented 13-tool contract and
+  current `opensearch_mcp.triage_remote` expectations.
+- Added `packages/windows-triage-mcp` as a FastMCP stdio backend with all 13 required tools:
+  `check_file`, `check_process_tree`, `check_service`, `check_scheduled_task`, `check_autorun`,
+  `check_registry`, `check_hash`, `analyze_filename`, `check_lolbin`, `check_hijackable_dll`,
+  `check_pipe`, `get_db_stats`, `get_health`.
+- Added JSON baseline DB loader with default root `/var/lib/agentir/windows-triage` and
+  `AGENTIR_WINDOWS_TRIAGE_DB_DIR` override. Missing DB returns `status=degraded` / `UNKNOWN`;
+  it never returns trusted `EXPECTED` verdicts without local records.
+- Added workspace/root dependency wiring and `windows-triage-mcp` backend config in
+  `configs/gateway.yaml.template`; installer now creates the DB directory and renders the env var.
+- Updated case-mcp capability reporting to separate `windows_triage` from unsupported `wintools`.
+- Updated gateway instructions to remove `wintools-mcp` from the supported/optional backend list.
+- Updated OpenSearch triage enrichment so windows-triage backend failures or missing baseline DB
+  return degraded artifact results instead of silently reporting complete zero-enrichment.
+- Added tests for the 13-tool registration/behavior, missing DB behavior, gateway tool listing, and
+  OpenSearch degraded-mode handling.
+
+**Verification:**
+- `uv sync --all-packages` passed.
+- `uv run pytest packages/windows-triage-mcp/tests/ -v --tb=short` → 8 passed.
+- `uv run pytest packages/opensearch-mcp/tests/test_triage_remote.py -v --tb=short` → 11 passed.
+- `uv run pytest packages/sift-gateway/tests/test_windows_triage_backend.py -v --tb=short` → 1 passed.
+- `uv run pytest packages/opensearch-mcp/tests/ -v --tb=short` → 887 passed, 71 skipped.
+- `uv run pytest packages/agentir-core/tests/ -v --tb=short` → 139 passed.
+- `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → 0 lines.
+- `uv run python -c "from windows_triage_mcp.server import WindowsTriageServer; from case_mcp.server import create_server; print('OK')"` → OK.
+- `uv run pytest packages/case-mcp/tests/ -v --tb=short` could not run because
+  `packages/case-mcp/tests/` does not exist.
+
+**Still open in Phase 11:**
+- Real baseline asset download/extract workflow is not implemented; installer currently provisions
+  the target directory and backend fails degraded until JSON assets are present.
+- Disk footprint and air-gapped baseline asset documentation still needs to be written.
+- Add a fuller OpenSearch success fixture that exercises EXPECTED/SUSPICIOUS/UNKNOWN stamping
+  through the enrichment path, not only lower-level stamping and backend tool tests.
+- Continue stale `wintools` cleanup where it conflicts with the supported SIFT-local contract.
+
+### Session 19 (2026-05-24)
+
+**Evidence-chain clarification:**
+- Reviewed the original/current `case-mcp` evidence contract and current
+  `agentir_core.evidence_ops`.
+- Confirmed there is existing evidence tracking: `evidence_register` stores path + SHA-256 in
+  `evidence.json`, `evidence_list` reads the registry, and `evidence_verify` re-hashes registered
+  files to report OK/MODIFIED/MISSING.
+- Clarified the gap: the legacy model does not detect unregistered files under `evidence/`, does
+  not automatically warn the portal, does not gate agent/backend MCP calls, is not versioned or
+  HMAC/hash-chain sealed, and current same-path re-registration can update a changed hash.
+- Updated `SIFT-MCPS-PLAN.md`, `TASKS.md`, and `AGENTS.md` so Phase 16 is an upgrade of existing
+  evidence tools, not a claim that evidence verification was absent.
+- Added `16-pre` audit tasks and explicit requirements that `evidence.json` becomes a compatibility
+  view while `evidence-manifest.json` + `evidence-ledger.jsonl` become authoritative.
+
+### Session 18 (2026-05-24)
+
+**Planning correction and verification:**
+- Confirmed `Reference MCP Toolsfrom original Valhuntir Documentation.md` distinguishes
+  `windows-triage-mcp` from `wintools-mcp`.
+- `windows-triage-mcp` is local/offline Windows baseline validation and OpenSearch enrichment
+  support: 13 tools (`check_file`, `check_process_tree`, `check_service`, `check_scheduled_task`,
+  `check_autorun`, `check_registry`, `check_hash`, `analyze_filename`, `check_lolbin`,
+  `check_hijackable_dll`, `check_pipe`, `get_db_stats`, `get_health`).
+- `wintools-mcp` is the separate Windows host execution backend and remains out of scope.
+- Current workspace has no `packages/windows-triage-mcp`; root workspace deps include only
+  forensic-mcp, case-mcp, sift-mcp, report-mcp, opensearch-mcp, rag-mcp, and opencti-mcp.
+- Current gateway template includes forensic-mcp, case-mcp, sift-mcp, report-mcp,
+  forensic-rag-mcp, opensearch-mcp, and opencti-mcp, but not windows-triage-mcp.
+- Current migrated FastMCP tool counts verified for local packages:
+  forensic-mcp 9 core tools, case-mcp 15, sift-mcp 5, report-mcp 6. Forensic-mcp discipline
+  tools/resources are present in code but not counted in the default FastMCP tool manager output.
+- Current opensearch-mcp still exposes `idx_enrich_triage` and `triage_remote.py` gateway calls,
+  so the restoration must verify those calls against the new aggregate gateway/backend contract.
+- Found stale copied behavior needing follow-up: `case-mcp` still has `_wintools_configured()`
+  wording that says Windows-triage support was dropped, and `_resolve_case_dir()` still checks
+  `~/.agentir/active_case` before env var despite the portal-first runtime contract.
+
+**Docs updated:**
+- `AGENTS.md`: R7 corrected to retain `windows-triage-mcp` and drop only `wintools-mcp`;
+  package summary and priorities updated.
+- `SIFT-MCPS-PLAN.md`: "not doing" section corrected; architecture and Hermes tool table include
+  `windows-triage-mcp`; new Phase 11 defines restoration scope and acceptance.
+- `TASKS.md`: workflow contract, Phase 10c, and new Phase 11 task list added.
+
+**Direction:**
+- Next implementation should start at Phase 11 before Phase 13 if the user wants parity with the
+  original backend inventory before continuing auth/RBAC work.
+
+### Session 17 (2026-05-24)
+
+**Completed:**
+- Phase 12d COMPLETE — 7 auth endpoints implemented in `routes.py`:
+  - `GET /api/auth/setup-required`, `POST /api/auth/setup` (first-run account creation)
+  - `GET /api/auth/challenge` — R3 anti-enumeration (fake challenges for unknown examiners), R6 pool cap (200 total, 5 per examiner)
+  - `POST /api/auth/login` — R8 domain-separated auth key (`derive_auth_key`), R2 `login:{examiner}` lockout namespace, HttpOnly Secure SameSite=Strict session cookie
+  - `POST /api/auth/reset-password` — requires session + login challenge + new password
+  - `POST /api/auth/logout` — Max-Age=0 cookie clear
+  - `GET /api/auth/me` — R1 re-reads must_reset from disk
+  - 36 tests in `test_auth_endpoints.py`; lockout file isolation via `Path.home()` redirect
+- Phase 12e COMPLETE — existing route guards updated:
+  - `_resolve_examiner()` — removed env var fallback (R9)
+  - `post_delta`, `delete_delta_item`, `verify_evidence` — 401 if no auth, 403 if must_reset (R1)
+  - `get_commit_challenge`, `post_commit` — added must_reset check (R1)
+- Phase 12f COMPLETE — gateway R4 portal block:
+  - `AuthMiddleware.dispatch()` blocks agent tokens on `/portal/api/` paths (403)
+  - Portal paths bypass gateway auth — `PortalSessionMiddleware` handles own auth
+  - `packages/sift-gateway/tests/` created; 8 tests in `test_portal_agent_block.py`
+
+**Verification:**
+- `uv run pytest packages/agentir-core/tests/ -q` → 139/139 passed
+- `uv run pytest packages/case-dashboard/tests/ -q` → 75/75 passed (includes 36 new 12d tests + 8 12c tests + others)
+- `uv run pytest packages/sift-gateway/tests/ -q` → 8/8 passed
+- `grep -rn "vhir|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → 0 lines
+
+**Next session starts at Phase 13** — separate agent credentials + RBAC:
+- 13a: `token_gen.py` — generate_service_token() and fix generate_gateway_token()
+- 13b: Role enforcement — readonly→403 on MCP writes; (R4 agent→portal already done in 12f)
+- 13c: Portal route RBAC guards (`_require_examiner_role` helper)
+- 13f: Portal service-token lifecycle endpoints
 
 ### Session 16 (2026-05-24)
 

@@ -37,6 +37,8 @@ def _verify_bearer(token: str, api_keys: dict) -> dict | None:
     key_info = api_keys.get(matched_key, {})
     if not isinstance(key_info, dict):
         return None
+    if key_info.get("revoked_at"):
+        return None
     expires_at = key_info.get("expires_at")
     if expires_at:
         try:

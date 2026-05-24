@@ -49,6 +49,9 @@ def verify_api_key(token: str, api_keys: dict) -> dict | None:
     if not isinstance(key_info, dict):
         logger.error("API key config for matched key is not a dict, got %s", type(key_info).__name__)
         return None
+    if key_info.get("revoked_at"):
+        logger.warning("Revoked token used (token_id=%s)", key_info.get("token_id"))
+        return None
     expires_at = key_info.get("expires_at")
     if expires_at:
         try:
@@ -76,17 +79,52 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.api_keys = api_keys or {}
 
     async def dispatch(self, request: Request, call_next):
-        # Public paths skip auth
-        # /mcp and /mcp/* are handled by MCPAuthASGIApp (ASGI-level auth)
+        path = request.url.path
+
+        # R4 (Phase 12f): Block agent tokens from portal API before any passthrough
+        if path.startswith("/portal/api/") and self.api_keys:
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.lower().startswith("bearer "):
+                token = auth_header[7:].strip()
+                key_info = verify_api_key(token, self.api_keys)
+                if key_info is not None and key_info.get("role") == "agent":
+                    logger.warning(
+                        "Agent token blocked from portal API: path=%s agent=%s",
+                        path,
+                        key_info.get("examiner", key_info.get("analyst", "unknown")),
+                    )
+                    return JSONResponse(
+                        {"error": "Agent tokens cannot access portal"},
+                        status_code=403,
+                    )
+                if (
+                    key_info is not None
+                    and key_info.get("role") == "readonly"
+                    and request.method not in ("GET", "HEAD")
+                ):
+                    logger.warning(
+                        "Readonly token blocked from portal write: path=%s token_id=%s",
+                        path,
+                        key_info.get("token_id"),
+                    )
+                    return JSONResponse(
+                        {"error": "Readonly role cannot modify portal resources"},
+                        status_code=403,
+                    )
+
+        # Public paths skip gateway auth.
+        # /mcp and /mcp/* are handled by MCPAuthASGIApp (ASGI-level auth).
+        # Portal paths (/portal/...) are handled by PortalSessionMiddleware inside the portal app.
         is_portal_static = (
-            request.url.path.startswith(("/portal/", "/dashboard/"))
-            and request.url.path.rsplit(".", 1)[-1] in _STATIC_ASSET_EXTS
+            path.startswith(("/portal/", "/dashboard/"))
+            and path.rsplit(".", 1)[-1] in _STATIC_ASSET_EXTS
         )
         if (
-            request.url.path in _PUBLIC_PATHS
-            or request.url.path.startswith("/mcp/")
-            or request.url.path.startswith(_PUBLIC_PREFIXES)
+            path in _PUBLIC_PATHS
+            or path.startswith("/mcp/")
+            or path.startswith(_PUBLIC_PREFIXES)
             or is_portal_static
+            or path.startswith("/portal/")  # portal sub-app owns its own auth
         ):
             request.state.examiner = None
             request.state.role = None

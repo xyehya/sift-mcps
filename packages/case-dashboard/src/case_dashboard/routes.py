@@ -21,9 +21,20 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from agentir_core.approval_auth import _load_password_entry as _load_pw_entry
+from agentir_core.approval_auth import (
+    _load_password_entry as _load_pw_entry,
+    _save_password_entry as _save_pw_entry,
+    derive_auth_key,
+)
 from agentir_core.case_io import _protected_write, compute_content_hash
 from agentir_core.verification import compute_hmac, write_ledger_entry
+from case_dashboard.session_jwt import (
+    COOKIE_NAME,
+    COOKIE_PATH,
+    COOKIE_SAME_SITE,
+    generate_jwt,
+    verify_jwt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +106,13 @@ _challenges: dict[str, dict] = {}  # challenge_id → {nonce, examiner, created_
 _CHALLENGE_TTL = 30  # seconds
 _MAX_COMMIT_ATTEMPTS = 3
 _COMMIT_LOCKOUT_SECONDS = 900
+
+# Login challenge store — separate from commit challenges (R2 namespace separation)
+_login_challenges: dict[str, dict] = {}
+_LOGIN_CHALLENGE_TTL = 30  # seconds
+_MAX_LOGIN_ATTEMPTS = 5  # Phase 15c specifies 5 for login
+_MAX_LOGIN_CHALLENGES = 200  # R6 total pool cap
+_MAX_LOGIN_CHALLENGES_PER_EXAMINER = 5  # R6 per-examiner in-flight limit
 
 
 def _resolve_case_dir() -> Path | None:
@@ -218,17 +236,23 @@ _EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
 
 
 def _resolve_examiner(request: Request) -> str | None:
-    """Get examiner from auth middleware, fall back to env var."""
+    """Get examiner from auth middleware state. R9: always use getattr, never direct access."""
     examiner = getattr(request.state, "examiner", None)
-    if examiner and examiner != "anonymous":
-        if not _EXAMINER_RE.match(examiner):
-            return None
-        return examiner
-    # Single-user fallback
-    env_examiner = os.environ.get("AGENTIR_EXAMINER")
-    if env_examiner and not _EXAMINER_RE.match(env_examiner):
+    if not examiner or examiner == "anonymous":
         return None
-    return env_examiner
+    if not _EXAMINER_RE.match(examiner):
+        return None
+    return examiner
+
+
+def _require_examiner_role(request: Request) -> JSONResponse | None:
+    """Return 403 unless the authenticated portal principal is an examiner."""
+    if getattr(request.state, "role", None) != "examiner":
+        return JSONResponse(
+            {"error": "Examiner role required"},
+            status_code=403,
+        )
+    return None
 
 
 def _check_commit_lockout(examiner: str) -> str | None:
@@ -307,6 +331,52 @@ def _commit_failure_count(examiner: str) -> int:
         return 0
     now = time.time()
     return sum(1 for t in data.get(examiner, []) if now - t < _COMMIT_LOCKOUT_SECONDS)
+
+
+# Login lockout helpers — use "login:{examiner}" as the key (R2: separate namespace)
+
+def _check_login_lockout(examiner: str) -> str | None:
+    """Returns error message if login is locked out; None if OK. R2: login: namespace."""
+    lockout_file = Path.home() / ".agentir" / ".password_lockout"
+    try:
+        data = json.loads(lockout_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    key = f"login:{examiner}"
+    failures = data.get(key, [])
+    now = time.time()
+    recent = sum(1 for t in failures if now - t < _COMMIT_LOCKOUT_SECONDS)
+    if recent >= _MAX_LOGIN_ATTEMPTS:
+        oldest = min(t for t in failures if now - t < _COMMIT_LOCKOUT_SECONDS)
+        remaining = int(_COMMIT_LOCKOUT_SECONDS - (now - oldest))
+        return f"Too many failed attempts. Try again in {max(remaining, 1)}s."
+    return None
+
+
+def _record_login_failure(examiner: str) -> None:
+    """Record a failed login attempt under login:{examiner} key. R2."""
+    _record_commit_failure(f"login:{examiner}")
+
+
+def _clear_login_failures(examiner: str) -> None:
+    """Clear login failure count on success. R2."""
+    _clear_commit_failures(f"login:{examiner}")
+
+
+def _login_failure_count(examiner: str) -> int:
+    """Count recent login failures under login:{examiner} key. R2."""
+    return _commit_failure_count(f"login:{examiner}")
+
+
+def _must_reset_check(examiner: str) -> JSONResponse | None:
+    """R1: Returns 403 if examiner must reset password; None if OK. Re-reads from disk."""
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    if entry and entry.get("must_reset_password"):
+        return JSONResponse(
+            {"error": "Password reset required before performing this action"},
+            status_code=403,
+        )
+    return None
 
 
 def _iso_now() -> str:
@@ -948,9 +1018,20 @@ async def get_summary(request: Request) -> JSONResponse:
 
 
 async def post_delta(request: Request) -> JSONResponse:
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    err = _must_reset_check(examiner)
+    if err:
+        return err
 
     # Size check
     content_length = request.headers.get("content-length")
@@ -1036,9 +1117,20 @@ async def post_delta(request: Request) -> JSONResponse:
 
 
 async def delete_delta_item(request: Request) -> JSONResponse:
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    err = _must_reset_check(examiner)
+    if err:
+        return err
 
     item_id = request.path_params["id"]
     delta_path = case_dir / "pending-reviews.json"
@@ -1087,9 +1179,20 @@ async def delete_delta_item(request: Request) -> JSONResponse:
 
 
 async def verify_evidence(request: Request) -> JSONResponse:
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    err = _must_reset_check(examiner)
+    if err:
+        return err
 
     req_path = request.path_params["path"]
 
@@ -1148,6 +1251,10 @@ async def verify_evidence(request: Request) -> JSONResponse:
 
 async def get_commit_challenge(request: Request) -> JSONResponse:
     """Issue a challenge nonce + salt for password verification."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
@@ -1155,6 +1262,10 @@ async def get_commit_challenge(request: Request) -> JSONResponse:
     lockout_msg = _check_commit_lockout(examiner)
     if lockout_msg:
         return JSONResponse({"error": lockout_msg}, status_code=429)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
 
     entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
     if not entry:
@@ -1193,6 +1304,10 @@ async def get_commit_challenge(request: Request) -> JSONResponse:
 
 async def post_commit(request: Request) -> JSONResponse:
     """Apply delta with challenge-response authentication."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1204,6 +1319,10 @@ async def post_commit(request: Request) -> JSONResponse:
     lockout_msg = _check_commit_lockout(examiner)
     if lockout_msg:
         return JSONResponse({"error": lockout_msg}, status_code=429)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
 
     try:
         body = await request.json()
@@ -1268,6 +1387,337 @@ async def post_commit(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
+# ---- Phase 12d: Auth endpoints ----
+
+
+async def get_auth_setup_required(request: Request) -> JSONResponse:
+    """No auth required. Returns whether first-time password setup is needed."""
+    try:
+        has_any = _PASSWORDS_DIR.is_dir() and any(_PASSWORDS_DIR.glob("*.json"))
+    except OSError:
+        has_any = False
+    return JSONResponse({"required": not has_any})
+
+
+async def post_auth_setup(request: Request) -> JSONResponse:
+    """Create the first examiner account. Only available when no passwords exist."""
+    try:
+        already_set_up = _PASSWORDS_DIR.is_dir() and any(_PASSWORDS_DIR.glob("*.json"))
+    except OSError:
+        already_set_up = False
+    if already_set_up:
+        return JSONResponse({"error": "Already set up"}, status_code=409)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    examiner = str(body.get("examiner", "")).strip()
+    password = str(body.get("password", ""))
+
+    if not _EXAMINER_RE.match(examiner):
+        return JSONResponse({"error": "Invalid examiner name"}, status_code=400)
+    if len(password) < 8:
+        return JSONResponse(
+            {"error": "Password too short (minimum 8 characters)"}, status_code=400
+        )
+
+    salt = secrets.token_bytes(32)
+    pw_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000).hex()
+    entry = {"hash": pw_hash, "salt": salt.hex(), "must_reset_password": False}
+    try:
+        _save_pw_entry(_PASSWORDS_DIR, examiner, entry)
+    except PermissionError as e:
+        logger.error("Cannot create passwords dir: %s", e)
+        return JSONResponse(
+            {"error": "Server configuration error — check gateway logs"},
+            status_code=500,
+        )
+    except OSError:
+        logger.exception("Failed to save password entry for %s", examiner)
+        return JSONResponse(
+            {"error": "Failed to save password — check gateway logs"},
+            status_code=500,
+        )
+    return JSONResponse({"ok": True, "examiner": examiner})
+
+
+async def get_auth_challenge(request: Request) -> JSONResponse:
+    """Issue a login challenge nonce. Always returns 200 (R3: no user enumeration)."""
+    examiner = str(request.query_params.get("examiner", "")).strip()
+    if not examiner or not _EXAMINER_RE.match(examiner):
+        return JSONResponse({"error": "Invalid examiner name"}, status_code=400)
+
+    lockout_msg = _check_login_lockout(examiner)
+    if lockout_msg:
+        return JSONResponse({"error": lockout_msg}, status_code=429)
+
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    now = time.time()
+
+    # Purge expired login challenges
+    expired = [
+        k for k, v in _login_challenges.items()
+        if now - v["created_at"] > _LOGIN_CHALLENGE_TTL
+    ]
+    for k in expired:
+        del _login_challenges[k]
+
+    # R6: Per-examiner limit — evict oldest for this examiner if at cap
+    per_examiner_keys = [
+        k for k, v in _login_challenges.items() if v["examiner"] == examiner
+    ]
+    while len(per_examiner_keys) >= _MAX_LOGIN_CHALLENGES_PER_EXAMINER:
+        oldest = min(per_examiner_keys, key=lambda k: _login_challenges[k]["created_at"])
+        del _login_challenges[oldest]
+        per_examiner_keys.remove(oldest)
+
+    # R6: Total pool cap — evict oldest overall
+    while len(_login_challenges) >= _MAX_LOGIN_CHALLENGES:
+        oldest = min(
+            _login_challenges.keys(), key=lambda k: _login_challenges[k]["created_at"]
+        )
+        del _login_challenges[oldest]
+
+    # R3: Always issue a challenge — fake for unknown examiners
+    is_fake = entry is None
+    salt_hex = secrets.token_hex(32) if is_fake else entry["salt"]
+
+    challenge_id = secrets.token_hex(16)
+    nonce = secrets.token_hex(32)
+    _login_challenges[challenge_id] = {
+        "nonce": nonce,
+        "examiner": examiner,
+        "created_at": now,
+        "bound_ip": request.client.host,
+        "_fake": is_fake,
+    }
+
+    return JSONResponse(
+        {
+            "challenge_id": challenge_id,
+            "nonce": nonce,
+            "salt": salt_hex,
+            "iterations": 600000,
+            "hash_algorithm": "SHA-256",
+        }
+    )
+
+
+async def post_auth_login(request: Request) -> JSONResponse:
+    """Authenticate via PBKDF2 challenge-response. Sets session cookie on success."""
+    if not _SESSION_SECRET:
+        logger.error("Portal session secret not configured")
+        return JSONResponse(
+            {"error": "Portal session not configured — check gateway logs"},
+            status_code=500,
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    challenge_id = str(body.get("challenge_id", ""))
+    examiner = str(body.get("examiner", "")).strip()
+    response_hex = str(body.get("response", ""))
+
+    if not challenge_id or not examiner or not response_hex:
+        return JSONResponse({"error": "Missing required fields"}, status_code=400)
+
+    if not _EXAMINER_RE.match(examiner):
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    # R2: Check login lockout (login: namespace, separate from commit lockout)
+    lockout_msg = _check_login_lockout(examiner)
+    if lockout_msg:
+        return JSONResponse({"error": lockout_msg}, status_code=429)
+
+    # Pop challenge — single-use
+    challenge = _login_challenges.pop(challenge_id, None)
+    if not challenge:
+        return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
+
+    now = time.time()
+    if now - challenge["created_at"] > _LOGIN_CHALLENGE_TTL:
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    if challenge.get("bound_ip") != request.client.host or challenge["examiner"] != examiner:
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    # R3: Fake challenges always fail — same error path as real mismatch
+    if challenge.get("_fake"):
+        _record_login_failure(examiner)
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    if not entry:
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    # R8: Domain-separated auth key — never use raw stored hash directly
+    try:
+        auth_key = derive_auth_key(entry["hash"])
+    except (ValueError, KeyError):
+        logger.error("Corrupt password entry for examiner %s", examiner)
+        return JSONResponse(
+            {"error": "Server configuration error — check gateway logs"},
+            status_code=500,
+        )
+
+    expected = hmac_mod.new(auth_key, challenge["nonce"].encode(), "sha256").hexdigest()
+    if not hmac_mod.compare_digest(expected, response_hex):
+        _record_login_failure(examiner)
+        remaining = _MAX_LOGIN_ATTEMPTS - _login_failure_count(examiner)
+        msg = (
+            f"Too many failed attempts. Locked for {_COMMIT_LOCKOUT_SECONDS}s."
+            if remaining <= 0
+            else "Invalid credentials"
+        )
+        return JSONResponse({"error": msg}, status_code=401)
+
+    _clear_login_failures(examiner)
+
+    must_reset = bool(entry.get("must_reset_password", False))
+    role = entry.get("role", "examiner")
+
+    token = generate_jwt(examiner, role, _SESSION_SECRET, _SESSION_MAX_AGE)
+    exp_ts = int(time.time()) + _SESSION_MAX_AGE
+    expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc).isoformat()
+
+    resp = JSONResponse(
+        {
+            "examiner": examiner,
+            "role": role,
+            "expires_at": expires_at,
+            "must_reset": must_reset,
+        }
+    )
+    resp.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=_SESSION_MAX_AGE,
+        path=COOKIE_PATH,
+        httponly=True,
+        secure=True,
+        samesite=COOKIE_SAME_SITE,
+    )
+    return resp
+
+
+async def post_auth_reset_password(request: Request) -> JSONResponse:
+    """Reset password via login challenge + new password. Clears must_reset_password."""
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    challenge_id = str(body.get("challenge_id", ""))
+    response_hex = str(body.get("response", ""))
+    new_password = str(body.get("new_password", ""))
+
+    if not challenge_id or not response_hex or not new_password:
+        return JSONResponse({"error": "Missing required fields"}, status_code=400)
+
+    if len(new_password) < 8:
+        return JSONResponse(
+            {"error": "Password too short (minimum 8 characters)"}, status_code=400
+        )
+
+    challenge = _login_challenges.pop(challenge_id, None)
+    if not challenge:
+        return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
+
+    now = time.time()
+    if now - challenge["created_at"] > _LOGIN_CHALLENGE_TTL:
+        return JSONResponse({"error": "Challenge expired"}, status_code=401)
+
+    if challenge.get("_fake") or challenge["examiner"] != examiner:
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    if challenge.get("bound_ip") != request.client.host:
+        return JSONResponse({"error": "Challenge IP mismatch"}, status_code=401)
+
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    if not entry:
+        return JSONResponse({"error": "No password configured"}, status_code=403)
+
+    try:
+        auth_key = derive_auth_key(entry["hash"])
+    except (ValueError, KeyError):
+        logger.error("Corrupt password entry for examiner %s", examiner)
+        return JSONResponse(
+            {"error": "Server configuration error — check gateway logs"},
+            status_code=500,
+        )
+
+    expected = hmac_mod.new(auth_key, challenge["nonce"].encode(), "sha256").hexdigest()
+    if not hmac_mod.compare_digest(expected, response_hex):
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    new_salt = secrets.token_bytes(32)
+    new_hash = hashlib.pbkdf2_hmac("sha256", new_password.encode(), new_salt, 600_000).hex()
+    new_entry = {**entry, "hash": new_hash, "salt": new_salt.hex(), "must_reset_password": False}
+    try:
+        _save_pw_entry(_PASSWORDS_DIR, examiner, new_entry)
+    except OSError:
+        logger.exception("Failed to update password for %s", examiner)
+        return JSONResponse(
+            {"error": "Failed to update password — check gateway logs"},
+            status_code=500,
+        )
+    return JSONResponse({"ok": True})
+
+
+async def post_auth_logout(request: Request) -> JSONResponse:
+    """Clear the portal session cookie."""
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(
+        COOKIE_NAME,
+        "",
+        max_age=0,
+        path=COOKIE_PATH,
+        httponly=True,
+        secure=True,
+        samesite=COOKIE_SAME_SITE,
+    )
+    return resp
+
+
+async def get_auth_me(request: Request) -> JSONResponse:
+    """Return current session info, or 401 if not authenticated."""
+    examiner = getattr(request.state, "examiner", None)
+    role = getattr(request.state, "role", None)
+
+    if not examiner:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    # R1: Re-read must_reset from disk — JWT is a UI hint only
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    must_reset = bool(entry.get("must_reset_password", False)) if entry else False
+
+    cookie_val = request.cookies.get(COOKIE_NAME)
+    expires_at = None
+    if cookie_val and _SESSION_SECRET:
+        payload = verify_jwt(cookie_val, _SESSION_SECRET)
+        if payload:
+            exp_ts = payload.get("exp", 0)
+            expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc).isoformat()
+
+    return JSONResponse(
+        {
+            "examiner": examiner,
+            "role": role,
+            "expires_at": expires_at,
+            "must_reset": must_reset,
+        }
+    )
+
+
 async def serve_index(request: Request) -> Response:
     index_path = _STATIC_DIR / "index.html"
     if not index_path.exists():
@@ -1325,6 +1775,14 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/{path:path}/verify", verify_evidence, methods=["POST"]),
         Route("/api/commit/challenge", get_commit_challenge, methods=["GET"]),
         Route("/api/commit", post_commit, methods=["POST"]),
+        # Phase 12d: auth endpoints
+        Route("/api/auth/setup-required", get_auth_setup_required, methods=["GET"]),
+        Route("/api/auth/setup", post_auth_setup, methods=["POST"]),
+        Route("/api/auth/challenge", get_auth_challenge, methods=["GET"]),
+        Route("/api/auth/login", post_auth_login, methods=["POST"]),
+        Route("/api/auth/reset-password", post_auth_reset_password, methods=["POST"]),
+        Route("/api/auth/logout", post_auth_logout, methods=["POST"]),
+        Route("/api/auth/me", get_auth_me, methods=["GET"]),
     ]
 
 

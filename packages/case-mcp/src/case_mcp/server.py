@@ -44,11 +44,6 @@ _MAX_TEXT = 10_000
 _MAX_SHORT = 200
 
 
-def _wintools_configured() -> bool:
-    """Windows-triage support has been dropped. Always returns False."""
-    return False
-
-
 def _build_platform_capabilities() -> dict:
     """Detect available backends for Layer 4 platform capabilities."""
     import importlib.util
@@ -56,6 +51,7 @@ def _build_platform_capabilities() -> dict:
     capabilities = {
         "opensearch": importlib.util.find_spec("opensearch_mcp") is not None,
         "remnux": False,
+        "windows_triage": importlib.util.find_spec("windows_triage_mcp") is not None,
         "wintools": False,
         "forensic_rag": importlib.util.find_spec("rag_mcp") is not None,
         "opencti": importlib.util.find_spec("opencti_mcp") is not None,
@@ -90,11 +86,15 @@ def _build_platform_capabilities() -> dict:
         guidance.append(
             "- Evidence indexing: idx_ingest for structured querying at scale"
         )
+    if capabilities["windows_triage"]:
+        guidance.append(
+            "- Windows baseline validation: check_file, check_service, and related offline triage tools"
+        )
     if capabilities["remnux"]:
         guidance.append("- Malware analysis: upload_from_host + analyze_file on REMnux")
     if capabilities["wintools"]:
         guidance.append(
-            "- Windows offline analysis: run_windows_command on forensic workstation"
+            "- Windows host execution: unsupported in this portable SIFT runtime"
         )
     if capabilities["forensic_rag"]:
         guidance.append(

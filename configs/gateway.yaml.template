@@ -19,9 +19,15 @@ api_keys:
   ${AGENTIR_GATEWAY_TOKEN}:
     token_id: "examiner-default"
     examiner: "${AGENTIR_EXAMINER}"
+    agent_id: null
     role: examiner
     label: "Installer-created examiner fallback token"
+    created_by: "installer"
+    created_at: "${AGENTIR_TOKEN_CREATED_AT}"
     expires_at: null
+    revoked_at: null
+    last_used_at: null
+    last_used_ip: null
 
   ${AGENTIR_SERVICE_TOKEN}:
     token_id: "hermes-default"
@@ -29,7 +35,12 @@ api_keys:
     agent_id: "hermes-default"
     role: agent
     label: "Installer-created Hermes service token"
+    created_by: "installer"
+    created_at: "${AGENTIR_TOKEN_CREATED_AT}"
     expires_at: null
+    revoked_at: null
+    last_used_at: null
+    last_used_ip: null
 
 portal:
   session_secret: "${AGENTIR_PORTAL_SESSION_SECRET}"
@@ -79,6 +90,14 @@ backends:
     type: stdio
     command: "${UV_BIN}"
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "rag-mcp"]
+
+  windows-triage-mcp:
+    enabled: true
+    type: stdio
+    command: "${UV_BIN}"
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "windows-triage-mcp"]
+    env:
+      AGENTIR_WINDOWS_TRIAGE_DB_DIR: "${AGENTIR_WINDOWS_TRIAGE_DB_DIR}"
 
   opensearch-mcp:
     enabled: true

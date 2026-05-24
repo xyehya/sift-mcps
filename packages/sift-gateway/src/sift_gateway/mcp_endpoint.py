@@ -178,8 +178,16 @@ class MCPAuthASGIApp:
             return
 
         examiner = key_info.get("examiner", key_info.get("analyst", "unknown"))
+        role = key_info.get("role", "examiner")
+        if role == "readonly":
+            resp = JSONResponse(
+                {"error": "Readonly role cannot call MCP tools"},
+                status_code=403,
+            )
+            await resp(scope, receive, send)
+            return
         scope["state"]["examiner"] = examiner
-        scope["state"]["role"] = key_info.get("role", "examiner")
+        scope["state"]["role"] = role
 
         # Per-examiner post-auth rate limit
         if not check_examiner_rate_limit(examiner):
