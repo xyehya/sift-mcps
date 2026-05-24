@@ -59,7 +59,7 @@ Functional, resilience, and security tests must prove this workflow. No shortcut
    uv run python -c "from case_dashboard.routes import create_dashboard_app; print('OK')"
    uv run python -c "from case_mcp.server import create_server; print('OK')"
    ```
-6. **Next task: Phase 5** — forensic-rag FastMCP migration. See below.
+6. **Next task: Phase 4e** — research `notifications/tools/list_changed` lifecycle hooks, or continue to Phase 7 if deferred.
 
 ---
 
@@ -239,41 +239,45 @@ All test suites verified passing in Session 3:
 - [x] Replaced both copy-pasted try/except blocks in `create_mcp_server` and `create_backend_mcp_server`
 
 ### 4e. notifications/tools/list_changed
-- [ ] Research: check if `StreamableHTTPSessionManager` exposes session lifecycle hooks
-- [ ] Add `_active_mcp_sessions` tracking to `Gateway` class
+- [x] Research: check if `StreamableHTTPSessionManager` exposes session lifecycle hooks
+  - Result: installed MCP SDK exposes only `run()` and `handle_request()` on `StreamableHTTPSessionManager`; it privately tracks `StreamableHTTPServerTransport`, not `ServerSession`.
+  - `ServerSession.send_tool_list_changed()` exists, but there is no public manager lifecycle hook that hands gateway code active `ServerSession` objects.
+  - Version check: `uv pip show mcp` → `1.27.1`; `uv pip install --upgrade mcp --dry-run` found no newer `mcp` package, only newer transitive `pyjwt`/`starlette`.
+- [!] Add `_active_mcp_sessions` tracking to `Gateway` class
+  - Needs implementation decision: either defer until SDK exposes lifecycle hooks, or add a local `Server` subclass/wrapper that tracks sessions by copying the SDK `Server.run()` flow.
 - [ ] Emit `notifications/tools/list_changed` from `_build_tool_map()` when it's not the first build
 - [ ] Test: trigger a backend restart, verify Hermes refreshes tool list
 
 ---
 
-## Phase 5 — forensic-rag FastMCP Migration
+## Phase 5 — forensic-rag FastMCP Migration ✅
 
 > `packages/forensic-rag-mcp/src/rag_mcp/server.py` uses low-level MCP SDK.
 > See SIFT-MCPS-PLAN.md Phase 5 for code template.
 
-- [ ] Read `server.py` fully — catalog all tools and their current implementations
+- [x] Read `server.py` fully — catalog all tools and their current implementations
   - Tools: `search_knowledge`, `list_knowledge_sources`, `get_knowledge_stats`
   - Note: model allowlist validation, input length limits, ChromaDB integration
-- [ ] Rewrite using `from mcp.server.fastmcp import FastMCP`
+- [x] Rewrite using `from mcp.server.fastmcp import FastMCP`
   - Preserve all tool implementations unchanged (only wrap in FastMCP decorators)
   - Add `annotations={"readOnlyHint": True}` to all three tools
   - Keep existing instructions string
-- [ ] Test: `uv run rag-mcp --help` outputs tool list
-- [ ] Test: `uv run python -c "from rag_mcp.server import mcp; print('OK')"`
+- [x] Test: `uv run rag-mcp --help` outputs tool list
+- [x] Test: `uv run python -c "from rag_mcp.server import mcp; print('OK')"`
 
 ---
 
-## Phase 6 — sift-mcp Argument Sanitization Hardening
+## Phase 6 — sift-mcp Argument Sanitization Hardening ✅
 
 > `packages/sift-mcp/src/sift_mcp/security.py`
 > See SIFT-MCPS-PLAN.md Phase 6 for exact code.
 
-- [ ] Add `import unicodedata` at top of `security.py`
-- [ ] In `sanitize_extra_args()`, before existing flag checks, add:
+- [x] Add `import unicodedata` at top of `security.py`
+- [x] In `sanitize_extra_args()`, before existing flag checks, add:
   - Null-byte check: `if "\x00" in arg: raise ValueError(...)`
   - Length limit: `if len(arg) > 4096: raise ValueError(...)`
   - NFC normalization: normalize and log if arg changed
-- [ ] Write tests:
+- [x] Write tests:
   - `assert raises ValueError` on null-byte arg
   - `assert raises ValueError` on 4097-char arg
   - `assert normalizes` a known non-NFC Unicode string
@@ -295,6 +299,26 @@ All test suites verified passing in Session 3:
 - [ ] Installer writes gateway config with empty `case.dir` and portal-created-case workflow enabled
 - [ ] Test on clean Ubuntu VM or container
 - [ ] `chmod +x install.sh`
+
+---
+
+## Audit Invariant / Regression Guard
+
+> Do not weaken this while implementing installer, config, auth, token lifecycle, or dashboard work.
+
+- [x] Confirm central audit storage model.
+  - `sift_common.audit.AuditWriter` writes append-only JSONL to `AGENTIR_AUDIT_DIR` or `AGENTIR_CASE_DIR/audit/`, one file per writer/MCP (`sift-gateway.jsonl`, `sift-mcp.jsonl`, etc.), with flush + fsync.
+  - Existing evidence/provenance readers aggregate all `audit/*.jsonl`: `agentir_core.case_io.load_audit_index()`, `agentir_core.audit_ops._load_audit_entries()`, case-dashboard audit lookup, and forensic-mcp provenance classification.
+  - HMAC verification remains separate at `/var/lib/agentir/verification/{case-id}.jsonl`; report reconciliation checks approved findings/timeline against that ledger.
+- [~] Current state: tool actions are audited, but not yet in the final gateway-envelope shape for every backend.
+  - All intended agent calls enter through gateway HTTP MCP `/mcp`.
+  - Gateway then routes to local stdio backends; those backends write detailed per-backend evidence logs through `AuditWriter`.
+  - Gateway currently writes centralized proxy audit entries only for `HttpMCPBackend` paths, which are not part of the final normal SIFT backend set.
+  - Aggregate `/mcp` auth currently sets examiner/role in request state, and gateway injects examiner identity into `ANALYST_TOOLS`.
+- [ ] Close remaining final-spec gap: every aggregate `/mcp` `call_tool` must write a minimal gateway envelope to `audit/sift-gateway.jsonl` with request/correlation id, role, token id, agent id or examiner, source IP, active case, aggregate tool, resolved backend, status, duration, and truncation/result summary.
+- [ ] Preserve existing backend `audit_id`s as canonical evidence/provenance IDs; add `backend_audit_id` correlation from gateway envelope when available instead of replacing backend IDs.
+- [ ] Ensure raw bearer tokens and HMAC responses are never logged.
+- [ ] Add tests before/with Phase 13 proving two different service tokens produce separable gateway logs.
 
 ---
 
@@ -612,6 +636,71 @@ All test suites verified passing in Session 3:
 ---
 
 ## Session Notes
+
+### Session 11 (2026-05-24)
+
+**Completed:**
+- Created the project constitution at `.specify/memory/constitution.md` from the placeholder template.
+- Ratified constitution v1.0.0 around the settled installer-first, portal-first, aggregate `/mcp`,
+  chain-of-custody, agentir-core, and verification-gate requirements.
+- Updated Spec Kit templates so future plans/specs/tasks include constitution-aligned checks:
+  - `.specify/templates/plan-template.md`
+  - `.specify/templates/spec-template.md`
+  - `.specify/templates/tasks-template.md`
+- Ran mandatory `before_constitution` Git initialization hook; it skipped because the repository is
+  already initialized.
+
+**Verification:**
+- Checked constitution for placeholder tokens and deferred TODOs — none remain.
+- Checked version/date line matches the Sync Impact Report: `1.0.0`, ratified/amended `2026-05-24`.
+- Reviewed `.specify/templates/commands/*.md` path — directory is not present in this checkout.
+
+**Next implementation work:**
+- Continue Phase 7 installer script if Phase 4e remains deferred.
+
+### Session 10 (2026-05-24)
+
+**Completed:**
+- Phase 6 COMPLETE — `packages/sift-mcp/src/sift_mcp/security.py` now rejects null bytes, rejects arguments longer than 4096 chars, and NFC-normalizes non-canonical Unicode before existing flag/metacharacter checks.
+- Added focused tests in `packages/sift-mcp/tests/test_security_sanitize.py` for null-byte rejection, long-argument rejection, and non-NFC normalization/logging.
+- Phase 4e research COMPLETE — the installed MCP SDK has `ServerSession.send_tool_list_changed()`, but `StreamableHTTPSessionManager` does not expose active `ServerSession` lifecycle hooks.
+  - `mcp==1.27.1` is current; `uv pip install --upgrade mcp --dry-run` found no newer MCP SDK.
+- Gateway audit review: current tool calls are audited, but final gateway-principal metadata is only partial today. Stdio backends write backend audit logs; gateway proxy audit is centralized for HTTP backends. Added Audit Invariant / Regression Guard above.
+
+**Verification:**
+- `uv sync --all-packages` → clean
+- `uv run pytest packages/sift-mcp/tests/test_security_sanitize.py -v --tb=short` → 3/3 passed
+- `uv run pytest packages/agentir-core/tests/ -v --tb=short -q` → 125/125 passed
+- `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → 0 lines
+- `uv run python -c "from case_dashboard.routes import create_dashboard_app; print('OK')"` → OK
+- `uv run python -c "from case_mcp.server import create_server; print('OK')"` → OK
+- `uv run ruff check packages/sift-mcp/src/sift_mcp/security.py packages/sift-mcp/tests/test_security_sanitize.py` → clean
+
+**Next implementation work:**
+- Phase 4e implementation is awaiting decision: defer until MCP SDK exposes session hooks, or add a local session-tracking `Server` wrapper/subclass.
+- If Phase 4e stays deferred, continue to Phase 7 installer script while preserving the audit invariant.
+
+### Session 9 (2026-05-24)
+
+**Completed:**
+- Phase 5 COMPLETE — `packages/forensic-rag-mcp/src/rag_mcp/server.py` migrated from low-level MCP SDK to FastMCP.
+  - Exposes module-level `mcp = FastMCP("forensic-rag-mcp", instructions=_INSTRUCTIONS)`.
+  - Registered `search_knowledge`, `list_knowledge_sources`, and `get_knowledge_stats` with `annotations={"readOnlyHint": True}`.
+  - Preserved lazy ChromaDB/RAG index use, model allowlist behavior in `RAGIndex`, input length limits, audit envelope, examiner attribution, and error response shape.
+  - Added `rag-mcp --help` CLI output that terminates and lists tools for the documented smoke test.
+
+**Verification:**
+- `uv sync --all-packages` → clean
+- `uv run rag-mcp --help` → lists all three tools
+- `uv run python -c "from rag_mcp.server import mcp; print('OK')"` → OK
+- `uv run pytest packages/agentir-core/tests/ -v --tb=short` → 125/125 passed
+- `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` → 0 lines
+- `uv run python -c "from case_dashboard.routes import create_dashboard_app; print('OK')"` → OK
+- `uv run python -c "from case_mcp.server import create_server; print('OK')"` → OK
+
+**Next implementation work:**
+- Phase 4e remains open for `notifications/tools/list_changed` SDK lifecycle research.
+- If Phase 4e stays deferred, continue to Phase 6 sift-mcp argument sanitization hardening.
 
 ### Session 8 (2026-05-24)
 

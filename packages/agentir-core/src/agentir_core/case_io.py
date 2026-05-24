@@ -88,21 +88,9 @@ def get_case_dir(case_id: str | None = None) -> Path:
             raise CaseError(f"Case directory does not exist: {case_dir}")
         return case_dir
 
-    # Check ~/.agentir/active_case pointer
-    active_file = Path.home() / ".agentir" / "active_case"
-    if active_file.exists():
-        content = active_file.read_text().strip()
-        if os.path.isabs(content):
-            case_dir = Path(content)
-        else:
-            _validate_case_id(content)
-            cases_dir = Path(os.environ.get("AGENTIR_CASES_DIR", DEFAULT_CASES_DIR))
-            case_dir = cases_dir / content
-        if not case_dir.is_dir():
-            raise CaseError(f"Case directory does not exist: {case_dir}")
-        return case_dir
-
-    raise CaseError("No active case. Use --case <id> or set AGENTIR_CASE_DIR.")
+    raise CaseError(
+        "No active case: set AGENTIR_CASE_DIR in ~/.agentir/gateway.yaml case.dir"
+    )
 
 
 def get_examiner(case_dir: Path | None = None) -> str:

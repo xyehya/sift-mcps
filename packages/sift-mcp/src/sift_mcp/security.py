@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import unicodedata
 from pathlib import Path
 
 from sift_mcp.catalog import load_security_policy
 from sift_mcp.config import resolve_case_dir
 
 _DANGEROUS_PATTERNS = [";", "&&", "||", "`", "$(", "${"]
+logger = logging.getLogger(__name__)
 
 
 def _get_policy() -> dict:
@@ -43,6 +46,21 @@ def sanitize_extra_args(extra_args: list[str], tool_name: str = "") -> list[str]
     for arg in extra_args:
         if not isinstance(arg, str):
             raise ValueError(f"Non-string argument in extra_args: {type(arg).__name__}")
+        if "\x00" in arg:
+            raise ValueError(f"Null byte in extra_args for {tool_name}")
+        if len(arg) > 4096:
+            raise ValueError(
+                f"Argument too long ({len(arg)} chars) in extra_args for {tool_name}"
+            )
+        normalized = unicodedata.normalize("NFC", arg)
+        if normalized != arg:
+            logger.info(
+                "Normalized non-NFC argument for %s: %r to %r",
+                tool_name,
+                arg,
+                normalized,
+            )
+            arg = normalized
         flag = arg.lower().split("=")[0]
         if flag in tool_blocked:
             raise ValueError(f"Blocked dangerous flag '{arg}' for {tool_name}")
@@ -74,7 +92,7 @@ def sanitize_extra_args(extra_args: list[str], tool_name: str = "") -> list[str]
 # Directories where rm is blocked (evidence storage, case data)
 def _get_protected_dirs() -> tuple[str, ...]:
     """Resolve protected directories at runtime from env/defaults."""
-    cases_dir = os.environ.get("VHIR_CASES_DIR", str(Path.home() / "cases"))
+    cases_dir = os.environ.get("AGENTIR_CASES_DIR", str(Path.home() / "cases"))
     return (
         str(Path(cases_dir).resolve()),
         "/cases",
@@ -121,13 +139,13 @@ _BLOCKED_DIRECTORIES = (
     "/sys",
     "/dev",
     "/boot",
-    os.path.expanduser("~/.vhir"),
+    os.path.expanduser("~/.agentir"),
 )
 
 # Exceptions within blocked directories (evidence data, not config)
 _BLOCKED_EXCEPTIONS = (
-    os.path.expanduser("~/.vhir/cases"),
-    os.path.expanduser("~/.vhir/hayabusa-output"),
+    os.path.expanduser("~/.agentir/cases"),
+    os.path.expanduser("~/.agentir/hayabusa-output"),
 )
 
 
@@ -150,7 +168,7 @@ _OUTPUT_BLOCKED_DIRECTORIES = _BLOCKED_DIRECTORIES + (
 def validate_output_path(path: str) -> str:
     """Validate that an output path is safe to write to.
 
-    Stricter than validate_input_path. When VHIR_CASE_DIR is set, the
+    Stricter than validate_input_path. When AGENTIR_CASE_DIR is set, the
     output path must be inside the case directory. When not set, only
     /tmp and the current working directory are allowed.
 

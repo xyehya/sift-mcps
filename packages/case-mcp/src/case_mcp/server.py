@@ -128,7 +128,7 @@ def _validate_str_length(value: str | None, field: str, max_len: int) -> None:
 def _resolve_case_dir(case_id: str = "") -> Path:
     """Resolve case directory without sys.exit.
 
-    Same priority as vhir CLI get_case_dir(), but raises ValueError
+    Same priority as agentir CLI get_case_dir(), but raises ValueError
     instead of calling sys.exit().
 
     Side effect: sets AGENTIR_CASE_DIR env var so AuditWriter can find
@@ -641,7 +641,7 @@ def create_server() -> FastMCP:
 
         Creates a timestamped backup of case metadata, findings, timeline,
         approvals, audit trails, and reports. Does NOT include evidence or
-        extraction files (use 'vhir backup --all' for full backups).
+        extraction files (use 'agentir backup --all' for full backups).
 
         Confirm with the examiner before creating a backup.
 
@@ -675,7 +675,7 @@ def create_server() -> FastMCP:
                 if importlib.util.find_spec("opensearch_mcp") is not None:
                     result["opensearch_note"] = (
                         "OpenSearch indices are NOT included in MCP backups. "
-                        "Use 'vhir backup --all' from the CLI for a full backup "
+                        "Use 'agentir backup --all' from the CLI for a full backup "
                         "including indexed evidence."
                     )
             except Exception:
@@ -709,7 +709,7 @@ def create_server() -> FastMCP:
 
         config_path = Path.home() / ".agentir" / "gateway.yaml"
         if not config_path.is_file():
-            return {"error": "Gateway config not found (~/.vhir/gateway.yaml)"}
+            return {"error": "Gateway config not found (~/.agentir/gateway.yaml)"}
 
         try:
             config = yaml.safe_load(config_path.read_text()) or {}

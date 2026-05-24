@@ -4418,6 +4418,12 @@ full = [
     { name = "sift-mcp" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "agentir-core", marker = "extra == 'core'", editable = "packages/agentir-core" },
@@ -4438,6 +4444,12 @@ requires-dist = [
     { name = "sift-mcps", extras = ["core"], marker = "extra == 'full'" },
 ]
 provides-extras = ["core", "full", "dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-asyncio", specifier = ">=1.3.0" },
+]
 
 [[package]]
 name = "simplejson"

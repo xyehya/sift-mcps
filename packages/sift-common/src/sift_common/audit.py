@@ -1,4 +1,4 @@
-"""Audit trail writer for Valhuntir MCP servers.
+"""Audit trail writer for sift-mcps MCP servers.
 
 Each MCP writes to its own JSONL file in the case audit directory.
 Canonical implementation shared by all SIFT-platform MCPs via sift-common.
@@ -40,11 +40,11 @@ def _sanitize_slug(raw: str) -> str:
 
 
 def resolve_examiner() -> str:
-    """Resolve examiner identity: VHIR_EXAMINER > VHIR_ANALYST > OS username.
+    """Resolve examiner identity: AGENTIR_EXAMINER > AGENTIR_ANALYST > OS username.
 
     The result is validated against the slug pattern ^[a-z0-9][a-z0-9-]{0,19}$.
     """
-    examiner = os.environ.get("VHIR_EXAMINER") or os.environ.get("VHIR_ANALYST")
+    examiner = os.environ.get("AGENTIR_EXAMINER") or os.environ.get("AGENTIR_ANALYST")
     if not examiner:
         try:
             examiner = getpass.getuser()
@@ -74,14 +74,14 @@ class AuditWriter:
     def _get_audit_dir(self) -> Path | None:
         """Get the audit directory.
 
-        Priority: explicit audit_dir > VHIR_AUDIT_DIR > VHIR_CASE_DIR/audit/.
+        Priority: explicit audit_dir > AGENTIR_AUDIT_DIR > AGENTIR_CASE_DIR/audit/.
         """
         if self._explicit_audit_dir:
             audit_dir = Path(self._explicit_audit_dir)
-        elif os.environ.get("VHIR_AUDIT_DIR"):
-            audit_dir = Path(os.environ["VHIR_AUDIT_DIR"])
+        elif os.environ.get("AGENTIR_AUDIT_DIR"):
+            audit_dir = Path(os.environ["AGENTIR_AUDIT_DIR"])
         else:
-            case_dir = os.environ.get("VHIR_CASE_DIR", "").strip()
+            case_dir = os.environ.get("AGENTIR_CASE_DIR", "").strip()
             # Validate: must be a directory with CASE.yaml
             if case_dir:
                 path = Path(case_dir)
@@ -93,7 +93,7 @@ class AuditWriter:
                 # Fallback: read active case pointer file
                 try:
                     case_dir = (
-                        (Path.home() / ".vhir" / "active_case").read_text().strip()
+                        (Path.home() / ".agentir" / "active_case").read_text().strip()
                     )
                 except OSError:
                     return None
@@ -102,7 +102,7 @@ class AuditWriter:
                 path = Path(case_dir)
                 if not path.is_dir() or not (path / "CASE.yaml").exists():
                     logger.warning(
-                        "VHIR_CASE_DIR=%s is not a case directory, skipping audit",
+                        "AGENTIR_CASE_DIR=%s is not a case directory, skipping audit",
                         case_dir,
                     )
                     return None
@@ -190,13 +190,13 @@ class AuditWriter:
             pass
 
     def _read_active_case_id(self) -> str:
-        """Read case_id from ~/.vhir/active_case file.
+        """Read case_id from ~/.agentir/active_case file.
 
         Re-reads on every call to handle mid-session case switches.
         The file is ~50 bytes and OS page-cached, so effectively free.
         """
         try:
-            raw = (Path.home() / ".vhir" / "active_case").read_text().strip()
+            raw = (Path.home() / ".agentir" / "active_case").read_text().strip()
             if raw:
                 return Path(raw).name
         except OSError:
@@ -231,7 +231,7 @@ class AuditWriter:
             "audit_id": audit_id,
             "examiner": self.examiner,
             "case_id": case_id
-            or os.environ.get("VHIR_ACTIVE_CASE", "")
+            or os.environ.get("AGENTIR_ACTIVE_CASE", "")
             or self._read_active_case_id(),
             "source": source,
             "params": params,

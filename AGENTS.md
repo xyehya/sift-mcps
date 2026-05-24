@@ -147,7 +147,7 @@ These fixes were completed in TASKS.md Phase 2b.
 
 ---
 
-## Current State (as of Session 8 end — 2026-05-24)
+## Current State (as of Session 10 — 2026-05-24)
 
 ### What Is Done ✅
 - **Phase 0 COMPLETE** — all blocking bugs fixed, namespace sweep finished, verification gate passed
@@ -155,7 +155,9 @@ These fixes were completed in TASKS.md Phase 2b.
 - **Phase 2b COMPLETE** — agentir-core library hardening done
 - **Phase 3 COMPLETE** — portal HTTPS/CORS/nonce/error hardening done
 - **Phase 4a-4d COMPLETE** — shared auth helper, token expiry, examiner rate limit, Origin validation, extractor dedupe done
-- **Phase 4e OPEN** — `notifications/tools/list_changed` requires SDK lifecycle research
+- **Phase 4e RESEARCH DONE / IMPLEMENTATION DEFERRED** — current Python MCP SDK `mcp==1.27.1` has `ServerSession.send_tool_list_changed()`, but `StreamableHTTPSessionManager` exposes no public active-session lifecycle hook
+- **Phase 5 COMPLETE** — forensic-rag-mcp migrated to FastMCP
+- **Phase 6 COMPLETE** — sift-mcp argument sanitizer now rejects null bytes, rejects >4096-char args, and NFC-normalizes Unicode
 - **Documentation tracking unified** — plan is spec, task tracker is execution ledger, AGENTS is operating brief
 - **Final workflow clarified** — installer prepares SIFT VM; portal creates cases; Hermes uses aggregate `/mcp`; gateway separates identities and enriches responses
 - **agentir-core tests: 125/125 passing**
@@ -167,17 +169,22 @@ These fixes were completed in TASKS.md Phase 2b.
 
 ### What Needs Fixing Next (See TASKS.md)
 
-**Priority 1 — Phase 5: forensic-rag FastMCP migration**
-- Convert `packages/forensic-rag-mcp/src/rag_mcp/server.py` from low-level MCP SDK to FastMCP while preserving tool behavior.
-
-**Priority 2 — Phase 4e: tools/list_changed research**
-- Research `StreamableHTTPSessionManager` lifecycle hooks before implementing session notifications.
-
-**Priority 3 — Phase 6+: hardening and deployment**
-- Phase 6 sift-mcp argument sanitization
+**Priority 1 — Phase 7+: deployment foundation**
 - Phase 7 install script
 - Phase 8 OpenSearch compose
 - Phase 9 config templates
+
+**Priority 2 — Phase 4e implementation decision**
+- Current SDK finding: `mcp==1.27.1` is current and `uv pip install --upgrade mcp --dry-run` found no newer MCP SDK.
+- `StreamableHTTPSessionManager` exposes only `run()` and `handle_request()`; it privately tracks transports, not active `ServerSession` objects.
+- `ServerSession.send_tool_list_changed()` exists, but implementing active-session notification requires deferring for SDK hooks or adding a local session-tracking `Server` wrapper/subclass.
+
+**Priority 3 — Audit invariant / regression guard**
+- The central audit repository is the active case `audit/` directory. `sift_common.audit.AuditWriter` writes append-only JSONL there (`AGENTIR_AUDIT_DIR` or `AGENTIR_CASE_DIR/audit/`), one file per writer/MCP, with flush + fsync.
+- Existing evidence/provenance readers aggregate `audit/*.jsonl`; backend `audit_id`s are canonical evidence IDs used by findings and reports. Do not replace or stop returning them.
+- The HMAC verification ledger is separate at `/var/lib/agentir/verification/{case-id}.jsonl`; it proves examiner-approved findings/timeline entries, not raw tool execution.
+- Tool actions are audited today, but not yet in the final gateway-envelope shape for every backend. Stdio backends write detailed per-backend evidence logs; gateway proxy audit is currently centralized for `HttpMCPBackend` paths, which are not part of the final normal SIFT backend set.
+- Phase 13/integration must close the remaining gap so every aggregate `/mcp` `call_tool` writes a minimal `sift-gateway.jsonl` envelope: request/correlation id, role, token id, agent id or examiner, source IP, active case, aggregate tool, resolved backend, status, duration, and result/truncation summary. Link to backend logs with `backend_audit_id` when available. Never log raw tokens or HMAC responses.
 
 **Priority 4 — Phase 12-15: Portal auth (login UI + sessions)**
 - JWT sessions, forced first-login reset, portal case creation, service token lifecycle, RBAC
@@ -253,3 +260,8 @@ uv run python -c "from case_mcp.server import create_server; print('OK')"
 uv run python -c "from agentir_core.case_io import get_case_dir; print('OK')"
 uv run python -c "from agentir_core.approval_auth import verify_password; print('OK')"
 ```
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->

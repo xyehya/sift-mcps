@@ -15,7 +15,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-VERIFICATION_DIR = Path("/var/lib/agentir/verification")
+VERIFICATION_DIR = Path(os.environ.get("AGENTIR_VERIFICATION_DIR", "/var/lib/agentir/verification"))
 PBKDF2_ITERATIONS = 600_000
 
 

@@ -204,7 +204,7 @@ _FILENAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 def _resolve_case_dir(case_id: str = "") -> Path:
     """Resolve case directory without sys.exit.
 
-    Same priority as vhir CLI get_case_dir(), but raises ValueError
+    Same priority as agentir CLI get_case_dir(), but raises ValueError
     instead of calling sys.exit().
 
     """
@@ -611,7 +611,7 @@ def _generate(
     return result
 
 
-VERIFICATION_DIR = Path("/var/lib/vhir/verification")
+VERIFICATION_DIR = Path("/var/lib/agentir/verification")
 
 
 def _reconcile_verification(

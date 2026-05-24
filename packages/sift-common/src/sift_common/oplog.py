@@ -1,6 +1,6 @@
-"""Operational logging for Valhuntir MCP servers.
+"""Operational logging for sift-mcps MCP servers.
 
-Structured JSON logging to stderr and optionally to ~/.vhir/logs/.
+Structured JSON logging to stderr and optionally to ~/.agentir/logs/.
 Canonical implementation shared by all SIFT-platform MCPs via sift-common.
 """
 
@@ -56,15 +56,15 @@ def setup_logging(
     Args:
         service_name: Service name for log entries.
         level: Logging level.
-        json_format: Use JSON formatting. If None, checks VHIR_LOG_FORMAT env
+        json_format: Use JSON formatting. If None, checks AGENTIR_LOG_FORMAT env
             var (default: "json"). Set to "text" for plain text.
-        log_to_file: Write to ~/.vhir/logs/{service_name}.jsonl. If None,
-            checks VHIR_LOG_FILE env var (default: "true").
+        log_to_file: Write to ~/.agentir/logs/{service_name}.jsonl. If None,
+            checks AGENTIR_LOG_FILE env var (default: "true").
     """
     if json_format is None:
-        json_format = os.environ.get("VHIR_LOG_FORMAT", "json").lower() != "text"
+        json_format = os.environ.get("AGENTIR_LOG_FORMAT", "json").lower() != "text"
     if log_to_file is None:
-        log_to_file = os.environ.get("VHIR_LOG_FILE", "true").lower() in (
+        log_to_file = os.environ.get("AGENTIR_LOG_FILE", "true").lower() in (
             "true",
             "1",
             "yes",
@@ -88,10 +88,10 @@ def setup_logging(
     stderr_handler.setFormatter(formatter)
     pkg_logger.addHandler(stderr_handler)
 
-    # Optionally log to ~/.vhir/logs/
+    # Optionally log to ~/.agentir/logs/
     if log_to_file:
         try:
-            log_dir = Path.home() / ".vhir" / "logs"
+            log_dir = Path.home() / ".agentir" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             file_handler = logging.FileHandler(
                 log_dir / f"{service_name}.jsonl",
@@ -102,7 +102,7 @@ def setup_logging(
             pkg_logger.addHandler(file_handler)
         except OSError as exc:
             pkg_logger.warning(
-                "Failed to set up file logging to ~/.vhir/logs/: %s: %s",
+                "Failed to set up file logging to ~/.agentir/logs/: %s: %s",
                 type(exc).__name__,
                 exc,
             )

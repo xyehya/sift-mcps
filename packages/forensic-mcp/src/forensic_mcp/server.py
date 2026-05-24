@@ -173,7 +173,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         Tip: stage findings soon after analysis — audit_ids from earlier tool
         calls may be lost to context compaction.
 
-        Requires human approval via 'vhir approve'."""
+        Requires human approval via 'agentir approve'."""
         _validate_str_length(analyst_override, "analyst_override", _MAX_SHORT)
         if isinstance(finding, dict):
             _validate_str_length(finding.get("title"), "title", _MAX_TITLE)
@@ -231,7 +231,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         # Enrich with considerations when staging succeeds
         if result.get("status") == "STAGED":
             result["finding_status"] = (
-                "DRAFT — requires human approval via vhir approve"
+                "DRAFT — requires human approval via the examiner portal"
             )
             result["considerations"] = _build_finding_considerations(finding)
             grounding = manager._score_grounding(finding)
@@ -255,7 +255,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
 
     @server.tool()
     def record_timeline_event(event: dict, analyst_override: str = "") -> dict:
-        """Stage timeline event as DRAFT. Requires human approval via 'vhir approve'.
+        """Stage timeline event as DRAFT. Requires human approval via 'agentir approve'.
 
         Required fields in event dict:
         - timestamp (str): ISO 8601 datetime (e.g. "2026-03-01T14:32:00Z")

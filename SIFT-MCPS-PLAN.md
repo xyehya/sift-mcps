@@ -655,6 +655,15 @@ In `packages/sift-gateway/src/sift_gateway/server.py`, `Gateway`:
 
 Session registration: hook into `StreamableHTTPSessionManager` session lifecycle events if the SDK provides them; otherwise track via a side-channel in `create_mcp_server`.
 
+Current SDK finding (verified 2026-05-24): the installed/current Python MCP SDK is `mcp==1.27.1`
+(`uv pip show mcp`, and `uv pip install --upgrade mcp --dry-run` found no newer `mcp`). In this
+version, `StreamableHTTPSessionManager` exposes only `run()` and `handle_request()` and privately
+tracks `StreamableHTTPServerTransport` instances. `ServerSession.send_tool_list_changed()` exists,
+but the session manager does not expose active `ServerSession` lifecycle hooks. Implementing this
+phase therefore requires either deferring until the SDK exposes hooks or adding a local
+session-tracking `Server` wrapper/subclass that owns the relevant part of the SDK `Server.run()`
+flow.
+
 ---
 
 ### Phase 5 — FastMCP Migration for forensic-rag-mcp
@@ -1231,6 +1240,35 @@ For all gateway-routed MCP calls:
 - never log raw bearer token or HMAC response
 - include contextual enrichment in responses only through structured metadata or clearly delimited
   guidance so raw backend output remains distinguishable
+
+Current audit storage model (verified during Session 10):
+- `sift_common.audit.AuditWriter` is the shared writer. It writes append-only JSONL files to the
+  active case audit directory (`AGENTIR_AUDIT_DIR` when set, otherwise `AGENTIR_CASE_DIR/audit/`),
+  flushes, and fsyncs each line.
+- The central evidence-provenance repository is the case-local `audit/` directory, not one single
+  monolithic file. Each writer has its own file (`sift-gateway.jsonl`, `sift-mcp.jsonl`,
+  `forensic-mcp.jsonl`, etc.), and provenance code scans `audit/*.jsonl`.
+- `agentir_core.case_io.load_audit_index()`, `agentir_core.audit_ops._load_audit_entries()`,
+  `case-dashboard` audit lookups, and `forensic-mcp` provenance classification already aggregate
+  all `audit/*.jsonl` entries by `audit_id`.
+- The HMAC verification ledger is separate: approved findings/timeline entries are written to
+  `/var/lib/agentir/verification/{case-id}.jsonl` through `agentir-core`. Report reconciliation
+  checks approved items against that ledger.
+
+Regression guard:
+- Existing stdio backend audit IDs are evidence IDs used by findings and reports. Do not replace,
+  rename, or stop returning those backend `audit_id`s.
+- Add a gateway envelope log for every aggregate `/mcp` `call_tool`, regardless of backend type.
+  This should write to `audit/sift-gateway.jsonl` through `AuditWriter` and record minimal viable
+  request/routing metadata: request or correlation id, authenticated role, `token_id`, `agent_id`
+  or examiner, source IP, active case, aggregate tool name, resolved backend, status, duration,
+  and result/truncation summary. It must never log raw bearer tokens or HMAC responses.
+- Link gateway entries to backend entries with `backend_audit_id` when the backend response exposes
+  one, but keep the backend `audit_id` as the canonical evidence/provenance ID for findings unless
+  the finding/report schema is deliberately migrated with tests.
+- Final proof must verify both layers: the gateway envelope proves who called what through `/mcp`;
+  the backend audit entry proves what the backend/tool actually did; the verification ledger proves
+  what the examiner approved.
 
 ---
 

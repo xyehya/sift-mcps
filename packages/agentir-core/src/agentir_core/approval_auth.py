@@ -7,13 +7,11 @@ expect-style automation.
 
 from __future__ import annotations
 
-import getpass as getpass_mod
 import hashlib
 import json
 import os
 import re
 import secrets
-import subprocess
 import sys
 import tempfile
 import time
@@ -32,9 +30,22 @@ import yaml
 PBKDF2_ITERATIONS = 600_000
 _MAX_PASSWORD_ATTEMPTS = 3
 _LOCKOUT_SECONDS = 900
-_LOCKOUT_FILE = Path.home() / ".agentir" / ".password_lockout"
+_LOCKOUT_FILE = Path(
+    os.environ.get(
+        "AGENTIR_LOCKOUT_FILE",
+        str(Path.home() / ".agentir" / ".password_lockout"),
+    )
+)
 _MIN_PASSWORD_LENGTH = 8
-_PASSWORDS_DIR = Path("/var/lib/agentir/passwords")
+_PASSWORDS_DIR = Path(os.environ.get("AGENTIR_PASSWORDS_DIR", "/var/lib/agentir/passwords"))
+
+
+class AuthError(Exception):
+    """Authentication or authorization failure."""
+
+
+class LockoutError(AuthError):
+    """Account is locked due to too many failed attempts."""
 
 _EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
 
@@ -85,55 +96,29 @@ def _ensure_passwords_dir(passwords_dir: Path) -> None:
         return
     try:
         passwords_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        return
     except OSError:
-        pass
-    user = getpass_mod.getuser()
-    print(f"Creating {passwords_dir}/ (requires sudo)...")
-    result = None
-    for cmd in [
-        ["sudo", "mkdir", "-p", str(passwords_dir)],
-        ["sudo", "chown", f"{user}:{user}", str(passwords_dir)],
-        ["sudo", "chmod", "700", str(passwords_dir)],
-    ]:
-        result = subprocess.run(cmd, timeout=30)
-        if result.returncode != 0:
-            break
-    if result and result.returncode != 0:
-        print(
-            f"Could not create {passwords_dir}/. Create it manually:\n"
-            f"  sudo mkdir -p {passwords_dir} && "
-            f"sudo chown $USER:$USER {passwords_dir} && "
-            f"sudo chmod 700 {passwords_dir}",
-            file=sys.stderr,
+        raise PermissionError(
+            f"Cannot create {passwords_dir}/. Create it manually:\n"
+            f"  sudo mkdir -p {passwords_dir}\n"
+            f"  sudo chown $USER:$USER {passwords_dir}\n"
+            f"  sudo chmod 700 {passwords_dir}"
         )
-        sys.exit(1)
 
 
 def require_confirmation(config_path: Path, analyst: str) -> tuple[str, str | None]:
     """Require password. Returns ('password', raw_password) on success."""
     if not has_password(config_path, analyst):
-        print(
-            "No approval password configured. Set one with:\n  agentir config --setup-password\n",
-            file=sys.stderr,
+        raise AuthError(
+            "No approval password configured. Run: agentir config --setup-password"
         )
-        sys.exit(1)
     _check_lockout(analyst)
     password = getpass_prompt("Enter password to confirm: ")
     if not verify_password(config_path, analyst, password):
         _record_failure(analyst)
         remaining = _MAX_PASSWORD_ATTEMPTS - _recent_failure_count(analyst)
         if remaining <= 0:
-            print(
-                f"Too many failed attempts. Locked out for {_LOCKOUT_SECONDS}s.",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"Incorrect password. {remaining} attempt(s) remaining.",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+            raise LockoutError(f"Too many failed attempts. Locked out for {_LOCKOUT_SECONDS}s.")
+        raise AuthError(f"Incorrect password. {remaining} attempt(s) remaining.")
     _clear_failures(analyst)
     return ("password", password)
 
@@ -143,11 +128,7 @@ def require_tty_confirmation(prompt: str) -> bool:
     try:
         tty = open("/dev/tty")
     except OSError:
-        print(
-            "No terminal available (/dev/tty). Cannot confirm interactively.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        raise AuthError("No terminal available (/dev/tty). Cannot confirm interactively.")
     try:
         sys.stderr.write(prompt)
         sys.stderr.flush()
@@ -203,15 +184,12 @@ def setup_password(
     _ensure_passwords_dir(passwords_dir)
     pw1 = getpass_prompt("Enter new password: ")
     if not pw1:
-        print("Password cannot be empty.", file=sys.stderr)
-        sys.exit(1)
+        raise AuthError("Password cannot be empty.")
     if len(pw1) < _MIN_PASSWORD_LENGTH:
-        print(f"Password must be at least {_MIN_PASSWORD_LENGTH} characters.", file=sys.stderr)
-        sys.exit(1)
+        raise AuthError(f"Password must be at least {_MIN_PASSWORD_LENGTH} characters.")
     pw2 = getpass_prompt("Confirm new password: ")
     if pw1 != pw2:
-        print("Passwords do not match.", file=sys.stderr)
-        sys.exit(1)
+        raise AuthError("Passwords do not match.")
     salt = secrets.token_bytes(32)
     pw_hash = hashlib.pbkdf2_hmac("sha256", pw1.encode(), salt, PBKDF2_ITERATIONS).hex()
     _save_password_entry(passwords_dir, analyst, {"hash": pw_hash, "salt": salt.hex()})
@@ -274,11 +252,9 @@ def _check_lockout(analyst: str) -> None:
             remaining = max(int(_LOCKOUT_SECONDS - (now - min(recent))), 1)
         else:
             remaining = _LOCKOUT_SECONDS
-        print(
-            f"Password locked. Too many failed attempts. Try again in {remaining} seconds.",
-            file=sys.stderr,
+        raise LockoutError(
+            f"Password locked. Too many failed attempts. Try again in {remaining} seconds."
         )
-        sys.exit(1)
 
 
 def _record_failure(analyst: str) -> None:
@@ -341,6 +317,43 @@ def getpass_prompt(prompt: str) -> str:
             sys.stderr.flush()
     finally:
         tty_in.close()
+
+
+def reset_password(
+    config_path: Path, analyst: str, *, passwords_dir: Path | None = None
+) -> None:
+    """Reset password. Requires current password first.
+
+    After changing the password, re-signs all verification ledger entries
+    for this analyst with the new key.
+    """
+    if not has_password(config_path, analyst, passwords_dir=passwords_dir):
+        raise AuthError(f"No password configured for analyst '{analyst}'. Use setup_password first.")
+
+    current = getpass_prompt("Enter current password: ")
+    if not verify_password(config_path, analyst, current, passwords_dir=passwords_dir):
+        raise AuthError("Incorrect current password.")
+
+    old_salt = get_analyst_salt(config_path, analyst, passwords_dir=passwords_dir)
+    new_password = setup_password(config_path, analyst, passwords_dir=passwords_dir)
+    new_salt = get_analyst_salt(config_path, analyst, passwords_dir=passwords_dir)
+
+    try:
+        from agentir_core.verification import VERIFICATION_DIR, derive_hmac_key, rehmac_entries
+
+        if VERIFICATION_DIR.is_dir():
+            old_key = derive_hmac_key(current, old_salt)
+            new_key = derive_hmac_key(new_password, new_salt)
+            for ledger_file in VERIFICATION_DIR.glob("*.jsonl"):
+                case_id = ledger_file.stem
+                count = rehmac_entries(
+                    case_id, analyst, current, old_salt, new_password, new_salt,
+                    old_key=old_key, new_key=new_key,
+                )
+                if count:
+                    print(f"  Re-signed {count} ledger entry/entries for case {case_id}.")
+    except (ImportError, OSError) as e:
+        print(f"  Warning: could not re-sign ledger entries: {e}", file=sys.stderr)
 
 
 def _load_config(config_path: Path) -> dict:

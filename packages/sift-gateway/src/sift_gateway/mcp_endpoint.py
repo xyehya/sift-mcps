@@ -1,4 +1,4 @@
-"""Streamable HTTP MCP endpoint for the Valhuntir gateway.
+"""Streamable HTTP MCP endpoint for the sift-mcps gateway.
 
 Exposes the gateway's aggregated tools via the MCP protocol using a
 low-level ``Server`` that proxies through the gateway's existing backend
@@ -10,7 +10,6 @@ in the Starlette app.
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
 import logging
 import time
@@ -34,7 +33,8 @@ from sift_common.instructions import GATEWAY as _GATEWAY_INSTRUCTIONS
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from sift_gateway.rate_limit import check_rate_limit
+from sift_gateway.auth import verify_api_key
+from sift_gateway.rate_limit import check_examiner_rate_limit, check_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +67,6 @@ ANALYST_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-# Maximum length for bearer tokens (DoS protection)
-_MAX_TOKEN_LENGTH = 1024
-
 # Maximum MCP request body size (10 MB)
 _MAX_REQUEST_BYTES = 10 * 1024 * 1024
 
@@ -93,9 +90,15 @@ class MCPAuthASGIApp:
         self,
         session_manager: StreamableHTTPSessionManager,
         api_keys: dict[str, dict] | None = None,
+        allowed_origins: set[str] | None = None,
+        examiner_calls_per_minute: int = 120,
     ):
         self.session_manager = session_manager
         self.api_keys = api_keys or {}
+        self.allowed_origins = allowed_origins or set()
+        # Initialize the examiner rate limiter singleton with configured limit
+        from sift_gateway.rate_limit import get_examiner_rate_limiter
+        get_examiner_rate_limiter(limit=examiner_calls_per_minute)
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         # Ensure scope["state"] exists
@@ -136,16 +139,29 @@ class MCPAuthASGIApp:
             await resp(scope, receive, send)
             return
 
+        # Origin validation: browser requests set Origin; Hermes/curl do not.
+        # Reject cross-origin browser requests to prevent CSRF via the MCP endpoint.
+        if self.allowed_origins:
+            raw_headers = dict(scope.get("headers", []))
+            origin = raw_headers.get(b"origin", b"").decode("latin-1", errors="replace")
+            if origin and origin not in self.allowed_origins:
+                resp = JSONResponse({"error": "Forbidden"}, status_code=403)
+                await resp(scope, receive, send)
+                return
+
         if not self.api_keys:
             # No keys configured — single-user / anonymous mode
             scope["state"]["examiner"] = "anonymous"
             scope["state"]["role"] = "examiner"
+            if not check_examiner_rate_limit("anonymous"):
+                resp = JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+                await resp(scope, receive, send)
+                return
             await self.session_manager.handle_request(scope, receive, send)
             return
 
-        # Extract Authorization header from raw ASGI headers
+        # Extract and verify bearer token
         token = _extract_bearer_token(scope)
-
         if token is None:
             resp = JSONResponse(
                 {"error": "Missing or invalid Authorization header"},
@@ -154,47 +170,39 @@ class MCPAuthASGIApp:
             await resp(scope, receive, send)
             return
 
-        # Length check: reject excessively long tokens before timing-safe comparison
-        if len(token) > _MAX_TOKEN_LENGTH:
-            logger.warning(
-                "MCP endpoint: rejected oversized bearer token (%d bytes)", len(token)
-            )
-            resp = JSONResponse(
-                {"error": "Invalid API key"},
-                status_code=403,
-            )
+        key_info = verify_api_key(token, self.api_keys)
+        if key_info is None:
+            logger.warning("MCP endpoint: rejected invalid or expired token")
+            resp = JSONResponse({"error": "Invalid API key"}, status_code=403)
             await resp(scope, receive, send)
             return
 
-        # Timing-safe key lookup: iterate ALL keys to prevent timing leaks
-        matched_key = None
-        for candidate in self.api_keys:
-            if hmac.compare_digest(token, candidate) and matched_key is None:
-                matched_key = candidate
-
-        if matched_key is None:
-            resp = JSONResponse(
-                {"error": "Invalid API key"},
-                status_code=403,
-            )
-            await resp(scope, receive, send)
-            return
-
-        key_info = self.api_keys.get(matched_key, {})
-        if not isinstance(key_info, dict):
-            logger.error("MCP endpoint: API key config for matched key is not a dict")
-            resp = JSONResponse(
-                {"error": "Server configuration error"},
-                status_code=500,
-            )
-            await resp(scope, receive, send)
-            return
-
-        scope["state"]["examiner"] = key_info.get(
-            "examiner", key_info.get("analyst", "unknown")
-        )
+        examiner = key_info.get("examiner", key_info.get("analyst", "unknown"))
+        scope["state"]["examiner"] = examiner
         scope["state"]["role"] = key_info.get("role", "examiner")
+
+        # Per-examiner post-auth rate limit
+        if not check_examiner_rate_limit(examiner):
+            resp = JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
+            await resp(scope, receive, send)
+            return
+
         await self.session_manager.handle_request(scope, receive, send)
+
+
+def _extract_examiner(server: Server) -> str | None:
+    """Pull examiner identity from the current MCP request context."""
+    try:
+        ctx = server.request_context
+        request: Request | None = ctx.request
+        if request is not None:
+            examiner = getattr(request.state, "examiner", None)
+            if examiner is None:
+                examiner = getattr(request.state, "analyst", None)
+            return examiner
+    except LookupError:
+        pass
+    return None
 
 
 def _get_content_length(scope: dict) -> int | None:
@@ -244,17 +252,7 @@ def create_mcp_server(gateway: Any) -> Server:
 
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict) -> Sequence[TextContent]:
-        # Extract examiner from the Starlette Request stashed by the transport
-        examiner = None
-        try:
-            ctx = server.request_context
-            request: Request | None = ctx.request
-            if request is not None:
-                examiner = getattr(request.state, "examiner", None)
-                if examiner is None:
-                    examiner = getattr(request.state, "analyst", None)
-        except LookupError:
-            pass
+        examiner = _extract_examiner(server)
 
         try:
             result = await gateway.call_tool(name, arguments, examiner=examiner)
@@ -347,16 +345,7 @@ def create_backend_mcp_server(gateway: Any, backend_name: str) -> Server:
             await gateway.ensure_backend_started(backend_name)
         backend.last_tool_call = time.monotonic()
 
-        examiner = None
-        try:
-            ctx = server.request_context
-            request: Request | None = ctx.request
-            if request is not None:
-                examiner = getattr(request.state, "examiner", None)
-                if examiner is None:
-                    examiner = getattr(request.state, "analyst", None)
-        except LookupError:
-            pass
+        examiner = _extract_examiner(server)
 
         # Inject examiner identity for analyst tools
         if examiner and name in ANALYST_TOOLS:

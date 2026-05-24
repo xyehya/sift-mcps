@@ -10,9 +10,33 @@ import anyio
 from mcp.types import Tool
 from sift_common.audit import AuditWriter
 from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import PlainTextResponse
 from starlette.routing import Mount
 
 from sift_gateway.auth import AuthMiddleware
+
+
+class _PortalHTTPSGuard:
+    """Return 400 on plain-HTTP portal requests when TLS is configured."""
+
+    def __init__(self, app, tls_configured: bool):
+        self.app = app
+        self.tls_configured = tls_configured
+
+    async def __call__(self, scope, receive, send):
+        if (
+            self.tls_configured
+            and scope["type"] == "http"
+            and scope.get("scheme") == "http"
+            and scope.get("path", "").startswith(("/portal", "/dashboard"))
+        ):
+            resp = PlainTextResponse(
+                "Portal requires HTTPS. Connect via https://...", status_code=400
+            )
+            await resp(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 class _NormalizeMCPPath:
@@ -293,51 +317,8 @@ class Gateway:
                         backend._tool_map_stale = False
                         await self._build_tool_map()
                         logger.info("Tool map rebuilt after %s reconnected", name)
-                    # Re-sync case on wintools only (/cases/activate is wintools-specific)
-                    if name == "wintools-mcp":
-                        await self._notify_backend_case(backend)
             except (Exception, BaseExceptionGroup) as exc:
                 logger.error("Late-start checker error (will retry): %s", exc)
-
-    def _get_active_case(self) -> str:
-        """Read the current active case ID."""
-        try:
-            p = Path.home() / ".vhir" / "active_case"
-            if p.exists():
-                return Path(p.read_text().strip()).name
-        except Exception:
-            pass
-        return ""
-
-    async def _notify_backend_case(self, backend) -> None:
-        """Send case activation to an HTTP backend after reconnect."""
-        from sift_gateway.backends.http_backend import HttpMCPBackend
-
-        if not isinstance(backend, HttpMCPBackend):
-            return
-        active_case = self._get_active_case()
-        if not active_case:
-            return
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(verify=False) as client:
-                resp = await client.post(
-                    f"{backend.base_url}/cases/activate",
-                    json={"case_id": active_case},
-                    headers={"Authorization": f"Bearer {backend.bearer_token}"},
-                    timeout=5,
-                )
-            # Only log at INFO on actual state change, DEBUG for heartbeat no-ops
-            body = resp.json() if resp.status_code == 200 else {}
-            if body.get("status") == "already_active":
-                logger.debug("Case %s already active on %s", active_case, backend.name)
-            else:
-                logger.info(
-                    "Case %s activated on backend %s", active_case, backend.name
-                )
-        except Exception as e:
-            logger.debug("Case activation to %s failed: %s", backend.name, e)
 
     async def _backend_loader(self) -> None:
         """Start backends added after gateway boot (e.g. wintools after join).
@@ -559,10 +540,31 @@ class Gateway:
         api_keys = self.config.get("api_keys", {})
         self._api_keys = api_keys
 
+        # Compute allowed origins for Origin header validation (4c)
+        gw_conf = self.config.get("gateway", {})
+        host = gw_conf.get("host", "127.0.0.1")
+        port = gw_conf.get("port", 4508)
+        tls_configured = bool(gw_conf.get("tls", {}).get("cert"))
+        scheme = "https" if tls_configured else "http"
+        gateway_base_url = f"{scheme}://{host}:{port}"
+        allowed_origins: set[str] = {
+            gateway_base_url,
+            "https://localhost:4508",
+            "https://127.0.0.1:4508",
+        }
+        examiner_calls_per_minute: int = (
+            gw_conf.get("rate_limit", {}).get("examiner_calls_per_minute", 120)
+        )
+
         # Build aggregate MCP endpoint components
         mcp_server = create_mcp_server(gateway)
         session_manager = create_session_manager(mcp_server)
-        mcp_asgi_app = MCPAuthASGIApp(session_manager, api_keys=api_keys)
+        mcp_asgi_app = MCPAuthASGIApp(
+            session_manager,
+            api_keys=api_keys,
+            allowed_origins=allowed_origins,
+            examiner_calls_per_minute=examiner_calls_per_minute,
+        )
 
         # Build per-backend MCP endpoints
         backend_session_managers = []
@@ -570,7 +572,12 @@ class Gateway:
         for name in self.backends:
             b_server = create_backend_mcp_server(gateway, name)
             b_sm = create_session_manager(b_server)
-            b_asgi = MCPAuthASGIApp(b_sm, api_keys=api_keys)
+            b_asgi = MCPAuthASGIApp(
+                b_sm,
+                api_keys=api_keys,
+                allowed_origins=allowed_origins,
+                examiner_calls_per_minute=examiner_calls_per_minute,
+            )
             backend_session_managers.append(b_sm)
             per_backend_routes.append(Mount(f"/mcp/{name}", app=b_asgi))
 
@@ -638,11 +645,36 @@ class Gateway:
         # Attach gateway to app state so endpoints can access it
         app.state.gateway = gateway
 
+        # Global unhandled exception handler — never leak file paths or tracebacks to clients
+        @app.exception_handler(Exception)
+        async def _sanitized_error(request, exc):
+            logger.exception("Unhandled error: %s", exc)
+            from starlette.responses import JSONResponse as _JSONResponse
+            return _JSONResponse({"error": "Internal server error"}, status_code=500)
+
         # Add auth middleware (skips /mcp — handled by MCPAuthASGIApp)
         app.add_middleware(AuthMiddleware, api_keys=api_keys)
+
+        # CORS — restrict origins to the gateway's own URL
+        gw_cfg = self.config.get("gateway", {})
+        tls_configured = bool(gw_cfg.get("tls", {}).get("cert"))
+        scheme = "https" if tls_configured else "http"
+        gw_host = gw_cfg.get("host", "0.0.0.0")
+        gw_port = gw_cfg.get("port", 4508)
+        gateway_origin = f"{scheme}://{gw_host}:{gw_port}"
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[gateway_origin, "https://localhost:4508"],
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_credentials=True,
+            allow_headers=["Authorization", "Content-Type", "MCP-Protocol-Version"],
+        )
 
         # Normalize per-backend MCP paths (must be outermost = added last)
         backend_paths = frozenset(f"/mcp/{name}" for name in self.backends)
         app.add_middleware(_NormalizeMCPPath, backend_paths=backend_paths)
+
+        # HTTPS enforcement for portal paths (outermost — added after _NormalizeMCPPath)
+        app.add_middleware(_PortalHTTPSGuard, tls_configured=tls_configured)
 
         return app

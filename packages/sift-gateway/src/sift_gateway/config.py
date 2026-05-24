@@ -73,4 +73,12 @@ def load_config(path: str) -> dict:
             f"Config file must contain a YAML mapping, got {type(raw).__name__}: {path}"
         )
 
-    return _walk_and_interpolate(raw)
+    config = _walk_and_interpolate(raw)
+
+    # Propagate case.dir to AGENTIR_CASE_DIR so all backend subprocesses inherit it.
+    case_dir = config.get("case", {}).get("dir", "")
+    if case_dir:
+        os.environ["AGENTIR_CASE_DIR"] = case_dir
+        logger.debug("AGENTIR_CASE_DIR set to %s from gateway config", case_dir)
+
+    return config

@@ -2,6 +2,7 @@
 
 import hmac
 import logging
+from datetime import datetime, timezone
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -32,6 +33,32 @@ _STATIC_ASSET_EXTS = frozenset({"png", "jpg", "svg", "ico", "css", "js"})
 
 # Maximum length for bearer tokens (DoS protection against megabyte-sized headers)
 _MAX_TOKEN_LENGTH = 1024
+
+
+def verify_api_key(token: str, api_keys: dict) -> dict | None:
+    """Timing-safe key lookup with expiry checking. Returns key_info dict or None."""
+    if not token or len(token) > _MAX_TOKEN_LENGTH:
+        return None
+    matched_key = None
+    for candidate in api_keys:
+        if hmac.compare_digest(token, candidate) and matched_key is None:
+            matched_key = candidate
+    if matched_key is None:
+        return None
+    key_info = api_keys.get(matched_key, {})
+    if not isinstance(key_info, dict):
+        logger.error("API key config for matched key is not a dict, got %s", type(key_info).__name__)
+        return None
+    expires_at = key_info.get("expires_at")
+    if expires_at:
+        try:
+            exp = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) > exp:
+                logger.warning("Expired token used (examiner=%s)", key_info.get("examiner"))
+                return None
+        except (ValueError, AttributeError):
+            pass  # Malformed date — treat as no expiry
+    return key_info
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -81,39 +108,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         token = auth_header[7:].strip()
 
-        # Length check: reject excessively long tokens before timing-safe comparison
-        if len(token) > _MAX_TOKEN_LENGTH:
-            logger.warning("Rejected oversized bearer token (%d bytes)", len(token))
+        key_info = verify_api_key(token, self.api_keys)
+        if key_info is None:
+            logger.warning("AuthMiddleware: rejected invalid or expired token")
             return JSONResponse(
                 {"error": "Invalid API key"},
                 status_code=403,
             )
 
-        # Timing-safe key lookup: iterate ALL keys to prevent timing leaks
-        matched_key = None
-        for candidate in self.api_keys:
-            if hmac.compare_digest(token, candidate) and matched_key is None:
-                matched_key = candidate
-
-        if matched_key is None:
-            return JSONResponse(
-                {"error": "Invalid API key"},
-                status_code=403,
-            )
-
-        key_info = self.api_keys.get(matched_key, {})
-        if not isinstance(key_info, dict):
-            logger.error(
-                "API key config for matched key is not a dict, got %s",
-                type(key_info).__name__,
-            )
-            return JSONResponse(
-                {"error": "Server configuration error"},
-                status_code=500,
-            )
-        request.state.examiner = key_info.get(
-            "examiner", key_info.get("analyst", "unknown")
-        )
+        request.state.examiner = key_info.get("examiner", key_info.get("analyst", "unknown"))
         request.state.role = key_info.get("role", "examiner")
         return await call_next(request)
 

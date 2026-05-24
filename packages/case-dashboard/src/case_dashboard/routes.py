@@ -21,9 +21,14 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
+from agentir_core.approval_auth import _load_password_entry as _load_pw_entry
+from agentir_core.case_io import _protected_write, compute_content_hash
+from agentir_core.verification import compute_hmac, write_ledger_entry
+
 logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
+_PASSWORDS_DIR = Path("/var/lib/agentir/passwords")
 
 # Max delta file size (1 MB)
 _MAX_DELTA_SIZE = 1_048_576
@@ -82,7 +87,7 @@ _DELTA_EDITABLE_FIELDS = {
 
 # In-memory challenge store (gateway is single-process uvicorn)
 _challenges: dict[str, dict] = {}  # challenge_id → {nonce, examiner, created_at}
-_CHALLENGE_TTL = 60  # seconds
+_CHALLENGE_TTL = 30  # seconds
 _MAX_COMMIT_ATTEMPTS = 3
 _COMMIT_LOCKOUT_SECONDS = 900
 
@@ -90,7 +95,7 @@ _COMMIT_LOCKOUT_SECONDS = 900
 def _resolve_case_dir() -> Path | None:
     """Resolve case directory per-request.
 
-    Priority: VHIR_CASE_DIR env var > ~/.vhir/active_case file.
+    Priority: AGENTIR_CASE_DIR env var (set via gateway.yaml case.dir).
     Returns None if no case is active or directory lacks CASE.yaml.
     """
     from sift_common import resolve_case_dir
@@ -104,16 +109,9 @@ def _resolve_case_dir() -> Path | None:
 
 def _no_case_response() -> JSONResponse:
     return JSONResponse(
-        {"error": "No active case. Run `vhir case activate` first."},
+        {"error": "No active case. Set AGENTIR_CASE_DIR in gateway.yaml case.dir."},
         status_code=404,
     )
-
-
-def _compute_content_hash(item: dict) -> str:
-    """SHA-256 of canonical JSON excluding volatile fields."""
-    hashable = {k: v for k, v in item.items() if k not in _HASH_EXCLUDE_KEYS}
-    canonical = json.dumps(hashable, sort_keys=True, default=str)
-    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _load_json(path: Path) -> list | dict | None:
@@ -189,7 +187,7 @@ def _verify_items(case_dir: Path, items: list[dict]) -> list[dict]:
             result["verification"] = "draft"
         elif record:
             if record.get("action") == status:
-                recomputed = _compute_content_hash(f)
+                recomputed = compute_content_hash(f)
                 finding_hash = f.get("content_hash")
                 approval_hash = record.get("content_hash")
                 if (finding_hash and recomputed != finding_hash) or (
@@ -222,29 +220,15 @@ def _resolve_examiner(request: Request) -> str | None:
             return None
         return examiner
     # Single-user fallback
-    env_examiner = os.environ.get("VHIR_EXAMINER")
+    env_examiner = os.environ.get("AGENTIR_EXAMINER")
     if env_examiner and not _EXAMINER_RE.match(env_examiner):
         return None
     return env_examiner
 
 
-def _load_password_entry(examiner: str) -> dict | None:
-    """Read password entry from /var/lib/vhir/passwords/{examiner}.json."""
-    if ".." in examiner or "/" in examiner or "\\" in examiner:
-        return None
-    path = Path("/var/lib/vhir/passwords") / f"{examiner}.json"
-    try:
-        data = json.loads(path.read_text())
-        if isinstance(data, dict) and "hash" in data and "salt" in data:
-            return data
-    except (OSError, json.JSONDecodeError, ValueError):
-        pass
-    return None
-
-
 def _check_commit_lockout(examiner: str) -> str | None:
     """Returns error message if locked out, None if OK."""
-    lockout_file = Path.home() / ".vhir" / ".password_lockout"
+    lockout_file = Path.home() / ".agentir" / ".password_lockout"
     try:
         data = json.loads(lockout_file.read_text())
     except (OSError, json.JSONDecodeError):
@@ -261,7 +245,7 @@ def _check_commit_lockout(examiner: str) -> str | None:
 
 def _record_commit_failure(examiner: str) -> None:
     """Record a failed commit attempt to shared lockout file."""
-    lockout_file = Path.home() / ".vhir" / ".password_lockout"
+    lockout_file = Path.home() / ".agentir" / ".password_lockout"
     lockout_file.parent.mkdir(parents=True, exist_ok=True)
     try:
         data = json.loads(lockout_file.read_text())
@@ -286,7 +270,7 @@ def _record_commit_failure(examiner: str) -> None:
 
 def _clear_commit_failures(examiner: str) -> None:
     """Clear failure count on successful commit."""
-    lockout_file = Path.home() / ".vhir" / ".password_lockout"
+    lockout_file = Path.home() / ".agentir" / ".password_lockout"
     try:
         data = json.loads(lockout_file.read_text())
     except (OSError, json.JSONDecodeError):
@@ -311,7 +295,7 @@ def _clear_commit_failures(examiner: str) -> None:
 
 def _commit_failure_count(examiner: str) -> int:
     """Count recent failures for examiner."""
-    lockout_file = Path.home() / ".vhir" / ".password_lockout"
+    lockout_file = Path.home() / ".agentir" / ".password_lockout"
     try:
         data = json.loads(lockout_file.read_text())
     except (OSError, json.JSONDecodeError):
@@ -380,82 +364,6 @@ def _write_approval_log_entry(
         os.chmod(str(log_path), 0o444)
     except OSError:
         pass
-
-
-def _write_hmac_entries(
-    case_dir: Path,
-    case_id: str,
-    items: list[dict],
-    examiner: str,
-    derived_key: bytes,
-    now: str,
-) -> list[str]:
-    """Write HMAC verification ledger entries. Returns list of failed item IDs.
-
-    Matches CLI pattern: per-item try/except, failures are non-fatal.
-    Entry format matches CLI exactly (approve.py:447-456).
-    """
-    verification_dir = Path("/var/lib/vhir/verification")
-    verification_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    ledger_path = verification_dir / f"{case_id}.jsonl"
-    failures: list[str] = []
-
-    for item in items:
-        item_id = item.get("id", "")
-        item_type = "timeline" if item_id.startswith("T-") else "finding"
-        # Same formula as case_io.hmac_text()
-        hashable = {k: v for k, v in item.items() if k not in _HASH_EXCLUDE_KEYS}
-        description = json.dumps(hashable, sort_keys=True, default=str)
-        mac = hmac_mod.new(derived_key, description.encode(), "sha256").hexdigest()
-        entry = {
-            "finding_id": item_id,
-            "type": item_type,
-            "hmac": mac,
-            "hmac_version": 2,
-            "content_snapshot": description,
-            "approved_by": examiner,
-            "approved_at": now,
-            "case_id": case_id,
-            "mode": "dashboard",
-        }
-        try:
-            with open(ledger_path, "a") as f:
-                f.write(json.dumps(entry, sort_keys=True) + "\n")
-                f.flush()
-                os.fsync(f.fileno())
-            os.chmod(str(ledger_path), 0o600)
-        except OSError:
-            logger.warning("HMAC write failed for %s", item_id)
-            failures.append(item_id)
-
-    return failures
-
-
-def _save_protected(path: Path, data: object) -> None:
-    """Write JSON with chmod 444 protection. Matches CLI case_io._protected_write."""
-    try:
-        os.chmod(str(path), 0o644)
-    except OSError:
-        pass
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2, default=str)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, str(path))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    finally:
-        try:
-            if path.exists():
-                os.chmod(str(path), 0o444)
-        except OSError:
-            pass
 
 
 def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
@@ -591,7 +499,7 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
                 _apply_note(item, note, identity)
 
             # Compute content hash AFTER modifications
-            new_hash = _compute_content_hash(item)
+            new_hash = compute_content_hash(item)
             item["content_hash"] = new_hash
             item["status"] = "APPROVED"
             item["approved_at"] = now
@@ -651,7 +559,7 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
                     "modified_at": now,
                 }
 
-            new_hash = _compute_content_hash(item)
+            new_hash = compute_content_hash(item)
             item["content_hash"] = new_hash
             item["modified_at"] = now
             edited_count += 1
@@ -697,7 +605,7 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
                 item["approved_at"] = now
                 item["approved_by"] = examiner
                 item["modified_at"] = now
-                new_hash = _compute_content_hash(item)
+                new_hash = compute_content_hash(item)
                 item["content_hash"] = new_hash
                 approved_count += 1
                 approved_items.append(item)
@@ -796,12 +704,12 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
         # ============================================================
 
         # Step 1: Save findings + timeline + iocs
-        _save_protected(case_dir / "findings.json", findings)
-        _save_protected(case_dir / "timeline.json", timeline)
+        _protected_write(case_dir / "findings.json", json.dumps(findings, indent=2, default=str))
+        _protected_write(case_dir / "timeline.json", json.dumps(timeline, indent=2, default=str))
         # Save iocs if cascade modified OR any IOC was directly acted on
         any_ioc_acted = any(item_id.startswith("IOC-") for item_id, _, _ in log_entries)
         if iocs and (iocs_modified or any_ioc_acted):
-            _save_protected(iocs_path, iocs)
+            _protected_write(iocs_path, json.dumps(iocs, indent=2, default=str))
 
         # Step 2: Write approval log entries (best-effort)
         for item_id, action, kwargs in log_entries:
@@ -811,10 +719,31 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
 
         # Step 3: Write HMAC ledger entries (best-effort)
         hmac_failures: list[str] = []
-        if approved_items:
-            hmac_failures = _write_hmac_entries(
-                case_dir, case_id, approved_items, examiner, derived_key, now
+        for item in approved_items:
+            _item_id = item.get("id", "")
+            _item_type = "timeline" if _item_id.startswith("T-") else "finding"
+            _description = json.dumps(
+                {k: v for k, v in item.items() if k not in _HASH_EXCLUDE_KEYS},
+                sort_keys=True,
+                default=str,
             )
+            _mac = compute_hmac(derived_key, _description)
+            _entry = {
+                "finding_id": _item_id,
+                "type": _item_type,
+                "hmac": _mac,
+                "hmac_version": 2,
+                "content_snapshot": _description,
+                "approved_by": examiner,
+                "approved_at": now,
+                "case_id": case_id,
+                "mode": "dashboard",
+            }
+            try:
+                write_ledger_entry(case_id, _entry)
+            except OSError:
+                logger.warning("HMAC write failed for %s", _item_id)
+                hmac_failures.append(_item_id)
 
         # Delete processing file
         processing_path.unlink(missing_ok=True)
@@ -956,7 +885,7 @@ async def get_case(request: Request) -> JSONResponse:
         meta = _load_yaml(case_dir / "CASE.yaml")
     except ValueError as e:
         logger.error("Corrupt CASE.yaml: %s", e)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Case metadata could not be read — check gateway logs"}, status_code=500)
     if meta is None:
         return JSONResponse({})
     return JSONResponse(meta)
@@ -1222,10 +1151,10 @@ async def get_commit_challenge(request: Request) -> JSONResponse:
     if lockout_msg:
         return JSONResponse({"error": lockout_msg}, status_code=429)
 
-    entry = _load_password_entry(examiner)
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
     if not entry:
         return JSONResponse(
-            {"error": "No password configured. Run: vhir config --setup-password"},
+            {"error": "No password configured. Run: agentir config --setup-password"},
             status_code=403,
         )
 
@@ -1243,6 +1172,7 @@ async def get_commit_challenge(request: Request) -> JSONResponse:
         "nonce": nonce,
         "examiner": examiner,
         "created_at": now,
+        "bound_ip": request.client.host,
     }
 
     return JSONResponse(
@@ -1288,6 +1218,9 @@ async def post_commit(request: Request) -> JSONResponse:
     if not challenge:
         return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
 
+    if challenge.get("bound_ip") != request.client.host:
+        return JSONResponse({"error": "Challenge IP mismatch"}, status_code=403)
+
     now = time.time()
     if now - challenge["created_at"] > _CHALLENGE_TTL:
         return JSONResponse({"error": "Challenge expired"}, status_code=401)
@@ -1296,7 +1229,7 @@ async def post_commit(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Challenge/examiner mismatch"}, status_code=401)
 
     # Verify response: HMAC-SHA256(stored_pbkdf2_hash, nonce)
-    entry = _load_password_entry(examiner)
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
     if not entry:
         return JSONResponse({"error": "No password configured"}, status_code=403)
 
@@ -1325,7 +1258,7 @@ async def post_commit(request: Request) -> JSONResponse:
         result = _apply_delta(case_dir, examiner, stored_hash)
     except Exception as e:
         logger.exception("Commit failed")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Commit failed — check gateway logs"}, status_code=500)
 
     return JSONResponse(result)
 

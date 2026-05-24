@@ -13,7 +13,7 @@ from agentir_core.case_io import load_case_meta
 from agentir_core.verification import VERIFICATION_DIR
 
 _SKIP_NAMES = {"__pycache__", ".DS_Store", "examiners.bak"}
-_PASSWORDS_DIR = Path("/var/lib/agentir/passwords")
+_PASSWORDS_DIR = Path(os.environ.get("AGENTIR_PASSWORDS_DIR", "/var/lib/agentir/passwords"))
 
 
 def sha256_file(path: Path) -> str:

@@ -1,8 +1,8 @@
-"""Per-IP sliding window rate limiter for the Valhuntir gateway.
+"""Per-IP and per-examiner sliding window rate limiters for the sift-mcps gateway.
 
 In-memory implementation suitable for a single-process gateway.
-Each IP address is tracked independently with a configurable
-requests-per-minute limit using a sliding window approach.
+IP rate limiter runs pre-auth (DoS protection); examiner rate limiter runs
+post-auth (per-identity quota enforcement after successful authentication).
 """
 
 import threading
@@ -123,3 +123,36 @@ def check_rate_limit(ip: str) -> bool:
     if ip in ("127.0.0.1", "::1", "localhost"):
         return True
     return get_rate_limiter().is_allowed(ip)
+
+
+# Default post-auth examiner limit: 120 calls per 60-second window.
+DEFAULT_EXAMINER_LIMIT = 120
+
+# Module-level examiner limiter singleton.
+_examiner_limiter: RateLimiter | None = None
+
+
+def get_examiner_rate_limiter(
+    limit: int = DEFAULT_EXAMINER_LIMIT,
+    window: float = DEFAULT_WINDOW_SECONDS,
+) -> RateLimiter:
+    """Return the module-level examiner rate limiter singleton, creating it on first call."""
+    global _examiner_limiter
+    if _examiner_limiter is None:
+        _examiner_limiter = RateLimiter(limit=limit, window=window)
+    return _examiner_limiter
+
+
+def reset_examiner_rate_limiter() -> None:
+    """Replace the module-level examiner rate limiter (useful for tests)."""
+    global _examiner_limiter
+    _examiner_limiter = None
+
+
+def check_examiner_rate_limit(examiner: str) -> bool:
+    """Post-auth rate check keyed by examiner identity. Returns True if allowed.
+
+    Unlike the IP limiter, all examiners including anonymous are subject
+    to this limit — it enforces per-identity quotas after successful auth.
+    """
+    return get_examiner_rate_limiter().is_allowed(examiner)

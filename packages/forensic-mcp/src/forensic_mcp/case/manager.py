@@ -1,7 +1,7 @@
 """Case manager: investigation records, TODOs, evidence listing, grounding.
 
 Local-first: each examiner owns a flat case directory. Case lifecycle
-(init, close, activate) is handled by case-mcp and the vhir CLI.
+(init, close, activate) is handled by case-mcp and the agentir CLI.
 """
 
 from __future__ import annotations
@@ -65,9 +65,9 @@ def _protected_write(path: Path, content: str) -> None:
             pass  # Non-POSIX filesystem
 
 
-CASES_DIR_ENV = "VHIR_CASES_DIR"
+CASES_DIR_ENV = "AGENTIR_CASES_DIR"
 DEFAULT_CASES_DIR = str(Path.home() / "cases")
-_ACTIVE_CASE_FILE = Path.home() / ".vhir" / "active_case"
+_ACTIVE_CASE_FILE = Path.home() / ".agentir" / "active_case"
 
 # Audit ID format: prefix-examiner-YYYYMMDD-NNN (all lowercase alphanumeric + hyphens)
 _AUDIT_ID_PATTERN = re.compile(
@@ -128,8 +128,8 @@ _HASH_EXCLUDE_KEYS = {
 def _compute_content_hash(item: dict) -> str:
     """SHA-256 of canonical JSON excluding volatile fields.
 
-    Duplicated from vhir-cli case_io.py — forensic-mcp does NOT depend on
-    vhir-cli. Kept in sync manually.
+    Duplicated from agentir-core case_io.py — forensic-mcp does NOT depend on
+    agentir-core. Kept in sync manually.
     """
     hashable = {k: v for k, v in item.items() if k not in _HASH_EXCLUDE_KEYS}
     canonical = json.dumps(hashable, sort_keys=True, default=str)
@@ -496,7 +496,7 @@ class CaseManager:
                     self._active_case_path = case_dir
         d = self.active_case_dir
         if d is None or not d.exists():
-            raise ValueError("No active case. Run 'vhir case activate <id>' first.")
+            raise ValueError("No active case. Run 'agentir case activate <id>' first.")
         # Safety belt: refuse closed cases
         meta_file = d / "CASE.yaml"
         if meta_file.exists():
@@ -505,8 +505,8 @@ class CaseManager:
                 if meta.get("status") == "closed":
                     raise ValueError(
                         f"Case {self._active_case_id} is closed. "
-                        f"Run 'vhir case reopen {self._active_case_id}' or "
-                        f"'vhir case activate <id>' to work on a different case."
+                        f"Run 'agentir case reopen {self._active_case_id}' or "
+                        f"'agentir case activate <id>' to work on a different case."
                     )
             except yaml.YAMLError:
                 pass
@@ -562,7 +562,7 @@ class CaseManager:
             "sift_tools": True,
         }
         try:
-            gw_path = Path.home() / ".vhir" / "gateway.yaml"
+            gw_path = Path.home() / ".agentir" / "gateway.yaml"
             if gw_path.exists():
                 gw_config = yaml.safe_load(gw_path.read_text()) or {}
                 backends = gw_config.get("backends", {})

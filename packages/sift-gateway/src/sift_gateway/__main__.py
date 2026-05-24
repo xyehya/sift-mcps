@@ -44,7 +44,7 @@ def main():
         logger.error("Config file not found: %s", args.config)
         print(f"ERROR: Config file not found: {args.config}", file=sys.stderr)
         print(
-            "Create gateway.yaml using 'vhir setup client' or see sift-gateway documentation.",
+            "Create gateway.yaml from configs/gateway.yaml.template or see sift-mcps documentation.",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -15,7 +15,7 @@
 
 ## Test Vector
 
-`<img onerror=alert(1)>` as finding title imported via `vhir merge`:
+`<img onerror=alert(1)>` as finding title imported via `agentir merge`:
 1. `renderFinding()` calls `renderEditableField('title', ...)`
 2. `renderEditableField()` calls `renderFieldWithDelta()`
 3. `renderFieldWithDelta()` wraps value in `escapeHtml(String(value))`

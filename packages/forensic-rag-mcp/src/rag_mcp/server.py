@@ -30,13 +30,11 @@ Security:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import sys
 from typing import Any
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.server.fastmcp import FastMCP
 from sift_common.instructions import FORENSIC_RAG as _INSTRUCTIONS
 
 from .audit import AuditWriter, resolve_examiner
@@ -67,19 +65,10 @@ class RAGServer:
     """
 
     def __init__(self) -> None:
-        self.server = Server("rag-knowledge", instructions=_INSTRUCTIONS)
+        self.mcp = FastMCP("forensic-rag-mcp", instructions=_INSTRUCTIONS)
         self.index = RAGIndex()
         self._audit = AuditWriter("forensic-rag-mcp")
         self._register_tools()
-
-    @staticmethod
-    def _error_response(error_code: str, message: str) -> list[TextContent]:
-        """Format error response consistently."""
-        return [
-            TextContent(
-                type="text", text=json.dumps({"error": error_code, "message": message})
-            )
-        ]
 
     def _wrap_response(
         self,
@@ -117,143 +106,98 @@ class RAGServer:
     def _register_tools(self) -> None:
         """Register MCP tools."""
 
-        @self.server.list_tools()
-        async def list_tools() -> list[Tool]:
-            return [
-                Tool(
-                    name="search_knowledge",
-                    description=(
-                        "Semantic search across 23K+ incident response knowledge records. "
-                        "Sources include: Sigma rules, MITRE ATT&CK, Atomic Red Team, "
-                        "Splunk Security, KAPE, Velociraptor, LOLBAS, GTFOBins, and more. "
-                        "Returns ranked results with relevance scores (0-1, higher is better). "
-                        "Scores above 0.85 are excellent matches; 0.75-0.84 are good."
-                    ),
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": (
-                                    "Natural language search query. Examples: "
-                                    "'credential dumping detection', 'lateral movement windows', "
-                                    "'T1003' (MITRE technique ID)"
-                                ),
-                            },
-                            "top_k": {
-                                "type": "integer",
-                                "description": "Number of results to return (default: 5, max: 50)",
-                                "default": 5,
-                            },
-                            "source": {
-                                "type": "string",
-                                "description": (
-                                    "Filter by source (partial/substring match). Examples: "
-                                    "'sigma', 'mitre', 'atomic'. Use source_ids for exact matching."
-                                ),
-                            },
-                            "source_ids": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": (
-                                    "Filter by exact source IDs (deterministic). Examples: "
-                                    "['sigma', 'mitre_attack'], ['velociraptor', 'kape']. "
-                                    "Use list_knowledge_sources to see valid IDs. Takes precedence over 'source'."
-                                ),
-                            },
-                            "technique": {
-                                "type": "string",
-                                "description": "Filter by MITRE technique ID (e.g., 'T1003', 'T1059.001')",
-                            },
-                            "platform": {
-                                "type": "string",
-                                "description": "Filter by platform",
-                                "enum": ["windows", "linux", "macos"],
-                            },
-                        },
-                        "required": ["query"],
-                    },
-                ),
-                Tool(
-                    name="list_knowledge_sources",
-                    description=(
-                        "List all available knowledge sources in the RAG index. "
-                        "Use this to discover what sources can be used with the 'source' filter in search_knowledge."
-                    ),
-                    inputSchema={"type": "object", "properties": {}},
-                ),
-                Tool(
-                    name="get_knowledge_stats",
-                    description="Get RAG index statistics (document count, sources, model info).",
-                    inputSchema={"type": "object", "properties": {}},
-                ),
-            ]
+        @self.mcp.tool(annotations={"readOnlyHint": True})
+        async def search_knowledge(
+            query: str,
+            top_k: int = 5,
+            source: str | None = None,
+            source_ids: list[str] | None = None,
+            technique: str | None = None,
+            platform: str | None = None,
+        ) -> dict[str, Any]:
+            """Semantic search across 23K+ incident response knowledge records.
 
-        @self.server.call_tool()
-        async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-            import time
+            Sources include Sigma rules, MITRE ATT&CK, Atomic Red Team, Splunk
+            Security, KAPE, Velociraptor, LOLBAS, GTFOBins, and more. Returns
+            ranked results with relevance scores from 0-1, where higher is better.
+            Scores above 0.85 are excellent matches; 0.75-0.84 are good.
+            """
+            arguments = {
+                "query": query,
+                "top_k": top_k,
+                "source": source,
+                "source_ids": source_ids,
+                "technique": technique,
+                "platform": platform,
+            }
+            return await self._call_tool("search_knowledge", arguments, self._search)
 
-            audit_id = self._audit._next_audit_id()
-            start = time.monotonic()
-            try:
-                if name == "search_knowledge":
-                    result = await self._search(arguments)
-                elif name == "list_knowledge_sources":
-                    result = await self._list_sources()
-                elif name == "get_knowledge_stats":
-                    result = await self._get_stats()
-                else:
-                    result = {"error": f"Unknown tool: {name}"}
+        @self.mcp.tool(annotations={"readOnlyHint": True})
+        async def list_knowledge_sources() -> dict[str, Any]:
+            """List all available knowledge sources in the RAG index."""
+            return await self._call_tool(
+                "list_knowledge_sources", {}, lambda _: self._list_sources()
+            )
 
-                elapsed_ms = (time.monotonic() - start) * 1000
-                result = self._wrap_response(
-                    name,
-                    arguments,
-                    result,
-                    audit_id=audit_id,
-                    elapsed_ms=elapsed_ms,
-                )
+        @self.mcp.tool(annotations={"readOnlyHint": True})
+        async def get_knowledge_stats() -> dict[str, Any]:
+            """Get RAG index statistics: document count, sources, and model info."""
+            return await self._call_tool(
+                "get_knowledge_stats", {}, lambda _: self._get_stats()
+            )
 
-                return [
-                    TextContent(
-                        type="text", text=json.dumps(result, indent=2, default=str)
-                    )
-                ]
+    async def _call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        handler: Any,
+    ) -> dict[str, Any]:
+        """Run a FastMCP tool handler with the legacy audit/error envelope."""
+        import time
 
-            except ValueError as e:
-                elapsed_ms = (time.monotonic() - start) * 1000
-                logger.warning(f"Tool {name} validation failed: {e}")
-                error_result = {"error": "validation_error", "message": str(e)}
-                error_result = self._wrap_response(
-                    name,
-                    arguments,
-                    error_result,
-                    audit_id=audit_id,
-                    elapsed_ms=elapsed_ms,
-                )
-                return [TextContent(type="text", text=json.dumps(error_result))]
-            except Exception as exc:
-                elapsed_ms = (time.monotonic() - start) * 1000
-                logger.exception(f"Tool {name} internal error")
-                # Surface the actual error so LLMs can diagnose
-                msg = str(exc)
-                if isinstance(exc, FileNotFoundError):
-                    msg = f"Index not found: {exc}. Run 'python -m rag_mcp.build' to build the knowledge index."
-                elif isinstance(exc, ImportError):
-                    msg = f"Missing dependency: {exc}"
-                error_result = {
-                    "error": "internal_error",
-                    "message": msg
-                    or "An unexpected error occurred. Check server logs.",
-                }
-                error_result = self._wrap_response(
-                    name,
-                    arguments,
-                    error_result,
-                    audit_id=audit_id,
-                    elapsed_ms=elapsed_ms,
-                )
-                return [TextContent(type="text", text=json.dumps(error_result))]
+        audit_id = self._audit._next_audit_id()
+        start = time.monotonic()
+        try:
+            result = await handler(arguments)
+            elapsed_ms = (time.monotonic() - start) * 1000
+            return self._wrap_response(
+                name,
+                arguments,
+                result,
+                audit_id=audit_id,
+                elapsed_ms=elapsed_ms,
+            )
+        except ValueError as e:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            logger.warning(f"Tool {name} validation failed: {e}")
+            error_result = {"error": "validation_error", "message": str(e)}
+            return self._wrap_response(
+                name,
+                arguments,
+                error_result,
+                audit_id=audit_id,
+                elapsed_ms=elapsed_ms,
+            )
+        except Exception as exc:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            logger.exception(f"Tool {name} internal error")
+            # Surface the actual error so LLMs can diagnose
+            msg = str(exc)
+            if isinstance(exc, FileNotFoundError):
+                msg = f"Index not found: {exc}. Run 'python -m rag_mcp.build' to build the knowledge index."
+            elif isinstance(exc, ImportError):
+                msg = f"Missing dependency: {exc}"
+            error_result = {
+                "error": "internal_error",
+                "message": msg or "An unexpected error occurred. Check server logs.",
+            }
+            return self._wrap_response(
+                name,
+                arguments,
+                error_result,
+                audit_id=audit_id,
+                elapsed_ms=elapsed_ms,
+            )
 
     async def _search(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """
@@ -342,25 +286,41 @@ class RAGServer:
         stats = await loop.run_in_executor(None, self.index.get_stats)
         return {"status": "ok", **stats}
 
-    async def run(self) -> None:
+    def run(self) -> None:
         """Run the MCP server.
 
         Index loads lazily on first tool call (search/list_sources/get_stats)
         so the stdio handshake completes immediately.
         """
         logger.info("Starting MCP server (index loads on first query)...")
+        self.mcp.run()
 
-        async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream, write_stream, self.server.create_initialization_options()
-            )
+
+_server = RAGServer()
+mcp = _server.mcp
+
+
+def _print_help() -> None:
+    """Print CLI help without starting the stdio MCP transport."""
+    print("Usage: rag-mcp [--help]")
+    print()
+    print("RAG MCP Server - Semantic search over IR knowledge base.")
+    print()
+    print("Tools:")
+    for tool in mcp._tool_manager.list_tools():
+        print(f"  {tool.name}")
+        if tool.description:
+            print(f"    {tool.description}")
 
 
 def main() -> None:
     """Entry point."""
+    if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+        _print_help()
+        return
+
     setup_logging("forensic-rag-mcp")
-    server = RAGServer()
-    asyncio.run(server.run())
+    _server.run()
 
 
 if __name__ == "__main__":
