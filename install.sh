@@ -4,10 +4,11 @@ set -Eeuo pipefail
 AUTO_YES=0
 START_SERVICE=1
 RUN_DOCKER=1
+DOWNLOAD_DB=1
 
 usage() {
   cat <<'USAGE'
-Usage: ./install.sh [-y] [--no-start] [--skip-docker]
+Usage: ./install.sh [-y] [--no-start] [--skip-docker] [--skip-db]
 
 Install sift-mcps on a SIFT Workstation VM.
 
@@ -15,6 +16,7 @@ Options:
   -y, --yes       Run non-interactively.
   --no-start      Write config and service files, but do not start systemd service.
   --skip-docker   Skip Docker/OpenSearch startup.
+  --skip-db       Skip downloading triage baseline databases.
   -h, --help      Show this help.
 USAGE
 }
@@ -24,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     -y|--yes) AUTO_YES=1 ;;
     --no-start) START_SERVICE=0 ;;
     --skip-docker) RUN_DOCKER=0 ;;
+    --skip-db) DOWNLOAD_DB=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
@@ -159,6 +162,19 @@ install_state_dirs() {
   sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$AGENTIR_WINDOWS_TRIAGE_DB_DIR"
   sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$AGENTIR_CASE_ROOT"
   install -d -m 700 "$AGENTIR_HOME" "$AGENTIR_TLS_DIR" "$AGENTIR_BACKUP_DIR"
+}
+
+download_triage_databases() {
+  [[ "$DOWNLOAD_DB" -eq 1 ]] || { warn "Skipping triage database download."; return; }
+  log "Downloading triage baseline databases."
+  if [[ -f "$AGENTIR_WINDOWS_TRIAGE_DB_DIR/known_good.db" && -f "$AGENTIR_WINDOWS_TRIAGE_DB_DIR/context.db" ]]; then
+    log "Triage databases already exist; skipping download."
+    return
+  fi
+  # Run the python downloader. If it fails, print a warning but do not fail the installer.
+  if ! "$UV_BIN" run --project "$REPO_DIR" python -m windows_triage_mcp.scripts.download_databases --dest "$AGENTIR_WINDOWS_TRIAGE_DB_DIR"; then
+    warn "Triage baseline databases could not be downloaded. Backend will run in degraded mode."
+  fi
 }
 
 prepare_enrichment_assets() {
@@ -525,6 +541,7 @@ main() {
   install_uv_if_needed
   sync_workspace
   install_state_dirs
+  download_triage_databases
   prepare_enrichment_assets
   generate_tls
   write_default_examiner

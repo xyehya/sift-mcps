@@ -1233,9 +1233,7 @@ SQLite-backed MCP backend with three database files:
   patterns, protected process names, and Windows named pipes
 - `known_good_registry.db` — optional full registry baseline used by `check_registry`
 
-The current `sift-mcps/packages/windows-triage-mcp` reconstruction is an interim scaffold only. It
-is useful for proving workspace/gateway wiring, but it does not satisfy Phase 11 acceptance until it
-is replaced or upgraded with the original SQLite-backed behavior.
+The `windows-triage-mcp` package has been fully upgraded to the original SQLite-backed implementation. It uses the three SQLite database files listed above, handles missing assets by reporting degraded status/gracefully returning UNKNOWN verdicts, and is fully verified with passing unit tests.
 
 `wintools-mcp` remains out of scope because it requires a dedicated Windows workstation, SMB share
 orchestration, and Windows command execution. The restored backend must not reintroduce those

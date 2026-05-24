@@ -1,6 +1,26 @@
-"""Windows baseline validation MCP backend."""
+"""Windows Triage MCP Server.
 
-__all__ = ["__version__"]
+Provides offline forensic file/hash/indicator triage capabilities
+for Claude Code via the Model Context Protocol.
+"""
 
-__version__ = "0.1.0"
+__version__ = "0.6.1"
 
+from .config import Config, get_config, reset_config, set_config
+from .exceptions import (
+    ConfigurationError,
+    DatabaseError,
+    ValidationError,
+    WindowsTriageError,
+)
+
+__all__ = [
+    "Config",
+    "get_config",
+    "set_config",
+    "reset_config",
+    "ConfigurationError",
+    "WindowsTriageError",
+    "ValidationError",
+    "DatabaseError",
+]

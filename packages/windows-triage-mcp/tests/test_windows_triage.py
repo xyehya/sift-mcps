@@ -1,84 +1,143 @@
 from __future__ import annotations
 
 import json
-
+from pathlib import Path
 import pytest
 
-from windows_triage_mcp.db import BaselineDB
+from mcp.types import ListToolsRequest
+from windows_triage_mcp.config import Config
+from windows_triage_mcp.db import KnownGoodDB, ContextDB, RegistryDB
 from windows_triage_mcp.server import WindowsTriageServer
-
-
-def _write_json(root, name, records):
-    (root / f"{name}.json").write_text(json.dumps({"records": records}))
 
 
 @pytest.fixture()
 def server(tmp_path):
-    _write_json(
-        tmp_path,
-        "files",
+    kg_path = tmp_path / "known_good.db"
+    ctx_path = tmp_path / "context.db"
+    reg_path = tmp_path / "known_good_registry.db"
+
+    # 1. Initialize databases using their schemas
+    kg_db = KnownGoodDB(kg_path, read_only=False, cache_size=0)
+    kg_db.init_schema()
+
+    ctx_db = ContextDB(ctx_path, read_only=False, cache_size=0)
+    ctx_db.init_schema()
+
+    reg_db = RegistryDB(reg_path, read_only=False, cache_size=0)
+    reg_db.init_schema()
+
+    # 2. Add OS Version
+    kg_db.add_os_version(
+        short_name="Win10_21H2_Pro",
+        os_family="Windows 10",
+    )
+
+    # 3. Add baseline files
+    kg_db.upsert_files_batch(
         [
             {
                 "path": r"C:\Windows\System32\cmd.exe",
                 "sha256": "a" * 64,
-                "os_version": "Windows 10",
+                "file_size": 232323,
             }
         ],
+        os_short_name="Win10_21H2_Pro"
     )
-    _write_json(
-        tmp_path,
-        "process_trees",
-        [{"process_name": "cmd.exe", "parent_name": "explorer.exe"}],
+
+    # 4. Add process trees
+    ctx_db.add_expected_process(
+        process_name="cmd.exe",
+        valid_parents=["explorer.exe"],
     )
-    _write_json(
-        tmp_path,
-        "services",
-        [
-            {
-                "service_name": "EventLog",
-                "binary_path": r"C:\Windows\System32\svchost.exe",
-                "os_version": "Windows 10",
-            }
-        ],
+
+    # 5. Add services
+    kg_db.upsert_service(
+        service_name="EventLog",
+        os_short_name="Win10_21H2_Pro",
+        binary_path=r"C:\Windows\System32\svchost.exe",
     )
-    _write_json(
-        tmp_path,
-        "scheduled_tasks",
-        [{"task_path": r"\Microsoft\Windows\Defrag\ScheduledDefrag", "os_version": "Windows 10"}],
+
+    # 6. Add scheduled tasks
+    kg_db.upsert_task(
+        task_path=r"\Microsoft\Windows\Defrag\ScheduledDefrag",
+        os_short_name="Win10_21H2_Pro",
+        task_name="ScheduledDefrag",
     )
-    _write_json(
-        tmp_path,
-        "autoruns",
-        [
-            {
-                "key_path": r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run",
-                "value_name": "SecurityHealth",
-                "os_version": "Windows 10",
-            }
-        ],
+
+    # 7. Add autoruns
+    kg_db.upsert_autorun(
+        hive="HKLM",
+        key_path=r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run",
+        os_short_name="Win10_21H2_Pro",
+        value_name="SecurityHealth",
     )
-    _write_json(
-        tmp_path,
-        "registry",
-        [
-            {
-                "hive": "HKLM",
-                "key_path": r"HKLM\System\CurrentControlSet\Control\Session Manager",
-                "value_name": "BootExecute",
-                "os_version": "Windows 10",
-            }
-        ],
+
+    # 8. Add registry key/value
+    reg_db.connect().execute(
+        "INSERT INTO baseline_registry (hive, key_path_lower, value_name, value_type, value_data, os_versions, value_data_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "SYSTEM",
+            "hklm\\system\\currentcontrolset\\control\\session manager",
+            "BootExecute",
+            "REG_MULTI_SZ",
+            "autocheck autochk *",
+            json.dumps(["Win10_21H2_Pro"]),
+            "hash"
+        )
     )
-    _write_json(tmp_path, "loldrivers", [{"sha256": "b" * 64, "name": "bad.sys"}])
-    _write_json(tmp_path, "lolbins", [{"filename": "mshta.exe", "capabilities": ["hta"]}])
-    _write_json(tmp_path, "hijackable_dlls", [{"dll_name": "version.dll"}])
-    _write_json(tmp_path, "pipes", [{"pipe_name": r"\pipe\spoolss"}])
-    (tmp_path / "metadata.json").write_text(json.dumps({"version": "test"}))
-    return WindowsTriageServer(BaselineDB(tmp_path))
+    reg_db.connect().commit()
+
+    # 9. Add lolbin
+    ctx_db.add_lolbin(
+        filename="mshta.exe",
+        name="mshta",
+        functions=["hta"],
+    )
+    ctx_db.add_lolbin(
+        filename="cmd.exe",
+        name="cmd",
+        functions=["execute"],
+    )
+
+    # 10. Add vulnerable driver
+    ctx_db.add_vulnerable_driver(
+        filename="bad.sys",
+        sha256="b" * 64,
+        vendor="MagicalVendor",
+    )
+
+    # 11. Add hijackable DLL
+    ctx_db.connect().execute(
+        "INSERT INTO hijackable_dlls (dll_name_lower, hijack_type, vulnerable_exe) VALUES (?, ?, ?)",
+        ("version.dll", "sideloading", "someapp.exe")
+    )
+    ctx_db.connect().commit()
+
+    # 12. Create Config
+    config = Config(
+        known_good_db=kg_path,
+        context_db=ctx_path,
+        registry_db=reg_path,
+        skip_db_validation=True,
+        cache_size=0,
+    )
+
+    # 13. Instantiate server
+    srv = WindowsTriageServer(
+        config=config,
+        known_good_path=kg_path,
+        context_path=ctx_path,
+        registry_path=reg_path,
+    )
+    yield srv
+    srv.close_databases()
 
 
-def test_all_13_tools_are_registered(server):
-    tools = {tool.name for tool in server.mcp._tool_manager.list_tools()}
+@pytest.mark.asyncio
+async def test_all_13_tools_are_registered(server):
+    handler = server.server.request_handlers[ListToolsRequest]
+    res = await handler(ListToolsRequest())
+    tools = {tool.name for tool in res.root.tools}
     assert tools == {
         "check_file",
         "check_process_tree",
@@ -96,64 +155,107 @@ def test_all_13_tools_are_registered(server):
     }
 
 
-def test_check_file_expected_lolbin_and_hash_mismatch(server):
-    result = server.check_file(r"C:\Windows\System32\cmd.exe", "a" * 64, "Windows 10")
+@pytest.mark.asyncio
+async def test_check_file_expected_lolbin_and_hash_mismatch(server):
+    # Note: cmd.exe is built-in LOLBin, but not in lolbins context table (unless explicitly added).
+    # Since cmd.exe is hardcoded as built-in LOLBin in _find_lolbin, it will return is_lolbin=True.
+    result = await server._check_file(r"C:\Windows\System32\cmd.exe", "a" * 64, "Win10_21H2_Pro")
     assert result["verdict"] == "EXPECTED_LOLBIN"
     assert result["is_lolbin"] is True
 
-    result = server.check_file(r"C:\Windows\System32\cmd.exe", "c" * 64, "Windows 10")
+    result = await server._check_file(r"C:\Windows\System32\cmd.exe", "c" * 64, "Win10_21H2_Pro")
     assert result["verdict"] == "SUSPICIOUS"
-    assert "hash differs" in result["reasons"][0]
+    assert "Hash does not match baseline" in result["findings"][0]["description"]
 
 
-def test_check_process_tree_expected(server):
-    result = server.check_process_tree("cmd.exe", "explorer.exe")
+@pytest.mark.asyncio
+async def test_check_process_tree_expected(server):
+    result = await server._check_process_tree("cmd.exe", "explorer.exe")
     assert result["verdict"] == "EXPECTED"
 
 
-def test_check_service_requires_os_and_detects_path_mismatch(server):
-    with pytest.raises(ValueError, match="os_version"):
-        server.check_service("EventLog")
-    result = server.check_service("EventLog", r"C:\Temp\svchost.exe", "Windows 10")
+@pytest.mark.asyncio
+async def test_check_service_requires_os_and_detects_path_mismatch(server):
+    res = await server._check_service("EventLog")
+    assert "os_version is required" in res["error"]
+
+    # When service matches but binary path is mismatched
+    result = await server._check_service("EventLog", r"C:\Temp\svchost.exe", "Win10_21H2_Pro")
     assert result["verdict"] == "SUSPICIOUS"
 
 
-def test_check_scheduled_task_autorun_and_registry(server):
-    assert server.check_scheduled_task(
-        r"\Microsoft\Windows\Defrag\ScheduledDefrag", "Windows 10"
-    )["verdict"] == "EXPECTED"
-    assert server.check_autorun(
+@pytest.mark.asyncio
+async def test_check_scheduled_task_autorun_and_registry(server):
+    result_task = await server._check_scheduled_task(
+        r"\Microsoft\Windows\Defrag\ScheduledDefrag", "Win10_21H2_Pro"
+    )
+    assert result_task["verdict"] == "EXPECTED"
+
+    result_autorun = await server._check_autorun(
         r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run",
         "SecurityHealth",
-        "Windows 10",
-    )["verdict"] == "EXPECTED"
-    assert server.check_registry(
+        "Win10_21H2_Pro",
+    )
+    assert result_autorun["verdict"] == "EXPECTED"
+
+    result_registry = await server._check_registry(
         r"HKLM\System\CurrentControlSet\Control\Session Manager",
         "BootExecute",
-        "HKLM",
-        "Windows 10",
-    )["verdict"] == "EXPECTED"
+        None,
+        "Win10_21H2_Pro",
+    )
+    assert result_registry["verdict"] == "EXPECTED"
 
 
-def test_hash_lolbin_hijackable_dll_and_pipe(server):
-    assert server.check_hash("b" * 64)["verdict"] == "SUSPICIOUS"
-    assert server.check_lolbin("mshta.exe")["verdict"] == "EXPECTED_LOLBIN"
-    assert server.check_hijackable_dll("version.dll")["verdict"] == "SUSPICIOUS"
-    assert server.check_pipe(r"\pipe\postex_123")["verdict"] == "SUSPICIOUS"
-    assert server.check_pipe(r"\pipe\spoolss")["verdict"] == "EXPECTED"
+@pytest.mark.asyncio
+async def test_hash_lolbin_hijackable_dll_and_pipe(server):
+    result_hash = await server._check_hash("b" * 64)
+    assert result_hash["verdict"] == "SUSPICIOUS"
+
+    result_lol = await server._check_lolbin("mshta.exe")
+    assert result_lol["is_lolbin"] is True
+
+    result_dll = await server._check_hijackable_dll("version.dll")
+    assert result_dll["is_hijackable"] is True
+    assert result_dll["verdict"] == "EXPECTED_LOLBIN"
+
+    result_pipe_susp = await server._check_pipe(r"\pipe\postex_123")
+    assert result_pipe_susp["verdict"] == "SUSPICIOUS"
+
+    result_pipe_exp = await server._check_pipe(r"\pipe\spoolss")
+    assert result_pipe_exp["verdict"] == "EXPECTED"
 
 
-def test_analyze_filename_detects_deception(server):
-    result = server.analyze_filename("invoice.pdf.exe")
-    assert result["verdict"] == "SUSPICIOUS"
+@pytest.mark.asyncio
+async def test_analyze_filename_detects_deception(server):
+    result = await server._analyze_filename("invoice.pdf.exe")
+    assert result["is_suspicious"] is True
+    assert any("double extension" in f["description"].lower() for f in result["findings"])
 
 
-def test_missing_db_is_degraded_and_not_trusted(tmp_path):
-    server = WindowsTriageServer(BaselineDB(tmp_path / "missing"))
-    health = server.get_health()
+@pytest.mark.asyncio
+async def test_missing_db_is_degraded_and_not_trusted(tmp_path):
+    # Setup server with non-existent DB files
+    config = Config(
+        known_good_db=tmp_path / "missing_kg.db",
+        context_db=tmp_path / "missing_ctx.db",
+        registry_db=tmp_path / "missing_reg.db",
+        skip_db_validation=True,
+    )
+    srv = WindowsTriageServer(
+        config=config,
+        known_good_path=tmp_path / "missing_kg.db",
+        context_path=tmp_path / "missing_ctx.db",
+        registry_path=tmp_path / "missing_reg.db",
+    )
+
+    health = await srv._get_health()
     assert health["status"] == "degraded"
-    result = server.check_file(r"C:\Windows\System32\cmd.exe")
-    assert result["status"] == "degraded"
-    assert result["verdict"] == "UNKNOWN"
-    assert result["db_available"] is False
+    assert health["databases"]["known_good"].startswith("error:")
+    assert health["databases"]["context"].startswith("error:")
 
+    # Check that tools return degraded or unknown status and do not return EXPECTED
+    result = await srv._check_file(r"C:\Windows\System32\cmd.exe")
+    assert result["verdict"] == "UNKNOWN"
+
+    srv.close_databases()

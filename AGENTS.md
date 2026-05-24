@@ -189,7 +189,7 @@ These fixes were completed in TASKS.md Phase 2b.
 
 ---
 
-## Current State (as of Session 21 — 2026-05-24)
+## Current State (as of Session 22 — 2026-05-24)
 
 ### What Is Done ✅
 - **Phase 0 COMPLETE** — all blocking bugs fixed, namespace sweep finished, verification gate passed
@@ -203,6 +203,7 @@ These fixes were completed in TASKS.md Phase 2b.
 - **Phase 7 COMPLETE** — `install.sh` foundation: TLS gen, token gen, default examiner, systemd, gateway config render; live VM run still pending
 - **Phase 8 COMPLETE** — `docker-compose.yml`: OpenSearch 2.18.0, localhost-only, snapshots bind mount, `agentir-opensearch` container name
 - **Phase 9 COMPLETE** — `configs/gateway.yaml.template`, `configs/hermes-forensics-profile.yaml`, `configs/systemd/sift-gateway.service`
+- **Phase 11 COMPLETE** — SQLite-backed `windows-triage-mcp` restored from original source, DB downloader integrated, health/degraded handling implemented, and all 8 unit tests verified passing.
 - **Phase 12-pre COMPLETE** — R8 domain-separated HMAC sub-keys (`derive_auth_key`, `derive_ledger_key`)
 - **Phase 12a-12c COMPLETE** — `session_jwt.py`, `portal_session_secret` wiring, `PortalSessionMiddleware`
 - **Phase 12d COMPLETE** — 7 auth endpoints (setup, challenge, login, reset-password, logout, me); R1/R2/R3/R6/R8 guards; 36 tests
@@ -219,15 +220,7 @@ These fixes were completed in TASKS.md Phase 2b.
 
 ### What Needs Fixing Next (See TASKS.md)
 
-**Priority 0 — Phase 11: Restore Windows baseline backend**
-- Replace the temporary JSON scaffold with the original SQLite-backed `windows-triage-mcp` implementation from `/home/yk/AI/SIFTHACK/sift-mcp/packages/windows-triage`
-- Port the prebuilt DB downloader for `known_good.db.zst` and `context.db.zst` into the installer flow, targeting `/var/lib/agentir/windows-triage`
-- Preserve clear degraded behavior when DB assets are absent or invalid; never stamp false trusted enrichment
-- Keep dropping only `wintools-mcp`, the separate Windows host execution backend
-- Cross-check restored tool calls against `Reference MCP Toolsfrom original Valhuntir Documentation.md`
-- Verify `opensearch-mcp::idx_enrich_triage` uses the restored backend through the gateway path
-
-**Priority 1 — Phase 13: RBAC, agent credentials, portal route guards**
+**Priority 0 — Phase 13: RBAC, agent credentials, portal route guards**
 - 13a: `token_gen.py` — `generate_service_token()` and fix `generate_gateway_token()`
 - 13b: readonly→403 on MCP writes (R4 agent→portal already done in Phase 12f)
 - 13c: `_require_examiner_role()` helper; apply to delta/commit/token/case-create routes
