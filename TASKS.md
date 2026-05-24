@@ -414,15 +414,17 @@ All test suites verified passing in Session 3:
 - [x] `packages/sift-gateway/src/sift_gateway/server.py::create_app()`: reads `portal.session_secret` and `portal.session_max_age` (default 28800) from config; passes both to `create_dashboard_v2_app()`
 - [x] `case_dashboard/routes.py::create_dashboard_v2_app(session_secret, session_max_age)`: stores as module-level `_SESSION_SECRET` / `_SESSION_MAX_AGE`; 6 wiring tests in `test_session_wiring.py`
 
-### 12c. Backend: session middleware (`case_dashboard/auth.py`)
+### 12c. Backend: session middleware (`case_dashboard/auth.py`) ✅
 
-- [ ] New `PortalSessionMiddleware(BaseHTTPMiddleware)`:
-  - For every request to portal API paths:
-    - Read `agentir_session` cookie → call `verify_jwt()` → set `request.state.examiner`, `request.state.role`
-    - If no valid cookie: check `Authorization: Bearer` → look up in `api_keys` (backward compat, examiner role only)
-    - If neither: set `request.state.examiner = None`, `request.state.role = None`
-  - Does NOT return 401 itself — route handlers check `request.state.examiner`
-- [ ] Wire `PortalSessionMiddleware` into `create_dashboard_v2_app()` middleware stack
+- [x] New `PortalSessionMiddleware(BaseHTTPMiddleware)` in `case_dashboard/auth.py`:
+  - Cookie → `verify_jwt(_session_secret)` → set examiner/role
+  - If no valid cookie: Bearer token → `_verify_bearer` (inline timing-safe check) → examiner role only; agent tokens never accepted
+  - If neither: examiner=None, role=None
+  - Never returns 401 itself
+- [x] `_verify_bearer()` helper with timing-safe compare, expiry check (no sift_gateway import — standalone)
+- [x] `_API_KEYS` module-level var added to routes.py; `create_dashboard_v2_app()` gains `api_keys` param; passes both `session_secret` and `api_keys` to `PortalSessionMiddleware`
+- [x] `server.py` passes `api_keys` to `create_dashboard_v2_app()`
+- [x] 14 tests in `test_session_middleware.py`: cookie auth, tampered/expired cookie, Bearer examiner/agent distinction, no-auth state, middleware-never-returns-401, R9 getattr access
 
 ### 12d. Backend: auth endpoints (add to `routes.py`)
 
@@ -689,7 +691,7 @@ All test suites verified passing in Session 3:
   - 139/139 passing.
 - Clarified that existing tests are NOT the driver — plan and tasks are. Tests must be rewritten to match plan requirements when they diverge.
 
-**Phase 12b complete.** Next session starts at **Phase 12c** — `PortalSessionMiddleware` in `case_dashboard/auth.py`.
+**Phase 12c complete.** Next session starts at **Phase 12d** — auth endpoints (`/api/auth/setup-required`, `/api/auth/challenge`, `/api/auth/login`, etc.) in `routes.py`.
 
 ---
 

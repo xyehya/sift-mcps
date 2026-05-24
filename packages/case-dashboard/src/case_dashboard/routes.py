@@ -30,9 +30,10 @@ logger = logging.getLogger(__name__)
 _STATIC_DIR = Path(__file__).parent / "static"
 _PASSWORDS_DIR = Path("/var/lib/agentir/passwords")
 
-# Set by create_dashboard_v2_app() at startup from gateway.yaml portal config.
+# Set by create_dashboard_v2_app() at startup from gateway.yaml config.
 _SESSION_SECRET: str = ""
 _SESSION_MAX_AGE: int = 28800
+_API_KEYS: dict = {}
 
 # Max delta file size (1 MB)
 _MAX_DELTA_SIZE = 1_048_576
@@ -1364,12 +1365,26 @@ async def serve_v2_static(request: Request) -> Response:
 def create_dashboard_v2_app(
     session_secret: str = "",
     session_max_age: int = 28800,
+    api_keys: dict | None = None,
 ) -> Starlette:
     """Create the v2 dashboard sub-app for mounting on the gateway."""
-    global _SESSION_SECRET, _SESSION_MAX_AGE
+    from case_dashboard.auth import PortalSessionMiddleware
+
+    global _SESSION_SECRET, _SESSION_MAX_AGE, _API_KEYS
     _SESSION_SECRET = session_secret
     _SESSION_MAX_AGE = session_max_age
+    _API_KEYS = api_keys or {}
     routes = _dashboard_api_routes()
     routes.append(Route("/{filename}", serve_v2_static, methods=["GET"]))
     routes.append(Route("/", serve_v2_index, methods=["GET"]))
-    return Starlette(routes=routes, middleware=[Middleware(SecurityHeadersMiddleware)])
+    return Starlette(
+        routes=routes,
+        middleware=[
+            Middleware(
+                PortalSessionMiddleware,
+                session_secret=session_secret,
+                api_keys=_API_KEYS,
+            ),
+            Middleware(SecurityHeadersMiddleware),
+        ],
+    )

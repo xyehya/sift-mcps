@@ -637,6 +637,7 @@ class Gateway:
                     app=create_dashboard_v2_app(
                         session_secret=portal_secret,
                         session_max_age=portal_max_age,
+                        api_keys=api_keys,
                     ),
                 )
             )
