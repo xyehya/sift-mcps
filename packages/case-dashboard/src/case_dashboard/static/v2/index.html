@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Valhuntir — Examiner Portal</title>
+<title>sift-mcps — Examiner Portal</title>
 <style>
 :root {
   --bg-primary: #0f172a;
@@ -476,16 +476,245 @@ body {
 .error-banner { display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 100;
   padding: 8px 16px; background: var(--red); color: #fff; text-align: center; font-size: 13px; }
 .error-banner.visible { display: block; }
+
+/* Login & Case Creation styles */
+.login-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-primary);
+  font-family: inherit;
+  padding: 20px;
+}
+.login-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  text-align: center;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.login-logo {
+  font-size: 40px;
+  margin-bottom: 16px;
+}
+.login-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.login-subtitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+}
+.login-form-group {
+  text-align: left;
+  margin-bottom: 16px;
+}
+.login-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.login-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 14px;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+.login-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.login-btn {
+  width: 100%;
+  padding: 11px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: opacity 0.2s;
+}
+.login-btn:hover {
+  opacity: 0.9;
+}
+.login-error {
+  color: var(--red);
+  font-size: 13px;
+  margin-top: 12px;
+  text-align: left;
+  display: none;
+}
+.login-link {
+  display: inline-block;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.login-link:hover {
+  text-decoration: underline;
+}
 </style>
 </head>
 <body>
 <div class="error-banner" id="errorBanner"></div>
+<div id="loginScreen" style="display:none">
+  <div class="login-container">
+    <div class="login-card" id="loginCard">
+      <div class="login-logo">🔬</div>
+      <div class="login-title">sift-mcps</div>
+      <div class="login-subtitle">Examiner Portal</div>
+      
+      <div id="loginForm">
+        <div class="login-form-group">
+          <label class="login-label" for="loginExaminer">Examiner Name</label>
+          <input class="login-input" type="text" id="loginExaminer" placeholder="e.g. alice">
+        </div>
+        <div class="login-form-group">
+          <label class="login-label" for="loginPassword">Password</label>
+          <input class="login-input" type="password" id="loginPassword" placeholder="••••••••">
+        </div>
+        <button class="login-btn" id="loginBtn" onclick="submitLogin()">Sign in</button>
+        <div class="login-error" id="loginError"></div>
+        <div style="margin-top: 16px;">
+          <a class="login-link" id="setupLink" style="display:none" onclick="showSetupForm()">First run? Set up your account</a>
+        </div>
+      </div>
+      
+      <!-- First-run Setup Form -->
+      <div id="setupForm" style="display:none">
+        <div style="font-weight:600;margin-bottom:16px;color:var(--text-primary)">Set Up Examiner Account</div>
+        <div class="login-form-group">
+          <label class="login-label" for="setupExaminer">Examiner Name</label>
+          <input class="login-input" type="text" id="setupExaminer" placeholder="e.g. alice">
+        </div>
+        <div class="login-form-group">
+          <label class="login-label" for="setupPassword">Password</label>
+          <input class="login-input" type="password" id="setupPassword" placeholder="••••••••">
+        </div>
+        <div class="login-form-group">
+          <label class="login-label" for="setupConfirmPassword">Confirm Password</label>
+          <input class="login-input" type="password" id="setupConfirmPassword" placeholder="••••••••">
+        </div>
+        <button class="login-btn" onclick="submitSetup()">Create Account</button>
+        <div class="login-error" id="setupError"></div>
+        <div style="margin-top: 16px;">
+          <a class="login-link" onclick="hideSetupForm()">Back to login</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="dialog-overlay" id="newCaseModal" role="dialog" aria-modal="true" style="display:none">
+  <div class="dialog" style="max-width:400px">
+    <div style="font-weight:600;font-size:15px;margin-bottom:12px;color:var(--text-primary)">
+      Create New Case
+    </div>
+    <div style="margin-bottom:12px">
+      <label class="login-label" for="newCaseId">Case ID (lowercase alphanumeric, hyphen, underscore)</label>
+      <input class="login-input" type="text" id="newCaseId" placeholder="e.g. case-2026-001" oninput="updateNewCaseDir()">
+    </div>
+    <div style="margin-bottom:12px">
+      <label class="login-label" for="newCaseTitle">Title</label>
+      <input class="login-input" type="text" id="newCaseTitle" placeholder="e.g. Intrusion Analysis May 2026">
+    </div>
+    <div style="margin-bottom:12px">
+      <label class="login-label" for="newCaseDir">Directory</label>
+      <input class="login-input" type="text" id="newCaseDir" placeholder="/cases/case-2026-001" readonly>
+    </div>
+    <div class="login-error" id="newCaseError" style="margin-bottom:12px"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeNewCaseModal()">Cancel</button>
+      <button class="btn-primary" id="btnCreateCase" onclick="submitCreateCase()">Create Case</button>
+    </div>
+  </div>
+</div>
+
+<div class="dialog-overlay" id="agentTokensModal" role="dialog" aria-modal="true" style="display:none">
+  <div class="dialog" style="max-width:600px; width:95%">
+    <div style="font-weight:600;font-size:15px;margin-bottom:12px;color:var(--text-primary);display:flex;justify-content:space-between;align-items:center">
+      <span>Agent Service Tokens</span>
+      <button class="btn-cancel" style="padding:2px 8px;font-size:12px" onclick="closeAgentTokensModal()">Close</button>
+    </div>
+    
+    <!-- Token List -->
+    <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;padding:8px;margin-bottom:16px;background:var(--bg-primary)" id="tokenListContainer">
+      <table style="width:100%;font-size:12px;border-collapse:collapse" id="tokenListTable">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);color:var(--text-muted);text-align:left">
+            <th style="padding:4px">Agent ID</th>
+            <th style="padding:4px">Label</th>
+            <th style="padding:4px">Expires</th>
+            <th style="padding:4px;text-align:right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="tokenListBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Single use display of new token -->
+    <div id="newTokenDisplay" style="display:none;background:rgba(59,130,246,0.1);border:1px solid var(--accent);border-radius:4px;padding:12px;margin-bottom:16px;font-size:12px">
+      <div style="font-weight:600;color:var(--accent);margin-bottom:6px">New Agent Token Created</div>
+      <div style="font-family:monospace;font-size:13px;word-break:break-all;user-select:all;padding:6px;background:var(--bg-primary);border-radius:3px;margin-bottom:6px" id="newTokenValue"></div>
+      <div style="color:var(--text-muted);font-size:11px">Copy this token now. It will not be shown again.</div>
+    </div>
+
+    <!-- Create Form -->
+    <div style="border-top:1px solid var(--border);padding-top:12px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--text-primary)">Create New Token</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px">
+        <div>
+          <label class="login-label" for="tokenAgentId">Agent ID</label>
+          <input class="login-input" type="text" id="tokenAgentId" placeholder="e.g. hermes-agent">
+        </div>
+        <div>
+          <label class="login-label" for="tokenLabel">Label</label>
+          <input class="login-input" type="text" id="tokenLabel" placeholder="e.g. Hermes Production">
+        </div>
+      </div>
+      <div style="margin-bottom:12px">
+        <label class="login-label" for="tokenExpiry">Expiry (optional, ISO datetime or blank)</label>
+        <input class="login-input" type="text" id="tokenExpiry" placeholder="e.g. 2026-12-31T00:00:00Z">
+      </div>
+      <div class="login-error" id="tokenCreateError" style="margin-bottom:12px"></div>
+      <button class="btn-primary" id="btnCreateToken" onclick="submitCreateToken()">Generate Token</button>
+    </div>
+  </div>
+</div>
+
 <div class="app" id="app">
   <!-- Header -->
   <div class="header">
     <div class="header-row">
-      <span class="header-title" id="headerTitle"><img src="valhuntir-icon.png" alt="" style="height:24px;vertical-align:middle;margin-right:6px">Valhuntir — Examiner Portal</span>
+      <span class="header-title" id="headerTitle"><img src="agentir-icon.png" alt="" style="height:24px;vertical-align:middle;margin-right:6px">sift-mcps — Examiner Portal</span>
       <div class="header-actions">
+        <span id="examinerName" style="margin-left:12px;font-weight:500;font-size:13px;color:var(--text-secondary)"></span>
+        <span id="roleBadge" style="margin-left:8px;font-size:11px;padding:2px 6px;border-radius:4px;display:none;background:#d97706;color:white;font-weight:600">READONLY</span>
+        
+        <button id="btnNewCase" style="display:none" onclick="openNewCaseModal()">New Case</button>
+        <button id="btnAgentTokens" style="display:none" onclick="openAgentTokensModal()">Agent Tokens</button>
+        <button id="btnSignOut" onclick="submitSignOut()">Sign out</button>
+
         <button id="btnRefresh" title="Refresh findings">&#8635; Refresh</button>
         <span id="refreshBadge" class="refresh-badge" style="display:none"></span>
         <button id="btnShortcuts" title="Keyboard shortcuts">?</button>
@@ -746,7 +975,7 @@ body {
     <button id="commitBtn" class="btn-primary" onclick="openCommitDialog()"
       style="font-size:12px;padding:4px 12px" disabled>Commit</button>
     <span id="footerHint" style="font-size:11px;color:var(--text-muted)">
-      Or terminal: <code>vhir approve --review</code></span>
+      Or use the portal commit button</span>
     <span id="footerShortcuts" style="cursor:pointer">? Shortcuts</span>
   </div>
 </div>
@@ -822,7 +1051,8 @@ body {
 
 <script>
 /* === State === */
-let token = null;
+let currentExaminer = null;
+let currentRole = null;
 let findings = [];
 let delta = { version: 1, case_id: '', items: [] };
 let caseMeta = {};
@@ -864,25 +1094,11 @@ let timelineFilter = 'pending';
 let timelineTypeFilter = '';
 let batchTimelineSelected = new Set();
 
-/* === Token extraction === */
-(function extractToken() {
-  const hash = window.location.hash;
-  if (hash.startsWith('#token=')) {
-    token = hash.slice(7).split('&')[0];
-    try { sessionStorage.setItem('vhir_dashboard_token', token); } catch (e) {}
-    history.replaceState(null, '', window.location.pathname + window.location.search);
-  } else {
-    try { token = sessionStorage.getItem('vhir_dashboard_token'); } catch (e) {}
-  }
-})();
-
 /* === API helpers === */
 var API_BASE = window.location.pathname.replace(/\/+$/, '');
 
 function apiHeaders() {
-  const h = { 'Content-Type': 'application/json' };
-  if (token) h['Authorization'] = 'Bearer ' + token;
-  return h;
+  return { 'Content-Type': 'application/json' };
 }
 
 async function apiFetch(path, opts) {
@@ -892,6 +1108,10 @@ async function apiFetch(path, opts) {
     const headers = apiHeaders();
     if (opts && opts.headers) Object.assign(headers, opts.headers);
     const res = await fetch(API_BASE + path, { ...opts, headers, signal: controller.signal });
+    if (res.status === 401) {
+      showLoginScreen();
+      throw new Error('Unauthorized');
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || res.statusText);
@@ -899,6 +1119,371 @@ async function apiFetch(path, opts) {
     return res.json();
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/* === Auth & Session Management === */
+async function checkSession() {
+  try {
+    const me = await apiFetch('/api/auth/me');
+    currentExaminer = me.examiner;
+    currentRole = me.role;
+    showApp();
+    await loadAll();
+  } catch (e) {
+    showLoginScreen();
+  }
+}
+
+async function showLoginScreen() {
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('loginScreen').style.display = '';
+  document.getElementById('loginError').style.display = 'none';
+  document.getElementById('loginPassword').value = '';
+  
+  try {
+    const req = await apiFetch('/api/auth/setup-required');
+    if (req.required) {
+      document.getElementById('setupLink').style.display = '';
+    } else {
+      document.getElementById('setupLink').style.display = 'none';
+    }
+  } catch (e) {
+    console.error('Failed to check setup requirement:', e);
+  }
+}
+
+function showApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('app').style.display = '';
+  
+  if (currentExaminer) {
+    document.getElementById('examinerName').textContent = currentExaminer;
+    document.getElementById('examinerName').style.display = '';
+  } else {
+    document.getElementById('examinerName').style.display = 'none';
+  }
+  
+  const roleEl = document.getElementById('roleBadge');
+  if (currentRole === 'readonly') {
+    roleEl.textContent = 'READONLY';
+    roleEl.style.display = '';
+    document.getElementById('btnNewCase').style.display = 'none';
+    document.getElementById('btnAgentTokens').style.display = 'none';
+  } else {
+    roleEl.style.display = 'none';
+    document.getElementById('btnNewCase').style.display = '';
+    document.getElementById('btnAgentTokens').style.display = '';
+  }
+}
+
+async function submitLogin() {
+  const examiner = document.getElementById('loginExaminer').value.trim();
+  const pw = document.getElementById('loginPassword').value;
+  const errEl = document.getElementById('loginError');
+  errEl.style.display = 'none';
+
+  if (!examiner || !pw) {
+    errEl.textContent = 'Name and password required.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true;
+  try {
+    const challenge = await apiFetch('/api/auth/challenge?examiner=' + encodeURIComponent(examiner));
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']
+    );
+    const salt = hexToBytes(challenge.salt);
+    const derivedBits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: salt, iterations: challenge.iterations,
+        hash: challenge.hash_algorithm },
+      keyMaterial, 256
+    );
+
+    const hmacKey = await crypto.subtle.importKey(
+      'raw', derivedBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const sig = await crypto.subtle.sign('HMAC', hmacKey, enc.encode(challenge.nonce));
+    const response = bytesToHex(new Uint8Array(sig));
+
+    const result = await apiFetch('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        challenge_id: challenge.challenge_id,
+        examiner: examiner,
+        response: response,
+      }),
+    });
+
+    currentExaminer = result.examiner;
+    currentRole = result.role;
+    showApp();
+    await loadAll();
+  } catch (e) {
+    errEl.textContent = e.message || 'Login failed';
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function submitSetup() {
+  const examiner = document.getElementById('setupExaminer').value.trim();
+  const pw = document.getElementById('setupPassword').value;
+  const confirmPw = document.getElementById('setupConfirmPassword').value;
+  const errEl = document.getElementById('setupError');
+  errEl.style.display = 'none';
+
+  if (!examiner || !pw || !confirmPw) {
+    errEl.textContent = 'All fields required.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (pw !== confirmPw) {
+    errEl.textContent = 'Passwords do not match.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (pw.length < 8) {
+    errEl.textContent = 'Password must be at least 8 characters.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  try {
+    await apiFetch('/api/auth/setup', {
+      method: 'POST',
+      body: JSON.stringify({
+        examiner: examiner,
+        password: pw,
+      }),
+    });
+    hideSetupForm();
+    document.getElementById('loginExaminer').value = examiner;
+    document.getElementById('loginPassword').value = '';
+    const loginErr = document.getElementById('loginError');
+    loginErr.textContent = 'Account created successfully! Please sign in.';
+    loginErr.style.color = 'var(--text-secondary)';
+    loginErr.style.display = 'block';
+  } catch (e) {
+    errEl.textContent = e.message || 'Setup failed';
+    errEl.style.display = 'block';
+  }
+}
+
+function showSetupForm() {
+  document.getElementById('loginForm').style.display = 'none';
+  document.getElementById('setupForm').style.display = '';
+  document.getElementById('setupError').style.display = 'none';
+}
+
+function hideSetupForm() {
+  document.getElementById('setupForm').style.display = 'none';
+  document.getElementById('loginForm').style.display = '';
+  document.getElementById('loginError').style.display = 'none';
+  document.getElementById('loginError').style.color = 'var(--red)';
+}
+
+async function submitSignOut() {
+  try {
+    await apiFetch('/api/auth/logout', { method: 'POST' });
+  } catch (e) {
+    console.error('Logout error:', e);
+  }
+  currentExaminer = null;
+  currentRole = null;
+  showLoginScreen();
+}
+
+/* === Case Creation Management === */
+function updateNewCaseDir() {
+  const caseId = document.getElementById('newCaseId').value.trim();
+  document.getElementById('newCaseDir').value = caseId ? ('/cases/' + caseId) : '';
+}
+
+function openNewCaseModal() {
+  document.getElementById('newCaseId').value = '';
+  document.getElementById('newCaseTitle').value = '';
+  document.getElementById('newCaseDir').value = '';
+  document.getElementById('newCaseError').style.display = 'none';
+  document.getElementById('newCaseModal').classList.add('visible');
+  document.getElementById('newCaseModal').style.display = 'flex';
+}
+
+function closeNewCaseModal() {
+  document.getElementById('newCaseModal').classList.remove('visible');
+  document.getElementById('newCaseModal').style.display = 'none';
+}
+
+async function submitCreateCase() {
+  const caseId = document.getElementById('newCaseId').value.trim();
+  const title = document.getElementById('newCaseTitle').value.trim();
+  const directory = document.getElementById('newCaseDir').value.trim();
+  const errorEl = document.getElementById('newCaseError');
+  errorEl.style.display = 'none';
+
+  if (!caseId || !title || !directory) {
+    errorEl.textContent = 'All fields are required.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  const caseIdPattern = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+  if (!caseIdPattern.test(caseId)) {
+    errorEl.textContent = 'Case ID must start with lowercase letter/digit, contain only lowercase alnum, hyphens, or underscores, and be 1-40 characters.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  const btn = document.getElementById('btnCreateCase');
+  btn.disabled = true;
+  try {
+    await apiFetch('/api/case/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        case_id: caseId,
+        title: title,
+        dir: directory,
+      }),
+    });
+    closeNewCaseModal();
+    showToast('Case created successfully: ' + caseId, 'success');
+    await loadAll();
+  } catch (e) {
+    errorEl.textContent = e.message || 'Failed to create case';
+    errorEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* === Agent Service Tokens Management === */
+function openAgentTokensModal() {
+  document.getElementById('tokenAgentId').value = '';
+  document.getElementById('tokenLabel').value = '';
+  document.getElementById('tokenExpiry').value = '';
+  document.getElementById('tokenCreateError').style.display = 'none';
+  document.getElementById('newTokenDisplay').style.display = 'none';
+  document.getElementById('newTokenValue').textContent = '';
+  document.getElementById('agentTokensModal').classList.add('visible');
+  document.getElementById('agentTokensModal').style.display = 'flex';
+  loadAgentTokens();
+}
+
+function closeAgentTokensModal() {
+  document.getElementById('agentTokensModal').classList.remove('visible');
+  document.getElementById('agentTokensModal').style.display = 'none';
+}
+
+async function loadAgentTokens() {
+  const tbody = document.getElementById('tokenListBody');
+  tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:12px;color:var(--text-muted)">Loading...</td></tr>';
+  try {
+    const res = await apiFetch('/api/tokens');
+    tbody.innerHTML = '';
+    const tokens = res.tokens || [];
+    if (tokens.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:12px;color:var(--text-muted)">No active agent tokens.</td></tr>';
+      return;
+    }
+    tokens.forEach(function(t) {
+      const tr = document.createElement('tr');
+      tr.style.borderBottom = '1px solid var(--border)';
+      const expiryText = t.expires_at ? new Date(t.expires_at).toLocaleString() : 'Never';
+      tr.innerHTML = `
+        <td style="padding:6px;font-family:monospace">${escapeHtml(t.agent_id)}</td>
+        <td style="padding:6px">${escapeHtml(t.label)}</td>
+        <td style="padding:6px">${expiryText}</td>
+        <td style="padding:6px;text-align:right">
+          <button class="btn-primary" style="padding:2px 8px;font-size:11px;margin-right:4px;background:#d97706;border-color:#d97706" onclick="rotateAgentToken('${escapeHtml(t.token_id)}')">Rotate</button>
+          <button class="btn-cancel" style="padding:2px 8px;font-size:11px;background:var(--red);color:white;border-color:var(--red)" onclick="revokeAgentToken('${escapeHtml(t.token_id)}')">Revoke</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:12px;color:var(--red)">${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function submitCreateToken() {
+  const agentId = document.getElementById('tokenAgentId').value.trim();
+  const label = document.getElementById('tokenLabel').value.trim();
+  const expiry = document.getElementById('tokenExpiry').value.trim();
+  const errorEl = document.getElementById('tokenCreateError');
+  errorEl.style.display = 'none';
+
+  if (!agentId || !label) {
+    errorEl.textContent = 'Agent ID and Label are required.';
+    errorEl.style.display = 'block';
+    return;
+  }
+
+  const btn = document.getElementById('btnCreateToken');
+  btn.disabled = true;
+  try {
+    const payload = {
+      agent_id: agentId,
+      label: label,
+      role: 'agent',
+    };
+    if (expiry) {
+      payload.expires_at = expiry;
+    }
+    const result = await apiFetch('/api/tokens', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    document.getElementById('newTokenValue').textContent = result.token;
+    document.getElementById('newTokenDisplay').style.display = 'block';
+    document.getElementById('tokenAgentId').value = '';
+    document.getElementById('tokenLabel').value = '';
+    document.getElementById('tokenExpiry').value = '';
+    await loadAgentTokens();
+  } catch (e) {
+    errorEl.textContent = e.message || 'Failed to create token';
+    errorEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function revokeAgentToken(tokenId) {
+  if (!confirm('Are you sure you want to revoke this agent token? Any active agent using this token will be disconnected immediately.')) {
+    return;
+  }
+  try {
+    await apiFetch('/api/tokens/' + encodeURIComponent(tokenId), {
+      method: 'DELETE',
+    });
+    showToast('Token revoked successfully', 'success');
+    await loadAgentTokens();
+  } catch (e) {
+    alert('Failed to revoke token: ' + e.message);
+  }
+}
+
+async function rotateAgentToken(tokenId) {
+  if (!confirm('Are you sure you want to rotate this token? The old token will be revoked immediately and a new one will be displayed.')) {
+    return;
+  }
+  try {
+    const result = await apiFetch('/api/tokens/' + encodeURIComponent(tokenId) + '/rotate', {
+      method: 'POST',
+    });
+    document.getElementById('newTokenValue').textContent = result.token;
+    document.getElementById('newTokenDisplay').style.display = 'block';
+    showToast('Token rotated successfully', 'success');
+    await loadAgentTokens();
+  } catch (e) {
+    alert('Failed to rotate token: ' + e.message);
+  }
+}
+
   }
 }
 
@@ -931,8 +1516,8 @@ async function loadAll() {
     delta = d && d.items ? d : { version: 1, case_id: '', items: [] };
     caseMeta = c || {};
     if (caseMeta.case_id) {
-      document.getElementById('headerTitle').innerHTML = '<img src="valhuntir-icon.png" alt="" style="height:24px;vertical-align:middle;margin-right:6px">Valhuntir \u2014 ' + escapeHtml(caseMeta.case_id);
-      document.title = 'Valhuntir \u2014 ' + caseMeta.case_id;
+      document.getElementById('headerTitle').innerHTML = '<img src="agentir-icon.png" alt="" style="height:24px;vertical-align:middle;margin-right:6px">sift-mcps \u2014 ' + escapeHtml(caseMeta.case_id);
+      document.title = 'sift-mcps \u2014 ' + caseMeta.case_id;
       if (!delta.case_id) delta.case_id = caseMeta.case_id;
     }
     // Prune stale ids from batch selections so the toolbar count
@@ -992,7 +1577,7 @@ function showEmptyOrFirst() {
     });
     if (allReviewed && currentFilter === 'pending') {
       document.getElementById('emptyState').innerHTML =
-        '<h2>No pending findings remaining</h2><p>Run <code>vhir approve --review</code> in your terminal to commit.</p>';
+        '<h2>No pending findings remaining</h2><p>Click the "Commit Approved" button below to commit your reviews.</p>';
     } else {
       document.getElementById('emptyState').innerHTML =
         '<h2>No findings match current filter</h2><p>Try changing the filter or search.</p>';
@@ -1834,7 +2419,7 @@ async function submitCommit() {
     updateCommitButton();
     showToast('Committed: ' + (result.approved || 0) + ' approved, ' +
       (result.rejected || 0) + ' rejected, ' + (result.edited || 0) + ' edited', 'success');
-    try { localStorage.setItem('vhir-has-committed', 'true'); } catch(_) {}
+    try { localStorage.setItem('agentir-has-committed', 'true'); } catch(_) {}
     _commitInProgress = false;
 
   } catch (e) {
@@ -2469,14 +3054,14 @@ function formatTimeShort(iso) {
 /* === Theme === */
 function initTheme() {
   var saved;
-  try { saved = localStorage.getItem('vhir-theme'); } catch(_) {}
+  try { saved = localStorage.getItem('agentir-theme'); } catch(_) {}
   if (saved === 'light') document.body.classList.add('light');
   updateThemeButton();
 }
 
 function toggleTheme() {
   document.body.classList.toggle('light');
-  try { localStorage.setItem('vhir-theme', document.body.classList.contains('light') ? 'light' : 'dark'); } catch(_) {}
+  try { localStorage.setItem('agentir-theme', document.body.classList.contains('light') ? 'light' : 'dark'); } catch(_) {}
   updateThemeButton();
 }
 
@@ -2798,7 +3383,7 @@ function renderDashboard(summary) {
     if (caseMeta.description) html += '<p style="font-size:13px;color:var(--text-secondary);margin:0 0 12px">' + escapeHtml(caseMeta.description) + '</p>';
   } else {
     html += '<h2 style="margin:0 0 8px;font-size:20px;color:var(--text-muted)">No active case</h2>';
-    html += '<p style="color:var(--text-muted);font-size:13px">Open a case with <code>vhir case activate</code> or create one with <code>vhir case init</code>.</p>';
+    html += '<p style="color:var(--text-muted);font-size:13px">Open or create a case in the Examiner Portal.</p>';
   }
 
   // === TWO-PANEL LAYOUT ===
@@ -2855,11 +3440,11 @@ function renderDashboard(summary) {
 
   // --- RIGHT PANEL: Getting Started ---
   html += '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary)">';
-  html += '<div style="font-weight:600;font-size:15px;margin-bottom:10px;color:var(--text-primary)">Welcome to Valhuntir</div>';
+  html += '<div style="font-weight:600;font-size:15px;margin-bottom:10px;color:var(--text-primary)">Welcome to sift-mcps</div>';
 
   // --- Intro ---
   html += '<div style="margin-bottom:14px">';
-  html += 'Valhuntir is an AI-assisted incident response platform. An AI analyst investigates using forensic tools on your SIFT and Windows workstations, recording what it finds as structured findings and timeline events. <strong>You are the examiner</strong> \u2014 the human authority who reviews, corrects, and approves the AI\u2019s work before anything appears in a report.';
+  html += 'sift-mcps is an AI-assisted incident response platform. An AI analyst investigates using forensic tools on your SIFT and Windows workstations, recording what it finds as structured findings and timeline events. <strong>You are the examiner</strong> \u2014 the human authority who reviews, corrects, and approves the AI\u2019s work before anything appears in a report.';
   html += '</div>';
 
   // --- How It Works (always visible) ---
@@ -2888,7 +3473,7 @@ function renderDashboard(summary) {
   // --- Evidence & Trust ---
   html += '<details style="margin-bottom:8px"><summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--text-primary)">Evidence & Trust</summary>';
   html += '<div style="margin-top:8px;font-size:12px;line-height:1.7">';
-  html += '<div style="margin-bottom:6px">Valhuntir is designed so you never have to take the AI\u2019s word for anything:</div>';
+  html += '<div style="margin-bottom:6px">sift-mcps is designed so you never have to take the AI\u2019s word for anything:</div>';
   html += '<div style="margin-bottom:4px"><strong>Provenance chain</strong> \u2014 every finding links back to the evidence files and tool executions that produced it. The chain panel on each finding shows: which evidence file was input, which tool processed it, and what output was extracted. You can trace any claim back to its source</div>';
   html += '<div style="margin-bottom:4px"><strong>Audit trail</strong> \u2014 every tool execution, finding record, and approval decision is logged with timestamps and the examiner identity. The AI cannot modify or delete audit entries</div>';
   html += '<div style="margin-bottom:4px"><strong>Content hashing</strong> \u2014 findings are hashed at creation. If a finding is modified after you reviewed it, the hash changes and the approval is flagged as stale</div>';
@@ -2897,13 +3482,13 @@ function renderDashboard(summary) {
   html += '</div></details>';
 
   // --- The Platform ---
-  html += '<details style="margin-bottom:8px"><summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--text-primary)">The Valhuntir Platform</summary>';
+  html += '<details style="margin-bottom:8px"><summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--text-primary)">The sift-mcps Platform</summary>';
   html += '<div style="margin-top:8px;font-size:12px;line-height:1.7">';
   html += '<div style="margin-bottom:6px">The Examiner Portal is one part of a larger system:</div>';
   html += '<div style="margin-bottom:4px"><strong>SIFT Gateway</strong> \u2014 runs on your SIFT workstation. Hosts 7 MCP backends: forensic tools, case management, report generation, knowledge search, threat intelligence, and more</div>';
   html += '<div style="margin-bottom:4px"><strong>Windows Tools</strong> \u2014 if connected, runs Zimmerman tools and Hayabusa on a Windows VM for artifact parsing that requires Windows</div>';
   html += '<div style="margin-bottom:4px"><strong>LLM Client</strong> \u2014 any MCP-compatible AI client (Claude Code, Goose, Cursor, etc.) connects to the gateway and drives the investigation. The platform is LLM-agnostic</div>';
-  html += '<div style="margin-bottom:4px"><strong>vhir CLI</strong> \u2014 your command-line tool for case management, approval, backup, and reporting. Everything you can do in the Examiner Portal, you can also do from the terminal with <code>vhir approve --review</code>, <code>vhir case status</code>, <code>vhir backup</code></div>';
+  html += '<div style="margin-bottom:4px"><strong>agentir CLI</strong> \u2014 your command-line tool for case management, approval, backup, and reporting. Everything you can do in the Examiner Portal, you can also do from the terminal with <code>agentir approve --review</code>, <code>agentir case status</code>, <code>agentir backup</code></div>';
   html += '<div><strong>Reports</strong> \u2014 once findings are committed, generate professional IR reports: full, executive summary, timeline-only, IOC-only, or status updates</div>';
   html += '</div></details>';
 
@@ -3567,7 +4152,7 @@ function renderTimeline() {
   }
   if (filtered.length === 0) {
     var msg = timelineFilter === 'pending'
-      ? 'No pending events remaining. Run <code>vhir approve --review</code> to apply.'
+      ? 'No pending events remaining. Click the "Commit Approved" button below to apply.'
       : 'No events match current filters.';
     container.innerHTML = '<div class="tl-empty"><h2>' + msg + '</h2></div>';
     updateTimelineSummary();
@@ -3975,7 +4560,7 @@ document.getElementById('timelineTypeFilter').addEventListener('change', functio
   var handle = document.getElementById('sidebarResize');
   var sidebar = document.querySelector('.sidebar');
   if (!handle || !sidebar) return;
-  var savedW = localStorage.getItem('vhir-sidebar-width');
+  var savedW = localStorage.getItem('agentir-sidebar-width');
   if (savedW) sidebar.style.width = savedW + 'px';
   var startX, startW;
   handle.addEventListener('mousedown', function(e) {
@@ -3998,13 +4583,14 @@ document.getElementById('timelineTypeFilter').addEventListener('change', functio
     document.body.style.userSelect = '';
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
-    try { localStorage.setItem('vhir-sidebar-width', sidebar.offsetWidth); } catch(_) {}
+    try { localStorage.setItem('agentir-sidebar-width', sidebar.offsetWidth); } catch(_) {}
   }
 })();
 
 /* === Init === */
 initTheme();
-loadAll();
+checkSession();
+
 
 // Auto-refresh every 15s — skip if loading, dialog open, or editing
 setInterval(function() {

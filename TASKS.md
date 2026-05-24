@@ -631,71 +631,71 @@ All test suites verified passing in Session 3:
 
 ### 14a. Namespace / branding cleanup
 
-- [ ] Title: `Valhuntir — Examiner Portal` → `sift-mcps — Examiner Portal`
-- [ ] Header title HTML: `Valhuntir — ` → `sift-mcps — `
-- [ ] Icon `src`: `valhuntir-icon.png` → `agentir-icon.png`
-- [ ] Rename icon file: `static/v2/valhuntir-icon.png` → `static/v2/agentir-icon.png`
-- [ ] localStorage key: `vhir-theme` → `agentir-theme` (replace_all)
-- [ ] localStorage key: `vhir-sidebar-width` → `agentir-sidebar-width`
-- [ ] localStorage key: `vhir-has-committed` → `agentir-has-committed`
-- [ ] All occurrences of `vhir approve --review` → remove or replace with "use the portal commit button"
-- [ ] `vhir case activate` / `vhir case init` references → replace with portal UI instructions
-- [ ] Help text "Valhuntir is an AI-assisted..." → update to sift-mcps branding
-- [ ] "vhir CLI" reference in help → "agentir CLI"
-- [ ] Smoke test: `grep -c "vhir\|valhuntir\|Valhuntir" index.html` → 0 (case-insensitive)
+- [x] Title: `Valhuntir — Examiner Portal` → `sift-mcps — Examiner Portal`
+- [x] Header title HTML: `Valhuntir — ` → `sift-mcps — `
+- [x] Icon `src`: `valhuntir-icon.png` → `agentir-icon.png`
+- [x] Rename icon file: `static/v2/valhuntir-icon.png` → `static/v2/agentir-icon.png`
+- [x] localStorage key: `vhir-theme` → `agentir-theme` (replace_all)
+- [x] localStorage key: `vhir-sidebar-width` → `agentir-sidebar-width`
+- [x] localStorage key: `vhir-has-committed` → `agentir-has-committed`
+- [x] All occurrences of `vhir approve --review` → remove or replace with "use the portal commit button"
+- [x] `vhir case activate` / `vhir case init` references → replace with portal UI instructions
+- [x] Help text "Valhuntir is an AI-assisted..." → update to sift-mcps branding
+- [x] "vhir CLI" reference in help → "agentir CLI"
+- [x] Smoke test: `grep -c "vhir\|valhuntir\|Valhuntir" index.html` → 0 (case-insensitive)
 
 ### 14b. Auth flow rewiring
 
-- [ ] Remove `extractToken()` IIFE (the `#token=` URL hash extraction block)
-- [ ] Remove `sessionStorage.setItem('vhir_dashboard_token', ...)` and `getItem` calls
-- [ ] Remove `token` variable declaration and all `if (token)` Bearer injection in `apiHeaders()`
-- [ ] `apiFetch`: remove `Authorization` header injection; keep `Content-Type`
-- [ ] `apiFetch` error handler: on 401 → call `showLoginScreen()` instead of throwing
-- [ ] Add `currentExaminer` and `currentRole` module-level variables
-- [ ] On page load: call `checkSession()` first; on success `showApp()`; on 401 `showLoginScreen()`
-- [ ] `checkSession()`: `GET /api/auth/me` → set `currentExaminer`, `currentRole`
+- [x] Remove `extractToken()` IIFE (the `#token=` URL hash extraction block)
+- [x] Remove `sessionStorage.setItem('vhir_dashboard_token', ...)` and `getItem` calls
+- [x] Remove `token` variable declaration and all `if (token)` Bearer injection in `apiHeaders()`
+- [x] `apiFetch`: remove `Authorization` header injection; keep `Content-Type`
+- [x] `apiFetch` error handler: on 401 → call `showLoginScreen()` instead of throwing
+- [x] Add `currentExaminer` and `currentRole` module-level variables
+- [x] On page load: call `checkSession()` first; on success `showApp()`; on 401 `showLoginScreen()`
+- [x] `checkSession()`: `GET /api/auth/me` → set `currentExaminer`, `currentRole`
 
 ### 14c. Login screen HTML + CSS
 
-- [ ] Add `<div id="loginScreen" style="display:none">` section with:
+- [x] Add `<div id="loginScreen" style="display:none">` section with:
   - sift-mcps branding (title, subtitle)
   - Examiner name input `#loginExaminer`
   - Password input `#loginPassword`
   - Sign in button `#loginBtn`
   - Error message area `#loginError`
   - "First run? Set up your account" link (shown when `setup-required` returns true)
-- [ ] Style: centered card, matches existing dark/light theme variables, no external CSS
+- [x] Style: centered card, matches existing dark/light theme variables, no external CSS
 
 ### 14d. Login JS flow
 
-- [ ] `showLoginScreen()`: hides main app, shows `#loginScreen`; checks `GET /api/auth/setup-required`, shows setup link if needed
-- [ ] `showApp()`: hides `#loginScreen`, shows main app; updates header examiner name + role badge
-- [ ] Login submit handler:
+- [x] `showLoginScreen()`: hides main app, shows `#loginScreen`; checks `GET /api/auth/setup-required`, shows setup link if needed
+- [x] `showApp()`: hides `#loginScreen`, shows main app; updates header examiner name + role badge
+- [x] Login submit handler:
   1. `GET /api/auth/challenge?examiner=<name>` → `{challenge_id, nonce, salt, iterations}`
   2. `PBKDF2` via `SubtleCrypto.importKey` + `deriveKey` (SHA-256, 600000 iterations)
   3. `HMAC-SHA256` via `SubtleCrypto.sign(...)` on the nonce
   4. `POST /api/auth/login` → `{challenge_id, examiner, response: hex(hmac)}`
   5. On success: `showApp()` + `loadAll()`
   6. On error: show `#loginError` message
-- [ ] First-run setup flow: separate form (examiner name + password + confirm); `POST /api/auth/setup`
+- [x] First-run setup flow: separate form (examiner name + password + confirm); `POST /api/auth/setup`
 
 ### 14e. Header additions
 
-- [ ] Add examiner name display span in header (updated by `showApp()`)
-- [ ] Add role badge: hidden for examiner, visible (styled amber) for readonly
-- [ ] Add "Sign out" button → `POST /api/auth/logout` → `showLoginScreen()`
-- [ ] "New Case" button (examiner only) → opens case init modal (Phase 14f)
-- [ ] "Agent Tokens" button (examiner only) → opens service-token management UI
+- [x] Add examiner name display span in header (updated by `showApp()`)
+- [x] Add role badge: hidden for examiner, visible (styled amber) for readonly
+- [x] Add "Sign out" button → `POST /api/auth/logout` → `showLoginScreen()`
+- [x] "New Case" button (examiner only) → opens case init modal (Phase 14f)
+- [x] "Agent Tokens" button (examiner only) → opens service-token management UI
 
 ### 14f. Case init modal
 
-- [ ] Add `<div id="newCaseModal">` with:
+- [x] Add `<div id="newCaseModal">` with:
   - Case ID input (validated: `[a-z0-9_-]+`)
   - Title input
   - Directory input (pre-populated as `/cases/<case-id>`)
   - Create button → `POST /portal/api/case/create` (portal routes.py — NOT gateway rest.py)
   - Status/error display
-- [ ] Backend (`routes.py`): `POST /portal/api/case/create` (examiner auth via cookie session):
+- [x] Backend (`routes.py`): `POST /portal/api/case/create` (examiner auth via cookie session):
   - **Decision (Session 22):** in `routes.py`, not `rest.py`. Uses `_require_examiner_role()`,
     `must_reset` re-read, `_resolve_examiner()` — all already available in routes.py.
     Avoids circular cross-package dep (case-dashboard → sift-gateway) that `rest.py` placement
@@ -712,18 +712,18 @@ All test suites verified passing in Session 3:
   - Sets `AGENTIR_CASE_DIR` in `os.environ` inside the lock
   - Signals backends to reload via gateway reference from portal app state
   - Returns `{ok: true, case_dir: "..."}`
-- [ ] Test: **R5** symlink pointing outside case_root → 400
-- [ ] Test: **R5** two simultaneous requests → one 200, one 409 (not both succeed or crash)
-- [ ] Test: no session / wrong role / must_reset → 401/403
-- [ ] On success: close modal, reload dashboard data
+- [x] Test: **R5** symlink pointing outside case_root → 400
+- [x] Test: **R5** two simultaneous requests → one 200, one 409 (not both succeed or crash)
+- [x] Test: no session / wrong role / must_reset → 401/403
+- [x] On success: close modal, reload dashboard data
 
 ### 14g. Agent token management UI
 
-- [ ] List service token metadata without raw token values
-- [ ] Create token form: label, `agent_id`, optional expiry
-- [ ] Show created/rotated raw token exactly once
-- [ ] Revoke/rotate actions require examiner role and password/HMAC confirmation
-- [ ] Show last-used timestamp/IP if available
+- [x] List service token metadata without raw token values
+- [x] Create token form: label, `agent_id`, optional expiry
+- [x] Show created/rotated raw token exactly once
+- [x] Revoke/rotate actions require examiner role and password/HMAC confirmation
+- [x] Show last-used timestamp/IP if available
 
 ---
 

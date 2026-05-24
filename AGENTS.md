@@ -344,8 +344,3 @@ uv run python -c "from case_mcp.server import create_server; print('OK')"
 uv run python -c "from agentir_core.case_io import get_case_dir; print('OK')"
 uv run python -c "from agentir_core.approval_auth import verify_password; print('OK')"
 ```
-
-<!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan
-<!-- SPECKIT END -->

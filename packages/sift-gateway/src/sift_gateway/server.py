@@ -175,6 +175,13 @@ class Gateway:
         self._tool_map.clear()
         self._tool_cache.clear()
 
+    async def restart_backends(self) -> None:
+        """Stop and restart all backends to reload active case."""
+        logger.info("Restarting all MCP backends...")
+        await self.stop()
+        await self.start()
+
+
     async def _build_tool_map(self) -> None:
         """Build a map from tool names to backend names.
 
@@ -631,6 +638,14 @@ class Gateway:
             portal_cfg = self.config.get("portal", {})
             portal_secret: str = portal_cfg.get("session_secret", "")
             portal_max_age: int = int(portal_cfg.get("session_max_age", 28800))
+            # Resolve the gateway config path for token lifecycle endpoints.
+            # Use AGENTIR_GATEWAY_CONFIG env var if set, otherwise the
+            # conventional ~/.agentir/gateway.yaml that rest.py uses.
+            import os as _os
+            from pathlib import Path as _Path
+            _gw_config_path: str | None = _os.environ.get("AGENTIR_GATEWAY_CONFIG") or str(
+                _Path.home() / ".agentir" / "gateway.yaml"
+            )
             routes.append(
                 Mount(
                     "/portal",
@@ -638,6 +653,7 @@ class Gateway:
                         session_secret=portal_secret,
                         session_max_age=portal_max_age,
                         api_keys=api_keys,
+                        gateway_config_path=_gw_config_path,
                     ),
                 )
             )
