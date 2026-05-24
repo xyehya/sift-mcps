@@ -14,10 +14,18 @@ import hmac
 import logging
 from datetime import datetime, timezone
 
+import time
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from case_dashboard.session_jwt import COOKIE_NAME, verify_jwt
+from case_dashboard.session_jwt import (
+    COOKIE_NAME,
+    COOKIE_PATH,
+    COOKIE_SAME_SITE,
+    verify_jwt,
+    generate_jwt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +67,11 @@ class PortalSessionMiddleware(BaseHTTPMiddleware):
       3. Neither → examiner=None, role=None (route handlers enforce 401)
     """
 
-    def __init__(self, app, *, session_secret: str, api_keys: dict):
+    def __init__(self, app, *, session_secret: str, api_keys: dict, session_max_age: int = 28800):
         super().__init__(app)
         self._session_secret = session_secret
         self._api_keys = api_keys
+        self._session_max_age = session_max_age
 
     async def dispatch(self, request: Request, call_next):
         # 1. Cookie-based JWT auth
@@ -72,7 +81,37 @@ class PortalSessionMiddleware(BaseHTTPMiddleware):
             if payload is not None:
                 request.state.examiner = payload.get("sub")
                 request.state.role = payload.get("role", "examiner")
-                return await call_next(request)
+
+                # Sliding session refresh check
+                now = int(time.time())
+                exp = payload.get("exp", 0)
+                iat = payload.get("iat", 0)
+                
+                # Refresh if >10% elapsed (exp - now < max_age * 0.9)
+                # and at least 5 minutes (300s) have passed since iat to avoid churn
+                should_refresh = False
+                if exp - now < self._session_max_age * 0.9 and now - iat > 300:
+                    should_refresh = True
+
+                response = await call_next(request)
+
+                if should_refresh:
+                    new_token = generate_jwt(
+                        sub=request.state.examiner,
+                        role=request.state.role,
+                        secret=self._session_secret,
+                        max_age=self._session_max_age,
+                    )
+                    response.set_cookie(
+                        COOKIE_NAME,
+                        new_token,
+                        max_age=self._session_max_age,
+                        path=COOKIE_PATH,
+                        httponly=True,
+                        secure=True,
+                        samesite=COOKIE_SAME_SITE,
+                    )
+                return response
 
         # 2. Bearer token fallback — examiner role only
         auth_header = request.headers.get("authorization", "")

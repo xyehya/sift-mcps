@@ -10,6 +10,7 @@ import anyio
 from mcp.types import Tool
 from sift_common.audit import AuditWriter
 from starlette.applications import Starlette
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import PlainTextResponse
 from starlette.routing import Mount
@@ -37,6 +38,29 @@ class _PortalHTTPSGuard:
             await resp(scope, receive, send)
             return
         await self.app(scope, receive, send)
+
+
+class SecureHeadersMiddleware(BaseHTTPMiddleware):
+    """Enforce security headers on all responses, and portal-specific CSP."""
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+
+        content_type = response.headers.get("content-type", "")
+        if "text/html" in content_type:
+            path = request.url.path
+            if path.startswith("/portal") or path.startswith("/dashboard"):
+                response.headers["Content-Security-Policy"] = (
+                    "default-src 'self'; "
+                    "script-src 'self' 'unsafe-inline'; "
+                    "style-src 'self' 'unsafe-inline'"
+                )
+        return response
+
 
 
 class _NormalizeMCPPath:
@@ -704,5 +728,8 @@ class Gateway:
 
         # HTTPS enforcement for portal paths (outermost — added after _NormalizeMCPPath)
         app.add_middleware(_PortalHTTPSGuard, tls_configured=tls_configured)
+
+        # Secure headers middleware (outermost — added after _PortalHTTPSGuard)
+        app.add_middleware(SecureHeadersMiddleware)
 
         return app

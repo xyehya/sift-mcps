@@ -35,6 +35,7 @@ from case_dashboard.session_jwt import (
     COOKIE_SAME_SITE,
     generate_jwt,
     verify_jwt,
+    revoke_jti,
 )
 
 logger = logging.getLogger(__name__)
@@ -1684,7 +1685,13 @@ async def post_auth_reset_password(request: Request) -> JSONResponse:
 
 
 async def post_auth_logout(request: Request) -> JSONResponse:
-    """Clear the portal session cookie."""
+    """Clear the portal session cookie and revoke the JTI."""
+    cookie_token = request.cookies.get(COOKIE_NAME)
+    if cookie_token and _SESSION_SECRET:
+        payload = verify_jwt(cookie_token, _SESSION_SECRET)
+        if payload and "jti" in payload:
+            revoke_jti(payload["jti"])
+
     resp = JSONResponse({"ok": True})
     resp.set_cookie(
         COOKIE_NAME,
@@ -2457,6 +2464,7 @@ def create_dashboard_v2_app(
                 PortalSessionMiddleware,
                 session_secret=session_secret,
                 api_keys=_API_KEYS,
+                session_max_age=session_max_age,
             ),
             Middleware(SecurityHeadersMiddleware),
         ],

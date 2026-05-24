@@ -734,31 +734,32 @@ All test suites verified passing in Session 3:
 
 ### 15a. JWT revocation on logout
 
-- [ ] `session_jwt.py`: add `_revoked_jtis: set[str]` module-level set
-- [ ] `revoke_jti(jti: str)` and `is_revoked(jti: str)` helpers
-- [ ] `verify_jwt()`: after validating signature, check `is_revoked(payload["jti"])` → return None if revoked
-- [ ] `POST /api/auth/logout`: extract `jti` from current cookie before clearing it, call `revoke_jti(jti)`
-- [ ] Test: login → get jti → logout → verify_jwt with old token returns None
+- [x] `session_jwt.py`: add `_revoked_jtis: set[str]` module-level set
+- [x] `revoke_jti(jti: str)` and `is_revoked(jti: str)` helpers
+- [x] `verify_jwt()`: after validating signature, check `is_revoked(payload["jti"])` → return None if revoked
+- [x] `POST /api/auth/logout`: extract `jti` from current cookie before clearing it, call `revoke_jti(jti)`
+- [x] Test: login → get jti → logout → verify_jwt with old token returns None
 
 ### 15b. Sliding session refresh
 
-- [ ] In `PortalSessionMiddleware`: if valid session and `exp - now < max_age * 0.9` (token is > 10% into its life), reissue new JWT cookie on the response
-- [ ] Throttle: only refresh if `now - iat > 300` (don't refresh on every request, only after 5min)
+- [x] In `PortalSessionMiddleware`: if valid session and `exp - now < max_age * 0.9` (token is > 10% into its life), reissue new JWT cookie on the response
+- [x] Throttle: only refresh if `now - iat > 300` (don't refresh on every request, only after 5min)
 
 ### 15c. Login rate limiting
 
-- [ ] Reuse `_check_commit_lockout` / `_record_commit_failure` for login endpoint too
-- [ ] `GET /api/auth/challenge`: check lockout first — return 429 if locked
-- [ ] `POST /api/auth/login`: on HMAC mismatch, call `_record_commit_failure(examiner)`; on success `_clear_commit_failures(examiner)`
-- [ ] Max 5 login failures before lockout (separate from commit failures)
+- [x] Reuse `_check_commit_lockout` / `_record_commit_failure` for login endpoint too
+- [x] `GET /api/auth/challenge`: check lockout first — return 429 if locked
+- [x] `POST /api/auth/login`: on HMAC mismatch, call `_record_commit_failure(examiner)`; on success `_clear_commit_failures(examiner)`
+- [x] Max 5 login failures before lockout (separate from commit failures)
 
 ### 15d. Secure response headers middleware
 
-- [ ] New `SecureHeadersMiddleware(BaseHTTPMiddleware)` in `sift_gateway/server.py`:
+- [x] New `SecureHeadersMiddleware(BaseHTTPMiddleware)` in `sift_gateway/server.py`:
   - Sets `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` on all responses
-  - Sets `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'` on portal HTML responses
-- [ ] Mount as outermost middleware in `create_app()`
-- [ ] Test: `curl -I https://127.0.0.1:4508/portal/` → confirm headers present
+  - Sets `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'` on portal HTML responses
+- [x] Mount as outermost middleware in `create_app()`
+- [x] Test: `curl -I https://127.0.0.1:4508/portal/` → confirm headers present
+
 
 ---
 

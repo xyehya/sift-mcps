@@ -66,11 +66,24 @@ def generate_jwt(sub: str, role: str, secret: str, max_age: int = 28800) -> str:
     return f"{signing_input}.{sig}"
 
 
+_revoked_jtis: set[str] = set()
+
+
+def revoke_jti(jti: str) -> None:
+    """Revoke a JWT by its JTI (in-memory)."""
+    _revoked_jtis.add(jti)
+
+
+def is_revoked(jti: str) -> bool:
+    """Check if a JWT has been revoked (in-memory)."""
+    return jti in _revoked_jtis
+
+
 def verify_jwt(token: str, secret: str) -> dict | None:
     """Verify a portal session JWT and return its payload.
 
     Returns the payload dict on success, None on any failure (never raises).
-    Checks: structure, HMAC-SHA256 signature (timing-safe), expiry.
+    Checks: structure, HMAC-SHA256 signature (timing-safe), expiry, revocation.
     """
     try:
         parts = token.split(".")
@@ -88,8 +101,12 @@ def verify_jwt(token: str, secret: str) -> dict | None:
         payload = json.loads(_b64url_decode(payload_b64))
         if not isinstance(payload, dict):
             return None
+        jti = payload.get("jti")
+        if jti and is_revoked(jti):
+            return None
         if payload.get("exp", 0) <= time.time():
             return None
         return payload
     except Exception:
         return None
+
