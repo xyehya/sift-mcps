@@ -1,0 +1,17 @@
+# Copy this profile to the analyst machine and replace SIFT_IP.
+# Copy the installer-generated CA certificate and set REQUESTS_CA_BUNDLE.
+
+mcp_servers:
+  sift-forensics:
+    url: "https://SIFT_IP:4508/mcp"
+    headers:
+      Authorization: "Bearer ${AGENTIR_SERVICE_TOKEN}"
+    timeout: 600
+    supports_parallel_tool_calls: true
+
+# Analyst profile .env:
+# AGENTIR_SERVICE_TOKEN=agentir_svc_<token printed by install.sh>
+# REQUESTS_CA_BUNDLE=/path/to/ca-cert.pem
+#
+# Do not configure Hermes with per-backend MCP URLs. The aggregate gateway
+# endpoint above is the only supported agent MCP entry point.

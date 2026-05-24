@@ -1,12 +1,15 @@
 services:
   opensearch:
     image: opensearchproject/opensearch:2.18.0
+    container_name: agentir-opensearch
     environment:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
       - OPENSEARCH_JAVA_OPTS=-Xms3g -Xmx3g
+      - path.repo=/usr/share/opensearch/snapshots
     volumes:
       - opensearch-data:/usr/share/opensearch/data
+      - /var/lib/agentir/snapshots:/usr/share/opensearch/snapshots
     ports:
       - "127.0.0.1:9200:9200"
     ulimits:

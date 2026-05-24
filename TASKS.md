@@ -59,7 +59,7 @@ Functional, resilience, and security tests must prove this workflow. No shortcut
    uv run python -c "from case_dashboard.routes import create_dashboard_app; print('OK')"
    uv run python -c "from case_mcp.server import create_server; print('OK')"
    ```
-6. **Next task: Phase 4e** — research `notifications/tools/list_changed` lifecycle hooks, or continue to Phase 7 if deferred.
+6. **Next task: Phase 7/8 live validation** — test installer on clean Ubuntu/SIFT VM or container and run live Docker/OpenSearch health check.
 
 ---
 
@@ -286,19 +286,19 @@ All test suites verified passing in Session 3:
 
 ## Phase 7 — Install Script
 
-- [ ] Create `/home/yk/AI/SIFTHACK/sift-mcps/install.sh`
+- [x] Create `/home/yk/AI/SIFTHACK/sift-mcps/install.sh`
   - Executable, bash, target Ubuntu 22.04/24.04
   - Steps per SIFT-MCPS-PLAN.md Phase 7 (Python check, uv install, sync, dirs, OpenSearch Docker, enrichment/RAG prep, TLS gen, token gen, default examiner creation, gateway.yaml write, systemd, health poll, summary)
   - Non-interactive mode: `./install.sh -y`
   - Idempotent: re-running on an already-installed system should not break anything
-- [ ] Installer creates `/var/lib/agentir/{passwords,verification,enrichment,tokens}` and default case root
-- [ ] Installer deploys OpenSearch Docker compose and verifies healthy localhost-only binding
-- [ ] Installer prepares forensic-knowledge, forensic-rag, and OpenSearch enrichment assets
-- [ ] Installer creates default examiner account with `must_reset_password: true`
-- [ ] Installer generates first `agentir_svc_*` Hermes service token and stores token metadata without logging raw token in normal logs
-- [ ] Installer writes gateway config with empty `case.dir` and portal-created-case workflow enabled
+- [x] Installer creates `/var/lib/agentir/{passwords,verification,enrichment,tokens}` and default case root
+- [x] Installer deploys OpenSearch Docker compose and verifies healthy localhost-only binding
+- [x] Installer prepares forensic-knowledge, forensic-rag, and OpenSearch enrichment assets
+- [x] Installer creates default examiner account with `must_reset_password: true`
+- [x] Installer generates first `agentir_svc_*` Hermes service token and stores token metadata without logging raw token in normal logs
+- [x] Installer writes gateway config with empty `case.dir` and portal-created-case workflow enabled
 - [ ] Test on clean Ubuntu VM or container
-- [ ] `chmod +x install.sh`
+- [x] `chmod +x install.sh`
 
 ---
 
@@ -324,7 +324,7 @@ All test suites verified passing in Session 3:
 
 ## Phase 8 — Docker Compose (OpenSearch)
 
-- [ ] Create `/home/yk/AI/SIFTHACK/sift-mcps/docker-compose.yml`
+- [x] Create `/home/yk/AI/SIFTHACK/sift-mcps/docker-compose.yml`
   - OpenSearch 2.18.0, single-node, security disabled, 3GB JVM heap
   - Bound to 127.0.0.1:9200 only
   - Named volume for persistence
@@ -336,12 +336,12 @@ All test suites verified passing in Session 3:
 
 ## Phase 9 — Configs and Templates
 
-- [ ] Create `configs/gateway.yaml.template` (full annotated template per plan Phase 9)
-- [ ] Template includes `case.root`, empty `case.dir`, portal session settings, OpenSearch settings, enrichment settings, examiner fallback token, and first service-token metadata
-- [ ] Create `configs/hermes-forensics-profile.yaml` (per plan Phase 9)
-- [ ] Hermes profile exposes only aggregate `https://SIFT_IP:4508/mcp`, not per-backend MCP URLs
-- [ ] Create `configs/systemd/sift-gateway.service` (per plan Phase 9)
-- [ ] Ensure `configs/` directory exists in repo with a `.gitkeep` if needed
+- [x] Create `configs/gateway.yaml.template` (full annotated template per plan Phase 9)
+- [x] Template includes `case.root`, empty `case.dir`, portal session settings, OpenSearch settings, enrichment settings, examiner fallback token, and first service-token metadata
+- [x] Create `configs/hermes-forensics-profile.yaml` (per plan Phase 9)
+- [x] Hermes profile exposes only aggregate `https://SIFT_IP:4508/mcp`, not per-backend MCP URLs
+- [x] Create `configs/systemd/sift-gateway.service` (per plan Phase 9)
+- [x] Ensure `configs/` directory exists in repo with a `.gitkeep` if needed
 
 ---
 
@@ -636,6 +636,64 @@ All test suites verified passing in Session 3:
 ---
 
 ## Session Notes
+
+### Session 12 (2026-05-24)
+
+**Completed:**
+- Implemented Phase 7 installer foundation in `install.sh`.
+  - Supports `-y/--yes`, `--skip-docker`, and `--no-start`.
+  - Checks Ubuntu target version and Python >= 3.10.
+  - Installs/uses `uv`, runs `uv sync --all-packages`, creates agentir state directories, creates default case root, prepares enrichment pointers, generates TLS, creates default examiner password with `must_reset_password: true`, writes one-time handoff material, renders gateway config, installs user systemd service, starts/polls services when enabled.
+  - Preserves existing TLS, password, gateway config, OpenSearch config, and service file on rerun.
+- Added `.dockerignore` and expanded `.gitignore` with Python/build/cache/env patterns.
+- Completed Phase 9 config templates:
+  - `configs/gateway.yaml.template`
+  - `configs/hermes-forensics-profile.yaml`
+  - `configs/systemd/sift-gateway.service`
+- Confirmed existing Phase 8 `docker-compose.yml` matches the planned OpenSearch 2.18.0 localhost-only single-node deployment.
+
+**Verification:**
+- `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` failed because current branch is `main`, not a Spec Kit feature branch; continued from root `TASKS.md`.
+- `bash -n install.sh` → clean
+- `./install.sh --help` → works
+- `docker compose -f docker-compose.yml config` → valid, binds `127.0.0.1:9200`
+- Rendered `configs/gateway.yaml.template` with sample values and parsed with PyYAML → OK, 2 API keys, empty `case.dir`, aggregate backend config present
+- Isolated temp install run:
+  - `AGENTIR_HOME=$tmp/home AGENTIR_STATE_DIR=$tmp/state AGENTIR_CASE_ROOT=$tmp/cases SYSTEMD_USER_DIR=$tmp/systemd MATERIALS_FILE=$tmp/state/tokens/handoff.txt ./install.sh -y --skip-docker --no-start`
+  - Result: generated gateway config, OpenSearch client config, TLS certs/keys, examiner password JSON, systemd service, and handoff file under temp paths.
+
+**Still needs live validation:**
+- Run installer on clean Ubuntu/SIFT VM or container.
+- Run live `docker compose up -d && docker compose ps` and confirm OpenSearch healthy.
+- Run full gateway start with real user systemd and verify `https://127.0.0.1:4508/health`.
+
+### Session 13 (2026-05-24)
+
+**Completed:**
+- Cross-checked the new installer against original setup scripts:
+  - `/home/yk/AI/SIFTHACK/sift-mcp/quickstart.sh`
+  - `/home/yk/AI/SIFTHACK/sift-mcp/setup-sift.sh`
+  - `/home/yk/AI/SIFTHACK/sift-mcp/quickstart-lite.sh`
+  - `/home/yk/AI/SIFTHACK/opensearch-mcp/scripts/setup-opensearch.sh`
+- Confirmed old `bwrap`/AppArmor/socat setup was for Claude Code direct-Bash sandboxing. It is intentionally not ported because sift-mcps uses remote Hermes → gateway `/mcp` → `sift-mcp` controlled execution instead of granting direct shell access.
+- Ported OpenSearch setup details that still apply to the revamp:
+  - `docker-compose.yml` now names the container `agentir-opensearch`.
+  - Added `/var/lib/agentir/snapshots` bind mount and `path.repo=/usr/share/opensearch/snapshots`.
+  - Installer creates the snapshots directory with container-compatible ownership.
+  - Installer applies `cluster.max_shards_per_node=3000`.
+  - Installer runs an OpenSearch smoke index/search/delete check.
+  - Installer configures `agentir-geoip` and applies it to existing IP-bearing case index patterns where available.
+- Fixed opensearch-mcp gateway config contract:
+  - `configs/gateway.yaml.template` now sets `OPENSEARCH_CONFIG=${AGENTIR_HOME}/opensearch.yaml` for the backend.
+  - `packages/opensearch-mcp/src/opensearch_mcp/client.py` now honors `OPENSEARCH_CONFIG` before falling back to `~/.agentir/opensearch.yaml`.
+  - Added a regression test for the `OPENSEARCH_CONFIG` path.
+
+**Verification:**
+- `bash -n install.sh` → clean
+- `docker compose -f docker-compose.yml config` → valid, includes localhost bind, snapshot bind, `path.repo`, and `agentir-opensearch`
+- `uv run pytest tests/test_edge_cases.py::TestMissingConnection::test_get_client_honors_opensearch_config_env -q` in `packages/opensearch-mcp` → passed
+- Rendered `configs/gateway.yaml.template` with sample values and confirmed `opensearch-mcp` env includes `OPENSEARCH_CONFIG`
+- Isolated temp installer run with `--skip-docker --no-start` still succeeds and renders `OPENSEARCH_CONFIG` correctly.
 
 ### Session 11 (2026-05-24)
 

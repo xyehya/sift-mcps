@@ -1,0 +1,16 @@
+[Unit]
+Description=sift-mcps Gateway - MCP server runtime for digital forensics
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${UV_BIN} run --project ${SIFT_MCPS_ROOT} sift-gateway --config ${AGENTIR_CONFIG}
+WorkingDirectory=${SIFT_MCPS_ROOT}
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=AGENTIR_EXAMINER=${AGENTIR_EXAMINER}
+
+[Install]
+WantedBy=default.target

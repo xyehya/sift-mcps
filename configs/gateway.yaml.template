@@ -1,0 +1,99 @@
+gateway:
+  host: "0.0.0.0"
+  port: 4508
+  tls:
+    cert: "${AGENTIR_TLS_DIR}/gateway-cert.pem"
+    key: "${AGENTIR_TLS_DIR}/gateway-key.pem"
+  rate_limit:
+    ip_calls_per_minute: 120
+    examiner_calls_per_minute: 120
+    burst: 20
+  lazy_start: false
+  idle_timeout_seconds: 0
+
+case:
+  root: "${AGENTIR_CASE_ROOT}"
+  dir: ""
+
+api_keys:
+  ${AGENTIR_GATEWAY_TOKEN}:
+    token_id: "examiner-default"
+    examiner: "${AGENTIR_EXAMINER}"
+    role: examiner
+    label: "Installer-created examiner fallback token"
+    expires_at: null
+
+  ${AGENTIR_SERVICE_TOKEN}:
+    token_id: "hermes-default"
+    examiner: "hermes-agent"
+    agent_id: "hermes-default"
+    role: agent
+    label: "Installer-created Hermes service token"
+    expires_at: null
+
+portal:
+  session_secret: "${AGENTIR_PORTAL_SESSION_SECRET}"
+  session_max_age: 28800
+  default_examiner: "${AGENTIR_EXAMINER}"
+  require_password_reset: true
+
+opensearch:
+  url: "http://127.0.0.1:9200"
+  verify_certs: true
+  ca_cert_path: "${AGENTIR_TLS_DIR}/ca-cert.pem"
+
+enrichment:
+  enabled: true
+  forensic_knowledge: true
+  forensic_rag: true
+  opensearch_context: true
+  root: "/var/lib/agentir/enrichment"
+
+backends:
+  forensic-mcp:
+    enabled: true
+    type: stdio
+    command: "${UV_BIN}"
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "forensic-mcp"]
+
+  case-mcp:
+    enabled: true
+    type: stdio
+    command: "${UV_BIN}"
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "case-mcp"]
+
+  sift-mcp:
+    enabled: true
+    type: stdio
+    command: "${UV_BIN}"
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "sift-mcp"]
+
+  report-mcp:
+    enabled: true
+    type: stdio
+    command: "${UV_BIN}"
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "report-mcp"]
+
+  forensic-rag-mcp:
+    enabled: true
+    type: stdio
+    command: "${UV_BIN}"
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "rag-mcp"]
+
+  opensearch-mcp:
+    enabled: true
+    type: stdio
+    command: "${UV_BIN}"
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "opensearch-mcp"]
+    env:
+      OPENSEARCH_CONFIG: "${AGENTIR_HOME}/opensearch.yaml"
+      OPENSEARCH_HOST: "http://127.0.0.1:9200"
+
+  opencti-mcp:
+    enabled: false
+    type: stdio
+    command: "${UV_BIN}"
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "opencti-mcp"]
+    env:
+      OPENCTI_URL: "${OPENCTI_URL}"
+      OPENCTI_TOKEN: "${OPENCTI_TOKEN}"
