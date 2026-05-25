@@ -415,8 +415,8 @@ def seal_manifest(
     case_id = existing_manifest.get("case_id", "") or _load_case_id(case_dir)
     now = _now()
 
-    # Carry forward IGNORED entries; drop ACTIVE entries (they get re-registered via file_specs)
-    carried = [f for f in existing_manifest.get("files", []) if f.get("status") == "IGNORED"]
+    # Carry forward IGNORED and RETIRED entries; ACTIVE entries get re-registered via file_specs
+    carried = [f for f in existing_manifest.get("files", []) if f.get("status") in ("IGNORED", "RETIRED")]
 
     new_files = list(carried)
     for spec in file_specs:
@@ -426,6 +426,9 @@ def seal_manifest(
             raise FileNotFoundError(f"Evidence file not found: {rel_path}")
         if abs_path.is_dir():
             raise ValueError(f"Cannot register directory: {rel_path}")
+
+        # Clear immutable flag before hashing (no-op if already clear or cap absent)
+        _set_immutable(abs_path, False)
 
         st = abs_path.stat()
         file_hash = hash_file(abs_path)
@@ -469,6 +472,16 @@ def seal_manifest(
     }
     _append_ledger_event(case_dir / _LEDGER_FILE, event, derived_key)
 
+    # Set immutable flag on each newly registered file (Phase 17a)
+    for spec in file_specs:
+        abs_path = case_dir / spec["path"]
+        if abs_path.exists():
+            if not _set_immutable(abs_path, True):
+                logger.warning(
+                    "seal_manifest: could not set +i on %s "
+                    "(install.sh setcap step may not have run)", abs_path
+                )
+
     return new_manifest
 
 
@@ -484,6 +497,8 @@ def ignore_file(
     Creates a new manifest version with the file marked IGNORED.
     The file is not hashed — only its path and the examiner's reason are recorded.
     """
+    _resolve_evidence_path(case_dir, rel_path)  # raises ValueError on traversal
+
     manifest = load_manifest(case_dir)
     if manifest is None:
         raise ValueError("No evidence manifest — call init_evidence_chain first")
@@ -663,6 +678,20 @@ def _set_immutable(path: Path, immutable: bool) -> bool:
         return False
 
 
+def get_immutable_flag(path: Path) -> bool | None:
+    """Return True if the immutable flag is set, False if clear, None on error.
+
+    Public helper for portal status display (Phase 17a).
+    """
+    try:
+        flags_val = ctypes.c_int(0)
+        with open(path, "rb") as f:
+            fcntl.ioctl(f.fileno(), _FS_IOC_GETFLAGS, flags_val)
+        return bool(flags_val.value & _FS_IMMUTABLE_FL)
+    except (OSError, IOError, AttributeError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Ledger append (internal)
 # ---------------------------------------------------------------------------
@@ -675,6 +704,137 @@ def _append_ledger_event(ledger_path: Path, event: dict, derived_key: bytes) -> 
         f.flush()
         os.fsync(f.fileno())
     _try_chmod(ledger_path, 0o444)
+
+
+# ---------------------------------------------------------------------------
+# Solana anchoring (Phase 16e — optional, degrades gracefully without solders)
+# ---------------------------------------------------------------------------
+
+_ANCHOR_PROOF_PATTERN = "evidence-anchor-v{version}.json"
+_MEMO_PROGRAM_ID = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+_SOLANA_MAINNET_RPC = "https://api.mainnet-beta.solana.com"
+_SOLANA_DEVNET_RPC = "https://api.devnet.solana.com"
+
+
+def load_anchor_proof(case_dir: Path, version: int) -> dict | None:
+    """Load evidence-anchor-v{N}.json. Returns None if not present."""
+    path = case_dir / _ANCHOR_PROOF_PATTERN.format(version=version)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def anchor_manifest(
+    case_dir: Path,
+    manifest: dict,
+    ledger: list[dict],
+    *,
+    keypair_path: str | None = None,
+    rpc_url: str | None = None,
+    cluster: str = "mainnet",
+) -> dict:
+    """Anchor the manifest hash on Solana via SPL Memo. Degrades gracefully without solders.
+
+    Writes evidence-anchor-v{N}.json to case_dir. Returns the proof dict.
+    If keypair_path is None or solders is not installed, the proof is written
+    with solana_tx=None (unanchored but locally recorded).
+    """
+    version = manifest.get("version", 0)
+    manifest_hash = manifest.get("manifest_hash", "")
+    ledger_tip_hmac = ledger[-1].get("hmac", "") if ledger else ""
+
+    mh_hex = manifest_hash.split(":")[-1] if ":" in manifest_hash else manifest_hash
+    anchor_payload = f"AGENTIR|{mh_hex[:16]}|{ledger_tip_hmac[:16]}"
+
+    proof: dict = {
+        "schema": "agentir.evidence-anchor.v1",
+        "timestamp": _now(),
+        "manifest_version": version,
+        "manifest_hash": manifest_hash,
+        "ledger_tip_hmac": ledger_tip_hmac,
+        "anchor_payload": anchor_payload,
+        "solana_tx": None,
+        "solana_cluster": cluster,
+        "confirmed": False,
+        "explorer_url": None,
+    }
+
+    if keypair_path:
+        try:
+            _do_solana_anchor(proof, keypair_path, rpc_url, cluster)
+        except ImportError:
+            logger.warning("anchor_manifest: solders not installed — proof written without on-chain tx")
+        except Exception as exc:
+            logger.warning("anchor_manifest: Solana submission failed: %s", exc)
+
+    proof_path = case_dir / _ANCHOR_PROOF_PATTERN.format(version=version)
+    _atomic_write_json(proof_path, proof)
+    return proof
+
+
+def _do_solana_anchor(proof: dict, keypair_path: str, rpc_url: str | None, cluster: str) -> None:
+    """Submit anchor_payload to Solana via SPL Memo. Modifies proof in place."""
+    import base64
+    import time as _time
+    from solders.keypair import Keypair
+    from solders.pubkey import Pubkey
+    from solders.transaction import Transaction
+    from solders.message import Message
+    from solders.instruction import Instruction, AccountMeta
+    from solders.hash import Hash as SolHash
+
+    rpc = rpc_url or (_SOLANA_MAINNET_RPC if cluster == "mainnet" else _SOLANA_DEVNET_RPC)
+
+    kp_data = json.loads(Path(keypair_path).expanduser().read_text())
+    keypair = Keypair.from_bytes(bytes(kp_data))
+
+    memo_data = proof["anchor_payload"].encode("utf-8")
+    memo_program = Pubkey.from_string(_MEMO_PROGRAM_ID)
+    memo_ix = Instruction(
+        program_id=memo_program,
+        accounts=[AccountMeta(pubkey=keypair.pubkey(), is_signer=True, is_writable=False)],
+        data=memo_data,
+    )
+
+    bh_resp = _rpc_call(rpc, "getLatestBlockhash", [{"commitment": "finalized"}])
+    blockhash = SolHash.from_string(bh_resp["result"]["value"]["blockhash"])
+
+    msg = Message.new_with_blockhash([memo_ix], keypair.pubkey(), blockhash)
+    tx = Transaction.new_unsigned(msg)
+    tx.sign([keypair], blockhash)
+
+    tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
+    send_resp = _rpc_call(rpc, "sendTransaction", [tx_b64, {"encoding": "base64", "skipPreflight": False}])
+
+    if "error" in send_resp:
+        raise RuntimeError(f"Solana RPC error: {send_resp['error']}")
+
+    tx_sig = send_resp["result"]
+
+    _time.sleep(2)
+    confirm_resp = _rpc_call(rpc, "getTransaction", [tx_sig, {"encoding": "json", "commitment": "confirmed"}])
+    confirmed = confirm_resp.get("result") is not None
+
+    explorer = (
+        f"https://solscan.io/tx/{tx_sig}"
+        if cluster == "mainnet"
+        else f"https://solscan.io/tx/{tx_sig}?cluster=devnet"
+    )
+    proof["solana_tx"] = tx_sig
+    proof["confirmed"] = confirmed
+    proof["explorer_url"] = explorer
+
+
+def _rpc_call(url: str, method: str, params: list) -> dict:
+    import json as _json
+    import urllib.request as _urlib
+    payload = _json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    req = _urlib.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with _urlib.urlopen(req, timeout=30) as resp:
+        return _json.loads(resp.read())
 
 
 # ---------------------------------------------------------------------------

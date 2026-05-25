@@ -573,53 +573,119 @@ compressed, encrypted, bit-perfect forensic archive of the Hermes session.
 If modified, full workspace rollback is triggered. Detection is post-run, not real-time — use
 policy enforcer watch mode + custom poller for mid-run kill on config file changes.
 
-### Approach B — SIFT VM: Solana Anchoring Pattern for Evidence Sealing (Phase 16 add-on)
+### Approach B — SIFT VM: Solana Anchoring Pattern for Evidence Sealing (Phase 16e/16f — COMPLETE)
 
-Add an optional `anchor_manifest()` function to `agentir-core/evidence_chain.py`. When the examiner
-seals a new manifest version, this function anchors the manifest hash on Solana via the SPL Memo
-program, providing an immutable public timestamp proving the manifest existed at time T.
+**Status: Implemented.** `anchor_manifest()` in `evidence_chain.py` anchors the current manifest
+hash on Solana via the SPL Memo program whenever the examiner seals evidence. Proof written to
+`{case_dir}/evidence-anchor-v{N}.json`. Portal shows live anchor status with Solscan link.
 
-This closes the temporal-proof gap in our evidence chain: internal hash-chaining proves consistency
-but not "existed at time T." Solana anchoring provides that external timestamp anchor.
+This closes the temporal-proof gap: internal hash-chaining proves consistency but not "existed at
+time T." Solana anchoring provides an immutable public timestamp on a blockchain with global finality.
 
-**Do NOT import Liquefy as a Python dependency.** Implement the ~50-line SPL Memo pattern directly
-in `evidence_chain.py` following the same approach as `liquefy/tools/liquefy_vault_anchor.py`.
+#### Implementation summary
 
-```python
-# agentir_core/evidence_chain.py — new optional function
-def anchor_manifest(manifest_hash: str, ledger_tip_hash: str, keypair_path: str | None = None) -> dict:
-    """Anchor manifest hash on Solana via SPL Memo. Degrades gracefully without solders."""
-    payload = f"AGENTIR|{manifest_hash[:16]}|{ledger_tip_hash[:16]}"
-    proof = {
-        "schema": "agentir.evidence-anchor.v1",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "manifest_hash": manifest_hash,
-        "ledger_tip_hash": ledger_tip_hash,
-        "anchor_payload": payload,
-        "solana_tx": None,
-        "confirmed": False,
-    }
-    if keypair_path:
-        try:
-            from solders.keypair import Keypair  # optional dep
-            # ~15 lines: build SPL Memo tx, send to Solana, record tx signature
-            proof["solana_tx"] = tx_signature
-            proof["confirmed"] = True
-        except ImportError:
-            pass  # graceful degradation — proof file still written without on-chain tx
-    return proof
+- `anchor_manifest(case_dir, manifest, ledger, *, keypair_path, rpc_url, cluster)` in `evidence_chain.py`
+- `load_anchor_proof(case_dir, version)` — reads existing proof file
+- `_do_solana_anchor()` — builds SPL Memo tx via `solders`, submits via stdlib `urllib.request` (no httpx dep)
+- `_rpc_call()` — thin JSON-RPC wrapper over stdlib urllib
+- Payload format: `AGENTIR|{manifest_hash_hex[:16]}|{ledger_tip_hmac[:16]}`
+- Auto-triggers after every seal if `AGENTIR_SOLANA_KEYPAIR` is set. Never blocks the seal on failure.
+- `POST /api/evidence/chain/anchor` — manual re-anchor endpoint (session auth, no HMAC)
+- Optional dep: `pip install "agentir-core[solana]"` → installs `solders>=0.21`
+- Degrades gracefully without `solders` — proof file still written with `solana_tx: null`
+
+#### Environment variables (add to sift-gateway systemd service)
+
+```ini
+Environment="AGENTIR_SOLANA_KEYPAIR=/var/lib/agentir/solana-keypair.json"
+Environment="AGENTIR_SOLANA_CLUSTER=mainnet"   # or "devnet" for testing
 ```
 
-Proof written to `{case_dir}/evidence-anchor-v{N}.json`. Portal shows anchor status
-(Unanchored / Anchored — Solana tx: …) in evidence intake panel.
+#### Keypair setup on SIFT VM (one-time, no Solana CLI required)
 
-**Examiner opt-in:** requires Solana keypair + ~0.000005 SOL per seal. Works perfectly without it;
-anchoring is additive. For DFIR testimony: Solana anchoring proves "this hash was committed at T"
-on a public blockchain. Supplement with RFC 3161 trusted timestamping for highest evidentiary value.
+```bash
+# 1. Install optional dep (in the venv)
+uv add --optional solana solders   # or: pip install "agentir-core[solana]"
 
-Files to modify: `packages/agentir-core/src/agentir_core/evidence_chain.py`,
-`packages/case-dashboard/…/routes.py` (call after seal, show status),
-`packages/agentir-core/pyproject.toml` (add `solders` as optional: `"agentir-core[solana]"`).
+# 2. Generate keypair using Python (solders is already installed)
+python3 -c "from solders.keypair import Keypair; import json; kp=Keypair(); json.dump(list(bytes(kp)), open('/var/lib/agentir/solana-keypair.json','w')); print('Pubkey:', kp.pubkey())"
+chmod 600 /var/lib/agentir/solana-keypair.json
+
+# 3. Verify keypair loads correctly
+python3 -c "from solders.keypair import Keypair; import json; kp=Keypair.from_bytes(bytes(json.load(open('/var/lib/agentir/solana-keypair.json')))); print('Public key:', kp.pubkey())"
+```
+
+SIFT VM keypair (generated 2026-05-25): `9PjHRwGUeQTvCq8iF9nsALfFce6dUfXWbVFA57XBk1mW`
+
+#### Funding the wallet
+
+**Devnet (testing — free):**
+```bash
+# Airdrop 1 SOL on devnet (no Solana CLI needed — plain curl)
+curl -s -X POST https://api.devnet.solana.com \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"requestAirdrop","params":["<YOUR_PUBKEY>", 1000000000]}'
+
+# Verify balance (~5s after airdrop)
+curl -s -X POST https://api.devnet.solana.com \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getBalance","params":["<YOUR_PUBKEY>"]}'
+# Expect: {"result":{"value":1000000000,...}}
+```
+
+**Mainnet (production):** Send ~0.001 SOL to the pubkey from any wallet. Each anchor costs
+~0.000005 SOL (~$0.001), so 0.001 SOL covers ~200 seals.
+
+#### Full devnet smoke test (no portal/service restart needed)
+
+```bash
+# Run from the sift-mcps-test directory with venv active
+cat > /tmp/test_anchor.py << 'EOF'
+import sys, json
+sys.path.insert(0, 'packages/agentir-core/src')
+from pathlib import Path
+from agentir_core.evidence_chain import init_evidence_chain, seal_manifest, load_ledger, anchor_manifest
+
+KEY = b"test-derived-key-32bytes-padding!"
+case_dir = Path("/tmp/anchor-test-case")
+case_dir.mkdir(exist_ok=True)
+(case_dir / "evidence").mkdir(exist_ok=True)
+(case_dir / "CASE.yaml").write_text("case_id: test-001\ntitle: Test\nexaminer: alice\n")
+(case_dir / "evidence" / "test.bin").write_bytes(b"hello world evidence")
+
+init_evidence_chain(case_dir)
+manifest = seal_manifest(case_dir, [{"path": "evidence/test.bin", "source": "test", "description": "smoke test"}], "alice", KEY)
+print("Sealed manifest version:", manifest["version"])
+
+ledger = load_ledger(case_dir)
+print("Anchoring to Solana devnet...")
+proof = anchor_manifest(case_dir, manifest, ledger,
+    keypair_path="/var/lib/agentir/solana-keypair.json", cluster="devnet")
+
+print("TX:       ", proof["solana_tx"])
+print("Confirmed:", proof["confirmed"])
+print("Explorer: ", proof["explorer_url"])
+EOF
+python3 /tmp/test_anchor.py
+```
+
+#### Wiring into the live gateway service
+
+```bash
+systemctl --user edit sift-gateway --force
+# Add under [Service]:
+# Environment="AGENTIR_SOLANA_KEYPAIR=/var/lib/agentir/solana-keypair.json"
+# Environment="AGENTIR_SOLANA_CLUSTER=devnet"
+
+systemctl --user daemon-reload && systemctl --user restart sift-gateway
+```
+
+After restart: log into portal → Evidence tab → seal a file → success message shows anchor status →
+green "On-chain Anchored" bar appears with Solscan devnet link.
+
+**For DFIR testimony:** Solana anchoring proves "this hash was committed at time T" on a public
+blockchain. Supplement with RFC 3161 trusted timestamping for highest evidentiary value in
+jurisdictions that require a recognised timestamping authority.
 
 ### Approach C — SIFT VM: Gateway Response Secret Redaction + Examiner Override
 

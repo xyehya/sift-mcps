@@ -633,11 +633,26 @@ class Gateway:
         @contextlib.asynccontextmanager
         async def lifespan(app):
             """Start backends → all MCP session managers → yield → stop."""
+            import os as _os
             await gateway.start()
             reaper_task = None
             if gateway.idle_timeout > 0:
                 reaper_task = asyncio.create_task(gateway._idle_reaper())
             late_start_task = asyncio.create_task(gateway._late_start_checker())
+
+            # Phase 17d: inotify watcher for real-time evidence cache invalidation
+            watcher_task = None
+            _case_dir_str = _os.environ.get("AGENTIR_CASE_DIR", "")
+            if _case_dir_str:
+                try:
+                    from sift_gateway.evidence_gate import invalidate_evidence_cache
+                    from sift_gateway.evidence_watcher import watch_evidence_dir
+                    watcher_task = asyncio.create_task(
+                        watch_evidence_dir(_case_dir_str, invalidate_evidence_cache)
+                    )
+                except ImportError:
+                    pass
+
             async with contextlib.AsyncExitStack() as stack:
                 await stack.enter_async_context(session_manager.run())
                 for b_sm in backend_session_managers:
@@ -661,6 +676,10 @@ class Gateway:
                 reaper_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await reaper_task
+            if watcher_task is not None:
+                watcher_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher_task
             late_start_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await late_start_task

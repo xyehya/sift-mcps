@@ -517,7 +517,7 @@ configure_geoip_pipeline() {
 
   local pattern
   for pattern in "case-*-evtx-*" "case-*-iis-*" "case-*-httperr-*" "case-*-firewall-*" "case-*-ssh-*" "case-*-accesslog-*"; do
-    opensearch_api PUT "/$pattern/_settings" '{"index.default_pipeline":"agentir-geoip"}' || true
+    opensearch_api PUT "/$pattern/_settings" '{"index.default_pipeline":"agentir-geoip"}' 2>/dev/null || true
   done
 }
 
@@ -610,6 +610,73 @@ write_handoff() {
   chmod 600 "$MATERIALS_FILE"
 }
 
+configure_immutable_capability() {
+  # Phase 17a: grant CAP_LINUX_IMMUTABLE to the venv Python so the gateway
+  # process can set/clear chattr +i on evidence files without running as root.
+  local venv_py
+  venv_py="$(readlink -f "${REPO_DIR}/.venv/bin/python3.11" 2>/dev/null || true)"
+  if [[ -z "$venv_py" || ! -f "$venv_py" ]]; then
+    warn "configure_immutable_capability: .venv/bin/python3.11 not found — skipping setcap"
+    return 0
+  fi
+  if ! command -v setcap &>/dev/null; then
+    warn "configure_immutable_capability: setcap not found (install libcap2-bin) — skipping"
+    return 0
+  fi
+  sudo_if_needed setcap cap_linux_immutable+ep "$venv_py"
+  log "setcap cap_linux_immutable+ep applied to $venv_py"
+}
+
+configure_auditd() {
+  # Phase 17b: install kernel audit rules for evidence write/attribute events.
+  if ! command -v augenrules &>/dev/null && ! command -v auditctl &>/dev/null; then
+    warn "configure_auditd: auditd not found — skipping audit rule installation"
+    return 0
+  fi
+  local rules_src="${REPO_DIR}/configs/audit/99-agentir-evidence.rules"
+  local rules_dst="/etc/audit/rules.d/99-agentir-evidence.rules"
+  # Substitute CASES_ROOT placeholder
+  local tmp
+  tmp="$(mktemp)"
+  sed "s|CASES_ROOT|${AGENTIR_CASE_ROOT}|g" "$rules_src" > "$tmp"
+  sudo_if_needed cp "$tmp" "$rules_dst"
+  rm -f "$tmp"
+  sudo_if_needed chmod 640 "$rules_dst"
+  if command -v augenrules &>/dev/null; then
+    sudo_if_needed augenrules --load
+  else
+    sudo_if_needed auditctl -R "$rules_dst"
+  fi
+  log "auditd rules installed → $rules_dst (CASES_ROOT=${AGENTIR_CASE_ROOT})"
+}
+
+configure_apparmor() {
+  # Phase 17c: install AppArmor profile for sift-gateway in complain mode.
+  if ! command -v aa-status &>/dev/null; then
+    warn "configure_apparmor: AppArmor tools not found — skipping profile installation"
+    return 0
+  fi
+  local venv_py
+  venv_py="$(readlink -f "${REPO_DIR}/.venv/bin/python3.11" 2>/dev/null || true)"
+  if [[ -z "$venv_py" || ! -f "$venv_py" ]]; then
+    warn "configure_apparmor: .venv/bin/python3.11 not found — skipping AppArmor profile"
+    return 0
+  fi
+  local profile_src="${REPO_DIR}/configs/apparmor/sift-gateway.template"
+  local profile_dst="/etc/apparmor.d/sift-gateway"
+  local tmp
+  tmp="$(mktemp)"
+  sed "s|@@PYTHON_BIN@@|${venv_py}|g" "$profile_src" > "$tmp"
+  sudo_if_needed cp "$tmp" "$profile_dst"
+  rm -f "$tmp"
+  sudo_if_needed chmod 644 "$profile_dst"
+  # Load in complain mode — use aa-enforce after validating with aa-logprof
+  # -C = complain mode; -r = replace existing
+  sudo_if_needed apparmor_parser -C -r "$profile_dst" || true
+  log "AppArmor profile installed in complain mode → $profile_dst (binary: $venv_py)"
+  log "  Run 'sudo aa-logprof' after exercising the gateway, then 'sudo aa-enforce $profile_dst'"
+}
+
 print_summary() {
   local ip
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -647,6 +714,9 @@ main() {
   configure_geoip_pipeline
   install_opensearch_templates
   install_systemd_service
+  configure_immutable_capability
+  configure_auditd
+  configure_apparmor
   poll_gateway
   write_handoff
   print_summary

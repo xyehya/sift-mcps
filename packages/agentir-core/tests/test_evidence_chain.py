@@ -8,12 +8,14 @@ import pytest
 
 from agentir_core.evidence_chain import (
     ChainStatus,
+    anchor_manifest,
     chain_status,
     compute_manifest_hash,
     diff_manifest,
     hash_file,
     ignore_file,
     init_evidence_chain,
+    load_anchor_proof,
     load_ledger,
     load_manifest,
     retire_file,
@@ -591,3 +593,84 @@ class TestDiffManifestRetiredExclusion:
         # File still on disk — should NOT appear as unregistered
         diff = diff_manifest(initialized, m)
         assert path not in diff["unregistered"]
+
+
+# ---------------------------------------------------------------------------
+# anchor_manifest / load_anchor_proof (Phase 16e)
+# ---------------------------------------------------------------------------
+
+class TestAnchorManifest:
+    def test_writes_proof_file_no_keypair(self, initialized):
+        """Proof file written with solana_tx=None when no keypair given."""
+        f = initialized / "evidence" / "data.bin"
+        f.write_bytes(b"x" * 32)
+        manifest = seal_manifest(initialized, [{"path": "evidence/data.bin"}], "alice", _KEY)
+        ledger = load_ledger(initialized)
+        proof = anchor_manifest(initialized, manifest, ledger)
+        assert (initialized / "evidence-anchor-v1.json").exists()
+        assert proof["schema"] == "agentir.evidence-anchor.v1"
+        assert proof["manifest_version"] == 1
+        assert proof["solana_tx"] is None
+        assert proof["confirmed"] is False
+        assert proof["manifest_hash"] == manifest["manifest_hash"]
+
+    def test_anchor_payload_format(self, initialized):
+        """Payload contains AGENTIR prefix with manifest and ledger tip fragments."""
+        f = initialized / "evidence" / "data.bin"
+        f.write_bytes(b"hello")
+        manifest = seal_manifest(initialized, [{"path": "evidence/data.bin"}], "alice", _KEY)
+        ledger = load_ledger(initialized)
+        proof = anchor_manifest(initialized, manifest, ledger)
+        assert proof["anchor_payload"].startswith("AGENTIR|")
+        parts = proof["anchor_payload"].split("|")
+        assert len(parts) == 3
+        assert len(parts[1]) == 16
+        assert len(parts[2]) == 16
+
+    def test_graceful_degradation_missing_solders(self, initialized, monkeypatch):
+        """If solders import fails, proof is still written without tx."""
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "solders.keypair":
+                raise ImportError("no solders")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", mock_import)
+        f = initialized / "evidence" / "data.bin"
+        f.write_bytes(b"test")
+        manifest = seal_manifest(initialized, [{"path": "evidence/data.bin"}], "alice", _KEY)
+        ledger = load_ledger(initialized)
+        proof = anchor_manifest(initialized, manifest, ledger, keypair_path="/fake/keypair.json")
+        assert proof["solana_tx"] is None
+        assert (initialized / "evidence-anchor-v1.json").exists()
+
+    def test_load_anchor_proof_returns_none_when_missing(self, initialized):
+        assert load_anchor_proof(initialized, 1) is None
+
+    def test_load_anchor_proof_roundtrip(self, initialized):
+        f = initialized / "evidence" / "data.bin"
+        f.write_bytes(b"y" * 8)
+        manifest = seal_manifest(initialized, [{"path": "evidence/data.bin"}], "alice", _KEY)
+        ledger = load_ledger(initialized)
+        anchor_manifest(initialized, manifest, ledger)
+        loaded = load_anchor_proof(initialized, 1)
+        assert loaded is not None
+        assert loaded["manifest_version"] == 1
+        assert loaded["solana_tx"] is None
+
+    def test_each_version_gets_own_proof_file(self, initialized):
+        for i in range(2):
+            fname = f"evidence/file{i}.bin"
+            (initialized / fname).write_bytes(b"v" * (i + 1))
+            manifest = seal_manifest(initialized, [{"path": fname}], "alice", _KEY)
+            ledger = load_ledger(initialized)
+            anchor_manifest(initialized, manifest, ledger)
+        assert (initialized / "evidence-anchor-v1.json").exists()
+        assert (initialized / "evidence-anchor-v2.json").exists()
+        p1 = load_anchor_proof(initialized, 1)
+        p2 = load_anchor_proof(initialized, 2)
+        assert p1["manifest_version"] == 1
+        assert p2["manifest_version"] == 2
+        assert p1["manifest_hash"] != p2["manifest_hash"]

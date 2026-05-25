@@ -3809,7 +3809,32 @@ function renderEvidenceIntake(cs) {
   }
   html += '</div>';
 
-  // 2. Chain of custody violations (Missing/Modified)
+  // 2. Solana anchor status (Phase 16e)
+  var a = cs.anchor || {};
+  html += '<div style="margin-bottom:16px">';
+  if (a.solana_tx && a.confirmed) {
+    html += '<div style="background:rgba(40,167,69,0.08);border:1px solid rgba(40,167,69,0.3);color:var(--green);padding:8px 12px;border-radius:6px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:8px">';
+    html += '<span>&#128279; <strong>On-chain Anchored:</strong> Manifest v' + escapeHtml(String(a.manifest_version || '')) + ' anchored on Solana (' + escapeHtml(a.cluster || 'mainnet') + ') at ' + escapeHtml(a.timestamp || '') + '</span>';
+    if (a.explorer_url) html += '<a href="' + escapeHtml(a.explorer_url) + '" target="_blank" rel="noopener" style="color:var(--green);font-size:11px;white-space:nowrap">View on Solscan &#8599;</a>';
+    html += '</div>';
+  } else if (a.solana_tx && !a.confirmed) {
+    html += '<div style="background:rgba(255,193,7,0.12);border:1px solid rgba(255,193,7,0.4);color:#d39e00;padding:8px 12px;border-radius:6px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:8px">';
+    html += '<span>&#9201; <strong>Anchor Pending:</strong> TX submitted, awaiting confirmation.</span>';
+    if (a.explorer_url) html += '<a href="' + escapeHtml(a.explorer_url) + '" target="_blank" rel="noopener" style="color:#d39e00;font-size:11px">View on Solscan &#8599;</a>';
+    html += '</div>';
+  } else if (a.anchoring_enabled && a.manifest_version > 0) {
+    html += '<div style="background:rgba(255,193,7,0.06);border:1px solid rgba(255,193,7,0.3);color:#d39e00;padding:8px 12px;border-radius:6px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:8px">';
+    html += '<span>&#128279; <strong>Unanchored:</strong> Manifest v' + escapeHtml(String(a.manifest_version || '')) + ' not yet anchored on Solana.</span>';
+    html += '<button class="verify-btn" style="padding:3px 10px;font-size:11px" onclick="triggerAnchor()">Anchor Now</button>';
+    html += '</div>';
+  } else {
+    html += '<div style="background:var(--bg-secondary);border:1px solid var(--border);color:var(--text-muted);padding:8px 12px;border-radius:6px;font-size:12px">';
+    html += '<span>&#128279; Solana anchoring not configured. Set <code>AGENTIR_SOLANA_KEYPAIR</code> in the gateway environment to enable on-chain timestamping.</span>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // 3. Chain of custody violations (Missing/Modified)
   var missing = cs.missing || [];
   var modified = cs.modified || [];
   if (missing.length > 0 || modified.length > 0) {
@@ -3893,6 +3918,20 @@ function closeSealEvidenceModal() {
   modal.classList.remove('visible');
 }
 
+async function triggerAnchor() {
+  try {
+    var result = await apiFetch('/api/evidence/chain/anchor', { method: 'POST' });
+    chainStatusData = await apiFetch('/api/evidence/chain/status');
+    renderChainRemindBar(chainStatusData);
+    renderEvidenceIntake(chainStatusData);
+    if (!result.anchored) {
+      alert('Anchor submitted but not yet confirmed. Check the Evidence tab for status.');
+    }
+  } catch (e) {
+    alert('Anchor failed: ' + (e.message || 'Network error'));
+  }
+}
+
 async function submitSealEvidence() {
   var pw = document.getElementById('sealEvidencePassword').value;
   if (!pw) {
@@ -3940,7 +3979,13 @@ async function submitSealEvidence() {
 
     var resEl = document.getElementById('sealEvidenceResult');
     if (result.sealed) {
-      resEl.innerHTML = '<span style="color:var(--green)">&#10003; Manifest version ' + escapeHtml(String(result.manifest_version)) + ' sealed successfully!</span>';
+      var anchorNote = '';
+      if (result.anchor && result.anchor.solana_tx && result.anchor.confirmed) {
+        anchorNote = ' <span style="font-size:11px;color:var(--text-muted)">&nbsp;&#128279; Anchored on Solana.</span>';
+      } else if (result.anchor && result.anchor.solana_tx) {
+        anchorNote = ' <span style="font-size:11px;color:var(--text-muted)">&nbsp;&#9201; Anchor pending confirmation.</span>';
+      }
+      resEl.innerHTML = '<span style="color:var(--green)">&#10003; Manifest version ' + escapeHtml(String(result.manifest_version)) + ' sealed successfully!' + anchorNote + '</span>';
       setTimeout(function() {
         closeSealEvidenceModal();
         loadEvidence();

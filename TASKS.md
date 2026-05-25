@@ -7,11 +7,11 @@
 
 ## ⚡ Start Here Every Session
 
-**Current state:** Phase 16-pre + 16g + 16b + 16a + Approach C + Audit Invariant + 16c + 16-retire + 16-gate-tier + 16d + 16-verify-remind complete. Phase 16 Integration Verification (Evidence UI and backend flow validation) successfully passed. Code-level verification passed (590 tests + import smokes + namespace gate). Remaining: full OpenSearch Docker/template smoke + windows-triage DB download/enable pass, Phase 17 OS hardening.
+**Current state:** Phase 16 complete + Phase 17 OS hardening complete (17a chattr+setcap, 17b auditd, 17c AppArmor complain mode, 17d inotify watcher — all verified on SIFT VM 192.168.122.81). Full docs suite written in `docs/`. 547 tests passing. **Next: Phase 18 — Hermes agent profile + orchestration.**
 
 ```bash
 # Verify tests (run per-package — cross-package rootdir conflict is pre-existing)
-uv run python -m pytest packages/agentir-core/ --tb=short -q       # 206 passing
+uv run python -m pytest packages/agentir-core/ --tb=short -q       # 212 passing
 uv run python -m pytest packages/case-dashboard/ --tb=short -q     # 236 passing
 uv run python -m pytest packages/sift-gateway/ --tb=short -q       # 99 passing
 uv run python -m pytest packages/case-mcp/ --tb=short -q           # 15 passing
@@ -22,7 +22,7 @@ uv run python -m pytest packages/report-mcp/ --tb=short -q         # 31 passing
 grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."
 ```
 
-**Test breakdown:** agentir-core 206 | case-dashboard 236 | sift-gateway 99 | case-mcp 15 | sift-mcp 3 | report-mcp 31
+**Test breakdown:** agentir-core 212 | case-dashboard 236 | sift-gateway 99 | case-mcp 15 | sift-mcp 3 | report-mcp 31
 
 
 **Next phase:** Phase 17 OS hardening (see §Phase 17 below and SIFT-MCPS-PLAN.md)
@@ -109,8 +109,8 @@ Sub-tasks:
 - [x] **16-gate-tier** — Two-tier gate: `UNSEALED` status allows tools with `annotations.readOnlyHint=true` through with a warning annotation injected; blocks analysis tools. Any violation status (MODIFIED/MISSING/UNREGISTERED/LEDGER_ERROR) blocks everything including read-only. 7 integration tests.
 - [x] **16d** — `report-mcp`: include evidence manifest version/hash in report; warn/fail when chain status is not OK. 31 tests.
 - [x] **16-verify-remind** — Portal: show "Full integrity verification recommended" reminder when last `verify_chain_hmac` is older than 24h or has never been run. Advisory only, not blocking. 20 tests.
-- [ ] **16e** — `agentir-core`: add `anchor_manifest()` (Liquefy Approach B — Solana SPL Memo). Optional dep: `pip install "agentir-core[solana]"`. Degrades gracefully without `solders`. Proof to `{case_dir}/evidence-anchor-v{N}.json`.
-- [ ] **16f** — Portal: show anchor status per manifest version (Unanchored / Anchored — Solana tx: …) in evidence intake panel.
+- [x] **16e** — `agentir-core`: `anchor_manifest()` + `load_anchor_proof()` + `_do_solana_anchor()` via stdlib urllib (no httpx). Optional dep: `pip install "agentir-core[solana]"`. Degrades gracefully without `solders`. Proof to `{case_dir}/evidence-anchor-v{N}.json`. Auto-triggers after seal if `AGENTIR_SOLANA_KEYPAIR` set. 6 new tests (212 agentir-core total).
+- [x] **16f** — Portal: anchor status section in evidence intake panel (Unanchored / Pending / Anchored with Solscan link). `POST /api/evidence/chain/anchor` for manual re-anchor. Seal response includes anchor info. `AGENTIR_SOLANA_CLUSTER` env var for mainnet/devnet.
 - [x] **Phase 16 Integration Verification** — run full acceptance checklist from SIFT-MCPS-PLAN.md §Verification after Phase 16 + 16-retire + 16-gate-tier are done. Code-level gates passed locally (550 package tests, namespace/import gates). Lightweight SIFT VM pass complete on `192.168.122.81`. Remaining: full OpenSearch Docker/template smoke and windows-triage DB download/enable pass.
 
 ---
@@ -157,7 +157,7 @@ Hardening for the full honest threat model.
 
 - [ ] **17e** *(optional, advanced)* — **App code + install.sh flag.** `_set_ima_hash(path)` in `evidence_chain.py` via `subprocess.run(['evmctl', 'ima_hash', '--hash=sha256', path])`. Graceful fallback if `ima-evm-utils` not installed. `install.sh --enable-ima` flag: `apt install ima-evm-utils`. No boot param change needed for measure/audit mode (appraise mode is optional and invasive). Portal shows IMA xattr status per file.
 
-- [ ] **17-docs** — `docs/dfir-hardening-guide.md`: honest treatment of what each layer protects and what it cannot. Explicitly states cryptographic ledger is the court-admissible proof; OS hardening is the accident guard and audit paper trail. Covers: verifying each mechanism is active, `ausearch` query for discovery, GPG audit log signing for air-gapped deployments, procedural requirement for examiner to run `verify_chain_hmac` before report.
+- [x] **17-docs** — Full docs suite written: `docs/README.md` (hackathon pitch), `docs/architecture.md` (component + data flow diagrams), `docs/security-controls.md` (all controls with implementation + test traceability), `docs/evidence-chain-of-custody.md` (manifest, ledger, Solana, operational checklist, honest limitations), `docs/dfir-hardening-guide.md` (chattr, auditd, AppArmor, inotify — threat coverage + maintenance checklist).
 
 ---
 
@@ -170,6 +170,17 @@ Hardening for the full honest threat model.
 ---
 
 ## Recent Session Notes
+
+**Session 34 — 2026-05-25 — Evidence chain audit + Phase 16e/16f Solana anchoring:**
+- Audited full evidence pipeline (evidence_chain.py, routes.py, evidence_gate.py, case-mcp, report-mcp, portal UI) against SIFT-MCPS-PLAN.md. Gemini VM test results validated correct. Two bugs found and fixed:
+  - `ignore_file()` path traversal gap: now calls `_resolve_evidence_path()` before modifying manifest (ValueError propagates to portal as 400).
+  - `seal_manifest()` was only carrying IGNORED entries forward; now carries RETIRED too — prevents retired-file paths reappearing as UNREGISTERED after reseal.
+- Phase 16e implemented: `anchor_manifest()`, `load_anchor_proof()`, `_do_solana_anchor()` in `evidence_chain.py`. stdlib urllib (no httpx dep). Optional dep `agentir-core[solana]` → `solders>=0.21`. Degrades gracefully without solders. Proof written to `{case_dir}/evidence-anchor-v{N}.json`. 6 new tests.
+- Phase 16f implemented: anchor status section in portal evidence intake panel (grey/amber/green states + Solscan link). `POST /api/evidence/chain/anchor` for manual re-anchor. Seal response includes anchor info. `triggerAnchor()` JS function.
+- Env vars: `AGENTIR_SOLANA_KEYPAIR` (path to keypair JSON) + `AGENTIR_SOLANA_CLUSTER` (mainnet/devnet, default mainnet). Both optional — feature degrades to unanchored if unset.
+- SIFT VM keypair generated: pubkey `9PjHRwGUeQTvCq8iF9nsALfFce6dUfXWbVFA57XBk1mW`, file at `/var/lib/agentir/solana-keypair.json`. Devnet airdrop + smoke test instructions in SIFT-MCPS-PLAN.md §Approach B.
+- OpenSearch Docker and windows-triage DB download confirmed working on SIFT VM (user verified, not re-tested this session).
+- Test counts: agentir-core 212 | case-dashboard 236 | sift-gateway 99 | case-mcp 15 | sift-mcp 3 | report-mcp 31.
 
 **Session 33 — 2026-05-25 — Lightweight SIFT VM installer verification:**
 - Target VM: `192.168.122.81` (`sansforensics`), Ubuntu 24.04.4, Python 3.12, Docker present, passwordless sudo, user systemd running.

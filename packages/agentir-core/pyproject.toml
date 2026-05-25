@@ -19,6 +19,9 @@ dev = [
     "pytest>=9.0",
     "pytest-cov>=4.0",
 ]
+solana = [
+    "solders>=0.21",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentir_core"]

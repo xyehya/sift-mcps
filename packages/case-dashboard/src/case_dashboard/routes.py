@@ -31,11 +31,15 @@ from agentir_core.approval_auth import (
 )
 from agentir_core.case_io import _protected_write, compute_content_hash
 from agentir_core.evidence_chain import (
+    anchor_manifest,
     chain_status,
     retire_file,
     diff_manifest,
+    get_immutable_flag,
     ignore_file,
     init_evidence_chain,
+    load_anchor_proof,
+    load_ledger,
     load_manifest,
     seal_manifest,
     verify_chain_hmac,
@@ -526,10 +530,33 @@ def _build_evidence_chain_status(case_dir: Path) -> dict:
     wb = _detect_write_block(evidence_dir)
 
     verify_state = _read_verify_state(case_dir)
+    manifest_version = status["manifest_version"]
+
+    # Anchor status (Phase 16e)
+    keypair_configured = bool(os.environ.get("AGENTIR_SOLANA_KEYPAIR", "").strip())
+    anchor_proof = load_anchor_proof(case_dir, manifest_version) if manifest_version > 0 else None
+    anchor_info: dict = {"anchoring_enabled": keypair_configured, "manifest_version": manifest_version}
+    if anchor_proof:
+        anchor_info.update({
+            "solana_tx": anchor_proof.get("solana_tx"),
+            "confirmed": anchor_proof.get("confirmed", False),
+            "cluster": anchor_proof.get("solana_cluster", "mainnet"),
+            "timestamp": anchor_proof.get("timestamp"),
+            "explorer_url": anchor_proof.get("explorer_url"),
+        })
+
+    # Immutable flag per ACTIVE file (Phase 17a)
+    immutable_flags: dict[str, bool | None] = {}
+    if manifest:
+        for entry in manifest.get("files", []):
+            if entry.get("status") == "ACTIVE":
+                rel = entry["path"]
+                immutable_flags[rel] = get_immutable_flag(case_dir / rel)
+
     return {
         "status": status["status"],
         "issues": status["issues"],
-        "manifest_version": status["manifest_version"],
+        "manifest_version": manifest_version,
         "ok_count": status.get("ok_count", 0),
         "unregistered": diff.get("unregistered", []),
         "missing": diff.get("missing", []),
@@ -541,6 +568,8 @@ def _build_evidence_chain_status(case_dir: Path) -> dict:
         "hmac_last_verified_at": verify_state.get("last_hmac_verified_at"),
         "hmac_last_verified_by": verify_state.get("last_hmac_verified_by"),
         "hmac_verify_needed": _hmac_verify_needed(verify_state),
+        "anchor": anchor_info,
+        "immutable_flags": immutable_flags,
     }
 
 
@@ -727,11 +756,30 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         except Exception as exc:
             logger.warning("evidence seal: cache invalidation failed: %s", exc)
 
-    return JSONResponse({
+    # Auto-anchor on Solana if keypair is configured (non-blocking — never fails the seal)
+    anchor_info: dict | None = None
+    keypair_path = os.environ.get("AGENTIR_SOLANA_KEYPAIR", "").strip() or None
+    if keypair_path:
+        try:
+            cluster = os.environ.get("AGENTIR_SOLANA_CLUSTER", "mainnet")
+            ledger = load_ledger(case_dir)
+            proof = anchor_manifest(case_dir, new_manifest, ledger, keypair_path=keypair_path, cluster=cluster)
+            anchor_info = {
+                "solana_tx": proof.get("solana_tx"),
+                "confirmed": proof.get("confirmed"),
+                "explorer_url": proof.get("explorer_url"),
+            }
+        except Exception as exc:
+            logger.warning("evidence seal: anchor_manifest failed: %s", exc)
+
+    resp: dict = {
         "sealed": True,
         "manifest_version": new_manifest["version"],
         "files_added": [s["path"] for s in file_specs],
-    })
+    }
+    if anchor_info is not None:
+        resp["anchor"] = anchor_info
+    return JSONResponse(resp)
 
 
 async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
@@ -956,6 +1004,54 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
         **result,
         "verified_at": verified_at,
         "verified_by": examiner,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Solana anchor endpoint (Phase 16e — manual re-anchor)
+# ---------------------------------------------------------------------------
+
+
+async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
+    """Anchor current manifest on Solana. Session auth, no HMAC required.
+
+    Writes evidence-anchor-v{N}.json and returns anchor status.
+    Returns 503 if AGENTIR_SOLANA_KEYPAIR is not configured.
+    """
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    keypair_path = os.environ.get("AGENTIR_SOLANA_KEYPAIR", "").strip() or None
+    if not keypair_path:
+        return JSONResponse(
+            {"error": "Solana anchoring not configured — set AGENTIR_SOLANA_KEYPAIR"},
+            status_code=503,
+        )
+
+    manifest = load_manifest(case_dir)
+    if not manifest or manifest.get("version", 0) == 0:
+        return JSONResponse({"error": "No sealed manifest to anchor"}, status_code=400)
+
+    try:
+        cluster = os.environ.get("AGENTIR_SOLANA_CLUSTER", "mainnet")
+        ledger = load_ledger(case_dir)
+        proof = anchor_manifest(case_dir, manifest, ledger, keypair_path=keypair_path, cluster=cluster)
+    except Exception:
+        logger.exception("manual anchor_manifest failed")
+        return JSONResponse({"error": "Anchor failed — check gateway logs"}, status_code=500)
+
+    return JSONResponse({
+        "anchored": proof.get("solana_tx") is not None,
+        "manifest_version": proof.get("manifest_version"),
+        "solana_tx": proof.get("solana_tx"),
+        "confirmed": proof.get("confirmed"),
+        "explorer_url": proof.get("explorer_url"),
+        "cluster": proof.get("solana_cluster"),
     })
 
 
@@ -3107,6 +3203,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
         Route("/api/evidence/chain/retire", post_evidence_chain_retire, methods=["POST"]),
         Route("/api/evidence/chain/verify-hmac", post_evidence_chain_verify_hmac, methods=["POST"]),
+        Route("/api/evidence/chain/anchor", post_evidence_chain_anchor, methods=["POST"]),
         # Approach C: response-guard override
         Route("/api/response-guard/status", get_response_guard_status, methods=["GET"]),
         Route("/api/response-guard/override", post_response_guard_override, methods=["POST"]),
