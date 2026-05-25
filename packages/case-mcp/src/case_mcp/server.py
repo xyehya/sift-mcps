@@ -151,7 +151,7 @@ def _resolve_case_dir(case_id: str = "") -> Path:
             raise ValueError(f"AGENTIR_CASE_DIR does not exist: {env_dir}")
         return p
 
-    raise ValueError("No active case. Use case_init or case_activate first.")
+    raise ValueError("No active case. Use the Examiner Portal to create or select a case first.")
 
 
 def create_server() -> FastMCP:
@@ -171,8 +171,9 @@ def create_server() -> FastMCP:
         case_id: str = "",
         cases_dir: str = "",
     ) -> dict:
-        """Create a new case directory with the given name. The case ID
-        is auto-generated unless case_id is provided.
+        """LEGACY: This tool is provided for CLI compatibility only.
+        In the portal-first workflow, cases are created via the Examiner Portal.
+        Calling this tool will create a directory outside the portal-managed structure.
 
         Confirm with the examiner before creating a case — this creates
         a permanent directory with case metadata.
@@ -214,12 +215,12 @@ def create_server() -> FastMCP:
             if logged_id is None:
                 result["warning"] = "Audit write failed — action not recorded"
             result["next_steps"] = [
-                "Ask the examiner what triggered this investigation",
-                "Survey evidence: ls evidence/",
-                "If OpenSearch tools available: offer to ingest evidence",
-                "Run idx_case_summary for scope overview",
-                "Check list_playbooks for investigation procedures",
+                "Use the Examiner Portal to create and activate cases in the supported workflow.",
+                "Open the portal evidence intake flow before investigation proceeds.",
+                "Only use case_init as a legacy maintenance fallback.",
             ]
+            result["legacy"] = True
+            result["portal_hint"] = "Create cases in the Examiner Portal, not through MCP."
             return result
         except (ValueError, OSError) as e:
             return {"error": str(e)}
@@ -229,7 +230,9 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     @server.tool()
     def case_activate(case_id: str, cases_dir: str = "") -> dict:
-        """Switch the active case pointer to the specified case ID.
+        """LEGACY: This tool is provided for CLI compatibility only.
+        In the portal-first workflow, cases are selected via the Examiner Portal.
+        Calling this tool updates only the legacy CLI active-case pointer.
 
         Confirm with the examiner before switching cases — this changes
         which case all subsequent operations apply to.
@@ -258,10 +261,12 @@ def create_server() -> FastMCP:
                     "to see what's indexed, or offer to ingest new evidence."
                 )
             result["next_steps"] = [
-                "Ask the examiner for investigation context",
-                "Survey evidence: ls evidence/",
-                "Follow the INVESTIGATION STARTUP sequence in your instructions",
+                "Use the Examiner Portal to select or create the active case in the supported workflow.",
+                "Open the portal evidence intake flow before investigation proceeds.",
+                "Only use case_activate as a legacy maintenance fallback.",
             ]
+            result["legacy"] = True
+            result["portal_hint"] = "Activate cases in the Examiner Portal, not through MCP."
             return result
         except (ValueError, OSError) as e:
             return {"error": str(e)}

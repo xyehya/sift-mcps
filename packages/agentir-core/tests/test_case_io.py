@@ -14,6 +14,7 @@ from agentir_core.case_io import (
     import_bundle,
     load_findings,
     load_timeline,
+    resolve_case_path,
     save_findings,
     save_timeline,
     verify_approval_integrity,
@@ -46,6 +47,54 @@ class TestGetCaseDir:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         with pytest.raises(CaseError):
             get_case_dir()
+
+
+class TestResolveCasePath:
+    def test_absolute_path_inside_case(self, tmp_path):
+        case_dir = tmp_path / "case"
+        evidence = case_dir / "evidence"
+        evidence.mkdir(parents=True)
+        target = evidence / "disk.e01"
+        target.write_text("x")
+
+        assert resolve_case_path(str(target), case_dir=case_dir) == target.resolve()
+
+    def test_known_subdir_relative_path(self, tmp_path):
+        case_dir = tmp_path / "case"
+        expected = case_dir / "evidence" / "disk.e01"
+
+        assert resolve_case_path("evidence/disk.e01", case_dir=case_dir) == expected.resolve()
+
+    def test_bare_filename_defaults_to_evidence(self, tmp_path):
+        case_dir = tmp_path / "case"
+        expected = case_dir / "evidence" / "disk.e01"
+
+        assert resolve_case_path("disk.e01", case_dir=case_dir) == expected.resolve()
+
+    def test_custom_default_subdir(self, tmp_path):
+        case_dir = tmp_path / "case"
+        expected = case_dir / "reports" / "final.md"
+
+        assert (
+            resolve_case_path("final.md", case_dir=case_dir, default_subdir="reports")
+            == expected.resolve()
+        )
+
+    def test_traversal_escape_rejected(self, tmp_path):
+        case_dir = tmp_path / "case"
+        with pytest.raises(ValueError, match="outside case directory"):
+            resolve_case_path("../../../etc/passwd", case_dir=case_dir)
+
+    def test_absolute_path_outside_case_rejected(self, tmp_path):
+        case_dir = tmp_path / "case"
+        outside = tmp_path / "outside.txt"
+        with pytest.raises(ValueError, match="outside case directory"):
+            resolve_case_path(str(outside), case_dir=case_dir)
+
+    def test_missing_active_case_rejected(self, monkeypatch):
+        monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
+        with pytest.raises(ValueError, match="Examiner Portal"):
+            resolve_case_path("disk.e01")
 
 
 class TestFindingsIO:

@@ -1,6 +1,7 @@
 import json
 import os
 import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -76,9 +77,8 @@ def _setup_cookie(client, examiner="alice", role="examiner", must_reset=False, p
 
 def test_unauthorized_returns_401(client):
     resp = client.post("/api/case/create", json={
-        "case_id": "case1",
+        "casename": "case1",
         "title": "Case 1",
-        "dir": "/cases/case1"
     })
     assert resp.status_code == 401
 
@@ -86,9 +86,8 @@ def test_unauthorized_returns_401(client):
 def test_readonly_role_returns_403(client, passwords_dir):
     _setup_cookie(client, examiner="alice", role="readonly", passwords_dir=passwords_dir)
     resp = client.post("/api/case/create", json={
-        "case_id": "case1",
+        "casename": "case1",
         "title": "Case 1",
-        "dir": "/cases/case1"
     })
     assert resp.status_code == 403
 
@@ -96,52 +95,105 @@ def test_readonly_role_returns_403(client, passwords_dir):
 def test_must_reset_password_returns_403(client, passwords_dir):
     _setup_cookie(client, examiner="alice", role="examiner", must_reset=True, passwords_dir=passwords_dir)
     resp = client.post("/api/case/create", json={
-        "case_id": "case1",
+        "casename": "case1",
         "title": "Case 1",
-        "dir": "/cases/case1"
     })
     assert resp.status_code == 403
 
 
-def test_invalid_case_id_returns_400(client, passwords_dir):
+def test_portal_case_create_lowercases_casename(client, passwords_dir):
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
     resp = client.post("/api/case/create", json={
-        "case_id": "Case1!",  # Upper case, special chars
+        "casename": "Case1",
         "title": "Case 1",
-        "dir": "/cases/case1"
     })
     assert resp.status_code == 400
+    assert resp.json()["error"] == "casename must be lowercase"
 
 
-def test_symlink_escape_returns_400(client, case_env, passwords_dir):
-    case_root, _ = case_env
+def test_portal_case_create_rejects_free_form_directory(client, case_env, passwords_dir):
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
-    
-    outside_dir = case_root.parent / "outside_dir"
-    
+
     resp = client.post("/api/case/create", json={
-        "case_id": "case1",
+        "casename": "case1",
         "title": "Case 1",
-        "dir": str(outside_dir)
+        "dir": str(case_env[0] / "case1"),
+    })
+    assert resp.status_code == 400
+    assert "computed by the portal" in resp.json()["error"]
+
+
+def test_case_id_format_validation_regex():
+    assert routes_mod._valid_case_id("case-20260525-1412")
+    assert routes_mod._valid_case_id("rocba_cdrive-20260525-1412")
+    assert not routes_mod._valid_case_id("Case-20260525-1412")
+    assert not routes_mod._valid_case_id("1case-20260525-1412")
+    assert not routes_mod._valid_case_id("c")
+    assert not routes_mod._valid_case_id("case/escape-20260525-1412")
+
+
+def test_portal_case_create_rejects_path_traversal(client, passwords_dir, monkeypatch):
+    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+
+    monkeypatch.setattr(routes_mod, "_slugify_case_name", lambda _: "../escape")
+    monkeypatch.setattr(routes_mod, "_valid_case_id", lambda _: True)
+
+    resp = client.post("/api/case/create", json={
+        "casename": "case1",
+        "title": "Case 1",
     })
     assert resp.status_code == 400
     assert resp.json()["error"] == "Directory must be under case root"
 
 
-def test_successful_case_creation(client, case_env, passwords_dir):
+def test_portal_case_create_computes_case_id_with_time(client, case_env, passwords_dir, monkeypatch):
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 5, 25, 14, 12, 33, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
     case_root, cfg_path = case_env
+    monkeypatch.setattr(routes_mod, "datetime", FrozenDatetime)
+    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+
+    resp = client.post("/api/case/create", json={
+        "casename": "rocba cdrive!",
+        "title": "ROCBA C Drive",
+    })
+
+    expected_id = "rocba-cdrive-20260525-1412"
+    expected_dir = case_root / expected_id
+    assert resp.status_code == 200
+    assert resp.json()["case_id"] == expected_id
+    assert resp.json()["case_dir"] == str(expected_dir)
+
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+    assert cfg["case"]["dir"] == str(expected_dir)
+
+
+def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 5, 25, 14, 13, 0, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+    case_root, cfg_path = case_env
+    monkeypatch.setattr(routes_mod, "datetime", FrozenDatetime)
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
     
-    requested_dir = case_root / "case-2026-001"
+    requested_dir = case_root / "case-2026-001-20260525-1413"
     
     resp = client.post("/api/case/create", json={
-        "case_id": "case-2026-001",
+        "casename": "case-2026-001",
         "title": "Case 2026 001",
-        "dir": str(requested_dir)
     })
     
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+    assert resp.json()["case_id"] == "case-2026-001-20260525-1413"
     assert resp.json()["case_dir"] == str(requested_dir)
     
     assert requested_dir.exists()
@@ -154,10 +206,11 @@ def test_successful_case_creation(client, case_env, passwords_dir):
     assert case_yaml_path.exists()
     with open(case_yaml_path) as f:
         meta = yaml.safe_load(f)
-    assert meta["case_id"] == "case-2026-001"
+    assert meta["case_id"] == "case-2026-001-20260525-1413"
     assert meta["title"] == "Case 2026 001"
     assert meta["status"] == "open"
     assert meta["examiner"] == "alice"
+    assert meta["created_at"] == "2026-05-25T14:13:00+00:00"
     
     for fname in ("findings.json", "timeline.json", "todos.json", "iocs.json", "evidence-manifest.json"):
         assert (requested_dir / fname).exists()
@@ -179,6 +232,13 @@ def test_successful_case_creation(client, case_env, passwords_dir):
 
 def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_path, monkeypatch):
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 5, 25, 14, 14, 0, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+    monkeypatch.setattr(routes_mod, "datetime", FrozenDatetime)
     case_root, cfg_path = case_env
     activated = []
 
@@ -191,11 +251,10 @@ def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_
     client = TestClient(app, raise_server_exceptions=True)
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
 
-    requested_dir = case_root / "case-activation"
+    requested_dir = case_root / "case-activation-20260525-1414"
     resp = client.post("/api/case/create", json={
-        "case_id": "case-activation",
+        "casename": "case-activation",
         "title": "Case Activation",
-        "dir": str(requested_dir)
     })
 
     assert resp.status_code == 200
@@ -203,18 +262,14 @@ def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_
 
 
 def test_concurrent_case_creation_returns_409(client, case_env, passwords_dir):
-    case_root, _ = case_env
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
-    
-    requested_dir = case_root / "case-concurrent"
     
     routes_mod._case_create_lock.acquire()
     
     try:
         resp = client.post("/api/case/create", json={
-            "case_id": "case-concurrent",
+            "casename": "case-concurrent",
             "title": "Case Concurrent",
-            "dir": str(requested_dir)
         })
         assert resp.status_code == 409
         assert resp.json()["error"] == "Another case creation is in progress"

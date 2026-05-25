@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
+from agentir_core.case_io import resolve_case_path
 from mcp.server.fastmcp import FastMCP
 from sift_common.instructions import SIFT_MCP as _INSTRUCTIONS
 
@@ -118,6 +120,7 @@ def create_server() -> FastMCP:
         timeout: int = 0,
         save_output: bool = False,
         input_files: list[str] | None = None,
+        working_dir: str = "",
         preview_lines: int = 0,
         skip_enrichment: bool = False,
     ) -> dict:
@@ -136,6 +139,9 @@ def create_server() -> FastMCP:
             input_files: Files this command reads. Pass the paths you
                 referenced in the command. Server auto-detects as backup
                 for cataloged tools.
+            working_dir: Optional working directory under the active case.
+                Defaults to AGENTIR_CASE_DIR. Relative command paths are
+                evaluated from this directory.
             preview_lines: Max lines in inline preview for large outputs
                 (0 = default ~10KB budget, max 200). Useful when you need
                 more context from a grep or timeline query.
@@ -151,6 +157,19 @@ def create_server() -> FastMCP:
 
         start = time.monotonic()
         audit_id = audit._next_audit_id()
+        try:
+            if working_dir:
+                cwd = str(resolve_case_path(working_dir, default_subdir=""))
+            else:
+                cwd = os.environ.get("AGENTIR_CASE_DIR", "") or None
+        except ValueError as e:
+            return build_response(
+                tool_name="run_command",
+                success=False,
+                data=None,
+                audit_id=audit_id,
+                error="Path must be within the case directory",
+            )
 
         # Detect input files: LLM-first, catalog-backup, parsed-fallback
         binary = command[0].split("/")[-1] if command else ""
@@ -159,7 +178,12 @@ def create_server() -> FastMCP:
         detected_inputs: list[str] = []
 
         if input_files:
-            detected_inputs = input_files
+            detected_inputs = []
+            for fpath in input_files:
+                try:
+                    detected_inputs.append(str(resolve_case_path(fpath)))
+                except ValueError:
+                    detected_inputs.append(fpath)
             detection_method = "llm"
         elif td and td.input_flag:
             # Cataloged tool: find flag in command, take next element
@@ -209,6 +233,7 @@ def create_server() -> FastMCP:
                 purpose=purpose,
                 timeout=timeout or None,
                 save_output=save_output,
+                cwd=cwd,
                 preview_lines=min(preview_lines, 200) if preview_lines else 0,
             )
             elapsed = time.monotonic() - start

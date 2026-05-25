@@ -2591,6 +2591,7 @@ name = "opensearch-mcp"
 version = "0.6.1"
 source = { editable = "packages/opensearch-mcp" }
 dependencies = [
+    { name = "agentir-core" },
     { name = "defusedxml" },
     { name = "evtx" },
     { name = "mcp" },
@@ -2613,6 +2614,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agentir-core", editable = "packages/agentir-core" },
     { name = "defusedxml", specifier = ">=0.7" },
     { name = "evtx", specifier = ">=0.8" },
     { name = "mcp", specifier = ">=1.26" },
@@ -4404,6 +4406,7 @@ name = "sift-mcp"
 version = "0.6.1"
 source = { editable = "packages/sift-mcp" }
 dependencies = [
+    { name = "agentir-core" },
     { name = "forensic-knowledge" },
     { name = "mcp" },
     { name = "pyyaml" },
@@ -4419,6 +4422,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agentir-core", editable = "packages/agentir-core" },
     { name = "forensic-knowledge", editable = "packages/forensic-knowledge" },
     { name = "mcp", specifier = ">=1.26" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },

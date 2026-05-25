@@ -639,16 +639,12 @@ body {
       Create New Case
     </div>
     <div style="margin-bottom:12px">
-      <label class="login-label" for="newCaseId">Case ID (lowercase alphanumeric, hyphen, underscore)</label>
-      <input class="login-input" type="text" id="newCaseId" placeholder="e.g. case-2026-001" oninput="updateNewCaseDir()">
+      <label class="login-label" for="newCaseId">Case name</label>
+      <input class="login-input" type="text" id="newCaseId" placeholder="e.g. rocba-cdrive">
     </div>
     <div style="margin-bottom:12px">
       <label class="login-label" for="newCaseTitle">Title</label>
       <input class="login-input" type="text" id="newCaseTitle" placeholder="e.g. Intrusion Analysis May 2026">
-    </div>
-    <div style="margin-bottom:12px">
-      <label class="login-label" for="newCaseDir">Directory</label>
-      <input class="login-input" type="text" id="newCaseDir" placeholder="/cases/case-2026-001" readonly>
     </div>
     <div class="login-error" id="newCaseError" style="margin-bottom:12px"></div>
     <div class="dialog-actions">
@@ -1435,15 +1431,9 @@ async function submitSignOut() {
 }
 
 /* === Case Creation Management === */
-function updateNewCaseDir() {
-  const caseId = document.getElementById('newCaseId').value.trim();
-  document.getElementById('newCaseDir').value = caseId ? ('/cases/' + caseId) : '';
-}
-
 function openNewCaseModal() {
   document.getElementById('newCaseId').value = '';
   document.getElementById('newCaseTitle').value = '';
-  document.getElementById('newCaseDir').value = '';
   document.getElementById('newCaseError').style.display = 'none';
   document.getElementById('newCaseModal').classList.add('visible');
   document.getElementById('newCaseModal').style.display = 'flex';
@@ -1455,21 +1445,19 @@ function closeNewCaseModal() {
 }
 
 async function submitCreateCase() {
-  const caseId = document.getElementById('newCaseId').value.trim();
+  const casename = document.getElementById('newCaseId').value.trim();
   const title = document.getElementById('newCaseTitle').value.trim();
-  const directory = document.getElementById('newCaseDir').value.trim();
   const errorEl = document.getElementById('newCaseError');
   errorEl.style.display = 'none';
 
-  if (!caseId || !title || !directory) {
+  if (!casename || !title) {
     errorEl.textContent = 'All fields are required.';
     errorEl.style.display = 'block';
     return;
   }
 
-  const caseIdPattern = /^[a-z0-9][a-z0-9_-]{0,39}$/;
-  if (!caseIdPattern.test(caseId)) {
-    errorEl.textContent = 'Case ID must start with lowercase letter/digit, contain only lowercase alnum, hyphens, or underscores, and be 1-40 characters.';
+  if (casename !== casename.toLowerCase()) {
+    errorEl.textContent = 'Case name must be lowercase.';
     errorEl.style.display = 'block';
     return;
   }
@@ -1480,13 +1468,13 @@ async function submitCreateCase() {
     await apiFetch('/api/case/create', {
       method: 'POST',
       body: JSON.stringify({
-        case_id: caseId,
+        casename: casename,
         title: title,
-        dir: directory,
       }),
+    }).then((data) => {
+      showToast('Case created successfully: ' + (data.case_id || casename), 'success');
     });
     closeNewCaseModal();
-    showToast('Case created successfully: ' + caseId, 'success');
     await loadAll();
   } catch (e) {
     errorEl.textContent = e.message || 'Failed to create case';

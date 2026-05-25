@@ -25,6 +25,7 @@ from agentir_core.case_io import (
     load_findings,
     load_timeline,
     load_todos,
+    resolve_case_path,
 )
 from agentir_core.evidence_chain import ChainStatus, chain_status as _ev_chain_status, load_manifest
 from agentir_core.evidence_ops import list_evidence_data
@@ -942,25 +943,34 @@ def create_server() -> FastMCP:
     def save_report(filename: str, content: str, profile: str = "") -> dict:
         """Persist a rendered report to the case reports/ directory.
 
-        Filename is sanitized: only alphanumeric characters, hyphens,
-        underscores, and dots are allowed. Path traversal is blocked.
+        Bare filenames resolve to AGENTIR_CASE_DIR/reports/. The explicit
+        reports/<filename> form is also accepted. Path traversal is blocked.
         """
         try:
             _validate_str_length(filename, "filename", _MAX_FILENAME)
             if len(content.encode("utf-8", errors="replace")) > _MAX_REPORT_BYTES:
                 return {"error": "Report content exceeds maximum size of 10 MB."}
-            # Block path traversal
-            if ".." in filename or "/" in filename or "\\" in filename:
-                return {"error": "Invalid filename: path traversal not allowed."}
-
-            # Sanitize filename
-            sanitized = re.sub(r"[^a-zA-Z0-9._-]", "_", filename)
-            if not sanitized:
-                return {"error": "Filename is empty after sanitization."}
-
             case_dir = _resolve_case_dir()
             reports_dir = case_dir / "reports"
             reports_dir.mkdir(exist_ok=True)
+
+            try:
+                requested_path = resolve_case_path(
+                    filename,
+                    case_dir=case_dir,
+                    default_subdir="reports",
+                )
+            except ValueError as e:
+                return {
+                    "error": "Path must be within the case directory",
+                    "details": str(e),
+                }
+            if not requested_path.is_relative_to(reports_dir.resolve()):
+                return {"error": "Report path must be within the case reports directory."}
+
+            sanitized = re.sub(r"[^a-zA-Z0-9._-]", "_", requested_path.name)
+            if not sanitized:
+                return {"error": "Filename is empty after sanitization."}
 
             report_path = reports_dir / sanitized
 

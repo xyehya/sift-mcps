@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from sift_mcp.catalog import get_tool_def
 from sift_mcp.config import get_config
 from sift_mcp.environment import find_binary
@@ -64,6 +66,9 @@ def run_command(
     """
     if not command:
         raise ValueError("Empty command")
+
+    if cwd is None:
+        cwd = os.environ.get("AGENTIR_CASE_DIR") or None
 
     binary = command[0].split("/")[-1]  # Strip path prefix
 

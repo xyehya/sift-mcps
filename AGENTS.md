@@ -127,6 +127,15 @@ All code — case-mcp tools, portal endpoints, report-mcp, validators, tests —
 file pointer is intentionally not part of this repo's runtime contract. Manual `gateway.yaml`
 editing remains an administrator fallback only.
 
+### R4b. Tool path arguments resolve under the active case
+All tools that accept a `path` argument must resolve paths through
+`agentir_core.case_io.resolve_case_path()` or equivalent gateway-owned policy:
+1. Absolute paths are accepted only when they resolve under `AGENTIR_CASE_DIR`.
+2. Relative paths starting with a known case subdir (`evidence/`, `extractions/`, `reports/`, `audit/`, `tmp/`) resolve from `AGENTIR_CASE_DIR`.
+3. Bare filenames resolve under `AGENTIR_CASE_DIR/evidence/` by default; tool docstrings must state this default.
+4. Empty paths use the tool's documented default or return a structured error.
+5. Any path that resolves outside `AGENTIR_CASE_DIR` returns `{"error": "Path must be within the case directory"}` or a more specific structured error with the same meaning.
+
 ### R5. All MCP transport over TLS
 Self-signed CA generated at install time. Hermes configures `REQUESTS_CA_BUNDLE` or
 adds the CA to its OS trust store. The gateway listens on HTTPS only for remote access.

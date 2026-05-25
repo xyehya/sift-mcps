@@ -7,13 +7,13 @@
 
 ## ⚡ Start Here Every Session
 
-**Current state:** Phase R1 COMPLETE (Session 42). Gateway now owns `AGENTIR_CASE_DIR` + `AGENTIR_CASES_ROOT` propagation, stdio backend launches fail closed without active case env, and portal case creation writes the legacy CLI pointer only as compatibility. Validated: agentir-core 218 | case-dashboard 237 | sift-gateway 103 | case-mcp 21 | opensearch-mcp 907 (71 skipped) | sift-mcp 3 | report-mcp 31 | remediation gate 0 failures. **Next: Phase R2 — case directory canonicalization (portal computes `{casename}-{YYYYMMDD}-{HHMM}`, no free-form directory, legacy case-mcp guidance).**
+**Current state:** Phase R3 COMPLETE (Session 44). `agentir-core` now owns `resolve_case_path()` for active-case-contained tool paths, AGENTS.md records the path policy, OpenSearch ingest tools resolve bare filenames / known relative subdirs under `AGENTIR_CASE_DIR`, `sift-mcp run_command` defaults cwd to the active case, `report-mcp save_report` resolves output under `reports/`, and the aggregate gateway injects `_case` context into MCP tool responses. Validated: agentir-core 225 | sift-gateway 104 | opensearch-mcp 907 (71 skipped) | sift-mcp 3 | report-mcp 31 | remediation gate 0 failures. **Next: Phase R4 — tool registry audit from `remediation-tasks.md`.**
 
 ```bash
 # Verify tests (run per-package — cross-package rootdir conflict is pre-existing)
-uv run python -m pytest packages/agentir-core/ --tb=short -q       # 218 passing
-uv run python -m pytest packages/case-dashboard/ --tb=short -q     # 236 passing
-uv run python -m pytest packages/sift-gateway/ --tb=short -q       # 99 passing
+uv run python -m pytest packages/agentir-core/ --tb=short -q       # 225 passing
+uv run python -m pytest packages/case-dashboard/ --tb=short -q     # 240 passing
+uv run python -m pytest packages/sift-gateway/ --tb=short -q       # 104 passing
 uv run python -m pytest packages/case-mcp/ --tb=short -q           # 21 passing
 uv run python -m pytest packages/opensearch-mcp/ --tb=short -q     # 907 passing
 uv run python -m pytest packages/sift-mcp/ --tb=short -q           # 3 passing
@@ -23,7 +23,7 @@ uv run python -m pytest packages/report-mcp/ --tb=short -q         # 31 passing
 bash scripts/remediation-gate.sh
 ```
 
-**Test breakdown:** agentir-core 218 | case-dashboard 236 | sift-gateway 99 | case-mcp 21 | opensearch-mcp 907 | sift-mcp 3 | report-mcp 31
+**Test breakdown:** agentir-core 225 | case-dashboard 240 | sift-gateway 104 | case-mcp 21 | opensearch-mcp 907 | sift-mcp 3 | report-mcp 31
 
 
 **Remediation track:** See `remediation-tasks.md` for the complete bug inventory + phased fix plan (R0→R6). R0 unblocks all workflow testing. R6 = Phase 18-pre gate. Phase 18 Hermes profile follows R6.
@@ -158,6 +158,30 @@ Gateway/process env is now the single active-case source for runtime backends; `
 - [x] **R1-3** — Portal case creation sets both env vars, writes `~/.agentir/active_case` atomically as `# Legacy CLI fallback`, and avoids double backend restart when the gateway callback is wired.
 - [x] **R1-4** — `configs/gateway.yaml.template` uses `${AGENTIR_CASES_ROOT}`; `install.sh` exports plural root while preserving `AGENTIR_CASE_ROOT` backward compatibility for existing installer code.
 - [x] **R1 tests/gates** — New `packages/sift-gateway/tests/test_case_env.py`; updated portal case-create assertions. Passed: `bash scripts/remediation-gate.sh`, `bash -n install.sh`, `uv run python -m pytest packages/sift-gateway/ --tb=short -q`, `uv run python -m pytest packages/case-dashboard/ --tb=short -q`, `uv run pytest packages/agentir-core/tests/ -v --tb=short`, plus case-mcp, opensearch-mcp, sift-mcp, and report-mcp package gates.
+
+---
+
+## Phase R2 — Case Directory Canonicalization ✅ (Session 43)
+
+Portal-created cases now own canonical case naming and directory placement. Agents and callers cannot choose an arbitrary case directory through the portal API.
+
+- [x] **R2-1** — `packages/case-dashboard/src/case_dashboard/routes.py`: `POST /api/case/create` accepts `casename` + `title`, rejects `case_id`/`dir`/`directory`/`case_dir`, enforces lowercase casename, slugifies to lowercase path-safe form, and computes `case_id = {slug}-{YYYYMMDD}-{HHMM}`.
+- [x] **R2-2** — Portal case directory now resolves `gateway.yaml case.root` first, then `AGENTIR_CASES_ROOT`, then `/cases`; computed directory is checked with `Path.resolve().is_relative_to(cases_root.resolve())` before creation.
+- [x] **R2-3** — `packages/case-mcp/src/case_mcp/server.py`: `case_init` and `case_activate` docstrings/results mark both tools as LEGACY compatibility surfaces and their `next_steps` / hints direct users to the Examiner Portal.
+- [x] **R2-4 tests** — Added/updated tests for timestamped computed IDs, lowercase rejection, free-form directory rejection, containment guard, and case ID regex validation. Portal UI static form now sends only `casename` + `title`.
+- [x] **R2 validation** — Passed: `bash scripts/remediation-gate.sh`; `uv run python -m pytest packages/case-dashboard/ --tb=short -q` (240 passed, 5 warnings); `uv run python -m pytest packages/case-mcp/ --tb=short -q` (21 passed); `uv run pytest packages/agentir-core/tests/ -v --tb=short` (218 passed).
+
+---
+
+## Phase R3 — Path Auto-Resolution in Tools ✅ (Session 44)
+
+Path-taking tools now resolve against the portal-created active case rather than accepting arbitrary filesystem locations.
+
+- [x] **R3-1** — `AGENTS.md`: added R4b path policy for absolute paths, known case subdirs, bare filename defaults, empty paths, and outside-case rejections.
+- [x] **R3-2** — `packages/agentir-core/src/agentir_core/case_io.py`: added `resolve_case_path()` with tests for absolute in-case paths, `evidence/...`, bare filenames, custom default subdirs, traversal, outside-case absolutes, and missing active case.
+- [x] **R3-3** — Wired path resolution into `opensearch-mcp` ingest tools (`idx_ingest`, JSON, delimited, accesslog, memory), `sift-mcp run_command` cwd/default input-file handling, and `report-mcp save_report` reports output handling.
+- [x] **R3-4** — `packages/sift-gateway/src/sift_gateway/mcp_endpoint.py`: aggregate `/mcp` response middleware appends `_case: {id, dir, evidence_dir}` to tool responses, including gateway-generated error/block responses when an active case is set.
+- [x] **R3 validation** — Passed: `bash scripts/remediation-gate.sh`; `uv run pytest packages/agentir-core/tests/ -v --tb=short` (225 passed); `uv run python -m pytest packages/sift-gateway/ --tb=short -q` (104 passed); `uv run python -m pytest packages/opensearch-mcp/ --tb=short -q` (907 passed, 71 skipped); `uv run python -m pytest packages/sift-mcp/ --tb=short -q` (3 passed); `uv run python -m pytest packages/report-mcp/ --tb=short -q` (31 passed).
 
 ---
 

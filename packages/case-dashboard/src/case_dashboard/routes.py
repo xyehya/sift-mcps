@@ -139,7 +139,9 @@ _MAX_LOGIN_CHALLENGES = 200  # R6 total pool cap
 _MAX_LOGIN_CHALLENGES_PER_EXAMINER = 5  # R6 per-examiner in-flight limit
 
 _case_create_lock = threading.Lock()
-_CASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+_CASE_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
+_CASE_SLUG_INVALID_RE = re.compile(r"[^a-z0-9_-]+")
+_CASE_SLUG_HYPHENS_RE = re.compile(r"-+")
 
 # Evidence chain challenge store — domain-separated from commit challenges (R2)
 _evidence_challenges: dict[str, dict] = {}
@@ -3057,6 +3059,40 @@ def _write_cli_case_pointer(case_dir: str) -> None:
         raise
 
 
+def _slugify_case_name(casename: str) -> str:
+    """Normalize an already-lowercase portal case name into a path slug."""
+    slug = _CASE_SLUG_INVALID_RE.sub("-", casename.strip())
+    slug = _CASE_SLUG_HYPHENS_RE.sub("-", slug)
+    return slug.strip("-")
+
+
+def _valid_case_id(case_id: str) -> bool:
+    return bool(_CASE_ID_RE.fullmatch(case_id))
+
+
+def _load_cases_root() -> Path:
+    """Resolve cases root from gateway.yaml case.root or AGENTIR_CASES_ROOT."""
+    case_root = None
+    if _GATEWAY_CONFIG_PATH is not None:
+        try:
+            with open(_GATEWAY_CONFIG_PATH, encoding="utf-8") as f:
+                import yaml as _yaml
+                config = _yaml.safe_load(f) or {}
+            case_root = config.get("case", {}).get("root")
+        except Exception:
+            pass
+
+    if not case_root:
+        case_root = os.environ.get("AGENTIR_CASES_ROOT") or "/cases"
+
+    expanded = re.sub(
+        r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+        lambda m: os.environ.get(m.group(1), ""),
+        str(case_root),
+    )
+    return Path(expanded).expanduser().resolve()
+
+
 async def post_case_create(request: Request) -> JSONResponse:
     """POST /portal/api/case/create — Create a new case.
 
@@ -3083,41 +3119,35 @@ async def post_case_create(request: Request) -> JSONResponse:
     if not isinstance(body, dict):
         return JSONResponse({"error": "Expected JSON object"}, status_code=400)
 
-    case_id = body.get("case_id", "").strip()
-    title = body.get("title", "").strip()
-    requested_dir = body.get("dir", "").strip()
-
-    if not case_id or not title or not requested_dir:
-        return JSONResponse({"error": "Missing required fields"}, status_code=400)
-
-    if not _CASE_ID_RE.match(case_id):
-        return JSONResponse({"error": "Invalid case_id format"}, status_code=400)
-
-    # Determine case_root
-    case_root = None
-    if _GATEWAY_CONFIG_PATH is not None:
-        try:
-            with open(_GATEWAY_CONFIG_PATH, encoding="utf-8") as f:
-                import yaml as _yaml
-                config = _yaml.safe_load(f) or {}
-            case_root = config.get("case", {}).get("root")
-        except Exception:
-            pass
-    
-    if not case_root:
-        case_root = (
-            os.environ.get("AGENTIR_CASES_ROOT")
-            or os.environ.get("AGENTIR_CASE_ROOT")
-            or "/cases"
+    forbidden_fields = {"dir", "directory", "case_dir", "case_id"} & set(body)
+    if forbidden_fields:
+        return JSONResponse(
+            {
+                "error": (
+                    "Case directory and case_id are computed by the portal; "
+                    "submit casename and title only"
+                )
+            },
+            status_code=400,
         )
 
-    # Interpolate environment variables in case_root
-    case_root = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), ""), case_root)
+    casename = body.get("casename", "").strip()
+    title = body.get("title", "").strip()
 
-    # R5 Symlink escape check
-    real_root = Path(os.path.realpath(case_root))
-    real_requested = Path(os.path.realpath(requested_dir))
-    if not str(real_requested).startswith(str(real_root) + os.sep):
+    if not casename or not title:
+        return JSONResponse({"error": "Missing required fields"}, status_code=400)
+
+    if casename != casename.lower():
+        return JSONResponse({"error": "casename must be lowercase"}, status_code=400)
+
+    slug = _slugify_case_name(casename)
+    case_id = f"{slug}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}"
+    if not _valid_case_id(case_id):
+        return JSONResponse({"error": "Invalid case_id format"}, status_code=400)
+
+    real_root = _load_cases_root()
+    real_requested = (real_root / case_id).resolve()
+    if not real_requested.is_relative_to(real_root):
         return JSONResponse({"error": "Directory must be under case root"}, status_code=400)
 
     # Concurrency serialization using threading.Lock with non-blocking acquire
@@ -3143,6 +3173,7 @@ async def post_case_create(request: Request) -> JSONResponse:
             "status": "open",
             "examiner": examiner,
             "created": ts.isoformat(),
+            "created_at": ts.isoformat(),
         }
         
         tmp_fd, tmp_yaml = tempfile.mkstemp(dir=str(real_requested), suffix=".tmp")
@@ -3214,7 +3245,9 @@ async def post_case_create(request: Request) -> JSONResponse:
                 if hasattr(gateway, "restart_backends"):
                     await gateway.restart_backends()
 
-        return JSONResponse({"ok": True, "case_dir": str(real_requested)})
+        return JSONResponse(
+            {"ok": True, "case_id": case_id, "case_dir": str(real_requested)}
+        )
 
     except Exception as e:
         logger.error("Failed to create case: %s", e)

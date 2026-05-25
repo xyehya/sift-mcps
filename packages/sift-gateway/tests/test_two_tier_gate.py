@@ -189,6 +189,15 @@ class TestTwoTierGateIntegration:
         assert any("ok" in t for t in texts)
         assert not any("blocked" in t for t in texts)
 
+    async def test_ok_status_injects_case_context(self):
+        texts = await self._call("list_findings", ChainStatus.OK, read_only=True)
+        case_texts = [t for t in texts if '"_case"' in t]
+        assert len(case_texts) == 1
+        parsed = json.loads(case_texts[0])
+        assert parsed["_case"]["id"] == "case"
+        assert parsed["_case"]["dir"] == "/tmp/case"
+        assert parsed["_case"]["evidence_dir"] == "/tmp/case/evidence"
+
     async def test_unsealed_blocks_non_readonly_tool(self):
         texts = await self._call("sift_run_command", ChainStatus.UNSEALED, read_only=False)
         combined = " ".join(texts)

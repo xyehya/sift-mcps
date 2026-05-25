@@ -16,8 +16,10 @@ import logging
 import os
 import time
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
+import yaml
 from mcp.server.lowlevel.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import TextContent, Tool
@@ -240,6 +242,36 @@ def _extract_examiner(server: Server) -> str | None:
     return _extract_request_context(server)["examiner"]
 
 
+def _build_case_context(case_dir_str: str) -> dict | None:
+    """Build gateway-injected case context for aggregate MCP responses."""
+    if not case_dir_str:
+        return None
+    case_dir = Path(case_dir_str).resolve()
+    case_id = case_dir.name
+    meta_path = case_dir / "CASE.yaml"
+    if meta_path.exists():
+        try:
+            meta = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+            case_id = str(meta.get("case_id") or case_id)
+        except (OSError, yaml.YAMLError):
+            pass
+    return {
+        "id": case_id,
+        "dir": str(case_dir),
+        "evidence_dir": str(case_dir / "evidence"),
+    }
+
+
+def _append_case_context(contents: list[TextContent], case_dir_str: str) -> list[TextContent]:
+    """Append _case metadata as gateway response middleware."""
+    context = _build_case_context(case_dir_str)
+    if context is None:
+        return contents
+    return contents + [
+        TextContent(type="text", text=json.dumps({"_case": context}, indent=2))
+    ]
+
+
 def _get_content_length(scope: dict) -> int | None:
     """Extract Content-Length from raw ASGI scope headers. Returns None if absent or invalid."""
     headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
@@ -322,7 +354,10 @@ def create_mcp_server(gateway: Any) -> Server:
                         )
                     except Exception as exc:
                         logger.warning("evidence_gate: audit write failed: %s", exc)
-                    _final_contents = [TextContent(type="text", text=json.dumps(build_block_response(name, gate), indent=2))]
+                    _final_contents = _append_case_context(
+                        [TextContent(type="text", text=json.dumps(build_block_response(name, gate), indent=2))],
+                        case_dir_str,
+                    )
                     return _final_contents
                 else:
                     # UNSEALED — check whether this tool is read-only
@@ -371,7 +406,10 @@ def create_mcp_server(gateway: Any) -> Server:
                             )
                         except Exception as exc:
                             logger.warning("evidence_gate: audit write failed: %s", exc)
-                        _final_contents = [TextContent(type="text", text=json.dumps(build_block_response(name, gate), indent=2))]
+                        _final_contents = _append_case_context(
+                            [TextContent(type="text", text=json.dumps(build_block_response(name, gate), indent=2))],
+                            case_dir_str,
+                        )
                         return _final_contents
 
             try:
@@ -379,17 +417,23 @@ def create_mcp_server(gateway: Any) -> Server:
             except KeyError as e:
                 _status = "error"
                 logger.warning("MCP call_tool unknown tool: %s", e)
-                _final_contents = [TextContent(type="text", text=f"Error: unknown tool {name}")]
+                _final_contents = _append_case_context(
+                    [TextContent(type="text", text=f"Error: unknown tool {name}")],
+                    case_dir_str,
+                )
                 return _final_contents
             except (RuntimeError, ConnectionError, OSError) as e:
                 _status = "error"
                 logger.error("MCP call_tool backend error for %s: %s", name, e)
-                _final_contents = [
-                    TextContent(
-                        type="text",
-                        text=f"Error: backend failure for {name} — backend will auto-restart on next call, retry once",
-                    )
-                ]
+                _final_contents = _append_case_context(
+                    [
+                        TextContent(
+                            type="text",
+                            text=f"Error: backend failure for {name} — backend will auto-restart on next call, retry once",
+                        )
+                    ],
+                    case_dir_str,
+                )
                 return _final_contents
             except Exception as e:
                 # Catch ClosedResourceError / BrokenResourceError (anyio) and
@@ -403,12 +447,15 @@ def create_mcp_server(gateway: Any) -> Server:
                         type(e).__name__,
                         e,
                     )
-                    _final_contents = [
-                        TextContent(
-                            type="text",
-                            text=f"Error: backend connection lost for {name} — retry once to trigger reconnect",
-                        )
-                    ]
+                    _final_contents = _append_case_context(
+                        [
+                            TextContent(
+                                type="text",
+                                text=f"Error: backend connection lost for {name} — retry once to trigger reconnect",
+                            )
+                        ],
+                        case_dir_str,
+                    )
                     return _final_contents
                 raise  # Re-raise non-transport exceptions to fall through to generic handler
             except (asyncio.CancelledError, BaseExceptionGroup) as e:
@@ -419,12 +466,15 @@ def create_mcp_server(gateway: Any) -> Server:
                     type(e).__name__,
                     e,
                 )
-                _final_contents = [
-                    TextContent(
-                        type="text",
-                        text=f"Error: unexpected failure for {name} — if this persists, report to examiner",
-                    )
-                ]
+                _final_contents = _append_case_context(
+                    [
+                        TextContent(
+                            type="text",
+                            text=f"Error: unexpected failure for {name} — if this persists, report to examiner",
+                        )
+                    ],
+                    case_dir_str,
+                )
                 return _final_contents
 
             # Normalise to list of TextContent for the MCP protocol
@@ -487,7 +537,7 @@ def create_mcp_server(gateway: Any) -> Server:
             if _gate_unsealed_warning:
                 contents.append(TextContent(type="text", text=_gate_unsealed_warning))
 
-            _final_contents = contents
+            _final_contents = _append_case_context(contents, case_dir_str)
             return _final_contents
 
         finally:

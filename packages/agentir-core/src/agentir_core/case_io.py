@@ -19,6 +19,7 @@ import yaml
 _EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
 
 DEFAULT_CASES_DIR = str(Path.home() / "cases")
+_CASE_SUBDIRS = frozenset({"evidence", "extractions", "reports", "audit", "tmp"})
 
 
 class CaseError(Exception):
@@ -91,6 +92,45 @@ def get_case_dir(case_id: str | None = None) -> Path:
     raise CaseError(
         "No active case: set AGENTIR_CASE_DIR in ~/.agentir/gateway.yaml case.dir"
     )
+
+
+def resolve_case_path(
+    path: str,
+    *,
+    case_dir: Path | None = None,
+    default_subdir: str = "evidence",
+) -> Path:
+    """Resolve a tool path argument against the active case directory.
+
+    Absolute paths are allowed only when they resolve inside the case. Relative
+    paths beginning with a known case subdirectory are resolved from the case
+    root. Bare filenames default to ``case_dir/default_subdir``.
+    """
+    if case_dir is None:
+        env = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+        if not env:
+            raise ValueError("No active case. Use the Examiner Portal to create a case first.")
+        case_dir = Path(env)
+
+    case_root = case_dir.resolve()
+    raw_path = "" if path is None else str(path).strip()
+    if not raw_path:
+        raise ValueError("Path cannot be empty.")
+
+    p = Path(raw_path)
+    if p.is_absolute():
+        resolved = p.resolve()
+    elif p.parts and p.parts[0] in _CASE_SUBDIRS:
+        resolved = (case_root / p).resolve()
+    else:
+        resolved = (case_root / default_subdir / p).resolve()
+
+    if not resolved.is_relative_to(case_root):
+        raise ValueError(
+            f"Path {raw_path!r} resolves outside case directory. "
+            "Use a relative path like 'evidence/filename.e01'."
+        )
+    return resolved
 
 
 def get_examiner(case_dir: Path | None = None) -> str:
