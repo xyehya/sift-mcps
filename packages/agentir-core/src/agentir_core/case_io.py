@@ -137,16 +137,16 @@ def check_case_file_integrity(case_dir: Path, filename: str) -> None:
     try:
         raw = path.read_text().strip()
     except OSError as e:
-        print(f"ERROR: Cannot read {filename}: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"Cannot read {filename}: {e}") from e
     if not raw or raw == "[]":
         return
     try:
         json.loads(raw)
     except json.JSONDecodeError as e:
-        print(f"ERROR: {filename} is corrupt and cannot be parsed: {e}", file=sys.stderr)
-        print("Verify file integrity before proceeding.", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(
+            f"{filename} is corrupt and cannot be parsed: {e}. "
+            "Verify file integrity before proceeding."
+        ) from e
 
 
 def load_findings(case_dir: Path) -> list[dict]:

@@ -9,13 +9,13 @@ Covers:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import yaml
 
 from case_mcp.server import create_server
+from case_mcp.server import _resolve_case_dir
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +98,32 @@ class TestEvidenceListSystemB:
         result = _call(tools["evidence_list"])
         assert result["evidence"] == []
         assert result["source"] == "manifest_v2"
+
+    def test_env_case_dir_wins_over_legacy_active_case_file(self, server_with_case, tmp_path, monkeypatch):
+        _, tools, case_dir = server_with_case
+        stale_case = tmp_path / "stale-case"
+        stale_case.mkdir()
+        legacy_pointer = tmp_path / ".agentir" / "active_case"
+        legacy_pointer.parent.mkdir()
+        legacy_pointer.write_text(str(stale_case))
+        monkeypatch.setattr("case_mcp.server.Path.home", lambda: tmp_path)
+
+        manifest = {
+            "version": 1,
+            "case_id": "test-case-001",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "created_by": "alice",
+            "previous_manifest_hash": "",
+            "manifest_hash": "sha256:abc123",
+            "files": [
+                {"path": "evidence/current.dd", "status": "ACTIVE", "sha256": "aa", "bytes": 1, "mtime_ns": 0, "registered_at": "", "registered_by": "alice", "source": "", "description": ""}
+            ],
+        }
+        (case_dir / "evidence-manifest.json").write_text(json.dumps(manifest))
+
+        assert _resolve_case_dir() == case_dir
+        result = _call(tools["evidence_list"])
+        assert result["evidence"][0]["path"] == "evidence/current.dd"
 
     def test_reads_manifest_files(self, server_with_case):
         _, tools, case_dir = server_with_case
@@ -248,3 +274,99 @@ class TestEvidenceVerifySystemB:
         # Should be unsealed (reads manifest, not evidence.json)
         assert result["status"] == "unsealed"
         assert result["source"] == "manifest_v2"
+
+
+# ---------------------------------------------------------------------------
+# R0-6: evidence_list — shows unregistered files in evidence/
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceListUnregistered:
+    def test_shows_unregistered_files(self, server_with_case):
+        """Files in evidence/ not in manifest appear in unregistered list."""
+        _, tools, case_dir = server_with_case
+        (case_dir / "evidence" / "mystery.e01").write_bytes(b"EVF" + b"\x00" * 100)
+        result = _call(tools["evidence_list"])
+        unregistered = result.get("unregistered", [])
+        paths = [f["path"] for f in unregistered]
+        assert any("mystery.e01" in p for p in paths)
+
+    def test_registered_files_not_in_unregistered(self, server_with_case):
+        """Files sealed in manifest should NOT appear in unregistered list."""
+        _, tools, case_dir = server_with_case
+        ev_file = case_dir / "evidence" / "sample.dd"
+        ev_file.write_bytes(b"DISK_IMAGE")
+        manifest = {
+            "version": 1,
+            "case_id": "test-case-001",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "created_by": "alice",
+            "previous_manifest_hash": "",
+            "manifest_hash": "sha256:abc",
+            "files": [
+                {
+                    "path": "evidence/sample.dd",
+                    "sha256": "deadbeef",
+                    "bytes": 10,
+                    "mtime_ns": 0,
+                    "registered_at": "2026-01-01T00:00:00+00:00",
+                    "registered_by": "alice",
+                    "source": "",
+                    "description": "disk",
+                    "status": "ACTIVE",
+                }
+            ],
+        }
+        (case_dir / "evidence-manifest.json").write_text(json.dumps(manifest))
+        result = _call(tools["evidence_list"])
+        unregistered_paths = [f["path"] for f in result.get("unregistered", [])]
+        assert not any("sample.dd" in p for p in unregistered_paths)
+
+    def test_unregistered_has_registered_false(self, server_with_case):
+        """Unregistered files have registered=False flag."""
+        _, tools, case_dir = server_with_case
+        (case_dir / "evidence" / "unknown.vmdk").write_bytes(b"KDMV" + b"\x00" * 100)
+        result = _call(tools["evidence_list"])
+        unregistered = result.get("unregistered", [])
+        assert len(unregistered) >= 1
+        assert all(f["registered"] is False for f in unregistered)
+
+    def test_unregistered_includes_seal_note(self, server_with_case):
+        """Unregistered file entry includes a note about sealing via portal."""
+        _, tools, case_dir = server_with_case
+        (case_dir / "evidence" / "raw.img").write_bytes(b"\x00" * 10)
+        result = _call(tools["evidence_list"])
+        unregistered = result.get("unregistered", [])
+        assert len(unregistered) >= 1
+        note = unregistered[0].get("note", "")
+        assert "Portal" in note or "portal" in note
+
+    def test_unregistered_empty_when_all_registered(self, server_with_case):
+        """No extra files in evidence/ → unregistered list is empty."""
+        _, tools, case_dir = server_with_case
+        ev_file = case_dir / "evidence" / "sealed.dd"
+        ev_file.write_bytes(b"DATA")
+        manifest = {
+            "version": 1,
+            "case_id": "test-case-001",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "created_by": "alice",
+            "previous_manifest_hash": "",
+            "manifest_hash": "sha256:abc",
+            "files": [
+                {
+                    "path": "evidence/sealed.dd",
+                    "sha256": "aabbcc",
+                    "bytes": 4,
+                    "mtime_ns": 0,
+                    "registered_at": "2026-01-01T00:00:00+00:00",
+                    "registered_by": "alice",
+                    "source": "",
+                    "description": "",
+                    "status": "ACTIVE",
+                }
+            ],
+        }
+        (case_dir / "evidence-manifest.json").write_text(json.dumps(manifest))
+        result = _call(tools["evidence_list"])
+        assert result["unregistered"] == []

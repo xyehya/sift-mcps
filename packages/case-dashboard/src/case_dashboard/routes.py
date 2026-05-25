@@ -11,6 +11,7 @@ import secrets
 import tempfile
 import threading
 import time
+import inspect
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,6 +160,11 @@ _OVERRIDE_ENABLE: Callable[[str, str, int], dict] | None = None
 _OVERRIDE_CANCEL: Callable[[str], None] | None = None
 
 _DEFAULT_OVERRIDE_TTL = 600  # 10 minutes
+
+# Callback invoked after portal case creation activates a new case. Mounted
+# Starlette sub-apps cannot reliably discover parent app.state, so the gateway
+# injects its restart hook explicitly.
+_ON_CASE_ACTIVATED: Callable[[str], object] | None = None
 
 
 def _resolve_case_dir() -> Path | None:
@@ -3157,6 +3163,11 @@ async def post_case_create(request: Request) -> JSONResponse:
         # Update environment variable in-process
         os.environ["AGENTIR_CASE_DIR"] = str(real_requested)
 
+        if _ON_CASE_ACTIVATED is not None:
+            maybe_awaitable = _ON_CASE_ACTIVATED(str(real_requested))
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
+
         # Restart backends
         gateway = _resolve_gateway(request)
         if gateway:
@@ -3266,6 +3277,7 @@ def create_dashboard_v2_app(
     api_keys: dict | None = None,
     gateway_config_path: str | None = None,
     on_chain_mutation: Callable[[str], None] | None = None,
+    on_case_activated: Callable[[str], object] | None = None,
     on_override_get_status: Callable[[str], dict] | None = None,
     on_override_enable: Callable[[str, str, int], dict] | None = None,
     on_override_cancel: Callable[[str], None] | None = None,
@@ -3283,6 +3295,9 @@ def create_dashboard_v2_app(
         on_chain_mutation: Called with case_dir_str after every evidence chain
             seal or ignore. The gateway passes invalidate_evidence_cache so the
             30s TTL cache is dropped immediately on portal seal.
+        on_case_activated: Called with case_dir_str after portal case creation
+            updates AGENTIR_CASE_DIR. The gateway passes an async callback that
+            restarts stdio backends so they inherit the new case directory.
         on_override_get_status / on_override_enable / on_override_cancel:
             Bound to response_guard.get_override_status / enable_override /
             cancel_override by the gateway. Required for response-guard portal
@@ -3292,11 +3307,13 @@ def create_dashboard_v2_app(
 
     global _SESSION_SECRET, _SESSION_MAX_AGE, _API_KEYS, _GATEWAY_CONFIG_PATH
     global _ON_CHAIN_MUTATION, _OVERRIDE_GET_STATUS, _OVERRIDE_ENABLE, _OVERRIDE_CANCEL
+    global _ON_CASE_ACTIVATED
     _SESSION_SECRET = session_secret
     _SESSION_MAX_AGE = session_max_age
     _API_KEYS = api_keys if api_keys is not None else {}
     _GATEWAY_CONFIG_PATH = Path(gateway_config_path) if gateway_config_path else None
     _ON_CHAIN_MUTATION = on_chain_mutation
+    _ON_CASE_ACTIVATED = on_case_activated
     _OVERRIDE_GET_STATUS = on_override_get_status
     _OVERRIDE_ENABLE = on_override_enable
     _OVERRIDE_CANCEL = on_override_cancel

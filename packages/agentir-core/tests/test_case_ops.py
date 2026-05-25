@@ -236,3 +236,103 @@ class TestCaseStatusData:
         assert result["case_id"] == "INC-TEST-001"
         assert result["name"] == "Status Test"
         assert result["status"] == "open"
+
+
+# ---------------------------------------------------------------------------
+# R0-4: case_list_data — reads AGENTIR_CASES_ROOT first
+# ---------------------------------------------------------------------------
+
+
+class TestCaseListEnvVarPriority:
+    def test_reads_agentir_cases_root(self, tmp_path, monkeypatch):
+        """AGENTIR_CASES_ROOT set → case_list_data reads from that root."""
+        cases_root = tmp_path / "cases"
+        case_dir = cases_root / "rocba-20260525-1200"
+        case_dir.mkdir(parents=True)
+        with open(case_dir / "CASE.yaml", "w") as f:
+            yaml.dump({"case_id": "rocba-20260525-1200", "name": "ROCBA Test", "status": "open"}, f)
+        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(cases_root))
+        monkeypatch.delenv("AGENTIR_CASES_DIR", raising=False)
+        result = case_list_data()
+        ids = [c["id"] for c in result["cases"]]
+        assert "rocba-20260525-1200" in ids
+
+    def test_cases_root_beats_cases_dir(self, tmp_path, monkeypatch):
+        """AGENTIR_CASES_ROOT takes priority over AGENTIR_CASES_DIR."""
+        root_cases = tmp_path / "root" / "cases"
+        legacy_cases = tmp_path / "legacy" / "cases"
+        case_in_root = root_cases / "rootcase-001"
+        case_in_root.mkdir(parents=True)
+        with open(case_in_root / "CASE.yaml", "w") as f:
+            yaml.dump({"case_id": "rootcase-001", "status": "open"}, f)
+        legacy_cases.mkdir(parents=True)
+        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(root_cases))
+        monkeypatch.setenv("AGENTIR_CASES_DIR", str(legacy_cases))
+        result = case_list_data()
+        assert result["cases_root"] == str(root_cases)
+        assert any(c["id"] == "rootcase-001" for c in result["cases"])
+
+    def test_falls_back_to_agentir_cases_dir(self, tmp_path, monkeypatch):
+        """No AGENTIR_CASES_ROOT → falls back to AGENTIR_CASES_DIR."""
+        cases_dir = tmp_path / "mydir" / "cases"
+        case_dir = cases_dir / "fallback-case-001"
+        case_dir.mkdir(parents=True)
+        with open(case_dir / "CASE.yaml", "w") as f:
+            yaml.dump({"case_id": "fallback-case-001", "status": "open"}, f)
+        monkeypatch.delenv("AGENTIR_CASES_ROOT", raising=False)
+        monkeypatch.setenv("AGENTIR_CASES_DIR", str(cases_dir))
+        result = case_list_data()
+        ids = [c["id"] for c in result["cases"]]
+        assert "fallback-case-001" in ids
+
+    def test_marks_active_case_from_env(self, tmp_path, monkeypatch):
+        """AGENTIR_CASE_DIR → active case identified without reading legacy file."""
+        cases_root = tmp_path / "cases"
+        case_dir = cases_root / "active-case-20260525-1200"
+        case_dir.mkdir(parents=True)
+        with open(case_dir / "CASE.yaml", "w") as f:
+            yaml.dump({"case_id": "active-case-20260525-1200", "status": "open"}, f)
+        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(cases_root))
+        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        result = case_list_data()
+        active = [c for c in result["cases"] if c["active"]]
+        assert len(active) == 1
+        assert active[0]["id"] == "active-case-20260525-1200"
+
+
+# ---------------------------------------------------------------------------
+# R0-5: case_status_data — includes explicit path fields
+# ---------------------------------------------------------------------------
+
+
+class TestCaseStatusPaths:
+    def test_includes_evidence_dir(self, tmp_path):
+        """case_status_data returns evidence_dir field."""
+        case_dir = tmp_path / "INC-TEST-STATUS"
+        case_dir.mkdir()
+        with open(case_dir / "CASE.yaml", "w") as f:
+            yaml.dump({
+                "case_id": "INC-TEST-STATUS",
+                "name": "Status Paths Test",
+                "status": "open",
+                "examiner": "tester",
+            }, f)
+        for fname in ("findings.json", "timeline.json", "evidence.json"):
+            (case_dir / fname).write_text("[]")
+        result = case_status_data(case_dir)
+        assert result["evidence_dir"] == str(case_dir / "evidence")
+        assert result["extractions_dir"] == str(case_dir / "extractions")
+        assert result["reports_dir"] == str(case_dir / "reports")
+        assert result["audit_dir"] == str(case_dir / "audit")
+
+    def test_path_fields_are_strings(self, tmp_path):
+        """All dir fields are plain strings, not Path objects."""
+        case_dir = tmp_path / "INC-TEST-PATHS"
+        case_dir.mkdir()
+        with open(case_dir / "CASE.yaml", "w") as f:
+            yaml.dump({"case_id": "INC-TEST-PATHS", "status": "open", "examiner": "t"}, f)
+        for fname in ("findings.json", "timeline.json", "evidence.json"):
+            (case_dir / fname).write_text("[]")
+        result = case_status_data(case_dir)
+        for field in ("evidence_dir", "extractions_dir", "reports_dir", "audit_dir"):
+            assert isinstance(result[field], str), f"{field} should be a str"

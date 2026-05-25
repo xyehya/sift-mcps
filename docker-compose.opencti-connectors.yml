@@ -1,0 +1,46 @@
+# OpenCTI public import connectors — optional, enabled via:
+#   ./install.sh --enable-opencti-feeds
+#
+# These containers fetch public CTI sources into the local OpenCTI platform.
+# They share the existing agentir-net network and authenticate with the
+# installer-generated OpenCTI admin token.
+
+services:
+  connector-mitre:
+    image: opencti/connector-mitre:latest
+    container_name: agentir-opencti-connector-mitre
+    restart: unless-stopped
+    networks:
+      - agentir-net
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${OPENCTI_CONNECTOR_MITRE_ID}
+      - CONNECTOR_NAME=MITRE ATT&CK
+      - CONNECTOR_SCOPE=marking-definition,identity,attack-pattern,course-of-action,intrusion-set,campaign,malware,tool,report,external-reference-as-report,x-mitre-data-source,x-mitre-data-component,x-mitre-matrix,x-mitre-tactic,x-mitre-collection
+      - CONNECTOR_LOG_LEVEL=info
+      - MITRE_INTERVAL=7
+
+  connector-cisa-known-exploited-vulnerabilities:
+    image: opencti/connector-cisa-known-exploited-vulnerabilities:latest
+    container_name: agentir-opencti-connector-cisa-kev
+    restart: unless-stopped
+    networks:
+      - agentir-net
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${OPENCTI_CONNECTOR_CISA_KEV_ID}
+      - CONNECTOR_NAME=CISA KEV
+      - CONNECTOR_SCOPE=cisa
+      - CONNECTOR_LOG_LEVEL=info
+      - CONNECTOR_DURATION_PERIOD=P1D
+      - CISA_CATALOG_URL=https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+      - CISA_CREATE_INFRASTRUCTURES=true
+      - CISA_KEV_FLAG_ONLY=false
+      - CISA_TLP=TLP:CLEAR
+
+networks:
+  agentir-net:
+    external: true
+    name: agentir-net

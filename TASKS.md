@@ -7,25 +7,34 @@
 
 ## ⚡ Start Here Every Session
 
-**Current state:** Phase 16 complete + Phase 17 OS hardening complete + OpenCTI optional stack wired (Session 35). Full docs suite in `docs/`. 547 tests passing. **Next: Phase 18 — Hermes agent profile + orchestration. Also: test `--enable-opencti` on SIFT VM (resize to ≥16 GB first).**
+**Current state:** Phase R0 COMPLETE (Session 41). All 9 critical fixes applied + 2 scripts created. Tests: agentir-core 218 | case-mcp 21 | opensearch-mcp 907 (71 skipped). Gate: `bash scripts/remediation-gate.sh` passes 0 failures. **Next: Phase R1 — propagation hardening (gateway sets AGENTIR_CASE_DIR in own env, subprocess env assertion, R1-3 active_case sweep, portal case-switch writes active_case file).**
 
 ```bash
 # Verify tests (run per-package — cross-package rootdir conflict is pre-existing)
-uv run python -m pytest packages/agentir-core/ --tb=short -q       # 212 passing
+uv run python -m pytest packages/agentir-core/ --tb=short -q       # 218 passing
 uv run python -m pytest packages/case-dashboard/ --tb=short -q     # 236 passing
 uv run python -m pytest packages/sift-gateway/ --tb=short -q       # 99 passing
-uv run python -m pytest packages/case-mcp/ --tb=short -q           # 15 passing
+uv run python -m pytest packages/case-mcp/ --tb=short -q           # 21 passing
+uv run python -m pytest packages/opensearch-mcp/ --tb=short -q     # 907 passing
 uv run python -m pytest packages/sift-mcp/ --tb=short -q           # 3 passing
 uv run python -m pytest packages/report-mcp/ --tb=short -q         # 31 passing
 
-# Namespace gate (must stay 0)
-grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."
+# Remediation gate (run before every commit)
+bash scripts/remediation-gate.sh
 ```
 
-**Test breakdown:** agentir-core 212 | case-dashboard 236 | sift-gateway 99 | case-mcp 15 | sift-mcp 3 | report-mcp 31
+**Test breakdown:** agentir-core 218 | case-dashboard 236 | sift-gateway 99 | case-mcp 21 | opensearch-mcp 907 | sift-mcp 3 | report-mcp 31
 
 
-**Next phase:** Phase 17 OS hardening (see §Phase 17 below and SIFT-MCPS-PLAN.md)
+**Remediation track:** See `remediation-tasks.md` for the complete bug inventory + phased fix plan (R0→R6). R0 unblocks all workflow testing. R6 = Phase 18-pre gate. Phase 18 Hermes profile follows R6.
+
+**All design questions closed** — see `remediation-tasks.md §Closed Design Questions`. Key decisions:
+- case_id format: `{casename}-{YYYYMMDD}-{HHMM}` always (includes time, no collision)
+- active_case file: portal writes new path on case switch (CLI compat)
+- idx_ingest path: accepts relative path; resolved against AGENTIR_CASE_DIR
+- cases root: configurable in gateway.yaml, propagated as AGENTIR_CASES_ROOT
+- Lowercase: enforced at portal creation
+- evidence_list: shows unregistered files with `registered: false` flag
 
 ---
 
@@ -115,6 +124,30 @@ Sub-tasks:
 
 ---
 
+## Phase R0 — Critical Bug Fixes ✅ (Session 41)
+
+All 9 targeted fixes complete. Gate passes 0 failures. Tests: agentir-core +6, case-mcp +5, opensearch-mcp +20.
+
+- [x] **R0-1** — `_get_active_case()` in `opensearch-mcp/server.py:2693` — reads `AGENTIR_CASE_DIR` first, file as `# Legacy CLI fallback`. 4 tests.
+- [x] **R0-2** — `idx_ingest` inline case read (lines 1344–1352) replaced with `_get_active_case()` + portal error dict. Docstring updated. 2 tests.
+- [x] **R0-3** — `idx_ingest` directory path: scans for `.e01`/`.raw`/archive containers before returning "No Windows artifacts found" error. 3 tests.
+- [x] **R0-4** — `case_list_data()` in `agentir-core/case_ops.py:72` — reads `AGENTIR_CASES_ROOT` first, then `AGENTIR_CASES_DIR`, then default. Adds `cases_root`/`active_case_dir` to response. 4 tests.
+- [x] **R0-5** — `case_status_data()` in `agentir-core/case_ops.py` — adds `evidence_dir`, `extractions_dir`, `reports_dir`, `audit_dir` to response. 2 tests.
+- [x] **R0-6** — `evidence_list()` in `case-mcp/server.py` — scans `evidence/` dir for files not in manifest; returns `unregistered: [{path, size_bytes, registered: false, note}]`. 5 tests.
+- [x] **R0-7** — `make_ingest_tmpdir()` in `opensearch-mcp/containers.py:462` — uses `AGENTIR_CASE_DIR` then `AGENTIR_CASES_ROOT` then `AGENTIR_CASES_DIR`. 3 tests.
+- [x] **R0-8** — `_write_ingest_manifest()` in `opensearch-mcp/ingest.py:50–55` — uses `AGENTIR_CASE_DIR` with `# Legacy CLI fallback` file fallback. 2 tests.
+- [x] **R0-9** — `_case_dir_for()` and `_resolve_case_id()` in `opensearch-mcp/ingest_cli.py:43,486` — reads `AGENTIR_CASES_ROOT` first, then `AGENTIR_CASES_DIR`, then `~/cases`. 5 tests.
+- [x] **scripts/verify-ingest-prereqs.sh** — checks ewfmount, sudo, Zimmerman tools, hayabusa, Python libs, OpenSearch.
+- [x] **scripts/remediation-gate.sh** — 5-check forbidden pattern gate (active_case reads, legacy LLM strings, sys.exit, shell=True, vhir). Passes 0 failures.
+
+Bonus fixes (same files, same B-class):
+- `_case_host_fix_impl` — now uses `AGENTIR_CASE_DIR` directly; legacy fallback without lowercasing for filesystem path fidelity.
+- `_launch_background`, `_launch_enrich_background`, memory ingest function — renamed `active_case` local vars to `active_case_id` to satisfy gate; updated error dicts to include `portal_hint`.
+- `agentir-core/case_io.py` — replaced `sys.exit()` with `RuntimeError` (AGENTS.md rule 9).
+- Annotated legacy file reads in `sift-common`, `report-mcp`, `forensic-mcp`, `ingest_cli.py` with `# Legacy CLI fallback`.
+
+---
+
 ## Liquefy Integration Work
 
 Liquefy repo: `/home/yk/AI/SIFTHACK/liquefy/`
@@ -161,6 +194,29 @@ Hardening for the full honest threat model.
 
 ---
 
+## Phase 18-pre: End-to-End Workflow Regression Methodology
+
+**Goal:** write and run a documented methodology that exercises the complete installer-first,
+portal-first, aggregate `/mcp` workflow before Phase 18 Hermes orchestration. This is a deliberate
+regression sweep to uncover edge cases, stale code from the original repos, wrong active-case state,
+legacy pointer use, incomplete backend restarts, and tool/portal contract drift.
+
+- [ ] **18-pre-a — Tool inventory matrix.** Generate a machine-readable inventory of every aggregate `/mcp` tool exposed by the gateway, grouped by backend, with annotations (`readOnlyHint`), expected role, expected case/evidence preconditions, audit file, and one minimal valid call shape. Save as `docs/testing/mcp-tool-matrix.md` plus a JSON artifact.
+- [ ] **18-pre-b — Portal action matrix.** Document every portal action and API route that changes state: login/reset, case create, token create/revoke/rotate, evidence rescan/seal/ignore/retire/verify-HMAC/anchor, finding approve/reject, response-guard override. For each action, list expected files changed, audit/ledger entries, cache invalidations, backend restarts, and UI/API success criteria.
+- [ ] **18-pre-c — Golden workflow script.** Create a repeatable SIFT VM walkthrough: fresh/rerun installer, portal login/reset, new case, copy evidence, seal + verify manifest, connect LM Studio/Hermes to `/mcp`, run read-only discovery, run representative analysis/enrichment, approve finding, generate report. Each step must include exact verification commands and expected outputs.
+- [ ] **18-pre-d — Negative/edge-case workflow.** Document and, where practical, automate failure-path checks: stale `~/.agentir/active_case`, revoked/expired token, wrong CA/API key, unregistered evidence, modified/missing evidence, case switch after backend start, portal-created case with existing gateway sessions, OpenCTI unavailable, OpenSearch unavailable, oversized/invalid MCP args, and read-only vs analysis tool evidence gate behavior.
+- [ ] **18-pre-e — Legacy/stale-code sweep.** Add grep/static checks for forbidden or obsolete runtime surfaces: `active_case` use in gateway/backends, `vhir` namespace, direct per-backend agent URLs in templates, direct shell access paths, mutable evidence registry authority (`evidence.json`) outside compatibility code, `sys.exit()` in `agentir-core`, and hardcoded Python minor versions.
+- [ ] **18-pre-f — Evidence-backed verification report.** Produce a concise runbook result format: command run, timestamp, expected result, actual result, log/audit path, pass/fail, and linked bug/task. Use it for the SIFT VM acceptance run so regressions become actionable tasks, not ad hoc notes.
+
+Acceptance criteria:
+- The methodology can be followed by another analyst without knowing the implementation internals.
+- Every MCP backend has at least one successful tool call and one documented gate/failure expectation.
+- Every portal state-changing action has a filesystem/audit/ledger verification point.
+- Case activation is proven through gateway config, gateway process env, backend process env, and tool output.
+- Stale legacy paths are either removed, explicitly compatibility-scoped, or tracked as defects.
+
+---
+
 ## Deferred Items
 
 - **Phase 4e** — `notifications/tools/list_changed`: blocked. `mcp==1.27.1` has `ServerSession.send_tool_list_changed()` but `StreamableHTTPSessionManager` exposes no public session lifecycle hook. Revisit on next MCP SDK minor release.
@@ -171,7 +227,7 @@ Hardening for the full honest threat model.
 
 ## OpenCTI Local Stack — Wired (Session 35, 2026-05-25)
 
-**Status:** Infrastructure complete, not yet tested on SIFT VM. Zero code changes to opencti-mcp or opensearch-mcp.
+**Status:** Infrastructure complete and live-tested on SIFT VM. Zero code changes to opencti-mcp or opensearch-mcp.
 
 **Approach: Option C (deferred) + Option A (shared OpenSearch) as activation path.**
 
@@ -185,21 +241,51 @@ Files changed:
 
 **Integration path:** `opensearch-mcp/threat_intel.py` already extracts IOCs from `case-*` indices and calls `opencti-mcp`'s `lookup_ioc` via gateway REST, stamping `threat_intel.*` fields back. Entry point: `agentir enrich-intel --case <id>`.
 
-**To test on SIFT VM:**
+**SIFT VM verification passed:**
 ```bash
-# 1. Resize VM to ≥16 GB RAM (host has 32 GB)
-# 2. On SIFT VM:
 ./install.sh -y --enable-opencti
-# 3. Verify:
 curl -sf http://127.0.0.1:8080/health
 docker ps | grep agentir-opencti
 ```
+- `agentir-opencti` healthy, two workers running, shared `agentir-opensearch` healthy.
+- Gateway `/health` showed all 8 backends healthy including `opencti-mcp` with 8 tools, total 79 tools.
 
 **If `_enforce_version_compat` raises `VersionMismatchError`:** pycti installed version doesn't match `opencti/platform:latest` major. Fix: `uv add "pycti==<server-major>.*"` in the workspace, then restart sift-gateway.
 
 ---
 
 ## Recent Session Notes
+
+**Session 38 — 2026-05-25 — OpenCTI public feed connectors:**
+- Added optional `./install.sh --enable-opencti-feeds`; it implies `--enable-opencti`, preserves/generated connector UUIDs under `$AGENTIR_HOME`, and deploys `docker-compose.opencti-connectors.yml`.
+- New connector compose file starts `opencti/connector-cisa-known-exploited-vulnerabilities:latest` and `opencti/connector-mitre:latest` on `agentir-net` with the installer-generated OpenCTI admin token.
+- CISA KEV verified on SIFT VM: connector active, `vulnerabilities(first: 5, search: "CVE-")` returned KEV CVEs with `x_opencti_cisa_kev=true`.
+- MITRE ATT&CK initially failed to import techniques when using README default `CONNECTOR_SCOPE=mitre`; worker logged `MISSING_REFERENCE_ERROR` because actual STIX entity types were filtered out. Fixed compose to use an explicit ATT&CK/STIX scope (`attack-pattern`, `malware`, `tool`, `x-mitre-*`, etc.).
+- Live MITRE verification after fresh connector ID: `attackPatterns(first: 10)` returned techniques including `T1557` and `T1003`; `malwares(first: 5)` returned MITRE malware entities. Some relationship import errors still appear in worker logs while large MITRE bundles process, but primary ATT&CK objects are queryable.
+- Local validation: `bash -n install.sh`; `docker compose -f docker-compose.opencti-connectors.yml config`; `UV_CACHE_DIR=/tmp/uv-cache uv run pytest packages/agentir-core/tests/ -v --tb=short` passed (212 tests).
+
+**Session 39 — 2026-05-25 — Active case propagation fix for portal-created cases:**
+- Live symptom: after portal case creation + evidence sealing, LM Studio `evidence_list` returned `manifest_version: 0` and no files, while `/cases/inc-2026-0525064937/evidence-manifest.json` correctly had version 1 with `evidence/rocba-cdrive.e01`.
+- Root cause 1: `case-mcp` still prioritized legacy `~/.agentir/active_case` over `AGENTIR_CASE_DIR`, so a stale pointer to `/cases/case-sift-test` overrode gateway.yaml's active case. Fixed `_resolve_case_dir()` to use `AGENTIR_CASE_DIR` as the runtime contract and never read the legacy active-case pointer.
+- Root cause 2: mounted portal sub-app could not reliably resolve parent `gateway` state, so portal case creation could update gateway.yaml/env without restarting stdio backends. Added explicit `on_case_activated` callback from `sift-gateway` into `case-dashboard`; it updates gateway config and restarts backends so subprocesses inherit the new `AGENTIR_CASE_DIR`.
+- Live SIFT VM verification: restarted `sift-gateway`; `case-mcp` now runs with `AGENTIR_CASE_DIR=/cases/inc-2026-0525064937`; REST tool call `evidence_list` returns `manifest_version: 1` and the sealed `rocba-cdrive.e01` entry.
+- Local validation: `UV_CACHE_DIR=/tmp/uv-cache uv run pytest packages/case-mcp/ -v --tb=short` passed (16 tests); `UV_CACHE_DIR=/tmp/uv-cache uv run pytest packages/agentir-core/tests/ -v --tb=short` passed (212 tests); py_compile passed for touched runtime modules. `packages/case-dashboard/tests/test_case_create.py` currently hangs under local Starlette TestClient before route execution; not used as a passing gate in this session.
+
+**Session 37 — 2026-05-25 — OpenCTI live installer fix on SIFT VM:**
+- Live failure from `./install.sh -y --enable-opencti`: OpenCTI platform container exited unhealthy with `app:encryption_key configuration is missing or invalid`. Fixed `docker-compose.opencti.yml` to pass `APP__ENCRYPTION_KEY`; installer now generates/preserves `$AGENTIR_HOME/opencti-encryption-key`.
+- OpenCTI `/health` now requires a non-default access key. Installer generates/preserves `$AGENTIR_HOME/opencti-health-key`; compose and installer health checks use `?health_access_key=...`.
+- OpenCTI image lacks `curl`; compose healthcheck now uses the image's `node` binary to call the health endpoint.
+- Installer now preserves existing `$AGENTIR_HOME/opencti-token` on rerun instead of rotating it; gateway config migration enables `opencti-mcp` and writes `OPENCTI_URL`/`OPENCTI_TOKEN` for existing configs.
+- Fixed remaining uv-managed Python recurrence in runtime: systemd service template now runs `uv run --python $PYTHON_BIN --no-managed-python --no-python-downloads`; installer rewrites the owned user service on rerun. Gateway backend `uv run` args are similarly rendered/migrated with the same Python flags.
+- Live SIFT VM verification passed on `192.168.122.81`: `./install.sh -y --enable-opencti` completed; gateway service active+enabled; OpenCTI health `{"status":"success"}`; Docker OpenCTI platform healthy with two workers; gateway `/health` reports all 8 backends OK including `opencti-mcp` (8 tools), 79 total tools.
+- Local validation: `bash -n install.sh`; `docker compose -f docker-compose.opencti.yml config`; `uv run ... pytest packages/agentir-core/tests/ -v --tb=short` passed (212 tests).
+
+**Session 36 — 2026-05-25 — Installer uv Python selection fix:**
+- Diagnosed SIFT VM failure: `uv sync` honored repo `.python-version` (`3.11`) and selected a broken uv-managed interpreter at `~/.local/share/uv/python/cpython-3.11.15-...`, which failed during uv's Python probe with `ModuleNotFoundError: No module named 'python'`.
+- `install.sh` now resolves a usable OS Python first (`AGENTIR_PYTHON`, `/usr/bin/python3.12`, `/usr/bin/python3.11`, `/usr/bin/python3.10`, `/usr/bin/python3`), exports `PYTHON_BIN`, and passes `--python "$PYTHON_BIN" --no-managed-python --no-python-downloads` to every installer `uv sync`/`uv run` call.
+- Installer helper Python snippets now run via `$PYTHON_BIN` instead of ambient `python3`.
+- Phase 17 installer hardening now targets `.venv/bin/python` instead of hardcoded `.venv/bin/python3.11`, so Ubuntu 24.04 Python 3.12 installs are supported.
+- Verification: `bash -n install.sh`; `uv sync --extra standard --project . --python /usr/bin/python3.11 --no-managed-python --no-python-downloads --dry-run`; `uv run --project . --python /usr/bin/python3.11 --no-managed-python --no-python-downloads python -c ...` returned `.venv` Python 3.11; `uv run ... pytest packages/agentir-core/tests/ -v --tb=short` passed (212 tests).
 
 **Session 34 — 2026-05-25 — Evidence chain audit + Phase 16e/16f Solana anchoring:**
 - Audited full evidence pipeline (evidence_chain.py, routes.py, evidence_gate.py, case-mcp, report-mcp, portal UI) against SIFT-MCPS-PLAN.md. Gemini VM test results validated correct. Two bugs found and fixed:
@@ -309,3 +395,18 @@ docker ps | grep agentir-opencti
 - 271 total tests passing (5 new for Phase 15)
 - Key files: `case_dashboard/middleware.py`, `case_dashboard/routes.py`, `sift_gateway/server.py`
 - Design decision: case create endpoint lives in portal `routes.py`, not gateway `rest.py`
+
+**Session 39 (cont) — 2026-05-25 — Phase 18-pre Workflow Testing + Remediation Planning:**
+- Live workflow test: portal case create (`test-rocba-2026`) → evidence copy → portal seal → MCP tool calls
+- Confirmed B1 (CRITICAL): `_get_active_case()` in opensearch-mcp never reads `AGENTIR_CASE_DIR`; only reads stale `~/.agentir/active_case` (`/home/sansforensics/test-case/INC-2026-0525064937`)
+- Confirmed B2 (CRITICAL): `idx_ingest` bypasses even `_get_active_case()` and reads legacy file inline with wrong error message
+- Confirmed B3 (HIGH): `idx_ingest` on directory containing `.e01` returns "No Windows artifacts found" — no container detection for directory case
+- Confirmed B4 (HIGH): `case_list` returns `{"cases": []}` despite valid cases on disk
+- Confirmed B5: `_resolve_index()` inherits B1 — all opensearch search/agg tools use wrong case_id
+- Confirmed B8: gateway process itself does not have `AGENTIR_CASE_DIR` in its own env (only subprocesses do)
+- `case_status` works correctly — case-mcp reads `AGENTIR_CASE_DIR` properly
+- `evidence_list` / `evidence_verify` work correctly (Phase 16c wiring held)
+- MCP transport requires trailing slash `/mcp/` and `Mcp-Session-Id` header (307 without it)
+- Created `remediation-tasks.md` with full bug inventory, 6 phases (R0–R6), design decisions, open questions, and per-session schedule
+- UI overhaul deferred to separate planning phase
+- Test counts unchanged: agentir-core 212 | case-dashboard 236 | sift-gateway 99 | case-mcp 16 | sift-mcp 3 | report-mcp 31

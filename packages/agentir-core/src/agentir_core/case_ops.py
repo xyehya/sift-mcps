@@ -51,6 +51,10 @@ def case_status_data(case_dir) -> dict:
         "status": meta.get("status", "unknown"),
         "examiner": meta.get("examiner", "unknown"),
         "path": str(case_dir),
+        "evidence_dir": str(case_dir / "evidence"),
+        "extractions_dir": str(case_dir / "extractions"),
+        "reports_dir": str(case_dir / "reports"),
+        "audit_dir": str(case_dir / "audit"),
         "finding_count": len(findings),
         "finding_draft": draft_f,
         "finding_approved": approved_f,
@@ -69,24 +73,37 @@ _case_status_data = case_status_data
 def case_list_data(cases_dir=None) -> dict:
     """Return list of cases as structured data."""
     if cases_dir is None:
-        cases_dir = Path(os.environ.get("AGENTIR_CASES_DIR", DEFAULT_CASES_DIR))
+        # Try AGENTIR_CASES_ROOT first (set by gateway from case_dir parent),
+        # then AGENTIR_CASES_DIR (legacy), then default ~/cases
+        root = (
+            os.environ.get("AGENTIR_CASES_ROOT")
+            or os.environ.get("AGENTIR_CASES_DIR")
+            or DEFAULT_CASES_DIR
+        )
+        cases_dir = Path(root)
     else:
         cases_dir = Path(cases_dir)
 
     if not cases_dir.is_dir():
-        return {"cases": []}
+        return {"cases": [], "cases_root": str(cases_dir)}
 
+    # Determine active case from env var first, then legacy file
     active_case_dir_name = None
-    active_file = Path.home() / ".agentir" / "active_case"
-    if active_file.exists():
-        try:
-            content = active_file.read_text().strip()
-            if os.path.isabs(content):
-                active_case_dir_name = Path(content).name
-            else:
-                active_case_dir_name = content
-        except OSError:
-            pass
+    active_case_dir = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    if active_case_dir:
+        active_case_dir_name = Path(active_case_dir).name
+    else:
+        # Legacy CLI fallback — not used in portal workflow
+        active_case_file = Path.home() / ".agentir" / "active_case"
+        if active_case_file.exists():
+            try:
+                content = active_case_file.read_text().strip()
+                if os.path.isabs(content):
+                    active_case_dir_name = Path(content).name
+                else:
+                    active_case_dir_name = content
+            except OSError:
+                pass
 
     cases = []
     for entry in sorted(cases_dir.iterdir()):
@@ -108,7 +125,11 @@ def case_list_data(cases_dir=None) -> dict:
                 "active": entry.name == active_case_dir_name,
             }
         )
-    return {"cases": cases}
+    return {
+        "cases": cases,
+        "cases_root": str(cases_dir),
+        "active_case_dir": active_case_dir or None,
+    }
 
 
 # Backward-compat alias
@@ -190,11 +211,11 @@ def case_init_data(
             except OSError:
                 pass
 
-    # Set active case pointer
+    # Set active case pointer — Legacy CLI fallback write (portal sets AGENTIR_CASE_DIR)
     try:
         agentir_dir = Path.home() / ".agentir"
         agentir_dir.mkdir(exist_ok=True)
-        _atomic_write(agentir_dir / "active_case", str(case_dir.resolve()))
+        _atomic_write(agentir_dir / "active_case", str(case_dir.resolve()))  # Legacy CLI fallback
     except OSError:
         pass
 
@@ -229,7 +250,7 @@ def case_activate_data(case_id: str, cases_dir=None) -> dict:
 
     agentir_dir = Path.home() / ".agentir"
     agentir_dir.mkdir(exist_ok=True)
-    _atomic_write(agentir_dir / "active_case", str(case_dir.resolve()))
+    _atomic_write(agentir_dir / "active_case", str(case_dir.resolve()))  # Legacy CLI fallback
 
     return {"case_id": case_id, "case_dir": str(case_dir)}
 

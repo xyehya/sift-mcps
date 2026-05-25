@@ -469,7 +469,7 @@ class CaseManager:
         return resolve_examiner()
 
     def _require_active_case(self) -> Path:
-        # Re-read active_case file on every call to detect case switches
+        # Legacy CLI fallback — re-reads pointer file on every call to detect case switches
         active_file = _ACTIVE_CASE_FILE
         if active_file.exists():
             try:

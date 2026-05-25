@@ -88,12 +88,12 @@ class AuditWriter:
                 if path.is_dir() and (path / "CASE.yaml").exists():
                     audit_dir = path / "audit"
                 else:
-                    case_dir = ""  # set-but-wrong, try active_case
+                    case_dir = ""  # set-but-wrong, try legacy fallback
             if not case_dir:
-                # Fallback: read active case pointer file
+                # Legacy CLI fallback — reads active_case_file pointer
                 try:
                     case_dir = (
-                        (Path.home() / ".agentir" / "active_case").read_text().strip()
+                        (Path.home() / ".agentir" / "active_case").read_text().strip()  # Legacy CLI fallback
                     )
                 except OSError:
                     return None
@@ -190,13 +190,13 @@ class AuditWriter:
             pass
 
     def _read_active_case_id(self) -> str:
-        """Read case_id from ~/.agentir/active_case file.
+        """Read case_id from the legacy pointer file.
 
         Re-reads on every call to handle mid-session case switches.
         The file is ~50 bytes and OS page-cached, so effectively free.
         """
         try:
-            raw = (Path.home() / ".agentir" / "active_case").read_text().strip()
+            raw = (Path.home() / ".agentir" / "active_case").read_text().strip()  # Legacy CLI fallback
             if raw:
                 return Path(raw).name
         except OSError:

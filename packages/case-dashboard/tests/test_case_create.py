@@ -175,6 +175,31 @@ def test_successful_case_creation(client, case_env, passwords_dir):
     assert os.environ.get("AGENTIR_CASE_DIR") == str(requested_dir)
 
 
+def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_path, monkeypatch):
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    case_root, cfg_path = case_env
+    activated = []
+
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        gateway_config_path=str(cfg_path),
+        on_case_activated=lambda case_dir: activated.append(case_dir),
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+
+    requested_dir = case_root / "case-activation"
+    resp = client.post("/api/case/create", json={
+        "case_id": "case-activation",
+        "title": "Case Activation",
+        "dir": str(requested_dir)
+    })
+
+    assert resp.status_code == 200
+    assert activated == [str(requested_dir)]
+
+
 def test_concurrent_case_creation_returns_409(client, case_env, passwords_dir):
     case_root, _ = case_env
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)

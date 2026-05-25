@@ -65,37 +65,37 @@ backends:
     enabled: true
     type: stdio
     command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "forensic-mcp"]
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "forensic-mcp"]
 
   case-mcp:
     enabled: true
     type: stdio
     command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "case-mcp"]
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "case-mcp"]
 
   sift-mcp:
     enabled: true
     type: stdio
     command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "sift-mcp"]
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "sift-mcp"]
 
   report-mcp:
     enabled: true
     type: stdio
     command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "report-mcp"]
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "report-mcp"]
 
   forensic-rag-mcp:
     enabled: ${AGENTIR_RAG_ENABLED}
     type: stdio
     command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "rag-mcp"]
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "rag-mcp"]
 
   windows-triage-mcp:
     enabled: ${AGENTIR_WINDOWS_TRIAGE_ENABLED}
     type: stdio
     command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "windows-triage-mcp"]
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "windows-triage-mcp"]
     env:
       AGENTIR_WINDOWS_TRIAGE_DB_DIR: "${AGENTIR_WINDOWS_TRIAGE_DB_DIR}"
 
@@ -103,7 +103,7 @@ backends:
     enabled: true
     type: stdio
     command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "opensearch-mcp"]
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "opensearch-mcp"]
     env:
       OPENSEARCH_CONFIG: "${AGENTIR_HOME}/opensearch.yaml"
       OPENSEARCH_HOST: "http://127.0.0.1:9200"
@@ -112,7 +112,7 @@ backends:
     enabled: ${AGENTIR_OPENCTI_ENABLED}
     type: stdio
     command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "opencti-mcp"]
+    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "opencti-mcp"]
     env:
       OPENCTI_URL: "${OPENCTI_URL}"
       OPENCTI_TOKEN: "${OPENCTI_TOKEN}"

@@ -713,6 +713,11 @@ class Gateway:
                 enable_override,
                 get_override_status,
             )
+
+            async def _on_case_activated(case_dir_str: str) -> None:
+                gateway.config.setdefault("case", {})["dir"] = case_dir_str
+                await gateway.restart_backends()
+
             routes.append(
                 Mount(
                     "/portal",
@@ -722,6 +727,7 @@ class Gateway:
                         api_keys=api_keys,
                         gateway_config_path=_gw_config_path,
                         on_chain_mutation=invalidate_evidence_cache,
+                        on_case_activated=_on_case_activated,
                         on_override_get_status=get_override_status,
                         on_override_enable=enable_override,
                         on_override_cancel=cancel_override,

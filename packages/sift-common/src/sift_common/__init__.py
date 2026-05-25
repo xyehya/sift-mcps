@@ -9,20 +9,20 @@ from pathlib import Path
 def resolve_case_dir() -> str:
     """Resolve the active case directory.
 
-    Resolution order: AGENTIR_CASE_DIR env var → ~/.agentir/active_case file → "".
+    Resolution order: AGENTIR_CASE_DIR env var → legacy pointer file → "".
     AGENTIR_CASE_DIR must be a directory containing CASE.yaml to be valid.
-    If set but invalid, falls through to active_case.
+    If set but invalid, falls through to the legacy fallback.
     """
     case_dir = os.environ.get("AGENTIR_CASE_DIR", "").strip()
     if case_dir:
         p = Path(case_dir)
         if p.is_dir() and (p / "CASE.yaml").exists():
             return case_dir
-        # Set but invalid — fall through to active_case
-    active_file = Path.home() / ".agentir" / "active_case"
-    if active_file.is_file():
+        # Set but invalid — fall through to legacy fallback
+    active_case_file = Path.home() / ".agentir" / "active_case"  # Legacy CLI fallback
+    if active_case_file.is_file():
         try:
-            content = active_file.read_text().strip()
+            content = active_case_file.read_text().strip()
         except OSError:
             return ""
         if content:

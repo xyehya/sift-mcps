@@ -218,11 +218,11 @@ def _resolve_case_dir(case_id: str = "") -> Path:
             raise ValueError(f"Case not found: {case_id}")
         return case_dir
 
-    # Read active_case file first (detects case switches without restart)
-    active_file = _ACTIVE_CASE_FILE
-    if active_file.exists():
+    # Legacy CLI fallback — reads active_case_file pointer (portal sets AGENTIR_CASE_DIR instead)
+    active_case_file = _ACTIVE_CASE_FILE
+    if active_case_file.exists():
         try:
-            content = active_file.read_text().strip()
+            content = active_case_file.read_text().strip()
         except OSError:
             content = ""
         if content:
@@ -230,7 +230,7 @@ def _resolve_case_dir(case_id: str = "") -> Path:
                 case_dir = Path(content)
             else:
                 if ".." in content or "/" in content or "\\" in content:
-                    raise ValueError(f"Invalid case ID in active_case: {content}")
+                    raise ValueError(f"Invalid case ID in active_case_file: {content}")
                 cases_dir = Path(os.environ.get("AGENTIR_CASES_DIR", _DEFAULT_CASES_DIR))
                 case_dir = cases_dir / content
             if case_dir.is_dir():

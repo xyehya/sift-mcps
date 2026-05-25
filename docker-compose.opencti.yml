@@ -76,6 +76,8 @@ services:
       - APP__ADMIN__EMAIL=admin@agentir.local
       - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_TOKEN}
       - APP__ADMIN__TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - APP__ENCRYPTION_KEY=${OPENCTI_ENCRYPTION_KEY}
+      - APP__HEALTH_ACCESS_KEY=${OPENCTI_HEALTH_ACCESS_KEY}
       - APP__APP_LOGS__LOGS_LEVEL=error
       # Search backend — our shared agentir-opensearch instance
       - ELASTICSEARCH__URL=http://opensearch:9200
@@ -105,7 +107,11 @@ services:
       minio:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD-SHELL",
+          "node -e 'const http=require(\"http\");const key=process.env.APP__HEALTH_ACCESS_KEY;http.get(\"http://localhost:8080/health?health_access_key=\"+encodeURIComponent(key),r=>process.exit(r.statusCode===200?0:1)).on(\"error\",()=>process.exit(1));'",
+        ]
       interval: 20s
       timeout: 10s
       retries: 20

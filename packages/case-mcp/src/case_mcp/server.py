@@ -38,7 +38,6 @@ from agentir_core.evidence_chain import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CASES_DIR = str(Path.home() / "cases")
-_ACTIVE_CASE_FILE = Path.home() / ".agentir" / "active_case"
 _MAX_NAME = 200
 _MAX_TEXT = 10_000
 _MAX_SHORT = 200
@@ -143,25 +142,8 @@ def _resolve_case_dir(case_id: str = "") -> Path:
             raise ValueError(f"Case not found: {case_id}")
         return case_dir
 
-    # Read active_case file first (detects case switches without restart)
-    active_file = _ACTIVE_CASE_FILE
-    if active_file.exists():
-        try:
-            content = active_file.read_text().strip()
-        except OSError:
-            content = ""
-        if content:
-            if os.path.isabs(content):
-                case_dir = Path(content)
-            else:
-                if ".." in content or "/" in content or "\\" in content:
-                    raise ValueError(f"Invalid case ID in active_case: {content}")
-                cases_dir = Path(os.environ.get("AGENTIR_CASES_DIR", _DEFAULT_CASES_DIR))
-                case_dir = cases_dir / content
-            if case_dir.is_dir():
-                return case_dir
-
-    # Fallback: env var (containers, tests, non-standard deployments)
+    # Portal-created case activation is the runtime contract. Do not read the
+    # legacy ~/.agentir/active_case pointer here; it can drift from gateway.yaml.
     env_dir = os.environ.get("AGENTIR_CASE_DIR")
     if env_dir:
         p = Path(env_dir)
@@ -347,28 +329,49 @@ def create_server() -> FastMCP:
     def evidence_list() -> dict:
         """List all registered evidence files in the active case with
         their SHA-256 hashes, registration dates, and descriptions.
+        Also shows any unregistered files in the evidence/ directory.
 
         Reads from the authoritative System B manifest (evidence-manifest.json).
         IGNORED entries are excluded from the result.
+        Unregistered files appear with registered=false — seal via the portal.
         """
         try:
             case_dir = _resolve_case_dir()
             manifest = load_manifest(case_dir)
             if manifest is None:
-                return {
-                    "evidence": [],
-                    "manifest_version": 0,
-                    "source": "manifest_v2",
-                    "note": "No evidence manifest — case may pre-date System B or not yet initialised",
-                }
-            active_files = [
-                f for f in manifest.get("files", []) if f.get("status") != "IGNORED"
-            ]
-            return {
+                active_files = []
+                manifest_version = 0
+            else:
+                active_files = [
+                    f for f in manifest.get("files", []) if f.get("status") != "IGNORED"
+                ]
+                manifest_version = manifest.get("version", 0)
+
+            # Scan actual evidence dir for files not in the manifest (B14 fix)
+            evidence_dir = case_dir / "evidence"
+            registered_paths = {f.get("path", "") for f in active_files}
+            unregistered = []
+            if evidence_dir.is_dir():
+                for f in sorted(evidence_dir.iterdir()):
+                    if f.is_file():
+                        rel = f"evidence/{f.name}"
+                        if rel not in registered_paths and str(f) not in registered_paths:
+                            unregistered.append({
+                                "path": rel,
+                                "size_bytes": f.stat().st_size,
+                                "registered": False,
+                                "note": "File not sealed. Seal via Examiner Portal → Evidence tab before indexing.",
+                            })
+
+            result = {
                 "evidence": active_files,
-                "manifest_version": manifest.get("version", 0),
+                "unregistered": unregistered,
+                "manifest_version": manifest_version,
                 "source": "manifest_v2",
             }
+            if manifest is None:
+                result["note"] = "No evidence manifest — case may pre-date System B or not yet initialised"
+            return result
         except (ValueError, OSError) as e:
             return {"error": str(e)}
 

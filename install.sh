@@ -7,10 +7,11 @@ RUN_DOCKER=1
 DOWNLOAD_DB=1
 INSTALL_RAG=1
 ENABLE_OPENCTI=0
+ENABLE_OPENCTI_FEEDS=0
 
 usage() {
   cat <<'USAGE'
-Usage: ./install.sh [-y] [--no-start] [--skip-docker] [--skip-db] [--skip-rag] [--enable-opencti]
+Usage: ./install.sh [-y] [--no-start] [--skip-docker] [--skip-db] [--skip-rag] [--enable-opencti] [--enable-opencti-feeds]
 
 Install sift-mcps on a SIFT Workstation VM.
 
@@ -21,6 +22,8 @@ Options:
   --skip-db          Skip downloading triage baseline databases.
   --skip-rag         Skip forensic-rag-mcp and its ML dependencies.
   --enable-opencti   Deploy local OpenCTI stack (requires >=14 GB RAM, resizes VM first).
+  --enable-opencti-feeds
+                     Deploy public OpenCTI import connectors (MITRE ATT&CK + CISA KEV).
   -h, --help         Show this help.
 USAGE
 }
@@ -33,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     --skip-db) DOWNLOAD_DB=0 ;;
     --skip-rag) INSTALL_RAG=0 ;;
     --enable-opencti) ENABLE_OPENCTI=1 ;;
+    --enable-opencti-feeds) ENABLE_OPENCTI=1; ENABLE_OPENCTI_FEEDS=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
@@ -56,6 +60,7 @@ AGENTIR_EXAMINER="${AGENTIR_EXAMINER:-examiner}"
 MATERIALS_FILE="${MATERIALS_FILE:-$AGENTIR_TOKENS_DIR/installer-handoff.txt}"
 SYSTEMD_USER_DIR="${SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 GATEWAY_SERVICE_FILE="$SYSTEMD_USER_DIR/sift-gateway.service"
+PYTHON_BIN=""
 
 log() { printf '[sift-mcps] %s\n' "$*"; }
 warn() { printf '[sift-mcps] WARNING: %s\n' "$*" >&2; }
@@ -110,12 +115,25 @@ check_os() {
   fi
 }
 
-check_python() {
-  require_cmd python3
-  python3 - <<'PY' || die "Python 3.10 or newer is required."
+python_is_usable() {
+  "$1" - <<'PY' >/dev/null 2>&1
 import sys
 raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
 PY
+}
+
+check_python() {
+  local candidate
+  for candidate in "${AGENTIR_PYTHON:-}" /usr/bin/python3.12 /usr/bin/python3.11 /usr/bin/python3.10 /usr/bin/python3 "$(command -v python3 2>/dev/null || true)"; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    if python_is_usable "$candidate"; then
+      PYTHON_BIN="$(readlink -f "$candidate")"
+      export PYTHON_BIN
+      log "Using Python: $PYTHON_BIN ($("$PYTHON_BIN" -V 2>&1))"
+      return
+    fi
+  done
+  die "Python 3.10 or newer is required."
 }
 
 resolve_uv() {
@@ -150,12 +168,15 @@ install_uv_if_needed() {
 }
 
 sync_workspace() {
+  export UV_PYTHON="$PYTHON_BIN"
+  export UV_NO_MANAGED_PYTHON=1
+  export UV_PYTHON_DOWNLOADS=never
   if [[ "$INSTALL_RAG" -eq 1 ]]; then
     log "Syncing full uv workspace."
-    "$UV_BIN" sync --extra full --project "$REPO_DIR"
+    "$UV_BIN" sync --extra full --project "$REPO_DIR" --python "$PYTHON_BIN" --no-managed-python --no-python-downloads
   else
     log "Syncing standard uv workspace without forensic-rag-mcp."
-    "$UV_BIN" sync --extra standard --project "$REPO_DIR"
+    "$UV_BIN" sync --extra standard --project "$REPO_DIR" --python "$PYTHON_BIN" --no-managed-python --no-python-downloads
   fi
 }
 
@@ -183,7 +204,7 @@ download_triage_databases() {
     return
   fi
   # Run the python downloader. If it fails, print a warning but do not fail the installer.
-  if ! "$UV_BIN" run --project "$REPO_DIR" python -m windows_triage_mcp.scripts.download_databases --dest "$AGENTIR_WINDOWS_TRIAGE_DB_DIR"; then
+  if ! "$UV_BIN" run --project "$REPO_DIR" --python "$PYTHON_BIN" --no-managed-python --no-python-downloads python -m windows_triage_mcp.scripts.download_databases --dest "$AGENTIR_WINDOWS_TRIAGE_DB_DIR"; then
     warn "Triage baseline databases could not be downloaded. Backend will run in degraded mode."
   fi
 }
@@ -233,6 +254,74 @@ random_hex() {
   openssl rand -hex "$bytes"
 }
 
+prepare_opencti_secrets() {
+  [[ "$ENABLE_OPENCTI" -eq 1 ]] || return 0
+
+  if [[ -z "${OPENCTI_TOKEN:-}" ]]; then
+    if [[ -f "$AGENTIR_HOME/opencti-token" ]]; then
+      OPENCTI_TOKEN="$(< "$AGENTIR_HOME/opencti-token")"
+      log "OpenCTI admin token already exists; preserving it."
+    else
+      OPENCTI_TOKEN=$("$PYTHON_BIN" -c "import uuid; print(uuid.uuid4())")
+      printf '%s\n' "$OPENCTI_TOKEN" > "$AGENTIR_HOME/opencti-token"
+      chmod 600 "$AGENTIR_HOME/opencti-token"
+      log "OpenCTI admin token saved to $AGENTIR_HOME/opencti-token"
+    fi
+  fi
+
+  if [[ -f "$AGENTIR_HOME/opencti-encryption-key" ]]; then
+    OPENCTI_ENCRYPTION_KEY="$(< "$AGENTIR_HOME/opencti-encryption-key")"
+    log "OpenCTI encryption key already exists; preserving it."
+  else
+    OPENCTI_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+    printf '%s\n' "$OPENCTI_ENCRYPTION_KEY" > "$AGENTIR_HOME/opencti-encryption-key"
+    chmod 600 "$AGENTIR_HOME/opencti-encryption-key"
+    log "OpenCTI encryption key saved to $AGENTIR_HOME/opencti-encryption-key"
+  fi
+
+  if [[ -f "$AGENTIR_HOME/opencti-health-key" ]]; then
+    OPENCTI_HEALTH_ACCESS_KEY="$(< "$AGENTIR_HOME/opencti-health-key")"
+    log "OpenCTI health key already exists; preserving it."
+  else
+    OPENCTI_HEALTH_ACCESS_KEY=$("$PYTHON_BIN" -c "import uuid; print(uuid.uuid4())")
+    printf '%s\n' "$OPENCTI_HEALTH_ACCESS_KEY" > "$AGENTIR_HOME/opencti-health-key"
+    chmod 600 "$AGENTIR_HOME/opencti-health-key"
+    log "OpenCTI health key saved to $AGENTIR_HOME/opencti-health-key"
+  fi
+
+  export OPENCTI_TOKEN OPENCTI_ENCRYPTION_KEY OPENCTI_HEALTH_ACCESS_KEY
+  export OPENCTI_URL="http://127.0.0.1:8080"
+}
+
+prepare_opencti_connector_ids() {
+  [[ "$ENABLE_OPENCTI_FEEDS" -eq 1 ]] || return 0
+  local id_file
+
+  id_file="$AGENTIR_HOME/opencti-connector-mitre-id"
+  if [[ -f "$id_file" ]]; then
+    OPENCTI_CONNECTOR_MITRE_ID="$(< "$id_file")"
+    log "OpenCTI MITRE connector ID already exists; preserving it."
+  else
+    OPENCTI_CONNECTOR_MITRE_ID=$("$PYTHON_BIN" -c "import uuid; print(uuid.uuid4())")
+    printf '%s\n' "$OPENCTI_CONNECTOR_MITRE_ID" > "$id_file"
+    chmod 600 "$id_file"
+    log "OpenCTI MITRE connector ID saved to $id_file"
+  fi
+
+  id_file="$AGENTIR_HOME/opencti-connector-cisa-kev-id"
+  if [[ -f "$id_file" ]]; then
+    OPENCTI_CONNECTOR_CISA_KEV_ID="$(< "$id_file")"
+    log "OpenCTI CISA KEV connector ID already exists; preserving it."
+  else
+    OPENCTI_CONNECTOR_CISA_KEV_ID=$("$PYTHON_BIN" -c "import uuid; print(uuid.uuid4())")
+    printf '%s\n' "$OPENCTI_CONNECTOR_CISA_KEV_ID" > "$id_file"
+    chmod 600 "$id_file"
+    log "OpenCTI CISA KEV connector ID saved to $id_file"
+  fi
+
+  export OPENCTI_CONNECTOR_MITRE_ID OPENCTI_CONNECTOR_CISA_KEV_ID
+}
+
 write_default_examiner() {
   local password_file temp_password
   password_file="$AGENTIR_PASSWORDS_DIR/$AGENTIR_EXAMINER.json"
@@ -246,7 +335,7 @@ write_default_examiner() {
   TEMP_PASSWORD="$temp_password"
   TEMP_PASSWORD_CREATED=1
   export AGENTIR_PASSWORDS_DIR AGENTIR_EXAMINER TEMP_PASSWORD
-  python3 - <<'PY'
+  "$PYTHON_BIN" - <<'PY'
 import hashlib
 import json
 import os
@@ -287,7 +376,7 @@ render_file() {
   export AGENTIR_HOME AGENTIR_TLS_DIR AGENTIR_CONFIG AGENTIR_CASE_ROOT
   export AGENTIR_WINDOWS_TRIAGE_DB_DIR
   export AGENTIR_GATEWAY_TOKEN AGENTIR_SERVICE_TOKEN AGENTIR_PORTAL_SESSION_SECRET
-  export AGENTIR_EXAMINER SIFT_MCPS_ROOT UV_BIN OPENCTI_URL OPENCTI_TOKEN
+  export AGENTIR_EXAMINER SIFT_MCPS_ROOT UV_BIN PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
   export AGENTIR_RAG_ENABLED AGENTIR_OPENCTI_ENABLED
   export AGENTIR_WINDOWS_TRIAGE_ENABLED
   SIFT_MCPS_ROOT="$REPO_DIR"
@@ -308,7 +397,7 @@ render_file() {
   else
     AGENTIR_OPENCTI_ENABLED="false"
   fi
-  python3 - "$src" "$dst" "$mode" <<'PY'
+  "$PYTHON_BIN" - "$src" "$dst" "$mode" <<'PY'
 import os
 import stat
 import sys
@@ -361,8 +450,9 @@ write_gateway_config() {
 
 migrate_gateway_config() {
   log "Checking gateway config compatibility."
-  export AGENTIR_CONFIG INSTALL_RAG DOWNLOAD_DB
-  "$UV_BIN" run --project "$REPO_DIR" python - <<'PY'
+  export AGENTIR_CONFIG INSTALL_RAG DOWNLOAD_DB ENABLE_OPENCTI OPENCTI_URL OPENCTI_TOKEN
+  export SIFT_MCPS_ROOT PYTHON_BIN
+  "$UV_BIN" run --project "$REPO_DIR" --python "$PYTHON_BIN" --no-managed-python --no-python-downloads python - <<'PY'
 import os
 import tempfile
 from pathlib import Path
@@ -398,6 +488,50 @@ if os.environ.get("DOWNLOAD_DB") != "1":
     wt_backend = cfg.setdefault("backends", {}).get("windows-triage-mcp")
     if isinstance(wt_backend, dict) and wt_backend.get("enabled") is not False:
         wt_backend["enabled"] = False
+        changed = True
+
+root = os.environ.get("SIFT_MCPS_ROOT") or ""
+python_bin = os.environ.get("PYTHON_BIN") or ""
+for backend in (cfg.get("backends") or {}).values():
+    if not isinstance(backend, dict):
+        continue
+    args = backend.get("args")
+    if not isinstance(args, list) or not args or args[0] != "run":
+        continue
+    if "--python" in args and "--no-managed-python" in args and "--no-python-downloads" in args:
+        continue
+    script = args[-1]
+    project = root
+    if "--project" in args:
+        try:
+            project = args[args.index("--project") + 1]
+        except IndexError:
+            project = root
+    backend["args"] = [
+        "run",
+        "--project",
+        project,
+        "--python",
+        python_bin,
+        "--no-managed-python",
+        "--no-python-downloads",
+        script,
+    ]
+    changed = True
+
+if os.environ.get("ENABLE_OPENCTI") == "1":
+    backend = cfg.setdefault("backends", {}).setdefault("opencti-mcp", {})
+    if backend.get("enabled") is not True:
+        backend["enabled"] = True
+        changed = True
+    env = backend.setdefault("env", {})
+    opencti_url = os.environ.get("OPENCTI_URL") or "http://127.0.0.1:8080"
+    opencti_token = os.environ.get("OPENCTI_TOKEN") or ""
+    if env.get("OPENCTI_URL") != opencti_url:
+        env["OPENCTI_URL"] = opencti_url
+        changed = True
+    if env.get("OPENCTI_TOKEN") != opencti_token:
+        env["OPENCTI_TOKEN"] = opencti_token
         changed = True
 
 if changed:
@@ -454,7 +588,7 @@ start_opensearch() {
   status="unknown"
   for _ in $(seq 1 90); do
     status="$(curl -fsS http://127.0.0.1:9200/_cluster/health 2>/dev/null \
-      | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status","unknown"))' 2>/dev/null || true)"
+    | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("status","unknown"))' 2>/dev/null || true)"
     if [[ "$status" == "green" || "$status" == "yellow" ]]; then
       log "OpenSearch healthy: $status"
       return
@@ -488,7 +622,7 @@ configure_opensearch_cluster() {
     || warn "OpenSearch smoke index failed."
   local found
   found="$(curl -fsS "http://127.0.0.1:9200/case-test-evtx-smoketest/_search?q=event.code:4624&size=1" 2>/dev/null \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["hits"]["total"]["value"])' 2>/dev/null || echo 0)"
+    | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin)["hits"]["total"]["value"])' 2>/dev/null || echo 0)"
   if [[ "$found" == "1" ]]; then
     log "OpenSearch smoke test passed."
   else
@@ -532,7 +666,7 @@ configure_geoip_pipeline() {
 install_opensearch_templates() {
   [[ "$RUN_DOCKER" -eq 1 ]] || return 0
   log "Installing OpenSearch templates and pipelines if cluster is reachable."
-  "$UV_BIN" run --project "$REPO_DIR" python - <<'PY' || warn "OpenSearch template bootstrap failed; opensearch-mcp will retry at backend startup."
+  "$UV_BIN" run --project "$REPO_DIR" --python "$PYTHON_BIN" --no-managed-python --no-python-downloads python - <<'PY' || warn "OpenSearch template bootstrap failed; opensearch-mcp will retry at backend startup."
 from opensearch_mcp.client import get_client
 from opensearch_mcp.mappings import ensure_winlog_pipeline
 
@@ -557,41 +691,50 @@ install_opencti() {
 
   log "Deploying local OpenCTI stack (RAM: ${total_ram_mb} MB)."
 
-  # Generate admin token (UUID) if not already set
-  if [[ -z "${OPENCTI_TOKEN:-}" ]]; then
-    OPENCTI_TOKEN=$(python3 -c "import uuid; print(uuid.uuid4())")
-    printf '%s\n' "$OPENCTI_TOKEN" > "$AGENTIR_HOME/opencti-token"
-    chmod 600 "$AGENTIR_HOME/opencti-token"
-    log "OpenCTI admin token saved to $AGENTIR_HOME/opencti-token"
-  fi
-  export OPENCTI_TOKEN
-  export OPENCTI_URL="http://127.0.0.1:8080"
+  prepare_opencti_secrets
 
   # Bring up OpenCTI stack (separate compose file, shares agentir-net with opensearch)
   OPENCTI_ADMIN_TOKEN="$OPENCTI_TOKEN" \
+  OPENCTI_ENCRYPTION_KEY="$OPENCTI_ENCRYPTION_KEY" \
+  OPENCTI_HEALTH_ACCESS_KEY="$OPENCTI_HEALTH_ACCESS_KEY" \
     docker compose -f "$REPO_DIR/docker-compose.opencti.yml" up -d
 
   # Wait for OpenCTI platform health (first-run schema init takes 2-5 min)
   log "Waiting for OpenCTI platform to be ready (up to 5 min on first run)..."
   local deadline=$(( $(date +%s) + 300 ))
-  until curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; do
+  until curl -sf "http://127.0.0.1:8080/health?health_access_key=$OPENCTI_HEALTH_ACCESS_KEY" >/dev/null 2>&1; do
     [[ $(date +%s) -lt $deadline ]] || { warn "OpenCTI did not become healthy within 5 min; check: docker logs agentir-opencti"; break; }
     sleep 10
   done
   log "OpenCTI ready at http://127.0.0.1:8080"
 }
 
+install_opencti_feeds() {
+  [[ "$ENABLE_OPENCTI_FEEDS" -eq 1 ]] || return 0
+  [[ "$RUN_DOCKER" -eq 1 ]] || { warn "OpenCTI feed connectors require Docker; skipping (--skip-docker set)."; return 0; }
+
+  prepare_opencti_secrets
+  prepare_opencti_connector_ids
+
+  log "Deploying OpenCTI public feed connectors (MITRE ATT&CK + CISA KEV)."
+  OPENCTI_ADMIN_TOKEN="$OPENCTI_TOKEN" \
+  OPENCTI_CONNECTOR_MITRE_ID="$OPENCTI_CONNECTOR_MITRE_ID" \
+  OPENCTI_CONNECTOR_CISA_KEV_ID="$OPENCTI_CONNECTOR_CISA_KEV_ID" \
+    docker compose -f "$REPO_DIR/docker-compose.opencti-connectors.yml" up -d
+}
+
 install_systemd_service() {
   install -d -m 700 "$SYSTEMD_USER_DIR"
-  if [[ ! -f "$GATEWAY_SERVICE_FILE" ]]; then
-    AGENTIR_GATEWAY_TOKEN=""
-    AGENTIR_SERVICE_TOKEN=""
-    AGENTIR_PORTAL_SESSION_SECRET=""
-    export SIFT_MCPS_ROOT="$REPO_DIR" UV_BIN AGENTIR_CONFIG AGENTIR_EXAMINER
-    render_file "$REPO_DIR/configs/systemd/sift-gateway.service" "$GATEWAY_SERVICE_FILE" 0644
+  AGENTIR_GATEWAY_TOKEN=""
+  AGENTIR_SERVICE_TOKEN=""
+  AGENTIR_PORTAL_SESSION_SECRET=""
+  export SIFT_MCPS_ROOT="$REPO_DIR" UV_BIN PYTHON_BIN AGENTIR_CONFIG AGENTIR_EXAMINER
+  if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
+    log "Updating systemd user service $GATEWAY_SERVICE_FILE."
   else
-    log "Systemd user service exists; preserving $GATEWAY_SERVICE_FILE."
+    log "Writing systemd user service $GATEWAY_SERVICE_FILE."
   fi
+  render_file "$REPO_DIR/configs/systemd/sift-gateway.service" "$GATEWAY_SERVICE_FILE" 0644
 
   [[ "$START_SERVICE" -eq 1 ]] || { warn "Skipping gateway service start."; return; }
   if ! command -v systemctl >/dev/null 2>&1; then
@@ -659,9 +802,9 @@ configure_immutable_capability() {
   # Phase 17a: grant CAP_LINUX_IMMUTABLE to the venv Python so the gateway
   # process can set/clear chattr +i on evidence files without running as root.
   local venv_py
-  venv_py="$(readlink -f "${REPO_DIR}/.venv/bin/python3.11" 2>/dev/null || true)"
+  venv_py="$(readlink -f "${REPO_DIR}/.venv/bin/python" 2>/dev/null || true)"
   if [[ -z "$venv_py" || ! -f "$venv_py" ]]; then
-    warn "configure_immutable_capability: .venv/bin/python3.11 not found — skipping setcap"
+    warn "configure_immutable_capability: .venv/bin/python not found; skipping setcap"
     return 0
   fi
   if ! command -v setcap &>/dev/null; then
@@ -702,9 +845,9 @@ configure_apparmor() {
     return 0
   fi
   local venv_py
-  venv_py="$(readlink -f "${REPO_DIR}/.venv/bin/python3.11" 2>/dev/null || true)"
+  venv_py="$(readlink -f "${REPO_DIR}/.venv/bin/python" 2>/dev/null || true)"
   if [[ -z "$venv_py" || ! -f "$venv_py" ]]; then
-    warn "configure_apparmor: .venv/bin/python3.11 not found — skipping AppArmor profile"
+    warn "configure_apparmor: .venv/bin/python not found; skipping AppArmor profile"
     return 0
   fi
   local profile_src="${REPO_DIR}/configs/apparmor/sift-gateway.template"
@@ -752,6 +895,8 @@ main() {
   prepare_enrichment_assets
   generate_tls
   write_default_examiner
+  prepare_opencti_secrets
+  prepare_opencti_connector_ids
   write_gateway_config
   write_opensearch_config
   start_opensearch
@@ -759,6 +904,7 @@ main() {
   configure_geoip_pipeline
   install_opensearch_templates
   install_opencti
+  install_opencti_feeds
   install_systemd_service
   configure_immutable_capability
   configure_auditd
