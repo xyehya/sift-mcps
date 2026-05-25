@@ -7,7 +7,7 @@
 
 ## ⚡ Start Here Every Session
 
-**Current state:** Phase R3 COMPLETE (Session 44). `agentir-core` now owns `resolve_case_path()` for active-case-contained tool paths, AGENTS.md records the path policy, OpenSearch ingest tools resolve bare filenames / known relative subdirs under `AGENTIR_CASE_DIR`, `sift-mcp run_command` defaults cwd to the active case, `report-mcp save_report` resolves output under `reports/`, and the aggregate gateway injects `_case` context into MCP tool responses. Validated: agentir-core 225 | sift-gateway 104 | opensearch-mcp 907 (71 skipped) | sift-mcp 3 | report-mcp 31 | remediation gate 0 failures. **Next: Phase R4 — tool registry audit from `remediation-tasks.md`.**
+**Current state:** Phase R4 IN PROGRESS (Session 45). R4-1 instructions update is complete. R4-2 Session 4A first batch is complete for OpenSearch query/list/status tools: read-only annotations added where appropriate, portal-first `case_id` guidance added, and `idx_install_pipelines` remains non-read-only as an admin write/maintenance tool. Validated: remediation gate 0 failures | sift-common import smoke OK | opensearch-mcp 909 passed / 71 skipped | sift-gateway 104 passed | agentir-core 225 passed | parent + nested `git diff --check` clean. **Next: continue Phase R4-2 Session 4B (OpenSearch ingest/enrich/detection + `case_host_fix`) or move to R4-3 case-mcp audit per `remediation-tasks.md`.**
 
 ```bash
 # Verify tests (run per-package — cross-package rootdir conflict is pre-existing)
@@ -182,6 +182,20 @@ Path-taking tools now resolve against the portal-created active case rather than
 - [x] **R3-3** — Wired path resolution into `opensearch-mcp` ingest tools (`idx_ingest`, JSON, delimited, accesslog, memory), `sift-mcp run_command` cwd/default input-file handling, and `report-mcp save_report` reports output handling.
 - [x] **R3-4** — `packages/sift-gateway/src/sift_gateway/mcp_endpoint.py`: aggregate `/mcp` response middleware appends `_case: {id, dir, evidence_dir}` to tool responses, including gateway-generated error/block responses when an active case is set.
 - [x] **R3 validation** — Passed: `bash scripts/remediation-gate.sh`; `uv run pytest packages/agentir-core/tests/ -v --tb=short` (225 passed); `uv run python -m pytest packages/sift-gateway/ --tb=short -q` (104 passed); `uv run python -m pytest packages/opensearch-mcp/ --tb=short -q` (907 passed, 71 skipped); `uv run python -m pytest packages/sift-mcp/ --tb=short -q` (3 passed); `uv run python -m pytest packages/report-mcp/ --tb=short -q` (31 passed).
+
+## Phase R4 — Tool Registry Audit
+
+- [x] **R4-1** — `packages/sift-common/src/sift_common/instructions.py`: gateway routing now removes `case_init`, `case_activate`, and `evidence_register` from agent guidance; case lifecycle language is portal-first; OpenSearch instructions document `idx_ingest` relative path behavior and explicit `case_id` guidance for query tools.
+- [x] **R4-2 Session 4A first batch** — `packages/opensearch-mcp/src/opensearch_mcp/server.py`: query/list/status tools now carry `annotations={"readOnlyHint": True}` for evidence-gate compatibility; `idx_install_pipelines` is documented as an admin write/maintenance tool and remains non-read-only; OpenSearch query docstrings now direct agents to get `case_id` from `case_status`; `idx_case_summary` no-active-case error now points to the Examiner Portal.
+- [x] **R4 focused validation** — Passed: `bash scripts/remediation-gate.sh`; sift-common import smoke; `uv run python -m pytest packages/opensearch-mcp/ --tb=short -q` (909 passed, 71 skipped); `uv run python -m pytest packages/sift-gateway/ --tb=short -q` (104 passed); `uv run pytest packages/agentir-core/tests/ -v --tb=short` (225 passed); parent and nested `git diff --check`.
+- [ ] **R4-2 Session 4B** — Audit OpenSearch ingest/enrich/status tools and `case_host_fix` error/docstring contract.
+- [ ] **R4-3** — Audit case-mcp tool registry and portal-first language.
+
+**Session 45 — 2026-05-25 — Phase R4 first batch:**
+- `sift_common/instructions.py`: updated high-impact LLM instructions for portal-first case lifecycle, evidence gate behavior, relative case path convention, and explicit OpenSearch `case_id` guidance.
+- `opensearch_mcp/server.py`: added `readOnlyHint=True` to query/list/status tools (`idx_search`, `idx_count`, `idx_aggregate`, `idx_get_event`, `idx_timeline`, `idx_field_values`, `idx_status`, `idx_shard_status`, `idx_case_summary`, `idx_list_detections`); kept `idx_install_pipelines` non-read-only and documented it as an admin write/maintenance tool.
+- `opensearch-mcp/tests/test_server_tools.py`: added registry tests proving read-only annotations and non-read-only pipeline install behavior.
+- Validation: remediation gate passed; sift-common import smoke passed; opensearch-mcp 909 passed / 71 skipped; sift-gateway 104 passed; agentir-core 225 passed; parent and nested diff checks clean.
 
 ---
 

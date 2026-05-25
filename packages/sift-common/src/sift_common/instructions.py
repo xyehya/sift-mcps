@@ -101,8 +101,11 @@ GATEWAY = (
     "Always pass save_output: true for large forensic tool output. "
     "Tool routing: "
     "Core investigation — record_finding, record_timeline_event, run_command. "
-    "Case management — case_init, case_activate, case_status. "
-    "Evidence — evidence_register, evidence_verify. "
+    "Case lifecycle (portal-managed): case_status, case_list, evidence_list, evidence_verify. "
+    "Evidence gate: SEALED state required for analysis tools; UNSEALED allows read-only tools only. "
+    "Path convention: idx_ingest and run_command accept relative paths under evidence/ — "
+    "the gateway resolves them against the active case directory. "
+    "Do not call case_init, case_activate, or evidence_register — these are portal-managed. "
     "Evidence indexing — idx_ingest, idx_search, idx_aggregate, idx_timeline, "
     "idx_case_summary, idx_enrich_triage, idx_enrich_intel (via opensearch-mcp). "
     "Windows artifacts — check_file, check_process_tree, check_service (via windows-triage). "
@@ -148,6 +151,8 @@ OPENSEARCH = (
     "(4) idx_timeline for temporal patterns, "
     "(5) idx_enrich_triage/intel for enrichment. "
     "idx_search and idx_timeline support time_from/time_to for temporal filtering. "
+    "idx_ingest accepts relative paths: path='evidence/disk.e01' resolves against the active case dir. "
+    "Always pass case_id explicitly to idx_search/idx_aggregate — retrieve it from case_status first. "
     'Quote special chars in queries (e.g., source.ip:"::1"). '
     "WinRM/Operational often dominates event volumes (50%+) — add "
     'NOT winlog.channel:"Microsoft-Windows-WinRM/Operational" '
@@ -164,11 +169,11 @@ OPENSEARCH = (
 )
 
 CASE_MCP = (
-    "Case management tools for the Valhuntir forensic investigation platform. "
-    "Use case_init to create cases and case_activate to switch between them. "
-    "Evidence registration (evidence_register) computes SHA-256 hashes "
-    "for integrity verification. All evidence modifications require "
-    "examiner confirmation. Query case_status for investigation progress."
+    "Case status and evidence tools for the Valhuntir forensic investigation platform. "
+    "Cases are created and activated via the Examiner Portal, not via case_init/case_activate. "
+    "Start every session with case_status to get case_id, evidence_dir, and platform capabilities. "
+    "Use evidence_list to see sealed evidence and any unregistered files in evidence/. "
+    "evidence_register is blocked — seal evidence via the portal Evidence tab."
 )
 
 REPORT_MCP = (
