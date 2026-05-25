@@ -35,6 +35,7 @@ keywords = ["mcp", "forensics", "incident-response", "dfir", "security"]
 [project.optional-dependencies]
 core = [
     "agentir-core",
+    "case-dashboard",
     "forensic-knowledge",
     "sift-common",
     "sift-gateway",
@@ -43,12 +44,15 @@ core = [
     "sift-mcp",
     "report-mcp",
 ]
-full = [
+standard = [
     "sift-mcps[core]",
     "opensearch-mcp",
-    "rag-mcp",
     "windows-triage-mcp",
     "opencti-mcp",
+]
+full = [
+    "sift-mcps[standard]",
+    "rag-mcp",
 ]
 dev = [
     "pytest>=9.0",

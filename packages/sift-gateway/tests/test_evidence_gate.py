@@ -15,11 +15,14 @@ import pytest
 
 from agentir_core.evidence_chain import ChainStatus, init_evidence_chain, seal_manifest
 from sift_gateway.evidence_gate import (
+    VIOLATION_STATUSES,
     _CACHE,
     _TTL,
     build_block_response,
+    build_unsealed_warning,
     check_evidence_gate,
     invalidate_evidence_cache,
+    is_violation,
 )
 
 _KEY = b"test-derived-key-32bytes-padding!"
@@ -214,7 +217,7 @@ class TestViolations:
 # ---------------------------------------------------------------------------
 
 class TestBuildBlockResponse:
-    def test_structure(self):
+    def test_violation_uses_violation_reason(self):
         gate = {
             "blocked": True,
             "status": ChainStatus.MISSING,
@@ -228,6 +231,16 @@ class TestBuildBlockResponse:
         assert resp["status"] == ChainStatus.MISSING
         assert "remediation" in resp
 
+    def test_unsealed_uses_unsealed_reason(self):
+        gate = {
+            "blocked": True,
+            "status": ChainStatus.UNSEALED,
+            "issues": ["No sealed manifest"],
+            "manifest_version": 0,
+        }
+        resp = build_block_response("sift_run_command", gate)
+        assert resp["reason"] == "evidence_chain_unsealed"
+
     def test_json_serialisable(self):
         gate = {
             "blocked": True,
@@ -237,3 +250,55 @@ class TestBuildBlockResponse:
         }
         resp = build_block_response("case_status", gate)
         json.dumps(resp)  # must not raise — ChainStatus is a str-enum so it serialises
+
+
+# ---------------------------------------------------------------------------
+# Two-tier gate helpers (Phase 16-gate-tier)
+# ---------------------------------------------------------------------------
+
+class TestIsViolation:
+    def test_unsealed_is_not_violation(self):
+        assert is_violation(ChainStatus.UNSEALED) is False
+
+    def test_ok_is_not_violation(self):
+        assert is_violation(ChainStatus.OK) is False
+
+    def test_modified_is_violation(self):
+        assert is_violation(ChainStatus.MODIFIED) is True
+
+    def test_missing_is_violation(self):
+        assert is_violation(ChainStatus.MISSING) is True
+
+    def test_unregistered_is_violation(self):
+        assert is_violation(ChainStatus.UNREGISTERED) is True
+
+    def test_ledger_error_is_violation(self):
+        assert is_violation(ChainStatus.LEDGER_ERROR) is True
+
+    def test_violation_statuses_complete(self):
+        # Every non-OK, non-UNSEALED status must be a violation
+        non_ok = set(ChainStatus) - {ChainStatus.OK, ChainStatus.UNSEALED}
+        assert non_ok == VIOLATION_STATUSES
+
+
+class TestBuildUnsealedWarning:
+    def _gate(self):
+        return {"status": ChainStatus.UNSEALED, "manifest_version": 0, "issues": []}
+
+    def test_returns_dict_with_required_keys(self):
+        w = build_unsealed_warning("case_status", self._gate())
+        assert w["evidence_gate_warning"] is True
+        assert "message" in w
+        assert "remediation" in w
+
+    def test_includes_tool_name(self):
+        w = build_unsealed_warning("idx_case_summary", self._gate())
+        assert "idx_case_summary" in w["message"]
+
+    def test_json_serialisable(self):
+        w = build_unsealed_warning("any_tool", self._gate())
+        json.dumps({"_agentir_context": w})  # must not raise
+
+    def test_status_is_string(self):
+        w = build_unsealed_warning("t", self._gate())
+        assert isinstance(w["status"], str)

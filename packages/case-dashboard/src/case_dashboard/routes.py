@@ -32,11 +32,13 @@ from agentir_core.approval_auth import (
 from agentir_core.case_io import _protected_write, compute_content_hash
 from agentir_core.evidence_chain import (
     chain_status,
+    retire_file,
     diff_manifest,
     ignore_file,
     init_evidence_chain,
     load_manifest,
     seal_manifest,
+    verify_chain_hmac,
 )
 from agentir_core.verification import compute_hmac, write_ledger_entry
 from case_dashboard.session_jwt import (
@@ -137,6 +139,10 @@ _CASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 # Evidence chain challenge store — domain-separated from commit challenges (R2)
 _evidence_challenges: dict[str, dict] = {}
 _EVIDENCE_CHALLENGE_TTL = 30  # seconds
+
+# HMAC verify state file — records when the examiner last ran a full ledger HMAC verify
+_VERIFY_STATE_FILE = "evidence-verify-state.json"
+_HMAC_VERIFY_REMIND_HOURS = 24  # remind if no verify within this window
 
 # Callback invoked after every successful evidence chain mutation (seal/ignore).
 # Set by create_dashboard_v2_app() — the gateway passes invalidate_evidence_cache.
@@ -286,6 +292,17 @@ def _require_examiner_role(request: Request) -> JSONResponse | None:
     if getattr(request.state, "role", None) != "examiner":
         return JSONResponse(
             {"error": "Examiner role required"},
+            status_code=403,
+        )
+    return None
+
+
+def _require_portal_role(request: Request) -> JSONResponse | None:
+    """Return 403 unless the authenticated portal principal has a valid role (examiner or readonly)."""
+    role = getattr(request.state, "role", None)
+    if role not in ("examiner", "readonly"):
+        return JSONResponse(
+            {"error": "Examiner or Readonly role required"},
             status_code=403,
         )
     return None
@@ -472,16 +489,43 @@ def _detect_write_block(evidence_dir: Path) -> dict:
     return {"write_protected": False, "warning": _WRITE_BLOCK_WARNING}
 
 
+def _read_verify_state(case_dir: Path) -> dict:
+    """Read the HMAC verify state file. Returns {} on missing/parse error."""
+    try:
+        path = case_dir / _VERIFY_STATE_FILE
+        if path.exists():
+            return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _hmac_verify_needed(state: dict) -> bool:
+    """Return True if last HMAC verify is absent or older than the reminder window."""
+    last = state.get("last_hmac_verified_at")
+    if not last:
+        return True
+    try:
+        from datetime import datetime, timezone
+        ts = datetime.fromisoformat(last)
+        age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+        return age_hours >= _HMAC_VERIFY_REMIND_HOURS
+    except (ValueError, TypeError):
+        return True
+
+
 def _build_evidence_chain_status(case_dir: Path) -> dict:
     """Assemble the full evidence chain status payload for portal display."""
     status = chain_status(case_dir)
     manifest = load_manifest(case_dir)
     diff: dict = {}
-    if manifest and manifest.get("version", 0) > 0:
+    if manifest:
         diff = diff_manifest(case_dir, manifest)
 
     evidence_dir = case_dir / "evidence"
     wb = _detect_write_block(evidence_dir)
+
+    verify_state = _read_verify_state(case_dir)
     return {
         "status": status["status"],
         "issues": status["issues"],
@@ -494,6 +538,9 @@ def _build_evidence_chain_status(case_dir: Path) -> dict:
         "write_protected": wb.get("write_protected", False),
         "write_block_warning": wb.get("warning"),
         "write_block_mount_point": wb.get("mount_point"),
+        "hmac_last_verified_at": verify_state.get("last_hmac_verified_at"),
+        "hmac_last_verified_by": verify_state.get("last_hmac_verified_by"),
+        "hmac_verify_needed": _hmac_verify_needed(verify_state),
     }
 
 
@@ -539,7 +586,7 @@ def _verify_evidence_hmac(
 
 async def get_evidence_chain_status(request: Request) -> JSONResponse:
     """Return evidence chain status, diff, and write-block detection. No mutation."""
-    role_err = _require_examiner_role(request)
+    role_err = _require_portal_role(request)
     if role_err:
         return role_err
 
@@ -754,6 +801,164 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     })
 
 
+async def post_evidence_chain_retire(request: Request) -> JSONResponse:
+    """Retire a registered evidence file with HMAC confirmation.
+
+    Documents the deliberate removal of an ACTIVE evidence file.
+    Distinct from ignore (which is for unregistered files).
+    Clears the immutable flag and deletes the file from disk after
+    recording the FILE_RETIRED ledger event.
+
+    Body: {challenge_id, response, path, reason}
+    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
+    """
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    challenge_id = str(body.get("challenge_id", ""))
+    response_hmac = str(body.get("response", ""))
+    rel_path = str(body.get("path", "")).strip()
+    reason = str(body.get("reason", "")).strip()
+
+    if not challenge_id or not response_hmac:
+        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
+    if not rel_path:
+        return JSONResponse({"error": "Missing path"}, status_code=400)
+    if not reason:
+        return JSONResponse({"error": "Missing reason"}, status_code=400)
+
+    err_msg, derived_key = _verify_evidence_hmac(
+        examiner, challenge_id, response_hmac, request.client.host
+    )
+    if err_msg:
+        return JSONResponse({"error": err_msg}, status_code=401)
+
+    try:
+        retire_file(case_dir, rel_path, reason, examiner, derived_key)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception:
+        logger.exception("Evidence retire failed")
+        return JSONResponse({"error": "Retire failed — check gateway logs"}, status_code=500)
+
+    # Delete the file from disk now that the immutable flag is cleared and ledger is updated
+    abs_path = case_dir / rel_path
+    deleted = False
+    if abs_path.exists():
+        try:
+            abs_path.unlink()
+            deleted = True
+        except OSError as e:
+            logger.warning("retire: file unlink failed for %s: %s", abs_path, e)
+
+    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    if _ON_CHAIN_MUTATION and case_dir_str:
+        try:
+            _ON_CHAIN_MUTATION(case_dir_str)
+        except Exception as exc:
+            logger.warning("evidence retire: cache invalidation failed: %s", exc)
+
+    return JSONResponse({
+        "retired": True,
+        "path": rel_path,
+        "deleted_from_disk": deleted,
+        "manifest_version": (load_manifest(case_dir) or {}).get("version", -1),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Evidence chain HMAC verify endpoint (Phase 16-verify-remind)
+# ---------------------------------------------------------------------------
+
+
+async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
+    """Run a full HMAC verification of every ledger event with HMAC confirmation.
+
+    Records the timestamp on success so the portal can remind the examiner when
+    more than _HMAC_VERIFY_REMIND_HOURS have elapsed since the last verify.
+
+    Body: {challenge_id, response}
+    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
+    Returns: {ok, verified, failed, failed_indices, verified_at, verified_by}
+    """
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    challenge_id = str(body.get("challenge_id", ""))
+    response_hmac = str(body.get("response", ""))
+
+    if not challenge_id or not response_hmac:
+        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
+
+    err_msg, derived_key = _verify_evidence_hmac(
+        examiner, challenge_id, response_hmac, request.client.host
+    )
+    if err_msg:
+        return JSONResponse({"error": err_msg}, status_code=401)
+
+    try:
+        result = verify_chain_hmac(case_dir, derived_key)
+    except Exception:
+        logger.exception("verify_chain_hmac failed")
+        return JSONResponse({"error": "HMAC verify failed — check gateway logs"}, status_code=500)
+
+    from datetime import datetime, timezone
+    verified_at = datetime.now(timezone.utc).isoformat()
+
+    if result.get("ok"):
+        # Record the successful verify timestamp
+        state_path = case_dir / _VERIFY_STATE_FILE
+        try:
+            state_path.write_text(json.dumps({
+                "last_hmac_verified_at": verified_at,
+                "last_hmac_verified_by": examiner,
+            }))
+        except OSError as exc:
+            logger.warning("verify_chain_hmac: failed to write state file: %s", exc)
+
+    return JSONResponse({
+        **result,
+        "verified_at": verified_at,
+        "verified_by": examiner,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Response-guard override endpoints (Approach C / Phase 16a-guard)
 # ---------------------------------------------------------------------------
@@ -761,7 +966,7 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
 
 async def get_response_guard_status(request: Request) -> JSONResponse:
     """Return current response-guard override status. Session auth, no HMAC."""
-    role_err = _require_examiner_role(request)
+    role_err = _require_portal_role(request)
     if role_err:
         return role_err
 
@@ -1301,6 +1506,13 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
 
 
 async def get_findings(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1310,6 +1522,13 @@ async def get_findings(request: Request) -> JSONResponse:
 
 
 async def get_finding_by_id(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1323,6 +1542,13 @@ async def get_finding_by_id(request: Request) -> JSONResponse:
 
 
 async def get_timeline(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1332,6 +1558,13 @@ async def get_timeline(request: Request) -> JSONResponse:
 
 
 async def get_evidence(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1360,6 +1593,13 @@ async def get_evidence(request: Request) -> JSONResponse:
 
 
 async def get_audit_for_finding(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1399,6 +1639,13 @@ async def get_audit_for_finding(request: Request) -> JSONResponse:
 
 
 async def get_delta(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1409,6 +1656,13 @@ async def get_delta(request: Request) -> JSONResponse:
 
 
 async def get_case(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1423,6 +1677,13 @@ async def get_case(request: Request) -> JSONResponse:
 
 
 async def get_todos(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1431,6 +1692,13 @@ async def get_todos(request: Request) -> JSONResponse:
 
 
 async def get_iocs(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1441,6 +1709,13 @@ async def get_iocs(request: Request) -> JSONResponse:
 
 
 async def get_summary(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -2830,6 +3105,8 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/challenge", get_evidence_chain_challenge, methods=["GET"]),
         Route("/api/evidence/chain/seal", post_evidence_chain_seal, methods=["POST"]),
         Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
+        Route("/api/evidence/chain/retire", post_evidence_chain_retire, methods=["POST"]),
+        Route("/api/evidence/chain/verify-hmac", post_evidence_chain_verify_hmac, methods=["POST"]),
         # Approach C: response-guard override
         Route("/api/response-guard/status", get_response_guard_status, methods=["GET"]),
         Route("/api/response-guard/override", post_response_guard_override, methods=["POST"]),

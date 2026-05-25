@@ -4424,6 +4424,7 @@ source = { virtual = "." }
 [package.optional-dependencies]
 core = [
     { name = "agentir-core" },
+    { name = "case-dashboard" },
     { name = "case-mcp" },
     { name = "forensic-knowledge" },
     { name = "forensic-mcp" },
@@ -4440,12 +4441,27 @@ dev = [
 ]
 full = [
     { name = "agentir-core" },
+    { name = "case-dashboard" },
     { name = "case-mcp" },
     { name = "forensic-knowledge" },
     { name = "forensic-mcp" },
     { name = "opencti-mcp" },
     { name = "opensearch-mcp" },
     { name = "rag-mcp" },
+    { name = "report-mcp" },
+    { name = "sift-common" },
+    { name = "sift-gateway" },
+    { name = "sift-mcp" },
+    { name = "windows-triage-mcp" },
+]
+standard = [
+    { name = "agentir-core" },
+    { name = "case-dashboard" },
+    { name = "case-mcp" },
+    { name = "forensic-knowledge" },
+    { name = "forensic-mcp" },
+    { name = "opencti-mcp" },
+    { name = "opensearch-mcp" },
     { name = "report-mcp" },
     { name = "sift-common" },
     { name = "sift-gateway" },
@@ -4462,11 +4478,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "agentir-core", marker = "extra == 'core'", editable = "packages/agentir-core" },
+    { name = "case-dashboard", marker = "extra == 'core'", editable = "packages/case-dashboard" },
     { name = "case-mcp", marker = "extra == 'core'", editable = "packages/case-mcp" },
     { name = "forensic-knowledge", marker = "extra == 'core'", editable = "packages/forensic-knowledge" },
     { name = "forensic-mcp", marker = "extra == 'core'", editable = "packages/forensic-mcp" },
-    { name = "opencti-mcp", marker = "extra == 'full'", editable = "packages/opencti-mcp" },
-    { name = "opensearch-mcp", marker = "extra == 'full'", editable = "packages/opensearch-mcp" },
+    { name = "opencti-mcp", marker = "extra == 'standard'", editable = "packages/opencti-mcp" },
+    { name = "opensearch-mcp", marker = "extra == 'standard'", editable = "packages/opensearch-mcp" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
@@ -4476,10 +4493,11 @@ requires-dist = [
     { name = "sift-common", marker = "extra == 'core'", editable = "packages/sift-common" },
     { name = "sift-gateway", marker = "extra == 'core'", editable = "packages/sift-gateway" },
     { name = "sift-mcp", marker = "extra == 'core'", editable = "packages/sift-mcp" },
-    { name = "sift-mcps", extras = ["core"], marker = "extra == 'full'" },
-    { name = "windows-triage-mcp", marker = "extra == 'full'", editable = "packages/windows-triage-mcp" },
+    { name = "sift-mcps", extras = ["core"], marker = "extra == 'standard'" },
+    { name = "sift-mcps", extras = ["standard"], marker = "extra == 'full'" },
+    { name = "windows-triage-mcp", marker = "extra == 'standard'", editable = "packages/windows-triage-mcp" },
 ]
-provides-extras = ["core", "full", "dev"]
+provides-extras = ["core", "standard", "full", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

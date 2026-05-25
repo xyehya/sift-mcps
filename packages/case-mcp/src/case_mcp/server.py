@@ -29,10 +29,10 @@ from agentir_core.case_ops import (
     _case_status_data,
     _set_case_wintools_permissions,
 )
-from agentir_core.evidence_ops import (
-    list_evidence_data,
-    register_evidence_data,
-    verify_evidence_data,
+from agentir_core.evidence_chain import (
+    ChainStatus,
+    chain_status,
+    load_manifest,
 )
 
 logger = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     # Tool 3: case_list (SAFE)
     # ------------------------------------------------------------------
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def case_list() -> dict:
         """List all cases in the cases directory with their status
         (open/closed) and whether each is the active case."""
@@ -300,7 +300,7 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     # Tool 4: case_status (SAFE)
     # ------------------------------------------------------------------
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def case_status(case_id: str = "") -> dict:
         """Get detailed status of a case including finding counts,
         timeline entries, and TODO progress. Defaults to the active
@@ -315,61 +315,91 @@ def create_server() -> FastMCP:
             return {"error": str(e)}
 
     # ------------------------------------------------------------------
-    # Tool 5: evidence_register (CONFIRM)
+    # Tool 5: evidence_register (BLOCKED — examiner-only via portal)
     # ------------------------------------------------------------------
     @server.tool()
     def evidence_register(path: str, description: str = "") -> dict:
-        """Register an evidence file with the active case. Computes
-        SHA-256 hash and adds to evidence registry.
+        """Register an evidence file with the active case.
 
-        Confirm with the examiner before registering.
+        Evidence registration requires examiner review and must be
+        performed via the Examiner Portal. This tool will return a
+        portal-remediation block when called by the agent.
         """
-        try:
-            _validate_str_length(description, "description", _MAX_TEXT)
-            case_dir = _resolve_case_dir()
-            examiner = resolve_examiner()
-            result = register_evidence_data(
-                case_dir=case_dir,
-                path=path,
-                examiner=examiner,
-                description=description,
-            )
-            logged_id = audit.log(
-                tool="evidence_register",
-                params={"path": path, "description": description},
-                result_summary=result,
-            )
-            if logged_id is None:
-                result["warning"] = "Audit write failed — action not recorded"
-            return result
-        except (ValueError, FileNotFoundError, OSError) as e:
-            return {"error": str(e)}
+        audit.log(
+            tool="evidence_register",
+            params={"path": path, "description": description},
+            result_summary={"blocked": True, "reason": "portal_required"},
+        )
+        return {
+            "blocked": True,
+            "reason": "Evidence registration requires examiner review",
+            "action": "portal_required",
+            "portal_hint": (
+                "Open the Examiner Portal and use the 'Register Evidence' panel "
+                "in the Evidence Chain tab. Call open_case_dashboard() to open it."
+            ),
+        }
 
     # ------------------------------------------------------------------
     # Tool 6: evidence_list (SAFE)
     # ------------------------------------------------------------------
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def evidence_list() -> dict:
         """List all registered evidence files in the active case with
-        their SHA-256 hashes, registration dates, and descriptions."""
+        their SHA-256 hashes, registration dates, and descriptions.
+
+        Reads from the authoritative System B manifest (evidence-manifest.json).
+        IGNORED entries are excluded from the result.
+        """
         try:
             case_dir = _resolve_case_dir()
-            result = list_evidence_data(case_dir)
-            return result
+            manifest = load_manifest(case_dir)
+            if manifest is None:
+                return {
+                    "evidence": [],
+                    "manifest_version": 0,
+                    "source": "manifest_v2",
+                    "note": "No evidence manifest — case may pre-date System B or not yet initialised",
+                }
+            active_files = [
+                f for f in manifest.get("files", []) if f.get("status") != "IGNORED"
+            ]
+            return {
+                "evidence": active_files,
+                "manifest_version": manifest.get("version", 0),
+                "source": "manifest_v2",
+            }
         except (ValueError, OSError) as e:
             return {"error": str(e)}
 
     # ------------------------------------------------------------------
     # Tool 7: evidence_verify (SAFE)
     # ------------------------------------------------------------------
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def evidence_verify() -> dict:
-        """Verify integrity of all registered evidence files by comparing
-        current SHA-256 hashes against the registry. Reports OK, MODIFIED,
-        MISSING, or ERROR for each file."""
+        """Verify integrity of all registered evidence files using a
+        stat-check against the authoritative System B manifest.
+
+        Reports chain status: ok, unsealed, modified, missing,
+        unregistered, or ledger_error. For full HMAC verification,
+        use the Examiner Portal's 'Verify HMAC' button.
+        """
         try:
             case_dir = _resolve_case_dir()
-            result = verify_evidence_data(case_dir)
+            status = chain_status(case_dir)
+            result = {
+                "status": status["status"],
+                "issues": status["issues"],
+                "manifest_version": status["manifest_version"],
+                "ok_count": status["ok_count"],
+                "source": "manifest_v2",
+            }
+            if status["status"] not in (ChainStatus.OK, ChainStatus.UNSEALED):
+                result["portal_hint"] = (
+                    "Integrity issues detected. Open the Examiner Portal "
+                    "and run 'Verify HMAC' for full cryptographic verification. "
+                    "Call open_case_dashboard() to open it."
+                )
             return result
         except (ValueError, OSError) as e:
             return {"error": str(e)}

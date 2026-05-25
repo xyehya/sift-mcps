@@ -48,6 +48,10 @@ This workflow is the product contract. Implementation phases, tests, and docs mu
    - Installer validates OS/runtime prerequisites, syncs all packages, creates `/var/lib/agentir/`,
      deploys OpenSearch Docker, prepares enrichment/RAG assets, generates TLS material, writes
      `~/.agentir/gateway.yaml`, installs/enables `sift-gateway`, and verifies health.
+   - For lightweight/offline validation, `install.sh --skip-rag --skip-db --skip-docker` installs
+     the core gateway, portal, case, report, sift, forensic, OpenSearch client backend, TLS,
+     credentials, and service token without downloading RAG ML dependencies, triage DBs, or
+     starting OpenSearch Docker.
    - Installer creates a default examiner account and marks it `must_reset_password: true`.
    - Installer generates the first Hermes service token and prints/saves operator handoff material.
 
@@ -145,7 +149,7 @@ This workflow is the product contract. Implementation phases, tests, and docs mu
 | Content hash + stale detection | Detects post-review tampering |
 | Append-only `approvals.jsonl` | Immutable approval audit trail |
 | Versioned evidence manifest + ledger | Allows legitimate evidence additions while detecting tampering |
-| MCP evidence chain gate | Prevents the agent from operating on unsealed or tampered evidence |
+| MCP evidence chain gate | Prevents the agent from running analysis on unsealed evidence or any tool on tampered evidence |
 | `windows-triage-mcp` baseline validation | Deterministic local Windows known-good enrichment without Windows host execution |
 
 ---
@@ -218,7 +222,7 @@ registry, not a sealed chain of custody:
 
 Phase 16 therefore makes `evidence-manifest.json` plus `evidence-ledger.jsonl` the authority while
 keeping `evidence.json` as a compatibility view for existing tools. The new design adds versioned
-sealing, append-only evidence decisions, portal warnings, and a gateway fail-closed MCP gate.
+sealing, append-only evidence decisions, portal warnings, and a gateway evidence MCP gate.
 
 ### Evidence intake workflow
 
@@ -335,8 +339,9 @@ MCP Tool Call → Gateway
   2. On cache miss: read manifest + ledger, verify HMAC + hash-chain (~5ms disk read)
   3. Stat-check: do registered files still exist with expected byte size? (~10ms for 20 files)
   4. If any stat changed: set chain_status = VIOLATION (do not rehash inline — defer to portal)
-  5. If chain_status != OK: return structured block response + write audit entry
-  6. Else: route to backend, update cache
+  5. If chain_status is UNSEALED: allow read-only tools with warning, block analysis/write tools
+  6. If chain_status is a violation: return structured block response + write audit entry
+  7. Else: route to backend, update cache
 ```
 
 Full SHA-256 rehashing of evidence files is triggered **only** by:
@@ -362,8 +367,8 @@ or `mount -o ro,noatime`. The system must make the status of this protection vis
   should delegate to this module or be migrated without changing public tool semantics abruptly.
 - `case-dashboard`: add evidence intake/status panel, warning banner, rescan endpoint, register/seal
   endpoint, ignore unintended file endpoint, and violation display.
-- `sift-gateway`: call `verify_evidence_chain()` before agent `/mcp` tool calls; emit structured
-  block responses and audit entries.
+- `sift-gateway`: call the evidence gate before agent `/mcp` tool calls; emit structured block
+  responses, read-only UNSEALED warnings, and audit entries.
 - `case-mcp`: update `evidence_register`, `evidence_list`, and `evidence_verify` to use the evidence
   chain data model. Agent calls may read status and request remediation guidance, but only
   examiner-authorized portal actions may seal new evidence or resolve modified/missing evidence.
@@ -373,6 +378,85 @@ or `mount -o ro,noatime`. The system must make the status of this protection vis
 - Installer/config: case creation must create new evidence-chain files; no active case starts with a
   sealed manifest until the examiner runs initial evidence intake or explicitly seals an empty case.
 
+### DFIR Hardening Requirements (Gaps Identified in Architecture Review)
+
+The following gaps were identified against a real IR scenario where evidence is legitimately added,
+replaced, or removed by the operator, and where Hermes must only operate on cryptographically
+sealed evidence. These requirements extend the Phase 16 design.
+
+#### Gap 1 — No `FILE_RETIRED` event (court-critical)
+
+When a bad or corrupt artifact is deliberately removed by the examiner, the current design has no
+operation for it. Evidence simply disappears between manifest versions with no documented reason,
+which opposing counsel will exploit. Fix: add `retire_file(path, reason, examiner, derived_key)`
+to `evidence_chain.py`. This writes a `FILE_RETIRED` ledger event (HMAC-signed) before the
+manifest is re-sealed without the file, creating a documented chain: "file existed, examiner
+removed it for stated reason, chain continues."
+
+```python
+# New ledger event
+{"event": "FILE_RETIRED", "path": "evidence/bad-disk.E01", "reason": "corrupt acquisition",
+ "retired_by": "alice", "retired_at": "...", "previous_manifest_hash": "sha256:...",
+ "new_manifest_hash": "sha256:...", "hmac": "..."}
+```
+
+The portal must expose a "Retire evidence" action (HMAC-confirmed) distinct from "Ignore" (which
+is for unregistered files) and "Remove outside app / rescan" (which is the ad-hoc workaround).
+
+#### Gap 2 — Two registries diverge (`evidence.json` vs `evidence-manifest.json`)
+
+`evidence_ops.py` / case-mcp's `evidence_register` still writes to the old `evidence.json` flat
+file, which has no chain, no HMAC, no sealing. Until Phase 16c wires case-mcp to System B, an
+agent can register evidence that bypasses the chain-of-custody entirely.
+
+**Required 16c behavior:**
+- `evidence_list` → reads `evidence-manifest.json` (authoritative); falls back to `evidence.json`
+  for backward compat display only.
+- `evidence_verify` → calls `chain_status()` (stat-check, no key needed); returns structured result.
+- `evidence_register` called by agent → returns `{"blocked": true, "reason": "evidence_registration_requires_examiner", "remediation": "Use the Examiner Portal Evidence tab to register and seal new evidence."}`. Does NOT write to either registry. The agent can never self-register evidence.
+- `evidence_register` called by examiner session (portal REST, not MCP tool) → unchanged existing
+  behavior wired into seal_manifest flow.
+
+#### Gap 3 — Two-tier evidence gate (usability vs. security tradeoff)
+
+The gate started as fail-closed for ALL tool calls when the manifest was UNSEALED or violated.
+That was safe but created unnecessary friction: at case start, the examiner could not even run
+`list_findings` or `get_case_summary` until evidence was sealed. The implemented model is:
+
+**Two-tier gate model:**
+- Tier 1 (read-only): `UNSEALED` status allows read-only tools through with a warning annotation
+  injected into the response (not a block). The set of read-only tools is defined by `annotations:
+  {readOnlyHint: true}` on the FastMCP tool registration. The gateway checks this annotation.
+- Tier 2 (analysis): `UNSEALED` or any violation BLOCKS analysis/write tools with the existing
+  structured block response. A MODIFIED/MISSING/UNREGISTERED/LEDGER_ERROR status blocks everything.
+- `UNSEALED` is not a violation — it means no evidence has been registered yet (valid at case start).
+  Any of the other statuses IS a violation, even for read-only tools, because the chain is broken.
+
+This model is implemented by consulting MCP tool annotations. Tests must keep covering read-only
+UNSEALED pass-through, unsealed analysis blocks, and violation blocks for all tools.
+
+#### Gap 4 — Stat-check window (same-size tampering)
+
+The gateway stat-check only catches size changes. A sophisticated adversary who modifies a file
+while preserving byte count fools the gate for up to 30s (TTL). This is a documented accepted
+tradeoff — full rehash on every call is not feasible on 500 GB images. Mitigations:
+
+1. `chattr +i` after sealing (Phase 17a) prevents the write from succeeding at all.
+2. AppArmor profile (Phase 17c) prevents unauthorized processes from writing to evidence/.
+3. auditd rules (Phase 17b) record any write attempt to the kernel audit log even if the write
+   is permitted (to catch root-level tampering after-the-fact).
+4. Procedural: examiner must run full HMAC verify (`verify_chain_hmac`) before submitting findings.
+
+**Document requirement:** portal must show a "Full integrity verification recommended before
+report submission" reminder whenever the last full-hash verify is older than 24h or has never
+been run. Do not make it blocking — it is advisory.
+
+#### Gap 5 — Ledger chmod is advisory on some filesystems
+
+`chmod 444` is bypassed on NTFS/exFAT/FUSE mounts. Already documented in the compatibility
+section. The OS-level hardening in Phase 17 (chattr, AppArmor) provides the real protection.
+The portal write-block detection already covers this case with a warning.
+
 ### Compatibility and breakage risks
 
 - Existing tests and tools assume `evidence.json` is the only evidence registry. Keep `evidence.json`
@@ -380,9 +464,10 @@ or `mount -o ro,noatime`. The system must make the status of this protection vis
   integrity checks.
 - Current `case-mcp` and `report-mcp` still consult `~/.agentir/active_case` in some paths. Phase 16
   must not deepen that dependency; use `AGENTIR_CASE_DIR`.
-- Blocking every MCP call before any sealed manifest exists may break first-run usability. Required
-  behavior: case with no sealed manifest returns a clear `evidence_chain_unsealed` block for agent
-  tools and a portal prompt to seal an empty or populated evidence set.
+- Blocking every MCP call before any sealed manifest exists breaks first-run usability. Required
+  behavior: case with no sealed manifest allows read-only tools with a warning annotation, blocks
+  analysis/write tools with `evidence_chain_unsealed`, and prompts the examiner to seal an empty
+  or populated evidence set in the portal.
 - OpenSearch ingest currently writes ingest manifests under `audit/ingest-manifests/`. Do not move
   those into `evidence/`; they are processing provenance, not acquired evidence.
 - Large evidence files can be expensive to hash. Hashing must stream in chunks and portal UI should
@@ -624,6 +709,336 @@ REDACTED:AWS Access Key — examiner action needed"). The examiner can then:
 
 ---
 
+---
+
+## OS-Level Evidence Hardening (Ubuntu 24.04 SIFT VM)
+
+**Target:** Ubuntu 24.04 (Noble Numbat), kernel 6.8+. SIFT Workstation is based on Ubuntu.
+Confirmed on SIFT test VM (192.168.122.81): kernel 6.17.0-29-generic, AppArmor active (77 enforce
+profiles), ext4 root filesystem, `chattr +i` proven working, IMA compiled in (CONFIG_IMA=y,
+CONFIG_IMA_APPRAISE=y), inotify_init1 functional, NOPASSWD sudo available.
+Dev machine (Fedora 44) has no AppArmor — develop and test Phase 17c profile on Ubuntu only.
+All other mechanisms work cross-platform.
+
+**Delivery:** All Phase 17 steps are additions to `install.sh`. None require separate deployment
+or out-of-band configuration. The install script already handles TLS, tokens, systemd, and
+OpenSearch — OS hardening is an additional section at the end of the same script.
+
+### Honest Threat Model — What This Layer Actually Covers
+
+The OS hardening layer protects against **accidents and low-privilege tampering**. It does NOT
+protect against a malicious examiner or system administrator with root access — they can disable
+any of these controls with the same tools that set them. This is a documented and acceptable
+constraint in DFIR: the examiner is a trusted principal.
+
+What OS hardening actually does in the DFIR context:
+
+1. **Accidents become impossible.** A wrong `rm`, errant `cp`, or misbehaving tool cannot silently
+   overwrite or delete a sealed evidence file. EPERM fires before the damage happens.
+
+2. **Intentional tampering becomes a deliberate, auditable act.** Without `chattr +i`, root can
+   silently modify a file. With it, root must first run `chattr -i` — and if `auditd` is watching
+   the directory, that `chattr -i` call is recorded in the kernel audit log with timestamp, UID,
+   PID, and binary path. Combined with the SHA-256 mismatch in our ledger, you can show in court:
+   "at 14:32 the immutable flag was cleared, at 14:33 the file was modified, at 14:34 the flag
+   was restored — here is the kernel audit record of each step."
+
+3. **The cryptographic ledger remains the actual chain-of-custody proof.** `chattr +i` is a
+   practical barrier. The SHA-256 hash in `evidence-manifest.json`, the HMAC-signed ledger chain,
+   and (optionally) the Solana timestamp anchor are what hold up in court when opposing counsel
+   asks "was the file you analyzed the same as what was acquired?" The OS layer makes tampering
+   require deliberate effort and leaves traces; the cryptographic layer makes tampering detectable
+   and provable regardless.
+
+**What cannot be protected at the software level:**
+- A root user explicitly running `chattr -i` (leaves auditd trace but is still possible)
+- Physical disk access — pull the drive, mount offline, modify, replace (out of scope)
+- Kernel exploits that bypass the VFS layer (out of scope for this threat model)
+- The examiner signing false findings — human integrity, not a software problem
+
+Document these limitations in `docs/dfir-hardening-guide.md` so examiners understand the
+system's guarantees and are not misled into thinking OS hardening replaces cryptographic proof.
+
+### Phase 17a — `chattr +i` Immutable Flag After Sealing
+
+**What it protects:** Accidents and low-privilege writes. Makes deliberate root-level tampering
+require an explicit, auditable `chattr -i` step (see threat model above). Does NOT protect against
+a malicious root user — that is the job of the cryptographic ledger + auditd.
+
+After every successful `seal_manifest()` call, each registered evidence file is set immutable.
+Any write, delete, truncate, rename, or `chmod` returns EPERM until explicitly cleared.
+Clearing requires CAP_LINUX_IMMUTABLE — which on SIFT means a deliberate root action.
+
+**Application code — `agentir_core/evidence_chain.py`:**
+
+```python
+import ctypes, fcntl
+FS_IOC_SETFLAGS = 0x40086602
+FS_IOC_GETFLAGS = 0x80086601
+FS_IMMUTABLE_FL = 0x00000010
+
+def _set_immutable(path: Path, immutable: bool) -> bool:
+    """Accident guard: set or clear immutable flag. Graceful fallback if CAP_LINUX_IMMUTABLE absent."""
+    try:
+        with open(path, 'rb') as f:
+            flags = ctypes.c_int(0)
+            fcntl.ioctl(f.fileno(), FS_IOC_GETFLAGS, flags)
+            if immutable:
+                flags.value |= FS_IMMUTABLE_FL
+            else:
+                flags.value &= ~FS_IMMUTABLE_FL
+            fcntl.ioctl(f.fileno(), FS_IOC_SETFLAGS, flags)
+        return True
+    except (OSError, PermissionError):
+        return False  # logs WARNING; does not abort seal
+```
+
+- `seal_manifest()`: clear immutable on each path before re-hashing (in case re-sealing), set +i after.
+- `retire_file()`: clear immutable before the external `rm`; does not set it back (file is being removed).
+- Graceful degradation on NTFS/FUSE/NFS: logs `WARNING: immutable flag not supported on <path>`.
+- Portal evidence status shows `immutable: true/false` per file.
+
+**`install.sh` addition (Ubuntu-only block):**
+```bash
+# Grant CAP_LINUX_IMMUTABLE to the Python interpreter used by sift-gateway.
+# This allows the gateway to set/clear the immutable flag without full root.
+# Revoked if the interpreter is upgraded — installer must re-run on Python upgrade.
+if command -v setcap >/dev/null 2>&1; then
+    setcap 'cap_linux_immutable+ep' "$(readlink -f "$(which python3)")"
+    echo "[install] CAP_LINUX_IMMUTABLE granted to $(readlink -f $(which python3))"
+else
+    echo "[install] WARN: setcap not found — immutable flag protection not configured"
+fi
+```
+
+**Filesystem compatibility:** ext4, XFS, btrfs — confirmed on SIFT VM (ext4 LVM, lsattr shows
+`e` flag on evidence files, `i` flag absent until we set it). NTFS/FAT/NFS: graceful fallback.
+
+### Phase 17b — auditd Rules for Evidence Directory
+
+**What it provides:** A second, independent, kernel-level record of all writes and attribute
+changes in the evidence directory. Critically: it records `chattr -i` calls (attribute changes,
+`perm=a`), so if someone clears the immutable flag before tampering, auditd catches it even if our
+application layer is bypassed. Clearing the auditd log itself requires `CAP_AUDIT_CONTROL` —
+a separate deliberate root action that is itself auditable.
+
+**Zero application code changes.** Entirely an `install.sh` and config file addition.
+Rules template lives at `configs/audit/99-agentir-evidence.rules` in the repo.
+
+**`install.sh` addition:**
+```bash
+# Install auditd (not present by default on SIFT — confirmed on test VM)
+apt install -y auditd audispd-plugins
+
+# Write evidence watch rules. AGENTIR_CASES_ROOT is substituted at install time
+# from gateway.yaml template (default: /cases)
+CASES_ROOT="${AGENTIR_CASES_ROOT:-/cases}"
+cat > /etc/audit/rules.d/99-agentir-evidence.rules << EOF
+# agentir — track all writes + attribute changes (incl. chattr -i) in case directories
+# perm=w: file content writes; perm=a: attribute changes (chmod, chattr, xattr)
+-a always,exit -F dir=${CASES_ROOT} -F perm=wa -F key=agentir_evidence_write
+-a always,exit -F dir=/var/lib/agentir -F perm=wa -F key=agentir_core_write
+EOF
+
+augenrules --load
+systemctl enable --now auditd
+echo "[install] auditd configured — watching ${CASES_ROOT} for write/attribute changes"
+```
+
+**Forensic value in court:** Examiner can produce two independent records:
+1. `evidence-ledger.jsonl` — application layer, HMAC-signed, cryptographically bound
+2. `/var/log/audit/audit.log` — kernel layer, records every write + `chattr` call with UID/PID/timestamp
+
+**Query to produce for discovery:** `ausearch -k agentir_evidence_write --format text`
+
+### Phase 17c — AppArmor Profile for sift-gateway (Ubuntu 24.04 Only)
+
+**What it protects:** Limits the blast radius if the gateway process is exploited. Even with a
+vulnerability in application code, AppArmor prevents the process from writing to evidence files,
+spawning arbitrary shells, or reaching the network beyond localhost. This is MAC enforcement at the
+kernel level — it holds even if the application code is fully compromised.
+
+**Delivery:** Profile file lives at `configs/apparmor/sift-gateway` in the repo. `install.sh`
+copies it and loads it in enforce mode. Dev machine is Fedora 44 (SELinux, not AppArmor) —
+develop and validate the profile on Ubuntu 24.04 using `aa-logprof` to catch legitimate denials
+before flipping to enforce.
+
+**Important:** Profile the sift-gateway entry point binary (the uv-installed script path), NOT
+`/usr/bin/python3*` broadly — profiling all Python would catch unrelated processes. The installed
+binary path will be something like `/usr/local/bin/sift-gateway` or `/home/sansforensics/.local/bin/sift-gateway`.
+Confirm the exact path after `install.sh` runs and update `configs/apparmor/sift-gateway` accordingly.
+
+**Profile goals:**
+- Allow: read evidence files (for SHA-256 hashing during seal)
+- **Deny: write to `evidence/**`** — gateway never needs to write evidence file content
+- Allow: read/write manifest, ledger, audit/, approvals, findings, timeline
+- Allow: read gateway.yaml and TLS certs
+- Allow: TCP localhost only (OpenSearch :9200, stdio backend pipes)
+- Deny: exec of arbitrary binaries beyond defined backend paths
+- Deny: all network except localhost TCP
+
+**Profile skeleton** (`configs/apparmor/sift-gateway`):
+```
+#include <tunables/global>
+
+/usr/local/bin/sift-gateway {
+  #include <abstractions/base>
+  #include <abstractions/python>
+  #include <abstractions/ssl_certs>
+  #include <abstractions/nameservice>
+
+  # Evidence: read for hashing; hard deny writes
+  /cases/*/evidence/                 r,
+  /cases/*/evidence/**               r,
+  /cases/*/evidence/**               deny w,
+
+  # Case metadata and outputs
+  /cases/*/CASE.yaml                 r,
+  /cases/*/evidence-manifest.json    rw,
+  /cases/*/evidence-ledger.jsonl     rw,
+  /cases/*/approvals.jsonl           rw,
+  /cases/*/audit/                    rw,
+  /cases/*/audit/**                  rw,
+  /cases/*/**                        rw,
+
+  # Config, TLS, runtime
+  /home/*/.agentir/gateway.yaml      r,
+  /var/lib/agentir/**                rw,
+  /etc/ssl/                          r,
+  /etc/ssl/**                        r,
+  /tmp/agentir-*                     rw,
+
+  # Network: localhost only
+  network inet tcp,
+  network inet6 tcp,
+  deny network udp,
+  deny network raw,
+
+  # Backend subprocesses (uv-managed Python only)
+  /usr/bin/python3*                  rix,
+  /home/*/.local/bin/**              rix,
+  /home/*/.venv/bin/**               rix,
+  deny /bin/bash                     x,
+  deny /bin/sh                       x,
+  deny /usr/bin/bash                 x,
+}
+```
+
+**`install.sh` addition:**
+```bash
+if command -v apparmor_parser >/dev/null 2>&1; then
+    cp "${SIFT_MCPS_ROOT}/configs/apparmor/sift-gateway" /etc/apparmor.d/sift-gateway
+    apparmor_parser -r /etc/apparmor.d/sift-gateway
+    aa-enforce /etc/apparmor.d/sift-gateway
+    echo "[install] AppArmor profile loaded in enforce mode"
+else
+    echo "[install] WARN: AppArmor not available — skipping profile (non-Ubuntu system?)"
+fi
+```
+
+### Phase 17d — inotify Real-Time Gate Invalidation
+
+The current gateway cache invalidation relies on two signals:
+1. The portal calls `invalidate_evidence_cache()` after sealing (immediate)
+2. Manifest mtime-change detection on the 30s TTL check path
+
+Neither catches the case where someone modifies an evidence FILE directly without going through
+the portal. The mtime check only watches the manifest file, not the evidence files themselves.
+
+**inotify watcher:** A background asyncio task in sift-gateway watches `case_dir/evidence/` with
+inotify. On `IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO`, it immediately
+calls `invalidate_evidence_cache(case_dir_str)` and logs an audit entry.
+
+**Implementation:** Pure stdlib via ctypes — no external dependencies. ~40 lines.
+
+```python
+# agentir_core/inotify_watch.py  (or sift_gateway/evidence_watcher.py)
+import asyncio, ctypes, os, struct
+
+IN_MODIFY    = 0x00000002
+IN_CREATE    = 0x00000100
+IN_DELETE    = 0x00000200
+IN_MOVED     = 0x000000C0  # IN_MOVED_FROM | IN_MOVED_TO
+
+_libc = ctypes.CDLL('libc.so.6', use_errno=True)
+
+async def watch_evidence_dir(case_dir_str: str, on_change_fn) -> None:
+    """Background task: invalidate gate cache on any evidence/ filesystem event."""
+    fd = _libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
+    if fd < 0:
+        logger.warning("inotify unavailable — falling back to TTL-only invalidation")
+        return
+    wd = _libc.inotify_add_watch(fd, os.fsencode(f"{case_dir_str}/evidence"),
+                                  IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVED)
+    try:
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: os.read(fd, 4096)), timeout=60.0
+            )
+            await asyncio.to_thread(on_change_fn, case_dir_str)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _libc.inotify_rm_watch(fd, wd)
+        os.close(fd)
+```
+
+The watcher is started by `server.py` when `AGENTIR_CASE_DIR` is set, cancelled on case switch.
+Graceful fallback when inotify is unavailable (NTFS/NFS/FUSE), logs warning.
+
+**Effect:** Tampering with an evidence file triggers a gate cache flush within milliseconds.
+Combined with chattr +i (Phase 17a), the write is prevented entirely; without chattr, the gate
+catches it before the next tool call.
+
+### Phase 17e — IMA xattr File Hash Anchoring (Advanced, Optional)
+
+Linux IMA (Integrity Measurement Architecture) can store cryptographic hashes of files in kernel-
+managed extended attributes (`security.ima`). In appraise mode, the kernel refuses to open a file
+whose content hash does not match the stored xattr. In measure mode, it records hashes to a TPM.
+
+**What this adds over chattr:** chattr prevents writes. IMA-appraise additionally prevents READS
+of a tampered file — the kernel itself denies access before any application code runs.
+
+**Requirements:**
+- Ubuntu 24.04 kernel 6.8: IMA is compiled in (confirmed via `/sys/kernel/security/ima`)
+- Boot parameter: `ima_appraise=fix` initially (to write xattrs), then `ima_appraise=enforce`
+- Package: `apt install ima-evm-utils` (provides `evmctl`)
+- Policy in `/etc/ima/ima-policy`: restrict to evidence files
+
+**After sealing in `evidence_chain.py`:**
+```python
+import subprocess
+def _set_ima_hash(path: Path) -> bool:
+    """Write SHA-256 into security.ima xattr for IMA appraisal. Optional."""
+    try:
+        subprocess.run(['evmctl', 'ima_hash', '--hash=sha256', str(path)],
+                       check=True, capture_output=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False  # graceful degradation if ima-evm-utils not installed
+```
+
+**Verdict:** Valuable for the highest-assurance deployments but requires kernel boot parameter
+changes (invasive for SIFT installers) and `ima-evm-utils` package. Implement as an opt-in
+installer flag (`--enable-ima`) rather than default. Portal shows IMA status per file if enabled.
+
+### OS Hardening — What Cannot Be Protected
+
+Document these limitations explicitly in `docs/dfir-hardening-guide.md`:
+
+- All mechanisms are bypassable by root (`chattr -i`, `aa-disable`, `auditctl -D`). The system
+  assumes examiner/administrator integrity. The chain-of-custody provides the evidence trail if
+  they do tamper.
+- IMA appraise mode protects reads but not in-memory modifications after a file is opened.
+- AppArmor profiles protect the gateway process but not other processes on the same host.
+- auditd logs are not tamper-evident in the forensic sense — they require a separate log host or
+  `audispd → remote logging` to be truly independent. For air-gapped deployments, the examiner
+  should GPG-sign the audit log after each session.
+- `chattr +i` does not work on NTFS, FAT, NFS, FUSE filesystems (degraded mode documented).
+
+---
+
 ## Completed Phases
 
 All phases 0–15 are complete. Implementation details live in git history. The table below records
@@ -758,6 +1173,8 @@ Evidence manifest and chain-of-custody:
 - OpenSearch ingest manifests remain under `audit/ingest-manifests/`; they are not treated as acquired evidence.
 - Gateway evidence gate uses stat-check + 30s TTL cache; does NOT rehash files on every MCP call.
 - Portal evidence intake panel shows write-block detection status (read-only mount warning if not protected).
+- Portal shows an advisory full-HMAC-verify reminder when no full verification has been run or the
+  last verification is 24 hours old or older.
 
 Aggregate MCP gateway:
 - Hermes config contains only `https://SIFT_VM:4508/mcp`.

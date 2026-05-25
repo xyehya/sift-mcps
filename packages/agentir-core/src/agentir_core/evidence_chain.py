@@ -4,22 +4,32 @@ Authority: evidence-manifest.json + evidence-ledger.jsonl.
 Compatibility view: evidence.json (unchanged — kept for existing tools).
 
 Gateway path: chain_status() — stat-check + structural hash-chain verify; no key needed.
-Portal path: seal_manifest(), ignore_file(), verify_chain_hmac() — require derived_key.
+Portal path: seal_manifest(), ignore_file(), retire_file(), verify_chain_hmac() — require derived_key.
 Full SHA-256 rehash of files is triggered only by seal_manifest() and explicit verify calls.
 
 mtime_ns is recorded for informational context only. Never used in integrity assertions.
+
+File statuses in manifest:
+  ACTIVE     — registered, included in integrity checks
+  IGNORED    — examiner decision: unregistered file intentionally excluded
+  RETIRED    — examiner decision: previously registered file deliberately removed
 """
 
 from __future__ import annotations
 
+import ctypes
+import fcntl
 import hashlib
 import hmac
 import json
+import logging
 import os
 import tempfile
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class ChainStatus(str, Enum):
@@ -184,10 +194,15 @@ def diff_manifest(case_dir: Path, manifest: dict) -> dict:
     Ignores IGNORED entries. Size mismatch → MODIFIED (not MISSING).
     Returns {status, ok, missing, modified, unregistered}.
     """
+    excluded = {
+        f["path"]
+        for f in manifest.get("files", [])
+        if f.get("status") in ("IGNORED", "RETIRED")
+    }
     registered = {
         f["path"]: f
         for f in manifest.get("files", [])
-        if f.get("status") != "IGNORED"
+        if f.get("status") not in ("IGNORED", "RETIRED")
     }
     live = {f["path"]: f for f in scan_evidence_dir(case_dir)}
 
@@ -205,7 +220,7 @@ def diff_manifest(case_dir: Path, manifest: dict) -> dict:
             ok.append(rel_path)
 
     for rel_path in live:
-        if rel_path not in registered:
+        if rel_path not in registered and rel_path not in excluded:
             unregistered.append(rel_path)
 
     if missing:
@@ -518,6 +533,134 @@ def ignore_file(
         "hmac_version": 1,
     }
     _append_ledger_event(case_dir / _LEDGER_FILE, event, derived_key)
+
+
+# ---------------------------------------------------------------------------
+# Retire (portal only — requires derived_key)
+# ---------------------------------------------------------------------------
+
+def retire_file(
+    case_dir: Path,
+    rel_path: str,
+    reason: str,
+    examiner: str,
+    derived_key: bytes,
+) -> None:
+    """Record the deliberate removal of a registered evidence file.
+
+    The file must be ACTIVE in the current manifest. Clears the immutable
+    flag so the caller can delete the file from disk afterwards.
+    Creates a new manifest version with the file marked RETIRED and appends
+    a FILE_RETIRED ledger event (HMAC-signed). Does NOT delete the file —
+    the caller (portal route) is responsible for the actual unlink.
+
+    Raises ValueError if:
+    - No evidence manifest exists
+    - rel_path is not registered (ACTIVE) in the current manifest
+    """
+    manifest = load_manifest(case_dir)
+    if manifest is None:
+        raise ValueError("No evidence manifest — call init_evidence_chain first")
+
+    files = list(manifest.get("files", []))
+
+    # Find the ACTIVE entry for this path
+    active_index = None
+    for i, f in enumerate(files):
+        if f["path"] == rel_path:
+            if f.get("status") == "IGNORED":
+                raise ValueError(
+                    f"Cannot retire IGNORED file {rel_path!r} — "
+                    "use ignore_file() only for unregistered files"
+                )
+            if f.get("status") == "RETIRED":
+                raise ValueError(f"File {rel_path!r} is already RETIRED")
+            active_index = i
+            break
+
+    if active_index is None:
+        raise ValueError(
+            f"File {rel_path!r} is not registered in the evidence manifest"
+        )
+
+    # Clear immutable flag so the caller can remove the file
+    abs_path = case_dir / rel_path
+    if abs_path.exists():
+        if not _set_immutable(abs_path, False):
+            logger.warning("retire_file: could not clear immutable flag on %s", abs_path)
+
+    prev_hash = manifest.get("manifest_hash", "")
+    prev_version = manifest.get("version", 0)
+    case_id = manifest.get("case_id", "") or _load_case_id(case_dir)
+    now = _now()
+
+    # Replace ACTIVE entry with RETIRED
+    files[active_index] = {
+        **files[active_index],
+        "status": "RETIRED",
+        "retired_at": now,
+        "retired_by": examiner,
+        "retire_reason": reason,
+    }
+
+    new_manifest: dict = {
+        "version": prev_version + 1,
+        "case_id": case_id,
+        "created_at": now,
+        "created_by": examiner,
+        "previous_manifest_hash": prev_hash,
+        "manifest_hash": "",
+        "files": files,
+    }
+    new_hash = compute_manifest_hash(new_manifest)
+    new_manifest["manifest_hash"] = new_hash
+
+    _atomic_write_json(case_dir / _MANIFEST_FILE, new_manifest)
+
+    event: dict = {
+        "event": "FILE_RETIRED",
+        "case_id": case_id,
+        "version": new_manifest["version"],
+        "path": rel_path,
+        "reason": reason,
+        "previous_manifest_hash": prev_hash,
+        "new_manifest_hash": new_hash,
+        "approved_by": examiner,
+        "approved_at": now,
+        "hmac_version": 1,
+    }
+    _append_ledger_event(case_dir / _LEDGER_FILE, event, derived_key)
+
+
+# ---------------------------------------------------------------------------
+# Immutable flag helper (Phase 17a — graceful fallback)
+# ---------------------------------------------------------------------------
+
+_FS_IOC_GETFLAGS = 0x80086601
+_FS_IOC_SETFLAGS = 0x40086602
+_FS_IMMUTABLE_FL = 0x00000010
+
+
+def _set_immutable(path: Path, immutable: bool) -> bool:
+    """Set or clear the immutable flag on a file (Linux ext4/XFS/btrfs).
+
+    Requires CAP_LINUX_IMMUTABLE. Returns True on success, False on EPERM
+    or any OS error — does not raise. Caller logs a warning on False.
+    No-op and returns False on non-Linux or unsupported filesystem.
+    """
+    try:
+        flags_val = ctypes.c_int(0)
+        with open(path, "rb") as f:
+            fcntl.ioctl(f.fileno(), _FS_IOC_GETFLAGS, flags_val)
+        if immutable:
+            flags_val.value |= _FS_IMMUTABLE_FL
+        else:
+            flags_val.value &= ~_FS_IMMUTABLE_FL
+        with open(path, "rb") as f:
+            fcntl.ioctl(f.fileno(), _FS_IOC_SETFLAGS, flags_val)
+        return True
+    except (OSError, IOError, AttributeError):
+        return False
 
 
 # ---------------------------------------------------------------------------

@@ -2,8 +2,8 @@ gateway:
   host: "0.0.0.0"
   port: 4508
   tls:
-    cert: "${AGENTIR_TLS_DIR}/gateway-cert.pem"
-    key: "${AGENTIR_TLS_DIR}/gateway-key.pem"
+    certfile: "${AGENTIR_TLS_DIR}/gateway-cert.pem"
+    keyfile: "${AGENTIR_TLS_DIR}/gateway-key.pem"
   rate_limit:
     ip_calls_per_minute: 120
     examiner_calls_per_minute: 120
@@ -56,7 +56,7 @@ opensearch:
 enrichment:
   enabled: true
   forensic_knowledge: true
-  forensic_rag: true
+  forensic_rag: ${AGENTIR_RAG_ENABLED}
   opensearch_context: true
   root: "/var/lib/agentir/enrichment"
 
@@ -86,13 +86,13 @@ backends:
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "report-mcp"]
 
   forensic-rag-mcp:
-    enabled: true
+    enabled: ${AGENTIR_RAG_ENABLED}
     type: stdio
     command: "${UV_BIN}"
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "rag-mcp"]
 
   windows-triage-mcp:
-    enabled: true
+    enabled: ${AGENTIR_WINDOWS_TRIAGE_ENABLED}
     type: stdio
     command: "${UV_BIN}"
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "windows-triage-mcp"]

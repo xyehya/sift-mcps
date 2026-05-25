@@ -5,10 +5,11 @@ AUTO_YES=0
 START_SERVICE=1
 RUN_DOCKER=1
 DOWNLOAD_DB=1
+INSTALL_RAG=1
 
 usage() {
   cat <<'USAGE'
-Usage: ./install.sh [-y] [--no-start] [--skip-docker] [--skip-db]
+Usage: ./install.sh [-y] [--no-start] [--skip-docker] [--skip-db] [--skip-rag]
 
 Install sift-mcps on a SIFT Workstation VM.
 
@@ -17,6 +18,7 @@ Options:
   --no-start      Write config and service files, but do not start systemd service.
   --skip-docker   Skip Docker/OpenSearch startup.
   --skip-db       Skip downloading triage baseline databases.
+  --skip-rag      Skip forensic-rag-mcp and its ML dependencies.
   -h, --help      Show this help.
 USAGE
 }
@@ -27,6 +29,7 @@ while [[ $# -gt 0 ]]; do
     --no-start) START_SERVICE=0 ;;
     --skip-docker) RUN_DOCKER=0 ;;
     --skip-db) DOWNLOAD_DB=0 ;;
+    --skip-rag) INSTALL_RAG=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
@@ -144,8 +147,13 @@ install_uv_if_needed() {
 }
 
 sync_workspace() {
-  log "Syncing uv workspace."
-  "$UV_BIN" sync --all-packages --project "$REPO_DIR"
+  if [[ "$INSTALL_RAG" -eq 1 ]]; then
+    log "Syncing full uv workspace."
+    "$UV_BIN" sync --extra full --project "$REPO_DIR"
+  else
+    log "Syncing standard uv workspace without forensic-rag-mcp."
+    "$UV_BIN" sync --extra standard --project "$REPO_DIR"
+  fi
 }
 
 install_state_dirs() {
@@ -277,9 +285,21 @@ render_file() {
   export AGENTIR_WINDOWS_TRIAGE_DB_DIR
   export AGENTIR_GATEWAY_TOKEN AGENTIR_SERVICE_TOKEN AGENTIR_PORTAL_SESSION_SECRET
   export AGENTIR_EXAMINER SIFT_MCPS_ROOT UV_BIN OPENCTI_URL OPENCTI_TOKEN
+  export AGENTIR_RAG_ENABLED
+  export AGENTIR_WINDOWS_TRIAGE_ENABLED
   SIFT_MCPS_ROOT="$REPO_DIR"
   OPENCTI_URL="${OPENCTI_URL:-}"
   OPENCTI_TOKEN="${OPENCTI_TOKEN:-}"
+  if [[ "$INSTALL_RAG" -eq 1 ]]; then
+    AGENTIR_RAG_ENABLED="true"
+  else
+    AGENTIR_RAG_ENABLED="false"
+  fi
+  if [[ "$DOWNLOAD_DB" -eq 1 ]]; then
+    AGENTIR_WINDOWS_TRIAGE_ENABLED="true"
+  else
+    AGENTIR_WINDOWS_TRIAGE_ENABLED="false"
+  fi
   python3 - "$src" "$dst" "$mode" <<'PY'
 import os
 import stat
@@ -319,6 +339,7 @@ write_gateway_config() {
     AGENTIR_GATEWAY_TOKEN=""
     AGENTIR_SERVICE_TOKEN=""
     AGENTIR_PORTAL_SESSION_SECRET=""
+    migrate_gateway_config
     return
   fi
   AGENTIR_GATEWAY_TOKEN="agentir_gw_$(random_hex 24)"
@@ -328,6 +349,66 @@ write_gateway_config() {
   CONFIG_CREATED=1
   export AGENTIR_GATEWAY_TOKEN AGENTIR_SERVICE_TOKEN AGENTIR_PORTAL_SESSION_SECRET AGENTIR_TOKEN_CREATED_AT
   render_file "$REPO_DIR/configs/gateway.yaml.template" "$AGENTIR_CONFIG" 0600
+}
+
+migrate_gateway_config() {
+  log "Checking gateway config compatibility."
+  export AGENTIR_CONFIG INSTALL_RAG DOWNLOAD_DB
+  "$UV_BIN" run --project "$REPO_DIR" python - <<'PY'
+import os
+import tempfile
+from pathlib import Path
+
+import yaml
+
+path = Path(os.environ["AGENTIR_CONFIG"])
+install_rag = os.environ.get("INSTALL_RAG") == "1"
+cfg = yaml.safe_load(path.read_text()) or {}
+changed = False
+
+gateway = cfg.setdefault("gateway", {})
+tls = gateway.get("tls")
+if isinstance(tls, dict):
+    if "certfile" not in tls and "cert" in tls:
+        tls["certfile"] = tls.pop("cert")
+        changed = True
+    if "keyfile" not in tls and "key" in tls:
+        tls["keyfile"] = tls.pop("key")
+        changed = True
+
+if not install_rag:
+    enrichment = cfg.setdefault("enrichment", {})
+    if enrichment.get("forensic_rag") is not False:
+        enrichment["forensic_rag"] = False
+        changed = True
+    rag_backend = cfg.setdefault("backends", {}).get("forensic-rag-mcp")
+    if isinstance(rag_backend, dict) and rag_backend.get("enabled") is not False:
+        rag_backend["enabled"] = False
+        changed = True
+
+if os.environ.get("DOWNLOAD_DB") != "1":
+    wt_backend = cfg.setdefault("backends", {}).get("windows-triage-mcp")
+    if isinstance(wt_backend, dict) and wt_backend.get("enabled") is not False:
+        wt_backend["enabled"] = False
+        changed = True
+
+if changed:
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            yaml.safe_dump(cfg, handle, sort_keys=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+PY
 }
 
 write_opensearch_config() {
@@ -491,6 +572,15 @@ poll_gateway() {
 }
 
 write_handoff() {
+  local existing_temp_password existing_gateway_token existing_service_token
+  existing_temp_password=""
+  existing_gateway_token=""
+  existing_service_token=""
+  if [[ -f "$MATERIALS_FILE" ]]; then
+    existing_temp_password="$(awk -F= '$1=="temporary_examiner_password"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
+    existing_gateway_token="$(awk -F= '$1=="examiner_fallback_token"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
+    existing_service_token="$(awk -F= '$1=="hermes_service_token"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
+  fi
   umask 077
   {
     printf 'sift-mcps installer handoff\n'
@@ -502,12 +592,17 @@ write_handoff() {
     printf 'examiner=%s\n' "$AGENTIR_EXAMINER"
     if [[ "${TEMP_PASSWORD_CREATED:-0}" -eq 1 ]]; then
       printf 'temporary_examiner_password=%s\n' "$TEMP_PASSWORD"
+    elif [[ -n "$existing_temp_password" && "$existing_temp_password" != "existing-password-preserved" ]]; then
+      printf 'temporary_examiner_password=%s\n' "$existing_temp_password"
     else
       printf 'temporary_examiner_password=existing-password-preserved\n'
     fi
     if [[ "${CONFIG_CREATED:-0}" -eq 1 ]]; then
       printf 'examiner_fallback_token=%s\n' "$AGENTIR_GATEWAY_TOKEN"
       printf 'hermes_service_token=%s\n' "$AGENTIR_SERVICE_TOKEN"
+    elif [[ -n "$existing_gateway_token" || -n "$existing_service_token" ]]; then
+      [[ -n "$existing_gateway_token" ]] && printf 'examiner_fallback_token=%s\n' "$existing_gateway_token"
+      [[ -n "$existing_service_token" ]] && printf 'hermes_service_token=%s\n' "$existing_service_token"
     else
       printf 'tokens=existing-gateway-config-preserved\n'
     fi

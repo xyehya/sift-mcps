@@ -486,3 +486,187 @@ class TestEvidenceChainIgnore:
             },
         )
         assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# retire endpoint (Phase 16-retire)
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceChainRetire:
+    def _seal_evidence_file(self, client, passwords_dir, case_dir, filename="evidence/sample.E01"):
+        """Helper: write evidence file and seal it via the portal."""
+        from agentir_core.evidence_chain import seal_manifest
+        import hashlib, json
+
+        (case_dir / filename).write_bytes(b"DISK_IMAGE_CONTENT")
+        entry = json.loads((passwords_dir / "alice.json").read_text())
+        resp = client.get("/api/evidence/chain/challenge")
+        data = resp.json()
+        response = hmac_mod.new(
+            bytes.fromhex(entry["hash"]), data["nonce"].encode(), "sha256"
+        ).hexdigest()
+        r = client.post(
+            "/api/evidence/chain/seal",
+            json={"challenge_id": data["challenge_id"], "response": response,
+                  "file_specs": [{"path": filename}]},
+        )
+        assert r.status_code == 200, r.text
+        return filename
+
+    def test_no_auth_returns_403(self, client):
+        resp = client.post("/api/evidence/chain/retire", json={})
+        assert resp.status_code == 403
+
+    def test_agent_role_returns_403(self, client, passwords_dir):
+        _setup_examiner(passwords_dir, "alice", "password123")
+        client.cookies[COOKIE_NAME] = _session_cookie(role="agent")
+        resp = client.post("/api/evidence/chain/retire", json={})
+        assert resp.status_code == 403
+
+    def test_missing_challenge_fields_returns_400(self, authed_client):
+        resp = authed_client.post("/api/evidence/chain/retire", json={"path": "evidence/x", "reason": "r"})
+        assert resp.status_code == 400
+
+    def test_missing_path_returns_400(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": "x", "response": "y", "reason": "r"},
+        )
+        assert resp.status_code == 400
+
+    def test_missing_reason_returns_400(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": "x", "response": "y", "path": "evidence/x"},
+        )
+        assert resp.status_code == 400
+
+    def test_invalid_challenge_returns_401(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": "notreal", "response": "deadbeef" * 8,
+                  "path": "evidence/x.bin", "reason": "test"},
+        )
+        assert resp.status_code == 401
+
+    def test_retire_active_file_succeeds(self, authed_client, passwords_dir, case_dir):
+        filename = self._seal_evidence_file(authed_client, passwords_dir, case_dir)
+        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+        resp = authed_client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": challenge_id, "response": response,
+                  "path": filename, "reason": "corrupt acquisition"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["retired"] is True
+        assert data["path"] == filename
+        assert data["manifest_version"] == 2
+
+    def test_retire_deletes_file_from_disk(self, authed_client, passwords_dir, case_dir):
+        filename = self._seal_evidence_file(authed_client, passwords_dir, case_dir)
+        assert (case_dir / filename).exists()
+        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+        authed_client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": challenge_id, "response": response,
+                  "path": filename, "reason": "test"},
+        )
+        assert not (case_dir / filename).exists()
+
+    def test_retire_writes_file_retired_ledger_event(self, authed_client, passwords_dir, case_dir):
+        from agentir_core.evidence_chain import load_ledger
+        filename = self._seal_evidence_file(authed_client, passwords_dir, case_dir)
+        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+        authed_client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": challenge_id, "response": response,
+                  "path": filename, "reason": "bad acquisition"},
+        )
+        ledger = load_ledger(case_dir)
+        assert ledger[-1]["event"] == "FILE_RETIRED"
+        assert ledger[-1]["path"] == filename
+        assert ledger[-1]["reason"] == "bad acquisition"
+
+    def test_retire_chain_status_ok_after_retire(self, authed_client, passwords_dir, case_dir):
+        from agentir_core.evidence_chain import chain_status
+        filename = self._seal_evidence_file(authed_client, passwords_dir, case_dir)
+        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+        authed_client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": challenge_id, "response": response,
+                  "path": filename, "reason": "corrupt"},
+        )
+        result = chain_status(case_dir)
+        assert result["status"] == "ok"
+
+    def test_retire_unregistered_path_returns_400(self, authed_client, passwords_dir):
+        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+        resp = authed_client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": challenge_id, "response": response,
+                  "path": "evidence/ghost.bin", "reason": "oops"},
+        )
+        assert resp.status_code == 400
+        assert "not registered" in resp.json()["error"]
+
+    def test_retire_wrong_password_returns_401(self, authed_client, passwords_dir):
+        resp = authed_client.get("/api/evidence/chain/challenge")
+        data = resp.json()
+        resp2 = authed_client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": data["challenge_id"], "response": "00" * 32,
+                  "path": "evidence/x.bin", "reason": "test"},
+        )
+        assert resp2.status_code == 401
+
+    def test_retire_invokes_on_chain_mutation(self, passwords_dir, case_dir, tmp_path, monkeypatch):
+        from agentir_core.evidence_chain import seal_manifest
+        import json as json_mod
+
+        routes_mod._evidence_challenges.clear()
+        routes_mod._challenges.clear()
+        routes_mod._login_challenges.clear()
+        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+
+        called_with = []
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET,
+            session_max_age=28800,
+            on_chain_mutation=lambda x: called_with.append(x),
+        )
+        client = TestClient(app, raise_server_exceptions=True)
+        _setup_examiner(passwords_dir, "alice", "password123")
+        client.cookies[COOKIE_NAME] = _session_cookie()
+
+        # Seal via direct call (bypass portal to keep test fast)
+        ev_file = case_dir / "evidence" / "sample.bin"
+        ev_file.write_bytes(b"DATA")
+        entry = json_mod.loads((passwords_dir / "alice.json").read_text())
+        resp = client.get("/api/evidence/chain/challenge")
+        data = resp.json()
+        response = hmac_mod.new(
+            bytes.fromhex(entry["hash"]), data["nonce"].encode(), "sha256"
+        ).hexdigest()
+        r = client.post(
+            "/api/evidence/chain/seal",
+            json={"challenge_id": data["challenge_id"], "response": response,
+                  "file_specs": [{"path": "evidence/sample.bin"}]},
+        )
+        assert r.status_code == 200
+        called_with.clear()
+
+        resp = client.get("/api/evidence/chain/challenge")
+        data = resp.json()
+        response = hmac_mod.new(
+            bytes.fromhex(entry["hash"]), data["nonce"].encode(), "sha256"
+        ).hexdigest()
+        r = client.post(
+            "/api/evidence/chain/retire",
+            json={"challenge_id": data["challenge_id"], "response": response,
+                  "path": "evidence/sample.bin", "reason": "test"},
+        )
+        assert r.status_code == 200
+        assert len(called_with) == 1

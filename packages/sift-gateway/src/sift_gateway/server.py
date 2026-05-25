@@ -182,6 +182,18 @@ class Gateway:
             if backend.started:
                 await self._notify_backend_case(backend)
 
+    async def _notify_backend_case(self, backend) -> None:
+        """Best-effort active-case notification for backends that support it.
+
+        Stdio backends inherit AGENTIR_CASE_DIR from the gateway process, and
+        backends are restarted on portal case changes. HTTP backends may grow a
+        dedicated case notification API later; until then startup must not fail
+        just because there is nothing to notify.
+        """
+        if not isinstance(backend, HttpMCPBackend):
+            return
+        logger.debug("No HTTP active-case notification endpoint for %s", backend.name)
+
     async def stop(self) -> None:
         """Stop all backends."""
         for name, backend in self.backends.items():
@@ -253,8 +265,14 @@ class Gateway:
             if original in tool_objects:
                 new_cache[mapped_name] = Tool(
                     name=mapped_name,
+                    title=tool_objects[original].title,
                     description=tool_objects[original].description or "",
                     inputSchema=tool_objects[original].inputSchema,
+                    outputSchema=tool_objects[original].outputSchema,
+                    icons=tool_objects[original].icons,
+                    annotations=tool_objects[original].annotations,
+                    meta=tool_objects[original].meta,
+                    execution=tool_objects[original].execution,
                 )
         self._tool_cache = new_cache
 
@@ -575,7 +593,7 @@ class Gateway:
         gw_conf = self.config.get("gateway", {})
         host = gw_conf.get("host", "127.0.0.1")
         port = gw_conf.get("port", 4508)
-        tls_configured = bool(gw_conf.get("tls", {}).get("cert"))
+        tls_configured = bool(gw_conf.get("tls", {}).get("certfile"))
         scheme = "https" if tls_configured else "http"
         gateway_base_url = f"{scheme}://{host}:{port}"
         allowed_origins: set[str] = {
@@ -707,19 +725,20 @@ class Gateway:
         # Attach gateway to app state so endpoints can access it
         app.state.gateway = gateway
 
-        # Global unhandled exception handler — never leak file paths or tracebacks to clients
-        @app.exception_handler(Exception)
         async def _sanitized_error(request, exc):
+            """Global unhandled exception handler — never leak file paths or tracebacks."""
             logger.exception("Unhandled error: %s", exc)
             from starlette.responses import JSONResponse as _JSONResponse
             return _JSONResponse({"error": "Internal server error"}, status_code=500)
+
+        app.add_exception_handler(Exception, _sanitized_error)
 
         # Add auth middleware (skips /mcp — handled by MCPAuthASGIApp)
         app.add_middleware(AuthMiddleware, api_keys=api_keys)
 
         # CORS — restrict origins to the gateway's own URL
         gw_cfg = self.config.get("gateway", {})
-        tls_configured = bool(gw_cfg.get("tls", {}).get("cert"))
+        tls_configured = bool(gw_cfg.get("tls", {}).get("certfile"))
         scheme = "https" if tls_configured else "http"
         gw_host = gw_cfg.get("host", "0.0.0.0")
         gw_port = gw_cfg.get("port", 4508)

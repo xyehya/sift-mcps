@@ -29,6 +29,9 @@ dependencies = [
     "sift-common",
 ]
 
+[project.scripts]
+sift-mcp = "sift_mcp.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/AppliedIR/sift-mcp"
 Repository = "https://github.com/AppliedIR/sift-mcp"

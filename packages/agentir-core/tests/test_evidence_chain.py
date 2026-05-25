@@ -16,6 +16,7 @@ from agentir_core.evidence_chain import (
     init_evidence_chain,
     load_ledger,
     load_manifest,
+    retire_file,
     scan_evidence_dir,
     seal_manifest,
     verify_chain_hmac,
@@ -466,3 +467,127 @@ class TestPathSafety:
         (initialized / "evidence" / "sub" / "file.bin").write_bytes(b"x")
         resolved = _resolve_evidence_path(initialized, "evidence/sub/file.bin")
         assert resolved.exists()
+
+
+# ---------------------------------------------------------------------------
+# retire_file
+# ---------------------------------------------------------------------------
+
+def _seal_active_file(case_dir, filename="evidence/sample.bin", content=b"DATA"):
+    """Helper: write file + seal it; returns the relative path."""
+    (case_dir / filename).write_bytes(content)
+    seal_manifest(case_dir, [{"path": filename}], "alice", _KEY)
+    return filename
+
+
+class TestRetireFile:
+    def test_marks_file_retired_in_manifest(self, initialized):
+        path = _seal_active_file(initialized)
+        retire_file(initialized, path, "corrupt acquisition", "alice", _KEY)
+        m = load_manifest(initialized)
+        retired = [f for f in m["files"] if f.get("status") == "RETIRED"]
+        assert len(retired) == 1
+        assert retired[0]["path"] == path
+        assert retired[0]["retire_reason"] == "corrupt acquisition"
+        assert retired[0]["retired_by"] == "alice"
+
+    def test_increments_manifest_version(self, initialized):
+        path = _seal_active_file(initialized)
+        before = load_manifest(initialized)["version"]
+        retire_file(initialized, path, "bad image", "alice", _KEY)
+        after = load_manifest(initialized)["version"]
+        assert after == before + 1
+
+    def test_appends_file_retired_ledger_event(self, initialized):
+        path = _seal_active_file(initialized)
+        retire_file(initialized, path, "bad image", "alice", _KEY)
+        ledger = load_ledger(initialized)
+        last = ledger[-1]
+        assert last["event"] == "FILE_RETIRED"
+        assert last["path"] == path
+        assert last["reason"] == "bad image"
+        assert last["approved_by"] == "alice"
+
+    def test_ledger_event_hmac_verifies(self, initialized):
+        path = _seal_active_file(initialized)
+        retire_file(initialized, path, "bad image", "alice", _KEY)
+        result = verify_chain_hmac(initialized, _KEY)
+        assert result["ok"] is True
+        assert result["failed"] == 0
+
+    def test_hash_chain_intact_after_retire(self, initialized):
+        path = _seal_active_file(initialized)
+        retire_file(initialized, path, "reason", "alice", _KEY)
+        result = verify_chain_integrity(initialized)
+        assert result["ok"] is True
+
+    def test_retired_path_excluded_from_diff(self, initialized):
+        path = _seal_active_file(initialized)
+        retire_file(initialized, path, "bad image", "alice", _KEY)
+        (initialized / path).unlink()  # caller deletes after retire
+        result = chain_status(initialized)
+        assert result["status"] == ChainStatus.OK
+        issues = result.get("issues", [])
+        assert not any(path in i for i in issues)
+
+    def test_retired_file_still_on_disk_shows_ok(self, initialized):
+        path = _seal_active_file(initialized)
+        retire_file(initialized, path, "reason", "alice", _KEY)
+        # File still on disk (not deleted yet) — should still be OK
+        result = chain_status(initialized)
+        assert result["status"] == ChainStatus.OK
+
+    def test_raises_on_unregistered_path(self, initialized):
+        with pytest.raises(ValueError, match="not registered"):
+            retire_file(initialized, "evidence/ghost.bin", "oops", "alice", _KEY)
+
+    def test_raises_on_ignored_path(self, initialized):
+        ignore_file(initialized, "evidence/noise.bin", "alice", _KEY, "stray")
+        with pytest.raises(ValueError, match="IGNORED"):
+            retire_file(initialized, "evidence/noise.bin", "bad reason", "alice", _KEY)
+
+    def test_raises_on_already_retired_path(self, initialized):
+        path = _seal_active_file(initialized)
+        retire_file(initialized, path, "first retire", "alice", _KEY)
+        with pytest.raises(ValueError, match="already RETIRED"):
+            retire_file(initialized, path, "double retire", "alice", _KEY)
+
+    def test_raises_without_manifest(self, case_dir):
+        with pytest.raises(ValueError, match="init_evidence_chain"):
+            retire_file(case_dir, "evidence/x.bin", "reason", "alice", _KEY)
+
+    def test_preserves_other_active_files(self, initialized):
+        (initialized / "evidence" / "keep.bin").write_bytes(b"KEEP")
+        (initialized / "evidence" / "remove.bin").write_bytes(b"GONE")
+        seal_manifest(initialized, [
+            {"path": "evidence/keep.bin"},
+            {"path": "evidence/remove.bin"},
+        ], "alice", _KEY)
+        retire_file(initialized, "evidence/remove.bin", "bad", "alice", _KEY)
+        m = load_manifest(initialized)
+        statuses = {f["path"]: f["status"] for f in m["files"]}
+        assert statuses["evidence/keep.bin"] == "ACTIVE"
+        assert statuses["evidence/remove.bin"] == "RETIRED"
+
+
+# ---------------------------------------------------------------------------
+# diff_manifest — RETIRED exclusion
+# ---------------------------------------------------------------------------
+
+class TestDiffManifestRetiredExclusion:
+    def test_retired_entry_excluded_from_registered(self, initialized):
+        path = _seal_active_file(initialized)
+        retire_file(initialized, path, "bad", "alice", _KEY)
+        m = load_manifest(initialized)
+        (initialized / path).unlink()
+        diff = diff_manifest(initialized, m)
+        assert path not in diff["missing"]
+        assert path not in diff["ok"]
+
+    def test_retired_file_on_disk_not_counted_unregistered(self, initialized):
+        path = _seal_active_file(initialized)
+        retire_file(initialized, path, "bad", "alice", _KEY)
+        m = load_manifest(initialized)
+        # File still on disk — should NOT appear as unregistered
+        diff = diff_manifest(initialized, m)
+        assert path not in diff["unregistered"]

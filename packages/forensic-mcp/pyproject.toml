@@ -29,6 +29,9 @@ dependencies = [
     "sift-common",
 ]
 
+[project.scripts]
+forensic-mcp = "forensic_mcp.__main__:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",

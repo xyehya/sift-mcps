@@ -26,6 +26,7 @@ from agentir_core.case_io import (
     load_timeline,
     load_todos,
 )
+from agentir_core.evidence_chain import ChainStatus, chain_status as _ev_chain_status, load_manifest
 from agentir_core.evidence_ops import list_evidence_data
 
 from report_mcp.profiles import PROFILES, STRIPPED_FINDING_FIELDS
@@ -469,6 +470,32 @@ def _generate(
         pass
     evidence_count = len(evidence_list)
 
+    # Evidence chain status — included in every report for chain-of-custody
+    ev_chain: dict = {}
+    try:
+        ev_status = _ev_chain_status(case_dir)
+        ev_chain = {
+            "status": str(ev_status["status"]),
+            "manifest_version": ev_status.get("manifest_version", 0),
+            "ok_count": ev_status.get("ok_count", 0),
+            "issues": ev_status.get("issues", []),
+            "manifest_hash": None,
+        }
+        try:
+            manifest = load_manifest(case_dir)
+            if manifest:
+                ev_chain["manifest_hash"] = manifest.get("manifest_hash")
+        except Exception:
+            pass
+    except Exception as exc:
+        ev_chain = {
+            "status": str(ChainStatus.LEDGER_ERROR),
+            "issues": [f"Chain status check failed: {exc}"],
+            "manifest_version": 0,
+            "ok_count": 0,
+            "manifest_hash": None,
+        }
+
     # Filter approved only
     approved_findings = [f for f in all_findings if f.get("status") == "APPROVED"]
     approved_timeline = [t for t in all_timeline if t.get("status") == "APPROVED"]
@@ -584,6 +611,33 @@ def _generate(
     result["writing_guidance"] = _WRITING_GUIDANCE
     result["human_review_required"] = _HUMAN_REVIEW_REQUIRED
     result["generation_constraints"] = _GENERATION_CONSTRAINTS
+
+    # Evidence chain provenance
+    result["evidence_chain"] = ev_chain
+    _ev_status_val = ev_chain.get("status", "")
+    _VIOLATION_STATUSES = {
+        str(ChainStatus.MODIFIED),
+        str(ChainStatus.MISSING),
+        str(ChainStatus.UNREGISTERED),
+        str(ChainStatus.LEDGER_ERROR),
+    }
+    if _ev_status_val in _VIOLATION_STATUSES:
+        _chain_warning = (
+            f"EVIDENCE INTEGRITY VIOLATION ({_ev_status_val}): "
+            "The evidence chain has detected integrity violations. "
+            "This report may be based on compromised or tampered evidence. "
+            "Do NOT distribute this report until an examiner resolves the issues in evidence_chain.issues."
+        )
+        existing = result.get("integrity_warning", "")
+        result["integrity_warning"] = (
+            _chain_warning + " | " + existing if existing else _chain_warning
+        )
+    elif _ev_status_val and _ev_status_val != str(ChainStatus.OK):
+        # UNSEALED — evidence not yet registered
+        result["evidence_chain_warning"] = (
+            "No sealed evidence manifest. Evidence integrity is unverified. "
+            "Register and seal evidence in the Examiner Portal before finalizing this report."
+        )
 
     # Verification ledger reconciliation
     case_id = metadata.get("case_id", "")

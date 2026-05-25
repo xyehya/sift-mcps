@@ -334,6 +334,14 @@ body {
 .filter-dims { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .filter-dims select { padding: 3px 6px; font-size: 11px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-secondary); border-radius: 3px; }
 
+/* Evidence chain verify reminder */
+.chain-remind-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; }
+.chain-remind-bar.warn { background: rgba(255,193,7,0.12); border: 1px solid rgba(255,193,7,0.4); color: var(--text-primary); }
+.chain-remind-bar.ok { background: rgba(40,167,69,0.08); border: 1px solid rgba(40,167,69,0.3); color: var(--text-muted); }
+.chain-remind-bar .remind-icon { font-size: 14px; flex-shrink: 0; }
+.chain-remind-bar .remind-text { flex: 1; }
+.chain-remind-bar button { padding: 3px 10px; font-size: 11px; border-radius: 4px; cursor: pointer; border: 1px solid currentColor; background: transparent; color: inherit; white-space: nowrap; }
+
 /* Evidence panel */
 .evidence-panel { margin-top: 16px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .evidence-panel-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--text-secondary); }
@@ -702,7 +710,7 @@ body {
   </div>
 </div>
 
-<div class="app" id="app">
+<div class="app" id="app" style="display:none">
   <!-- Header -->
   <div class="header">
     <div class="header-row">
@@ -818,7 +826,12 @@ body {
   <div class="tab-panel" data-panel="evidence" role="tabpanel"
     id="panel-evidence" aria-labelledby="tab-evidence">
     <div class="tab-table-wrap">
-      <h3 style="margin-bottom:12px;font-size:15px;">Evidence Registry</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px;">Evidence Registry</h3>
+        <button class="verify-btn" onclick="rescanEvidenceChain()">Rescan</button>
+      </div>
+      <div id="chainRemindBar"></div>
+      <div id="evidenceIntakePanel"></div>
       <table class="data-table" id="evidenceTable">
         <thead>
           <tr>
@@ -1048,12 +1061,129 @@ body {
   </div>
 </div>
 
+<!-- Verify HMAC dialog -->
+<div class="dialog-overlay" id="verifyHmacModal" role="dialog" aria-modal="true"
+  aria-labelledby="verifyHmacTitle" style="display:none">
+  <div class="dialog" style="max-width:400px">
+    <h3 id="verifyHmacTitle">Verify Evidence Chain HMAC</h3>
+    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
+      Verifies the cryptographic signature on every ledger event.
+      Enter your password to authenticate.
+    </p>
+    <div id="verifyHmacPasswordRow">
+      <label for="verifyHmacPassword" style="font-size:12px;color:var(--text-secondary)">Password:</label>
+      <input type="password" id="verifyHmacPassword" autocomplete="off"
+        style="width:100%;margin-top:4px;padding:8px;font-size:14px;
+        background:var(--bg-primary);color:var(--text-primary);
+        border:1px solid var(--border);border-radius:4px"
+        onkeydown="if(event.key==='Enter')submitVerifyHmac()">
+    </div>
+    <div id="verifyHmacError" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+    <div id="verifyHmacResult" style="margin-top:8px;font-size:12px;display:none"></div>
+    <div class="dialog-actions" style="margin-top:12px">
+      <button class="btn-cancel" onclick="closeVerifyHmacModal()">Cancel</button>
+      <button class="btn-primary" id="verifyHmacSubmitBtn" onclick="submitVerifyHmac()">Verify</button>
+    </div>
+  </div>
+</div>
+
+<!-- Seal Evidence Dialog -->
+<div class="dialog-overlay" id="sealEvidenceModal" role="dialog" aria-modal="true"
+  aria-labelledby="sealEvidenceTitle" style="display:none">
+  <div class="dialog" style="max-width:400px">
+    <h3 id="sealEvidenceTitle">Seal Evidence Manifest</h3>
+    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
+      Register and seal the detected unregistered files. Enter your password to authenticate.
+    </p>
+    <div id="sealEvidencePasswordRow">
+      <label for="sealEvidencePassword" style="font-size:12px;color:var(--text-secondary)">Password:</label>
+      <input type="password" id="sealEvidencePassword" autocomplete="off"
+        style="width:100%;margin-top:4px;padding:8px;font-size:14px;
+        background:var(--bg-primary);color:var(--text-primary);
+        border:1px solid var(--border);border-radius:4px"
+        onkeydown="if(event.key==='Enter')submitSealEvidence()">
+    </div>
+    <div id="sealEvidenceError" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+    <div id="sealEvidenceResult" style="margin-top:8px;font-size:12px;display:none"></div>
+    <div class="dialog-actions" style="margin-top:12px">
+      <button class="btn-cancel" onclick="closeSealEvidenceModal()">Cancel</button>
+      <button class="btn-primary" id="sealEvidenceSubmitBtn" onclick="submitSealEvidence()">Seal Manifest</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ignore Evidence Dialog -->
+<div class="dialog-overlay" id="ignoreEvidenceModal" role="dialog" aria-modal="true"
+  aria-labelledby="ignoreEvidenceTitle" style="display:none">
+  <div class="dialog" style="max-width:400px">
+    <h3 id="ignoreEvidenceTitle">Ignore Unregistered File</h3>
+    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
+      Mark the file as ignored/unintended. Enter your password and reason to authenticate.
+    </p>
+    <div style="margin-bottom:8px">
+      <label for="ignoreEvidenceReason" style="font-size:12px;color:var(--text-secondary)">Reason for ignoring:</label>
+      <textarea id="ignoreEvidenceReason" placeholder="e.g. Temp test file, logs..."
+        style="width:100%;margin-top:4px;padding:8px;font-size:13px;height:60px;
+        background:var(--bg-primary);color:var(--text-primary);
+        border:1px solid var(--border);border-radius:4px;resize:vertical"></textarea>
+    </div>
+    <div id="ignoreEvidencePasswordRow">
+      <label for="ignoreEvidencePassword" style="font-size:12px;color:var(--text-secondary)">Password:</label>
+      <input type="password" id="ignoreEvidencePassword" autocomplete="off"
+        style="width:100%;margin-top:4px;padding:8px;font-size:14px;
+        background:var(--bg-primary);color:var(--text-primary);
+        border:1px solid var(--border);border-radius:4px"
+        onkeydown="if(event.key==='Enter')submitIgnoreEvidence()">
+    </div>
+    <div id="ignoreEvidenceError" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+    <div id="ignoreEvidenceResult" style="margin-top:8px;font-size:12px;display:none"></div>
+    <div class="dialog-actions" style="margin-top:12px">
+      <button class="btn-cancel" onclick="closeIgnoreEvidenceModal()">Cancel</button>
+      <button class="btn-primary" id="ignoreEvidenceSubmitBtn" onclick="submitIgnoreEvidence()">Ignore File</button>
+    </div>
+  </div>
+</div>
+
+<!-- Retire Evidence Dialog -->
+<div class="dialog-overlay" id="retireEvidenceModal" role="dialog" aria-modal="true"
+  aria-labelledby="retireEvidenceTitle" style="display:none">
+  <div class="dialog" style="max-width:400px">
+    <h3 id="retireEvidenceTitle">Retire Evidence File</h3>
+    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">
+      Document the deliberate removal of an active evidence file. Clears the immutable flag and deletes the file from disk. Enter password and reason to authenticate.
+    </p>
+    <div style="margin-bottom:8px">
+      <label for="retireEvidenceReason" style="font-size:12px;color:var(--text-secondary)">Reason for retiring:</label>
+      <textarea id="retireEvidenceReason" placeholder="e.g. Bad/corrupted file replaced..."
+        style="width:100%;margin-top:4px;padding:8px;font-size:13px;height:60px;
+        background:var(--bg-primary);color:var(--text-primary);
+        border:1px solid var(--border);border-radius:4px;resize:vertical"></textarea>
+    </div>
+    <div id="retireEvidencePasswordRow">
+      <label for="retireEvidencePassword" style="font-size:12px;color:var(--text-secondary)">Password:</label>
+      <input type="password" id="retireEvidencePassword" autocomplete="off"
+        style="width:100%;margin-top:4px;padding:8px;font-size:14px;
+        background:var(--bg-primary);color:var(--text-primary);
+        border:1px solid var(--border);border-radius:4px"
+        onkeydown="if(event.key==='Enter')submitRetireEvidence()">
+    </div>
+    <div id="retireEvidenceError" style="color:var(--red);font-size:12px;margin-top:8px;display:none"></div>
+    <div id="retireEvidenceResult" style="margin-top:8px;font-size:12px;display:none"></div>
+    <div class="dialog-actions" style="margin-top:12px">
+      <button class="btn-cancel" onclick="closeRetireEvidenceModal()">Cancel</button>
+      <button class="btn-primary" id="retireEvidenceSubmitBtn" onclick="submitRetireEvidence()">Retire File</button>
+    </div>
+  </div>
+</div>
+
 
 <script>
 /* === State === */
 let currentExaminer = null;
 let currentRole = null;
 let findings = [];
+let pendingIgnorePath = null;
+let pendingRetirePath = null;
 let delta = { version: 1, case_id: '', items: [] };
 let caseMeta = {};
 let selectedId = null;
@@ -1081,6 +1211,7 @@ let filterExaminer = '';
 let filterHost = '';
 let filterAccount = '';
 let evidenceData = [];
+let chainStatusData = null;
 let todosData = [];
 let iocsData = [];
 let summaryData = null;
@@ -1204,8 +1335,12 @@ async function submitLogin() {
       keyMaterial, 256
     );
 
-    const hmacKey = await crypto.subtle.importKey(
+    const domainKey = await crypto.subtle.importKey(
       'raw', derivedBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const authBits = await crypto.subtle.sign('HMAC', domainKey, enc.encode('agentir-auth-v1'));
+    const hmacKey = await crypto.subtle.importKey(
+      'raw', authBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
     );
     const sig = await crypto.subtle.sign('HMAC', hmacKey, enc.encode(challenge.nonce));
     const response = bytesToHex(new Uint8Array(sig));
@@ -1481,9 +1616,6 @@ async function rotateAgentToken(tokenId) {
     await loadAgentTokens();
   } catch (e) {
     alert('Failed to rotate token: ' + e.message);
-  }
-}
-
   }
 }
 
@@ -3523,6 +3655,484 @@ async function loadEvidence() {
   } catch (e) {
     document.getElementById('evidenceBody').innerHTML =
       '<tr><td colspan="7" style="color:var(--red)">' + escapeHtml(e.message) + '</td></tr>';
+  }
+  try {
+    chainStatusData = await apiFetch('/api/evidence/chain/status');
+    renderChainRemindBar(chainStatusData);
+    renderEvidenceIntake(chainStatusData);
+  } catch (_) {}
+}
+
+async function rescanEvidenceChain() {
+  try {
+    chainStatusData = await apiFetch('/api/evidence/chain/rescan', { method: 'POST' });
+    renderChainRemindBar(chainStatusData);
+    renderEvidenceIntake(chainStatusData);
+    // Also reload main evidence list
+    evidenceData = await apiFetch('/api/evidence');
+    renderEvidence();
+  } catch (e) {
+    console.error("Rescan failed:", e);
+  }
+}
+
+function renderChainRemindBar(cs) {
+  var el = document.getElementById('chainRemindBar');
+  if (!el) return;
+  if (!cs) { el.innerHTML = ''; return; }
+
+  if (cs.hmac_verify_needed) {
+    var msg = cs.hmac_last_verified_at
+      ? 'Evidence chain HMAC verification is overdue (last: ' + formatTime(cs.hmac_last_verified_at) + ').'
+      : 'Evidence chain HMAC has never been verified.';
+    el.innerHTML = '<div class="chain-remind-bar warn">' +
+      '<span class="remind-icon">&#9888;</span>' +
+      '<span class="remind-text">' + escapeHtml(msg) + '</span>' +
+      '<button onclick="showVerifyHmacModal()">Verify Now</button>' +
+      '</div>';
+  } else {
+    var ago = cs.hmac_last_verified_at
+      ? ' — last verified ' + formatTime(cs.hmac_last_verified_at) + (cs.hmac_last_verified_by ? ' by ' + escapeHtml(cs.hmac_last_verified_by) : '')
+      : '';
+    el.innerHTML = '<div class="chain-remind-bar ok">' +
+      '<span class="remind-icon">&#10003;</span>' +
+      '<span class="remind-text">Evidence chain HMAC verified' + ago + '.</span>' +
+      '<button onclick="showVerifyHmacModal()">Re-verify</button>' +
+      '</div>';
+  }
+}
+
+function showVerifyHmacModal() {
+  document.getElementById('verifyHmacPassword').value = '';
+  document.getElementById('verifyHmacError').style.display = 'none';
+  document.getElementById('verifyHmacResult').style.display = 'none';
+  document.getElementById('verifyHmacSubmitBtn').disabled = false;
+  document.getElementById('verifyHmacPasswordRow').style.display = '';
+  var modal = document.getElementById('verifyHmacModal');
+  modal.style.display = 'flex';
+  modal.classList.add('visible');
+  setTimeout(function() { document.getElementById('verifyHmacPassword').focus(); }, 50);
+}
+
+function closeVerifyHmacModal() {
+  var modal = document.getElementById('verifyHmacModal');
+  modal.style.display = 'none';
+  modal.classList.remove('visible');
+  // Reset for next open
+  var submitBtn = document.getElementById('verifyHmacSubmitBtn');
+  submitBtn.style.display = '';
+  submitBtn.disabled = false;
+  document.querySelector('#verifyHmacModal .btn-cancel').textContent = 'Cancel';
+}
+
+async function submitVerifyHmac() {
+  var pw = document.getElementById('verifyHmacPassword').value;
+  if (!pw) {
+    var errEl = document.getElementById('verifyHmacError');
+    errEl.textContent = 'Password required.';
+    errEl.style.display = '';
+    return;
+  }
+
+  document.getElementById('verifyHmacSubmitBtn').disabled = true;
+  document.getElementById('verifyHmacPasswordRow').style.display = 'none';
+  document.getElementById('verifyHmacError').style.display = 'none';
+  document.getElementById('verifyHmacResult').style.display = '';
+  document.getElementById('verifyHmacResult').textContent = 'Verifying…';
+
+  try {
+    var challenge = await apiFetch('/api/evidence/chain/challenge');
+    var enc = new TextEncoder();
+    var keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
+    var salt = hexToBytes(challenge.salt);
+    var derivedBits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: salt, iterations: challenge.iterations, hash: challenge.hash_algorithm },
+      keyMaterial, 256
+    );
+    var hmacKey = await crypto.subtle.importKey('raw', derivedBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    var sig = await crypto.subtle.sign('HMAC', hmacKey, enc.encode(challenge.nonce));
+    var response = bytesToHex(new Uint8Array(sig));
+
+    var result = await apiFetch('/api/evidence/chain/verify-hmac', {
+      method: 'POST',
+      body: JSON.stringify({ challenge_id: challenge.challenge_id, response: response }),
+    });
+
+    var resEl = document.getElementById('verifyHmacResult');
+    if (result.ok) {
+      resEl.innerHTML = '<span style="color:var(--green)">&#10003; Verified ' + escapeHtml(String(result.verified)) + ' event(s). Chain is intact.</span>';
+    } else {
+      resEl.innerHTML = '<span style="color:var(--red)">&#9888; ' + escapeHtml(String(result.failed)) + ' event(s) FAILED. Indices: ' + escapeHtml(JSON.stringify(result.failed_indices)) + '</span>';
+    }
+
+    // Refresh the remind bar
+    try {
+      chainStatusData = await apiFetch('/api/evidence/chain/status');
+      renderChainRemindBar(chainStatusData);
+    } catch (_) {}
+
+    // Keep modal open to show result; add close button
+    document.getElementById('verifyHmacSubmitBtn').style.display = 'none';
+    document.querySelector('#verifyHmacModal .btn-cancel').textContent = 'Close';
+
+  } catch (e) {
+    document.getElementById('verifyHmacPasswordRow').style.display = '';
+    document.getElementById('verifyHmacResult').style.display = 'none';
+    document.getElementById('verifyHmacSubmitBtn').disabled = false;
+    var errEl2 = document.getElementById('verifyHmacError');
+    errEl2.textContent = e.message || 'Verification failed';
+    errEl2.style.display = '';
+  }
+}
+
+/* === Evidence Intake Panel and Modals === */
+function renderEvidenceIntake(cs) {
+  var el = document.getElementById('evidenceIntakePanel');
+  if (!el) return;
+  if (!cs) { el.innerHTML = ''; return; }
+
+  var html = '';
+
+  // 1. Write block status display
+  html += '<div style="margin-bottom:16px">';
+  if (cs.write_protected) {
+    html += '<div style="background:rgba(40,167,69,0.08);border:1px solid rgba(40,167,69,0.3);color:var(--green);padding:8px 12px;border-radius:6px;font-size:12px;display:flex;align-items:center;gap:8px">';
+    html += '<span>&#10003;</span> <span><strong>Write Protection Active:</strong> Evidence directory is write-protected (mounted read-only' + (cs.write_block_mount_point ? ' on ' + escapeHtml(cs.write_block_mount_point) : '') + ').</span>';
+    html += '</div>';
+  } else {
+    html += '<div style="background:rgba(255,193,7,0.12);border:1px solid rgba(255,193,7,0.4);color:#d39e00;padding:8px 12px;border-radius:6px;font-size:12px;display:flex;align-items:center;gap:8px">';
+    html += '<span>&#9888;</span> <span><strong>Write Protection Warning:</strong> Evidence directory is NOT write-protected (mounted read-write). Forensic best practice requires mounting evidence read-only.</span>';
+    if (cs.write_block_warning) {
+      html += '<div style="font-size:10px;margin-top:2px;color:var(--text-muted)">' + escapeHtml(cs.write_block_warning) + '</div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // 2. Chain of custody violations (Missing/Modified)
+  var missing = cs.missing || [];
+  var modified = cs.modified || [];
+  if (missing.length > 0 || modified.length > 0) {
+    html += '<div style="background:rgba(220,53,69,0.1);border:1px solid rgba(220,53,69,0.3);color:var(--red);padding:12px;border-radius:6px;margin-bottom:16px">';
+    html += '<h4 style="margin:0 0 8px 0;font-size:13px;font-weight:700">🚨 Chain of Custody Violation</h4>';
+    
+    if (missing.length > 0) {
+      html += '<div style="font-size:12px;margin-bottom:8px"><strong>Missing Files:</strong>';
+      html += '<ul style="margin:4px 0 0 16px;padding:0;list-style-type:disc">';
+      missing.forEach(function(f) {
+        var path = typeof f === 'string' ? f : (f.path || '');
+        html += '<li style="margin-bottom:4px">' + 
+                '<div style="display:flex;justify-content:space-between;align-items:center;width:100%">' +
+                '<span>' + escapeHtml(path) + '</span>' +
+                '<button class="verify-btn" style="padding:1px 5px;font-size:10px;color:var(--red);border-color:var(--red)" onclick="showRetireModal(\'' + escapeJsString(path) + '\')">Retire File</button>' +
+                '</div>' +
+                '</li>';
+      });
+      html += '</ul></div>';
+    }
+
+    if (modified.length > 0) {
+      html += '<div style="font-size:12px"><strong>Modified Files (Hash Mismatch):</strong>';
+      html += '<ul style="margin:4px 0 0 16px;padding:0;list-style-type:disc">';
+      modified.forEach(function(f) {
+        var path = typeof f === 'string' ? f : (f.path || '');
+        html += '<li>' + escapeHtml(path) + '</li>';
+      });
+      html += '</ul></div>';
+    }
+    html += '</div>';
+  }
+
+  // 3. Unregistered files display
+  var unregistered = cs.unregistered || [];
+  if (unregistered.length > 0) {
+    html += '<div style="background:rgba(255,193,7,0.06);border:1px solid rgba(255,193,7,0.3);padding:16px;border-radius:6px;margin-bottom:16px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">';
+    html += '<h4 style="margin:0;font-size:13px;font-weight:700;color:var(--text-primary)">📂 Unregistered Evidence Files Detected</h4>';
+    html += '<div>';
+    html += '<button class="verify-btn btn-primary" style="padding:4px 10px;font-size:11px;font-weight:600" onclick="showSealModal()">Seal Manifest (' + unregistered.length + ' file(s))</button>';
+    html += '</div>';
+    html += '</div>';
+
+    html += '<table class="data-table" style="font-size:12px;margin-bottom:0">';
+    html += '<thead><tr><th>Path</th><th>Source Notes</th><th>Description</th><th>Action</th></tr></thead>';
+    html += '<tbody>';
+    unregistered.forEach(function(path, idx) {
+      html += '<tr>';
+      html += '<td style="font-family:monospace">' + escapeHtml(path) + '</td>';
+      html += '<td><input type="text" id="unreg-source-' + idx + '" placeholder="e.g. USB drive #1" style="width:100%;padding:4px;font-size:11px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:3px"></td>';
+      html += '<td><input type="text" id="unreg-desc-' + idx + '" placeholder="e.g. Acquired disk image" style="width:100%;padding:4px;font-size:11px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:3px"></td>';
+      html += '<td><button class="verify-btn" style="padding:2px 6px;font-size:10px" onclick="showIgnoreModal(\'' + escapeJsString(path) + '\')">Ignore</button></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+// Seal Modals
+function showSealModal() {
+  document.getElementById('sealEvidencePassword').value = '';
+  document.getElementById('sealEvidenceError').style.display = 'none';
+  document.getElementById('sealEvidenceResult').style.display = 'none';
+  document.getElementById('sealEvidenceSubmitBtn').style.display = '';
+  document.getElementById('sealEvidenceSubmitBtn').disabled = false;
+  document.getElementById('sealEvidencePasswordRow').style.display = '';
+  document.querySelector('#sealEvidenceModal .btn-cancel').textContent = 'Cancel';
+  var modal = document.getElementById('sealEvidenceModal');
+  modal.style.display = 'flex';
+  modal.classList.add('visible');
+  setTimeout(function() { document.getElementById('sealEvidencePassword').focus(); }, 50);
+}
+
+function closeSealEvidenceModal() {
+  var modal = document.getElementById('sealEvidenceModal');
+  modal.style.display = 'none';
+  modal.classList.remove('visible');
+}
+
+async function submitSealEvidence() {
+  var pw = document.getElementById('sealEvidencePassword').value;
+  if (!pw) {
+    var errEl = document.getElementById('sealEvidenceError');
+    errEl.textContent = 'Password required.';
+    errEl.style.display = '';
+    return;
+  }
+
+  document.getElementById('sealEvidenceSubmitBtn').disabled = true;
+  document.getElementById('sealEvidencePasswordRow').style.display = 'none';
+  document.getElementById('sealEvidenceError').style.display = 'none';
+  document.getElementById('sealEvidenceResult').style.display = '';
+  document.getElementById('sealEvidenceResult').textContent = 'Generating key and signing...';
+
+  try {
+    var challenge = await apiFetch('/api/evidence/chain/challenge');
+    var enc = new TextEncoder();
+    var keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
+    var salt = hexToBytes(challenge.salt);
+    var derivedBits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: salt, iterations: challenge.iterations, hash: challenge.hash_algorithm },
+      keyMaterial, 256
+    );
+    var hmacKey = await crypto.subtle.importKey('raw', derivedBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    var sig = await crypto.subtle.sign('HMAC', hmacKey, enc.encode(challenge.nonce));
+    var response = bytesToHex(new Uint8Array(sig));
+
+    var unregistered = chainStatusData.unregistered || [];
+    var fileSpecs = [];
+    unregistered.forEach(function(path, idx) {
+      var src = document.getElementById('unreg-source-' + idx).value;
+      var desc = document.getElementById('unreg-desc-' + idx).value;
+      fileSpecs.push({ path: path, source: src, description: desc });
+    });
+
+    var result = await apiFetch('/api/evidence/chain/seal', {
+      method: 'POST',
+      body: JSON.stringify({
+        challenge_id: challenge.challenge_id,
+        response: response,
+        file_specs: fileSpecs
+      }),
+    });
+
+    var resEl = document.getElementById('sealEvidenceResult');
+    if (result.sealed) {
+      resEl.innerHTML = '<span style="color:var(--green)">&#10003; Manifest version ' + escapeHtml(String(result.manifest_version)) + ' sealed successfully!</span>';
+      setTimeout(function() {
+        closeSealEvidenceModal();
+        loadEvidence();
+      }, 1500);
+    } else {
+      throw new Error(result.error || 'Seal failed');
+    }
+  } catch (e) {
+    document.getElementById('sealEvidencePasswordRow').style.display = '';
+    document.getElementById('sealEvidenceResult').style.display = 'none';
+    document.getElementById('sealEvidenceSubmitBtn').disabled = false;
+    var errEl2 = document.getElementById('sealEvidenceError');
+    errEl2.textContent = e.message || 'Seal failed';
+    errEl2.style.display = '';
+  }
+}
+
+// Ignore Modals
+function showIgnoreModal(path) {
+  pendingIgnorePath = path;
+  document.getElementById('ignoreEvidenceReason').value = '';
+  document.getElementById('ignoreEvidencePassword').value = '';
+  document.getElementById('ignoreEvidenceError').style.display = 'none';
+  document.getElementById('ignoreEvidenceResult').style.display = 'none';
+  document.getElementById('ignoreEvidenceSubmitBtn').style.display = '';
+  document.getElementById('ignoreEvidenceSubmitBtn').disabled = false;
+  document.getElementById('ignoreEvidencePasswordRow').style.display = '';
+  document.querySelector('#ignoreEvidenceModal .btn-cancel').textContent = 'Cancel';
+  var modal = document.getElementById('ignoreEvidenceModal');
+  modal.style.display = 'flex';
+  modal.classList.add('visible');
+  setTimeout(function() { document.getElementById('ignoreEvidenceReason').focus(); }, 50);
+}
+
+function closeIgnoreEvidenceModal() {
+  var modal = document.getElementById('ignoreEvidenceModal');
+  modal.style.display = 'none';
+  modal.classList.remove('visible');
+  pendingIgnorePath = null;
+}
+
+async function submitIgnoreEvidence() {
+  var reason = document.getElementById('ignoreEvidenceReason').value;
+  var pw = document.getElementById('ignoreEvidencePassword').value;
+  if (!reason) {
+    var errEl = document.getElementById('ignoreEvidenceError');
+    errEl.textContent = 'Reason is required.';
+    errEl.style.display = '';
+    return;
+  }
+  if (!pw) {
+    var errEl = document.getElementById('ignoreEvidenceError');
+    errEl.textContent = 'Password required.';
+    errEl.style.display = '';
+    return;
+  }
+
+  document.getElementById('ignoreEvidenceSubmitBtn').disabled = true;
+  document.getElementById('ignoreEvidencePasswordRow').style.display = 'none';
+  document.getElementById('ignoreEvidenceError').style.display = 'none';
+  document.getElementById('ignoreEvidenceResult').style.display = '';
+  document.getElementById('ignoreEvidenceResult').textContent = 'Signing and submitting...';
+
+  try {
+    var challenge = await apiFetch('/api/evidence/chain/challenge');
+    var enc = new TextEncoder();
+    var keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
+    var salt = hexToBytes(challenge.salt);
+    var derivedBits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: salt, iterations: challenge.iterations, hash: challenge.hash_algorithm },
+      keyMaterial, 256
+    );
+    var hmacKey = await crypto.subtle.importKey('raw', derivedBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    var sig = await crypto.subtle.sign('HMAC', hmacKey, enc.encode(challenge.nonce));
+    var response = bytesToHex(new Uint8Array(sig));
+
+    var result = await apiFetch('/api/evidence/chain/ignore', {
+      method: 'POST',
+      body: JSON.stringify({
+        challenge_id: challenge.challenge_id,
+        response: response,
+        path: pendingIgnorePath,
+        reason: reason
+      }),
+    });
+
+    var resEl = document.getElementById('ignoreEvidenceResult');
+    if (result.ignored) {
+      resEl.innerHTML = '<span style="color:var(--green)">&#10003; File marked as ignored successfully!</span>';
+      setTimeout(function() {
+        closeIgnoreEvidenceModal();
+        loadEvidence();
+      }, 1500);
+    } else {
+      throw new Error(result.error || 'Ignore failed');
+    }
+  } catch (e) {
+    document.getElementById('ignoreEvidencePasswordRow').style.display = '';
+    document.getElementById('ignoreEvidenceResult').style.display = 'none';
+    document.getElementById('ignoreEvidenceSubmitBtn').disabled = false;
+    var errEl2 = document.getElementById('ignoreEvidenceError');
+    errEl2.textContent = e.message || 'Ignore failed';
+    errEl2.style.display = '';
+  }
+}
+
+// Retire Modals
+function showRetireModal(path) {
+  pendingRetirePath = path;
+  document.getElementById('retireEvidenceReason').value = '';
+  document.getElementById('retireEvidencePassword').value = '';
+  document.getElementById('retireEvidenceError').style.display = 'none';
+  document.getElementById('retireEvidenceResult').style.display = 'none';
+  document.getElementById('retireEvidenceSubmitBtn').style.display = '';
+  document.getElementById('retireEvidenceSubmitBtn').disabled = false;
+  document.getElementById('retireEvidencePasswordRow').style.display = '';
+  document.querySelector('#retireEvidenceModal .btn-cancel').textContent = 'Cancel';
+  var modal = document.getElementById('retireEvidenceModal');
+  modal.style.display = 'flex';
+  modal.classList.add('visible');
+  setTimeout(function() { document.getElementById('retireEvidenceReason').focus(); }, 50);
+}
+
+function closeRetireEvidenceModal() {
+  var modal = document.getElementById('retireEvidenceModal');
+  modal.style.display = 'none';
+  modal.classList.remove('visible');
+  pendingRetirePath = null;
+}
+
+async function submitRetireEvidence() {
+  var reason = document.getElementById('retireEvidenceReason').value;
+  var pw = document.getElementById('retireEvidencePassword').value;
+  if (!reason) {
+    var errEl = document.getElementById('retireEvidenceError');
+    errEl.textContent = 'Reason is required.';
+    errEl.style.display = '';
+    return;
+  }
+  if (!pw) {
+    var errEl = document.getElementById('retireEvidenceError');
+    errEl.textContent = 'Password required.';
+    errEl.style.display = '';
+    return;
+  }
+
+  document.getElementById('retireEvidenceSubmitBtn').disabled = true;
+  document.getElementById('retireEvidencePasswordRow').style.display = 'none';
+  document.getElementById('retireEvidenceError').style.display = 'none';
+  document.getElementById('retireEvidenceResult').style.display = '';
+  document.getElementById('retireEvidenceResult').textContent = 'Signing and retiring...';
+
+  try {
+    var challenge = await apiFetch('/api/evidence/chain/challenge');
+    var enc = new TextEncoder();
+    var keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
+    var salt = hexToBytes(challenge.salt);
+    var derivedBits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: salt, iterations: challenge.iterations, hash: challenge.hash_algorithm },
+      keyMaterial, 256
+    );
+    var hmacKey = await crypto.subtle.importKey('raw', derivedBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    var sig = await crypto.subtle.sign('HMAC', hmacKey, enc.encode(challenge.nonce));
+    var response = bytesToHex(new Uint8Array(sig));
+
+    var result = await apiFetch('/api/evidence/chain/retire', {
+      method: 'POST',
+      body: JSON.stringify({
+        challenge_id: challenge.challenge_id,
+        response: response,
+        path: pendingRetirePath,
+        reason: reason
+      }),
+    });
+
+    var resEl = document.getElementById('retireEvidenceResult');
+    if (result.ignored || result.retired || result.manifest_version !== undefined) {
+      resEl.innerHTML = '<span style="color:var(--green)">&#10003; File retired successfully!</span>';
+      setTimeout(function() {
+        closeRetireEvidenceModal();
+        loadEvidence();
+      }, 1500);
+    } else {
+      throw new Error(result.error || 'Retire failed');
+    }
+  } catch (e) {
+    document.getElementById('retireEvidencePasswordRow').style.display = '';
+    document.getElementById('retireEvidenceResult').style.display = 'none';
+    document.getElementById('retireEvidenceSubmitBtn').disabled = false;
+    var errEl2 = document.getElementById('retireEvidenceError');
+    errEl2.textContent = e.message || 'Retire failed';
+    errEl2.style.display = '';
   }
 }
 

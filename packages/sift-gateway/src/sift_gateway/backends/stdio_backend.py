@@ -84,16 +84,11 @@ class StdioMCPBackend(MCPBackend):
 
         command = self.config.get("command", "python")
         args = self.config.get("args", [])
-        env = self.config.get("env") or None
-
-        # When config provides explicit env vars, merge AGENTIR_* from parent
-        # so examiner identity and case dir propagate to backend subprocesses.
-        if env is not None:
-            for key, val in os.environ.items():
-                if key.startswith("AGENTIR_") and key not in env:
-                    env[key] = val
-            # Remove empty values (from unset ${VAR} interpolation)
-            env = {k: v for k, v in env.items() if v}
+        configured_env = self.config.get("env") or {}
+        env = dict(os.environ)
+        env.update(configured_env)
+        # Remove empty values from unset ${VAR} interpolation.
+        env = {k: v for k, v in env.items() if v}
 
         server_params = StdioServerParameters(
             command=command,

@@ -33,6 +33,15 @@ PORTAL_REMEDIATION = (
     "the evidence chain before proceeding with agent analysis."
 )
 
+# Statuses that represent an integrity violation — block ALL tools including read-only.
+# UNSEALED is NOT a violation: it means no evidence registered yet (valid at case start).
+VIOLATION_STATUSES = frozenset({
+    ChainStatus.MODIFIED,
+    ChainStatus.MISSING,
+    ChainStatus.UNREGISTERED,
+    ChainStatus.LEDGER_ERROR,
+})
+
 
 def check_evidence_gate(case_dir_str: str | None) -> dict:
     """Return gate result for the given case directory.
@@ -112,14 +121,50 @@ def _result(cached: dict) -> dict:
     }
 
 
+def is_violation(status) -> bool:
+    """Return True if status is an integrity violation (blocks read-only tools too).
+
+    UNSEALED is not a violation — it means no evidence registered yet.
+    MODIFIED/MISSING/UNREGISTERED/LEDGER_ERROR are violations.
+    """
+    return status in VIOLATION_STATUSES
+
+
+def build_unsealed_warning(tool_name: str, gate: dict) -> dict:
+    """Build the _agentir_context warning injected when a read-only tool is allowed
+    through on UNSEALED status."""
+    return {
+        "evidence_gate_warning": True,
+        "status": str(gate["status"]),
+        "manifest_version": gate["manifest_version"],
+        "message": (
+            f"Evidence manifest not yet sealed. Tool '{tool_name}' is read-only and "
+            "was allowed through. Register and seal evidence in the Examiner Portal "
+            "before conducting analysis."
+        ),
+        "remediation": PORTAL_REMEDIATION,
+    }
+
+
 def build_block_response(tool_name: str, gate: dict) -> dict:
     """Build the structured block response returned to Hermes."""
+    status = gate["status"]
+    if status == ChainStatus.UNSEALED:
+        reason = "evidence_chain_unsealed"
+        detail = (
+            "No sealed evidence manifest. This tool requires evidence to be registered "
+            "and sealed before it can be used."
+        )
+    else:
+        reason = "evidence_chain_violation"
+        detail = "Evidence integrity check failed."
     return {
         "blocked": True,
-        "reason": "evidence_chain_violation",
+        "reason": reason,
         "tool": tool_name,
-        "status": gate["status"],
+        "status": status,
         "issues": gate["issues"],
         "manifest_version": gate["manifest_version"],
+        "detail": detail,
         "remediation": PORTAL_REMEDIATION,
     }

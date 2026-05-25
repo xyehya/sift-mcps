@@ -31,3 +31,6 @@ report-mcp = "report_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/report_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

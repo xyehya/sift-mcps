@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 _PUBLIC_PATHS = {
     "/health",
     "/health/",
+    "/api/v1/health",
+    "/api/v1/health/",
     "/mcp",
     "/api/v1/setup/join",
     # Examiner Portal + legacy dashboard HTML only — API endpoints require auth

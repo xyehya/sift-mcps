@@ -69,4 +69,7 @@ async def health_endpoint(request: Request) -> JSONResponse:
 
 def health_routes() -> list[Route]:
     """Return the health check route."""
-    return [Route("/health", health_endpoint, methods=["GET"])]
+    return [
+        Route("/health", health_endpoint, methods=["GET"]),
+        Route("/api/v1/health", health_endpoint, methods=["GET"]),
+    ]
