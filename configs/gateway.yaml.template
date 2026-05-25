@@ -109,7 +109,7 @@ backends:
       OPENSEARCH_HOST: "http://127.0.0.1:9200"
 
   opencti-mcp:
-    enabled: false
+    enabled: ${AGENTIR_OPENCTI_ENABLED}
     type: stdio
     command: "${UV_BIN}"
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "opencti-mcp"]

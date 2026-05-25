@@ -7,7 +7,7 @@
 
 ## ⚡ Start Here Every Session
 
-**Current state:** Phase 16 complete + Phase 17 OS hardening complete (17a chattr+setcap, 17b auditd, 17c AppArmor complain mode, 17d inotify watcher — all verified on SIFT VM 192.168.122.81). Full docs suite written in `docs/`. 547 tests passing. **Next: Phase 18 — Hermes agent profile + orchestration.**
+**Current state:** Phase 16 complete + Phase 17 OS hardening complete + OpenCTI optional stack wired (Session 35). Full docs suite in `docs/`. 547 tests passing. **Next: Phase 18 — Hermes agent profile + orchestration. Also: test `--enable-opencti` on SIFT VM (resize to ≥16 GB first).**
 
 ```bash
 # Verify tests (run per-package — cross-package rootdir conflict is pre-existing)
@@ -166,6 +166,36 @@ Hardening for the full honest threat model.
 - **Phase 4e** — `notifications/tools/list_changed`: blocked. `mcp==1.27.1` has `ServerSession.send_tool_list_changed()` but `StreamableHTTPSessionManager` exposes no public session lifecycle hook. Revisit on next MCP SDK minor release.
 - **Phase 10** — Architecture cleanup (split `routes.py`, extract auth/examiner helpers). Low priority; do on next touch of those files.
 - **Audit Invariant** ✅ — Gateway transport envelope implemented. Every `/mcp` `call_tool` writes a `sift-gateway.jsonl` entry with role, token_id (SHA-256 fingerprint), examiner, source_ip, backend, status, elapsed_ms, backend_audit_id. Raw token never logged. 15 tests.
+
+---
+
+## OpenCTI Local Stack — Wired (Session 35, 2026-05-25)
+
+**Status:** Infrastructure complete, not yet tested on SIFT VM. Zero code changes to opencti-mcp or opensearch-mcp.
+
+**Approach: Option C (deferred) + Option A (shared OpenSearch) as activation path.**
+
+Files changed:
+- `configs/gateway.yaml.template` — `opencti-mcp: enabled:` now uses `${AGENTIR_OPENCTI_ENABLED}` (was hardcoded `false`)
+- `install.sh` — `--enable-opencti` flag: RAM gate (≥14 GB), UUID token gen → `$AGENTIR_HOME/opencti-token`, `install_opencti()` function, `OPENCTI_URL`/`OPENCTI_TOKEN`/`AGENTIR_OPENCTI_ENABLED` exported before template render
+- `docker-compose.yml` — added `thread_pool.search.queue_size=5000` to opensearch env; added `agentir-net` named network
+- `docker-compose.opencti.yml` — new file: redis + rabbitmq + minio + opencti platform + 2 workers; `ELASTICSEARCH__URL=http://opensearch:9200`, `ELASTICSEARCH__ENGINE_SELECTOR=opensearch`, `ELASTICSEARCH__INDEX_PREFIX=opencti`, `APP__ADMIN__TOKEN=${OPENCTI_ADMIN_TOKEN}`; shares `agentir-net` (external) to reach agentir-opensearch by service name
+
+**Collision analysis (confirmed safe):** Our indices `case-*`, templates `agentir-*`, pipeline `winlog_data_normalize_v1`. OpenCTI indices `opencti_*`, templates `opencti-*`. Zero overlap at every layer.
+
+**Integration path:** `opensearch-mcp/threat_intel.py` already extracts IOCs from `case-*` indices and calls `opencti-mcp`'s `lookup_ioc` via gateway REST, stamping `threat_intel.*` fields back. Entry point: `agentir enrich-intel --case <id>`.
+
+**To test on SIFT VM:**
+```bash
+# 1. Resize VM to ≥16 GB RAM (host has 32 GB)
+# 2. On SIFT VM:
+./install.sh -y --enable-opencti
+# 3. Verify:
+curl -sf http://127.0.0.1:8080/health
+docker ps | grep agentir-opencti
+```
+
+**If `_enforce_version_compat` raises `VersionMismatchError`:** pycti installed version doesn't match `opencti/platform:latest` major. Fix: `uv add "pycti==<server-major>.*"` in the workspace, then restart sift-gateway.
 
 ---
 

@@ -6,20 +6,22 @@ START_SERVICE=1
 RUN_DOCKER=1
 DOWNLOAD_DB=1
 INSTALL_RAG=1
+ENABLE_OPENCTI=0
 
 usage() {
   cat <<'USAGE'
-Usage: ./install.sh [-y] [--no-start] [--skip-docker] [--skip-db] [--skip-rag]
+Usage: ./install.sh [-y] [--no-start] [--skip-docker] [--skip-db] [--skip-rag] [--enable-opencti]
 
 Install sift-mcps on a SIFT Workstation VM.
 
 Options:
-  -y, --yes       Run non-interactively.
-  --no-start      Write config and service files, but do not start systemd service.
-  --skip-docker   Skip Docker/OpenSearch startup.
-  --skip-db       Skip downloading triage baseline databases.
-  --skip-rag      Skip forensic-rag-mcp and its ML dependencies.
-  -h, --help      Show this help.
+  -y, --yes          Run non-interactively.
+  --no-start         Write config and service files, but do not start systemd service.
+  --skip-docker      Skip Docker/OpenSearch startup.
+  --skip-db          Skip downloading triage baseline databases.
+  --skip-rag         Skip forensic-rag-mcp and its ML dependencies.
+  --enable-opencti   Deploy local OpenCTI stack (requires >=14 GB RAM, resizes VM first).
+  -h, --help         Show this help.
 USAGE
 }
 
@@ -30,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --skip-docker) RUN_DOCKER=0 ;;
     --skip-db) DOWNLOAD_DB=0 ;;
     --skip-rag) INSTALL_RAG=0 ;;
+    --enable-opencti) ENABLE_OPENCTI=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
@@ -285,10 +288,10 @@ render_file() {
   export AGENTIR_WINDOWS_TRIAGE_DB_DIR
   export AGENTIR_GATEWAY_TOKEN AGENTIR_SERVICE_TOKEN AGENTIR_PORTAL_SESSION_SECRET
   export AGENTIR_EXAMINER SIFT_MCPS_ROOT UV_BIN OPENCTI_URL OPENCTI_TOKEN
-  export AGENTIR_RAG_ENABLED
+  export AGENTIR_RAG_ENABLED AGENTIR_OPENCTI_ENABLED
   export AGENTIR_WINDOWS_TRIAGE_ENABLED
   SIFT_MCPS_ROOT="$REPO_DIR"
-  OPENCTI_URL="${OPENCTI_URL:-}"
+  OPENCTI_URL="${OPENCTI_URL:-http://127.0.0.1:8080}"
   OPENCTI_TOKEN="${OPENCTI_TOKEN:-}"
   if [[ "$INSTALL_RAG" -eq 1 ]]; then
     AGENTIR_RAG_ENABLED="true"
@@ -299,6 +302,11 @@ render_file() {
     AGENTIR_WINDOWS_TRIAGE_ENABLED="true"
   else
     AGENTIR_WINDOWS_TRIAGE_ENABLED="false"
+  fi
+  if [[ "$ENABLE_OPENCTI" -eq 1 ]]; then
+    AGENTIR_OPENCTI_ENABLED="true"
+  else
+    AGENTIR_OPENCTI_ENABLED="false"
   fi
   python3 - "$src" "$dst" "$mode" <<'PY'
 import os
@@ -536,6 +544,43 @@ print(result.get("status", "ok"))
 PY
 }
 
+install_opencti() {
+  [[ "$ENABLE_OPENCTI" -eq 1 ]] || return 0
+  [[ "$RUN_DOCKER" -eq 1 ]] || { warn "OpenCTI requires Docker; skipping (--skip-docker set)."; return 0; }
+
+  # RAM gate: OpenCTI platform alone wants 4+ GB; with Redis/RabbitMQ/MinIO need headroom
+  local total_ram_mb
+  total_ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+  if [[ "$total_ram_mb" -lt 14336 ]]; then
+    die "OpenCTI requires >=14 GB RAM. VM has ${total_ram_mb} MB. Resize the VM first (host has headroom)."
+  fi
+
+  log "Deploying local OpenCTI stack (RAM: ${total_ram_mb} MB)."
+
+  # Generate admin token (UUID) if not already set
+  if [[ -z "${OPENCTI_TOKEN:-}" ]]; then
+    OPENCTI_TOKEN=$(python3 -c "import uuid; print(uuid.uuid4())")
+    printf '%s\n' "$OPENCTI_TOKEN" > "$AGENTIR_HOME/opencti-token"
+    chmod 600 "$AGENTIR_HOME/opencti-token"
+    log "OpenCTI admin token saved to $AGENTIR_HOME/opencti-token"
+  fi
+  export OPENCTI_TOKEN
+  export OPENCTI_URL="http://127.0.0.1:8080"
+
+  # Bring up OpenCTI stack (separate compose file, shares agentir-net with opensearch)
+  OPENCTI_ADMIN_TOKEN="$OPENCTI_TOKEN" \
+    docker compose -f "$REPO_DIR/docker-compose.opencti.yml" up -d
+
+  # Wait for OpenCTI platform health (first-run schema init takes 2-5 min)
+  log "Waiting for OpenCTI platform to be ready (up to 5 min on first run)..."
+  local deadline=$(( $(date +%s) + 300 ))
+  until curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; do
+    [[ $(date +%s) -lt $deadline ]] || { warn "OpenCTI did not become healthy within 5 min; check: docker logs agentir-opencti"; break; }
+    sleep 10
+  done
+  log "OpenCTI ready at http://127.0.0.1:8080"
+}
+
 install_systemd_service() {
   install -d -m 700 "$SYSTEMD_USER_DIR"
   if [[ ! -f "$GATEWAY_SERVICE_FILE" ]]; then
@@ -713,6 +758,7 @@ main() {
   configure_opensearch_cluster
   configure_geoip_pipeline
   install_opensearch_templates
+  install_opencti
   install_systemd_service
   configure_immutable_capability
   configure_auditd

@@ -1,0 +1,137 @@
+# OpenCTI stack — optional, enabled via: ./install.sh --enable-opencti
+#
+# Uses the shared agentir-net network so it can reach agentir-opensearch
+# by service name. OpenCTI's own data store IS our agentir-opensearch
+# instance (index prefix "opencti" — no collision with "case-*" forensic
+# indices). See SIFT-MCPS-PLAN.md §OpenCTI Integration for analysis.
+#
+# Bring up:  OPENCTI_ADMIN_TOKEN=<uuid> docker compose -f docker-compose.opencti.yml up -d
+# Tear down: docker compose -f docker-compose.opencti.yml down
+#
+# All services are stateless except the volumes below. opencti-mcp in
+# sift-gateway authenticates to the platform using OPENCTI_ADMIN_TOKEN.
+
+services:
+  redis:
+    image: redis:7.4
+    container_name: agentir-opencti-redis
+    restart: unless-stopped
+    networks:
+      - agentir-net
+    volumes:
+      - opencti-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:4.0-management
+    container_name: agentir-opencti-rabbitmq
+    restart: unless-stopped
+    networks:
+      - agentir-net
+    volumes:
+      - opencti-rabbitmq:/var/lib/rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=opencti
+      - RABBITMQ_DEFAULT_PASS=${OPENCTI_ADMIN_TOKEN}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: agentir-opencti-minio
+    restart: unless-stopped
+    networks:
+      - agentir-net
+    volumes:
+      - opencti-minio:/data
+    environment:
+      - MINIO_ROOT_USER=opencti
+      - MINIO_ROOT_PASSWORD=${OPENCTI_ADMIN_TOKEN}
+    command: server /data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  opencti:
+    image: opencti/platform:latest
+    container_name: agentir-opencti
+    restart: unless-stopped
+    networks:
+      - agentir-net
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=4096
+      - APP__PORT=8080
+      - APP__BASE_URL=http://localhost:8080
+      - APP__ADMIN__EMAIL=admin@agentir.local
+      - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_TOKEN}
+      - APP__ADMIN__TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - APP__APP_LOGS__LOGS_LEVEL=error
+      # Search backend — our shared agentir-opensearch instance
+      - ELASTICSEARCH__URL=http://opensearch:9200
+      - ELASTICSEARCH__ENGINE_SELECTOR=opensearch
+      - ELASTICSEARCH__INDEX_PREFIX=opencti
+      - ELASTICSEARCH__NUMBER_OF_SHARDS=1
+      - ELASTICSEARCH__NUMBER_OF_REPLICAS=0
+      # Redis
+      - REDIS__HOSTNAME=redis
+      - REDIS__PORT=6379
+      # RabbitMQ
+      - RABBITMQ__HOSTNAME=rabbitmq
+      - RABBITMQ__PORT=5672
+      - RABBITMQ__USERNAME=opencti
+      - RABBITMQ__PASSWORD=${OPENCTI_ADMIN_TOKEN}
+      # MinIO / S3
+      - MINIO__ENDPOINT=minio
+      - MINIO__PORT=9000
+      - MINIO__USE_SSL=false
+      - MINIO__ACCESS_KEY=opencti
+      - MINIO__SECRET_KEY=${OPENCTI_ADMIN_TOKEN}
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  worker:
+    image: opencti/worker:latest
+    restart: unless-stopped
+    networks:
+      - agentir-net
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - WORKER_LOG_LEVEL=error
+    deploy:
+      replicas: 2
+    depends_on:
+      opencti:
+        condition: service_healthy
+
+volumes:
+  opencti-redis:
+  opencti-rabbitmq:
+  opencti-minio:
+
+networks:
+  agentir-net:
+    external: true
+    name: agentir-net
