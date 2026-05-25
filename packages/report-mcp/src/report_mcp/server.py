@@ -219,7 +219,18 @@ def _resolve_case_dir(case_id: str = "") -> Path:
             raise ValueError(f"Case not found: {case_id}")
         return case_dir
 
-    # Legacy CLI fallback — reads active_case_file pointer (portal sets AGENTIR_CASE_DIR instead)
+    # Primary: check env var first via sift_common
+    from sift_common import resolve_case_dir as _resolve_case_dir_env
+    try:
+        env_dir_str = _resolve_case_dir_env()
+        if env_dir_str:
+            case_dir = Path(env_dir_str)
+            if case_dir.is_dir():
+                return case_dir
+    except Exception:
+        pass
+
+    # Legacy CLI fallback — reads active_case_file pointer
     active_case_file = _ACTIVE_CASE_FILE
     if active_case_file.exists():
         try:
@@ -237,15 +248,7 @@ def _resolve_case_dir(case_id: str = "") -> Path:
             if case_dir.is_dir():
                 return case_dir
 
-    # Fallback: env var (containers, tests, non-standard deployments)
-    env_dir = os.environ.get("AGENTIR_CASE_DIR")
-    if env_dir:
-        p = Path(env_dir)
-        if not p.is_dir():
-            raise ValueError(f"AGENTIR_CASE_DIR does not exist: {env_dir}")
-        return p
-
-    raise ValueError("No active case. Use case_init or case_activate first.")
+    raise ValueError("No active case. Create or select a case in the Examiner Portal first.")
 
 
 def _atomic_write(path: Path, content: str) -> None:

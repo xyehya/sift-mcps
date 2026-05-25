@@ -18,7 +18,7 @@ fi
 
 echo
 echo "=== B10/B11: legacy workflow strings in LLM-visible text ==="
-if grep -rn '"agentir case activate\|agentir case init\|~/.agentir/active_case' \
+if grep -rn "agentir case activate\|agentir case init\|~/.agentir/active_case" \
    packages/ --include="*.py" | grep -v "test_\|#"; then
     echo "FAIL: legacy CLI workflow strings in tool descriptions/errors"
     FAIL=1

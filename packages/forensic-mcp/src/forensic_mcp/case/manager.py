@@ -469,34 +469,47 @@ class CaseManager:
         return resolve_examiner()
 
     def _require_active_case(self) -> Path:
-        # Legacy CLI fallback — re-reads pointer file on every call to detect case switches
-        active_file = _ACTIVE_CASE_FILE
-        if active_file.exists():
-            try:
-                content = active_file.read_text().strip()
-            except OSError:
-                content = ""
-            if content:
-                if os.path.isabs(content):
-                    case_dir = Path(content)
-                    new_id = case_dir.name
-                else:
-                    _validate_case_id(content)
-                    case_dir = self.cases_dir / content
-                    new_id = content
+        # Check AGENTIR_CASE_DIR env var first
+        from sift_common import resolve_case_dir as _resolve_case_dir_env
+        try:
+            env_dir_str = _resolve_case_dir_env()
+            if env_dir_str:
+                case_dir = Path(env_dir_str)
                 if case_dir.is_dir() and (case_dir / "CASE.yaml").exists():
-                    if (
-                        new_id != self._active_case_id
-                        and self._active_case_id is not None
-                    ):
-                        logger.info(
-                            "Case switched: %s → %s", self._active_case_id, new_id
-                        )
-                    self._active_case_id = new_id
+                    self._active_case_id = case_dir.name
                     self._active_case_path = case_dir
+        except Exception:
+            pass
+
+        # Legacy CLI fallback — active_case file check if env var was not set or valid
+        if not self._active_case_path or not self._active_case_path.exists():
+            active_file = _ACTIVE_CASE_FILE
+            if active_file.exists():
+                try:
+                    content = active_file.read_text().strip()
+                except OSError:
+                    content = ""
+                if content:
+                    if os.path.isabs(content):
+                        case_dir = Path(content)
+                        new_id = case_dir.name
+                    else:
+                        _validate_case_id(content)
+                        case_dir = self.cases_dir / content
+                        new_id = content
+                    if case_dir.is_dir() and (case_dir / "CASE.yaml").exists():
+                        if (
+                            new_id != self._active_case_id
+                            and self._active_case_id is not None
+                        ):
+                            logger.info(
+                                "Case switched: %s → %s", self._active_case_id, new_id
+                            )
+                        self._active_case_id = new_id
+                        self._active_case_path = case_dir
         d = self.active_case_dir
         if d is None or not d.exists():
-            raise ValueError("No active case. Run 'agentir case activate <id>' first.")
+            raise ValueError("No active case. Create or select a case in the Examiner Portal first.")
         # Safety belt: refuse closed cases
         meta_file = d / "CASE.yaml"
         if meta_file.exists():
@@ -505,8 +518,7 @@ class CaseManager:
                 if meta.get("status") == "closed":
                     raise ValueError(
                         f"Case {self._active_case_id} is closed. "
-                        f"Run 'agentir case reopen {self._active_case_id}' or "
-                        f"'agentir case activate <id>' to work on a different case."
+                        f"Select an active case in the Examiner Portal to work on a different case."
                     )
             except yaml.YAMLError:
                 pass

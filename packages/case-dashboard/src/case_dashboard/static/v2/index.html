@@ -591,7 +591,7 @@ body {
       <div class="login-logo">🔬</div>
       <div class="login-title">sift-mcps</div>
       <div class="login-subtitle">Examiner Portal</div>
-      
+
       <div id="loginForm">
         <div class="login-form-group">
           <label class="login-label" for="loginExaminer">Examiner Name</label>
@@ -607,7 +607,7 @@ body {
           <a class="login-link" id="setupLink" style="display:none" onclick="showSetupForm()">First run? Set up your account</a>
         </div>
       </div>
-      
+
       <!-- First-run Setup Form -->
       <div id="setupForm" style="display:none">
         <div style="font-weight:600;margin-bottom:16px;color:var(--text-primary)">Set Up Examiner Account</div>
@@ -654,13 +654,34 @@ body {
   </div>
 </div>
 
+<div class="dialog-overlay" id="activateCaseModal" role="dialog" aria-modal="true" style="display:none">
+  <div class="dialog" style="max-width:400px">
+    <div style="font-weight:600;font-size:15px;margin-bottom:12px;color:var(--text-primary)">
+      Activate Case
+    </div>
+    <div style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">
+      You are switching active case to: <strong id="activateCaseTargetName" style="color:var(--text-primary)"></strong>.
+      This will restart backend processes. Please enter your password to confirm activation.
+    </div>
+    <div style="margin-bottom:12px">
+      <label class="login-label" for="activateCasePassword">Password</label>
+      <input class="login-input" type="password" id="activateCasePassword" placeholder="••••••••" onkeydown="if (event.key === 'Enter') submitSwitchCase()">
+    </div>
+    <div class="login-error" id="activateCaseError" style="margin-bottom:12px"></div>
+    <div class="dialog-actions">
+      <button class="btn-cancel" onclick="closeActivateCaseModal()">Cancel</button>
+      <button class="btn-primary" id="btnConfirmActivate" onclick="submitSwitchCase()">Activate Case</button>
+    </div>
+  </div>
+</div>
+
 <div class="dialog-overlay" id="agentTokensModal" role="dialog" aria-modal="true" style="display:none">
   <div class="dialog" style="max-width:600px; width:95%">
     <div style="font-weight:600;font-size:15px;margin-bottom:12px;color:var(--text-primary);display:flex;justify-content:space-between;align-items:center">
       <span>Agent Service Tokens</span>
       <button class="btn-cancel" style="padding:2px 8px;font-size:12px" onclick="closeAgentTokensModal()">Close</button>
     </div>
-    
+
     <!-- Token List -->
     <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;padding:8px;margin-bottom:16px;background:var(--bg-primary)" id="tokenListContainer">
       <table style="width:100%;font-size:12px;border-collapse:collapse" id="tokenListTable">
@@ -714,7 +735,8 @@ body {
       <div class="header-actions">
         <span id="examinerName" style="margin-left:12px;font-weight:500;font-size:13px;color:var(--text-secondary)"></span>
         <span id="roleBadge" style="margin-left:8px;font-size:11px;padding:2px 6px;border-radius:4px;display:none;background:#d97706;color:white;font-weight:600">READONLY</span>
-        
+
+        <select id="caseSelector" onchange="onCaseSelectorChange()" style="display:none; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); padding: 4px 8px; border-radius: 4px; font-size: 13px; cursor: pointer;"></select>
         <button id="btnNewCase" style="display:none" onclick="openNewCaseModal()">New Case</button>
         <button id="btnAgentTokens" style="display:none" onclick="openAgentTokensModal()">Agent Tokens</button>
         <button id="btnSignOut" onclick="submitSignOut()">Sign out</button>
@@ -1267,7 +1289,7 @@ async function showLoginScreen() {
   document.getElementById('loginScreen').style.display = '';
   document.getElementById('loginError').style.display = 'none';
   document.getElementById('loginPassword').value = '';
-  
+
   try {
     const req = await apiFetch('/api/auth/setup-required');
     if (req.required) {
@@ -1283,14 +1305,14 @@ async function showLoginScreen() {
 function showApp() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = '';
-  
+
   if (currentExaminer) {
     document.getElementById('examinerName').textContent = currentExaminer;
     document.getElementById('examinerName').style.display = '';
   } else {
     document.getElementById('examinerName').style.display = 'none';
   }
-  
+
   const roleEl = document.getElementById('roleBadge');
   if (currentRole === 'readonly') {
     roleEl.textContent = 'READONLY';
@@ -1301,6 +1323,15 @@ function showApp() {
     roleEl.style.display = 'none';
     document.getElementById('btnNewCase').style.display = '';
     document.getElementById('btnAgentTokens').style.display = '';
+  }
+  const selectorEl = document.getElementById('caseSelector');
+  if (selectorEl) {
+    selectorEl.style.display = '';
+    if (currentRole === 'readonly') {
+      selectorEl.disabled = true;
+    } else {
+      selectorEl.disabled = false;
+    }
   }
 }
 
@@ -1484,6 +1515,125 @@ async function submitCreateCase() {
   }
 }
 
+/* === Case Selection and Activation === */
+async function loadCasesList() {
+  const selectorEl = document.getElementById('caseSelector');
+  if (!selectorEl) return;
+  try {
+    const data = await apiFetch('/api/cases');
+    selectorEl.innerHTML = '';
+
+    if (!data.cases || data.cases.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '-- No Cases Found --';
+      selectorEl.appendChild(opt);
+      return;
+    }
+
+    const activeCaseId = caseMeta.case_id || data.active_case;
+
+    data.cases.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.id + (c.name ? ' (' + c.name + ')' : '');
+      if (c.id === activeCaseId) {
+        opt.selected = true;
+      }
+      selectorEl.appendChild(opt);
+    });
+
+    selectorEl.dataset.prevValue = selectorEl.value;
+  } catch (e) {
+    console.error('Failed to load cases list:', e);
+  }
+}
+
+function openActivateCaseModal(targetCaseId) {
+  document.getElementById('activateCaseTargetName').textContent = targetCaseId;
+  document.getElementById('activateCasePassword').value = '';
+  document.getElementById('activateCaseError').style.display = 'none';
+  document.getElementById('btnConfirmActivate').disabled = false;
+  document.getElementById('activateCaseModal').classList.add('visible');
+  document.getElementById('activateCaseModal').style.display = 'flex';
+}
+
+function closeActivateCaseModal() {
+  document.getElementById('activateCaseModal').classList.remove('visible');
+  document.getElementById('activateCaseModal').style.display = 'none';
+  const selectorEl = document.getElementById('caseSelector');
+  if (selectorEl && selectorEl.dataset.prevValue) {
+    selectorEl.value = selectorEl.dataset.prevValue;
+  }
+}
+
+async function onCaseSelectorChange() {
+  const selectorEl = document.getElementById('caseSelector');
+  if (!selectorEl) return;
+  const targetCaseId = selectorEl.value;
+  const prevValue = selectorEl.dataset.prevValue || '';
+  if (!targetCaseId) return;
+  if (targetCaseId === prevValue) return;
+
+  openActivateCaseModal(targetCaseId);
+}
+
+async function submitSwitchCase() {
+  const selectorEl = document.getElementById('caseSelector');
+  if (!selectorEl) return;
+  const targetCaseId = selectorEl.value;
+  const pw = document.getElementById('activateCasePassword').value;
+  const errEl = document.getElementById('activateCaseError');
+  errEl.style.display = 'none';
+
+  if (!pw) {
+    errEl.textContent = 'Password required.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  document.getElementById('btnConfirmActivate').disabled = true;
+
+  try {
+    const challenge = await apiFetch('/api/case/activate/challenge');
+
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveBits']);
+    const salt = hexToBytes(challenge.salt);
+    const derivedBits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: salt, iterations: challenge.iterations, hash: challenge.hash_algorithm },
+      keyMaterial, 256
+    );
+    const hmacKey = await crypto.subtle.importKey('raw', derivedBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', hmacKey, enc.encode(challenge.nonce));
+    const responseHMAC = bytesToHex(new Uint8Array(sig));
+
+    const result = await apiFetch('/api/case/activate', {
+      method: 'POST',
+      body: JSON.stringify({
+        case_id: targetCaseId,
+        challenge_id: challenge.challenge_id,
+        response: responseHMAC
+      })
+    });
+
+    if (result.ok) {
+      showToast('Case ' + targetCaseId + ' activated successfully. Reloading...', 'success');
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } else {
+      errEl.textContent = result.error || 'Activation failed';
+      errEl.style.display = 'block';
+      document.getElementById('btnConfirmActivate').disabled = false;
+    }
+  } catch (e) {
+    errEl.textContent = e.message || 'Error occurred during activation';
+    errEl.style.display = 'block';
+    document.getElementById('btnConfirmActivate').disabled = false;
+  }
+}
+
 /* === Agent Service Tokens Management === */
 function openAgentTokensModal() {
   document.getElementById('tokenAgentId').value = '';
@@ -1640,6 +1790,7 @@ async function loadAll() {
       document.title = 'sift-mcps \u2014 ' + caseMeta.case_id;
       if (!delta.case_id) delta.case_id = caseMeta.case_id;
     }
+    await loadCasesList();
     // Prune stale ids from batch selections so the toolbar count
     // reflects only items still visible after refresh.
     {
@@ -3828,13 +3979,13 @@ function renderEvidenceIntake(cs) {
   if (missing.length > 0 || modified.length > 0) {
     html += '<div style="background:rgba(220,53,69,0.1);border:1px solid rgba(220,53,69,0.3);color:var(--red);padding:12px;border-radius:6px;margin-bottom:16px">';
     html += '<h4 style="margin:0 0 8px 0;font-size:13px;font-weight:700">🚨 Chain of Custody Violation</h4>';
-    
+
     if (missing.length > 0) {
       html += '<div style="font-size:12px;margin-bottom:8px"><strong>Missing Files:</strong>';
       html += '<ul style="margin:4px 0 0 16px;padding:0;list-style-type:disc">';
       missing.forEach(function(f) {
         var path = typeof f === 'string' ? f : (f.path || '');
-        html += '<li style="margin-bottom:4px">' + 
+        html += '<li style="margin-bottom:4px">' +
                 '<div style="display:flex;justify-content:space-between;align-items:center;width:100%">' +
                 '<span>' + escapeHtml(path) + '</span>' +
                 '<button class="verify-btn" style="padding:1px 5px;font-size:10px;color:var(--red);border-color:var(--red)" onclick="showRetireModal(\'' + escapeJsString(path) + '\')">Retire File</button>' +

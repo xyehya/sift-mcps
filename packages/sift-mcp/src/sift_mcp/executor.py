@@ -147,11 +147,16 @@ def execute(
                 response,
             )
         elif save_output and (stdout or stderr):
+            default_save_dir = None
+            if case_dir:
+                default_save_dir = os.path.join(case_dir, "extractions")
+            elif cwd:
+                default_save_dir = str(Path(cwd) / "extracted")
             _save_output(
                 cmd_list,
                 stdout,
                 stderr,
-                save_dir or (str(Path(cwd) / "extracted") if cwd else None),
+                save_dir or default_save_dir,
                 response,
             )
 
@@ -210,12 +215,22 @@ def _save_output(
     ):
         raise ExecutionError(f"Refusing to write output to system directory: {out_dir}")
 
-    # When case dir is known, restrict save_dir to within the case directory
+    # When case dir is known, restrict save_dir to extractions or tmp
     case_dir = resolve_case_dir() or None
     if case_dir:
         try:
             case_resolved = Path(case_dir).resolve()
-            out_dir.relative_to(case_resolved)
+            allowed_subdirs = [case_resolved / "extractions", case_resolved / "tmp"]
+            is_allowed = False
+            for subdir in allowed_subdirs:
+                if out_dir == subdir or out_dir.is_relative_to(subdir):
+                    is_allowed = True
+                    break
+            if not is_allowed:
+                raise ExecutionError(
+                    f"save_dir '{out_dir}' must be inside case extractions or tmp directory: "
+                    f"'{case_resolved}/extractions/' or '{case_resolved}/tmp/'"
+                )
         except ValueError as exc:
             raise ExecutionError(
                 f"save_dir '{out_dir}' is outside the case directory '{case_resolved}'"

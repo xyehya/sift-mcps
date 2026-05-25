@@ -245,15 +245,15 @@ human operator to use the portal; the gateway does not run the backend tool.
 |---------|---------|-------|
 | `agentir-core` | Shared library: case I/O, auth, HMAC, identity, evidence chain | Phase 16: new `evidence_chain.py` (scan, seal, HMAC, hash-chain verify). Phase 16+: optional `anchor_manifest()` (Solana). |
 | `sift-gateway` | HTTP gateway, auth, routing, portal mount | Phase 16b complete (evidence gate). Approach C next: `response_guard.py` — redacts critical+high secrets inline before forwarding to Hermes; examiner can enable 10-min HMAC-confirmed override from portal. |
-| `case-dashboard` | Examiner Portal Starlette sub-app | Phase 16a complete (evidence intake: status/rescan/challenge/seal/ignore + write-block detection). Approach C: 3 response-guard endpoints. Phase 16f: anchor status display. |
-| `forensic-mcp` | Record findings, timeline events | ✅ No changes needed |
-| `case-mcp` | Case lifecycle (init, status, join, evidence registry) | Phase 16: evidence-chain-aware `evidence_register`, `evidence_list`, `evidence_verify`. |
-| `sift-mcp` | Run forensic tools via shell=False | Must stay behind gateway evidence chain gate |
-| `report-mcp` | Generate final case report | Phase 16: include evidence manifest/ledger status; warn/fail on chain violation. |
+| `case-dashboard` | Examiner Portal Starlette sub-app | Phase 16a complete. Approach C: 3 response-guard endpoints. Phase 16f: anchor display. R4-2 complete (password-confirmed case selection API & UI). |
+| `forensic-mcp` | Record findings, timeline events | ✅ R4-5 complete (active case resolved via environment variable first) |
+| `case-mcp` | Case lifecycle (init, status, join, evidence registry) | Phase 16. R4-3 complete (added `case_file_structure` tree tool, hidden legacy tool decorators, readOnlyHints). |
+| `sift-mcp` | Run forensic tools via shell=False | R4-4 complete (strict command output path constraints to `extractions/` or `tmp/` under active case directory). |
+| `report-mcp` | Generate final case report | Phase 16. R4-5 complete (active case resolved via environment variable first). |
 | `forensic-rag-mcp` | Semantic search over forensic knowledge | ✅ Phase 5 complete |
 | `windows-triage-mcp` | Local Windows known-good baseline validation and OpenSearch enrichment support | ✅ Phase 11 complete. SQLite-backed, 13 tools, 3 DBs, DB downloader, health/degraded mode; 8 tests. |
 | `opencti-mcp` | Threat intel enrichment via OpenCTI | ✅ No changes needed |
-| `opensearch-mcp` | SIEM evidence indexing and search | ✅ TLS fix + OPENSEARCH_CONFIG env done |
+| `opensearch-mcp` | SIEM evidence indexing and search | ✅ R4-2 complete (structured errors on missing case, docstring updates, 909 passing tests) |
 | `sift-common` | AuditWriter, oplog, parsers | `resolve_examiner()` duplicates identity — fix on touch only |
 | `forensic-knowledge` | YAML forensic knowledge data | ✅ Unchanged |
 | `liquefy` (external) | Agent workspace archival, sentinel protection, vault encryption — for Hermes on analyst machine | At `/home/yk/AI/SIFTHACK/liquefy/`. Deploy on analyst machine only. See SIFT-MCPS-PLAN.md §Liquefy Integration. |

@@ -370,3 +370,58 @@ class TestEvidenceListUnregistered:
         (case_dir / "evidence-manifest.json").write_text(json.dumps(manifest))
         result = _call(tools["evidence_list"])
         assert result["unregistered"] == []
+
+
+class TestLegacyToolsHidden:
+    def test_legacy_tools_not_in_registry(self, server_with_case):
+        _, tools, _ = server_with_case
+        assert "case_init" not in tools
+        assert "case_activate" not in tools
+
+
+class TestCaseFileStructure:
+    def test_case_file_structure_excludes_sensitive(self, server_with_case, case_dir):
+        _, tools, _ = server_with_case
+        assert "case_file_structure" in tools
+
+        # Create some test files/dirs
+        (case_dir / "evidence").mkdir(exist_ok=True)
+        (case_dir / "evidence" / "test.e01").write_bytes(b"123")
+        (case_dir / "extractions").mkdir(exist_ok=True)
+        (case_dir / "extractions" / "dump.txt").write_bytes(b"hello")
+
+        # Exclude directories
+        (case_dir / "audit").mkdir(exist_ok=True)
+        (case_dir / "audit" / "audit.jsonl").write_bytes(b"{}")
+        (case_dir / ".git").mkdir(exist_ok=True)
+        (case_dir / ".git" / "config").write_bytes(b"")
+
+        # Exclude basenames
+        (case_dir / "evidence-ledger.jsonl").write_bytes(b"")
+        (case_dir / "evidence-verify-state.json").write_bytes(b"")
+        (case_dir / "temp.tmp").write_bytes(b"")
+
+        result = _call(tools["case_file_structure"])
+
+        assert "case_id" in result
+        assert "case_dir" in result
+
+        # Check directories
+        dirs = result["directories"]
+        assert "evidence" in dirs
+        assert "extractions" in dirs
+        assert "audit" not in dirs
+        assert ".git" not in dirs
+
+        # Check files
+        files = {f["path"]: f["size_bytes"] for f in result["files"]}
+        assert "evidence/test.e01" in files
+        assert files["evidence/test.e01"] == 3
+        assert "extractions/dump.txt" in files
+        assert files["extractions/dump.txt"] == 5
+
+        assert "audit/audit.jsonl" not in files
+        assert ".git/config" not in files
+        assert "evidence-ledger.jsonl" not in files
+        assert "evidence-verify-state.json" not in files
+        assert "temp.tmp" not in files

@@ -7,15 +7,15 @@
 
 ## ⚡ Start Here Every Session
 
-**Current state:** Phase R4 IN PROGRESS (Session 45). R4-1 instructions update is complete. R4-2 Session 4A first batch is complete for OpenSearch query/list/status tools: read-only annotations added where appropriate, portal-first `case_id` guidance added, and `idx_install_pipelines` remains non-read-only as an admin write/maintenance tool. Validated: remediation gate 0 failures | sift-common import smoke OK | opensearch-mcp 909 passed / 71 skipped | sift-gateway 104 passed | agentir-core 225 passed | parent + nested `git diff --check` clean. **Next: continue Phase R4-2 Session 4B (OpenSearch ingest/enrich/detection + `case_host_fix`) or move to R4-3 case-mcp audit per `remediation-tasks.md`.**
+**Current state:** Phase R4 COMPLETED. Implementation of password-confirmed case selection API & UI V2, recursive case file structure tool, secure path constraints to `extractions/` or `tmp/` under `AGENTIR_CASE_DIR`, tool audits for `opensearch-mcp`, `forensic-mcp`, and `report-mcp` are complete and verified. Validated: 1526 tests passing across all packages (agentir-core 225, case-dashboard 240, case-mcp 23, opensearch-mcp 909, sift-mcp 3, report-mcp 31, sift-gateway 104) | remediation gate 0 failures | parent and nested diff checks clean. **Next: Proceed with Phase 17 OS-Level Evidence Hardening (AppArmor, auditd, chattr +i fcntl, evidence watcher inotify).**
 
 ```bash
 # Verify tests (run per-package — cross-package rootdir conflict is pre-existing)
 uv run python -m pytest packages/agentir-core/ --tb=short -q       # 225 passing
 uv run python -m pytest packages/case-dashboard/ --tb=short -q     # 240 passing
 uv run python -m pytest packages/sift-gateway/ --tb=short -q       # 104 passing
-uv run python -m pytest packages/case-mcp/ --tb=short -q           # 21 passing
-uv run python -m pytest packages/opensearch-mcp/ --tb=short -q     # 907 passing
+uv run python -m pytest packages/case-mcp/ --tb=short -q           # 23 passing
+uv run python -m pytest packages/opensearch-mcp/ --tb=short -q     # 909 passing
 uv run python -m pytest packages/sift-mcp/ --tb=short -q           # 3 passing
 uv run python -m pytest packages/report-mcp/ --tb=short -q         # 31 passing
 
@@ -23,7 +23,7 @@ uv run python -m pytest packages/report-mcp/ --tb=short -q         # 31 passing
 bash scripts/remediation-gate.sh
 ```
 
-**Test breakdown:** agentir-core 225 | case-dashboard 240 | sift-gateway 104 | case-mcp 21 | opensearch-mcp 907 | sift-mcp 3 | report-mcp 31
+**Test breakdown:** agentir-core 225 | case-dashboard 240 | sift-gateway 104 | case-mcp 23 | opensearch-mcp 909 | sift-mcp 3 | report-mcp 31
 
 
 **Remediation track:** See `remediation-tasks.md` for the complete bug inventory + phased fix plan (R0→R6). R0 unblocks all workflow testing. R6 = Phase 18-pre gate. Phase 18 Hermes profile follows R6.
@@ -188,8 +188,15 @@ Path-taking tools now resolve against the portal-created active case rather than
 - [x] **R4-1** — `packages/sift-common/src/sift_common/instructions.py`: gateway routing now removes `case_init`, `case_activate`, and `evidence_register` from agent guidance; case lifecycle language is portal-first; OpenSearch instructions document `idx_ingest` relative path behavior and explicit `case_id` guidance for query tools.
 - [x] **R4-2 Session 4A first batch** — `packages/opensearch-mcp/src/opensearch_mcp/server.py`: query/list/status tools now carry `annotations={"readOnlyHint": True}` for evidence-gate compatibility; `idx_install_pipelines` is documented as an admin write/maintenance tool and remains non-read-only; OpenSearch query docstrings now direct agents to get `case_id` from `case_status`; `idx_case_summary` no-active-case error now points to the Examiner Portal.
 - [x] **R4 focused validation** — Passed: `bash scripts/remediation-gate.sh`; sift-common import smoke; `uv run python -m pytest packages/opensearch-mcp/ --tb=short -q` (909 passed, 71 skipped); `uv run python -m pytest packages/sift-gateway/ --tb=short -q` (104 passed); `uv run pytest packages/agentir-core/tests/ -v --tb=short` (225 passed); parent and nested `git diff --check`.
-- [ ] **R4-2 Session 4B** — Audit OpenSearch ingest/enrich/status tools and `case_host_fix` error/docstring contract.
-- [ ] **R4-3** — Audit case-mcp tool registry and portal-first language.
+- [x] **R4-2 Session 4B** — Audit OpenSearch ingest/enrich/status tools and `case_host_fix` error/docstring contract.
+- [x] **R4-3** — Audit case-mcp tool registry and portal-first language.
+
+**Session 46 — 2026-05-25 — Password-Confirmed Case Selection, Output Constraints, and Tool Audits (Phase R4 Complete):**
+- **Case Selection & Activation:** Implemented password-confirmed case switch APIs (`GET /api/cases`, `GET /api/case/activate/challenge`, `POST /api/case/activate` with challenge signing) in `case-dashboard/routes.py`. Created dropdown selector next to "New Case" and challenge-response password modal in `v2/index.html`.
+- **Secure Directory Inspection:** Hidden `case_init`/`case_activate` decorators from MCP in `case-mcp/server.py`. Added a recursive `case_file_structure` tree tool that ignores sensitive files (`audit/`, ledger, verify-state). Added `readOnlyHint=True` to `audit_summary` and `open_case_dashboard`.
+- **Output Constraints:** Restructured `validate_output_path` and `_save_output` in `sift-mcp` to restrict command execution output paths strictly to `extractions/` or `tmp/` subdirectories of the active case directory.
+- **OpenSearch & Active Case Env Priority:** Updated `idx_ingest_status` to be read-only, updated ingest/enrich tool error handlers to return structured error dicts in `opensearch-mcp`. Updated `forensic-mcp` and `report-mcp` to prioritize active case lookup from `AGENTIR_CASE_DIR` environment variable.
+- **Validation:** Verified all 1526 tests across all packages; `remediation-gate.sh` and `git diff --check` pass with zero failures and no trailing whitespace.
 
 **Session 45 — 2026-05-25 — Phase R4 first batch:**
 - `sift_common/instructions.py`: updated high-impact LLM instructions for portal-first case lifecycle, evidence gate behavior, relative case path convention, and explicit OpenSearch `case_id` guidance.

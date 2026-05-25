@@ -147,6 +147,10 @@ _CASE_SLUG_HYPHENS_RE = re.compile(r"-+")
 _evidence_challenges: dict[str, dict] = {}
 _EVIDENCE_CHALLENGE_TTL = 30  # seconds
 
+# Case activation challenge store — domain-separated
+_activation_challenges: dict[str, dict] = {}
+_ACTIVATION_CHALLENGE_TTL = 30  # seconds
+
 # HMAC verify state file — records when the examiner last ran a full ledger HMAC verify
 _VERIFY_STATE_FILE = "evidence-verify-state.json"
 _HMAC_VERIFY_REMIND_HOURS = 24  # remind if no verify within this window
@@ -3001,7 +3005,7 @@ def _resolve_gateway(request: Request):
 
 def _case_config_write(case_dir: str) -> None:
     """Atomically update case.dir in gateway.yaml.
-    
+
     Caller must hold _GATEWAY_CONFIG_LOCK.
     """
     if _GATEWAY_CONFIG_PATH is None:
@@ -3093,6 +3097,206 @@ def _load_cases_root() -> Path:
     return Path(expanded).expanduser().resolve()
 
 
+async def get_cases(request: Request) -> JSONResponse:
+    """GET /portal/api/cases — List all cases under the cases root."""
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
+    try:
+        from agentir_core.case_ops import case_list_data
+        cases_root = _load_cases_root()
+        data = case_list_data(cases_root)
+        return JSONResponse(data)
+    except Exception as e:
+        logger.error("Failed to list cases: %s", e)
+        return JSONResponse({"error": "Failed to list cases"}, status_code=500)
+
+
+async def get_case_activate_challenge(request: Request) -> JSONResponse:
+    """GET /portal/api/case/activate/challenge — Issue challenge nonce for case activation."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+
+    lockout_msg = _check_commit_lockout(f"activate:{examiner}")
+    if lockout_msg:
+        return JSONResponse({"error": lockout_msg}, status_code=429)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    if not entry:
+        return JSONResponse(
+            {"error": "No password configured. Run: agentir config --setup-password"},
+            status_code=403,
+        )
+
+    # Purge expired challenges
+    now = time.time()
+    expired = [
+        k for k, v in _activation_challenges.items() if now - v["created_at"] > _ACTIVATION_CHALLENGE_TTL
+    ]
+    for k in expired:
+        del _activation_challenges[k]
+
+    challenge_id = secrets.token_hex(16)
+    nonce = secrets.token_hex(32)
+    _activation_challenges[challenge_id] = {
+        "nonce": nonce,
+        "examiner": examiner,
+        "created_at": now,
+        "bound_ip": request.client.host,
+    }
+
+    return JSONResponse(
+        {
+            "challenge_id": challenge_id,
+            "nonce": nonce,
+            "salt": entry["salt"],
+            "iterations": 600000,
+            "hash_algorithm": "SHA-256",
+        }
+    )
+
+
+async def post_case_activate(request: Request) -> JSONResponse:
+    """POST /portal/api/case/activate — Activate an existing case with password confirmation."""
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    lockout_msg = _check_commit_lockout(f"activate:{examiner}")
+    if lockout_msg:
+        return JSONResponse({"error": lockout_msg}, status_code=429)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Expected JSON object"}, status_code=400)
+
+    case_id = body.get("case_id", "").strip()
+    challenge_id = body.get("challenge_id", "").strip()
+    response_hmac = body.get("response", "").strip()
+
+    if not case_id or not challenge_id or not response_hmac:
+        return JSONResponse({"error": "Missing case_id, challenge_id, or response"}, status_code=400)
+
+    if not _valid_case_id(case_id):
+        return JSONResponse({"error": "Invalid case_id format"}, status_code=400)
+
+    real_root = _load_cases_root()
+    real_requested = (real_root / case_id).resolve()
+    if not real_requested.is_relative_to(real_root) or not real_requested.is_dir():
+        return JSONResponse({"error": "Case directory not found or invalid"}, status_code=404)
+
+    # Validate challenge
+    challenge = _activation_challenges.pop(challenge_id, None)
+    if not challenge:
+        return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
+
+    if challenge.get("bound_ip") != request.client.host:
+        return JSONResponse({"error": "Challenge IP mismatch"}, status_code=403)
+
+    now = time.time()
+    if now - challenge["created_at"] > _ACTIVATION_CHALLENGE_TTL:
+        return JSONResponse({"error": "Challenge expired"}, status_code=401)
+
+    if challenge["examiner"] != examiner:
+        return JSONResponse({"error": "Challenge/examiner mismatch"}, status_code=401)
+
+    # Verify response: HMAC-SHA256(stored_pbkdf2_hash, nonce)
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    if not entry:
+        return JSONResponse({"error": "No password configured"}, status_code=403)
+
+    try:
+        stored_hash = bytes.fromhex(entry["hash"])
+    except (ValueError, KeyError):
+        logger.error("Corrupt password entry for examiner %s", examiner)
+        return JSONResponse({"error": "Password data corrupted"}, status_code=500)
+
+    expected = hmac_mod.new(
+        stored_hash, challenge["nonce"].encode(), "sha256"
+    ).hexdigest()
+    if not hmac_mod.compare_digest(expected, response_hmac):
+        _record_commit_failure(f"activate:{examiner}")
+        return JSONResponse({"error": "Incorrect password"}, status_code=401)
+
+    _clear_commit_failures(f"activate:{examiner}")
+
+    # Concurrency serialization using threading.Lock with non-blocking acquire
+    acquired = _case_create_lock.acquire(blocking=False)
+    if not acquired:
+        return JSONResponse({"error": "Another case operation is in progress"}, status_code=409)
+
+    try:
+        # Update gateway.yaml config atomically if configured
+        if _GATEWAY_CONFIG_PATH is not None:
+            try:
+                with _GATEWAY_CONFIG_LOCK:
+                    _case_config_write(str(real_requested))
+            except Exception as e:
+                logger.error("Failed to update gateway config with case dir: %s", e)
+                return JSONResponse({"error": "Failed to update gateway config"}, status_code=500)
+
+        # Update environment variable in-process
+        os.environ["AGENTIR_CASE_DIR"] = str(real_requested)
+        os.environ["AGENTIR_CASES_ROOT"] = str(real_root)
+        try:
+            _write_cli_case_pointer(str(real_requested))
+        except OSError as e:
+            logger.error("Failed to update legacy CLI case pointer: %s", e)
+            return JSONResponse(
+                {"error": "Failed to update legacy CLI case pointer"},
+                status_code=500,
+            )
+
+        if _ON_CASE_ACTIVATED is not None:
+            maybe_awaitable = _ON_CASE_ACTIVATED(str(real_requested))
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
+        else:
+            gateway = _resolve_gateway(request)
+            if gateway:
+                if hasattr(gateway, "config") and isinstance(gateway.config, dict):
+                    if "case" not in gateway.config:
+                        gateway.config["case"] = {}
+                    gateway.config["case"]["dir"] = str(real_requested)
+
+                if hasattr(gateway, "restart_backends"):
+                    await gateway.restart_backends()
+
+        return JSONResponse(
+            {"ok": True, "case_id": case_id, "case_dir": str(real_requested)}
+        )
+
+    except Exception as e:
+        logger.error("Failed to activate case: %s", e)
+        return JSONResponse({"error": "Internal server error during case activation"}, status_code=500)
+    finally:
+        _case_create_lock.release()
+
+
 async def post_case_create(request: Request) -> JSONResponse:
     """POST /portal/api/case/create — Create a new case.
 
@@ -3106,7 +3310,7 @@ async def post_case_create(request: Request) -> JSONResponse:
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
-    
+
     err = _must_reset_check(examiner)
     if err:
         return err
@@ -3175,7 +3379,7 @@ async def post_case_create(request: Request) -> JSONResponse:
             "created": ts.isoformat(),
             "created_at": ts.isoformat(),
         }
-        
+
         tmp_fd, tmp_yaml = tempfile.mkstemp(dir=str(real_requested), suffix=".tmp")
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
@@ -3301,6 +3505,9 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/tokens/{token_id}", revoke_token, methods=["DELETE"]),
         Route("/api/tokens/{token_id}/rotate", rotate_token, methods=["POST"]),
         Route("/api/case/create", post_case_create, methods=["POST"]),
+        Route("/api/cases", get_cases, methods=["GET"]),
+        Route("/api/case/activate/challenge", get_case_activate_challenge, methods=["GET"]),
+        Route("/api/case/activate", post_case_activate, methods=["POST"]),
     ]
 
 

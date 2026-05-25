@@ -28,7 +28,7 @@ def case_env(tmp_path, monkeypatch):
     """Setup temporary case root and gateway config."""
     case_root = tmp_path / "cases"
     case_root.mkdir(parents=True, exist_ok=True)
-    
+
     cfg_path = tmp_path / "gateway.yaml"
     config = {
         "case": {
@@ -37,10 +37,10 @@ def case_env(tmp_path, monkeypatch):
         }
     }
     cfg_path.write_text(yaml.dump(config), encoding="utf-8")
-    
+
     monkeypatch.setenv("AGENTIR_CASES_ROOT", str(case_root))
     monkeypatch.setattr(routes_mod, "_GATEWAY_CONFIG_PATH", cfg_path)
-    
+
     return case_root, cfg_path
 
 
@@ -183,25 +183,25 @@ def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
     case_root, cfg_path = case_env
     monkeypatch.setattr(routes_mod, "datetime", FrozenDatetime)
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
-    
+
     requested_dir = case_root / "case-2026-001-20260525-1413"
-    
+
     resp = client.post("/api/case/create", json={
         "casename": "case-2026-001",
         "title": "Case 2026 001",
     })
-    
+
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     assert resp.json()["case_id"] == "case-2026-001-20260525-1413"
     assert resp.json()["case_dir"] == str(requested_dir)
-    
+
     assert requested_dir.exists()
     assert (requested_dir / "audit").is_dir()
     assert (requested_dir / "evidence").is_dir()
     assert (requested_dir / "extractions").is_dir()
     assert (requested_dir / "reports").is_dir()
-    
+
     case_yaml_path = requested_dir / "CASE.yaml"
     assert case_yaml_path.exists()
     with open(case_yaml_path) as f:
@@ -211,20 +211,20 @@ def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
     assert meta["status"] == "open"
     assert meta["examiner"] == "alice"
     assert meta["created_at"] == "2026-05-25T14:13:00+00:00"
-    
+
     for fname in ("findings.json", "timeline.json", "todos.json", "iocs.json", "evidence-manifest.json"):
         assert (requested_dir / fname).exists()
-    
+
     with open(requested_dir / "evidence-manifest.json") as f:
         manifest = json.load(f)
     assert manifest["version"] == 0
     assert manifest["files"] == []
     assert manifest["manifest_hash"].startswith("sha256:")
-    
+
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
     assert cfg["case"]["dir"] == str(requested_dir)
-    
+
     assert os.environ.get("AGENTIR_CASE_DIR") == str(requested_dir)
     assert os.environ.get("AGENTIR_CASES_ROOT") == str(case_root)
     assert (Path.home() / ".agentir" / "active_case").read_text().strip() == str(requested_dir)
@@ -263,9 +263,9 @@ def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_
 
 def test_concurrent_case_creation_returns_409(client, case_env, passwords_dir):
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
-    
+
     routes_mod._case_create_lock.acquire()
-    
+
     try:
         resp = client.post("/api/case/create", json={
             "casename": "case-concurrent",
@@ -275,3 +275,91 @@ def test_concurrent_case_creation_returns_409(client, case_env, passwords_dir):
         assert resp.json()["error"] == "Another case creation is in progress"
     finally:
         routes_mod._case_create_lock.release()
+
+
+def test_get_cases_returns_cases_list(client, case_env, passwords_dir):
+    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+    case_root, _ = case_env
+    # Create a couple of case directories with CASE.yaml
+    case1_dir = case_root / "case-one-20260525-1414"
+    case1_dir.mkdir(parents=True)
+    (case1_dir / "CASE.yaml").write_text("case_id: case-one-20260525-1414\nname: Case One\n")
+
+    case2_dir = case_root / "case-two-20260525-1414"
+    case2_dir.mkdir(parents=True)
+    (case2_dir / "CASE.yaml").write_text("case_id: case-two-20260525-1414\nname: Case Two\n")
+
+    resp = client.get("/api/cases")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "cases" in data
+    case_ids = [c["id"] for c in data["cases"]]
+    assert "case-one-20260525-1414" in case_ids
+    assert "case-two-20260525-1414" in case_ids
+
+
+def test_get_case_activate_challenge_requires_password_setup(client, passwords_dir):
+    # Setup examiner cookie but do NOT write password entry (no entry exists)
+    token = generate_jwt("alice", "examiner", _SECRET, max_age=3600)
+    client.cookies[COOKIE_NAME] = token
+    resp = client.get("/api/case/activate/challenge")
+    assert resp.status_code == 403
+    assert "No password configured" in resp.json()["error"]
+
+
+def test_post_case_activate_success(client, case_env, passwords_dir, monkeypatch):
+    import hmac
+    import hashlib
+
+    # 1. Setup examiner password and cookie
+    examiner = "alice"
+    passwords_dir.mkdir(parents=True, exist_ok=True)
+    pbkdf2_bin = hashlib.pbkdf2_hmac("sha256", b"password123", b"salt123", 600000)
+    entry = {
+        "hash": pbkdf2_bin.hex(),
+        "salt": "salt123",
+        "must_reset_password": False
+    }
+    (passwords_dir / f"{examiner}.json").write_text(json.dumps(entry))
+
+    token = generate_jwt(examiner, "examiner", _SECRET, max_age=3600)
+    client.cookies[COOKIE_NAME] = token
+
+    case_root, cfg_path = case_env
+    # Create the case to activate
+    case_id = "case-to-activate-20260525-1414"
+    case_dir = case_root / case_id
+    case_dir.mkdir(parents=True)
+    (case_dir / "CASE.yaml").write_text(f"case_id: {case_id}\nname: To Activate\n")
+
+    # 2. Get challenge
+    resp = client.get("/api/case/activate/challenge")
+    assert resp.status_code == 200
+    chal = resp.json()
+    assert "challenge_id" in chal
+    assert "nonce" in chal
+
+    # Verify salt/iterations match entry
+    assert chal["salt"] == "salt123"
+    assert chal["iterations"] == 600000
+
+    # 3. Compute response: HMAC-SHA256(stored_pbkdf2_hash, nonce)
+    expected_response = hmac.new(
+        pbkdf2_bin, chal["nonce"].encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+    # 4. Activate
+    resp = client.post("/api/case/activate", json={
+        "case_id": case_id,
+        "challenge_id": chal["challenge_id"],
+        "response": expected_response
+    })
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert resp.json()["case_id"] == case_id
+
+    # Verify gateway config was updated
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+    assert cfg["case"]["dir"] == str(case_dir)

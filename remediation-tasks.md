@@ -811,19 +811,17 @@ Before merging any function adapted from the original Valhuntir repo:
 - [ ] Includes `next_step` or `portal_hint` in error responses
 - [ ] Has tests: happy path + missing-case error + wrong-path error
 
-### R5-3: Backend Legacy Review Status Matrix
-
-| Backend | Adapted From | Primary Risk | Status after R0 |
+| Backend | Adapted From | Primary Risk | Status after R4 |
 |---------|-------------|--------------|-----------------|
-| opensearch-mcp | Valhuntir | B1/B2/B3/B6/B7/B8/B10 | ⚠️ R0 fixes 8 bugs; R1/R4 follow |
-| case-mcp | Valhuntir/new | B4/B12/B13/B14 | ⚠️ R0 fixes 4; R4 audit |
-| sift-mcp | Valhuntir | Sanitization done (Phase 6); path defaults | ⚠️ R4-4 audit |
-| forensic-mcp | Valhuntir | Phases 0–15 sweep done | ✅ R4-5 audit only |
-| report-mcp | Valhuntir | Phase 16d done | ✅ R4-5 audit only |
-| forensic-rag-mcp | Valhuntir | Phase 5 migration done | ✅ R4-5 audit only |
-| windows-triage-mcp | new | Phase 11 done; no case-path dependency expected | ✅ R4-5 verify |
-| opencti-mcp | external | No case-path dependency expected | ✅ R4-5 verify |
-| agentir-core | new (Phases 2/12/16) | 212 tests; R8 gates pass | ✅ R0 additions only |
+| opensearch-mcp | Valhuntir | B1/B2/B3/B6/B7/B8/B10 | ✅ R0 fixes + R1/R4 completed (structured errors, R4 docstrings, readOnlyHint) |
+| case-mcp | Valhuntir/new | B4/B12/B13/B14 | ✅ R0 fixes + R4-3 completed (hidden case_init/activate, new case_file_structure tool) |
+| sift-mcp | Valhuntir | Sanitization done (Phase 6); path defaults | ✅ R4-4 completed (strict output constraints under extractions/ or tmp/) |
+| forensic-mcp | Valhuntir | Phases 0–15 sweep done | ✅ R4-5 completed (active case env priority) |
+| report-mcp | Valhuntir | Phase 16d done | ✅ R4-5 completed (active case env priority) |
+| forensic-rag-mcp | Valhuntir | Phase 5 migration done | ✅ R4-5 verified |
+| windows-triage-mcp | new | Phase 11 done; no case-path dependency expected | ✅ R4-5 verified (SQLite-backed local baseline) |
+| opencti-mcp | external | No case-path dependency expected | ✅ R4-5 verified |
+| agentir-core | new (Phases 2/12/16) | 225 tests; R8 gates pass | ✅ R0 additions + 225 tests passing |
 
 ### R5-4: Env Var Smoke Test (add to every backend's test suite)
 

@@ -164,7 +164,6 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     # Tool 1: case_init (CONFIRM)
     # ------------------------------------------------------------------
-    @server.tool()
     def case_init(
         name: str,
         description: str = "",
@@ -228,7 +227,6 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     # Tool 2: case_activate (CONFIRM)
     # ------------------------------------------------------------------
-    @server.tool()
     def case_activate(case_id: str, cases_dir: str = "") -> dict:
         """LEGACY: This tool is provided for CLI compatibility only.
         In the portal-first workflow, cases are selected via the Examiner Portal.
@@ -298,6 +296,55 @@ def create_server() -> FastMCP:
             # Layer 4: platform capabilities detection
             result.update(_build_platform_capabilities())
             return result
+        except (ValueError, OSError) as e:
+            return {"error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Tool: case_file_structure (SAFE)
+    # ------------------------------------------------------------------
+    @server.tool(annotations={"readOnlyHint": True})
+    def case_file_structure() -> dict:
+        """Recursively list all files and directories in the active case directory.
+        Provides a tree structure of the case workspace (excluding system files).
+        """
+        try:
+            case_dir = _resolve_case_dir()
+            case_resolved = case_dir.resolve()
+
+            files_list = []
+            dirs_list = []
+
+            exclude_basenames = {"evidence-ledger.jsonl", "evidence-verify-state.json"}
+            exclude_dirs = {"audit", ".git", "__pycache__"}
+
+            for path in sorted(case_resolved.rglob("*")):
+                try:
+                    rel_parts = path.relative_to(case_resolved).parts
+                except ValueError:
+                    continue
+
+                if any(part in exclude_dirs for part in rel_parts):
+                    continue
+
+                if path.name in exclude_basenames or path.name.endswith(".tmp"):
+                    continue
+
+                rel_path = str(path.relative_to(case_resolved))
+
+                if path.is_dir():
+                    dirs_list.append(rel_path)
+                elif path.is_file():
+                    files_list.append({
+                        "path": rel_path,
+                        "size_bytes": path.stat().st_size,
+                    })
+
+            return {
+                "case_id": case_resolved.name,
+                "case_dir": str(case_resolved),
+                "directories": dirs_list,
+                "files": files_list,
+            }
         except (ValueError, OSError) as e:
             return {"error": str(e)}
 
@@ -475,7 +522,7 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     # Tool 10: audit_summary (SAFE)
     # ------------------------------------------------------------------
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def audit_summary() -> dict:
         """Get audit trail statistics for the active case including
         total entries, evidence IDs, and breakdowns by MCP and tool."""
@@ -733,7 +780,7 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     # Tool 16: open_case_dashboard (SAFE)
     # ------------------------------------------------------------------
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def open_case_dashboard() -> dict:
         """Open the Examiner Portal in the examiner's browser.
 
