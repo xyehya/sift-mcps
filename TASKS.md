@@ -7,7 +7,7 @@
 
 ## ⚡ Start Here Every Session
 
-**Current state:** Phase R0 COMPLETE (Session 41). All 9 critical fixes applied + 2 scripts created. Tests: agentir-core 218 | case-mcp 21 | opensearch-mcp 907 (71 skipped). Gate: `bash scripts/remediation-gate.sh` passes 0 failures. **Next: Phase R1 — propagation hardening (gateway sets AGENTIR_CASE_DIR in own env, subprocess env assertion, R1-3 active_case sweep, portal case-switch writes active_case file).**
+**Current state:** Phase R1 COMPLETE (Session 42). Gateway now owns `AGENTIR_CASE_DIR` + `AGENTIR_CASES_ROOT` propagation, stdio backend launches fail closed without active case env, and portal case creation writes the legacy CLI pointer only as compatibility. Validated: agentir-core 218 | case-dashboard 237 | sift-gateway 103 | case-mcp 21 | opensearch-mcp 907 (71 skipped) | sift-mcp 3 | report-mcp 31 | remediation gate 0 failures. **Next: Phase R2 — case directory canonicalization (portal computes `{casename}-{YYYYMMDD}-{HHMM}`, no free-form directory, legacy case-mcp guidance).**
 
 ```bash
 # Verify tests (run per-package — cross-package rootdir conflict is pre-existing)
@@ -145,6 +145,19 @@ Bonus fixes (same files, same B-class):
 - `_launch_background`, `_launch_enrich_background`, memory ingest function — renamed `active_case` local vars to `active_case_id` to satisfy gate; updated error dicts to include `portal_hint`.
 - `agentir-core/case_io.py` — replaced `sys.exit()` with `RuntimeError` (AGENTS.md rule 9).
 - Annotated legacy file reads in `sift-common`, `report-mcp`, `forensic-mcp`, `ingest_cli.py` with `# Legacy CLI fallback`.
+
+---
+
+## Phase R1 — Propagation Hardening ✅ (Session 42)
+
+Gateway/process env is now the single active-case source for runtime backends; `~/.agentir/active_case` is written only for CLI compatibility.
+
+- [x] **R1-1** — `sift_gateway.config.apply_case_env()` applies `gateway.yaml -> case.dir` to `AGENTIR_CASE_DIR` and `case.root` to `AGENTIR_CASES_ROOT`; stale `AGENTIR_CASE_DIR` is cleared when config has no active case.
+- [x] **R1-1b** — `Gateway.__init__()` and portal `on_case_activated` callback call `apply_case_env()` so direct gateway construction and case switches update the gateway process env before backend restart.
+- [x] **R1-2** — `StdioMCPBackend.start()` refuses subprocess launch unless both `AGENTIR_CASE_DIR` and `AGENTIR_CASES_ROOT` are present. Fresh installs with no active case keep the gateway up and fail closed before stdio backend spawn.
+- [x] **R1-3** — Portal case creation sets both env vars, writes `~/.agentir/active_case` atomically as `# Legacy CLI fallback`, and avoids double backend restart when the gateway callback is wired.
+- [x] **R1-4** — `configs/gateway.yaml.template` uses `${AGENTIR_CASES_ROOT}`; `install.sh` exports plural root while preserving `AGENTIR_CASE_ROOT` backward compatibility for existing installer code.
+- [x] **R1 tests/gates** — New `packages/sift-gateway/tests/test_case_env.py`; updated portal case-create assertions. Passed: `bash scripts/remediation-gate.sh`, `bash -n install.sh`, `uv run python -m pytest packages/sift-gateway/ --tb=short -q`, `uv run python -m pytest packages/case-dashboard/ --tb=short -q`, `uv run pytest packages/agentir-core/tests/ -v --tb=short`, plus case-mcp, opensearch-mcp, sift-mcp, and report-mcp package gates.
 
 ---
 

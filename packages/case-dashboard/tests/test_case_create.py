@@ -37,7 +37,7 @@ def case_env(tmp_path, monkeypatch):
     }
     cfg_path.write_text(yaml.dump(config), encoding="utf-8")
     
-    monkeypatch.setenv("AGENTIR_CASE_ROOT", str(case_root))
+    monkeypatch.setenv("AGENTIR_CASES_ROOT", str(case_root))
     monkeypatch.setattr(routes_mod, "_GATEWAY_CONFIG_PATH", cfg_path)
     
     return case_root, cfg_path
@@ -173,6 +173,8 @@ def test_successful_case_creation(client, case_env, passwords_dir):
     assert cfg["case"]["dir"] == str(requested_dir)
     
     assert os.environ.get("AGENTIR_CASE_DIR") == str(requested_dir)
+    assert os.environ.get("AGENTIR_CASES_ROOT") == str(case_root)
+    assert (Path.home() / ".agentir" / "active_case").read_text().strip() == str(requested_dir)
 
 
 def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_path, monkeypatch):

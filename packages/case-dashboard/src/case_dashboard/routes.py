@@ -3035,6 +3035,28 @@ def _case_config_write(case_dir: str) -> None:
         raise
 
 
+def _write_cli_case_pointer(case_dir: str) -> None:
+    """Atomically write the legacy CLI compatibility pointer."""
+    agentir_dir = Path.home() / ".agentir"
+    agentir_dir.mkdir(parents=True, exist_ok=True)
+    active_case_file = agentir_dir / "active_case"  # Legacy CLI fallback
+    fd, tmp_path = tempfile.mkstemp(dir=str(agentir_dir), suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(case_dir)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, active_case_file)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 async def post_case_create(request: Request) -> JSONResponse:
     """POST /portal/api/case/create — Create a new case.
 
@@ -3083,7 +3105,11 @@ async def post_case_create(request: Request) -> JSONResponse:
             pass
     
     if not case_root:
-        case_root = os.environ.get("AGENTIR_CASE_ROOT") or "/cases"
+        case_root = (
+            os.environ.get("AGENTIR_CASES_ROOT")
+            or os.environ.get("AGENTIR_CASE_ROOT")
+            or "/cases"
+        )
 
     # Interpolate environment variables in case_root
     case_root = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), ""), case_root)
@@ -3162,22 +3188,31 @@ async def post_case_create(request: Request) -> JSONResponse:
 
         # Update environment variable in-process
         os.environ["AGENTIR_CASE_DIR"] = str(real_requested)
+        os.environ["AGENTIR_CASES_ROOT"] = str(real_root)
+        try:
+            _write_cli_case_pointer(str(real_requested))
+        except OSError as e:
+            logger.error("Failed to update legacy CLI case pointer: %s", e)
+            return JSONResponse(
+                {"error": "Failed to update legacy CLI case pointer"},
+                status_code=500,
+            )
 
         if _ON_CASE_ACTIVATED is not None:
             maybe_awaitable = _ON_CASE_ACTIVATED(str(real_requested))
             if inspect.isawaitable(maybe_awaitable):
                 await maybe_awaitable
+        else:
+            # Restart backends when no explicit parent-gateway callback was wired.
+            gateway = _resolve_gateway(request)
+            if gateway:
+                if hasattr(gateway, "config") and isinstance(gateway.config, dict):
+                    if "case" not in gateway.config:
+                        gateway.config["case"] = {}
+                    gateway.config["case"]["dir"] = str(real_requested)
 
-        # Restart backends
-        gateway = _resolve_gateway(request)
-        if gateway:
-            if hasattr(gateway, "config") and isinstance(gateway.config, dict):
-                if "case" not in gateway.config:
-                    gateway.config["case"] = {}
-                gateway.config["case"]["dir"] = str(real_requested)
-            
-            if hasattr(gateway, "restart_backends"):
-                await gateway.restart_backends()
+                if hasattr(gateway, "restart_backends"):
+                    await gateway.restart_backends()
 
         return JSONResponse({"ok": True, "case_dir": str(real_requested)})
 

@@ -89,6 +89,14 @@ class StdioMCPBackend(MCPBackend):
         env.update(configured_env)
         # Remove empty values from unset ${VAR} interpolation.
         env = {k: v for k, v in env.items() if v}
+        if "AGENTIR_CASE_DIR" not in env:
+            raise RuntimeError(
+                "BUG: AGENTIR_CASE_DIR not in env before launching backend"
+            )
+        if "AGENTIR_CASES_ROOT" not in env:
+            raise RuntimeError(
+                "BUG: AGENTIR_CASES_ROOT not in env before launching backend"
+            )
 
         server_params = StdioServerParameters(
             command=command,

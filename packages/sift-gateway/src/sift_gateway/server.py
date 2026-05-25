@@ -92,6 +92,7 @@ from sift_gateway.audit_helpers import (
 )
 from sift_gateway.backends import MCPBackend, create_backend
 from sift_gateway.backends.http_backend import HttpMCPBackend
+from sift_gateway.config import apply_case_env
 from sift_gateway.health import health_routes
 from sift_gateway.mcp_endpoint import (
     ANALYST_TOOLS,
@@ -114,6 +115,7 @@ class Gateway:
 
     def __init__(self, config: dict):
         self.config = config
+        apply_case_env(self.config)
         self.backends: dict[str, MCPBackend] = {}
         self._tool_map: dict[str, str] = {}  # tool_name -> backend_name
         self._tool_cache: dict[str, Tool] = {}  # tool_name -> Tool object
@@ -716,6 +718,7 @@ class Gateway:
 
             async def _on_case_activated(case_dir_str: str) -> None:
                 gateway.config.setdefault("case", {})["dir"] = case_dir_str
+                apply_case_env(gateway.config)
                 await gateway.restart_backends()
 
             routes.append(

@@ -38,6 +38,34 @@ def _walk_and_interpolate(obj):
     return obj
 
 
+def apply_case_env(config: dict) -> None:
+    """Apply gateway case config to process env for backend inheritance."""
+    case_config = config.get("case", {})
+    if not isinstance(case_config, dict):
+        case_config = {}
+
+    case_dir = str(case_config.get("dir") or "").strip()
+    cases_root = str(case_config.get("root") or "").strip()
+    if not cases_root and case_dir:
+        cases_root = str(Path(case_dir).parent)
+    if not cases_root:
+        cases_root = (
+            os.environ.get("AGENTIR_CASES_ROOT")
+            or os.environ.get("AGENTIR_CASE_ROOT")
+            or ""
+        )
+
+    if cases_root:
+        os.environ["AGENTIR_CASES_ROOT"] = cases_root
+        logger.debug("AGENTIR_CASES_ROOT set to %s from gateway config", cases_root)
+
+    if case_dir:
+        os.environ["AGENTIR_CASE_DIR"] = case_dir
+        logger.debug("AGENTIR_CASE_DIR set to %s from gateway config", case_dir)
+    else:
+        os.environ.pop("AGENTIR_CASE_DIR", None)
+
+
 def load_config(path: str) -> dict:
     """Load a YAML config file with env var interpolation.
 
@@ -75,11 +103,7 @@ def load_config(path: str) -> dict:
 
     config = _walk_and_interpolate(raw)
 
-    # Propagate case.dir to AGENTIR_CASE_DIR so all backend subprocesses inherit it.
-    case_dir = config.get("case", {}).get("dir", "")
-    if case_dir:
-        os.environ["AGENTIR_CASE_DIR"] = case_dir
-        logger.debug("AGENTIR_CASE_DIR set to %s from gateway config", case_dir)
+    apply_case_env(config)
 
     # Warn early if portal session secret is absent — portal auth will fail at runtime.
     portal_secret = config.get("portal", {}).get("session_secret", "")

@@ -12,7 +12,7 @@ gateway:
   idle_timeout_seconds: 0
 
 case:
-  root: "${AGENTIR_CASE_ROOT}"
+  root: "${AGENTIR_CASES_ROOT}"
   dir: ""
 
 api_keys:
