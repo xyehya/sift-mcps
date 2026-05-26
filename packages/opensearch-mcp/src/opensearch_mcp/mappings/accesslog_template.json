@@ -1,0 +1,44 @@
+{
+  "index_patterns": ["case-*-accesslog-*"],
+  "template": {
+    "aliases": {
+      "agentir-sigma-web": {}
+    },
+    "settings": {
+      "index.number_of_replicas": 0
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": {"type": "date", "ignore_malformed": true},
+        "source.ip": {"type": "ip", "ignore_malformed": true},
+        "http.response.status_code": {"type": "integer"},
+        "http.response.bytes": {"type": "integer"},
+        "http.request.method": {"type": "keyword"},
+        "url.path": {"type": "keyword"},
+        "http.request.referrer": {"type": "keyword"},
+        "user.name": {"type": "keyword"},
+        "user_agent.original": {"type": "text"},
+        "host.name": {"type": "keyword"},
+        "host.id": {"type": "keyword"},
+        "vhir.source_file": {"type": "keyword"},
+        "vhir.ingest_audit_id": {"type": "keyword"},
+        "vhir.parse_method": {"type": "keyword"},
+        "pipeline_version": {"type": "keyword"},
+        "threat_intel.verdict": {"type": "keyword"},
+        "threat_intel.confidence": {"type": "integer"},
+        "threat_intel.labels": {"type": "keyword"},
+        "threat_intel.source": {"type": "keyword"},
+        "threat_intel.ioc_type": {"type": "keyword"},
+        "threat_intel.ioc_value": {"type": "keyword"},
+        "threat_intel.enriched_at": {"type": "date"},
+        "threat_intel.checked": {"type": "boolean"},
+        "source.geo.country_name": {"type": "keyword"},
+        "source.geo.city_name": {"type": "keyword"},
+        "source.geo.region_name": {"type": "keyword"},
+        "source.geo.continent_name": {"type": "keyword"},
+        "source.geo.location": {"type": "geo_point"}
+      }
+    }
+  },
+  "priority": 28
+}

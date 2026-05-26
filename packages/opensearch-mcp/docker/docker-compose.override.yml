@@ -1,0 +1,6 @@
+# Snapshot volume mount for agentir backup/restore
+# Added by setup-opensearch.sh — do not modify the main docker-compose.yml
+services:
+  opensearch:
+    volumes:
+      - /var/lib/agentir/snapshots:/usr/share/opensearch/snapshots

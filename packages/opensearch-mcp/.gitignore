@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.tmp
+
+# Evidence files — NEVER commit real forensic evidence
+tests/fixtures/*.evtx
+tests/fixtures/*.hve
+tests/fixtures/*.dat
+*.E01
+*.e01
+
+# Environment and credentials
+.env
+.env.*
+*.pem
+*.key
+*.crt
+opensearch.yaml
+
+# Live tests — require real evidence, not discovered by default pytest
+tests-live/

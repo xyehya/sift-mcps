@@ -1,0 +1,17 @@
+services:
+  opensearch:
+    image: opensearchproject/opensearch:3.5.0
+    container_name: agentir-opensearch
+    environment:
+      - discovery.type=single-node
+      - OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${AGENTIR_OS_PASSWORD}
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    mem_limit: 6g
+    restart: unless-stopped
+
+volumes:
+  opensearch-data:

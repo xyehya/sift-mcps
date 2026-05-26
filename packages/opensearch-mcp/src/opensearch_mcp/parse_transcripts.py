@@ -1,0 +1,338 @@
+"""PowerShell transcript parser — discover, parse, and index transcript files."""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from pathlib import Path, PureWindowsPath
+
+from opensearchpy import OpenSearch
+
+from opensearch_mcp.bulk import flush_bulk
+from opensearch_mcp.parse_csv import _doc_id
+from opensearch_mcp.paths import resolve_case_insensitive
+
+logger = logging.getLogger(__name__)
+
+
+def _read_transcript_config(volume_root: Path) -> tuple[str | None, str | None]:
+    """Read PS transcript GP config + system timezone from registry hives.
+
+    Returns (gp_transcript_dir, windows_timezone_name).
+
+    UAT 2026-04-23 (BUG 1+3): `regipy.RegistryHive.get_key()` requires a
+    leading backslash (or `ROOT\\` prefix) to resolve fully-qualified
+    paths. Without it, every lookup silently raised
+    `RegistryKeyNotFoundException` and the previous `except Exception:
+    pass` swallowed the error — producing `(None, None)` on every host.
+    That broke `host.system_timezone`, which in turn made
+    `parse_transcripts` skip every PowerShell transcript (30-host SRL
+    corpus → 0 docs) and `parse_defender` skip every MPLog line on the
+    "no timezone, no Z" branch.
+
+    Silent-swallow is split by severity. Hive-open failures (corrupt,
+    missing, locked) emit at `logger.warning` so the next silent-gap
+    regression surfaces at default log level; key-not-found failures
+    (Transcription GPO not configured, alternate ControlSet absent)
+    stay at `logger.debug` because they're expected on most hosts and
+    warning-spamming every stock Windows install would drown out the
+    real hive-level diagnostics.
+    """
+    transcript_dir = None
+    timezone = None
+
+    # Split hive-open from key-read logging levels:
+    # - hive-open failure (corrupt / missing / locked) → logger.warning
+    #   so operators see it at default log level; this class of failure
+    #   would cascade to the same "0 docs across 30 hosts" pattern.
+    # - key-not-found (policy not set, ControlSet variant absent) →
+    #   logger.debug because it's the expected path on many hosts
+    #   (e.g. PS Transcription GPO is off by default; only one
+    #   ControlSet is typically current).
+    software = resolve_case_insensitive(volume_root, "Windows/System32/config/SOFTWARE")
+    if software:
+        from regipy.registry import RegistryHive
+
+        try:
+            reg = RegistryHive(str(software))
+        except Exception as e:
+            logger.warning("could not open SOFTWARE hive at %s: %s", software, e)
+            reg = None
+        if reg is not None:
+            try:
+                # Leading backslash required — see docstring.
+                key = reg.get_key("\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription")
+                for val in key.iter_values():
+                    if val.name == "OutputDirectory" and val.value:
+                        transcript_dir = val.value
+            except Exception as e:
+                # Stays debug: the vast majority of hosts don't have PS
+                # Transcription GPO configured — not an error.
+                logger.debug("PS Transcription policy not set: %s", e)
+
+    system = resolve_case_insensitive(volume_root, "Windows/System32/config/SYSTEM")
+    if system:
+        from regipy.registry import RegistryHive
+
+        try:
+            reg = RegistryHive(str(system))
+        except Exception as e:
+            logger.warning("could not open SYSTEM hive at %s: %s", system, e)
+            reg = None
+        if reg is not None:
+            for cs in ["ControlSet001", "ControlSet002"]:
+                try:
+                    # Leading backslash required — see docstring.
+                    key = reg.get_key(f"\\{cs}\\Control\\TimeZoneInformation")
+                    # Prefer TimeZoneKeyName (canonical, e.g. "Eastern
+                    # Standard Time"). Fall back to StandardName on older
+                    # Windows installs that predate TimeZoneKeyName.
+                    for val in key.iter_values():
+                        if val.name == "TimeZoneKeyName" and val.value:
+                            timezone = val.value
+                            break
+                    if not timezone:
+                        for val in key.iter_values():
+                            if val.name == "StandardName" and val.value:
+                                timezone = val.value
+                                break
+                    if timezone:
+                        break
+                except Exception as e:
+                    # Stays debug: only one ControlSet is typically the
+                    # current one; the other variant absent is expected.
+                    logger.debug("could not read %s TimeZoneInformation: %s", cs, e)
+                    continue
+
+    return transcript_dir, timezone
+
+
+def discover_transcripts(volume_root: Path, gp_transcript_dir: str | None = None) -> list[Path]:
+    """Find all PowerShell transcript files."""
+    from opensearch_mcp.discover import safe_rglob
+
+    files: list[Path] = []
+
+    # User profiles (default location)
+    users_dir = resolve_case_insensitive(volume_root, "Users")
+    if users_dir and users_dir.is_dir():
+        files.extend(safe_rglob(users_dir, "PowerShell_transcript.*.txt"))
+
+    # GP-configured directory
+    if gp_transcript_dir:
+        parts = PureWindowsPath(gp_transcript_dir).parts[1:]
+        if parts:
+            rel = str(Path(*parts))
+            gp_dir = resolve_case_insensitive(volume_root, rel)
+            if gp_dir and gp_dir.is_dir():
+                files.extend(safe_rglob(gp_dir, "PowerShell_transcript.*.txt"))
+
+    # Common non-default locations
+    for extra in ["ProgramData/Transcripts", "Program Files/Amazon"]:
+        d = resolve_case_insensitive(volume_root, extra)
+        if d and d.is_dir():
+            files.extend(safe_rglob(d, "PowerShell_transcript.*.txt"))
+
+    return sorted(set(files))
+
+
+def _parse_transcript_time(time_str: str, system_tz_name: str | None) -> str:
+    """Parse transcript timestamp to UTC ISO 8601.
+
+    Handles both PS 5.x (yyyyMMddHHmmss, local time) and PS 7.x (ISO 8601 with offset).
+    Uses dateutil.tz.gettz() which handles Windows timezone names natively.
+    """
+    time_str = time_str.strip()
+
+    # Try ISO 8601 first (PS 7.x — includes timezone offset)
+    try:
+        from datetime import timezone as _tz
+
+        return (
+            datetime.fromisoformat(time_str).astimezone(_tz.utc).isoformat().replace("+00:00", "Z")
+        )
+    except ValueError:
+        pass
+
+    # Fall back to PS 5.x format (yyyyMMddHHmmss, local time)
+    try:
+        naive = datetime.strptime(time_str, "%Y%m%d%H%M%S")
+        if system_tz_name:
+            from dateutil.tz import gettz, tzutc
+
+            tz = gettz(system_tz_name)
+            if tz:
+                aware = naive.replace(tzinfo=tz)
+                return aware.astimezone(tzutc()).isoformat().replace("+00:00", "Z")
+        # Timezone unknown — cannot produce reliable UTC timestamp
+        return None
+    except Exception:
+        return None
+
+
+def _detect_session_type(host_app: str) -> str:
+    """Detect PS session type from Host Application header."""
+    lower = host_app.lower()
+    if "wsmprovhost" in lower or "serverremotehost" in lower:
+        return "remoting"
+    if "-encodedcommand" in lower:
+        return "encoded"
+    if "-noninteractive" in lower:
+        return "noninteractive"
+    if "powershell" in lower:
+        return "interactive"
+    return "other"
+
+
+def parse_transcript(file_path: Path, system_timezone: str | None = None) -> dict:
+    """Parse a single PowerShell transcript file into a document."""
+    text = file_path.read_text(errors="replace")
+    lines = text.splitlines()
+
+    doc: dict = {}
+    commands: list[str] = []
+    current_command: list[str] = []
+    in_command = False
+
+    for line in lines:
+        if line.startswith("Start time: "):
+            doc["@timestamp"] = _parse_transcript_time(line[12:], system_timezone)
+        elif line.startswith("End time: "):
+            doc["transcript.end_time"] = _parse_transcript_time(line[10:], system_timezone)
+        elif line.startswith("Username: "):
+            full = line[10:].strip()
+            if "\\" in full:
+                doc["user.domain"], doc["user.name"] = full.split("\\", 1)
+            else:
+                doc["user.name"] = full
+        elif line.startswith("RunAs User: "):
+            doc["user.runas"] = line[12:].strip()
+        elif line.startswith("Machine: "):
+            parts = line[9:].strip()
+            if " (" in parts:
+                machine, os_ver = parts.split(" (", 1)
+                doc["transcript.machine"] = machine
+                doc["host.os.version"] = os_ver.rstrip(")")
+            else:
+                doc["transcript.machine"] = parts
+        elif line.startswith("Host Application: "):
+            app = line[18:].strip()
+            app_parts = app.split(None, 1)
+            # rsplit handles Windows backslash paths on Linux (Path().name doesn't)
+            exe = app_parts[0] if app_parts else app
+            doc["process.name"] = exe.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+            if len(app_parts) > 1:
+                doc["process.args"] = app_parts[1]
+            doc["transcript.session_type"] = _detect_session_type(app)
+        elif line.startswith("Process ID: "):
+            try:
+                doc["process.pid"] = int(line[12:].strip())
+            except ValueError:
+                pass
+        elif line.startswith("PSVersion: "):
+            doc["transcript.ps_version"] = line[11:].strip()
+        elif line.startswith("PS>") or line.startswith(">> "):
+            if current_command:
+                commands.append("\n".join(current_command))
+            prefix_len = 3
+            current_command = [line[prefix_len:]]
+            in_command = True
+        elif line.startswith("****") and in_command:
+            if current_command:
+                commands.append("\n".join(current_command))
+                current_command = []
+            in_command = False
+        elif in_command:
+            current_command.append(line)
+
+    if current_command:
+        commands.append("\n".join(current_command))
+
+    doc["transcript.commands"] = commands
+    doc["transcript.command_count"] = len(commands)
+    doc["transcript.full_text"] = text
+
+    # Duration
+    if "@timestamp" in doc and "transcript.end_time" in doc:
+        try:
+            start = datetime.fromisoformat(doc["@timestamp"].replace("Z", "+00:00"))
+            end = datetime.fromisoformat(doc["transcript.end_time"].replace("Z", "+00:00"))
+            doc["transcript.duration_seconds"] = int((end - start).total_seconds())
+        except Exception:
+            pass
+
+    return doc
+
+
+def ingest_transcripts(
+    transcript_dir: Path,
+    client: OpenSearch,
+    index_name: str,
+    hostname: str,
+    volume_root: Path | None = None,
+    system_timezone: str | None = None,
+    ingest_audit_id: str = "",
+    pipeline_version: str = "",
+    vss_id: str = "",
+    host_dict=None,
+) -> tuple[int, int]:
+    """Discover and ingest transcript files from a directory.
+
+    Returns (count_indexed, count_bulk_failed).
+    """
+    # Discover files in this directory tree
+    files = discover_transcripts(transcript_dir)
+    if not files:
+        return 0, 0
+
+    count = 0
+    bulk_failed = 0
+    actions: list[dict] = []
+
+    for f in files:
+        doc = parse_transcript(f, system_timezone=system_timezone)
+        # Skip documents with unreliable timestamps — wrong data is not evidence
+        if doc.get("@timestamp") is None:
+            import sys
+
+            print(
+                f"  transcripts: skipped {f.name} — timezone unknown, timestamps unreliable",
+                file=sys.stderr,
+            )
+            continue
+        from opensearch_mcp.paths import relative_evidence_path
+
+        rel = relative_evidence_path(f, volume_root) if volume_root else str(f)
+        doc["host.name"] = hostname
+        if hostname:
+            if host_dict is not None:
+                _resolved = host_dict.resolve(hostname)
+                doc["host.id"] = _resolved if _resolved else hostname
+            else:
+                doc["host.id"] = hostname
+        doc["vhir.source_file"] = rel
+        if ingest_audit_id:
+            doc["vhir.ingest_audit_id"] = ingest_audit_id
+        if pipeline_version:
+            doc["pipeline_version"] = pipeline_version
+        if vss_id:
+            doc["vhir.vss_id"] = vss_id
+        doc["vhir.parse_method"] = "transcript-parser"
+        id_data = {"source_file": rel}
+        if vss_id:
+            id_data["vss_id"] = vss_id
+        _id = _doc_id(index_name, id_data)
+        actions.append({"_index": index_name, "_id": _id, "_source": doc})
+
+        if len(actions) >= 100:
+            flushed, failed = flush_bulk(client, actions)
+            count += flushed
+            bulk_failed += failed
+            actions = []
+
+    if actions:
+        flushed, failed = flush_bulk(client, actions)
+        count += flushed
+        bulk_failed += failed
+
+    return count, bulk_failed

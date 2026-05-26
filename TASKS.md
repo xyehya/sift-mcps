@@ -401,6 +401,16 @@ A-3: Diagnosed and fixed 5 E01 ingest bugs through live SIFT VM testing:
 Added `configure_fuse()` to install.sh (user_allow_other in /etc/fuse.conf). Fixed TLS cert SAN to include DNS:localhost. Updated AppArmor template with /tmp/**, /usr/local/bin/*, forensic tooling paths.
 Verified: 38,805 documents indexed across 12 artifact types (evtx, prefetch, srum, registry, shimcache, jumplists, tasks, lnk, shellbags, recyclebin, wer, httperr) in 0.5 minutes. `idx_case_summary` returns complete case overview.
 
+**Session 51 — 2026-05-26 — Flattened opensearch-mcp into monorepo:**
+
+- Converted `packages/opensearch-mcp` from an orphan gitlink/submodule-style entry into normal files tracked by the main `sift-mcps` repository.
+- Preserved recovery artifacts before flattening:
+  - `/home/yk/opensearch-mcp-history.bundle` — verified full nested-repo history bundle.
+  - `/home/yk/opensearch-mcp-staged-changes.patch` — binary patch for staged nested-repo worktree changes.
+  - `/home/yk/opensearch-mcp.git.backup` — moved nested `.git` directory.
+- Verification: parent index no longer has mode `160000` for `packages/opensearch-mcp`; namespace sweep returned 0 lines.
+- Tests: `uv run python -m pytest packages/opensearch-mcp/ --tb=short -q` still reports the 3 known pre-existing failures (`test_cleanup_fuse_and_nbd`, two Amcache `--nl` assertions): 906 passed, 71 skipped, 3 failed.
+
 ---
 
 ## Quick Reference
