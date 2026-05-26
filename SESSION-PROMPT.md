@@ -1,25 +1,4 @@
-# Session Prompt — sift-mcps
 
-Copy this prompt to start a new session with full context.
-
----
-
-## Project Identity
-
-**sift-mcps** — A portable, secure MCP runtime for AI-driven digital forensics on SIFT Workstation VMs. One installer provisions the entire stack. The examiner controls cases and approves findings through a web portal. An AI agent (Hermes) drives investigation through authenticated MCP tool calls — without direct shell access. The deliverable is a cryptographically auditable, HMAC-verified forensic report.
-
-```
-Analyst Machine                    SIFT VM (sift-mcps installed)
-────────────────            ───────────────────────────────────────
-Hermes Agent ──HTTPS──▶   sift-gateway :4508
-Browser      ──HTTPS──▶     │
-                            ├── /mcp      (agent MCP — aggregate endpoint)
-                            └── /portal/  (Examiner Portal — cases, review, approval)
-```
-
-**Hermes investigates. The examiner reviews and approves. The report is signed and auditable.**
-
----
 
 ## Current State (2026-05-25 — end of Session 50)
 
@@ -67,17 +46,9 @@ ssh sansforensics@192.168.122.81 'cd ~/sift-mcps-test && bash install.sh'
 - Venv integrity check: Python version mismatch → rebuild; broken imports → repair via sync
 - Post-sync import verification: smokes `yaml`, `mcp`, `agentir_core`, `sift_gateway`
 
-**The old way (DON'T DO THIS):**
-```bash
-# NEVER run bare uv sync on the VM — can trigger Python mismatch + venv rebuild
-uv sync --extra standard --python /usr/bin/python3.12 ...
-```
 
----
 
-## Where We're Heading
-
-**Immediate next task: Group 3 — Tool Consolidation (80 → 55 tools)**
+## Where We're Headin
 
 7 subagents completed optimization designs for every backend. Target reductions:
 
@@ -100,179 +71,11 @@ uv sync --extra standard --python /usr/bin/python3.12 ...
 4. Descriptions rewritten — concise, directive, with examples (agent needs WHAT + WHEN in one sentence)
 5. Parameters cleaned — remove redundant `analyst_override`, `case_id` on most tools, `input_files`, `preview_lines`, `skip_enrichment`
 
-**After Group 3:** Phase C (ingestion resilience), Phase D (agent workflow engine), Phase E (production hardening), Phase 17 (OS-level evidence hardening).
 
----
 
-## Pro Tips
+## Important Tasks
 
-1. **Read TASKS.md first** — it tracks current state, blockers, next steps. Read AGENTS.md for session rules. Read SIFT-MCPS-PLAN.md §8 for phase roadmap.
-
-2. **Test after every structural change** — run affected package tests + remediation gate:
-   ```bash
-   uv run python -m pytest packages/<pkg>/ --tb=short -q
-   bash scripts/remediation-gate.sh
-   ```
-
-3. **Namespace is `agentir`** — `grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."` must return 0.
-
-4. **agentir-core is a library** — no `sys.exit()`. Raise exceptions instead.
-
-5. **Never rewrite whole files** — targeted edits only.
-
-6. **The gateway runs as a systemd user service** — restart with:
-   ```bash
-   ssh sansforensics@192.168.122.81 'systemctl --user restart sift-gateway'
-   ```
-   Never use `nohup uv run` — that can trigger venv rebuilds. The service file is at `~/.config/systemd/user/sift-gateway.service`.
-
-7. **Use install.sh for dependency sync — never bare `uv sync` on the VM:**
-   ```bash
-   ssh sansforensics@192.168.122.81 'cd ~/sift-mcps-test && bash install.sh'
-   ```
-   The hardened installer handles venv integrity, Python version matching, and always uses `--extra full` + `/usr/bin/python3.12`. Re-run safe: every step is idempotent.
-
-8. **MCP tool annotations** — The Pydantic `Tool` model uses `_meta` as the JSON alias for the `meta` field. Set via attribute: `t.meta = {"category": "session-start"}`. When reading JSON responses, use `t["_meta"]`.
-
-9. **Only `get_health` collides** across backends (opencti + windows-triage). All other tool names are unique — use unprefixed names in category/phase mappings.
-
-10. **`get_tools_list()` must propagate ALL fields** — when building Tool objects from live backend data, copy all 9 fields: `name`, `title`, `description`, `inputSchema`, `outputSchema`, `icons`, `annotations`, `meta`, `execution`.
-
-11. **FastMCP outputSchema pitfall** — `-> dict[str, Any]` generates outputSchema which triggers structuredContent validation; `-> dict` (bare) does not. If you see "outputSchema defined but no structured output returned", change the return type annotation to bare `dict`. All working tools use bare `dict`.
-
-12. **Python version mismatch kills the venv** — `uv sync --python /usr/bin/python3.12` will silently rebuild a Python 3.11 venv, dropping ALL packages. Always check `~/.venv/bin/python --version` matches system Python before syncing. The hardened installer does this automatically.
-
----
-
-## Sync / Deploy / Reinstall
-
-### Quick deploy (Python source only, no dependency changes)
-
-```bash
-# 1. Sync code (from local project root)
-rsync -avz --exclude '.git' --exclude '.venv' --exclude '__pycache__' --exclude '*.pyc' \
-  /home/yk/AI/SIFTHACK/sift-mcps/ sansforensics@192.168.122.81:~/sift-mcps-test/
-
-# 2. Restart gateway via systemd
-ssh sansforensics@192.168.122.81 'systemctl --user restart sift-gateway'
-
-# 3. Wait for startup (10-15s), then verify
-ssh sansforensics@192.168.122.81 'curl -s -k https://localhost:4508/api/v1/health | python3 -m json.tool'
-```
-
-### Full reinstall (dependency changes, venv issues, asset problems)
-
-```bash
-# The hardened installer handles everything — idempotent, always safe
-ssh sansforensics@192.168.122.81 'cd ~/sift-mcps-test && bash install.sh'
-```
-
-### Test aggregate MCP endpoint
-
-```bash
-TOKEN="agentir_svc_b5152580b0cd2ce8003ee5c9a5c559537b322741f21d4f03"
-
-# Initialize and get session ID
-SESSION=$(curl -s -k -D - -L \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
-  "https://192.168.122.81:4508/mcp" 2>&1 | grep -i "mcp-session-id:" | awk '{print $2}' | tr -d '\r')
-
-# List tools
-curl -s -k -L \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "mcp-session-id: ${SESSION}" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-  "https://192.168.122.81:4508/mcp"
-
-# Call a tool
-curl -s -k -L \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "mcp-session-id: ${SESSION}" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_knowledge","arguments":{"query":"lateral movement"}}}' \
-  "https://192.168.122.81:4508/mcp"
-```
-
----
-
-## SSH Details
-
-```bash
-# Password auth
-sshpass -p 'forensics' ssh -o StrictHostKeyChecking=no sansforensics@192.168.122.81
-
-# Run commands remotely
-ssh sansforensics@192.168.122.81 '<command>'
-
-# Gateway control (via systemd user service)
-ssh sansforensics@192.168.122.81 'systemctl --user status sift-gateway'
-ssh sansforensics@192.168.122.81 'systemctl --user restart sift-gateway'
-ssh sansforensics@192.168.122.81 'journalctl --user -u sift-gateway -n 50'
-
-# Check Python version (must be 3.12)
-ssh sansforensics@192.168.122.81 '/usr/bin/python3.12 --version'
-```
-
----
-
-## Core Code File Reference
-
-### Gateway (sift-gateway)
-```
-packages/sift-gateway/src/sift_gateway/server.py       # Gateway class, get_tools_list(), _build_tool_map(), backend mgmt
-packages/sift-gateway/src/sift_gateway/mcp_endpoint.py  # MCP server, create_mcp_server(), _list_tools(), _call_tool(), evidence gate, annotations, categories, environment_summary
-packages/sift-gateway/src/sift_gateway/evidence_gate.py # Two-tier gate: check_evidence_gate(), build_block_response(), build_unsealed_warning()
-```
-
-### Backends (MCP tools)
-```
-packages/forensic-mcp/src/forensic_mcp/server.py        # 10 tools: record_finding, workflow_status, get_findings, TODOs, discipline resources
-packages/forensic-mcp/src/forensic_mcp/case/manager.py  # CaseManager: findings I/O, timeline, evidence registry, IOC processing
-packages/case-mcp/src/case_mcp/server.py                # 14 tools: case_status, evidence_list, evidence_verify, audit, bundles
-packages/sift-mcp/src/sift_mcp/server.py                # 5 tools: list_available_tools, run_command, suggest_tools
-packages/report-mcp/src/report_mcp/server.py            # 6 tools: generate_report, set_case_metadata, save_report
-packages/opensearch-mcp/src/opensearch_mcp/server.py    # 21 tools: idx_ingest, idx_search, idx_aggregate, idx_case_summary, idx_inspect_container
-packages/forensic-rag-mcp/src/rag_mcp/server.py         # 3 tools: search_knowledge, list_knowledge_sources, get_knowledge_stats
-packages/opencti-mcp/src/opencti_mcp/server.py          # 8 tools: search_threat_intel, lookup_ioc, search_reports
-packages/windows-triage-mcp/src/windows_triage_mcp/server.py  # 13 tools: check_file, check_process_tree, check_service, etc.
-```
-
-### Core library
-```
-packages/agentir-core/src/agentir_core/evidence_chain.py  # chain_status(), seal_manifest(), HMAC verification, ChainStatus enum
-packages/agentir-core/src/agentir_core/case_io.py         # Case I/O: resolve_case_path, evidence manifest read/write
-packages/agentir-core/src/agentir_core/case_ops.py        # Case operations: case_init_data, case_activate_data, case_list_data
-```
-
-### Config & install
-```
-install.sh                                        # Hardened zero-arg installer: venv integrity, system Python, idempotent
-configs/gateway.yaml.template                     # Gateway config template (backend definitions, ports, auth)
-configs/apparmor/sift-gateway.template            # AppArmor profile template (complain mode on VM)
-configs/systemd/sift-gateway.service              # Systemd user service template
-scripts/remediation-gate.sh                       # Pre-commit gate: namespace sweep, shell=True check, bare strings
-```
-
-### Docs
-```
-AGENTS.md           # Session rules, package summary, working commands, file locations
-TASKS.md            # Current state, active tasks, completed work, session notes, quick reference
-SIFT-MCPS-PLAN.md   # Architecture spec, design invariants, phase roadmap (§8), known issues
-docs/tool-audit-2026-05-25.md  # Full 78-tool audit with descriptions, parameters, readOnlyHint status, interaction map
-SESSION-PROMPT.md   # This file — full onboarding prompt
-```
-
----
-
-## Next Tasks
-
-### Group 3a — Unify opensearch-mcp ingest tools (highest impact, start here)
+### Unify opensearch-mcp ingest tools (highest impact, start here)
 
 Merge 5 ingest tools into `idx_ingest` with `format` parameter:
 - Current: `idx_ingest` (auto-discovery), `idx_ingest_json`, `idx_ingest_delimited`, `idx_ingest_accesslog`, `idx_ingest_memory`
@@ -288,32 +91,32 @@ Merge 5 ingest tools into `idx_ingest` with `format` parameter:
 - Gateway: update category/phase maps in `packages/sift-gateway/src/sift_gateway/server.py`
 - Tests: update `packages/opensearch-mcp/tests/`
 
-### Group 3b — Unify windows-triage-mcp (13 → 6)
+### Unify windows-triage-mcp (13 → 6)
 
-- `check_artifact(type, value)` replaces `check_file`, `check_hash`, `analyze_filename`, `check_lolbin`, `check_hijackable_dll`
-- `check_system(type, name, os_version)` replaces `check_service`, `check_scheduled_task`, `check_autorun`
-- `server_status` replaces `get_db_stats`, `get_health`
-- Keep standalone: `check_process_tree`, `check_registry`, `check_pipe`
+- `check_artifact(type, value)` unifies `check_file`, `check_hash`, `analyze_filename`, `check_lolbin`, `check_hijackable_dll`
+- `check_system(type, name, os_version)` unifies `check_service`, `check_scheduled_task`, `check_autorun`
+- `server_status` unifies `get_db_stats`, `get_health`
+- Check wether functionally other tools can be unified eg: `check_process_tree`, `check_registry`, `check_pipe`
 - File: `packages/windows-triage-mcp/src/windows_triage_mcp/server.py`
 
-### Group 3c — Unify forensic-mcp (10 → 6)
+### Unify forensic-mcp (10 → 6)
 
-- `query_case(record_type, status, query, limit, offset)` replaces `get_findings`, `get_timeline`, `get_actions`
-- `manage_todo(action, todo_id, ...)` replaces `add_todo`, `update_todo`, `complete_todo`
+- `query_case(record_type, status, query, limit, offset)` unifies `get_findings`, `get_timeline`, `get_actions`
+- `manage_todo(action, todo_id, ...)` unifies `add_todo`, `update_todo`, `complete_todo`
 - Remove `analyst_override` from all tools
 - File: `packages/forensic-mcp/src/forensic_mcp/server.py`
 
 ### Group 3d — Remaining backends
 
-- **sift-mcp** (5 → 3): `discover_tools(name, category, details)` replaces `list_available_tools`, `check_tools`, `get_tool_help`. `run_command` 8→5 params. Remove `suggest_tools` dead `question` param.
-- **opencti-mcp** (8 → 7): `search_entities(query, entity_type=?)` replaces `search_threat_intel`, `search_entity`.
-- **report-mcp** (6 → 5): `list(resource)` replaces `list_profiles`, `list_reports`. `set_metadata(fields={})` batch mode.
-- **case-mcp** (14 → 13): Merge `case_list`→`case_status`. Add `compact` param to `export_bundle`. Remove `evidence_register` from source.
+- **sift-mcp** (5 → 3): `discover_tools(name, category, details)` unifies `list_available_tools`, `check_tools`, `get_tool_help`. `run_command` 8→5 params. Check why `suggest_tools` uses `question` param and remove if not used.
+- **opencti-mcp** (8 → 7): `search_entities(query, entity_type=?)` unifies `search_threat_intel`, `search_entity`.
+- **report-mcp** (6 → 5): `list(resource)` unifies `list_profiles`, `list_reports`. `set_metadata(fields={})` batch mode.
+- **case-mcp** (14 → 13): Merge `case_list`→`case_status`. Add `compact` param to `export_bundle`. Check if required and how used `evidence_register`
 
 ### After Group 3: Phase C (Ingestion Resilience)
 
 - C1: E01 hostname auto-discovery from SYSTEM registry hive
-- C2: Lightweight `idx_ingest_progress(run_id)` polling
+- C2: enhance functionality and performance and reslience of all ingestion, progress, failed errors,  `idx_ingest_progress(run_id)` polling
 - C3: Ingest failure recovery / `--resume` support
 
 ---
