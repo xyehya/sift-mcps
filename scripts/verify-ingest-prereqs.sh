@@ -48,14 +48,24 @@ _check_cmd "SBECmd" SBECmd "download from https://ericzimmerman.github.io/"
 
 echo
 echo "=== Detection ==="
-_check_cmd "hayabusa" hayabusa "download from https://github.com/Yamato-Security/hayabusa"
-if ls /usr/local/share/hayabusa-rules/config &>/dev/null; then
-    echo "  OK  hayabusa-rules (/usr/local/share/hayabusa-rules/config)"
+if command -v hayabusa &>/dev/null && file "$(which hayabusa)" 2>/dev/null | grep -q "ELF"; then
+    echo "  OK  hayabusa ($(hayabusa help 2>&1 | head -1))"
     PASS=$(( PASS + 1 ))
 else
-    echo " MISS hayabusa-rules — clone to /usr/local/share/hayabusa-rules"
+    echo " MISS hayabusa — install via install.sh or download from https://github.com/Yamato-Security/hayabusa"
     FAIL=$(( FAIL + 1 ))
 fi
+# Check rules in both possible locations
+RULES_OK=0
+for d in "$HOME/.agentir/hayabusa-rules" "/usr/local/share/hayabusa-rules"; do
+    if [[ -d "$d" ]] && [[ $(find "$d" -name '*.yml' 2>/dev/null | wc -l) -gt 100 ]]; then
+        echo "  OK  hayabusa-rules ($d: $(find "$d" -name '*.yml' | wc -l) YAML files)"
+        PASS=$(( PASS + 1 ))
+        RULES_OK=1
+        break
+    fi
+done
+[[ "$RULES_OK" -eq 1 ]] || { echo " MISS hayabusa-rules — run install.sh (rules are bundled with hayabusa release)"; FAIL=$(( FAIL + 1 )); }
 
 echo
 echo "=== Python libraries ==="

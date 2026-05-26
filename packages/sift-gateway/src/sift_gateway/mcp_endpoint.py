@@ -300,6 +300,71 @@ def _extract_bearer_token(scope: dict) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Synthetic gateway tools
+# ---------------------------------------------------------------------------
+
+_ENV_SUMMARY_TOOLS = [
+    ("case_status", "case-mcp", {}),
+    ("evidence_list", "case-mcp", {}),
+    ("idx_status", "opensearch-mcp", {}),
+    ("get_knowledge_stats", "forensic-rag-mcp", {}),
+    ("opencti-mcp__get_health", "opencti-mcp", {}),
+    ("windows-triage-mcp__get_health", "windows-triage-mcp", {}),
+    ("list_available_tools", "sift-mcp", {}),
+]
+
+
+async def _handle_environment_summary(gateway: Any) -> Sequence[TextContent]:
+    """Call health/status tools from every backend and aggregate results."""
+    summary: dict = {
+        "platform": "sift-mcps",
+        "backends": {},
+        "degraded": [],
+        "unavailable": [],
+    }
+
+    for tool_name, backend_name, args in _ENV_SUMMARY_TOOLS:
+        try:
+            result = await asyncio.wait_for(
+                gateway.call_tool(tool_name, args),
+                timeout=8.0,
+            )
+            # Normalise result to dict
+            parsed = _extract_dict_from_tool_result(result) if isinstance(result, list) else result
+            summary["backends"][backend_name] = {
+                "status": "healthy",
+                "tool": tool_name,
+                "result": parsed,
+            }
+        except asyncio.TimeoutError:
+            summary["backends"][backend_name] = {"status": "degraded", "error": "timeout"}
+            summary["degraded"].append(backend_name)
+        except Exception as e:
+            summary["backends"][backend_name] = {"status": "unavailable", "error": str(e)[:200]}
+            summary["unavailable"].append(backend_name)
+
+    summary["verdict"] = (
+        "ready" if not summary["unavailable"]
+        else "degraded" if summary["degraded"]
+        else "impaired"
+    )
+
+    return [TextContent(type="text", text=json.dumps(summary, indent=2, default=str))]
+
+
+def _extract_dict_from_tool_result(result: list) -> dict:
+    """Pull a dict out of TextContent tool results."""
+    for item in result:
+        text = getattr(item, "text", "")
+        if text and text.strip().startswith("{"):
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                pass
+    return {"raw": str(result)[:1000]}
+
+
+# ---------------------------------------------------------------------------
 # MCP server factory
 # ---------------------------------------------------------------------------
 
@@ -313,14 +378,208 @@ def create_mcp_server(gateway: Any) -> Server:
     """
     server = Server("sift-gateway", instructions=_GATEWAY_INSTRUCTIONS)
 
+    # Tools filtered from agent view — portal-managed or deprecated
+    _AGENT_FILTERED_TOOLS: frozenset[str] = frozenset({
+        "evidence_register",  # portal-only — always returns remediation block
+        "idx_install_pipelines",  # admin tool — cluster config, not investigation
+    })
+
+    # Tool categories for structured agent navigation
+    _TOOL_CATEGORIES: dict[str, str] = {
+        # ── session-start: first calls every session ──
+        "workflow_status": "session-start",
+        "environment_summary": "session-start",
+        "case_status": "session-start",
+        "case_file_structure": "session-start",
+        # ── evidence-survey: inspect evidence before ingest ──
+        "evidence_list": "evidence-survey",
+        "evidence_verify": "evidence-survey",
+        "idx_inspect_container": "evidence-survey",
+        "audit_summary": "evidence-survey",
+        # ── ingest: get evidence into OpenSearch ──
+        "idx_ingest": "ingest",
+        "idx_ingest_status": "ingest",
+        "idx_ingest_json": "ingest",
+        "idx_ingest_delimited": "ingest",
+        "idx_ingest_accesslog": "ingest",
+        "idx_ingest_memory": "ingest",
+        "idx_status": "ingest",
+        # ── search-analysis: query indexed evidence ──
+        "idx_case_summary": "search-analysis",
+        "idx_search": "search-analysis",
+        "idx_count": "search-analysis",
+        "idx_aggregate": "search-analysis",
+        "idx_get_event": "search-analysis",
+        "idx_timeline": "search-analysis",
+        "idx_field_values": "search-analysis",
+        "idx_list_detections": "search-analysis",
+        "search_knowledge": "search-analysis",
+        "list_knowledge_sources": "search-analysis",
+        "get_knowledge_stats": "search-analysis",
+        # ── enrichment: add context to indexed data ──
+        "idx_enrich_intel": "enrichment",
+        "idx_enrich_triage": "enrichment",
+        "case_host_fix": "enrichment",
+        # ── detection: forensic tool execution ──
+        "list_available_tools": "detection",
+        "get_tool_help": "detection",
+        "check_tools": "detection",
+        "suggest_tools": "detection",
+        "run_command": "detection",
+        # ── baseline-check: Windows triage (all unprefixed except get_health) ──
+        "check_file": "baseline-check",
+        "check_process_tree": "baseline-check",
+        "check_service": "baseline-check",
+        "check_scheduled_task": "baseline-check",
+        "check_autorun": "baseline-check",
+        "check_registry": "baseline-check",
+        "check_hash": "baseline-check",
+        "analyze_filename": "baseline-check",
+        "check_lolbin": "baseline-check",
+        "check_hijackable_dll": "baseline-check",
+        "check_pipe": "baseline-check",
+        "get_db_stats": "baseline-check",
+        "windows-triage-mcp__get_health": "baseline-check",
+        # ── threat-intel: OpenCTI (all unprefixed except get_health) ──
+        "opencti-mcp__get_health": "threat-intel",
+        "search_threat_intel": "threat-intel",
+        "search_entity": "threat-intel",
+        "lookup_ioc": "threat-intel",
+        "get_recent_indicators": "threat-intel",
+        "get_entity": "threat-intel",
+        "get_relationships": "threat-intel",
+        "search_reports": "threat-intel",
+        # ── findings: record and review findings ──
+        "record_finding": "findings",
+        "record_timeline_event": "findings",
+        "get_findings": "findings",
+        "get_timeline": "findings",
+        "get_actions": "findings",
+        "add_todo": "findings",
+        "list_todos": "findings",
+        "update_todo": "findings",
+        "complete_todo": "findings",
+        "log_reasoning": "findings",
+        "log_external_action": "findings",
+        "record_action": "findings",
+        # ── reporting: generate and save reports ──
+        "generate_report": "reporting",
+        "set_case_metadata": "reporting",
+        "get_case_metadata": "reporting",
+        "list_profiles": "reporting",
+        "save_report": "reporting",
+        "list_reports": "reporting",
+        # ── admin: maintenance operations ──
+        "backup_case": "admin",
+        "export_bundle": "admin",
+        "import_bundle": "admin",
+        "open_case_dashboard": "admin",
+    }
+
+    # Recommend tools per investigation phase (preview of Phase D2)
+    _PHASE_RECOMMENDED: dict[str, str] = {
+        # ORIENT: fresh case — understand what we have
+        "workflow_status": "ORIENT",
+        "environment_summary": "ORIENT",
+        "case_status": "ORIENT",
+        "case_list": "ORIENT",
+        "case_file_structure": "ORIENT",
+        "evidence_list": "ORIENT",
+        "evidence_verify": "ORIENT",
+        "audit_summary": "ORIENT",
+        "list_knowledge_sources": "ORIENT",
+        "get_knowledge_stats": "ORIENT",
+        # SEALED: evidence registered — time to ingest
+        "idx_ingest": "SEALED",
+        "idx_inspect_container": "SEALED",
+        "idx_ingest_status": "SEALED",
+        "idx_status": "SEALED",
+        "idx_shard_status": "SEALED",
+        # TRIAGE: evidence indexed — start analysis
+        "idx_case_summary": "TRIAGE",
+        "idx_search": "TRIAGE",
+        "idx_count": "TRIAGE",
+        "idx_aggregate": "TRIAGE",
+        "idx_get_event": "TRIAGE",
+        "idx_timeline": "TRIAGE",
+        "idx_field_values": "TRIAGE",
+        "idx_list_detections": "TRIAGE",
+        "search_knowledge": "TRIAGE",
+        "idx_enrich_intel": "TRIAGE",
+        "idx_enrich_triage": "TRIAGE",
+        "lookup_ioc": "TRIAGE",
+        "search_threat_intel": "TRIAGE",
+        "search_entity": "TRIAGE",
+        "run_command": "TRIAGE",
+        "suggest_tools": "TRIAGE",
+        "list_available_tools": "TRIAGE",
+        "get_tool_help": "TRIAGE",
+        "check_tools": "TRIAGE",
+        # FINDINGS: stage and review findings
+        "record_finding": "FINDINGS",
+        "record_timeline_event": "FINDINGS",
+        "get_findings": "FINDINGS",
+        "get_timeline": "FINDINGS",
+        "get_actions": "FINDINGS",
+        "add_todo": "FINDINGS",
+        "list_todos": "FINDINGS",
+        "update_todo": "FINDINGS",
+        "complete_todo": "FINDINGS",
+        "log_reasoning": "FINDINGS",
+        "log_external_action": "FINDINGS",
+        "record_action": "FINDINGS",
+        # baseline-check tools are useful in any phase
+        "check_file": "TRIAGE",
+        "check_process_tree": "TRIAGE",
+        "check_service": "TRIAGE",
+        "check_lolbin": "TRIAGE",
+        "check_hash": "TRIAGE",
+        "analyze_filename": "TRIAGE",
+        "get_recent_indicators": "TRIAGE",
+        "get_relationships": "TRIAGE",
+        "search_reports": "TRIAGE",
+        # REPORTING: approved findings — generate report
+        "generate_report": "REPORTING",
+        "set_case_metadata": "REPORTING",
+        "get_case_metadata": "REPORTING",
+        "list_profiles": "REPORTING",
+        "save_report": "REPORTING",
+        "list_reports": "REPORTING",
+    }
+
     @server.list_tools()
     async def _list_tools() -> list[Tool]:
-        return await gateway.get_tools_list()
+        tools = await gateway.get_tools_list()
+        # Filter portal-only / admin tools from agent view
+        tools = [t for t in tools if t.name not in _AGENT_FILTERED_TOOLS]
+        # Synthetic gateway-level tool — add before annotation loop so meta gets set
+        tools.append(Tool(
+            name="environment_summary",
+            description="Single-call environment overview. Collapses case_status, evidence_list, OpenSearch health, RAG availability, OpenCTI connectivity, triage DB status, and SIFT tool availability into one response. Call this after workflow_status for a complete picture of platform readiness.",
+            inputSchema={"type": "object", "properties": {}},
+            annotations={"readOnlyHint": True},
+        ))
+        # Annotate with category and recommended phase
+        for t in tools:
+            category = _TOOL_CATEGORIES.get(t.name, "")
+            phase = _PHASE_RECOMMENDED.get(t.name, "")
+            meta = dict(t.meta) if t.meta else {}
+            if category:
+                meta["category"] = category
+            if phase:
+                meta["recommended_for_phase"] = phase
+            if meta:
+                t.meta = meta
+        return tools
 
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict) -> Sequence[TextContent]:
         req_ctx = _extract_request_context(server)
         examiner = req_ctx["examiner"]
+
+        # Synthetic gateway tool — aggregates backend health
+        if name == "environment_summary":
+            return await _handle_environment_summary(gateway)
         _start = time.monotonic()
         _status = "ok"
         _backend_audit_id: str | None = None

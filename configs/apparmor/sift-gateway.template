@@ -53,9 +53,17 @@
   /cases/*/audit/                            rw,
   /cases/*/audit/**                          rw,
 
-  # Temp files for atomic writes
-  /tmp/agentir-*                             rw,
-  /tmp/tmp*                                  rw,
+  # Temp files for atomic writes, ingest working space, and FUSE mount points
+  /tmp/                                       rw,
+  /tmp/**                                     rw,
+
+  # Case working directories (ingest tmp, extractions, reports)
+  /cases/*/tmp/                               rw,
+  /cases/*/tmp/**                             rw,
+  /cases/*/extractions/                       rw,
+  /cases/*/extractions/**                     rw,
+  /cases/*/reports/                           rw,
+  /cases/*/reports/**                         rw,
 
   # System libs and proc (read)
   /proc/mounts                               r,
@@ -73,6 +81,28 @@
   /home/*/.local/share/uv/python/**/bin/**   rix,
   /home/*/.local/bin/uv                      rix,
   /usr/bin/python3*                          rix,
+
+  # Forensic tooling (Zimmerman tools, mount helpers, FUSE tools)
+  /usr/local/bin/*                           rix,
+  /usr/bin/xmount                            rix,
+  /usr/bin/ewfmount                          rix,
+  /usr/bin/ntfs-3g                           rix,
+  /usr/bin/fusermount                        rix,
+  /usr/sbin/fdisk                            rix,
+  /usr/bin/unzip                             rix,
+  /usr/bin/7z                                rix,
+  /bin/fusermount                            rix,
+  /bin/fuser                                 rix,
+  /usr/bin/python3*                          rix,
+  /home/*/.agentir/bin/*                     rix,
+  /usr/sbin/partprobe                        rix,
+  /usr/sbin/modprobe                         rix,
+  /usr/bin/qemu-nbd                          rix,
+  /sbin/losetup                              rix,
+  /usr/bin/sudo                              rix,
+
+  # Sudo execution (ingest needs passwordless sudo for mount operations)
+  /usr/bin/sudo                              rix,
 
   # DENY shell execution
   deny /bin/bash                             x,

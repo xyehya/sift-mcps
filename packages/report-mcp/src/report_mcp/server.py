@@ -903,7 +903,7 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     # Tool 3: get_case_metadata
     # ------------------------------------------------------------------
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def get_case_metadata(field: str = "") -> dict:
         """Retrieve case metadata from CASE.yaml.
 
@@ -924,7 +924,7 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     # Tool 4: list_profiles
     # ------------------------------------------------------------------
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def list_profiles() -> dict:
         """List available report profiles with descriptions and
         Zeltser tool mappings."""
@@ -1019,7 +1019,7 @@ def create_server() -> FastMCP:
     # ------------------------------------------------------------------
     # Tool 6: list_reports
     # ------------------------------------------------------------------
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def list_reports() -> dict:
         """List saved reports in the case reports/ directory."""
         try:

@@ -474,8 +474,14 @@ class Gateway:
                 tools.append(
                     Tool(
                         name=mapped_name,
+                        title=src.title,
                         description=src.description or "",
                         inputSchema=src.inputSchema,
+                        outputSchema=src.outputSchema,
+                        icons=src.icons,
+                        annotations=src.annotations,
+                        meta=src.meta,
+                        execution=src.execution,
                     )
                 )
         return tools

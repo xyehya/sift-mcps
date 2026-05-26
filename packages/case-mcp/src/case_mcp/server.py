@@ -23,8 +23,6 @@ from agentir_core.case_io import (
     import_bundle as _import_bundle,
 )
 from agentir_core.case_ops import (
-    _case_activate_data,
-    _case_init_data,
     _case_list_data,
     _case_status_data,
     _set_case_wintools_permissions,
@@ -162,115 +160,7 @@ def create_server() -> FastMCP:
     server._audit = audit
 
     # ------------------------------------------------------------------
-    # Tool 1: case_init (CONFIRM)
-    # ------------------------------------------------------------------
-    def case_init(
-        name: str,
-        description: str = "",
-        case_id: str = "",
-        cases_dir: str = "",
-    ) -> dict:
-        """LEGACY: This tool is provided for CLI compatibility only.
-        In the portal-first workflow, cases are created via the Examiner Portal.
-        Calling this tool will create a directory outside the portal-managed structure.
-
-        Confirm with the examiner before creating a case — this creates
-        a permanent directory with case metadata.
-
-        Args:
-            name: Case name.
-            description: Optional case description.
-            case_id: Custom case ID (default: auto-generated INC-YYYY-MMDDHHMMSS).
-                Must match: alphanumeric, hyphens, underscores. Max 64 chars.
-            cases_dir: Override cases root directory.
-        """
-        try:
-            _validate_str_length(name, "name", _MAX_NAME)
-            _validate_str_length(description, "description", _MAX_TEXT)
-            _validate_str_length(cases_dir, "cases_dir", _MAX_NAME)
-            if case_id:
-                _validate_str_length(case_id, "case_id", 64)
-                import re
-
-                if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,63}$", case_id):
-                    return {
-                        "error": "case_id must be alphanumeric with hyphens/underscores, "
-                        "start with letter/digit, 2-64 chars"
-                    }
-            examiner = resolve_examiner()
-            result = _case_init_data(
-                name=name,
-                examiner=examiner,
-                description=description,
-                cases_dir=cases_dir or None,
-                case_id=case_id or None,
-            )
-
-            logged_id = audit.log(
-                tool="case_init",
-                params={"name": name, "description": description},
-                result_summary=result,
-            )
-            if logged_id is None:
-                result["warning"] = "Audit write failed — action not recorded"
-            result["next_steps"] = [
-                "Use the Examiner Portal to create and activate cases in the supported workflow.",
-                "Open the portal evidence intake flow before investigation proceeds.",
-                "Only use case_init as a legacy maintenance fallback.",
-            ]
-            result["legacy"] = True
-            result["portal_hint"] = "Create cases in the Examiner Portal, not through MCP."
-            return result
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
-
-    # ------------------------------------------------------------------
-    # Tool 2: case_activate (CONFIRM)
-    # ------------------------------------------------------------------
-    def case_activate(case_id: str, cases_dir: str = "") -> dict:
-        """LEGACY: This tool is provided for CLI compatibility only.
-        In the portal-first workflow, cases are selected via the Examiner Portal.
-        Calling this tool updates only the legacy CLI active-case pointer.
-
-        Confirm with the examiner before switching cases — this changes
-        which case all subsequent operations apply to.
-
-        Args:
-            case_id: Case ID to activate.
-            cases_dir: Override cases root directory.
-        """
-        try:
-            _validate_str_length(cases_dir, "cases_dir", _MAX_NAME)
-            result = _case_activate_data(case_id, cases_dir=cases_dir or None)
-
-            logged_id = audit.log(
-                tool="case_activate",
-                params={"case_id": case_id},
-                result_summary=result,
-            )
-            if logged_id is None:
-                result["warning"] = "Audit write failed — action not recorded"
-
-            import importlib.util
-
-            if importlib.util.find_spec("opensearch_mcp") is not None:
-                result["opensearch_hint"] = (
-                    "OpenSearch MCP tools are available. Call idx_case_summary "
-                    "to see what's indexed, or offer to ingest new evidence."
-                )
-            result["next_steps"] = [
-                "Use the Examiner Portal to select or create the active case in the supported workflow.",
-                "Open the portal evidence intake flow before investigation proceeds.",
-                "Only use case_activate as a legacy maintenance fallback.",
-            ]
-            result["legacy"] = True
-            result["portal_hint"] = "Activate cases in the Examiner Portal, not through MCP."
-            return result
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
-
-    # ------------------------------------------------------------------
-    # Tool 3: case_list (SAFE)
+    # Tool 1: case_list
     # ------------------------------------------------------------------
     @server.tool(annotations={"readOnlyHint": True})
     def case_list() -> dict:

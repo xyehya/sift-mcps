@@ -68,7 +68,7 @@ def create_server() -> FastMCP:
 
     # --- Discovery ---
 
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def list_available_tools(category: str = "") -> dict:
         """List forensic tools available on this SIFT workstation, with availability status."""
         from sift_mcp.tools.discovery import list_available_tools as _list
@@ -76,7 +76,7 @@ def create_server() -> FastMCP:
         tools = _list(category=category or None)
         return {"tools": tools, "count": len(tools)}
 
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def get_tool_help(tool_name: str) -> dict:
         """Get usage information, flags, and caveats for a specific forensic tool."""
         from sift_mcp.tools.discovery import get_tool_help as _help
@@ -89,14 +89,14 @@ def create_server() -> FastMCP:
             result["warning"] = "Audit write failed — action not recorded"
         return result
 
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def check_tools(tool_names: list[str] | None = None) -> dict:
         """Check which tools are installed and available on this system."""
         from sift_mcp.tools.discovery import check_tools as _check
 
         return _check(tool_names=tool_names)
 
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def suggest_tools(artifact_type: str, question: str = "") -> dict:
         """Suggest tools for analyzing a specific artifact type. Uses forensic-knowledge."""
         from sift_mcp.tools.discovery import suggest_tools as _suggest

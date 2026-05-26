@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from sift_common.instructions import FORENSIC_MCP as _INSTRUCTIONS
@@ -287,7 +288,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             result["warning"] = "Audit write failed — action not recorded"
         return result
 
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def get_findings(status: str = "", limit: int = 20, offset: int = 0):
         """Return findings, optionally filtered by DRAFT/APPROVED/REJECTED.
 
@@ -331,7 +332,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 "offset": offset,
             }
 
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def get_timeline(
         status: str = "",
         source: str = "",
@@ -385,7 +386,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 "offset": offset,
             }
 
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def get_actions(limit: int = 50):
         """Return recent actions from the case actions log."""
         try:
@@ -393,6 +394,264 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         except Exception as e:
             logger.error("get_actions failed: %s", e)
             return [{"error": str(e)}]
+
+    # --- Workflow Status ---
+
+    @server.tool(annotations={"readOnlyHint": True})
+    def workflow_status() -> dict:
+        """Single entry point — detect current investigation phase and recommend next steps.
+
+        Call this FIRST every session. Replaces 7+ discovery calls (case_status,
+        evidence_list, idx_case_summary, idx_ingest_status, get_findings, get_timeline,
+        list_todos) with one call.
+
+        Returns: {phase, case_id, evidence_summary, indexing_status,
+                  findings_summary, timeline_events, available_capabilities, next_steps[]}
+
+        Phases: ORIENT (fresh case), SEALED (evidence ready, not ingested),
+                INGESTING (ingestion running), INGESTED (data in OpenSearch),
+                TRIAGE (ready for analysis), FINDINGS (draft findings exist),
+                REPORTING (approved findings ready for report)
+        """
+        try:
+            case_dir = manager._require_active_case()
+        except ValueError as e:
+            return {
+                "phase": "NO_CASE",
+                "case_id": "",
+                "error": str(e),
+                "next_steps": [
+                    "Create a case in the Examiner Portal at /portal/",
+                    "Or select an existing case",
+                ],
+            }
+
+        meta = manager._load_case_meta(case_dir)
+        case_id = meta.get("case_id", case_dir.name)
+
+        # ── Evidence chain integrity (MUST check first — tampering blocks all) ─
+        evidence_chain_status = "unsealed"
+        evidence_chain_issues: list[str] = []
+        evidence_chain_version = 0
+        try:
+            from agentir_core.evidence_chain import chain_status
+
+            chain = chain_status(case_dir)
+            evidence_chain_status = chain.get("status", "unsealed")
+            evidence_chain_issues = chain.get("issues", [])
+            evidence_chain_version = chain.get("manifest_version", 0)
+        except ImportError:
+            pass
+
+        # VIOLATION: modified, missing, unregistered, or ledger_error
+        _VIOLATION_STATES = frozenset({"modified", "missing", "unregistered", "ledger_error"})
+        if evidence_chain_status in _VIOLATION_STATES:
+            return {
+                "phase": "EVIDENCE_VIOLATION",
+                "case_id": case_id,
+                "evidence_chain": {
+                    "status": evidence_chain_status,
+                    "issues": evidence_chain_issues,
+                    "manifest_version": evidence_chain_version,
+                },
+                "evidence_summary": {"sealed_files": 0, "ingested": False},
+                "indexing_status": {"complete": False, "running": False, "failed": False, "docs_indexed": 0, "indices": 0},
+                "findings_summary": {"total": 0, "draft": 0, "approved": 0, "rejected": 0},
+                "timeline_events": 0,
+                "available_capabilities": {},
+                "next_steps": [
+                    "EVIDENCE CHAIN VIOLATION DETECTED — Human-in-the-loop required.",
+                    f"Status: {evidence_chain_status.upper()}",
+                    *(f"  Issue: {issue}" for issue in evidence_chain_issues[:10]),
+                    "",
+                    "ALL tool calls are BLOCKED by the evidence gate until this is resolved.",
+                    "The examiner must resolve this from the Examiner Portal:",
+                    "  1. Review the evidence chain status in the Portal Evidence tab",
+                    "  2. If files were added/deleted: re-seal the evidence manifest",
+                    "  3. Run HMAC verification to confirm chain integrity",
+                    "  4. Once the chain returns to OK, the agent can resume",
+                    "",
+                    "Do NOT attempt further tool calls — they will all fail with",
+                    "'evidence_chain_violation' blocks until the examiner resolves this.",
+                ],
+            }
+
+        # ── Evidence detection ──────────────────────────────────────────
+        evidence_manifest_file = case_dir / "evidence-manifest.json"
+        evidence_json_file = case_dir / "evidence.json"
+        evidence_data: dict = {}
+        if evidence_manifest_file.exists():
+            try:
+                evidence_data = json.loads(evidence_manifest_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+        if not evidence_data and evidence_json_file.exists():
+            try:
+                evidence_data = json.loads(evidence_json_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        evidence_files = evidence_data.get("files", []) if isinstance(evidence_data, dict) else []
+        sealed_count = len(evidence_files)
+
+        # ── Ingest status detection ─────────────────────────────────────
+        ingest_status_dir = Path.home() / ".agentir" / "ingest-status"
+        ingest_complete = False
+        ingest_running = False
+        ingest_failed = False
+        ingest_error = ""
+        ingest_docs = 0
+        ingest_indices = 0
+        if ingest_status_dir.exists():
+            safe_case = case_id.replace("/", "_").replace("\\", "_").replace("..", "_")
+            for sf in sorted(ingest_status_dir.glob(f"{safe_case}-*.json")):
+                try:
+                    sdata = json.loads(sf.read_text())
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if sdata.get("pid") == 0:
+                    continue
+                status_val = sdata.get("status", "")
+                if status_val == "complete":
+                    ingest_complete = True
+                    totals = sdata.get("totals", {})
+                    if isinstance(totals, dict):
+                        ingest_docs = max(ingest_docs, totals.get("docs_indexed", 0))
+                    hosts = sdata.get("hosts", [])
+                    ingest_indices = max(ingest_indices, len(hosts) if isinstance(hosts, list) else 0)
+                elif status_val in ("running", "starting"):
+                    ingest_running = True
+                elif status_val == "failed":
+                    ingest_failed = True
+                    ingest_error = sdata.get("error", "")
+
+        # ── Findings ─────────────────────────────────────────────────────
+        findings = manager._load_findings(case_dir)
+        draft_count = sum(1 for f in findings if f.get("status") == "DRAFT")
+        approved_count = sum(1 for f in findings if f.get("status") == "APPROVED")
+        rejected_count = sum(1 for f in findings if f.get("status") == "REJECTED")
+
+        # ── Timeline ─────────────────────────────────────────────────────
+        timeline = manager._load_timeline(case_dir)
+        timeline_count = len(timeline)
+
+        # ── Capabilities ─────────────────────────────────────────────────
+        import importlib.util
+
+        capabilities = {
+            "opensearch": importlib.util.find_spec("opensearch_mcp") is not None,
+            "forensic_rag": importlib.util.find_spec("rag_mcp") is not None,
+            "opencti": importlib.util.find_spec("opencti_mcp") is not None,
+            "sift_tools": True,
+        }
+
+        # ── Phase detection ──────────────────────────────────────────────
+        if not sealed_count and not ingest_complete and not ingest_running:
+            phase = "ORIENT"
+            if evidence_chain_status == "unsealed":
+                next_steps = [
+                    "Copy evidence to the case directory (e.g., /cases/{case}/evidence/)",
+                    "Seal evidence via the Examiner Portal (Evidence tab → Seal Manifest)",
+                    "NOTE: Write tools are BLOCKED until evidence is sealed. Read-only tools (case_status, evidence_list, evidence_verify, search_knowledge) still work.",
+                    "Then run idx_ingest() to index evidence into OpenSearch for structured analysis",
+                ]
+            else:
+                next_steps = [
+                    "Copy evidence to the case directory (e.g., /cases/{case}/evidence/)",
+                    "Seal evidence via the Examiner Portal (Evidence tab → Seal Manifest)",
+                    "Then run idx_ingest() to index evidence into OpenSearch for structured analysis",
+                ]
+        elif sealed_count > 0 and not ingest_complete and not ingest_running and not ingest_failed:
+            phase = "SEALED"
+            evidence_names = []
+            for ef in evidence_files[:5]:
+                if isinstance(ef, dict):
+                    evidence_names.append(ef.get("name", ef.get("path", "unknown")))
+                elif isinstance(ef, str):
+                    evidence_names.append(ef)
+            hint = ""
+            if evidence_names:
+                hint = f" (e.g., {evidence_names[0]})"
+            next_steps = [
+                f"Run idx_ingest(path='evidence/<file>', hostname='<HOST>') to index {sealed_count} sealed evidence file(s){hint}",
+                "After ingestion, use idx_case_summary() for a full overview of indexed artifacts",
+            ]
+        elif ingest_running:
+            phase = "INGESTING"
+            next_steps = [
+                "Ingestion is currently running. Wait for it to complete.",
+                "Call idx_ingest_status() to check progress.",
+                "Once complete, use idx_case_summary() to review indexed artifacts.",
+            ]
+        elif ingest_failed and not ingest_complete:
+            phase = "SEALED"
+            next_steps = [
+                f"Ingestion failed: {ingest_error or 'unknown error'}",
+                "Check ingest logs in ~/.agentir/ingest-logs/ for details.",
+                "Fix the issue and re-run idx_ingest().",
+            ]
+        elif ingest_complete and draft_count == 0 and approved_count == 0:
+            phase = "TRIAGE"
+            next_steps = [
+                "Evidence is indexed — start your analysis:",
+                "1. Run idx_case_summary() for a complete overview of all indexed artifacts",
+                "2. Search for IOCs with idx_search() across all artifact types",
+                "3. Use idx_aggregate() to spot patterns (top commands, accounts, etc.)",
+                "4. Query specific hosts with idx_artifact_browse()",
+                "5. Check the RAG knowledge base with search_knowledge() for relevant detection guidance",
+                "6. Run timeline analysis on EVTX files if available",
+                "Stage findings as you go with record_finding() — they'll be DRAFT until examiner approval",
+            ]
+        elif draft_count > 0 and approved_count == 0:
+            phase = "FINDINGS"
+            next_steps = [
+                f"You have {draft_count} draft finding(s) waiting for examiner review.",
+                "Continue investigation: look for corroborating evidence, expand timeline coverage,",
+                "and cross-reference with threat intelligence via OpenCTI.",
+                "When findings are solid, the examiner can approve them in the portal.",
+                "Run get_findings(status='DRAFT') to review your staged findings.",
+            ]
+        elif approved_count > 0:
+            phase = "REPORTING"
+            next_steps = [
+                f"{approved_count} finding(s) approved — ready for report generation.",
+                "Run generate_report() to produce the final forensic report.",
+                "Pending findings can still be investigated and added.",
+                f"You also have {draft_count} draft finding(s) still pending.",
+            ]
+        else:
+            phase = "ORIENT"
+            next_steps = ["Investigate the case using available tools."]
+
+        return {
+            "phase": phase,
+            "case_id": case_id,
+            "evidence_chain": {
+                "status": evidence_chain_status,
+                "issues": evidence_chain_issues,
+                "manifest_version": evidence_chain_version,
+            },
+            "evidence_summary": {
+                "sealed_files": sealed_count,
+                "ingested": ingest_complete,
+            },
+            "indexing_status": {
+                "complete": ingest_complete,
+                "running": ingest_running,
+                "failed": ingest_failed,
+                "docs_indexed": ingest_docs,
+                "indices": ingest_indices,
+            },
+            "findings_summary": {
+                "total": len(findings),
+                "draft": draft_count,
+                "approved": approved_count,
+                "rejected": rejected_count,
+            },
+            "timeline_events": timeline_count,
+            "available_capabilities": capabilities,
+            "next_steps": next_steps,
+        }
 
     # --- TODOs ---
 
@@ -428,7 +687,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             result["warning"] = "Audit write failed — action not recorded"
         return result
 
-    @server.tool()
+    @server.tool(annotations={"readOnlyHint": True})
     def list_todos(status: str = "open", assignee: str = ""):
         """List TODO items. Status: open/completed/all."""
         try:

@@ -111,18 +111,21 @@ class RAGIndex:
                 "Use one of the approved embedding models."
             )
 
+        # Check ChromaDB exists BEFORE loading the model (~400MB download).
+        # If the index was never built, fail in milliseconds, not minutes.
+        chroma_path = self.index_dir / "chroma"
+        if not chroma_path.exists():
+            logger.error(f"Index not found at: {chroma_path}")
+            raise FileNotFoundError(
+                "RAG knowledge index not found. "
+                "Run the installer with --skip-rag to disable, or run: "
+                "python -m rag_mcp.scripts.download_index"
+            )
+
         logger.info(f"Loading embedding model: {self.model_name}")
         self.model = SentenceTransformer(self.model_name)
 
         logger.info("Loading ChromaDB index...")
-        chroma_path = self.index_dir / "chroma"
-        if not chroma_path.exists():
-            # Security: Log internal path but don't expose in exception
-            logger.error(f"Index not found at: {chroma_path}")
-            raise FileNotFoundError(
-                "Index not found. Run `python -m rag_mcp.build` first "
-                "or check RAG_INDEX_DIR environment variable."
-            )
 
         client = chromadb.PersistentClient(path=str(chroma_path))
         self.collection = client.get_collection("ir_knowledge")

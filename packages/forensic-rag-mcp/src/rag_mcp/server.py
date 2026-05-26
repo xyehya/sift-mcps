@@ -68,7 +68,23 @@ class RAGServer:
         self.mcp = FastMCP("forensic-rag-mcp", instructions=_INSTRUCTIONS)
         self.index = RAGIndex()
         self._audit = AuditWriter("forensic-rag-mcp")
+        self._index_ready = self._check_index()
         self._register_tools()
+
+    def _check_index(self) -> bool:
+        """Verify the ChromaDB index exists at startup. Fail fast, warn clearly."""
+        chroma_path = self.index.index_dir / "chroma"
+        if not chroma_path.exists():
+            logger.warning(
+                "RAG knowledge index not found at %s. "
+                "The server will start in degraded mode — search_knowledge "
+                "will return an error until the index is built. "
+                "Run: python -m rag_mcp.scripts.download_index",
+                chroma_path,
+            )
+            return False
+        logger.info("RAG index found at %s", chroma_path)
+        return True
 
     def _wrap_response(
         self,
@@ -114,7 +130,7 @@ class RAGServer:
             source_ids: list[str] | None = None,
             technique: str | None = None,
             platform: str | None = None,
-        ) -> dict[str, Any]:
+        ) -> dict:
             """Semantic search across 23K+ incident response knowledge records.
 
             Sources include Sigma rules, MITRE ATT&CK, Atomic Red Team, Splunk
@@ -133,14 +149,14 @@ class RAGServer:
             return await self._call_tool("search_knowledge", arguments, self._search)
 
         @self.mcp.tool(annotations={"readOnlyHint": True})
-        async def list_knowledge_sources() -> dict[str, Any]:
+        async def list_knowledge_sources() -> dict:
             """List all available knowledge sources in the RAG index."""
             return await self._call_tool(
                 "list_knowledge_sources", {}, lambda _: self._list_sources()
             )
 
         @self.mcp.tool(annotations={"readOnlyHint": True})
-        async def get_knowledge_stats() -> dict[str, Any]:
+        async def get_knowledge_stats() -> dict:
             """Get RAG index statistics: document count, sources, and model info."""
             return await self._call_tool(
                 "get_knowledge_stats", {}, lambda _: self._get_stats()
@@ -184,7 +200,11 @@ class RAGServer:
             # Surface the actual error so LLMs can diagnose
             msg = str(exc)
             if isinstance(exc, FileNotFoundError):
-                msg = f"Index not found: {exc}. Run 'python -m rag_mcp.build' to build the knowledge index."
+                msg = (
+                    "RAG knowledge index not found. The installer may have been run "
+                    "with --skip-rag, or the download step failed. "
+                    "Run: python -m rag_mcp.scripts.download_index"
+                )
             elif isinstance(exc, ImportError):
                 msg = f"Missing dependency: {exc}"
             error_result = {
@@ -287,12 +307,14 @@ class RAGServer:
         return {"status": "ok", **stats}
 
     def run(self) -> None:
-        """Run the MCP server.
-
-        Index loads lazily on first tool call (search/list_sources/get_stats)
-        so the stdio handshake completes immediately.
-        """
-        logger.info("Starting MCP server (index loads on first query)...")
+        """Run the MCP server."""
+        if self._index_ready:
+            logger.info("Starting MCP server (index ready, loads on first query)...")
+        else:
+            logger.warning(
+                "Starting MCP server in DEGRADED mode — index not found. "
+                "search_knowledge will return errors until the index is built."
+            )
         self.mcp.run()
 
 
