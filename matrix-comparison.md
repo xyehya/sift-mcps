@@ -40,7 +40,7 @@ The matrix is a coverage map, not an implementation contract. The safest expansi
 | SIFT skill area | Current MCP coverage | Current status | Main gaps | Agent risk today |
 |---|---|---:|---|---|
 | Windows Artifacts / EZ Tools | `idx_ingest(format="auto")`, `idx_search`, `idx_timeline`, `idx_aggregate`, `idx_case_summary`, Hayabusa, triage enrichment | Strong | Autorunsc, SQLECmd/browser, bstrings, some EZ tools depend on fallback paths | Low to medium. Most high-value host artifacts are indexed, but browser and ASEP coverage is not explicit. |
-| Memory Forensics / Volatility 3 | `idx_ingest(format="memory", tier=1/2/3)`, `vol-*` indices, triage enrichment for services | Partial | Default is Tier 1; no Memory Baseliner; no dump workflows; no YARA-in-memory; no VAD/manual strings workflow | Medium. Agent may assume memory coverage is complete when only Tier 1 ran. |
+| Memory Forensics / Volatility 3 | `idx_ingest(format="memory", tier=1/2/3)`, `vol-*` indices, triage enrichment for services, Hayabusa↔memory correlation | Partial | psscan+netscan Tier 1 promotion pending; no Memory Baseliner; no dump workflows; no YARA-in-memory; no VAD/manual strings workflow | Medium. Hayabusa corroboration stamps added; agent still needs to query `hayabusa_corroboration.flagged:true` to surface cross-referenced processes. |
 | Timeline / Plaso | Plaso fallback parsers for selected artifacts; OpenSearch timeline/query tools | Partial | No first-class `.plaso` build/export, `pinfo`, `psort` slice/filter, or merged super-timeline workflow | Medium. Agent can query indexed timelines, but not generate examiner-friendly Plaso exports through MCP. |
 | File System / Carving / TSK | Container inspect, read-only mount/ingest, artifact discovery, safe traversal | Partial | `mmls/fsstat/fls/icat/ils/tsk_recover`, `bulk_extractor`, `photorec`, bodyfile/mactime are not indexed workflows | Medium. Deep filesystem recovery requires manual commands and can bloat context. |
 | Threat Hunting / IOC Sweeps | OpenCTI enrichment, Hayabusa detections, windows-triage baselines, OpenSearch IOC search | Low to partial | YARA/yarac not currently integrated; no generated IOC sweep artifacts; Velociraptor is out-of-band | Medium to high for malware-hunt workflows. Agent lacks a one-call sweep path. |
@@ -60,8 +60,8 @@ The matrix is a coverage map, not an implementation contract. The safest expansi
 | `windows.svcscan` | Yes, Tier 1 | Indexed as `vol-svcscan`; triage currently checks service names | Add binary path checks where available. |
 | `windows.modules` | Yes, Tier 1 | Indexed as `vol-modules` | Add unsigned/unknown driver summary if fields support it. |
 | `windows.registry.hivelist` | Yes, Tier 1 | Indexed as `vol-hivelist` | Keep default. |
-| `windows.netscan` | Yes, Tier 2 | Not default | Promote to Tier 1 or add "memory coverage incomplete" hint until Tier 2 runs. |
-| `windows.psscan` | Yes, Tier 2 | Not default; important hidden/exited process coverage | Promote to Tier 1. |
+| `windows.netscan` | Yes, Tier 2 | **Tier 1 promotion agreed 2026-05-27, not yet applied.** `ForeignAddr.keyword` already swept by `idx_enrich_intel` for OpenCTI IP lookups. `Owner` field cross-referenced by Hayabusa memory correlation. | Move to TIER_1 in `parse_memory.py` — 2-line change. |
+| `windows.psscan` | Yes, Tier 2 | **Tier 1 promotion agreed 2026-05-27, not yet applied.** `ImageFileName` is 14-char truncated — excluded from triage `check_file` by design (would false-positive every system process). Hayabusa memory correlation stamps `hayabusa_corroboration.*` on psscan docs when process name matches a high/critical alert. | Move to TIER_1 in `parse_memory.py` alongside netscan. |
 | `windows.dlllist`, `envars`, `getsids` | Yes, Tier 2 | Useful pivots, moderate cost | Keep Tier 2; add targeted follow-up prompt. |
 | `windows.handles`, `filescan`, `malfind` | Yes, Tier 3 | Useful but heavier | Add an MCP "deep memory scan" preset rather than agent hand-selecting plugins. |
 | `windows.vadinfo`, `vadyarascan`, dumpfiles, memmap dumps | No | Manual only | Return precise `run_command` recipes only when a suspicious PID/path exists. |
@@ -305,6 +305,102 @@ Example for Volatility deep dive:
   "warning": "malfind has false positives; require corroboration before recording a finding."
 }
 ```
+
+## Confirmed Enrichment Pipeline State
+
+Verified against live case `rocba-drive-20260526-1417` (2026-05-27). This is the actual
+enrichment chain — not aspirational. Do not add a new enrichment layer if the signal is
+already flowing through one of these paths.
+
+| Signal | Source field | Destination | Mechanism |
+|---|---|---|---|
+| External IPs from network connections | `ForeignAddr.keyword` (vol-netscan, vol-netstat) | `threat_intel.verdict` on each doc | `idx_enrich_intel` → `extract_unique_iocs` → OpenCTI |
+| External IPs from event logs | `source.ip` (evtx, accesslog, w3c) | `threat_intel.verdict` | same sweep (`case-{id}-*` pattern) |
+| Hashes from CSV artifacts | `SHA1/SHA256/MD5.keyword` | `threat_intel.verdict` | same sweep |
+| Service names from memory | `Name.keyword` (vol-svcscan) | `triage.verdict` | `_enrich_service_artifact` → `check_system` |
+| Service names from EVTX 7045 | `winlog.event_data.ServiceName` | `triage.verdict` | `_enrich_evtx_services` → `check_system` |
+| DLL paths from memory | `Path.keyword` (vol-dlllist) | `triage.verdict` | `_enrich_file_artifact` → `check_artifact` |
+| File paths (shimcache, amcache, tasks) | `Path/FullPath/task.command.keyword` | `triage.verdict` | `_enrich_file_artifact` → `check_artifact` |
+| Registry persistence mechanisms | KeyPath + ValueName patterns (R1–R17) | `triage.verdict` | `_enrich_registry_persistence` (gateway-independent) |
+| **Hayabusa high/critical process names** | `Details` field `Proc:/Img:/TgtImg:` aliases | `hayabusa_corroboration.*` on vol-pslist/psscan/netscan | `_enrich_hayabusa_memory_correlation` (2026-05-27, gateway-independent) |
+
+### Confirmed non-overlaps (do not re-add)
+
+- **vol-pslist/psscan excluded from `check_file`**: `ImageFileName` is truncated to 14 chars
+  by the Windows kernel. `check_file` would call every system process SUSPICIOUS. This is
+  intentional. The Hayabusa correlation stamps these docs instead when a name-level match exists.
+
+- **Hayabusa `SrcIP:` → netscan correlation not added**: Logon-event source IPs (EID 4624
+  `SrcIP:` alias) are already swept by threat intel enrichment via `source.ip` from evtx.
+  Adding a second path through Hayabusa Details would produce duplicate stamps.
+
+- **Hayabusa `Path:` (7045 service alerts) → vol-svcscan not added**: Service binary paths
+  from service-install alerts are already handled via `_enrich_service_artifact` on vol-svcscan
+  service names. The check_service call covers the same ground.
+
+### Hayabusa Details field format reference
+
+Hayabusa verbose profile separator: ` ¦ ` (U+00A6 BROKEN BAR). Each segment: `Alias: Value`.
+
+| Event type | EID | Process-bearing aliases | Non-process aliases |
+|---|---|---|---|
+| Process creation | 4688 | `Proc:` (new process), `PProc:` (parent) | `User:`, `Cmd:` |
+| Sysmon process | 1 | `Img:` (full path), `PImg:` (parent full path) | `Cmd:`, `User:` |
+| Sysmon process access | 10 | `TgtImg:` | `SrcImg:`, `Access:` |
+| Service install | 7045 | — | `Svc:`, `Path:`, `Acct:`, `StartType:` |
+| BITS transfer | 16403 | — | `LocalName:`, `RemoteName:`, `User:`, `processId:` |
+| Network logon | 4624 | — | `Type:`, `TgtUser:`, `SrcComp:`, `SrcIP:`, `LID:` |
+
+The correlation regex targets `Proc:`, `Img:`, `TgtImg:` only (forward process, not parent).
+`PProc:` and `PImg:` are deliberately excluded to avoid over-flagging processes that are
+merely parents of suspicious children.
+
+## Implementation Log
+
+| Date | Item | Status | Notes |
+|---|---|---|---|
+| 2026-05-27 | Hayabusa↔memory correlation | **Done** | `_enrich_hayabusa_memory_correlation` in `triage_remote.py`; 9 tests; 928/928 pass; deployed to VM; runs as gateway-independent enrichment pass inside `idx_enrich_triage` |
+| 2026-05-27 | psscan + netscan → Tier 1 | **Agreed, pending** | 2-line change in `packages/opensearch-mcp/src/opensearch_mcp/parse_memory.py` TIER_1 list; no test changes needed |
+
+## Next Work Queue
+
+Ordered by the priority framework established 2026-05-27 (Group 1 → response enrichment,
+Group 2 → small targeted extensions, Group 3 → new capability modules):
+
+### Group 1 — Next up (response enrichment only, no new tools)
+
+**1. psscan + netscan → Tier 1** (`parse_memory.py`, 2 lines)
+Add `"windows.psscan"` and `"windows.netscan"` to `TIER_1`. Every future memory ingest
+defaults to full process and connection coverage. Verified safe: existing tests pass,
+no schema change, no gateway change.
+
+**2. `coverage_state` section in `idx_case_summary`** (`server.py`)
+Add `_build_coverage_state(artifacts)` helper that compares indexed artifact keys against
+an expected-artifact registry. Returns `coverage_state.disk_artifacts` (present/absent per
+SIFT skill area), `coverage_state.memory` (tier run, plugins run/not run), and
+`coverage_state.gaps` (structured fallback recipes with `coverage_gap`, `when_to_run`,
+`command`, `output_path`, `next_mcp_step`, `warning`). Injected as a new field in
+`idx_case_summary` response. Agent gets the SIFT skill map at every session start without
+a new tool call.
+
+### Group 2 — Small targeted extensions (one file each)
+
+**3. Filesystem metadata sidecar during ingest** (`containers.py`)
+`fdisk -l` output is already computed during E01 mount to parse partition offsets. Capture
+it plus mounted volume paths into `agent/ingest/<run_id>-filesystem-meta.json` instead of
+discarding. Return path in ingest response. Covers `mmls/fsstat` skill intent with zero
+new tool.
+
+**4. Autorunsc CSV ingest** (`idx_ingest(format="autorunsc")`)
+New `parse_autorunsc.py` (~100 lines, same pattern as `parse_csv.py`). New index suffix
+`autoruns`. Triage enrichment already handles file paths via `check_artifact`. Examiner
+drops Autorunsc CSV into `evidence/`; agent calls `idx_ingest(format="autorunsc")`.
+
+### Group 3 — New capability modules (separate PRs, do when specifically needed)
+
+- Optional Plaso timeline job (`idx_generate_timeline`)
+- YARA sweep framework (`idx_yara_sweep`) — verify `yara`/`yarac` in VM PATH first
+- Browser artifact ingestion (Plaso targeted or native SQLite)
 
 ## Target End State
 

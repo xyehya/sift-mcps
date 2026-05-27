@@ -85,6 +85,9 @@ def enrich_remote(
     # --- Gateway-independent: registry persistence R1-R14, R16 ---
     results["registry_persistence"] = _enrich_registry_persistence(client, safe_case, on_progress)
 
+    # --- Gateway-independent: Hayabusa ↔ memory correlation ---
+    results["hayabusa_memory"] = _enrich_hayabusa_memory_correlation(client, safe_case, on_progress)
+
     # --- Gateway-dependent: file + service enrichment ---
     if not gateway_available():
         results["_gateway"] = "not configured — file/service enrichment skipped"
@@ -1212,3 +1215,153 @@ def _enrich_registry_persistence(client, safe_case, on_progress=None):
             enriched=total_updated,
         )
     return {"status": "complete", "enriched": total_updated}
+
+
+# ---------------------------------------------------------------------------
+# Hayabusa ↔ memory correlation (gateway-independent)
+# ---------------------------------------------------------------------------
+
+
+def _enrich_hayabusa_memory_correlation(client, safe_case, on_progress=None):
+    """Cross-reference Hayabusa high/critical detections against vol memory artifacts.
+
+    Stamps vol-pslist, vol-psscan, and vol-netscan records where the process
+    name (ImageFileName / Owner) matches a process flagged by Hayabusa.
+    Gateway-independent — uses only OpenSearch update_by_query.
+
+    Stamped fields:
+        hayabusa_corroboration.flagged      bool  — always True on stamped docs
+        hayabusa_corroboration.max_level    str   — highest Hayabusa level that
+                                                    flagged this process name
+        hayabusa_corroboration.rule_titles  list  — up to 5 distinct rule titles
+    """
+    import re
+
+    hayabusa_index = f"case-{safe_case}-hayabusa-*"
+    try:
+        result = client.search(
+            index=hayabusa_index,
+            body={
+                "query": {"terms": {"Level": ["critical", "high"]}},
+                "size": 5000,
+                "_source": ["Details", "RuleTitle", "Level"],
+            },
+        )
+    except Exception:
+        return {"status": "skipped", "reason": "hayabusa index not found"}
+
+    hits = result["hits"]["hits"]
+    if not hits:
+        return {"status": "empty", "hayabusa_alerts_scanned": 0}
+
+    # Extract bare process names from Hayabusa Details.
+    # Hayabusa verbose profile format: "Alias: Value ¦ Alias: Value"
+    # ¦ is U+00A6 (BROKEN BAR). Process-bearing aliases across rule types:
+    #   EID 4688  → Proc (NewProcessName), PProc (ParentProcessName)
+    #   Sysmon 1  → Img (Image full path), PImg (ParentImage full path)
+    #   Sysmon 10 → TgtImg (TargetImage)
+    # We only match the forward process (not parent) to avoid over-flagging.
+    _PROC_RE = re.compile(
+        r"(?:^|¦|\|)\s*(?:Proc|Img|TgtImg):\s*([^\s¦|,;]+)",
+        re.IGNORECASE,
+    )
+    _LEVEL_RANK = {"critical": 0, "high": 1}
+
+    # flagged: {bare_lower_name -> {"max_level": str, "rule_titles": set}}
+    flagged: dict[str, dict] = {}
+    for h in hits:
+        src = h["_source"]
+        details = src.get("Details", "")
+        rule_title = src.get("RuleTitle", "unknown")
+        level = src.get("Level", "high").lower()
+        for m in _PROC_RE.finditer(details):
+            raw = m.group(1).strip()
+            bare = raw.replace("\\", "/").split("/")[-1].lower()
+            # Must look like an executable filename
+            if not bare or "." not in bare or len(bare) > 64:
+                continue
+            entry = flagged.setdefault(bare, {"max_level": "high", "rule_titles": set()})
+            entry["rule_titles"].add(rule_title)
+            if _LEVEL_RANK.get(level, 1) < _LEVEL_RANK.get(entry["max_level"], 1):
+                entry["max_level"] = level
+
+    if not flagged:
+        return {
+            "status": "empty",
+            "hayabusa_alerts_scanned": len(hits),
+            "flagged_process_names": 0,
+        }
+
+    if on_progress:
+        on_progress("triage_start", artifact="hayabusa_memory", unique_values=len(flagged))
+
+    total_stamped = 0
+
+    # vol-pslist and vol-psscan use ImageFileName; vol-netscan uses Owner.
+    # Both are dynamically mapped → need .keyword suffix.
+    for vol_suffix, name_field in [
+        ("vol-pslist", "ImageFileName.keyword"),
+        ("vol-psscan", "ImageFileName.keyword"),
+        ("vol-netscan", "Owner.keyword"),
+    ]:
+        vol_index = f"case-{safe_case}-{vol_suffix}-*"
+        try:
+            agg = client.search(
+                index=vol_index,
+                body={
+                    "size": 0,
+                    "aggs": {"names": {"terms": {"field": name_field, "size": 5000}}},
+                },
+            )
+        except Exception:
+            continue
+
+        buckets = agg.get("aggregations", {}).get("names", {}).get("buckets", [])
+        for bucket in buckets:
+            exact_val = bucket["key"]
+            entry = flagged.get(exact_val.lower())
+            if not entry:
+                continue
+            rule_list = sorted(entry["rule_titles"])[:5]
+            try:
+                resp = client.update_by_query(
+                    index=vol_index,
+                    body={
+                        "query": {"term": {name_field: exact_val}},
+                        "script": {
+                            "source": (
+                                "ctx._source['hayabusa_corroboration.flagged'] = true; "
+                                "ctx._source['hayabusa_corroboration.max_level'] = params.max_level; "
+                                "ctx._source['hayabusa_corroboration.rule_titles'] = params.rule_titles;"
+                            ),
+                            "lang": "painless",
+                            "params": {
+                                "max_level": entry["max_level"],
+                                "rule_titles": rule_list,
+                            },
+                        },
+                    },
+                    conflicts="proceed",
+                    requests_per_second=1000,
+                )
+                total_stamped += resp.get("updated", 0)
+            except Exception as e:
+                print(
+                    f"  WARNING: hayabusa_memory stamp failed for {vol_suffix}/{exact_val}: {e}",
+                    file=sys.stderr,
+                )
+
+    if on_progress:
+        on_progress(
+            "triage_done",
+            artifact="hayabusa_memory",
+            checked=len(hits),
+            enriched=total_stamped,
+        )
+
+    return {
+        "status": "complete",
+        "hayabusa_alerts_scanned": len(hits),
+        "flagged_process_names": len(flagged),
+        "vol_docs_stamped": total_stamped,
+    }

@@ -277,3 +277,251 @@ class TestNonPathFilter:
 
         # Only the real path should have been checked
         assert call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Hayabusa ↔ memory correlation
+# ---------------------------------------------------------------------------
+
+
+class TestHayabusaMemoryCorrelation:
+    def _make_client(self, hayabusa_hits=None, vol_buckets=None, updated=0):
+        """Build a mock OpenSearch client for correlation tests."""
+        client = MagicMock()
+
+        def search_side_effect(index="", body=None, **kwargs):
+            if "hayabusa" in index:
+                return {
+                    "hits": {
+                        "hits": hayabusa_hits or [],
+                        "total": {"value": len(hayabusa_hits or [])},
+                    }
+                }
+            # vol index aggregation
+            return {
+                "aggregations": {
+                    "names": {"buckets": vol_buckets or []}
+                }
+            }
+
+        client.search.side_effect = search_side_effect
+        client.update_by_query.return_value = {"updated": updated}
+        return client
+
+    def test_skips_when_hayabusa_index_missing(self):
+        from opensearch_mcp.triage_remote import _enrich_hayabusa_memory_correlation
+
+        client = MagicMock()
+        client.search.side_effect = Exception("index not found")
+        result = _enrich_hayabusa_memory_correlation(client, "test-case")
+        assert result["status"] == "skipped"
+
+    def test_empty_when_no_high_critical_alerts(self):
+        from opensearch_mcp.triage_remote import _enrich_hayabusa_memory_correlation
+
+        client = self._make_client(hayabusa_hits=[])
+        result = _enrich_hayabusa_memory_correlation(client, "test-case")
+        assert result["status"] == "empty"
+        assert result["hayabusa_alerts_scanned"] == 0
+
+    def test_stamps_pslist_on_proc_alias_match(self):
+        from opensearch_mcp.triage_remote import _enrich_hayabusa_memory_correlation
+
+        hits = [
+            {
+                "_source": {
+                    "Details": "Proc: cmd.exe ¦ User: admin",
+                    "RuleTitle": "Suspicious Cmd Usage",
+                    "Level": "high",
+                }
+            }
+        ]
+        vol_buckets = [{"key": "cmd.exe"}]
+        client = self._make_client(hayabusa_hits=hits, vol_buckets=vol_buckets, updated=3)
+
+        result = _enrich_hayabusa_memory_correlation(client, "test-case")
+
+        assert result["status"] == "complete"
+        assert result["flagged_process_names"] == 1
+        assert result["vol_docs_stamped"] > 0
+
+        # Verify stamp fields passed to update_by_query
+        stamp_calls = [
+            c for c in client.update_by_query.call_args_list
+        ]
+        assert len(stamp_calls) > 0
+        first_params = stamp_calls[0].kwargs["body"]["script"]["params"]
+        assert first_params["max_level"] == "high"
+        assert "Suspicious Cmd Usage" in first_params["rule_titles"]
+
+    def test_stamps_netscan_owner_match(self):
+        from opensearch_mcp.triage_remote import _enrich_hayabusa_memory_correlation
+
+        hits = [
+            {
+                "_source": {
+                    "Details": "Proc: powershell.exe ¦ Cmd: powershell -enc ...",
+                    "RuleTitle": "Encoded PS",
+                    "Level": "critical",
+                }
+            }
+        ]
+        # vol-netscan returns Owner field aggregation
+        client = MagicMock()
+
+        def search_side_effect(index="", body=None, **kwargs):
+            if "hayabusa" in index:
+                return {"hits": {"hits": hits}}
+            if "vol-netscan" in index:
+                return {"aggregations": {"names": {"buckets": [{"key": "powershell.exe"}]}}}
+            return {"aggregations": {"names": {"buckets": []}}}
+
+        client.search.side_effect = search_side_effect
+        client.update_by_query.return_value = {"updated": 2}
+
+        result = _enrich_hayabusa_memory_correlation(client, "test-case")
+
+        assert result["status"] == "complete"
+        # At least the netscan stamp call should have fired
+        netscan_calls = [
+            c for c in client.update_by_query.call_args_list
+            if "vol-netscan" in str(c)
+        ]
+        assert len(netscan_calls) >= 1
+
+    def test_critical_beats_high_for_max_level(self):
+        from opensearch_mcp.triage_remote import _enrich_hayabusa_memory_correlation
+
+        hits = [
+            {
+                "_source": {
+                    "Details": "Proc: evil.exe ¦ Cmd: evil.exe -c",
+                    "RuleTitle": "Rule A",
+                    "Level": "high",
+                }
+            },
+            {
+                "_source": {
+                    "Details": "Proc: evil.exe ¦ User: nt authority",
+                    "RuleTitle": "Rule B",
+                    "Level": "critical",
+                }
+            },
+        ]
+        client = self._make_client(
+            hayabusa_hits=hits,
+            vol_buckets=[{"key": "evil.exe"}],
+            updated=1,
+        )
+
+        _enrich_hayabusa_memory_correlation(client, "test-case")
+
+        params = client.update_by_query.call_args_list[0].kwargs["body"]["script"]["params"]
+        assert params["max_level"] == "critical"
+        assert "Rule A" in params["rule_titles"]
+        assert "Rule B" in params["rule_titles"]
+
+    def test_case_insensitive_name_match(self):
+        from opensearch_mcp.triage_remote import _enrich_hayabusa_memory_correlation
+
+        hits = [
+            {
+                "_source": {
+                    "Details": "Proc: WINWORD.EXE ¦ User: user",
+                    "RuleTitle": "Macro Exec",
+                    "Level": "high",
+                }
+            }
+        ]
+        # vol-pslist stores it with different casing
+        client = self._make_client(
+            hayabusa_hits=hits,
+            vol_buckets=[{"key": "winword.exe"}],
+            updated=1,
+        )
+
+        result = _enrich_hayabusa_memory_correlation(client, "test-case")
+        assert result["flagged_process_names"] == 1
+        assert result["vol_docs_stamped"] > 0
+
+    def test_img_alias_extracts_basename(self):
+        from opensearch_mcp.triage_remote import _enrich_hayabusa_memory_correlation
+
+        # Sysmon-style Details with full path in Img alias
+        hits = [
+            {
+                "_source": {
+                    "Details": "Img: C:\\Windows\\System32\\cmd.exe ¦ Cmd: cmd /c whoami",
+                    "RuleTitle": "Sysmon Process",
+                    "Level": "high",
+                }
+            }
+        ]
+        client = self._make_client(
+            hayabusa_hits=hits,
+            vol_buckets=[{"key": "cmd.exe"}],
+            updated=2,
+        )
+
+        result = _enrich_hayabusa_memory_correlation(client, "test-case")
+        assert result["flagged_process_names"] == 1
+
+    def test_empty_when_no_vol_match(self):
+        from opensearch_mcp.triage_remote import _enrich_hayabusa_memory_correlation
+
+        hits = [
+            {
+                "_source": {
+                    "Details": "Proc: rare_malware.exe ¦ Cmd: ...",
+                    "RuleTitle": "APT Tool",
+                    "Level": "critical",
+                }
+            }
+        ]
+        # vol indices return no matching names
+        client = self._make_client(
+            hayabusa_hits=hits,
+            vol_buckets=[],
+            updated=0,
+        )
+
+        result = _enrich_hayabusa_memory_correlation(client, "test-case")
+        assert result["status"] == "complete"
+        assert result["flagged_process_names"] == 1
+        assert result["vol_docs_stamped"] == 0
+
+    def test_hayabusa_in_gateway_unavailable_path(self):
+        """Hayabusa correlation runs even when gateway (windows-triage) is down."""
+        from opensearch_mcp.triage_remote import enrich_remote
+        from unittest.mock import patch
+
+        hits = [
+            {
+                "_source": {
+                    "Details": "Proc: cmd.exe ¦ User: admin",
+                    "RuleTitle": "Cmd Exec",
+                    "Level": "high",
+                }
+            }
+        ]
+
+        client = MagicMock()
+        client.indices.refresh.return_value = {}
+        client.update_by_query.return_value = {"updated": 0}
+
+        def search_side_effect(index="", body=None, **kwargs):
+            if "hayabusa" in index:
+                return {"hits": {"hits": hits}}
+            return {"hits": {"hits": []}, "aggregations": {"names": {"buckets": []}}}
+
+        client.search.side_effect = search_side_effect
+
+        with (
+            patch("opensearch_mcp.triage_remote.wait_for_gateway", return_value=True),
+            patch("opensearch_mcp.triage_remote.gateway_available", return_value=False),
+        ):
+            result = enrich_remote(client, "test-case")
+
+        # Hayabusa correlation must be present regardless of gateway state
+        assert "hayabusa_memory" in result
+        assert result["hayabusa_memory"]["status"] in ("complete", "empty", "skipped")
