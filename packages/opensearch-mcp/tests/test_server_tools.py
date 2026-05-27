@@ -78,10 +78,14 @@ class TestToolRegistry:
         for name in read_only_tools:
             assert getattr(tools[name].annotations, "readOnlyHint", None) is True
 
-    def test_admin_pipeline_install_is_not_marked_read_only(self):
-        tool = srv.server._tool_manager._tools["idx_install_pipelines"]
+    def test_admin_pipeline_install_not_in_public_registry(self):
+        """idx_install_pipelines is an internal admin function, not a public MCP tool.
 
-        assert getattr(tool.annotations, "readOnlyHint", None) is not True
+        It was removed from the agent-facing surface during Group 3 consolidation.
+        Confirm it is absent from the tool manager so the agent cannot call it.
+        """
+        tools = srv.server._tool_manager._tools
+        assert "idx_install_pipelines" not in tools
 
 
 # ---------------------------------------------------------------------------

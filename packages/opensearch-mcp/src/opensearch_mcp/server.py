@@ -1639,6 +1639,39 @@ def idx_ingest(
                 resp["hostname"] = hostname
             else:
                 resp["suggested_hostname"] = evidence_path.stem.split("-")[0]
+            # Check if this case already has indexed data so the agent doesn't
+            # blindly re-ingest a container that's already fully processed.
+            try:
+                _cli = _get_os()
+                if _cli is not None:
+                    _existing = (
+                        _cli.cat.indices(
+                            index=f"case-{case_id}-*",
+                            format="json",
+                            h="index,docs.count",
+                        )
+                        or []
+                    )
+                    _total = sum(int(r.get("docs.count") or 0) for r in _existing)
+                    if _total > 0:
+                        resp["already_indexed"] = {
+                            "doc_count": _total,
+                            "index_count": len(_existing),
+                            "message": (
+                                f"This case already has {_total:,} docs across "
+                                f"{len(_existing)} indices. "
+                                "Call idx_case_summary to review coverage. "
+                                "Only set dry_run=false to add new evidence."
+                            ),
+                        }
+                        resp["message"] = (
+                            f"Container image detected ({container_type}). "
+                            f"Case already indexed ({_total:,} docs across "
+                            f"{len(_existing)} indices) — "
+                            "review with idx_case_summary before re-ingesting."
+                        )
+            except Exception:
+                pass
             aid = audit.log(
                 tool="idx_ingest",
                 params={

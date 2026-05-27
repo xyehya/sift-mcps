@@ -357,6 +357,21 @@ install_hayabusa_system_links() {
   sudo_if_needed ln -sf "$binary" /usr/local/bin/hayabusa 2>/dev/null || true
 }
 
+fix_volatility_permissions() {
+  # Volatility 3 downloads PDB symbol files at runtime into its package dir.
+  # If /opt/volatility3 is root-owned the gateway user can't write the cache
+  # and every vol3 plugin exits 1 with "Cannot write necessary symbol file".
+  local vol_base="/opt/volatility3"
+  [[ -d "$vol_base" ]] || return 0
+  local symbols_dir
+  symbols_dir=$(find "$vol_base" -type d -name "symbols" 2>/dev/null | head -1)
+  [[ -n "$symbols_dir" ]] || return 0
+  log "Fixing Volatility 3 symbol directory write permissions: $symbols_dir"
+  sudo_if_needed chmod -R a+w "$symbols_dir" 2>/dev/null || \
+    sudo_if_needed chown -R "$(id -u):$(id -g)" "$symbols_dir" 2>/dev/null || \
+    warn "Could not fix Volatility 3 symbol permissions — memory ingest may fail on first plugin run."
+}
+
 # =============================================================================
 # Phase 5 — TLS
 # =============================================================================
@@ -1067,6 +1082,7 @@ main() {
   install_opencti_feeds
   install_systemd_service
   install_hayabusa_system_links
+  fix_volatility_permissions
   configure_immutable_capability
   configure_auditd
   configure_apparmor

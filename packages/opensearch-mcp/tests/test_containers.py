@@ -202,7 +202,7 @@ class TestMountContext:
         ctx.cleanup()
         calls = mock_subprocess.run.call_args_list
         cmds = [c[0][0] for c in calls]
-        assert ["fusermount", "-u", "/mnt/ewf"] in cmds
+        assert ["sudo", "fusermount", "-u", "/mnt/ewf"] in cmds
         assert ["sudo", "qemu-nbd", "-d", "/dev/nbd0"] in cmds
 
 

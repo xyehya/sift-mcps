@@ -165,11 +165,18 @@ class TestGetActiveTools:
 
 
 class TestBuildCommand:
-    def test_amcache_includes_nl_flag(self):
-        """Amcache command includes --nl to skip transaction log check."""
+    def test_amcache_excludes_nl_flag(self):
+        """Amcache command must NOT include --nl.
+
+        --nl was removed because forensic images have dirty transaction logs
+        that AmcacheParser needs to recover consistent state. With --nl,
+        AmcacheParser crashes (ArgumentOutOfRangeException) on >90% of
+        real-world Amcache hives. Shimcache and registry keep --nl because
+        they don't have this crash pattern.
+        """
         cfg = TOOLS["amcache"]
         cmd = _build_command(cfg, "amcache", Path("/evidence/Amcache.hve"), "/tmp/out")
-        assert "--nl" in cmd
+        assert "--nl" not in cmd
         assert "-f" in cmd
         assert str(Path("/evidence/Amcache.hve")) in cmd
 
@@ -369,11 +376,16 @@ class TestRunAndIngest:
 
 
 class TestBuildCommandRegressions:
-    def test_amcache_uses_nl_flag(self):
-        """Regression guard: amcache command must include --nl."""
+    def test_amcache_excludes_nl_flag(self):
+        """Regression guard: amcache command must NOT include --nl.
+
+        --nl was deliberately removed after real-world testing showed it causes
+        AmcacheParser to crash (ArgumentOutOfRangeException) on forensic images
+        that have dirty transaction logs needing *.LOG1/*.LOG2 recovery.
+        """
         cfg = TOOLS["amcache"]
         cmd = _build_command(cfg, "amcache", Path("/evidence/Amcache.hve"), "/tmp/out")
-        assert "--nl" in cmd
+        assert "--nl" not in cmd
 
     def test_shimcache_uses_nl_flag(self):
         """Regression guard (Bug 2): shimcache command MUST include --nl.
