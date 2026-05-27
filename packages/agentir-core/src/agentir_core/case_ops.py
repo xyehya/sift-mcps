@@ -55,6 +55,7 @@ def case_status_data(case_dir) -> dict:
         "extractions_dir": str(case_dir / "extractions"),
         "reports_dir": str(case_dir / "reports"),
         "audit_dir": str(case_dir / "audit"),
+        "agent_dir": str(case_dir / "agent"),
         "finding_count": len(findings),
         "finding_draft": draft_f,
         "finding_approved": approved_f,
@@ -163,7 +164,7 @@ def case_init_data(
         raise ValueError(f"Case directory already exists: {case_dir}")
 
     case_dir.mkdir(parents=True)
-    for subdir in ("evidence", "extractions", "reports", "audit"):
+    for subdir in ("evidence", "extractions", "reports", "audit", "agent"):
         (case_dir / subdir).mkdir()
 
     case_meta = {

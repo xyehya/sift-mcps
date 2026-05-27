@@ -19,7 +19,7 @@ import yaml
 _EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
 
 DEFAULT_CASES_DIR = str(Path.home() / "cases")
-_CASE_SUBDIRS = frozenset({"evidence", "extractions", "reports", "audit", "tmp"})
+_CASE_SUBDIRS = frozenset({"evidence", "extractions", "reports", "audit", "tmp", "agent"})
 
 
 class CaseError(Exception):

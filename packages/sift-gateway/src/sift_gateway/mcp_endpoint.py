@@ -257,6 +257,7 @@ def _build_case_context(case_dir_str: str) -> dict | None:
         "id": case_id,
         "dir": str(case_dir),
         "evidence_dir": str(case_dir / "evidence"),
+        "agent_dir": str(case_dir / "agent"),
     }
 
 

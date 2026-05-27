@@ -14,6 +14,26 @@ Assumptions:
   output is not yet captured as first-class case context.
 - The desired direction is: enrich the pipeline once, index or summarize durable facts, and only
   instruct the agent to run manual commands for narrow gaps.
+- Examiner-controlled evidence intake remains authoritative. The human operator copies files
+  into `evidence/`, seals them in the portal, and verifies the evidence ledger. Agent-run
+  commands produce analysis outputs, not evidence registrations.
+- Agent-visible fallback outputs should live under `AGENTIR_CASE_DIR/agent/`, with
+  `agent/commands/` as the default command capture location. Do not add new top-level
+  case directories such as `analysis/` or `exports/` unless the portal and case I/O
+  explicitly adopt them.
+
+## Grounding Notes
+
+The matrix is a coverage map, not an implementation contract. The safest expansion path is:
+
+1. Improve response hints and coverage state before adding new tools.
+2. Prefer existing MCP boundaries: `idx_*` for indexed/searchable artifacts, `run_command`
+   for controlled manual fallback, `case_status`/`case_file_structure` for orientation.
+3. Save bulky or manual outputs under `agent/`, return paths and hashes, then let findings
+   cite those paths plus audit IDs as provenance.
+4. Keep evidence verification and sealing as examiner actions. Agent tools may report
+   ledger status and container metadata, but must not blur analysis output with sealed
+   evidence.
 
 ## Coverage Matrix
 
@@ -22,9 +42,9 @@ Assumptions:
 | Windows Artifacts / EZ Tools | `idx_ingest(format="auto")`, `idx_search`, `idx_timeline`, `idx_aggregate`, `idx_case_summary`, Hayabusa, triage enrichment | Strong | Autorunsc, SQLECmd/browser, bstrings, some EZ tools depend on fallback paths | Low to medium. Most high-value host artifacts are indexed, but browser and ASEP coverage is not explicit. |
 | Memory Forensics / Volatility 3 | `idx_ingest(format="memory", tier=1/2/3)`, `vol-*` indices, triage enrichment for services | Partial | Default is Tier 1; no Memory Baseliner; no dump workflows; no YARA-in-memory; no VAD/manual strings workflow | Medium. Agent may assume memory coverage is complete when only Tier 1 ran. |
 | Timeline / Plaso | Plaso fallback parsers for selected artifacts; OpenSearch timeline/query tools | Partial | No first-class `.plaso` build/export, `pinfo`, `psort` slice/filter, or merged super-timeline workflow | Medium. Agent can query indexed timelines, but not generate examiner-friendly Plaso exports through MCP. |
-| File System / Carving / TSK | Container inspect, read-only mount/ingest, artifact discovery, safe traversal | Partial | `ewfverify`, `mmls/fsstat/fls/icat/ils/tsk_recover`, `bulk_extractor`, `photorec`, bodyfile/mactime are not indexed workflows | Medium. Deep filesystem recovery requires manual commands and can bloat context. |
+| File System / Carving / TSK | Container inspect, read-only mount/ingest, artifact discovery, safe traversal | Partial | `mmls/fsstat/fls/icat/ils/tsk_recover`, `bulk_extractor`, `photorec`, bodyfile/mactime are not indexed workflows | Medium. Deep filesystem recovery requires manual commands and can bloat context. |
 | Threat Hunting / IOC Sweeps | OpenCTI enrichment, Hayabusa detections, windows-triage baselines, OpenSearch IOC search | Low to partial | YARA/yarac not currently integrated; no generated IOC sweep artifacts; Velociraptor is out-of-band | Medium to high for malware-hunt workflows. Agent lacks a one-call sweep path. |
-| Case/report chain of custody | Portal case lifecycle, evidence manifest, HMAC ledger, approvals, reports | Strong | Command-output artifacts from manual fallbacks need standard capture and manifest linking | Low for normal workflow; medium when manual commands produce sidecar outputs. |
+| Case/report chain of custody | Portal case lifecycle, evidence manifest, HMAC ledger, approvals, reports | Strong | Command-output artifacts from manual fallbacks need standard capture, hashes, and audit/provenance linking | Low for normal workflow; medium when manual commands produce sidecar outputs. |
 
 ## Detailed Skill Mapping
 
@@ -53,7 +73,7 @@ Assumptions:
 |---|---|---|---|
 | Full `log2timeline.py` super-timeline | No | OpenSearch timeline is not a `.plaso` substitute for examiner export | Add `idx_generate_plaso_timeline(dry_run=True)` or case artifact bundle job. |
 | `pinfo.py` parser stats | No | Would be useful quality gate | Auto-run after Plaso jobs and store summary. |
-| `psort.py` CSV/JSON export | No | Manual only | Add output files under case `exports/timelines/` and return paths, not full CSV. |
+| `psort.py` CSV/JSON export | No | Manual only | Add output files under case `agent/timelines/` and return paths, not full CSV. |
 | `psort --slice` | No | Very useful for event pivot | Add a narrow MCP tool that takes timestamp/window and writes a small export. |
 | `image_export.py` | No | Overlaps targeted artifact extraction | Keep as fallback unless frequent need appears. |
 
@@ -62,7 +82,7 @@ Assumptions:
 | Skill item | Current automated coverage | Gap / note | Recommended MCP direction |
 |---|---|---|---|
 | `ewfinfo` | Yes via `idx_inspect_container` | Metadata only | Add optional hash fields to case evidence view if missing. |
-| `ewfverify` | No | Evidence manifest hashes exist, but E01 internal verification is separate | Add `evidence_verify_container` for EWF internal hash verification. |
+| `ewfverify` | No | Examiner-owned evidence validation step. Evidence manifest hashes and HMAC ledger are authoritative for this runtime. | Do not prioritize as agent automation now. If needed later, expose as examiner/portal metadata, not as an agent substitute for sealing and HMAC verification. |
 | E01 mount | Yes | Uses xmount/ntfs-3g with ewfmount fallback | Keep. |
 | `mmls`, `fsstat` | Not exposed | Useful for partition/filesystem context | Capture partition/filesystem summary during ingest. |
 | `fls` bodyfile + `mactime` | No | Useful filesystem timeline | Add optional filesystem timeline job; index or save bodyfile summary. |
@@ -127,34 +147,37 @@ Current Tier 1 misses two skill-recommended high-value plugins:
 These are core memory-baseline signals. Adding them to default memory ingest gives better
 coverage without asking the agent to remember a Tier 2 rerun.
 
-### 3. Add A Case-Aware Command Output Capture Pattern
+### 3. Standardize Agent Output Capture Under `agent/`
 
 Impact: high. Effort: medium.
 
 For manual fallbacks, the agent should not paste huge command output into chat. Instead:
 
 - MCP response gives a precise command.
-- Command writes to `analysis/`, `exports/`, or `tmp/` under `AGENTIR_CASE_DIR`.
+- Command writes to `agent/commands/` or another purpose-specific subdirectory under
+  `AGENTIR_CASE_DIR/agent/`.
 - A follow-up MCP tool indexes or summarizes the output.
 - Tool response returns file paths and short summaries only.
 
-Suggested primitive:
+Current primitive:
 
-`run_case_command(command, output_path, parser_hint="", reason="")`
+`run_command(command=[...], purpose="...", save_output=True, input_files=[...])`
 
-or keep `run_command` but add standard response recipes in relevant tools.
+The next increment should add structured response recipes in relevant tools and, only if
+needed, an explicit `output_dir`/`output_path` parameter constrained to `agent/`.
 
-### 4. Add EWF Internal Verification
+### 4. Improve Fallback Response Hints
 
-Impact: high for forensic defensibility. Effort: low.
+Impact: high. Effort: low to medium.
 
-Current chain-of-custody hashes are strong, but `ewfverify` validates the image's internal
-EWF acquisition hashes. Add a case-aware tool or case-mcp action:
+Fallback-only workflows should return compact, structured guidance with:
 
-- Input: evidence path.
-- Runs `ewfverify` read-only.
-- Stores short verification result in case audit/ledger.
-- Returns stored output path, computed status, and hash fields.
+- `coverage_gap`
+- `when_to_run`
+- `command`
+- `output_path` under `agent/`
+- `next_mcp_step`
+- `warning`
 
 ### 5. Add Autorunsc CSV Ingest And ASEP Summary
 
@@ -188,7 +211,7 @@ Impact: medium-high. Effort: medium.
 Do not run full Plaso by default; it is expensive. Add a background job:
 
 - `idx_generate_timeline(profile="win10", scope="full|evtx|registry|filesystem", output="csv|json")`
-- Writes `.plaso` and exports under `exports/timelines/`.
+- Writes `.plaso` and exports under `agent/timelines/`.
 - Runs `pinfo.py` and returns parser hit stats.
 - Adds a "timeline export available" entry in `idx_case_summary`.
 
@@ -198,9 +221,9 @@ Impact: medium-high. Effort: medium.
 
 First add installer/prereq verification for `yara` and `yarac`. Then add:
 
-- `idx_yara_sweep(path="evidence|mounted|exports", rules_path=..., dry_run=True)`
+- `idx_yara_sweep(path="evidence|mounted|agent", rules_path=..., dry_run=True)`
 - Background scan.
-- Output file under `exports/yara_hits/`.
+- Output file under `agent/yara/`.
 - Optional hit indexing into OpenSearch.
 
 Default should not run community rules automatically because noisy hits can confuse findings.
@@ -236,8 +259,8 @@ the useful detail. Add compact parser error details to `idx_ingest_status()` for
 |---:|---|---|
 | 1 | Coverage state in `idx_case_summary` | Stops agent overclaiming coverage immediately. |
 | 2 | Promote memory `psscan` + `netscan` to default | Big memory-forensics upgrade with small code change. |
-| 3 | `ewfverify` case-aware verification | Easy forensic-defensibility win. |
-| 4 | Manual fallback command recipes with output paths | Reduces context bloat and keeps case facts durable. |
+| 3 | Standardize `agent/` command-output capture | Reduces context bloat and keeps agent-generated provenance visible to the operator. |
+| 4 | Manual fallback response hints with `agent/` output paths | Gives the agent safe next steps without adding premature tools. |
 | 5 | Autorunsc CSV ingest + ASEP summary | High-value persistence coverage from common collection output. |
 | 6 | Filesystem metadata summary | Captures TSK context without heavy recovery workflows. |
 | 7 | Optional Plaso timeline job | Useful examiner deliverable, but expensive. |
@@ -263,8 +286,8 @@ Example for YARA:
 {
   "coverage_gap": "No YARA sweep has been run for this case.",
   "when_to_run": "Run only after specific IOC strings, hashes, or malware family rules are available.",
-  "command": "yara -r -s /path/to/rules.yar \"$AGENTIR_CASE_DIR/evidence\" > \"$AGENTIR_CASE_DIR/exports/yara_hits/ioc_sweep.txt\"",
-  "output_path": "exports/yara_hits/ioc_sweep.txt",
+  "command": "yara -r -s /path/to/rules.yar \"$AGENTIR_CASE_DIR/evidence\" > \"$AGENTIR_CASE_DIR/agent/yara/ioc_sweep.txt\"",
+  "output_path": "agent/yara/ioc_sweep.txt",
   "next_mcp_step": "Index or summarize only matching rule names, paths, and offsets; do not paste full output into findings.",
   "warning": "Community rules can be noisy. Treat hits as leads, not findings."
 }
@@ -276,8 +299,8 @@ Example for Volatility deep dive:
 {
   "coverage_gap": "Default memory ingest did not run malfind or VAD analysis.",
   "when_to_run": "Run only for suspicious PIDs from pslist/psscan/pstree/cmdline/netstat.",
-  "command": "vol -f \"$AGENTIR_CASE_DIR/evidence/Rocba-Memory.raw\" --renderer json windows.malfind --pid <PID> > \"$AGENTIR_CASE_DIR/analysis/memory/malfind_<PID>.json\"",
-  "output_path": "analysis/memory/malfind_<PID>.json",
+  "command": "vol -f \"$AGENTIR_CASE_DIR/evidence/Rocba-Memory.raw\" --renderer json windows.malfind --pid <PID> > \"$AGENTIR_CASE_DIR/agent/memory/malfind_<PID>.json\"",
+  "output_path": "agent/memory/malfind_<PID>.json",
   "next_mcp_step": "Summarize PID, process name, VAD address, protection, and PE/header indicators.",
   "warning": "malfind has false positives; require corroboration before recording a finding."
 }

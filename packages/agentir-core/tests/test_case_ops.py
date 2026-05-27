@@ -119,7 +119,7 @@ class TestCaseInitData:
             case_id="INC-TEST-001",
         )
         case_dir = cases_dir / "INC-TEST-001"
-        for subdir in ("evidence", "extractions", "reports", "audit"):
+        for subdir in ("evidence", "extractions", "reports", "audit", "agent"):
             assert (case_dir / subdir).is_dir()
 
     def test_creates_case_yaml(self, cases_dir, active_home):
@@ -324,6 +324,7 @@ class TestCaseStatusPaths:
         assert result["extractions_dir"] == str(case_dir / "extractions")
         assert result["reports_dir"] == str(case_dir / "reports")
         assert result["audit_dir"] == str(case_dir / "audit")
+        assert result["agent_dir"] == str(case_dir / "agent")
 
     def test_path_fields_are_strings(self, tmp_path):
         """All dir fields are plain strings, not Path objects."""
@@ -334,5 +335,11 @@ class TestCaseStatusPaths:
         for fname in ("findings.json", "timeline.json", "evidence.json"):
             (case_dir / fname).write_text("[]")
         result = case_status_data(case_dir)
-        for field in ("evidence_dir", "extractions_dir", "reports_dir", "audit_dir"):
+        for field in (
+            "evidence_dir",
+            "extractions_dir",
+            "reports_dir",
+            "audit_dir",
+            "agent_dir",
+        ):
             assert isinstance(result[field], str), f"{field} should be a str"

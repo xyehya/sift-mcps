@@ -177,17 +177,21 @@ def validate_output_path(path: str) -> str:
     """
     resolved = str(Path(path).resolve())
 
-    # Case-dir containment: must resolve only under extractions/ or tmp/
+    # Case-dir containment: must resolve only under agent/, extractions/, or tmp/.
     case_dir = resolve_case_dir()
     if case_dir:
         case_resolved = Path(case_dir).resolve()
-        allowed_subdirs = [case_resolved / "extractions", case_resolved / "tmp"]
+        allowed_subdirs = [
+            case_resolved / "agent",
+            case_resolved / "extractions",
+            case_resolved / "tmp",
+        ]
         for subdir in allowed_subdirs:
             if resolved == str(subdir) or resolved.startswith(str(subdir) + "/"):
                 return resolved
         raise ValueError(
-            f"Output path '{path}' must be inside the case extractions or tmp directory: "
-            f"'{case_resolved}/extractions/' or '{case_resolved}/tmp/'"
+            f"Output path '{path}' must be inside the case agent, extractions, or tmp directory: "
+            f"'{case_resolved}/agent/', '{case_resolved}/extractions/' or '{case_resolved}/tmp/'"
         )
 
     # No case dir: allow /tmp and cwd before checking blocked dirs

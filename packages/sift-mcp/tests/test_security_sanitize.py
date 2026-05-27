@@ -1,7 +1,7 @@
 import logging
 
 import pytest
-from sift_mcp.security import sanitize_extra_args
+from sift_mcp.security import sanitize_extra_args, validate_output_path
 
 
 def test_sanitize_extra_args_rejects_null_byte():
@@ -22,3 +22,14 @@ def test_sanitize_extra_args_normalizes_non_nfc_argument(caplog):
 
     assert sanitized == ["case-\u00e9vidence"]
     assert "Normalized non-NFC argument" in caplog.text
+
+
+def test_validate_output_path_allows_agent_dir(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case-001"
+    agent_dir = case_dir / "agent" / "commands"
+    agent_dir.mkdir(parents=True)
+    monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+
+    assert validate_output_path(str(agent_dir / "tool-output.txt")) == str(
+        agent_dir / "tool-output.txt"
+    )

@@ -3365,7 +3365,7 @@ async def post_case_create(request: Request) -> JSONResponse:
 
         # Create directories
         real_requested.mkdir(parents=True)
-        for subdir in ("audit", "evidence", "extractions", "reports"):
+        for subdir in ("audit", "evidence", "extractions", "reports", "agent"):
             (real_requested / subdir).mkdir()
 
         # Write CASE.yaml metadata

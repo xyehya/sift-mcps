@@ -201,6 +201,7 @@ def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
     assert (requested_dir / "evidence").is_dir()
     assert (requested_dir / "extractions").is_dir()
     assert (requested_dir / "reports").is_dir()
+    assert (requested_dir / "agent").is_dir()
 
     case_yaml_path = requested_dir / "CASE.yaml"
     assert case_yaml_path.exists()
