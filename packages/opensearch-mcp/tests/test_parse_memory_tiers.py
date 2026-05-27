@@ -17,6 +17,33 @@ section). Real vol-help parsing may come back as a separate ticket.
 from __future__ import annotations
 
 
+class TestTier1Promotion:
+    def test_psscan_in_tier_1(self):
+        """windows.psscan promoted to Tier 1 — hidden/exited processes in every default run."""
+        from opensearch_mcp.parse_memory import TIER_1
+
+        assert "windows.psscan" in TIER_1
+
+    def test_netscan_in_tier_1(self):
+        """windows.netscan promoted to Tier 1 — historical/closed connections in every default run."""
+        from opensearch_mcp.parse_memory import TIER_1
+
+        assert "windows.netscan" in TIER_1
+
+    def test_tier_2_no_duplicate_psscan_netscan(self):
+        """TIER_2 must not contain duplicates after psscan/netscan moved to TIER_1."""
+        from opensearch_mcp.parse_memory import TIER_2
+
+        assert TIER_2.count("windows.psscan") == 1
+        assert TIER_2.count("windows.netscan") == 1
+
+    def test_tier_1_subset_of_tier_2(self):
+        """TIER_1 must remain a strict subset of TIER_2."""
+        from opensearch_mcp.parse_memory import TIER_1, TIER_2
+
+        assert set(TIER_1).issubset(set(TIER_2))
+
+
 class TestTier3PluginList:
     def test_hashdump_removed_from_tier_3(self):
         """`windows.registry.hashdump` isn't in Vol3 2.26.2's argparse

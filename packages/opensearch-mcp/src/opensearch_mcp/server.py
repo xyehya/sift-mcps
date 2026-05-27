@@ -156,6 +156,139 @@ def _add_investigation_hints(resp: dict, artifacts: dict) -> None:
     _hints_delivered = True
 
 
+def _build_coverage_state(artifacts: dict, enrichment: dict) -> dict:
+    """Compute coverage state for idx_case_summary.
+
+    Pure computation — compares present artifact keys against expected registry.
+    Returns disk_artifacts, memory tier/plugin state, enrichment status, and
+    actionable gaps. No new OpenSearch queries.
+    """
+    from opensearch_mcp.parse_memory import TIER_1, TIER_2, TIER_3, _plugin_to_index_suffix
+
+    art_keys = set(artifacts.keys())
+
+    # Disk artifact registry: skill_area → (candidate index keys, absent_status)
+    _DISK: dict[str, tuple[set[str], str]] = {
+        "evtx":       ({"evtx"},                    "not_run"),
+        "hayabusa":   ({"hayabusa"},                 "not_run"),
+        "amcache":    ({"amcache", "delim-amcache"}, "not_run"),
+        "shimcache":  ({"shimcache"},                "not_run"),
+        "registry":   ({"registry"},                 "not_run"),
+        "shellbags":  ({"shellbags"},                "not_run"),
+        "jumplists":  ({"jumplists"},                "not_run"),
+        "lnk":        ({"lnk"},                      "not_run"),
+        "recyclebin": ({"recyclebin"},               "not_run"),
+        "mft":        ({"mft", "delim-mftecmd"},     "not_run"),
+        "usn":        ({"usn"},                      "not_run"),
+        "prefetch":   ({"prefetch"},                 "not_run"),
+        "srum":       ({"srum", "delim-srumecmd"},   "not_run"),
+        "tasks":      ({"tasks"},                    "not_run"),
+        "browser":    (set(),                        "not_available"),
+        "autoruns":   (set(),                        "not_available"),
+    }
+    disk_artifacts = {
+        skill: "indexed" if any(k in art_keys for k in keys) else absent
+        for skill, (keys, absent) in _DISK.items()
+    }
+
+    # Memory: which vol-* indices are present
+    vol_keys = {k for k in art_keys if k.startswith("vol-")}
+    suffix_to_plugin = {_plugin_to_index_suffix(p): p for p in TIER_3}
+
+    if vol_keys:
+        t3_excl = set(TIER_3) - set(TIER_2)
+        t2_excl = set(TIER_2) - set(TIER_1)
+        if any(_plugin_to_index_suffix(p) in vol_keys for p in t3_excl):
+            tier_run = 3
+        elif any(_plugin_to_index_suffix(p) in vol_keys for p in t2_excl):
+            tier_run = 2
+        else:
+            tier_run = 1
+        plugins_run = sorted(
+            suffix_to_plugin[k] for k in vol_keys if k in suffix_to_plugin
+        )
+        plugins_not_run = [p for p in TIER_3 if _plugin_to_index_suffix(p) not in vol_keys]
+    else:
+        tier_run = None
+        plugins_run = []
+        plugins_not_run = list(TIER_1)
+
+    memory: dict = {
+        "tier_run": tier_run,
+        "plugins_run": plugins_run,
+        "plugins_not_run": plugins_not_run,
+    }
+
+    # Enrichment: derive from already-computed enrichment dict
+    enrichment_state = {
+        "triage": "done" if "triage" in enrichment else "not_run",
+        "threat_intel": "done" if "threat_intel" in enrichment else "not_run",
+    }
+
+    # Gaps: actionable items derived from what's absent
+    gaps: list[dict] = []
+
+    if not vol_keys:
+        gaps.append({
+            "coverage_gap": "No memory analysis run — process, network, and module data unavailable.",
+            "when_to_run": "When a memory image is available in evidence/.",
+            "command": "idx_ingest(path='<memory_image>', format='memory', hostname='<hostname>', tier=1)",
+            "output_path": None,
+            "next_mcp_step": "idx_case_summary to verify vol-pslist, vol-netscan, vol-psscan indices",
+            "warning": "Tier 1 takes 2-5 minutes on a 16GB image.",
+        })
+    elif tier_run == 1:
+        mem_host = next(
+            (h for k, v in artifacts.items() if k.startswith("vol-") for h in v.get("hosts", [])),
+            "<hostname>",
+        )
+        gaps.append({
+            "coverage_gap": "Memory Tier 2 not run — dlllist, envars, getsids, ldrmodules not indexed.",
+            "when_to_run": "When suspicious processes or services found in Tier 1 results.",
+            "command": f"idx_ingest(path='<memory_image>', format='memory', hostname='{mem_host}', tier=2)",
+            "output_path": None,
+            "next_mcp_step": "idx_search on vol-dlllist or vol-ldrmodules after completion",
+            "warning": "Tier 2 adds 5-10 minutes on a 16GB image.",
+        })
+
+    if disk_artifacts.get("mft") == "not_run":
+        gaps.append({
+            "coverage_gap": "MFT not indexed — file creation/deletion/timestomping analysis unavailable.",
+            "when_to_run": "Include in initial ingest when disk image is available.",
+            "command": "idx_ingest(path='<disk_image>', format='auto', hostname='<hostname>')",
+            "output_path": None,
+            "next_mcp_step": "idx_search on mft index for InUse=False (deleted) or SI<FN (timestomping)",
+            "warning": None,
+        })
+
+    if enrichment_state["triage"] == "not_run" and art_keys:
+        gaps.append({
+            "coverage_gap": "Triage enrichment not run — file/service/registry baselines not checked.",
+            "when_to_run": "After initial ingest completes.",
+            "command": "idx_enrich_triage()",
+            "output_path": None,
+            "next_mcp_step": "idx_case_summary to verify enrichment.triage counts",
+            "warning": None,
+        })
+
+    if enrichment_state["threat_intel"] == "not_run" and art_keys:
+        gaps.append({
+            "coverage_gap": "Threat intel enrichment not run — IPs and hashes not checked against OpenCTI.",
+            "when_to_run": "After initial ingest; requires OpenCTI running.",
+            "command": "idx_enrich_intel()",
+            "output_path": None,
+            "next_mcp_step": "idx_case_summary to verify enrichment.threat_intel counts",
+            "warning": "Takes 15-60 minutes for large IOC corpora.",
+        })
+
+    return {
+        "disk_artifacts": disk_artifacts,
+        "memory": memory,
+        "enrichment": enrichment_state,
+        "gaps": gaps,
+    }
+
+
 # --- Field name mismatch detection (cached per case) ---
 _case_index_cache: dict[str, set[str]] = {}
 
@@ -1313,6 +1446,7 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
     if fields_per_type:
         resp["fields_per_type"] = fields_per_type
     _add_investigation_hints(resp, artifacts)
+    resp["coverage_state"] = _build_coverage_state(artifacts, enrichment)
     aid = audit.log(
         tool="idx_case_summary",
         params={"case_id": cid},

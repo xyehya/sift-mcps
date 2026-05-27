@@ -40,7 +40,7 @@ The matrix is a coverage map, not an implementation contract. The safest expansi
 | SIFT skill area | Current MCP coverage | Current status | Main gaps | Agent risk today |
 |---|---|---:|---|---|
 | Windows Artifacts / EZ Tools | `idx_ingest(format="auto")`, `idx_search`, `idx_timeline`, `idx_aggregate`, `idx_case_summary`, Hayabusa, triage enrichment | Strong | Autorunsc, SQLECmd/browser, bstrings, some EZ tools depend on fallback paths | Low to medium. Most high-value host artifacts are indexed, but browser and ASEP coverage is not explicit. |
-| Memory Forensics / Volatility 3 | `idx_ingest(format="memory", tier=1/2/3)`, `vol-*` indices, triage enrichment for services, Hayabusa↔memory correlation | Partial | psscan+netscan Tier 1 promotion pending; no Memory Baseliner; no dump workflows; no YARA-in-memory; no VAD/manual strings workflow | Medium. Hayabusa corroboration stamps added; agent still needs to query `hayabusa_corroboration.flagged:true` to surface cross-referenced processes. |
+| Memory Forensics / Volatility 3 | `idx_ingest(format="memory", tier=1/2/3)`, `vol-*` indices, triage enrichment for services, Hayabusa↔memory correlation, `coverage_state` in `idx_case_summary` | **Strong (Tier 1)** | No Memory Baseliner; no dump workflows; no YARA-in-memory; no VAD/manual strings workflow | Low to medium. psscan (2,212 docs) and netscan (430 docs) now default Tier 1. Agent can query `hayabusa_corroboration.flagged:true` to surface cross-referenced processes. `coverage_state` shows exactly what ran and what's missing. |
 | Timeline / Plaso | Plaso fallback parsers for selected artifacts; OpenSearch timeline/query tools | Partial | No first-class `.plaso` build/export, `pinfo`, `psort` slice/filter, or merged super-timeline workflow | Medium. Agent can query indexed timelines, but not generate examiner-friendly Plaso exports through MCP. |
 | File System / Carving / TSK | Container inspect, read-only mount/ingest, artifact discovery, safe traversal | Partial | `mmls/fsstat/fls/icat/ils/tsk_recover`, `bulk_extractor`, `photorec`, bodyfile/mactime are not indexed workflows | Medium. Deep filesystem recovery requires manual commands and can bloat context. |
 | Threat Hunting / IOC Sweeps | OpenCTI enrichment, Hayabusa detections, windows-triage baselines, OpenSearch IOC search | Low to partial | YARA/yarac not currently integrated; no generated IOC sweep artifacts; Velociraptor is out-of-band | Medium to high for malware-hunt workflows. Agent lacks a one-call sweep path. |
@@ -60,8 +60,8 @@ The matrix is a coverage map, not an implementation contract. The safest expansi
 | `windows.svcscan` | Yes, Tier 1 | Indexed as `vol-svcscan`; triage currently checks service names | Add binary path checks where available. |
 | `windows.modules` | Yes, Tier 1 | Indexed as `vol-modules` | Add unsigned/unknown driver summary if fields support it. |
 | `windows.registry.hivelist` | Yes, Tier 1 | Indexed as `vol-hivelist` | Keep default. |
-| `windows.netscan` | Yes, Tier 2 | **Tier 1 promotion agreed 2026-05-27, not yet applied.** `ForeignAddr.keyword` already swept by `idx_enrich_intel` for OpenCTI IP lookups. `Owner` field cross-referenced by Hayabusa memory correlation. | Move to TIER_1 in `parse_memory.py` — 2-line change. |
-| `windows.psscan` | Yes, Tier 2 | **Tier 1 promotion agreed 2026-05-27, not yet applied.** `ImageFileName` is 14-char truncated — excluded from triage `check_file` by design (would false-positive every system process). Hayabusa memory correlation stamps `hayabusa_corroboration.*` on psscan docs when process name matches a high/critical alert. | Move to TIER_1 in `parse_memory.py` alongside netscan. |
+| `windows.netscan` | **Yes, Tier 1** ✓ | **Promoted 2026-05-27.** Live: 430 docs on rocba case (vs 162 netstat — 268 additional historical/closed connections). `ForeignAddr.keyword` swept by `idx_enrich_intel`. `Owner` field corroborated by Hayabusa memory correlation. | Done. |
+| `windows.psscan` | **Yes, Tier 1** ✓ | **Promoted 2026-05-27.** Live: 2,212 docs on rocba case (vs 2,186 pslist — 26 hidden/exited processes). `ImageFileName` 14-char truncated — excluded from `check_file` by design. Hayabusa corroboration stamps applied. | Done. |
 | `windows.dlllist`, `envars`, `getsids` | Yes, Tier 2 | Useful pivots, moderate cost | Keep Tier 2; add targeted follow-up prompt. |
 | `windows.handles`, `filescan`, `malfind` | Yes, Tier 3 | Useful but heavier | Add an MCP "deep memory scan" preset rather than agent hand-selecting plugins. |
 | `windows.vadinfo`, `vadyarascan`, dumpfiles, memmap dumps | No | Manual only | Return precise `run_command` recipes only when a suspicious PID/path exists. |
@@ -121,31 +121,19 @@ The matrix is a coverage map, not an implementation contract. The safest expansi
 
 ## Biggest And Easiest Wins
 
-### 1. Add Coverage State To `idx_case_summary`
+### ~~1. Add Coverage State To `idx_case_summary`~~ — **DONE 2026-05-27**
 
-Impact: very high. Effort: low.
+`_build_coverage_state(artifacts, enrichment)` in `server.py`. Returns `disk_artifacts`
+(indexed/not_run/not_available per SIFT skill area), `memory` (tier_run, plugins_run,
+plugins_not_run), `enrichment` state, and `gaps` (structured fallback recipes). Verified
+live on rocba case: coverage_state correctly reported tier_run=1, psscan/netscan in
+plugins_not_run before re-ingest, then correctly updated after. 25 unit tests.
 
-`idx_case_summary()` should explicitly report expected coverage by evidence type:
+### ~~2. Promote `windows.psscan` And `windows.netscan` Into Default Memory Tier~~ — **DONE 2026-05-27**
 
-- Disk container coverage: EVTX, Hayabusa, registry, Amcache, Shimcache, Prefetch, SRUM,
-  LNK, Jumplists, Shellbags, Recycle Bin, tasks, MFT/USN if requested.
-- Memory coverage: tier run, plugins completed, plugins not run.
-- Enrichment coverage: triage baseline, OpenCTI, Hayabusa.
-- Gaps: "not run", "fallback parser used", "manual-only".
-
-This prevents the agent from assuming "case indexed" means every SIFT skill has been covered.
-
-### 2. Promote `windows.psscan` And `windows.netscan` Into Default Memory Tier
-
-Impact: high. Effort: low to medium.
-
-Current Tier 1 misses two skill-recommended high-value plugins:
-
-- `windows.psscan`: hidden/exited processes.
-- `windows.netscan`: historical/closed network connections.
-
-These are core memory-baseline signals. Adding them to default memory ingest gives better
-coverage without asking the agent to remember a Tier 2 rerun.
+`parse_memory.py` TIER_1 updated. TIER_2 extension deduped. Verified live on rocba case:
+psscan → 2,212 docs (26 hidden/exited vs pslist); netscan → 430 docs (268 more than netstat).
+4 regression tests added.
 
 ### 3. Standardize Agent Output Capture Under `agent/`
 
@@ -257,8 +245,8 @@ the useful detail. Add compact parser error details to `idx_ingest_status()` for
 
 | Rank | Work item | Why first |
 |---:|---|---|
-| 1 | Coverage state in `idx_case_summary` | Stops agent overclaiming coverage immediately. |
-| 2 | Promote memory `psscan` + `netscan` to default | Big memory-forensics upgrade with small code change. |
+| ~~1~~ | ~~Coverage state in `idx_case_summary`~~ | **Done 2026-05-27** |
+| ~~2~~ | ~~Promote memory `psscan` + `netscan` to default~~ | **Done 2026-05-27** |
 | 3 | Standardize `agent/` command-output capture | Reduces context bloat and keeps agent-generated provenance visible to the operator. |
 | 4 | Manual fallback response hints with `agent/` output paths | Gives the agent safe next steps without adding premature tools. |
 | 5 | Autorunsc CSV ingest + ASEP summary | High-value persistence coverage from common collection output. |
@@ -360,28 +348,19 @@ merely parents of suspicious children.
 | Date | Item | Status | Notes |
 |---|---|---|---|
 | 2026-05-27 | Hayabusa↔memory correlation | **Done** | `_enrich_hayabusa_memory_correlation` in `triage_remote.py`; 9 tests; 928/928 pass; deployed to VM; runs as gateway-independent enrichment pass inside `idx_enrich_triage` |
-| 2026-05-27 | psscan + netscan → Tier 1 | **Agreed, pending** | 2-line change in `packages/opensearch-mcp/src/opensearch_mcp/parse_memory.py` TIER_1 list; no test changes needed |
+| 2026-05-27 | psscan + netscan → Tier 1 | **Done** | `parse_memory.py` TIER_1 promoted; TIER_2 deduped; 4 new regression tests; 953/953 pass |
+| 2026-05-27 | `coverage_state` in `idx_case_summary` | **Done** | `_build_coverage_state(artifacts, enrichment)` added to `server.py`; injected as `coverage_state` field; 25 unit tests; disk/memory/enrichment/gaps; reuses `_plugin_to_index_suffix` from `parse_memory.py` |
+| 2026-05-27 | Live validation — psscan/netscan + coverage_state | **Verified** | Force re-ingest of `Rocba-Memory.raw` on rocba-drive-20260526-1417: 10-plugin Tier 1 run (pid 1664039, 1m). psscan: 2,212 docs; netscan: 430 docs. coverage_state returned correct state before and after. EVTX `unknown error` on disk ingest is pre-existing across all historical runs — not a regression. |
 
 ## Next Work Queue
 
 Ordered by the priority framework established 2026-05-27 (Group 1 → response enrichment,
 Group 2 → small targeted extensions, Group 3 → new capability modules):
 
-### Group 1 — Next up (response enrichment only, no new tools)
+### Group 1 — Complete
 
-**1. psscan + netscan → Tier 1** (`parse_memory.py`, 2 lines)
-Add `"windows.psscan"` and `"windows.netscan"` to `TIER_1`. Every future memory ingest
-defaults to full process and connection coverage. Verified safe: existing tests pass,
-no schema change, no gateway change.
-
-**2. `coverage_state` section in `idx_case_summary`** (`server.py`)
-Add `_build_coverage_state(artifacts)` helper that compares indexed artifact keys against
-an expected-artifact registry. Returns `coverage_state.disk_artifacts` (present/absent per
-SIFT skill area), `coverage_state.memory` (tier run, plugins run/not run), and
-`coverage_state.gaps` (structured fallback recipes with `coverage_gap`, `when_to_run`,
-`command`, `output_path`, `next_mcp_step`, `warning`). Injected as a new field in
-`idx_case_summary` response. Agent gets the SIFT skill map at every session start without
-a new tool call.
+**1. psscan + netscan → Tier 1** — Done 2026-05-27
+**2. `coverage_state` in `idx_case_summary`** — Done 2026-05-27
 
 ### Group 2 — Small targeted extensions (one file each)
 
