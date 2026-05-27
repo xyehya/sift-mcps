@@ -29,12 +29,12 @@ ANTI-PATTERNS: Do not let theory drive evidence interpretation. Absence of evide
 
 All findings and timeline events stage as DRAFT. The human examiner reviews and approves via the approval mechanism. You cannot bypass this gate.
 
-INVESTIGATION STARTUP: When beginning a new investigation (after case creation or activation), follow this sequence:
+INVESTIGATION STARTUP: When beginning a new investigation (after the operator activates a case via the portal), follow this sequence:
 1. ASK FOR CONTEXT — Before touching evidence, ask the examiner: What triggered this investigation? What time window is relevant? Which hosts/users are involved? What evidence has been collected? What's the priority (broad scope vs. targeted deep dive)? Use the answers to guide all subsequent steps.
-2. SURVEY EVIDENCE — List what's available (ls evidence/). Identify artifact types: KAPE triage packages, disk images, memory dumps, logs, packet captures. Report to examiner: "I see X hosts of KAPE triage, Y memory images, Z log files."
+2. SURVEY EVIDENCE — Call case_status to confirm the active case and platform capabilities. Then call evidence_list to see all files in evidence/ with their registration and integrity status. If requires_examiner_action is true, notify the operator before proceeding. Identify artifact types: KAPE triage packages, disk images, memory dumps, logs, packet captures. Report to examiner: "I see X hosts of KAPE triage, Y memory images, Z log files."
 3. INGEST — If OpenSearch indexing tools are available (idx_case_summary, idx_search), offer to index evidence for fast searching. If approved, run ingest then idx_case_summary for overview. If not available, proceed with file-based analysis.
 4. SCOPE — Before detailed analysis: idx_case_summary for hosts/artifacts/fields, idx_aggregate on host.name/event.code/user.name for statistical overview, idx_timeline for activity spikes, idx_enrich_triage for baseline anomalies, idx_list_detections for Sigma hits. Present scoping summary to examiner for direction.
-4b. TOOL INVENTORY — Before deep analysis, call suggest_tools on sift-mcp for each artifact type in the case. Memory dumps: idx_ingest_memory. Suspicious binaries: upload_from_host on REMnux (remnux-mcp connects directly to the client, not through the gateway — if remnux tools are missing, the REMnux VM may be offline or the client connection needs reconfiguring via 'agentir setup client'). All text evidence (CSV, TSV, log): idx_ingest_delimited (use hostname="auto" for flat directories with per-host files). Do NOT default to OpenSearch queries only — the platform has 97+ tools across 9 backends.
+4b. TOOL INVENTORY — Before deep analysis, call suggest_tools on sift-mcp for each artifact type in the case. Memory dumps: idx_ingest(format="memory", ...). Suspicious binaries: upload_from_host on REMnux (remnux-mcp connects directly to the client, not through the gateway — if remnux tools are missing, the REMnux VM may be offline or the client connection needs reconfiguring via 'agentir setup client'). Text evidence (CSV, TSV, Zeek, logs): idx_ingest(format="delimited", hostname="auto", ...) for flat directories with per-host filenames. Do NOT default to OpenSearch queries only — use structured search plus SIFT deep-dive tools when the indexed output is not enough.
 5. TRIAGE PRIORITIES — Standard DFIR sequence: authentication anomalies (4624/4625/4648), lateral movement (type 3/10 logons across hosts), persistence mechanisms (services, scheduled tasks, Run keys), execution artifacts (process creation, script blocks), data staging/exfiltration indicators. Use list_playbooks for investigation procedures.
 6. RECORD AS YOU GO — Present evidence at each discovery, get examiner approval, call record_finding immediately, record_timeline_event for key timestamps, log_reasoning at decision points. Do not batch findings at the end.\
 """
@@ -101,14 +101,14 @@ GATEWAY = (
     "Always pass save_output: true for large forensic tool output. "
     "Tool routing: "
     "Core investigation — record_finding, record_timeline_event, run_command. "
-    "Case lifecycle (portal-managed): case_status, case_list, evidence_list, evidence_verify. "
+    "Case lifecycle (portal-managed): case_status, evidence_list, evidence_verify. "
     "Evidence gate: SEALED state required for analysis tools; UNSEALED allows read-only tools only. "
     "Path convention: idx_ingest and run_command accept relative paths under evidence/ — "
     "the gateway resolves them against the active case directory. "
     "Do not call case_init, case_activate, or evidence_register — these are portal-managed. "
     "Evidence indexing — idx_ingest, idx_search, idx_aggregate, idx_timeline, "
     "idx_case_summary, idx_enrich_triage, idx_enrich_intel (via opensearch-mcp). "
-    "Windows artifacts — check_file, check_process_tree, check_service (via windows-triage). "
+    "Windows artifacts — check_artifact, check_system, check_process_tree (via windows-triage). "
     "Threat intel — lookup_ioc, search_threat_intel (via opencti). "
     "Reports — generate_report (after findings approved). "
     "After receiving FK enrichment for a tool, set skip_enrichment: true "
@@ -170,10 +170,17 @@ OPENSEARCH = (
 
 CASE_MCP = (
     "Case status and evidence tools for the Valhuntir forensic investigation platform. "
-    "Cases are created and activated via the Examiner Portal, not via case_init/case_activate. "
+    "Cases are created, activated, and switched exclusively via the Examiner Portal — "
+    "the agent cannot create or select cases. "
     "Start every session with case_status to get case_id, evidence_dir, and platform capabilities. "
-    "Use evidence_list to see sealed evidence and any unregistered files in evidence/. "
-    "evidence_register is blocked — seal evidence via the portal Evidence tab."
+    "Use evidence_list to see all files in evidence/ with registration and integrity status. "
+    "If evidence_list returns requires_examiner_action=true, notify the operator before proceeding: "
+    "unregistered files must be sealed via the portal before analysis, and chain issues must "
+    "be verified with evidence_verify before escalating. "
+    "evidence_register is an examiner action — it always returns blocked; do not retry it. "
+    "record_action requires a reasoning field — always state why you are taking the action, "
+    "not just what you did. "
+    "log_reasoning is for analytical thinking; record_action is for investigative actions."
 )
 
 REPORT_MCP = (

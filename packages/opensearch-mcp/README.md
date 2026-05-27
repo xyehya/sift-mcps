@@ -61,11 +61,7 @@ The LLM gets these tools via the MCP protocol:
 | `idx_field_values` | Enumerate unique values in a field |
 | `idx_get_event` | Retrieve a single document by ID |
 | `idx_status` | Index inventory: names, doc counts, sizes |
-| `idx_ingest` | Full disk artifact ingest pipeline |
-| `idx_ingest_memory` | Volatility 3 memory analysis |
-| `idx_ingest_json` | Generic JSON/JSONL ingest |
-| `idx_ingest_delimited` | Generic CSV/TSV/Zeek/bodyfile ingest |
-| `idx_ingest_accesslog` | Apache/Nginx access log ingest |
+| `idx_ingest` | Evidence ingest pipeline: `format="auto|json|delimited|accesslog|memory"` |
 | `idx_ingest_status` | Monitor running ingest operations |
 | `idx_enrich_triage` | Baseline enrichment via windows-triage-mcp |
 | `idx_enrich_intel` | Threat intel enrichment via OpenCTI |

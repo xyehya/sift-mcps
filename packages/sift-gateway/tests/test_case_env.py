@@ -52,7 +52,14 @@ def test_gateway_constructor_applies_case_env(tmp_path, monkeypatch):
     assert Path(os.environ["AGENTIR_CASES_ROOT"]) == case_dir.parent
 
 
-async def test_stdio_backend_refuses_launch_without_active_case_env(monkeypatch):
+async def test_stdio_backend_warns_without_active_case_env(monkeypatch, caplog):
+    """Backend starts in no-case mode with a warning, not a hard crash.
+
+    This supports the post-reset / fresh-install state where the portal
+    needs to be accessible to create the first case before any case dir exists.
+    """
+    import logging
+
     monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
     monkeypatch.setenv("AGENTIR_CASES_ROOT", "/cases")
     backend = StdioMCPBackend(
@@ -60,5 +67,12 @@ async def test_stdio_backend_refuses_launch_without_active_case_env(monkeypatch)
         {"type": "stdio", "command": "python", "args": ["-m", "case_mcp.server"]},
     )
 
-    with pytest.raises(RuntimeError, match="AGENTIR_CASE_DIR"):
-        await backend.start()
+    with caplog.at_level(logging.WARNING):
+        try:
+            await backend.start()
+        except Exception:
+            pass  # Backend may fail to fully start (no real process), that's fine
+
+    assert any("AGENTIR_CASE_DIR" in r.message for r in caplog.records), (
+        "Expected a WARNING about missing AGENTIR_CASE_DIR in no-case mode"
+    )

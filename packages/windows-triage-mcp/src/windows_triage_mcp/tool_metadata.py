@@ -1,6 +1,13 @@
 """Per-tool caveats and interpretation constraints for structured responses."""
 
 TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
+    "check_artifact": {
+        "caveats": [
+            "Baseline covers default Windows installations and selected context databases only",
+            "Third-party software and unknown hashes will often return UNKNOWN",
+        ],
+        "interpretation_constraint": "UNKNOWN means not-in-database, NOT suspicious",
+    },
     "check_file": {
         "caveats": [
             "Baseline covers default Windows installations only",
@@ -35,6 +42,13 @@ TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
             "Many legitimate applications add autorun entries",
         ],
         "interpretation_constraint": "Unknown autorun requires context — may be legitimate software",
+    },
+    "check_system": {
+        "caveats": [
+            "Service, scheduled task, and autorun baselines vary by Windows version",
+            "Enterprise management tools commonly create legitimate system entries",
+        ],
+        "interpretation_constraint": "UNKNOWN requires context and does not confirm malicious persistence",
     },
     "check_registry": {
         "caveats": [
@@ -88,6 +102,12 @@ TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
             "Health check reflects current server state",
         ],
         "interpretation_constraint": "Health status is point-in-time",
+    },
+    "server_status": {
+        "caveats": [
+            "Health and statistics reflect local backend state",
+        ],
+        "interpretation_constraint": "Database coverage depends on imported baselines",
     },
 }
 

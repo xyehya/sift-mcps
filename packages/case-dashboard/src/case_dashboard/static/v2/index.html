@@ -749,8 +749,19 @@ body {
     </div>
   </div>
 
+  <!-- No-case splash (shown when no active case is set) -->
+  <div id="noCaseSplash" style="display:none;flex-direction:column;align-items:center;justify-content:center;padding:80px 24px;text-align:center;gap:16px">
+    <div style="font-size:48px;opacity:0.3">🗂</div>
+    <h2 style="margin:0;font-size:22px;color:var(--text-primary)">No active case</h2>
+    <p style="margin:0;font-size:14px;color:var(--text-muted);max-width:380px">
+      Create a new case to begin the investigation. The portal will activate it automatically.
+    </p>
+    <button class="btn-primary" style="margin-top:8px;padding:10px 28px;font-size:15px"
+      onclick="openNewCaseModal()">Create New Case</button>
+  </div>
+
   <!-- Tabs -->
-  <div class="tabs" role="tablist">
+  <div class="tabs" id="tabNav" role="tablist">
     <div class="tab" data-tab="dashboard" role="tab" tabindex="0"
       aria-selected="false" id="tab-dashboard" aria-controls="panel-dashboard">Overview</div>
     <div class="tab active" data-tab="findings" role="tab" tabindex="0"
@@ -1305,6 +1316,8 @@ async function showLoginScreen() {
 function showApp() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = '';
+  // Optimistically show no-case state until loadAll confirms a case exists
+  setNoCaseState(true);
 
   if (currentExaminer) {
     document.getElementById('examinerName').textContent = currentExaminer;
@@ -1462,6 +1475,26 @@ async function submitSignOut() {
 }
 
 /* === Case Creation Management === */
+function setNoCaseState(noCase) {
+  var splash = document.getElementById('noCaseSplash');
+  var tabNav = document.getElementById('tabNav');
+  var progressBar = document.getElementById('progressBar');
+  var panels = document.querySelectorAll('.tab-panel');
+  var batchToolbar = document.getElementById('batchToolbar');
+  if (noCase) {
+    if (splash) splash.style.display = 'flex';
+    if (tabNav) tabNav.style.display = 'none';
+    if (progressBar) progressBar.style.display = 'none';
+    if (batchToolbar) batchToolbar.style.display = 'none';
+    panels.forEach(function(p) { p.style.display = 'none'; });
+  } else {
+    if (splash) splash.style.display = 'none';
+    if (tabNav) tabNav.style.display = '';
+    if (progressBar) progressBar.style.display = '';
+    panels.forEach(function(p) { p.style.display = ''; });
+  }
+}
+
 function openNewCaseModal() {
   document.getElementById('newCaseId').value = '';
   document.getElementById('newCaseTitle').value = '';
@@ -1768,20 +1801,20 @@ async function loadAll() {
         '<div class="skeleton skeleton-line"></div><div class="skeleton skeleton-block"></div></div>';
     }
     const [f, d, c, tl] = await Promise.all([
-      apiFetch('/api/findings'),
-      apiFetch('/api/delta'),
-      apiFetch('/api/case'),
-      apiFetch('/api/timeline'),
+      apiFetch('/api/findings').catch(() => []),
+      apiFetch('/api/delta').catch(() => ({})),
+      apiFetch('/api/case').catch(() => ({})),
+      apiFetch('/api/timeline').catch(() => []),
     ]);
     if (loading) loading.style.display = 'none';
     hideErrorBanner();
-    const newIds = new Set(f.map(x => x.id));
+    const newIds = new Set((f||[]).map(x => x.id));
     if (previousFindingIds.size > 0) {
       newFindingsCount = [...newIds].filter(id => !previousFindingIds.has(id)).length;
       updateRefreshBadge();
     }
     previousFindingIds = newIds;
-    findings = f;
+    findings = f || [];
     timelineEvents = tl || [];
     delta = d && d.items ? d : { version: 1, case_id: '', items: [] };
     caseMeta = c || {};
@@ -1790,6 +1823,7 @@ async function loadAll() {
       document.title = 'sift-mcps \u2014 ' + caseMeta.case_id;
       if (!delta.case_id) delta.case_id = caseMeta.case_id;
     }
+    setNoCaseState(!caseMeta.case_id);
     await loadCasesList();
     // Prune stale ids from batch selections so the toolbar count
     // reflects only items still visible after refresh.

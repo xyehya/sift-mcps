@@ -472,20 +472,20 @@ def _detect_preparsed_csvs(path: Path) -> str | None:
         parts.append(
             f"Detected ZimmermanTools CSV output "
             f"({', '.join(sorted(found_zt))}). "
-            "Use idx_ingest_delimited(path=..., hostname=...) "
+            "Use idx_ingest(path=..., format='delimited', hostname=...) "
             "to ingest."
         )
     if hayabusa:
         parts.append(
             "Detected Hayabusa CSV output. "
-            "Use idx_ingest_delimited(path=..., hostname=...) "
+            "Use idx_ingest(path=..., format='delimited', hostname=...) "
             "to ingest."
         )
     if not parts and csv_files:
         parts.append(
             f"Found {len(csv_files)} CSV files but no raw Windows "
             "artifacts. If these are pre-parsed tool output, use "
-            "idx_ingest_delimited(path=..., hostname=...)."
+            "idx_ingest(path=..., format='delimited', hostname=...)."
         )
     return " ".join(parts) if parts else None
 
@@ -1039,10 +1039,12 @@ def idx_shard_status() -> dict:
     return resp
 
 
-@server.tool()
 def idx_install_pipelines() -> dict:
-    """Admin maintenance tool to install or verify OpenSearch ingest pipelines
-    and index templates.
+    """Install or verify OpenSearch ingest pipelines and index templates.
+
+    Admin/installer function — not exposed as an agent tool.
+    Called by the installer and gateway startup; agents do not need
+    to call this directly. Use idx_shard_status to diagnose cluster state.
 
     This writes cluster pipeline/template configuration and is not read-only.
     Idempotent. Runs collision detection against operator-installed
@@ -1148,7 +1150,7 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
             },
         )
         for bucket in host_agg["aggregations"]["hosts"]["buckets"]:
-            hosts.add(bucket["key"])
+            hosts.add(bucket["key"].lower())
     except Exception as e:
         resp.setdefault("warnings", []).append(f"Host detection query failed: {e}")
 
@@ -1292,10 +1294,16 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
     except Exception as e:
         resp.setdefault("warnings", []).append(f"Time range query failed: {e}")
 
+    # Only surface hosts that own at least one index — ghost hostnames from
+    # within event fields (e.g. lateral movement targets in Hayabusa ECS data)
+    # appear in the host.name aggregation but have no indices of their own.
+    indexed_hosts = {
+        h for info in artifacts.values() for h in info.get("hosts", [])
+    }
     resp.update(
         {
             "case_id": cid,
-            "hosts": sorted(hosts),
+            "hosts": sorted(indexed_hosts),
             "artifacts": artifacts,
             "total_docs": total_docs,
             "time_range": time_range,
@@ -1308,7 +1316,7 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
     aid = audit.log(
         tool="idx_case_summary",
         params={"case_id": cid},
-        result_summary=f"{len(hosts)} hosts, {len(artifacts)} artifact types, {total_docs} docs",
+        result_summary=f"{len(indexed_hosts)} hosts, {len(artifacts)} artifact types, {total_docs} docs",
     )
     if aid:
         resp["audit_id"] = aid
@@ -1469,42 +1477,71 @@ def _human_size(size_bytes: int) -> str:
 @server.tool()
 def idx_ingest(
     path: str,
+    format: str = "auto",
     hostname: str = "",
+    index_suffix: str = "",
+    time_field: str = "",
+    delimiter: str = "",
+    recursive: bool = False,
     include: list[str] | None = None,
     exclude: list[str] | None = None,
     source_timezone: str = "",
     all_logs: bool = False,
     reduced_ids: bool = False,
     full: bool = False,
+    tier: int = 1,
+    plugins: list[str] | None = None,
     dry_run: bool = True,
     vss: bool = False,
     password: str = "",
     no_hayabusa: bool = False,
 ) -> dict:
-    """Discover and ingest forensic artifacts into OpenSearch.
+    """Preview or ingest evidence into OpenSearch.
 
-    Case ID resolved from the active case set in the Examiner Portal. No parameter needed.
+    Call after case_status, evidence_list, and evidence_verify. Use dry_run=True
+    first. Case ID is resolved from the active case set in the Examiner Portal;
+    no case_id parameter is accepted.
 
-    Supports directories (triage packages, mounted images) AND container
-    files (VHDX, E01, VMDK, 7z, raw). Containers are auto-detected and
-    mounted by the CLI backend.
+    Formats:
+      - auto: E01/VHDX/raw/archive containers, mounted images, or Windows
+        artifact directories. Example:
+        idx_ingest(path="evidence/rocba-cdrive.e01", format="auto", dry_run=True)
+      - json: JSON/JSONL evidence. Example:
+        idx_ingest(path="evidence/events.jsonl", format="json", hostname="host1")
+      - delimited: CSV/TSV/Zeek/bodyfile text evidence. Example:
+        idx_ingest(path="evidence/hayabusa", format="delimited", hostname="auto")
+      - accesslog: Apache/Nginx access logs. Example:
+        idx_ingest(path="evidence/access.log", format="accesslog", hostname="web01")
+      - memory: Volatility 3 memory-image parsing. Example:
+        idx_ingest(path="evidence/memdump.raw", format="memory", hostname="host1", tier=1)
 
-    Triage enrichment runs automatically during ingest when the Windows
-    baseline database is available (local SQLite or remote via gateway).
-    Use idx_enrich_triage to re-run on already-indexed data.
+    Ingest can add baseline context automatically for supported artifacts.
+    Keep enrichment decisions explicit after ingest: use idx_case_summary to
+    inspect coverage, then idx_enrich_triage or idx_enrich_intel when baseline
+    or threat-intel enrichment needs rerun.
 
     Args:
         path: Evidence path under the active case. Bare filenames resolve to
             AGENTIR_CASE_DIR/evidence/. Known relative subdirs like evidence/
             resolve from AGENTIR_CASE_DIR.
+        format: One of auto, json, delimited, accesslog, memory.
         hostname: Source hostname. Auto-detected from directory structure
-            if multi-host triage package. Required for flat directories.
+            for some auto-format evidence. Required for json, accesslog,
+            memory, and most delimited ingests. For delimited, hostname="auto"
+            detects hostnames from filenames in a flat directory.
+        index_suffix: Optional index suffix for json, delimited, or accesslog.
+        time_field: Optional timestamp field for json or delimited.
+        delimiter: Optional delimiter for delimited input.
+        recursive: For delimited directories, treat immediate subdirectories
+            as hostnames.
         include: Only these artifact types (e.g., ["mft", "usn"]).
         exclude: Skip these artifact types (e.g., ["jumplists"]).
         source_timezone: Evidence system's local timezone (e.g., "Eastern Standard Time").
         all_logs: Parse all evtx files (default: forensic logs only).
         reduced_ids: Filter to ~78 high-value Event IDs.
         full: Include all tiers including MFT, USN, timeline.
+        tier: Memory analysis depth (1=fast, 2=moderate, 3=deep).
+        plugins: Memory plugin override; runs only these Volatility plugins.
         dry_run: Preview without indexing (default True). Set False to execute
             immediately if path and parameters are confirmed.
     """
@@ -1522,6 +1559,51 @@ def idx_ingest(
             "action": "Create a case in the Examiner Portal first.",
             "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
         }
+    ingest_format = format.strip().lower()
+    if ingest_format not in {"auto", "json", "delimited", "accesslog", "memory"}:
+        return {
+            "error": f"Unsupported ingest format: {format}",
+            "supported_formats": ["auto", "json", "delimited", "accesslog", "memory"],
+            "next_step": (
+                "Use format='auto' for forensic containers or Windows artifact "
+                "directories; use json, delimited, accesslog, or memory for "
+                "specific evidence types."
+            ),
+        }
+    if ingest_format == "json":
+        if not hostname:
+            return {
+                "error": "hostname is required for format='json'.",
+                "next_step": "Call idx_ingest(..., format='json', hostname='<source-host>', dry_run=True).",
+            }
+        return idx_ingest_json(path, hostname, index_suffix, time_field, dry_run)
+    if ingest_format == "delimited":
+        return idx_ingest_delimited(
+            path,
+            hostname=hostname,
+            index_suffix=index_suffix,
+            time_field=time_field,
+            delimiter=delimiter,
+            recursive=recursive,
+            dry_run=dry_run,
+        )
+    if ingest_format == "accesslog":
+        if not hostname:
+            return {
+                "error": "hostname is required for format='accesslog'.",
+                "next_step": (
+                    "Call idx_ingest(..., format='accesslog', hostname='<web-host>', dry_run=True)."
+                ),
+            }
+        return idx_ingest_accesslog(path, hostname, index_suffix or "accesslog", dry_run)
+    if ingest_format == "memory":
+        if not hostname:
+            return {
+                "error": "hostname is required for format='memory'.",
+                "next_step": "Call idx_ingest(..., format='memory', hostname='<source-host>', dry_run=True).",
+            }
+        return idx_ingest_memory(path, hostname, tier=tier, plugins=plugins, dry_run=dry_run)
+
     evidence_path, path_error = _resolve_tool_path(path)
     if path_error:
         return path_error
@@ -1611,6 +1693,7 @@ def idx_ingest(
                 "containers": containers_found,
                 "next_step": (
                     f"Call idx_ingest(path=\"{containers_found[0]['relative_path']}\", "
+                    "format=\"auto\", "
                     f"hostname=\"<hostname>\", dry_run=True) to preview ingest."
                 ),
             }
@@ -2029,7 +2112,6 @@ def idx_ingest_status(case_id: str = "") -> dict:
     return {"ingests": summaries}
 
 
-@server.tool()
 def idx_ingest_json(
     path: str,
     hostname: str,
@@ -2067,7 +2149,6 @@ def idx_ingest_json(
     return _launch_background("json", resolved_path, hostname, index_suffix, time_field)
 
 
-@server.tool()
 def idx_ingest_delimited(
     path: str,
     hostname: str = "",
@@ -2208,7 +2289,6 @@ def idx_ingest_delimited(
     )
 
 
-@server.tool()
 def idx_ingest_accesslog(
     path: str,
     hostname: str,
@@ -2751,7 +2831,6 @@ def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
     return resp
 
 
-@server.tool()
 def idx_ingest_memory(
     path: str,
     hostname: str,

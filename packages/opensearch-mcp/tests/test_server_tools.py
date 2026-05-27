@@ -45,6 +45,21 @@ def mock_client():
 
 
 class TestToolRegistry:
+    def test_ingest_format_variants_are_consolidated_under_idx_ingest(self):
+        tools = srv.server._tool_manager._tools
+
+        assert "idx_ingest" in tools
+        for old_name in (
+            "idx_ingest_json",
+            "idx_ingest_delimited",
+            "idx_ingest_accesslog",
+            "idx_ingest_memory",
+        ):
+            assert old_name not in tools
+
+        schema = tools["idx_ingest"].fn_metadata.arg_model.model_json_schema()
+        assert "format" in schema["properties"]
+
     def test_query_and_status_tools_are_marked_read_only(self):
         read_only_tools = [
             "idx_search",
@@ -385,6 +400,77 @@ class TestIdxStatus:
 
 
 class TestIdxIngest:
+    def test_rejects_unknown_format(self, mock_client, monkeypatch):
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "test-case")
+        resp = idx_ingest(path="evidence", format="unknown", dry_run=True)
+        assert "error" in resp
+        assert "supported_formats" in resp
+
+    def test_routes_json_format_through_idx_ingest(self, mock_client, monkeypatch):
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "test-case")
+        with patch("opensearch_mcp.server.idx_ingest_json") as handler:
+            handler.return_value = {"status": "preview", "format": "jsonl"}
+            resp = idx_ingest(
+                path="evidence/events.jsonl",
+                format="json",
+                hostname="HOST1",
+                index_suffix="events",
+                time_field="@timestamp",
+                dry_run=True,
+            )
+        handler.assert_called_once_with(
+            "evidence/events.jsonl",
+            "HOST1",
+            "events",
+            "@timestamp",
+            True,
+        )
+        assert resp["status"] == "preview"
+
+    def test_routes_delimited_format_through_idx_ingest(self, mock_client, monkeypatch):
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "test-case")
+        with patch("opensearch_mcp.server.idx_ingest_delimited") as handler:
+            handler.return_value = {"status": "preview", "format": "csv"}
+            resp = idx_ingest(
+                path="evidence/csv",
+                format="delimited",
+                hostname="auto",
+                delimiter=",",
+                recursive=True,
+                dry_run=True,
+            )
+        handler.assert_called_once_with(
+            "evidence/csv",
+            hostname="auto",
+            index_suffix="",
+            time_field="",
+            delimiter=",",
+            recursive=True,
+            dry_run=True,
+        )
+        assert resp["status"] == "preview"
+
+    def test_routes_memory_format_through_idx_ingest(self, mock_client, monkeypatch):
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "test-case")
+        with patch("opensearch_mcp.server.idx_ingest_memory") as handler:
+            handler.return_value = {"status": "preview", "plugin_count": 2}
+            resp = idx_ingest(
+                path="evidence/memdump.raw",
+                format="memory",
+                hostname="HOST1",
+                tier=2,
+                plugins=["windows.pslist", "windows.netscan"],
+                dry_run=True,
+            )
+        handler.assert_called_once_with(
+            "evidence/memdump.raw",
+            "HOST1",
+            tier=2,
+            plugins=["windows.pslist", "windows.netscan"],
+            dry_run=True,
+        )
+        assert resp["status"] == "preview"
+
     def test_rejects_paths_outside_allowed_locations(self, mock_client):
         """Paths outside the active case are rejected."""
         resp = idx_ingest(path="/etc")

@@ -42,7 +42,7 @@ _SUGGESTION_GROUPS: dict[str, set[str]] = {
 _RELATED_TOOLS: dict[str, list[str]] = {
     "binary_analysis": [
         "remnux-mcp upload_from_host + analyze_file: Analyze suspicious binaries",
-        "windows-triage check_file: Validate against Windows baseline",
+        "windows-triage check_artifact: Validate files, hashes, LOLBins, and DLLs against local baselines",
         "opencti-mcp lookup_ioc: Check hash/filename against threat intel",
     ],
     "persistence": [
@@ -54,7 +54,7 @@ _RELATED_TOOLS: dict[str, list[str]] = {
         "wintools-mcp run_windows_command(PECmd/AmcacheParser): Parse on Windows for maximum fidelity",
     ],
     "memory": [
-        "opensearch-mcp idx_ingest_memory: Index Volatility results for querying",
+        "opensearch-mcp idx_ingest(format='memory'): Index Volatility results for querying",
         "remnux-mcp analyze_file: Upload suspicious processes for malware analysis",
     ],
 }

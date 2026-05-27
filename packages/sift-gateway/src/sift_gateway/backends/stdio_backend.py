@@ -90,12 +90,21 @@ class StdioMCPBackend(MCPBackend):
         # Remove empty values from unset ${VAR} interpolation.
         env = {k: v for k, v in env.items() if v}
         if "AGENTIR_CASE_DIR" not in env:
-            raise RuntimeError(
-                "BUG: AGENTIR_CASE_DIR not in env before launching backend"
+            # No active case yet (portal reset or fresh install).
+            # Backends start in no-case mode; individual tools return
+            # "No active case" errors when called. Portal remains accessible
+            # so the examiner can create and activate a case.
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "Backend %s starting without AGENTIR_CASE_DIR — "
+                "no active case set. Use the portal to create a case.",
+                self.name,
             )
         if "AGENTIR_CASES_ROOT" not in env:
-            raise RuntimeError(
-                "BUG: AGENTIR_CASES_ROOT not in env before launching backend"
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "Backend %s starting without AGENTIR_CASES_ROOT.",
+                self.name,
             )
 
         server_params = StdioServerParameters(
@@ -177,6 +186,12 @@ class StdioMCPBackend(MCPBackend):
             except (ConnectionError, OSError):
                 await self._safe_cleanup(context="list_tools cleanup after error")
                 raise
+            except Exception as e:
+                exc_name = type(e).__name__.lower()
+                if any(t in exc_name for t in ("closed", "broken", "resource")):
+                    await self._safe_cleanup(context="list_tools cleanup after transport error")
+                    raise ConnectionError(str(e)) from e
+                raise
         return self._tools_cache
 
     async def call_tool(self, name: str, arguments: dict) -> list:
@@ -188,8 +203,16 @@ class StdioMCPBackend(MCPBackend):
                 self._session.call_tool(name, arguments), timeout=_TOOL_CALL_TIMEOUT
             )
             return result.content
-        except (ConnectionError, OSError):
+        except (ConnectionError, OSError) as e:
             await self._safe_cleanup(context="call_tool cleanup after error")
+            raise
+        except Exception as e:
+            # Anyio transport errors (ClosedResourceError, BrokenResourceError) are not
+            # ConnectionError/OSError subclasses but also mean the subprocess is dead.
+            exc_name = type(e).__name__.lower()
+            if any(t in exc_name for t in ("closed", "broken", "resource")):
+                await self._safe_cleanup(context="call_tool cleanup after transport error")
+                raise ConnectionError(str(e)) from e
             raise
 
     async def health_check(self) -> dict:

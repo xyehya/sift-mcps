@@ -230,7 +230,7 @@ class TestEvidenceVerifySystemB:
         ev_file.write_bytes(b"TAMPERED_CONTENT_LONGER")
         result = _call(tools["evidence_verify"])
         assert result["status"] == "modified"
-        assert "portal_hint" in result
+        assert "operator_action_required" in result
 
     def test_missing_when_file_deleted(self, server_with_case):
         from agentir_core.evidence_chain import init_evidence_chain, seal_manifest
@@ -248,9 +248,9 @@ class TestEvidenceVerifySystemB:
         ev_file.unlink()
         result = _call(tools["evidence_verify"])
         assert result["status"] == "missing"
-        assert "portal_hint" in result
+        assert "operator_action_required" in result
 
-    def test_no_portal_hint_on_ok(self, server_with_case):
+    def test_no_operator_action_on_ok(self, server_with_case):
         from agentir_core.evidence_chain import init_evidence_chain, seal_manifest
 
         _, tools, case_dir = server_with_case
@@ -264,7 +264,7 @@ class TestEvidenceVerifySystemB:
             derived_key=_KEY,
         )
         result = _call(tools["evidence_verify"])
-        assert "portal_hint" not in result
+        assert "operator_action_required" not in result
 
     def test_does_not_read_old_evidence_json(self, server_with_case):
         _, tools, case_dir = server_with_case
@@ -331,15 +331,15 @@ class TestEvidenceListUnregistered:
         assert len(unregistered) >= 1
         assert all(f["registered"] is False for f in unregistered)
 
-    def test_unregistered_includes_seal_note(self, server_with_case):
-        """Unregistered file entry includes a note about sealing via portal."""
+    def test_unregistered_includes_action_required(self, server_with_case):
+        """Unregistered file entry includes an action_required hint about portal sealing."""
         _, tools, case_dir = server_with_case
         (case_dir / "evidence" / "raw.img").write_bytes(b"\x00" * 10)
         result = _call(tools["evidence_list"])
         unregistered = result.get("unregistered", [])
         assert len(unregistered) >= 1
-        note = unregistered[0].get("note", "")
-        assert "Portal" in note or "portal" in note
+        hint = unregistered[0].get("action_required", "")
+        assert "portal" in hint.lower() or "Portal" in hint
 
     def test_unregistered_empty_when_all_registered(self, server_with_case):
         """No extra files in evidence/ → unregistered list is empty."""

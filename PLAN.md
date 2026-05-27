@@ -1,9 +1,55 @@
 # Remediation Tasks — sift-mcps Backend Fixes
 
 **Created:** 2026-05-25 (Session 39 workflow testing)
-**Updated:** 2026-05-25 (Session 40 — full current state assessment + ingest pipeline inspection)
+**Updated:** 2026-05-26 (Group 3 complete — all backends reviewed; Phase C/R6 integration validation next)
 **References:** SIFT-MCPS-PLAN.md (spec), TASKS.md (execution checklist)
 **Scope:** Backend bugs found during workflow testing.
+
+---
+
+## Current State Snapshot — 2026-05-26 (Group 3 Complete)
+
+Phase B hardening and Group 3 tool-surface consolidation are complete across all backends.
+Phase C/R6 integration validation is next — the VM already has an active case (`test-rocba-2026`)
+with a sealed E01 and populated OpenSearch indices from a prior ingest run.
+
+Live SIFT VM before this sync (pre-push):
+
+| Source | Count |
+|--------|------:|
+| Health endpoint `tools_count` | 65 (pre-sync) |
+| Backends healthy | 8 |
+
+Target after sync (post-push):
+
+| Source | Count |
+|--------|------:|
+| Health endpoint `tools_count` | 61 |
+| Backends healthy | 8 |
+
+Completed Group 3 consolidation slices:
+
+| Backend | Before | After | Key changes |
+|---------|-------:|------:|-------------|
+| opensearch-mcp | 21 | 16 | `idx_ingest(format=...)` consolidated; `idx_install_pipelines` made internal (admin/installer only) |
+| windows-triage-mcp | 13 | 6 | `check_artifact`, `check_system`, `server_status` |
+| forensic-mcp | 10 | 6 | `list_existing_findings`, `query_case`, `manage_todo` |
+| case-mcp | 14 | 10 | Removed `case_list`, `audit_summary`, `backup_case`, `open_case_dashboard`; `record_action` now requires `reasoning`; `evidence_list` recursive with inline chain status |
+| sift-mcp | 5 | 5 | Kept as-is |
+| opencti-mcp | 8 | 8 | Kept as-is |
+| report-mcp | 6 | 6 | Kept as-is |
+
+Current local validation:
+
+- `packages/case-mcp`: 23 passed
+- `packages/opensearch-mcp` targeted tests: 11 passed
+- `packages/windows-triage-mcp`: 11 passed
+- `packages/forensic-mcp`: 20 passed
+- `packages/sift-gateway`: 104 passed
+- `scripts/remediation-gate.sh`: passed
+
+Known unrelated local OpenSearch test failures (pre-existing, not caused by consolidation):
+`fusermount` expectation and two Amcache `--nl` expectations.
 
 ---
 
@@ -24,13 +70,16 @@ The ONE correct workflow. All code, tool descriptions, and error messages must r
                       evidence_dir, platform capabilities in one response
 6. EVIDENCE SURVEY    Agent calls evidence_list → sees sealed evidence files + any unregistered
                       files in evidence/ with registered:false flag
-7. INGEST             Agent calls idx_ingest(path="evidence/<filename>", hostname="<host>")
+7. INGEST             Agent calls idx_ingest(path="evidence/<filename>", format="auto", hostname="<host>")
                       → gateway resolves relative path against AGENTIR_CASE_DIR
-                      → subprocess mounts and parses evidences → discovers artifacts → indexes to OpenSearch  <---- this is where the optimization is needed to revamp and harden and make it reselient to errors and different files types.
+                      → subprocess mounts and parses evidence → discovers artifacts → indexes to OpenSearch.
+                      Non-disk formats use the same public tool with format="json|delimited|accesslog|memory".
 8. ANALYSIS           Agent uses idx_case_summary, idx_search, idx_aggregate, idx_timeline,
-                      windows-triage-mcp, forensic-rag-mcp, opencti-mcp    <----- Should provide the AI agent more flexibility and ability to autonmously inspect, correlate, get info, deep dive into a specific event or incident not only view only.
+                      check_artifact/check_system/check_process_tree, forensic-rag-mcp,
+                      opencti-mcp, and run_command for controlled deep dives when structured outputs are insufficient.
 9. FINDINGS           Agent calls record_finding (DRAFT) → Examiner reviews in portal → APPROVED
-10. REPORT            Agent calls generate_report → save_report <------ if all are approved - this needs more structure to a workflow to
+                      Agent reviews existing findings with list_existing_findings.
+10. REPORT            Agent calls generate_report → save_report after findings are approved.
 ```
 
 Every tool error message, docstring, and instruction string must reference this workflow — never the old "agentir case activate" or "~/.agentir/active_case" CLI workflow.
@@ -57,6 +106,11 @@ Every tool error message, docstring, and instruction string must reference this 
 | B14 | LOW | `case-mcp` `evidence_list` | Only returns manifest-registered files; unregistered files in evidence/ are invisible to LLM |
 | B15 | LOW | `opensearch-mcp` 3 undocumented tools | `idx_shard_status`, `idx_install_pipelines`, `case_host_fix` not in original spec or TASKS.md |
 
+Current status: B1-B14 are historical remediation items and were fixed before or during
+the Phase B/R0-R4 work. B15 remains partially open: Group 3 kept `idx_status` and
+OpenSearch enrichment tools intentionally, but `idx_shard_status`, `idx_install_pipelines`,
+and `case_host_fix` still need a final agent-facing/admin visibility decision.
+
 ---
 
 ## Settled Design Decisions (non-negotiable)
@@ -78,8 +132,12 @@ CLI compat.
 - LLM passes `path="evidence/rocba-cdrive.e01"` not `/cases/test-rocba-2026/evidence/rocba-cdrive.e01`
 - `case_status` returns `evidence_dir`, `extractions_dir`, `reports_dir` <------------- **Should be able to give the AI agent a dedicated directory as outputs for the tool outputs it uses that generated big responses so it can later use ls, cat, grep on outputs and analyze as a real DFIR human.**
 
-**D4 — All 93 MCP tools (20 opensearch + others) audited before production**
-No tool ships without passing the R4 audit criteria table, optimization, simplification, more detailed responses, aggregated/unified tools to decrease the huge context that the 93 MCP tools have which can diverge the AI Agent in the analysis and DFIR workflow.
+**D4 — Agent-facing tool surface is curated before production**
+No tool ships without passing the R4 audit criteria table: accurate descriptions,
+clear examples, required arguments only, structured responses, correct `readOnlyHint`,
+and useful failure/next-step guidance. Tool count reduction is a means, not the goal.
+Consolidate only when the merged tool has a clear discriminator and does not hide a
+major DFIR workflow boundary. Current live health count after Group 3 slices: 65 tools.
 
 **D5 — `AGENTIR_CASES_ROOT` env var added alongside `AGENTIR_CASE_DIR`**
 Value: `Path(case_dir).parent`. Set by gateway in its own env and all subprocess envs.
@@ -101,7 +159,7 @@ finding/timeline/todo counts, indexed status hint. Agent calls this first on eve
 |---|--------|
 | case_id collision | `{casename}-{YYYYMMDD}-{HHMM}` always includes time — no collision |
 | active_case on switch | Portal writes new path to `~/.agentir/active_case` on case activation (CLI compat) |
-| idx_ingest path | Accept relative path; resolve against AGENTIR_CASE_DIR; LLM uses evidence/filename |
+| idx_ingest path | Accept relative path; resolve against AGENTIR_CASE_DIR; LLM uses `idx_ingest(path="evidence/filename", format="auto")` |
 | cases root | Configurable in gateway.yaml (`case.root`), propagated as `AGENTIR_CASES_ROOT` |
 | Lowercase enforcement | Enforced at portal creation; `_get_active_case()` lowercases result |
 | Unregistered files | Shown in evidence_list with `registered: false`; gate blocks tools anyway |
@@ -120,10 +178,10 @@ finding/timeline/todo counts, indexed status hint. Agent calls this first on eve
 4. If `dry_run=False`: launches background subprocess via `agentir_plugin` → `cmd_ingest` → `cmd_scan`
 
 **Step 2: `cmd_scan` (ingest_cli.py) — the actual ingest process**
-1. `_resolve_case_id()` → reads `AGENTIR_CASES_DIR` env or `~/cases` default ← **B6 bug**
+1. `_resolve_case_id()` → reads `AGENTIR_CASES_ROOT` / portal case context first; legacy `AGENTIR_CASES_DIR` fallback remains for CLI compatibility.
 2. `detect_container()` → `"ewf"`
 3. `cleanup_orphaned_mounts()` → disconnects stale `/dev/nbdX` devices
-4. `make_ingest_tmpdir(case_id)` → creates temp dir under `~/.agentir/cases/{case_id}/tmp/` ← **B8 bug**
+4. `make_ingest_tmpdir(case_id)` → creates temp dir under the active case directory, in a dedicated `tmp/ingest-*` path.
 5. `mount_image(e01_path, tmpdir, ctx)`:
    - `_mount_ewf()`: `ewfmount <e01> <tmpdir/_ewf/>` ← **requires ewfmount (libewf-tools)**
    - `_mount_raw_partitions(ewf1)`: `fdisk -l <ewf1>` → parse NTFS partition offsets
@@ -161,23 +219,26 @@ finding/timeline/todo counts, indexed status hint. Agent calls this first on eve
 
 **Step 4: Post-ingest**
 - `run_hayabusa_batch()`: `hayabusa csv-timeline` on evtx dir ← **requires hayabusa binary + rules**
-- `enrich_remote()`: triage enrichment via windows-triage-mcp backend   <----- Needs verification and error testing
+- `enrich_remote()`: triage enrichment via windows-triage-mcp backend. Enrichment
+  remains a standalone agent-facing phase through `idx_enrich_triage` and
+  `idx_enrich_intel`; full failure-mode testing remains open for Phase C/R6.
 
 **Step 5: Cleanup**
 - `mount_ctx.cleanup()`: `fusermount -u <ewf_mount>`, `sudo umount <vol0>`
 - `cleanup_tmpdir(tmpdir)`: `shutil.rmtree(tmpdir)`
 
-### Why the E01 did NOT ingest (root cause chain)
+### Why the E01 did NOT ingest (historical root cause chain)
 
 The MCP call `idx_ingest(path="/cases/test-rocba-2026/evidence/", dry_run=True)` was a DIRECTORY,
 not the .e01 file directly. The directory code path calls `discover()` which calls
 `scan_triage_directory()` which looks for Windows artifact subdirectory structure inside the
 directory — not for container files. It found nothing → "No Windows artifacts found" (B3).
 
-Even if B3 were fixed and the right path used:
-- B2: `idx_ingest` would read wrong case_id from `~/.agentir/active_case`
-- B6: `cmd_scan` subprocess would fail to find the case dir at `~/cases/test-rocba-2026` (doesn't exist)
-- B8: tmpdir would be created under `~/.agentir/cases/test-rocba-2026/tmp/` (doesn't exist)
+Those blockers are now resolved in the current runtime:
+- Directory dry-run now reports `containers_detected` when container files are present.
+- Direct E01 dry-run returns an EWF preview with the active case resolved from portal context.
+- The ingest subprocess and temp directory paths use the active case/cases root instead of
+  stale `~/.agentir` defaults.
 
 ### Binary/Tool Prerequisites to verify before Phase R6
 
@@ -211,13 +272,112 @@ python3 -c "import regipy" || echo "MISSING: regipy (pip install regipy)"
 curl -s https://localhost:9200/_cluster/health?pretty 2>/dev/null | grep status || echo "MISSING: OpenSearch"
 ```
 
-Add this as `scripts/verify-ingest-prereqs.sh` and run it as part of install.sh validation.
+This exists as `scripts/verify-ingest-prereqs.sh`; keep it in install validation and
+run it before Phase R6/full ingestion testing.
 
 ---
 
-## Phase R0 — Immediate Critical Fixes (1 session)
+## Group 3 — Agent Tool-Surface Consolidation
+
+Goal: reduce tool overload while preserving clear DFIR workflow boundaries and the
+agent's ability to dig deeper when structured outputs are insufficient.
+
+Rules for this phase:
+
+- Consolidate only when a discriminator field is obvious (`format`, `type`,
+  `record_type`, `action`, `resource`).
+- Keep standalone tools when the operation is a major workflow boundary,
+  write action, or deep-dive primitive.
+- Preserve response context already injected by the codebase: audit IDs,
+  caveats, interpretation constraints, evidence-gate messages, warnings,
+  `next_step`/`next_steps`, and structured progress.
+- Error responses should tell the agent whether to retry, choose a different
+  mode, inspect status, or report a human/operator action.
+
+### Completed in Current Session
+
+#### opensearch-mcp ingest consolidation — DONE
+
+Public tool count: 21 → 17.
+
+Current public ingest/enrichment surface:
+
+| Tool | Status | Notes |
+|------|--------|-------|
+| `idx_ingest` | Public | `format="auto|json|delimited|accesslog|memory"` |
+| `idx_ingest_status` | Public | Async ingest/enrichment progress |
+| `idx_inspect_container` | Public | Read-only container survey |
+| `idx_enrich_triage` | Public standalone | Baseline enrichment rerun after ingest |
+| `idx_enrich_intel` | Public standalone | Threat-intel enrichment; async execute mode |
+
+Former public tools now internal implementation paths:
+
+- `idx_ingest_json`
+- `idx_ingest_delimited`
+- `idx_ingest_accesslog`
+- `idx_ingest_memory`
+
+Decision: keep `idx_enrich_triage` and `idx_enrich_intel` standalone. Enrichment is
+not just an ingest format; it is a separate investigative phase with different
+dependencies, timing, confidence semantics, and failure modes.
+
+#### windows-triage-mcp consolidation — DONE
+
+Public tool count: 13 → 6.
+
+Current public surface:
+
+| Tool | Purpose |
+|------|---------|
+| `check_artifact(type, value, ...)` | File, hash, filename, LOLBin, and DLL hijackability checks |
+| `check_system(type, name, ...)` | Service, scheduled task, and autorun checks |
+| `check_process_tree` | Parent/child relationship validation; kept standalone |
+| `check_registry` | Full registry baseline lookup; kept standalone due optional 12GB DB and distinct schema |
+| `check_pipe` | Named pipe/C2 pipe check; kept standalone |
+| `server_status(resource)` | Health and DB coverage |
+
+Former public tools now routed through consolidated tools:
+
+- `check_file`
+- `check_hash`
+- `analyze_filename`
+- `check_lolbin`
+- `check_hijackable_dll`
+- `check_service`
+- `check_scheduled_task`
+- `check_autorun`
+- `get_db_stats`
+- `get_health`
+
+#### forensic-mcp consolidation — DONE
+
+Public tool count: 10 → 6.
+
+Current public surface:
+
+| Tool | Purpose |
+|------|---------|
+| `record_finding` | Stage DRAFT finding for examiner review; kept standalone |
+| `record_timeline_event` | Stage timeline event; kept standalone |
+| `list_existing_findings` | Dedicated findings reader; renamed from `get_findings` |
+| `query_case(record_type)` | Timeline and action-log reads |
+| `manage_todo(action)` | Add/list/update/complete TODOs |
+| `workflow_status` | Session entry point and workflow phase guidance |
+
+Decision: keep findings as a dedicated read tool. Findings are the main human-review
+and reporting object, so hiding them behind a generic `query_case(record_type="findings")`
+would make the agent workflow less clear.
+
+### Group 3 Status: COMPLETE
+
+All backends reviewed and resolved. No further consolidation planned.
+
+---
+
+## Phase R0 — Immediate Critical Fixes (DONE)
 
 Goal: make the basic workflow function — case resolves correctly, evidence is visible, ingest starts.
+Status: completed during Phase B/R0 remediation. Details are retained for traceability.
 
 ### R0-1: Fix `_get_active_case()` — env var first, file fallback
 
@@ -463,7 +623,9 @@ Same fix in `_case_dir_for()` at line 43.
 
 ---
 
-## Phase R1 — Propagation Hardening (1 session)
+## Phase R1 — Propagation Hardening (DONE)
+
+Status: completed during Phase B/R1 remediation. Details are retained for traceability.
 
 ### R1-1: Gateway sets `AGENTIR_CASE_DIR` and `AGENTIR_CASES_ROOT` in its own env
 
@@ -520,7 +682,9 @@ active_case_file.write_text(str(case_dir))
 
 ---
 
-## Phase R2 — Case Directory Canonicalization (1 session)
+## Phase R2 — Case Directory Canonicalization (DONE)
+
+Status: completed during Phase B/R2 remediation. Details are retained for traceability.
 
 ### R2-1: Portal case create API — enforce `{casename}-{YYYYMMDD}-{HHMM}`
 
@@ -559,7 +723,9 @@ Do NOT remove them (CLI compat). But ensure their `next_steps` guidance says to 
 
 ---
 
-## Phase R3 — Path Auto-Resolution in Tools (1–2 sessions)
+## Phase R3 — Path Auto-Resolution in Tools (DONE)
+
+Status: completed during Phase B/R3 remediation. Details are retained for traceability.
 
 ### R3-1: Add standard path resolution 
 
@@ -614,7 +780,7 @@ Tests: absolute, relative, subdir-relative, bare filename, traversal attack (`..
 
 Priority order:
 1. `idx_ingest` — `path` arg (highest impact, used in every investigation)
-2. `idx_ingest_json`, `idx_ingest_delimited`, `idx_ingest_accesslog`, `idx_ingest_memory`
+2. `idx_ingest(format="json|delimited|accesslog|memory")` — former format-specific tools are now routed through `idx_ingest`
 3. `run_command` in sift-mcp — `working_dir` default should be `AGENTIR_CASE_DIR`
 4. `save_report` in report-mcp — output path
 
@@ -633,7 +799,10 @@ Gateway can inject this via response middleware rather than requiring every tool
 
 ---
 
-## Phase R4 — Tool Registry Audit: All 93 Tools
+## Phase R4 — Tool Registry Audit and Agent-Facing Clarity (DONE for Phase B; Group 3 continues)
+
+Status: Phase B audit/remediation is complete. Group 3 now uses the same criteria to
+reduce and clarify the agent-facing surface without hiding workflow boundaries.
 
 ### Audit Criteria (apply to every tool)
 
@@ -674,9 +843,11 @@ Gateway can inject this via response middleware rather than requiring every tool
 "Always pass case_id explicitly to idx_search/idx_aggregate — retrieve it from case_status first. "
 ```
 
-### R4-2: opensearch-mcp — 20 tools
+### R4-2: opensearch-mcp
 
-Session 4A (query tools 1–10):
+Current public tool count after Group 3 ingest consolidation: 17.
+
+Session 4A (query tools):
 
 | Tool | Action needed |
 |------|---------------|
@@ -695,14 +866,14 @@ Session 4B (ingest/enrich/detection + legacy tools):
 
 | Tool | Action needed |
 |------|---------------|
-| `idx_ingest` | R0-2/R0-3 done; verify all error paths have `portal_hint`, `next_step` |
+| `idx_ingest` | DONE for Group 3: single public ingest tool with `format="auto|json|delimited|accesslog|memory"` |
 | `idx_ingest_status` | Update error message; add `readOnlyHint=True` |
-| `idx_ingest_json` | Path auto-resolution (R3-3); error messages |
-| `idx_ingest_delimited` | Path auto-resolution (R3-3); error messages |
-| `idx_ingest_accesslog` | Path auto-resolution (R3-3) |
-| `idx_ingest_memory` | Error messages |
-| `idx_enrich_triage` | Error messages |
-| `idx_enrich_intel` | Error messages |
+| former `idx_ingest_json` | DONE: internal route through `idx_ingest(format="json")` |
+| former `idx_ingest_delimited` | DONE: internal route through `idx_ingest(format="delimited")` |
+| former `idx_ingest_accesslog` | DONE: internal route through `idx_ingest(format="accesslog")` |
+| former `idx_ingest_memory` | DONE: internal route through `idx_ingest(format="memory")` |
+| `idx_enrich_triage` | Keep standalone; improve error/coverage response if touched |
+| `idx_enrich_intel` | Keep standalone; async execute mode already monitored through `idx_ingest_status` |
 | `idx_list_detections` | Add `readOnlyHint=True` |
 | `case_host_fix` | Needs spec: what is this? when does LLM call it? is it admin-only? |
 
@@ -734,21 +905,28 @@ Session 4B (ingest/enrich/detection + legacy tools):
 - `check_tools`: `readOnlyHint=True`
 - `suggest_tools`: `readOnlyHint=True`
 
-### R4-5: Remaining backends — 40 tools (lower risk)
+### R4-5: Remaining backends
 
-forensic-mcp (9 core): verify record_finding/record_timeline_event blocks on UNSEALED; get_* all have `readOnlyHint=True`
+forensic-mcp: DONE for Group 3. Current public tools: `workflow_status`,
+`record_finding`, `record_timeline_event`, `list_existing_findings`,
+`query_case`, `manage_todo`. Verify record_finding/record_timeline_event blocks
+on UNSEALED when touched.
 
 report-mcp (6): verify `generate_report` only surfaces APPROVED findings; `readOnlyHint` correct
 
 forensic-rag-mcp (3): `readOnlyHint=True` on all; descriptions accurate
 
-windows-triage-mcp (13): verify no case-path dependency; `readOnlyHint=True` on all check_* tools
+windows-triage-mcp: DONE for Group 3. Current public tools: `check_artifact`,
+`check_system`, `check_process_tree`, `check_registry`, `check_pipe`,
+`server_status`. All are read-only and carry interpretation caveats.
 
 opencti-mcp (8): `readOnlyHint=True` on all; verify no case-path dependency
 
 ---
 
-## Phase R5 — Legacy Code Review Methodology (1 session)
+## Phase R5 — Legacy Code Review Methodology (ACTIVE GUARDRAIL)
+
+Status: remediation gate and checklist are active guardrails for future changes.
 
 ### R5-1: Automated Forbidden Pattern Gate
 
@@ -811,17 +989,17 @@ Before merging any function adapted from the original Valhuntir repo:
 - [ ] Includes `next_step` or `portal_hint` in error responses
 - [ ] Has tests: happy path + missing-case error + wrong-path error
 
-| Backend | Adapted From | Primary Risk | Status after R4 |
-|---------|-------------|--------------|-----------------|
-| opensearch-mcp | Valhuntir | B1/B2/B3/B6/B7/B8/B10 | ✅ R0 fixes + R1/R4 completed (structured errors, R4 docstrings, readOnlyHint) |
-| case-mcp | Valhuntir/new | B4/B12/B13/B14 | ✅ R0 fixes + R4-3 completed (hidden case_init/activate, new case_file_structure tool) |
-| sift-mcp | Valhuntir | Sanitization done (Phase 6); path defaults | ✅ R4-4 completed (strict output constraints under extractions/ or tmp/) |
-| forensic-mcp | Valhuntir | Phases 0–15 sweep done | ✅ R4-5 completed (active case env priority) |
-| report-mcp | Valhuntir | Phase 16d done | ✅ R4-5 completed (active case env priority) |
-| forensic-rag-mcp | Valhuntir | Phase 5 migration done | ✅ R4-5 verified |
-| windows-triage-mcp | new | Phase 11 done; no case-path dependency expected | ✅ R4-5 verified (SQLite-backed local baseline) |
-| opencti-mcp | external | No case-path dependency expected | ✅ R4-5 verified |
-| agentir-core | new (Phases 2/12/16) | 225 tests; R8 gates pass | ✅ R0 additions + 225 tests passing |
+| Backend | Adapted From | Primary Risk | Current Status |
+|---------|-------------|--------------|----------------|
+| opensearch-mcp | Valhuntir | B1/B2/B3/B6/B7/B8/B10 | R0/R1/R4 fixes complete; Group 3 ingest consolidation done; public count 21 → 17 |
+| case-mcp | Valhuntir/new | B4/B12/B13/B14 | R0/R4 fixes complete; Group 3 review still open for `case_list`/`case_status`, `export_bundle`, and `evidence_register` visibility |
+| sift-mcp | Valhuntir | Sanitization done (Phase 6); path defaults | R4 path/output hardening complete; Group 3 discovery consolidation still open |
+| forensic-mcp | Valhuntir | Phases 0–15 sweep done | R4 active-case fixes complete; Group 3 consolidation done; public count 10 → 6 |
+| report-mcp | Valhuntir | Phase 16d done | R4 active-case fixes complete; Group 3 list/metadata batching still open |
+| forensic-rag-mcp | Valhuntir | Phase 5 migration done | Verified; no Group 3 changes planned |
+| windows-triage-mcp | new | Phase 11 done; no case-path dependency expected | Verified; Group 3 consolidation done; public count 13 → 6 |
+| opencti-mcp | external | No case-path dependency expected | Verified; Group 3 `search_entities` review still open |
+| agentir-core | new (Phases 2/12/16) | 225 tests; R8 gates pass | R0 additions complete; 225 tests baseline remains expected |
 
 ### R5-4: Env Var Smoke Test (add to every backend's test suite)
 
@@ -843,7 +1021,7 @@ def test_no_active_case_returns_none(monkeypatch):
 
 ---
 
-## Phase R6 — Integration Validation Matrix (1 session)
+## Phase R6 — Integration Validation Matrix (PENDING FULL INGESTION RESILIENCE)
 
 Run after R0–R5.
 
@@ -895,16 +1073,12 @@ All items must pass. Missing Zimmerman tools or ewfmount = fix install.sh, not t
 ## Implementation Schedule
 
 ```
-Session R0:   R0-1 through R0-9 (9 targeted fixes — opensearch-mcp + case-mcp + agentir-core)
-              R5-1 (remediation-gate.sh — run at end of every session from now)
-Session R1:   R1-1 through R1-5 (propagation hardening)
-              R2-1 through R2-4 (case naming enforcement)
-Session R2:   R3-1 through R3-4 (path auto-resolution + resolve_case_path)
-Session R3:   R4-1 (instructions strings — highest impact, no code risk)
-              R4-2 Session 4A (opensearch query tools 1–10)
-Session R4:   R4-2 Session 4B (opensearch ingest/enrich) + R4-3 (case-mcp 15 tools)
-Session R5:   R4-4 (sift-mcp) + R4-5 (remaining 40 tools)
-              R5-2 (pre-import checklist) + R5-3/R5-4 (smoke tests per backend)
-Session R6:   scripts/verify-ingest-prereqs.sh + R6 full integration validation
-UI Overhaul:  Separate planning — portal form redesign, evidence intake workflow
+Completed:    R0-R4/Phase B hardening, hardened installer, remediation gate, and all
+              Group 3 consolidation slices across all 8 backends. Total: 65 → 61 tools.
+Current:      Phase C/R6 integration validation. VM has active case test-rocba-2026
+              with sealed E01 and populated OpenSearch indices from prior ingest.
+              scripts/reset-vm-test.sh created for clean start-to-end pipeline resets.
+Next C/R6:    Run R6 validation matrix steps 1-14 (pre-binary gate), then steps 15-17
+              (full E01 ingestion with Zimmerman tools). Run verify-ingest-prereqs.sh first.
+UI Overhaul:  Separate planning — portal form redesign, evidence intake workflow.
 ```

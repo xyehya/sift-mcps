@@ -289,8 +289,12 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         return result
 
     @server.tool(annotations={"readOnlyHint": True})
-    def get_findings(status: str = "", limit: int = 20, offset: int = 0):
-        """Return findings, optionally filtered by DRAFT/APPROVED/REJECTED.
+    def list_existing_findings(status: str = "", limit: int = 20, offset: int = 0):
+        """List staged findings already recorded in this case.
+
+        Call this when you need to review DRAFT findings before adding new
+        evidence, check what the examiner has APPROVED/REJECTED, or prepare
+        report context. Do not use it to create findings; use record_finding.
 
         Args:
             status: Filter by DRAFT, APPROVED, or REJECTED. Empty = all.
@@ -324,7 +328,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 "offset": offset,
             }
         except Exception as e:
-            logger.error("get_findings failed: %s", e)
+            logger.error("list_existing_findings failed: %s", e)
             return {
                 "findings": [{"error": str(e)}],
                 "total": 0,
@@ -332,7 +336,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 "offset": offset,
             }
 
-    @server.tool(annotations={"readOnlyHint": True})
     def get_timeline(
         status: str = "",
         source: str = "",
@@ -386,7 +389,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 "offset": offset,
             }
 
-    @server.tool(annotations={"readOnlyHint": True})
     def get_actions(limit: int = 50):
         """Return recent actions from the case actions log."""
         try:
@@ -395,6 +397,54 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             logger.error("get_actions failed: %s", e)
             return [{"error": str(e)}]
 
+    @server.tool(annotations={"readOnlyHint": True})
+    def query_case(
+        record_type: str,
+        status: str = "",
+        source: str = "",
+        examiner: str = "",
+        start_date: str = "",
+        end_date: str = "",
+        event_type: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ):
+        """Read case timeline or action records without changing evidence.
+
+        Use record_type='timeline' for staged timeline events and
+        record_type='actions' for the case action log. Findings intentionally
+        stay separate as list_existing_findings because they are the main
+        human-review/reporting object.
+
+        Examples:
+        - query_case(record_type='timeline', status='DRAFT', event_type='auth')
+        - query_case(record_type='actions', limit=25)
+        """
+        rt = record_type.strip().lower()
+        if rt == "timeline":
+            return get_timeline(
+                status=status,
+                source=source,
+                examiner=examiner,
+                start_date=start_date,
+                end_date=end_date,
+                event_type=event_type,
+                limit=limit,
+                offset=offset,
+            )
+        if rt == "actions":
+            return {
+                "actions": get_actions(limit=limit),
+                "record_type": "actions",
+                "limit": limit,
+            }
+        return {
+            "error": "unsupported_record_type",
+            "message": "record_type must be 'timeline' or 'actions'. Use list_existing_findings for findings.",
+            "supported_record_types": ["timeline", "actions"],
+            "next_step": "Call query_case(record_type='timeline') or query_case(record_type='actions').",
+        }
+
     # --- Workflow Status ---
 
     @server.tool(annotations={"readOnlyHint": True})
@@ -402,8 +452,8 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         """Single entry point — detect current investigation phase and recommend next steps.
 
         Call this FIRST every session. Replaces 7+ discovery calls (case_status,
-        evidence_list, idx_case_summary, idx_ingest_status, get_findings, get_timeline,
-        list_todos) with one call.
+        evidence_list, idx_case_summary, idx_ingest_status,
+        list_existing_findings, query_case, manage_todo) with one call.
 
         Returns: {phase, case_id, evidence_summary, indexing_status,
                   findings_summary, timeline_events, available_capabilities, next_steps[]}
@@ -609,7 +659,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 "Continue investigation: look for corroborating evidence, expand timeline coverage,",
                 "and cross-reference with threat intelligence via OpenCTI.",
                 "When findings are solid, the examiner can approve them in the portal.",
-                "Run get_findings(status='DRAFT') to review your staged findings.",
+                "Run list_existing_findings(status='DRAFT') to review your staged findings.",
             ]
         elif approved_count > 0:
             phase = "REPORTING"
@@ -655,7 +705,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
 
     # --- TODOs ---
 
-    @server.tool()
     def add_todo(
         description: str,
         assignee: str = "",
@@ -687,7 +736,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             result["warning"] = "Audit write failed — action not recorded"
         return result
 
-    @server.tool(annotations={"readOnlyHint": True})
     def list_todos(status: str = "open", assignee: str = ""):
         """List TODO items. Status: open/completed/all."""
         try:
@@ -696,7 +744,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             logger.error("list_todos failed: %s", e)
             return [{"error": str(e)}]
 
-    @server.tool()
     def update_todo(
         todo_id: str,
         status: str = "",
@@ -728,7 +775,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             result["warning"] = "Audit write failed — action not recorded"
         return result
 
-    @server.tool()
     def complete_todo(todo_id: str, analyst_override: str = "") -> dict:
         """Mark a TODO as completed."""
         try:
@@ -742,6 +788,85 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         if logged_id is None:
             result["warning"] = "Audit write failed — action not recorded"
         return result
+
+    @server.tool()
+    def manage_todo(
+        action: str,
+        todo_id: str = "",
+        description: str = "",
+        assignee: str = "",
+        priority: str = "medium",
+        status: str = "",
+        note: str = "",
+        related_findings: list[str] | None = None,
+        analyst_override: str = "",
+    ):
+        """Create, list, update, or complete investigation TODOs.
+
+        Use this for investigation task tracking, not for findings. Actions:
+        - action='add': requires description; optional assignee, priority,
+          related_findings.
+        - action='list': optional status='open|completed|all' and assignee.
+        - action='update': requires todo_id; optional status, note, assignee,
+          priority.
+        - action='complete': requires todo_id.
+
+        Examples:
+        - manage_todo(action='add', description='Correlate 4624 logons for SRL-FORGE', priority='high')
+        - manage_todo(action='list', status='open')
+        - manage_todo(action='complete', todo_id='T-001')
+        """
+        normalized = action.strip().lower()
+        if normalized == "add":
+            if not description:
+                return {
+                    "error": "missing_description",
+                    "message": "description is required when action='add'.",
+                    "next_step": "Call manage_todo(action='add', description='...').",
+                }
+            return add_todo(
+                description=description,
+                assignee=assignee,
+                priority=priority,
+                related_findings=related_findings,
+                analyst_override=analyst_override,
+            )
+        if normalized == "list":
+            return {
+                "todos": list_todos(status=status or "open", assignee=assignee),
+                "action": "list",
+                "status": status or "open",
+                "assignee": assignee,
+            }
+        if normalized == "update":
+            if not todo_id:
+                return {
+                    "error": "missing_todo_id",
+                    "message": "todo_id is required when action='update'.",
+                    "next_step": "Call manage_todo(action='update', todo_id='...', status='...', note='...').",
+                }
+            return update_todo(
+                todo_id=todo_id,
+                status=status,
+                note=note,
+                assignee=assignee,
+                priority=priority,
+                analyst_override=analyst_override,
+            )
+        if normalized == "complete":
+            if not todo_id:
+                return {
+                    "error": "missing_todo_id",
+                    "message": "todo_id is required when action='complete'.",
+                    "next_step": "Call manage_todo(action='complete', todo_id='...').",
+                }
+            return complete_todo(todo_id=todo_id, analyst_override=analyst_override)
+        return {
+            "error": "unsupported_todo_action",
+            "message": "action must be one of: add, list, update, complete",
+            "supported_actions": ["add", "list", "update", "complete"],
+            "next_step": "Call manage_todo with action='add', 'list', 'update', or 'complete'.",
+        }
 
     # --- Discipline Reference Data ---
 

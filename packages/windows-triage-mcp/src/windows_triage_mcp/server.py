@@ -286,45 +286,42 @@ class WindowsTriageServer:
     def _register_tools(self) -> None:
         """Register all MCP tools with the server.
 
-        Registers 13 forensic triage tools:
-        - check_file: File baseline validation with LOLBin and hash checking
+        Registers 6 forensic triage tools:
+        - check_artifact: File/hash/filename/LOLBin/DLL baseline checks
         - check_process_tree: Parent-child process relationship validation
-        - check_service: Windows service baseline validation (requires os_version)
-        - check_scheduled_task: Task baseline validation (requires os_version)
-        - check_autorun: Registry autorun validation (requires os_version)
+        - check_system: Service/task/autorun baseline validation
         - check_registry: Full registry baseline lookup (requires optional 12GB database)
-        - check_hash: Vulnerable driver hash lookup
-        - analyze_filename: Filename heuristics (Unicode, double extension, entropy)
-        - check_lolbin: LOLBin lookup with abuse functions
-        - check_hijackable_dll: DLL hijacking scenario lookup
         - check_pipe: Named pipe analysis for C2 detection
-        - get_db_stats: Database statistics
-        - get_health: Server health and uptime
+        - server_status: Database statistics and health
         """
 
         @self.server.list_tools()
         async def list_tools():
             return [
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="check_file",
-                    description="Check a file path against the Windows baseline database. Returns verdict: EXPECTED, EXPECTED_LOLBIN (legitimate but abusable), SUSPICIOUS, or UNKNOWN (not in database — neutral, not an indicator). Pass os_version for version-specific baselines. For hash-based checks, use check_hash instead.",
+                    name="check_artifact",
+                    description="Validate one Windows artifact against local offline baselines. Use type='file' for path baseline + optional hash, type='hash' for LOLDrivers vulnerable-driver lookup, type='filename' for deception heuristics, type='lolbin' for living-off-the-land binary context, or type='dll' for DLL hijackability. UNKNOWN is neutral: not in the local database, not evidence of malice. Examples: check_artifact(type='file', value='C:\\Windows\\System32\\svchost.exe', os_version='Win10_21H2_Pro'); check_artifact(type='hash', value='<sha256>'); check_artifact(type='lolbin', value='certutil.exe').",
                     inputSchema={
                         "type": "object",
                         "properties": {
-                            "path": {
+                            "type": {
                                 "type": "string",
-                                "description": "Windows file path (with or without drive letter, e.g. C:\\Windows\\System32\\svchost.exe or \\Windows\\System32\\svchost.exe)",
+                                "description": "Artifact check type: file, hash, filename, lolbin, or dll",
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "Artifact value. file=Windows path; hash=MD5/SHA1/SHA256; filename/lolbin=filename; dll=DLL filename.",
                             },
                             "hash": {
                                 "type": "string",
-                                "description": "Optional file hash (MD5/SHA1/SHA256)",
+                                "description": "Optional file hash when type='file'",
                             },
                             "os_version": {
                                 "type": "string",
-                                "description": "Optional OS filter (e.g., 'Windows 10')",
+                                "description": "Optional OS filter for type='file' path baseline checks (e.g., Win10_21H2_Pro)",
                             },
                         },
-                        "required": ["path"],
+                        "required": ["type", "value"],
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
@@ -354,70 +351,38 @@ class WindowsTriageServer:
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="check_service",
-                    description="Check a Windows service against the baseline for a specific OS version. Returns verdict: EXPECTED, SUSPICIOUS, or UNKNOWN. OS version is REQUIRED — services vary between Windows versions. Pass binary_path for service binary hijacking detection. For persistence via registry autoruns, use check_autorun instead.",
+                    name="check_system",
+                    description="Validate Windows persistence/system configuration against OS-version baselines. Use type='service', type='scheduled_task', or type='autorun'. OS version is required because Windows services/tasks/autoruns vary by release. UNKNOWN is neutral unless the response includes concrete suspicious findings. Examples: check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro', binary_path='C:\\Windows\\System32\\svchost.exe'); check_system(type='scheduled_task', name='\\Microsoft\\Windows\\Defrag\\ScheduledDefrag', os_version='Win10_21H2_Pro'); check_system(type='autorun', name='HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', value_name='SecurityHealth', os_version='Win10_21H2_Pro').",
                     inputSchema={
                         "type": "object",
                         "properties": {
-                            "service_name": {
+                            "type": {
                                 "type": "string",
-                                "description": "Service name (e.g., 'BITS', 'Spooler')",
+                                "description": "System check type: service, scheduled_task, or autorun",
+                            },
+                            "name": {
+                                "type": "string",
+                                "description": "Service name, scheduled task path, or autorun registry key path",
                             },
                             "binary_path": {
                                 "type": "string",
-                                "description": "Service binary path - strongly recommended for hijacking detection",
-                            },
-                            "os_version": {
-                                "type": "string",
-                                "description": "Target OS version (e.g., 'W11_22H2', 'W10_21H2', 'Server2022'). REQUIRED for accurate results.",
-                            },
-                        },
-                        "required": ["service_name", "os_version"],
-                    },
-                ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="check_scheduled_task",
-                    description="Check a scheduled task against the Windows baseline. Returns verdict: EXPECTED, SUSPICIOUS, or UNKNOWN. OS version is REQUIRED — scheduled tasks vary between Windows versions. Use the full task path (e.g., '\\\\Microsoft\\\\Windows\\\\UpdateOrchestrator\\\\Schedule Scan').",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "task_path": {
-                                "type": "string",
-                                "description": "Task path (e.g., '\\Microsoft\\Windows\\UpdateOrchestrator\\Schedule Scan')",
-                            },
-                            "os_version": {
-                                "type": "string",
-                                "description": "Target OS version (e.g., 'W11_22H2', 'W10_21H2'). REQUIRED for accurate results.",
-                            },
-                        },
-                        "required": ["task_path", "os_version"],
-                    },
-                ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="check_autorun",
-                    description="Check a registry autorun/persistence entry against the baseline. Returns verdict: EXPECTED, SUSPICIOUS, or UNKNOWN. OS version is REQUIRED. Covers Run/RunOnce keys and other persistence locations. For general registry key lookups, use check_registry instead.",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "key_path": {
-                                "type": "string",
-                                "description": "Registry key path (e.g., 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run')",
+                                "description": "Optional service binary path for type='service'",
                             },
                             "value_name": {
                                 "type": "string",
-                                "description": "Registry value name",
+                                "description": "Optional registry value name for type='autorun'",
                             },
                             "os_version": {
                                 "type": "string",
-                                "description": "Target OS version (e.g., 'W11_22H2', 'W10_21H2'). REQUIRED for accurate results.",
+                                "description": "Target OS version (e.g., Win10_21H2_Pro, W11_22H2, Server2022). Required.",
                             },
                         },
-                        "required": ["key_path", "os_version"],
+                        "required": ["type", "name", "os_version"],
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
                     name="check_registry",
-                    description="Check a registry key or value against the full registry baseline (requires known_good_registry.db, 12GB). Returns verdict: EXPECTED, SUSPICIOUS, or UNKNOWN. For autorun/persistence checks specifically, use check_autorun instead — it's faster and doesn't require the large DB.",
+                    description="Check a registry key or value against the full registry baseline (requires known_good_registry.db, 12GB). Returns verdict: EXPECTED, SUSPICIOUS, or UNKNOWN. For autorun/persistence checks specifically, use check_system(type='autorun', ...) instead — it is faster and does not require the large DB.",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -442,62 +407,6 @@ class WindowsTriageServer:
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="check_hash",
-                    description="Check a file hash (MD5/SHA1/SHA256) against the LOLDrivers vulnerable driver database. Returns verdict: SUSPICIOUS (known vulnerable driver) or UNKNOWN (not in LOLDrivers database). For broader threat intel (malware hashes, IOCs), use opencti-mcp lookup_hash instead. For filename-based analysis, use check_file.",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "hash": {
-                                "type": "string",
-                                "description": "File hash (MD5/SHA1/SHA256)",
-                            }
-                        },
-                        "required": ["hash"],
-                    },
-                ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="analyze_filename",
-                    description="Analyze a filename for deception techniques: Unicode homoglyph evasion, typosquatting of system binaries, double extensions (e.g., doc.exe), and known attacker tools. Returns a list of detected suspicious characteristics with severity. Does not check file content — for path-based baseline checks use check_file.",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "filename": {
-                                "type": "string",
-                                "description": "Filename to analyze",
-                            }
-                        },
-                        "required": ["filename"],
-                    },
-                ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="check_lolbin",
-                    description="Check if a binary is a known LOLBin (Living Off The Land Binary) that attackers abuse for execution, download, or persistence. Returns abuse techniques and MITRE ATT&CK mappings if known. A LOLBin match is not inherently malicious — check the execution context (parent process, command line arguments).",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "filename": {
-                                "type": "string",
-                                "description": "Filename to check (e.g., 'certutil.exe')",
-                            }
-                        },
-                        "required": ["filename"],
-                    },
-                ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="check_hijackable_dll",
-                    description="Check if a DLL name is known to be vulnerable to DLL search-order hijacking. Returns the legitimate owner application and hijack context if vulnerable. Finding a hijackable DLL in an unexpected location is a persistence indicator.",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "dll_name": {
-                                "type": "string",
-                                "description": "DLL filename (e.g., 'version.dll')",
-                            }
-                        },
-                        "required": ["dll_name"],
-                    },
-                ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
                     name="check_pipe",
                     description="Check a named pipe against known Windows pipes and known C2 framework pipes. Returns verdict: EXPECTED (standard Windows pipe), SUSPICIOUS (matches known C2 pipe patterns from Cobalt Strike, Metasploit, etc.), or UNKNOWN. Named pipes are a common C2 communication channel.",
                     inputSchema={
@@ -512,14 +421,17 @@ class WindowsTriageServer:
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="get_db_stats",
-                    description="Get statistics for all loaded baseline databases: record counts, OS versions available, last update timestamps. Use to verify which databases are loaded and their coverage before running checks.",
-                    inputSchema={"type": "object", "properties": {}},
-                ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="get_health",
-                    description="Get server health: uptime, database connectivity, cache hit rates, and memory usage. Use to diagnose slow responses or verify the server is operational.",
-                    inputSchema={"type": "object", "properties": {}},
+                    name="server_status",
+                    description="Report Windows triage backend readiness. Use resource='health' for connectivity/cache health, resource='db_stats' for baseline coverage counts, or resource='all' before a triage-heavy investigation. Example: server_status(resource='all').",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "resource": {
+                                "type": "string",
+                                "description": "Status resource: health, db_stats, or all",
+                            }
+                        },
+                    },
                 ),
             ]
 
@@ -529,7 +441,115 @@ class WindowsTriageServer:
             start = time.monotonic()
             try:
                 # Input validation: check lengths and content
-                if name == "check_file":
+                if name == "check_artifact":
+                    artifact_type = str(arguments.get("type", "")).strip().lower()
+                    value = arguments.get("value")
+                    if artifact_type == "file":
+                        _validate_input_length(value, self.config.max_path_length, "value")
+                        _validate_input_length(
+                            arguments.get("hash"), self.config.max_hash_length, "hash"
+                        )
+                        _validate_no_null_bytes(value, "value")
+                        _validate_no_null_bytes(arguments.get("hash"), "hash")
+                        result = await self._check_file(
+                            value,
+                            arguments.get("hash"),
+                            arguments.get("os_version"),
+                        )
+                    elif artifact_type == "hash":
+                        _validate_input_length(value, self.config.max_hash_length, "value")
+                        _validate_no_null_bytes(value, "value")
+                        result = await self._check_hash(value)
+                    elif artifact_type == "filename":
+                        _validate_input_length(value, self.config.max_path_length, "value")
+                        _validate_no_null_bytes(value, "value")
+                        result = await self._analyze_filename(value)
+                    elif artifact_type == "lolbin":
+                        _validate_input_length(value, self.config.max_path_length, "value")
+                        _validate_no_null_bytes(value, "value")
+                        result = await self._check_lolbin(value)
+                    elif artifact_type == "dll":
+                        _validate_input_length(value, self.config.max_path_length, "value")
+                        _validate_no_null_bytes(value, "value")
+                        result = await self._check_hijackable_dll(value)
+                    else:
+                        result = {
+                            "error": "unsupported_artifact_type",
+                            "message": "type must be one of: file, hash, filename, lolbin, dll",
+                            "supported_types": ["file", "hash", "filename", "lolbin", "dll"],
+                            "next_step": "Call check_artifact with a supported type and put the artifact in value.",
+                        }
+                    result.setdefault("artifact_type", artifact_type)
+                elif name == "check_system":
+                    system_type = str(arguments.get("type", "")).strip().lower()
+                    name_value = arguments.get("name")
+                    if system_type == "service":
+                        _validate_input_length(
+                            name_value,
+                            self.config.max_service_name_length,
+                            "name",
+                        )
+                        _validate_input_length(
+                            arguments.get("binary_path"),
+                            self.config.max_path_length,
+                            "binary_path",
+                        )
+                        _validate_no_null_bytes(name_value, "name")
+                        result = await self._check_service(
+                            name_value,
+                            arguments.get("binary_path"),
+                            arguments.get("os_version"),
+                        )
+                    elif system_type == "scheduled_task":
+                        _validate_input_length(
+                            name_value,
+                            self.config.max_task_path_length,
+                            "name",
+                        )
+                        _validate_no_null_bytes(name_value, "name")
+                        result = await self._check_scheduled_task(
+                            name_value, arguments.get("os_version")
+                        )
+                    elif system_type == "autorun":
+                        _validate_input_length(
+                            name_value,
+                            self.config.max_key_path_length,
+                            "name",
+                        )
+                        _validate_no_null_bytes(name_value, "name")
+                        result = await self._check_autorun(
+                            name_value,
+                            arguments.get("value_name"),
+                            arguments.get("os_version"),
+                        )
+                    else:
+                        result = {
+                            "error": "unsupported_system_type",
+                            "message": "type must be one of: service, scheduled_task, autorun",
+                            "supported_types": ["service", "scheduled_task", "autorun"],
+                            "next_step": "Call check_system with a supported type and put the service name, task path, or autorun key path in name.",
+                        }
+                    result.setdefault("system_type", system_type)
+                elif name == "server_status":
+                    resource = str(arguments.get("resource", "health") or "health").strip().lower()
+                    if resource == "health":
+                        result = await self._get_health()
+                    elif resource == "db_stats":
+                        result = await self._get_db_stats()
+                    elif resource == "all":
+                        result = {
+                            "health": await self._get_health(),
+                            "db_stats": await self._get_db_stats(),
+                        }
+                    else:
+                        result = {
+                            "error": "unsupported_status_resource",
+                            "message": "resource must be one of: health, db_stats, all",
+                            "supported_resources": ["health", "db_stats", "all"],
+                            "next_step": "Call server_status(resource='health'), server_status(resource='db_stats'), or server_status(resource='all').",
+                        }
+                    result.setdefault("resource", resource)
+                elif name == "check_file":
                     _validate_input_length(
                         arguments.get("path"), self.config.max_path_length, "path"
                     )

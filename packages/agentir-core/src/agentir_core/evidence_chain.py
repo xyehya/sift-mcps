@@ -415,8 +415,15 @@ def seal_manifest(
     case_id = existing_manifest.get("case_id", "") or _load_case_id(case_dir)
     now = _now()
 
-    # Carry forward IGNORED and RETIRED entries; ACTIVE entries get re-registered via file_specs
-    carried = [f for f in existing_manifest.get("files", []) if f.get("status") in ("IGNORED", "RETIRED")]
+    # Carry forward IGNORED, RETIRED, and ACTIVE entries not being explicitly re-registered.
+    # The portal only sends newly-unregistered files in file_specs, so previously ACTIVE
+    # entries must be preserved here or they silently disappear from the manifest.
+    file_spec_paths = {spec["path"] for spec in file_specs}
+    carried = [
+        f for f in existing_manifest.get("files", [])
+        if f.get("status") in ("IGNORED", "RETIRED")
+        or (f.get("status") == "ACTIVE" and f.get("path") not in file_spec_paths)
+    ]
 
     new_files = list(carried)
     for spec in file_specs:

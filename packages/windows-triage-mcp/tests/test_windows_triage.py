@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import pytest
 
-from mcp.types import ListToolsRequest
+from mcp.types import CallToolRequest, ListToolsRequest
 from windows_triage_mcp.config import Config
 from windows_triage_mcp.db import KnownGoodDB, ContextDB, RegistryDB
 from windows_triage_mcp.server import WindowsTriageServer
@@ -134,25 +134,110 @@ def server(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_all_13_tools_are_registered(server):
+async def test_consolidated_tools_are_registered(server):
     handler = server.server.request_handlers[ListToolsRequest]
     res = await handler(ListToolsRequest())
     tools = {tool.name for tool in res.root.tools}
     assert tools == {
-        "check_file",
+        "check_artifact",
         "check_process_tree",
-        "check_service",
-        "check_scheduled_task",
-        "check_autorun",
+        "check_system",
         "check_registry",
-        "check_hash",
-        "analyze_filename",
-        "check_lolbin",
-        "check_hijackable_dll",
         "check_pipe",
-        "get_db_stats",
-        "get_health",
+        "server_status",
     }
+
+
+async def _call_tool(server, name: str, arguments: dict) -> dict:
+    handler = server.server.request_handlers[CallToolRequest]
+    res = await handler(CallToolRequest(params={"name": name, "arguments": arguments}))
+    return json.loads(res.root.content[0].text)
+
+
+@pytest.mark.asyncio
+async def test_check_artifact_routes_file_hash_lolbin_and_dll(server):
+    file_result = await _call_tool(
+        server,
+        "check_artifact",
+        {
+            "type": "file",
+            "value": r"C:\Windows\System32\cmd.exe",
+            "hash": "a" * 64,
+            "os_version": "Win10_21H2_Pro",
+        },
+    )
+    assert file_result["verdict"] == "EXPECTED_LOLBIN"
+    assert file_result["artifact_type"] == "file"
+    assert file_result["interpretation_constraint"] == "UNKNOWN means not-in-database, NOT suspicious"
+
+    hash_result = await _call_tool(server, "check_artifact", {"type": "hash", "value": "b" * 64})
+    assert hash_result["verdict"] == "SUSPICIOUS"
+    assert hash_result["artifact_type"] == "hash"
+
+    lolbin_result = await _call_tool(server, "check_artifact", {"type": "lolbin", "value": "mshta.exe"})
+    assert lolbin_result["is_lolbin"] is True
+    assert lolbin_result["artifact_type"] == "lolbin"
+
+    dll_result = await _call_tool(server, "check_artifact", {"type": "dll", "value": "version.dll"})
+    assert dll_result["is_hijackable"] is True
+    assert dll_result["artifact_type"] == "dll"
+
+
+@pytest.mark.asyncio
+async def test_check_system_routes_service_task_and_autorun(server):
+    service_result = await _call_tool(
+        server,
+        "check_system",
+        {
+            "type": "service",
+            "name": "EventLog",
+            "binary_path": r"C:\Windows\System32\svchost.exe",
+            "os_version": "Win10_21H2_Pro",
+        },
+    )
+    assert service_result["verdict"] == "EXPECTED"
+    assert service_result["system_type"] == "service"
+
+    task_result = await _call_tool(
+        server,
+        "check_system",
+        {
+            "type": "scheduled_task",
+            "name": r"\Microsoft\Windows\Defrag\ScheduledDefrag",
+            "os_version": "Win10_21H2_Pro",
+        },
+    )
+    assert task_result["verdict"] == "EXPECTED"
+    assert task_result["system_type"] == "scheduled_task"
+
+    autorun_result = await _call_tool(
+        server,
+        "check_system",
+        {
+            "type": "autorun",
+            "name": r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run",
+            "value_name": "SecurityHealth",
+            "os_version": "Win10_21H2_Pro",
+        },
+    )
+    assert autorun_result["verdict"] == "EXPECTED"
+    assert autorun_result["system_type"] == "autorun"
+
+
+@pytest.mark.asyncio
+async def test_server_status_routes_health_db_stats_and_all(server):
+    health = await _call_tool(server, "server_status", {"resource": "health"})
+    assert "status" in health
+    assert health["resource"] == "health"
+
+    stats = await _call_tool(server, "server_status", {"resource": "db_stats"})
+    assert "known_good_db" in stats
+    assert stats["resource"] == "db_stats"
+
+    all_status = await _call_tool(server, "server_status", {"resource": "all"})
+    assert "health" in all_status
+    assert "db_stats" in all_status
+    assert all_status["resource"] == "all"
 
 
 @pytest.mark.asyncio

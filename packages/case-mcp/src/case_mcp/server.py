@@ -16,16 +16,12 @@ from mcp.server.fastmcp import FastMCP
 from sift_common.audit import AuditWriter, resolve_examiner
 from sift_common.instructions import CASE_MCP as _INSTRUCTIONS
 from sift_common.oplog import setup_logging
-from agentir_core.audit_ops import audit_summary_data
-from agentir_core.backup_ops import create_backup_data as _create_backup_data
 from agentir_core.case_io import (
     export_bundle as _export_bundle,
     import_bundle as _import_bundle,
 )
 from agentir_core.case_ops import (
-    _case_list_data,
     _case_status_data,
-    _set_case_wintools_permissions,
 )
 from agentir_core.evidence_chain import (
     ChainStatus,
@@ -160,30 +156,22 @@ def create_server() -> FastMCP:
     server._audit = audit
 
     # ------------------------------------------------------------------
-    # Tool 1: case_list
+    # Tool: case_status
     # ------------------------------------------------------------------
     @server.tool(annotations={"readOnlyHint": True})
-    def case_list() -> dict:
-        """List all cases in the cases directory with their status
-        (open/closed) and whether each is the active case."""
-        try:
-            result = _case_list_data()
-            return result
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
+    def case_status() -> dict:
+        """Get the status of the active case: finding counts, timeline
+        entries, TODO progress, evidence summary, and available platform
+        capabilities.
 
-    # ------------------------------------------------------------------
-    # Tool 4: case_status (SAFE)
-    # ------------------------------------------------------------------
-    @server.tool(annotations={"readOnlyHint": True})
-    def case_status(case_id: str = "") -> dict:
-        """Get detailed status of a case including finding counts,
-        timeline entries, and TODO progress. Defaults to the active
-        case if no case_id is provided."""
+        The active case is set by the Examiner Portal — only the portal
+        can switch cases. Call this at the start of every session to
+        confirm the case context and available investigation tools before
+        proceeding.
+        """
         try:
-            case_dir = _resolve_case_dir(case_id)
+            case_dir = _resolve_case_dir()
             result = _case_status_data(case_dir)
-            # Layer 4: platform capabilities detection
             result.update(_build_platform_capabilities())
             return result
         except (ValueError, OSError) as e:
@@ -239,15 +227,16 @@ def create_server() -> FastMCP:
             return {"error": str(e)}
 
     # ------------------------------------------------------------------
-    # Tool 5: evidence_register (BLOCKED — examiner-only via portal)
+    # Tool: evidence_register (BLOCKED — examiner-only via portal)
     # ------------------------------------------------------------------
     @server.tool()
     def evidence_register(path: str, description: str = "") -> dict:
         """Register an evidence file with the active case.
 
-        Evidence registration requires examiner review and must be
-        performed via the Examiner Portal. This tool will return a
-        portal-remediation block when called by the agent.
+        Evidence registration is an examiner action performed via the
+        Examiner Portal — this tool always returns a portal-redirect.
+        Do not retry. Notify the operator to seal the file via the
+        Portal → Evidence tab, then call evidence_list to confirm.
         """
         audit.log(
             tool="evidence_register",
@@ -256,29 +245,39 @@ def create_server() -> FastMCP:
         )
         return {
             "blocked": True,
-            "reason": "Evidence registration requires examiner review",
+            "reason": "Evidence registration is an examiner action.",
             "action": "portal_required",
             "portal_hint": (
-                "Open the Examiner Portal and use the 'Register Evidence' panel "
-                "in the Evidence Chain tab. Call open_case_dashboard() to open it."
+                "Notify the operator to open the Examiner Portal and use the "
+                "'Register Evidence' panel in the Evidence Chain tab. "
+                "After sealing, call evidence_list to confirm registered status."
             ),
         }
 
     # ------------------------------------------------------------------
-    # Tool 6: evidence_list (SAFE)
+    # Tool: evidence_list (SAFE)
     # ------------------------------------------------------------------
     @server.tool(annotations={"readOnlyHint": True})
     def evidence_list() -> dict:
-        """List all registered evidence files in the active case with
-        their SHA-256 hashes, registration dates, and descriptions.
-        Also shows any unregistered files in the evidence/ directory.
+        """List all files in the active case evidence/ directory and their
+        registration and integrity status.
 
-        Reads from the authoritative System B manifest (evidence-manifest.json).
-        IGNORED entries are excluded from the result.
-        Unregistered files appear with registered=false — seal via the portal.
+        Returns two sections:
+        - evidence: sealed files from the manifest with SHA-256 hashes,
+          registration dates, and integrity status per file.
+        - unregistered: files found on disk that have not been sealed via
+          the portal — these cannot be used for analysis until registered.
+
+        Also includes an inline chain integrity summary. If
+        requires_examiner_action is true, notify the operator before
+        proceeding: unregistered files need portal sealing, and chain
+        issues need HMAC verification (call evidence_verify for a full
+        integrity check before escalating).
         """
         try:
             case_dir = _resolve_case_dir()
+
+            # Load manifest
             manifest = load_manifest(case_dir)
             if manifest is None:
                 active_files = []
@@ -289,45 +288,88 @@ def create_server() -> FastMCP:
                 ]
                 manifest_version = manifest.get("version", 0)
 
-            # Scan actual evidence dir for files not in the manifest (B14 fix)
+            # Inline chain status for tamper detection
+            try:
+                cs = chain_status(case_dir)
+                chain = {
+                    "status": cs["status"],
+                    "ok_count": cs["ok_count"],
+                    "issues": cs["issues"],
+                }
+            except Exception:
+                chain = {
+                    "status": "unknown",
+                    "ok_count": 0,
+                    "issues": ["Chain status check failed — call evidence_verify for details."],
+                }
+
+            # Recursive scan of evidence/ for all files (including subdirs)
             evidence_dir = case_dir / "evidence"
             registered_paths = {f.get("path", "") for f in active_files}
             unregistered = []
             if evidence_dir.is_dir():
-                for f in sorted(evidence_dir.iterdir()):
-                    if f.is_file():
-                        rel = f"evidence/{f.name}"
-                        if rel not in registered_paths and str(f) not in registered_paths:
-                            unregistered.append({
-                                "path": rel,
-                                "size_bytes": f.stat().st_size,
-                                "registered": False,
-                                "note": "File not sealed. Seal via Examiner Portal → Evidence tab before indexing.",
-                            })
+                for f in sorted(evidence_dir.rglob("*")):
+                    if not f.is_file():
+                        continue
+                    rel = str(f.relative_to(case_dir))
+                    if rel not in registered_paths and str(f) not in registered_paths:
+                        unregistered.append({
+                            "path": rel,
+                            "size_bytes": f.stat().st_size,
+                            "registered": False,
+                            "action_required": (
+                                "Notify the operator to seal this file via "
+                                "Examiner Portal → Evidence tab before analysis."
+                            ),
+                        })
+
+            has_chain_issues = bool(
+                chain.get("issues")
+                and chain.get("status") not in (ChainStatus.OK, ChainStatus.UNSEALED)
+            )
+            requires_examiner_action = bool(unregistered or has_chain_issues)
 
             result = {
                 "evidence": active_files,
                 "unregistered": unregistered,
+                "chain": chain,
+                "requires_examiner_action": requires_examiner_action,
                 "manifest_version": manifest_version,
                 "source": "manifest_v2",
             }
+            if requires_examiner_action:
+                hints = []
+                if unregistered:
+                    hints.append(
+                        f"{len(unregistered)} unregistered file(s) found — "
+                        "operator must seal via portal before analysis."
+                    )
+                if has_chain_issues:
+                    hints.append(
+                        "Chain integrity issues detected — call evidence_verify "
+                        "for a full check before escalating to the operator."
+                    )
+                result["examiner_action_hint"] = " ".join(hints)
             if manifest is None:
-                result["note"] = "No evidence manifest — case may pre-date System B or not yet initialised"
+                result["note"] = "No evidence manifest — case not yet initialised via portal."
             return result
         except (ValueError, OSError) as e:
             return {"error": str(e)}
 
     # ------------------------------------------------------------------
-    # Tool 7: evidence_verify (SAFE)
+    # Tool: evidence_verify (SAFE)
     # ------------------------------------------------------------------
     @server.tool(annotations={"readOnlyHint": True})
     def evidence_verify() -> dict:
-        """Verify integrity of all registered evidence files using a
-        stat-check against the authoritative System B manifest.
+        """Run a dedicated integrity check on all registered evidence files.
 
-        Reports chain status: ok, unsealed, modified, missing,
-        unregistered, or ledger_error. For full HMAC verification,
-        use the Examiner Portal's 'Verify HMAC' button.
+        Performs a stat-check against the authoritative manifest and reports
+        chain status: ok, unsealed, modified, missing, unregistered, or
+        ledger_error. Use this before escalating a chain-of-custody concern
+        to the operator to confirm the finding with a fresh check.
+
+        For full cryptographic HMAC verification, the operator must use the
+        Examiner Portal → Evidence tab → 'Verify HMAC' button.
         """
         try:
             case_dir = _resolve_case_dir()
@@ -340,10 +382,10 @@ def create_server() -> FastMCP:
                 "source": "manifest_v2",
             }
             if status["status"] not in (ChainStatus.OK, ChainStatus.UNSEALED):
-                result["portal_hint"] = (
-                    "Integrity issues detected. Open the Examiner Portal "
-                    "and run 'Verify HMAC' for full cryptographic verification. "
-                    "Call open_case_dashboard() to open it."
+                result["operator_action_required"] = (
+                    "Integrity issues detected. Notify the operator to open the "
+                    "Examiner Portal and run 'Verify HMAC' for full cryptographic "
+                    "verification."
                 )
             return result
         except (ValueError, OSError) as e:
@@ -410,34 +452,38 @@ def create_server() -> FastMCP:
             return {"error": str(e)}
 
     # ------------------------------------------------------------------
-    # Tool 10: audit_summary (SAFE)
-    # ------------------------------------------------------------------
-    @server.tool(annotations={"readOnlyHint": True})
-    def audit_summary() -> dict:
-        """Get audit trail statistics for the active case including
-        total entries, evidence IDs, and breakdowns by MCP and tool."""
-        try:
-            case_dir = _resolve_case_dir()
-            result = audit_summary_data(case_dir)
-            return result
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
-
-    # ------------------------------------------------------------------
-    # Tool 11: record_action (SAFE — auto-committed, no approval)
+    # Tool: record_action (SAFE — auto-committed, no approval)
     # ------------------------------------------------------------------
     @server.tool()
     def record_action(
         description: str,
+        reasoning: str,
         tool: str = "",
         command: str = "",
         analyst_override: str = "",
     ) -> dict:
-        """Log a supplemental action note to the case record.
-        Auto-committed, no approval needed. Note: MCP tool calls are
-        already captured by the automatic audit trail."""
+        """Log an investigative action and your reasoning to the case record.
+
+        Call this when you take an action not automatically captured by the
+        audit trail — a manual file inspection, a scope decision, a choice
+        of what to examine next. MCP tool calls are already captured
+        automatically; use this for supplemental decisions.
+
+        The reasoning field is required: state why you took this action so
+        the case record reflects your investigative logic, not just the
+        mechanics. This is especially important before context compaction.
+
+        Args:
+            description: What action was taken (the action itself).
+            reasoning: Why you took this action (your investigative rationale,
+                hypothesis, or decision logic).
+            tool: Tool name if applicable.
+            command: Command string if applicable.
+            analyst_override: Override examiner identity (leave empty normally).
+        """
         try:
             _validate_str_length(description, "description", _MAX_TEXT)
+            _validate_str_length(reasoning, "reasoning", _MAX_TEXT)
             _validate_str_length(tool, "tool", _MAX_SHORT)
             _validate_str_length(command, "command", _MAX_TEXT)
             _validate_str_length(analyst_override, "analyst_override", _MAX_SHORT)
@@ -445,10 +491,10 @@ def create_server() -> FastMCP:
             examiner = analyst_override or resolve_examiner()
             ts = datetime.now(timezone.utc).isoformat()
 
-            # Write to actions.jsonl (adds source field not in CaseManager)
             entry: dict = {
                 "ts": ts,
                 "description": description,
+                "reasoning": reasoning,
                 "examiner": examiner,
                 "source": "mcp",
             }
@@ -467,7 +513,7 @@ def create_server() -> FastMCP:
 
             logged_id = audit.log(
                 tool="record_action",
-                params={"description": description},
+                params={"description": description, "reasoning": reasoning},
                 result_summary={"status": "recorded", "timestamp": ts},
             )
             result = {"status": "recorded", "timestamp": ts}
@@ -478,14 +524,21 @@ def create_server() -> FastMCP:
             return {"error": str(e)}
 
     # ------------------------------------------------------------------
-    # Tool 12: log_reasoning (SAFE — audit-only, no approval)
+    # Tool: log_reasoning (SAFE — audit-only, no approval)
     # ------------------------------------------------------------------
     @server.tool()
     def log_reasoning(text: str, analyst_override: str = "") -> dict:
-        """Record analytical reasoning to the audit trail (no approval
-        needed). Call when choosing what to examine next, forming a
-        hypothesis, revising an interpretation, or ruling something out.
-        Unrecorded reasoning is lost during context compaction."""
+        """Record analytical reasoning to the audit trail.
+
+        Call at every meaningful decision point: when choosing what to
+        examine next, forming or revising a hypothesis, ruling something
+        out, or noting a contradiction. No approval needed — this is
+        audit-only and never modifies case data.
+
+        Unrecorded reasoning is lost during context compaction. Use this
+        to preserve your analytical logic across long investigations.
+        record_action is for actions; log_reasoning is for thinking.
+        """
         _validate_str_length(text, "text", _MAX_TEXT)
         _validate_str_length(analyst_override, "analyst_override", _MAX_SHORT)
         result = {"status": "logged"}
@@ -501,7 +554,7 @@ def create_server() -> FastMCP:
         return result
 
     # ------------------------------------------------------------------
-    # Tool 13: log_external_action (SAFE — audit-only, no approval)
+    # Tool: log_external_action (SAFE — audit-only, no approval)
     # ------------------------------------------------------------------
     @server.tool()
     def log_external_action(
@@ -513,21 +566,24 @@ def create_server() -> FastMCP:
         input_files: list[str] | None = None,
         output_files: list[str] | None = None,
     ) -> dict:
-        """Record a tool execution performed outside this MCP server
-        (e.g., via Bash or another backend). Response includes an audit_id
-        field that can be used in record_finding's audit_ids list. Without
-        this record, the action has no audit entry and findings cannot
-        reference it.
+        """Record a command executed outside this MCP server (e.g., via Bash).
+
+        Returns an audit_id that you can pass into record_finding's audit_ids
+        list to link a finding to the Bash command that produced the evidence.
+        Without this call, Bash-executed commands have no audit entry and
+        findings cannot reference them for provenance.
+
+        If the PostToolUse hook captured this command, pass its audit_id as
+        hook_audit_id — this upgrades provenance from voluntary (self-reported)
+        to verified (cross-referenced with the hook entry).
 
         Args:
-            command: The command that was executed.
-            output_summary: Summary of what the command produced.
-            purpose: Why this command was run.
-            analyst_override: Override examiner identity.
-            hook_audit_id: If the command was captured by the PostToolUse
-                hook, pass its audit_id here to cross-reference. Upgrades
-                provenance from voluntary to verified.
-            input_files: Files the command read (for provenance chain).
+            command: The exact command that was executed.
+            output_summary: What the command produced (key findings, not full output).
+            purpose: Why this command was run (investigative rationale).
+            analyst_override: Override examiner identity (leave empty normally).
+            hook_audit_id: PostToolUse hook audit_id if available.
+            input_files: Files the command read (enables provenance chain).
             output_files: Files the command produced.
         """
         _validate_str_length(command, "command", _MAX_TEXT)
@@ -605,133 +661,6 @@ def create_server() -> FastMCP:
             result["warning"] = "Audit write failed — action not recorded"
         if provenance_warning:
             result["provenance_warning"] = provenance_warning
-        return result
-
-    # ------------------------------------------------------------------
-    # Tool 15: backup_case (CONFIRM)
-    # ------------------------------------------------------------------
-    @server.tool()
-    def backup_case(destination: str, purpose: str = "") -> dict:
-        """Back up case data files to a destination directory.
-
-        Creates a timestamped backup of case metadata, findings, timeline,
-        approvals, audit trails, and reports. Does NOT include evidence or
-        extraction files (use 'agentir backup --all' for full backups).
-
-        Confirm with the examiner before creating a backup.
-
-        Args:
-            destination: Directory to create the backup in.
-            purpose: Why the backup is being made (audit trail).
-        """
-        from agentir_core.backup_ops import create_backup_data
-
-        try:
-            _validate_str_length(destination, "destination", _MAX_NAME)
-            _validate_str_length(purpose, "purpose", _MAX_TEXT)
-            case_dir = _resolve_case_dir()
-            examiner = resolve_examiner()
-
-            result = create_backup_data(
-                case_dir=case_dir,
-                destination=destination,
-                examiner=examiner,
-                purpose=purpose,
-            )
-
-            # Strip CLI-only fields from MCP response
-            result.pop("symlinks", None)
-            result.pop("ledger_note", None)
-
-            # Warn about OpenSearch if available
-            try:
-                import importlib.util
-
-                if importlib.util.find_spec("opensearch_mcp") is not None:
-                    result["opensearch_note"] = (
-                        "OpenSearch indices are NOT included in MCP backups. "
-                        "Use 'agentir backup --all' from the CLI for a full backup "
-                        "including indexed evidence."
-                    )
-            except Exception:
-                pass
-
-            logged_id = audit.log(
-                tool="backup_case",
-                params={"destination": destination, "purpose": purpose},
-                result_summary=result,
-            )
-            if logged_id is None:
-                result["warning"] = "Audit write failed — action not recorded"
-            return result
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
-
-    # ------------------------------------------------------------------
-    # Tool 16: open_case_dashboard (SAFE)
-    # ------------------------------------------------------------------
-    @server.tool(annotations={"readOnlyHint": True})
-    def open_case_dashboard() -> dict:
-        """Open the Examiner Portal in the examiner's browser.
-
-        Reads gateway config to build the portal URL with an auth
-        token. The URL is always returned so it can be displayed as a
-        clickable link even if the browser fails to open.
-        """
-        import webbrowser
-
-        import yaml
-
-        config_path = Path.home() / ".agentir" / "gateway.yaml"
-        if not config_path.is_file():
-            return {"error": "Gateway config not found (~/.agentir/gateway.yaml)"}
-
-        try:
-            config = yaml.safe_load(config_path.read_text()) or {}
-        except (yaml.YAMLError, OSError) as e:
-            return {"error": f"Cannot read gateway config: {e}"}
-
-        gw = config.get("gateway", {})
-        host = gw.get("host", "127.0.0.1")
-        port = gw.get("port", 4508)
-        tls = gw.get("tls", {})
-        scheme = "https" if tls.get("certfile") else "http"
-
-        if host == "0.0.0.0":
-            host = "127.0.0.1"
-
-        url = f"{scheme}://{host}:{port}/portal/"
-
-        # Append bearer token as URL fragment, matching current examiner
-        api_keys = config.get("api_keys", {})
-        if isinstance(api_keys, dict) and api_keys:
-            examiner = resolve_examiner()
-            token = None
-            for key, info in api_keys.items():
-                if isinstance(info, dict) and info.get("examiner") == examiner:
-                    token = key
-                    break
-            if token is None:
-                token = next(iter(api_keys))
-            url += f"#token={token}"
-
-        try:
-            webbrowser.open(url)
-            status = "opened"
-        except Exception:
-            status = "browser_failed"
-
-        logged_id = audit.log(
-            tool="open_case_dashboard",
-            params={},
-            result_summary={"status": status},
-        )
-        # Strip token from response — LLM should not see the bearer token.
-        # The browser already received it via webbrowser.open().
-        display_url = url.split("#")[0] if "#" in url else url
-        result = {"url": display_url, "status": status}
-        if logged_id is None:
-            result["warning"] = "Audit write failed — action not recorded"
         return result
 
     return server

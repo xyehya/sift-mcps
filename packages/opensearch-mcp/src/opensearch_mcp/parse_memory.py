@@ -129,24 +129,46 @@ _VOL3_CMD: str | None = None
 
 
 def _find_vol3() -> str:
-    """Find the vol3 command. Tries vol3, vol, python3 -m volatility3."""
+    """Find the vol3 command.
+
+    Systemd user services run with a minimal PATH that excludes /usr/local/bin,
+    so PATH-based lookup fails even when vol is installed there. Try known
+    absolute install locations first, then fall back to PATH candidates.
+    """
     global _VOL3_CMD
     if _VOL3_CMD:
         return _VOL3_CMD
 
-    for candidate in ["vol3", "vol", "python3 -m volatility3"]:
+    # Absolute paths first — bypasses PATH entirely, works under any environment.
+    absolute_candidates = [
+        "/usr/local/bin/vol",
+        "/opt/volatility3/bin/vol",
+        "/usr/local/bin/vol3",
+        "/usr/bin/vol",
+        "/usr/bin/vol3",
+    ]
+    path_candidates = ["vol3", "vol"]
+
+    all_candidates: list[list[str]] = (
+        [[p] for p in absolute_candidates if Path(p).exists()]
+        + [c.split() for c in path_candidates]
+        + [["python3", "-m", "volatility3"]]
+    )
+
+    for cmd in all_candidates:
         try:
-            cmd = candidate.split() + ["--version"]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if "Volatility 3" in (result.stdout + result.stderr):
-                _VOL3_CMD = candidate
+            # vol has no --version flag; -h prints usage and exits 2.
+            # Any non-127 exit with output means the binary is present and runnable.
+            result = subprocess.run(cmd + ["-h"], capture_output=True, text=True, timeout=10)
+            if (result.stdout + result.stderr).strip():
+                _VOL3_CMD = cmd[0] if len(cmd) == 1 else " ".join(cmd)
                 return _VOL3_CMD
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
 
     raise RuntimeError(
-        "Volatility 3 not found. Tried: vol3, vol, python3 -m volatility3\n"
-        "Install: pip install volatility3"
+        "Volatility 3 not found. Tried absolute paths and PATH candidates.\n"
+        "Install: pip install volatility3  or  apt install volatility3"
     )
 
 
@@ -156,6 +178,19 @@ def _plugin_to_index_suffix(plugin: str) -> str:
     return f"vol-{parts[-1]}"
 
 
+def _user_symbol_dir() -> Path:
+    """Return a user-writable Volatility 3 symbol cache directory.
+
+    The system vol install at /opt/volatility3 is root-owned so the ingest
+    subprocess (running as sansforensics) cannot write downloaded symbols there.
+    Using a user-writable directory via -s lets vol cache symbol files without
+    requiring elevated permissions.
+    """
+    cache = Path.home() / ".cache" / "volatility3" / "symbols"
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
 def run_vol3_plugin(
     image_path: Path,
     plugin: str,
@@ -163,11 +198,11 @@ def run_vol3_plugin(
 ) -> list[dict]:
     """Run a single vol3 plugin with JSON output."""
     vol_cmd = _find_vol3()
+    sym_dir = _user_symbol_dir()
     cmd = vol_cmd.split() + [
-        "-f",
-        str(image_path),
-        "--renderer",
-        "json",
+        "-s", str(sym_dir),
+        "-f", str(image_path),
+        "--renderer", "json",
         "-q",
         plugin,
     ]
