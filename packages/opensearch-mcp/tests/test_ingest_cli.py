@@ -12,6 +12,7 @@ from opensearch_mcp.ingest_cli import (
     _parse_date,
     _parse_set,
     _resolve_case_id,
+    cmd_scan,
     main,
 )
 
@@ -114,6 +115,44 @@ class TestParseSet:
 
     def test_empty_string_returns_none(self):
         assert _parse_set("") is None
+
+
+def test_cmd_scan_clean_deletes_host_indices(capsys):
+    existing = [{"index": "case-test-case-evtx-srl-forge"}, {"index": "case-test-case-mft-srl-forge"}]
+
+    args = argparse.Namespace(
+        path="/tmp/evidence.e01",
+        case="test-case",
+        hostname="srl-forge",
+        clean=True,
+        config=None,
+    )
+
+    with (
+        patch("opensearch_mcp.ingest_cli._resolve_case_id", return_value="test-case"),
+        patch("opensearch_mcp.ingest_cli._ensure_case_active"),
+        patch("opensearch_mcp.ingest_cli.get_client") as mock_get_client,
+        patch("opensearch_mcp.ingest_cli._load_config", side_effect=RuntimeError("stop")),
+        pytest.raises(RuntimeError, match="stop"),
+    ):
+        mock_client = mock_get_client.return_value
+        mock_client.cat.indices.return_value = existing
+        cmd_scan(args)
+
+    mock_client.cat.indices.assert_called_once_with(
+        index="case-test-case-*-srl-forge",
+        format="json",
+        h="index",
+    )
+    mock_client.indices.delete.assert_any_call(
+        index="case-test-case-evtx-srl-forge",
+        ignore_unavailable=True,
+    )
+    mock_client.indices.delete.assert_any_call(
+        index="case-test-case-mft-srl-forge",
+        ignore_unavailable=True,
+    )
+    assert "Cleaned 2 existing indices for srl-forge" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

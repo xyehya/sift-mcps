@@ -20,7 +20,7 @@ from opensearch_mcp.ingest import discover, ingest
 from opensearch_mcp.ingest_status import write_status
 from opensearch_mcp.manifest import sha256_file
 from opensearch_mcp.parse_csv import ingest_csv
-from opensearch_mcp.paths import agentir_dir
+from opensearch_mcp.paths import agentir_dir, sanitize_index_component
 from opensearch_mcp.tools import TOOLS
 
 _ACTIVE_CASE_FILE = agentir_dir() / "active_case"
@@ -669,6 +669,20 @@ def cmd_scan(args: argparse.Namespace) -> None:
     input_path = Path(args.path)
     case_id = _resolve_case_id(getattr(args, "case", None))
     _ensure_case_active(case_id)
+    hostname = getattr(args, "hostname", None)
+
+    if getattr(args, "clean", False) and hostname:
+        safe_case = sanitize_index_component(case_id)
+        safe_host = sanitize_index_component(hostname)
+        pattern = f"case-{safe_case}-*-{safe_host}"
+        try:
+            client = get_client()
+            existing = client.cat.indices(index=pattern, format="json", h="index") or []
+            for idx in existing:
+                client.indices.delete(index=idx["index"], ignore_unavailable=True)
+            print(f"  Cleaned {len(existing)} existing indices for {hostname}")
+        except Exception as e:
+            print(f"  Clean warning: {e}")
 
     # Load config file and merge
     config = _load_config(getattr(args, "config", None))
@@ -678,7 +692,6 @@ def cmd_scan(args: argparse.Namespace) -> None:
     time_to = _parse_date(args.time_to) if getattr(args, "time_to", None) else None
     include = _parse_set(getattr(args, "include", None))
     exclude = _parse_set(getattr(args, "exclude", None))
-    hostname = getattr(args, "hostname", None)
     vss_flag = getattr(args, "vss", False)
     password = getattr(args, "password", None)
     tz_override = getattr(args, "source_timezone", None)
@@ -2592,6 +2605,11 @@ def _add_scan_args(p: argparse.ArgumentParser) -> None:
         help="Reserved — parallel parsing not yet implemented",
     )
     p.add_argument("--yes", action="store_true", help="Skip confirmation")
+    p.add_argument(
+        "--clean",
+        action="store_true",
+        help="Delete existing indices for --case/--hostname before re-ingesting",
+    )
     p.add_argument(
         "--skip-triage",
         action="store_true",

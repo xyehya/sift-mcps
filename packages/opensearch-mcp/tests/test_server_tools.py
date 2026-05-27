@@ -787,3 +787,30 @@ class TestIdxIngestContainerDetection:
         resp = idx_ingest(path="evidence", dry_run=True)
         assert "error" in resp
         assert "No Windows artifacts found" in resp["error"]
+
+    def test_idx_ingest_directory_auto_launches_containers(
+        self, mock_client, tmp_path, monkeypatch
+    ):
+        """dry_run=False on a directory launches each detected container."""
+        case_dir = tmp_path / "test-case-001"
+        evidence_dir = case_dir / "evidence"
+        evidence_dir.mkdir(parents=True)
+        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        (evidence_dir / "rocba-cdrive.e01").write_bytes(b"EVF" + b"\x00" * 100)
+        (evidence_dir / "memdump.raw").write_bytes(b"\x00" * 100)
+
+        proc1 = MagicMock(pid=101)
+        proc2 = MagicMock(pid=102)
+        with (
+            patch("opensearch_mcp.ingest.discover", return_value=[]),
+            patch("opensearch_mcp.shard_capacity.check_shard_headroom", return_value=(True, "ok")),
+            patch("opensearch_mcp.server._spawn_ingest", side_effect=[proc1, proc2]) as mock_spawn,
+        ):
+            resp = idx_ingest(path="evidence", hostname="srl-forge", dry_run=False, force=True)
+
+        assert resp["status"] == "multi_started"
+        assert len(resp["containers"]) == 2
+        assert mock_spawn.call_count == 2
+        spawned_cmds = [call.args[0] for call in mock_spawn.call_args_list]
+        assert any("scan" in cmd and "--clean" in cmd for cmd in spawned_cmds)
+        assert any("memory" in cmd for cmd in spawned_cmds)

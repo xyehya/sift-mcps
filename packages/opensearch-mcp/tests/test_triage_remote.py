@@ -82,6 +82,24 @@ class TestResponseFieldMapping:
         script_source = client.update_by_query.call_args.kwargs["body"]["script"]["source"]
         assert "triage.lolbin" not in script_source
 
+    def test_gateway_calls_use_curated_windows_triage_tools(self):
+        from opensearch_mcp.triage_remote import _check_file, _check_service
+
+        with patch("opensearch_mcp.triage_remote.call_tool", return_value={"verdict": "EXPECTED"}) as call:
+            _check_file("C:\\Windows\\System32\\cmd.exe")
+            _check_service("EventLog")
+
+        call.assert_any_call(
+            "check_artifact",
+            {"type": "file", "value": "C:\\Windows\\System32\\cmd.exe"},
+            timeout=15,
+        )
+        call.assert_any_call(
+            "check_system",
+            {"type": "service", "name": "EventLog"},
+            timeout=15,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Circuit breaker
@@ -151,7 +169,10 @@ class TestSanitization:
         mock_client.search.return_value = {"hits": {"hits": []}}
         mock_client.update_by_query.return_value = {"updated": 0}
 
-        with patch("opensearch_mcp.triage_remote.gateway_available", return_value=False):
+        with (
+            patch("opensearch_mcp.triage_remote.wait_for_gateway", return_value=True),
+            patch("opensearch_mcp.triage_remote.gateway_available", return_value=False),
+        ):
             enrich_remote(mock_client, "Test Case!@#")
 
         # Should have called refresh with sanitized case_id
@@ -174,7 +195,10 @@ class TestGatewayUnavailable:
         mock_client.indices.refresh.return_value = {}
         mock_client.update_by_query.return_value = {"updated": 0}
 
-        with patch("opensearch_mcp.triage_remote.gateway_available", return_value=False):
+        with (
+            patch("opensearch_mcp.triage_remote.wait_for_gateway", return_value=True),
+            patch("opensearch_mcp.triage_remote.gateway_available", return_value=False),
+        ):
             result = enrich_remote(mock_client, "test-case")
 
         assert "registry_persistence" in result

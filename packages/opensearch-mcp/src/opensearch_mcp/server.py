@@ -1474,6 +1474,113 @@ def _human_size(size_bytes: int) -> str:
     return f"{size_bytes:.1f} PiB"
 
 
+def _launch_container_ingest(
+    resolved_path: str,
+    case_id: str,
+    hostname: str = "",
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+    source_timezone: str = "",
+    all_logs: bool = False,
+    reduced_ids: bool = False,
+    full: bool = False,
+    force: bool = False,
+    vss: bool = False,
+    password: str = "",
+    no_hayabusa: bool = False,
+    hosts: list | None = None,
+) -> dict:
+    """Launch the scan subprocess for a disk/archive container."""
+    import sys
+    import uuid as _uuid
+
+    from opensearch_mcp.ingest_status import read_active_ingests as _read_active
+    from opensearch_mcp.paths import agentir_dir
+
+    _running = [i for i in _read_active() if i.get("status") == "running"]
+    if len(_running) >= _MAX_CONCURRENT_INGESTS:
+        return {
+            "error": (
+                f"Too many concurrent ingests ({len(_running)} running, "
+                f"max {_MAX_CONCURRENT_INGESTS}). Use idx_ingest_status()."
+            ),
+        }
+
+    run_id = str(_uuid.uuid4())
+    env = os.environ.copy()
+    env["AGENTIR_INGEST_RUN_ID"] = run_id
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "opensearch_mcp.ingest_cli",
+        "scan",
+        resolved_path,
+        "--case",
+        case_id,
+        "--yes",
+    ]
+    if hostname:
+        cmd.extend(["--hostname", hostname])
+    if force:
+        cmd.append("--clean")
+    if include:
+        cmd.extend(["--include", ",".join(include)])
+    if exclude:
+        cmd.extend(["--exclude", ",".join(exclude)])
+    if source_timezone:
+        cmd.extend(["--source-timezone", source_timezone])
+    if all_logs:
+        cmd.append("--all-logs")
+    if reduced_ids:
+        cmd.append("--reduced-ids")
+    if full:
+        cmd.append("--full")
+    if vss:
+        cmd.append("--vss")
+    if password:
+        env["AGENTIR_ARCHIVE_PASSWORD"] = password
+    if no_hayabusa:
+        cmd.append("--no-hayabusa")
+
+    log_dir = agentir_dir() / "ingest-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{run_id}.log"
+    log_fh = open(log_file, "w")
+
+    proc = _spawn_ingest(cmd, env, log_fh, run_id)
+    log_fh.close()
+
+    host_names = [h.hostname for h in hosts] if hosts else ([hostname] if hostname else [])
+    aid = audit.log(
+        tool="idx_ingest",
+        params={
+            "path": resolved_path,
+            "dry_run": False,
+            "hosts": host_names,
+            "pid": proc.pid,
+            "run_id": run_id,
+        },
+        result_summary=f"started ingest (pid {proc.pid}) for {len(hosts or [])} hosts",
+        input_files=[resolved_path],
+    )
+    resp = {
+        "status": "started",
+        "pid": proc.pid,
+        "run_id": run_id,
+        "hosts": host_names,
+        "case_id": case_id,
+        "message": (
+            "Ingest started. IMPORTANT: Call idx_ingest_status() every 30 seconds "
+            "to monitor progress and report it to the examiner as a checklist. "
+            "Continue polling until status is 'complete' or 'failed'."
+        ),
+    }
+    if aid:
+        resp["audit_id"] = aid
+    return resp
+
+
 @server.tool()
 def idx_ingest(
     path: str,
@@ -1550,7 +1657,6 @@ def idx_ingest(
             accidental re-indexing. Set True only after reviewing idx_case_summary.
     """
     import subprocess as _check_sp
-    import sys
     from pathlib import Path
 
     from opensearch_mcp.containers import detect_container
@@ -1720,18 +1826,125 @@ def idx_ingest(
         except OSError:
             pass
         if containers_found:
+            if dry_run:
+                return {
+                    "status": "containers_detected",
+                    "case_id": case_id,
+                    "message": (
+                        f"The directory contains {len(containers_found)} forensic container file(s). "
+                        "Re-run idx_ingest with the container file path directly."
+                    ),
+                    "containers": containers_found,
+                    "next_step": (
+                        f"Call idx_ingest(path=\"{containers_found[0]['relative_path']}\", "
+                        "format=\"auto\", "
+                        f"hostname=\"<hostname>\", dry_run=True) to preview ingest."
+                    ),
+                }
+
+            from opensearch_mcp.bulk import reset_circuit_breaker as _reset_cb
+            from opensearch_mcp.shard_capacity import (
+                _estimate_new_shards,
+                check_shard_headroom,
+            )
+
+            _reset_cb()
+            if not force:
+                try:
+                    _cli = _get_os()
+                    if _cli is not None:
+                        _existing = (
+                            _cli.cat.indices(
+                                index=f"case-{case_id}-*",
+                                format="json",
+                                h="index,docs.count",
+                            )
+                            or []
+                        )
+                        _total = sum(int(r.get("docs.count") or 0) for r in _existing)
+                        if _total > 0:
+                            return {
+                                "status": "already_indexed",
+                                "case_id": case_id,
+                                "doc_count": _total,
+                                "index_count": len(_existing),
+                                "message": (
+                                    f"This case already has {_total:,} docs across "
+                                    f"{len(_existing)} indices. Re-ingest blocked to "
+                                    "prevent accidental data duplication."
+                                ),
+                                "next_step": (
+                                    "1. Call idx_case_summary to review current coverage. "
+                                    "2. If re-ingest is intentional, set force=True. "
+                                    "3. To add new evidence only, use a different evidence file path."
+                                ),
+                            }
+                except Exception:
+                    pass
+            ok, reason = check_shard_headroom(
+                get_client(),
+                expected_new_shards=_estimate_new_shards("evtx") * len(containers_found),
+                min_headroom_pct=10.0,
+            )
+            if not ok:
+                return {"status": "failed", "error": "shard_capacity", "message": reason}
+
+            def _looks_like_memory(container: dict) -> bool:
+                fname = container["path"].lower()
+                return any(
+                    marker in fname
+                    for marker in ("memory", "memdump", "ram", ".vmem", ".dmp", ".mem")
+                ) or (container["type"] == "raw" and container.get("size_mb", 0) > 4096)
+
+            started = []
+            for c in sorted(containers_found, key=_looks_like_memory):
+                rel_path = c["relative_path"]
+                is_memory = _looks_like_memory(c)
+
+                if is_memory:
+                    if not hostname:
+                        started.append(
+                            {
+                                "path": rel_path,
+                                "status": "skipped",
+                                "reason": "Memory format requires hostname= parameter",
+                            }
+                        )
+                        continue
+                    result = idx_ingest_memory(
+                        rel_path,
+                        hostname,
+                        tier=tier,
+                        plugins=plugins,
+                        dry_run=False,
+                    )
+                    started.append({"path": rel_path, "format": "memory", **result})
+                    continue
+
+                result = _launch_container_ingest(
+                    c["path"],
+                    case_id,
+                    hostname=hostname,
+                    include=include,
+                    exclude=exclude,
+                    source_timezone=source_timezone,
+                    all_logs=all_logs,
+                    reduced_ids=reduced_ids,
+                    full=full,
+                    force=force,
+                    vss=vss,
+                    password=password,
+                    no_hayabusa=no_hayabusa,
+                    hosts=[],
+                )
+                started.append({"path": rel_path, "format": "auto", **result})
+
             return {
-                "status": "containers_detected",
+                "status": "multi_started",
                 "case_id": case_id,
+                "containers": started,
                 "message": (
-                    f"The directory contains {len(containers_found)} forensic container file(s). "
-                    "Re-run idx_ingest with the container file path directly."
-                ),
-                "containers": containers_found,
-                "next_step": (
-                    f"Call idx_ingest(path=\"{containers_found[0]['relative_path']}\", "
-                    "format=\"auto\", "
-                    f"hostname=\"<hostname>\", dry_run=True) to preview ingest."
+                    f"Launched {len(started)} ingest(s). Poll idx_ingest_status() for progress."
                 ),
             }
         csv_hint = _detect_preparsed_csvs(evidence_path)
@@ -1891,94 +2104,22 @@ def idx_ingest(
             resp["audit_id"] = aid
         return resp
 
-    import os as _os
-    import uuid as _uuid
-
-    from opensearch_mcp.ingest_status import read_active_ingests as _read_active
-
-    _running = [i for i in _read_active() if i.get("status") == "running"]
-    if len(_running) >= _MAX_CONCURRENT_INGESTS:
-        return {
-            "error": (
-                f"Too many concurrent ingests ({len(_running)} running, "
-                f"max {_MAX_CONCURRENT_INGESTS}). Use idx_ingest_status()."
-            ),
-        }
-
-    run_id = str(_uuid.uuid4())
-    env = _os.environ.copy()
-    env["AGENTIR_INGEST_RUN_ID"] = run_id
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "opensearch_mcp.ingest_cli",
-        "scan",
+    return _launch_container_ingest(
         resolved_path,
-        "--case",
         case_id,
-        "--yes",
-    ]
-    if hostname:
-        cmd.extend(["--hostname", hostname])
-    if include:
-        cmd.extend(["--include", ",".join(include)])
-    if exclude:
-        cmd.extend(["--exclude", ",".join(exclude)])
-    if source_timezone:
-        cmd.extend(["--source-timezone", source_timezone])
-    if all_logs:
-        cmd.append("--all-logs")
-    if reduced_ids:
-        cmd.append("--reduced-ids")
-    if full:
-        cmd.append("--full")
-    if vss:
-        cmd.append("--vss")
-    if password:
-        env["AGENTIR_ARCHIVE_PASSWORD"] = password
-    if no_hayabusa:
-        cmd.append("--no-hayabusa")
-
-    # Log to file so errors are visible (same as _launch_background)
-    from opensearch_mcp.paths import agentir_dir
-
-    _log_dir = agentir_dir() / "ingest-logs"
-    _log_dir.mkdir(parents=True, exist_ok=True)
-    _log_file = _log_dir / f"{run_id}.log"
-    _log_fh = open(_log_file, "w")
-
-    proc = _spawn_ingest(cmd, env, _log_fh, run_id)
-    _log_fh.close()  # Safe: Popen dup2'd the fd, subprocess has its own copy
-
-    host_names = [h.hostname for h in hosts] if hosts else ([hostname] if hostname else [])
-    aid = audit.log(
-        tool="idx_ingest",
-        params={
-            "path": resolved_path,
-            "dry_run": False,
-            "hosts": host_names,
-            "pid": proc.pid,
-            "run_id": run_id,
-        },
-        result_summary=f"started ingest (pid {proc.pid}) for {len(hosts)} hosts",
-        input_files=[resolved_path],
+        hostname=hostname,
+        include=include,
+        exclude=exclude,
+        source_timezone=source_timezone,
+        all_logs=all_logs,
+        reduced_ids=reduced_ids,
+        full=full,
+        force=force,
+        vss=vss,
+        password=password,
+        no_hayabusa=no_hayabusa,
+        hosts=hosts,
     )
-    resp = {
-        "status": "started",
-        "pid": proc.pid,
-        "run_id": run_id,
-        "hosts": host_names,
-        "case_id": case_id,
-        "message": (
-            "Ingest started. IMPORTANT: Call idx_ingest_status() every 30 seconds "
-            "to monitor progress and report it to the examiner as a checklist. "
-            "Continue polling until status is 'complete' or 'failed'."
-        ),
-    }
-    if aid:
-        resp["audit_id"] = aid
-    return resp
 
 
 @server.tool(annotations={"readOnlyHint": True})

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import ssl
+import time
+import urllib.error
 import urllib.request
 
 from opensearch_mcp.paths import agentir_dir
@@ -76,13 +78,21 @@ def call_tool(tool_name: str, arguments: dict, timeout: int = 60) -> dict:
             ctx.load_verify_locations(ca_cert)
         # else: default SSL context (system CA bundle)
         open_kwargs["context"] = ctx
-    try:
-        with urllib.request.urlopen(req, **open_kwargs) as resp:
-            raw = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            raise RuntimeError(f"Tool not found: {tool_name}") from e
-        raise
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, **open_kwargs) as resp:
+                raw = json.loads(resp.read())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise RuntimeError(f"Tool not found: {tool_name}") from e
+            if e.code not in {502, 503, 504} or attempt == 2:
+                raise
+            time.sleep(2**attempt)
+        except (OSError, ConnectionRefusedError):
+            if attempt == 2:
+                raise
+            time.sleep(2**attempt)
     # Gateway REST returns {"result": [...], "tool": ..., "backend": ...}
     result_array = raw.get("result", raw.get("content", []))
     if result_array and isinstance(result_array, list):
@@ -93,6 +103,33 @@ def call_tool(tool_name: str, arguments: dict, timeout: int = 60) -> dict:
             except json.JSONDecodeError:
                 return {"text": text}
     return raw
+
+
+def wait_for_gateway(timeout: int = 60) -> bool:
+    """Poll the gateway health endpoint until it returns HTTP 200."""
+    config = load_gateway_config()
+    if not config:
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            req = urllib.request.Request(f"{config['url']}/health")
+            open_kwargs: dict = {"timeout": 3}
+            if config.get("tls"):
+                ctx = ssl.create_default_context()
+                if not config.get("verify_certs", True):
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                elif config.get("ca_cert_path"):
+                    ctx.load_verify_locations(config["ca_cert_path"])
+                open_kwargs["context"] = ctx
+            with urllib.request.urlopen(req, **open_kwargs) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
 
 
 def gateway_available() -> bool:

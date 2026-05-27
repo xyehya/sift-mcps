@@ -1,6 +1,6 @@
 """Post-ingest triage enrichment — batch gateway calls + registry persistence rules.
 
-Gateway-dependent: check_file/check_service via windows-triage-mcp.
+Gateway-dependent: check_artifact/check_system via windows-triage-mcp.
 Gateway-independent: registry persistence R1-R17 via update_by_query.
 """
 
@@ -11,7 +11,7 @@ import sys
 
 from opensearchpy import OpenSearch
 
-from opensearch_mcp.gateway import call_tool, gateway_available
+from opensearch_mcp.gateway import call_tool, gateway_available, wait_for_gateway
 from opensearch_mcp.paths import sanitize_index_component
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,17 @@ def _triage_degraded(verdict: dict) -> str | None:
     return None
 
 
+def _check_file(path: str) -> dict:
+    return call_tool("check_artifact", {"type": "file", "value": path}, timeout=15)
+
+
+def _check_service(service_name: str, binary_path: str | None = None) -> dict:
+    args = {"type": "service", "name": service_name}
+    if binary_path:
+        args["binary_path"] = binary_path
+    return call_tool("check_system", args, timeout=15)
+
+
 def enrich_remote(
     client: OpenSearch,
     case_id: str,
@@ -54,6 +65,13 @@ def enrich_remote(
 
     Returns dict with counts per artifact type.
     """
+    if not wait_for_gateway(timeout=60):
+        return {
+            "_gateway": "Gateway not reachable after 60s — enrichment skipped. "
+            "Run idx_enrich_triage() once gateway is ready.",
+            "status": "degraded",
+        }
+
     safe_case = sanitize_index_component(case_id)
 
     # Refresh indices so aggregations see all recently ingested docs
@@ -206,7 +224,7 @@ def _enrich_file_artifact(
         if not path or not (path[0] in ("\\", "/") or (len(path) > 1 and path[1] == ":")):
             continue
         try:
-            result = call_tool("check_file", {"path": path}, timeout=15)
+            result = _check_file(path)
             consecutive_failures = 0
             degraded_reason = _triage_degraded(result) or ""
             if degraded_reason:
@@ -370,11 +388,7 @@ def _enrich_evtx_services(client, safe_case, on_progress=None):
         if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
             break
         try:
-            verdict = call_tool(
-                "check_service",
-                {"service_name": name, "os_version": "Windows"},
-                timeout=15,
-            )
+            verdict = _check_service(name)
             consecutive_failures = 0
             degraded_reason = _triage_degraded(verdict) or ""
             if degraded_reason:
@@ -462,11 +476,7 @@ def _enrich_service_artifact(
             break
         name = bucket["key"]
         try:
-            verdict = call_tool(
-                "check_service",
-                {"service_name": name, "os_version": "Windows"},
-                timeout=15,
-            )
+            verdict = _check_service(name)
             consecutive_failures = 0
             degraded_reason = _triage_degraded(verdict) or ""
             if degraded_reason:
@@ -565,11 +575,7 @@ def _enrich_registry_services(client, safe_case, on_progress=None):
         if consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
             break
         try:
-            verdict = call_tool(
-                "check_service",
-                {"service_name": svc_name, "os_version": "Windows"},
-                timeout=15,
-            )
+            verdict = _check_service(svc_name)
             consecutive_failures = 0
             degraded_reason = _triage_degraded(verdict) or ""
             if degraded_reason:
@@ -669,7 +675,7 @@ def _enrich_registry_run_keys(client, safe_case, on_progress=None):
         if not value_data.strip():
             continue
         try:
-            verdict = call_tool("check_file", {"path": value_data}, timeout=15)
+            verdict = _check_file(value_data)
             consecutive_failures = 0
             degraded_reason = _triage_degraded(verdict) or ""
             if degraded_reason:
@@ -781,7 +787,7 @@ def _enrich_registry_check_file(
         if dll_filter and not value.lower().endswith(".dll"):
             continue
         try:
-            verdict = call_tool("check_file", {"path": value}, timeout=15)
+            verdict = _check_file(value)
             consecutive_failures = 0
             degraded_reason = _triage_degraded(verdict) or ""
             if degraded_reason:
