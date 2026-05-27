@@ -1492,6 +1492,7 @@ def idx_ingest(
     tier: int = 1,
     plugins: list[str] | None = None,
     dry_run: bool = True,
+    force: bool = False,
     vss: bool = False,
     password: str = "",
     no_hayabusa: bool = False,
@@ -1544,6 +1545,9 @@ def idx_ingest(
         plugins: Memory plugin override; runs only these Volatility plugins.
         dry_run: Preview without indexing (default True). Set False to execute
             immediately if path and parameters are confirmed.
+        force: Allow re-ingest when data already exists (default False). Required
+            when dry_run=False and the case already has indexed docs — prevents
+            accidental re-indexing. Set True only after reviewing idx_case_summary.
     """
     import subprocess as _check_sp
     import sys
@@ -1806,6 +1810,40 @@ def idx_ingest(
     from opensearch_mcp.bulk import reset_circuit_breaker as _reset_cb
 
     _reset_cb()
+
+    # Already-indexed guard: block accidental re-ingests without explicit force=True.
+    if not force:
+        try:
+            _cli = _get_os()
+            if _cli is not None:
+                _existing = (
+                    _cli.cat.indices(
+                        index=f"case-{case_id}-*",
+                        format="json",
+                        h="index,docs.count",
+                    )
+                    or []
+                )
+                _total = sum(int(r.get("docs.count") or 0) for r in _existing)
+                if _total > 0:
+                    return {
+                        "status": "already_indexed",
+                        "case_id": case_id,
+                        "doc_count": _total,
+                        "index_count": len(_existing),
+                        "message": (
+                            f"This case already has {_total:,} docs across "
+                            f"{len(_existing)} indices. Re-ingest blocked to "
+                            "prevent accidental data duplication."
+                        ),
+                        "next_step": (
+                            "1. Call idx_case_summary to review current coverage. "
+                            "2. If re-ingest is intentional, set force=True. "
+                            "3. To add new evidence only, use a different evidence file path."
+                        ),
+                    }
+        except Exception:
+            pass
 
     # Pre-flight: abort if cluster shard capacity is exhausted. Halts
     # loudly instead of discovering the condition mid-ingest through

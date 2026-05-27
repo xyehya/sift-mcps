@@ -48,7 +48,7 @@ _check_cmd "SBECmd" SBECmd "download from https://ericzimmerman.github.io/"
 
 echo
 echo "=== Detection ==="
-if command -v hayabusa &>/dev/null && file "$(which hayabusa)" 2>/dev/null | grep -q "ELF"; then
+if command -v hayabusa &>/dev/null && file -L "$(which hayabusa)" 2>/dev/null | grep -q "ELF"; then
     echo "  OK  hayabusa ($(hayabusa help 2>&1 | head -1))"
     PASS=$(( PASS + 1 ))
 else
@@ -69,18 +69,19 @@ done
 
 echo
 echo "=== Python libraries ==="
-_check "python-evtx" python3 -c "import evtx"
-if [ $? -ne 0 ]; then echo "         pip install python-evtx"; fi
-_check "regipy" python3 -c "import regipy"
-if [ $? -ne 0 ]; then echo "         pip install regipy"; fi
+# Check inside the uv project venv (same Python that opensearch-mcp runs under)
+_UV="$(command -v uv 2>/dev/null || echo "${HOME}/.local/bin/uv")"
+_UV_RUN() { "$_UV" run --project "$(dirname "$(dirname "$0")")" --python /usr/bin/python3.12 --no-managed-python --no-python-downloads "$@" 2>/dev/null; }
+_check "evtx (pyevtx-rs)" _UV_RUN python3 -c "import evtx"
+_check "regipy" _UV_RUN python3 -c "import regipy"
 
 echo
 echo "=== OpenSearch ==="
-if curl -sk "https://localhost:9200/_cluster/health" 2>/dev/null | grep -q '"status"'; then
-    echo "  OK  OpenSearch reachable at https://localhost:9200"
+if curl -s "http://127.0.0.1:9200/_cluster/health" 2>/dev/null | grep -q '"status"'; then
+    echo "  OK  OpenSearch reachable at http://127.0.0.1:9200"
     PASS=$(( PASS + 1 ))
 else
-    echo " MISS OpenSearch not reachable at https://localhost:9200 — check docker-compose"
+    echo " MISS OpenSearch not reachable at http://127.0.0.1:9200 — check: docker ps | grep opensearch"
     FAIL=$(( FAIL + 1 ))
 fi
 

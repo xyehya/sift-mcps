@@ -566,7 +566,11 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                     ingest_complete = True
                     totals = sdata.get("totals", {})
                     if isinstance(totals, dict):
-                        ingest_docs = max(ingest_docs, totals.get("docs_indexed", 0))
+                        # Status files use "indexed" key; "docs_indexed" kept for compat
+                        ingest_docs = max(
+                            ingest_docs,
+                            totals.get("docs_indexed") or totals.get("indexed", 0),
+                        )
                     hosts = sdata.get("hosts", [])
                     ingest_indices = max(ingest_indices, len(hosts) if isinstance(hosts, list) else 0)
                 elif status_val in ("running", "starting"):
@@ -691,6 +695,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 "failed": ingest_failed,
                 "docs_indexed": ingest_docs,
                 "indices": ingest_indices,
+                "note": "docs_indexed reflects ingest status files only. Call idx_case_summary for authoritative OpenSearch counts.",
             },
             "findings_summary": {
                 "total": len(findings),
