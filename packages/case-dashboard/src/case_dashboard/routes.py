@@ -2575,6 +2575,31 @@ async def serve_index(request: Request) -> Response:
 
 _V2_STATIC_DIR = _STATIC_DIR / "v2"
 
+_V2_ASSET_MEDIA_TYPES = {
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+}
+
+
+async def serve_v2_assets(request: Request) -> Response:
+    """Serve Vite build assets from static/v2/assets/ (hashed JS/CSS chunks)."""
+    filename = request.path_params.get("filename", "")
+    resolved = (_V2_STATIC_DIR / "assets" / filename).resolve()
+    assets_root = (_V2_STATIC_DIR / "assets").resolve()
+    if not str(resolved).startswith(str(assets_root)):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not resolved.is_file():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    media_type = _V2_ASSET_MEDIA_TYPES.get(resolved.suffix.lower(), "application/octet-stream")
+    return FileResponse(resolved, media_type=media_type)
+
 
 async def serve_v2_index(request: Request) -> Response:
     index_path = _V2_STATIC_DIR / "index.html"
@@ -3593,6 +3618,7 @@ def create_dashboard_v2_app(
     _OVERRIDE_ENABLE = on_override_enable
     _OVERRIDE_CANCEL = on_override_cancel
     routes = _dashboard_api_routes()
+    routes.append(Route("/assets/{filename:path}", serve_v2_assets, methods=["GET"]))
     routes.append(Route("/{filename}", serve_v2_static, methods=["GET"]))
     routes.append(Route("/", serve_v2_index, methods=["GET"]))
     return Starlette(

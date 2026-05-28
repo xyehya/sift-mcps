@@ -1,0 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:ital,wght@0,400;0,500;1,400&family=DM+Sans:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-void:      #07090e;
+  --bg-base:      #0a0d14;
+  --bg-surface:   #0f1320;
+  --bg-raised:    #141928;
+  --bg-overlay:   #1a2035;
+
+  --border-faint: #1c2338;
+  --border-soft:  #232d45;
+  --border-hard:  #2e3d5f;
+
+  --text-bright:  #eef2ff;
+  --text-primary: #c8d4f0;
+  --text-muted:   #6b7fa3;
+  --text-ghost:   #4e5e80;
+
+  --cyan:         #00d4ff;
+  --cyan-dim:     rgba(0, 212, 255, 0.12);
+  --cyan-glow:    rgba(0, 212, 255, 0.08);
+
+  --amber:        #ffb347;
+  --amber-dim:    rgba(255, 179, 71, 0.12);
+
+  --crimson:      #ff3864;
+  --crimson-dim:  rgba(255, 56, 100, 0.12);
+
+  --jade:         #00ff94;
+  --jade-dim:     rgba(0, 255, 148, 0.10);
+
+  --violet:       #a78bfa;
+  --violet-dim:   rgba(167, 139, 250, 0.10);
+
+  --ease-snap:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-smooth:  cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast:     100ms;
+  --dur-normal:   200ms;
+  --dur-slow:     350ms;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Thin scrollbars */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--border-hard); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-ghost); }
+
+/* Focus rings */
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+/* Monospace data class */
+.mono { font-family: 'DM Mono', monospace; }
+
+/* Shimmer skeleton animation */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-surface) 25%, var(--bg-raised) 50%, var(--bg-surface) 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: 4px;
+}
+
+/* Agent pulse animation */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+.pulse { animation: pulse-dot 2s ease-in-out infinite; }
+
