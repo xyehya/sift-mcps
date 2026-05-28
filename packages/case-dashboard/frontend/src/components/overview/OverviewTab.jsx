@@ -200,17 +200,19 @@ export function OverviewTab() {
 function KPICard({ label, value, color, loading, extra, onClick }) {
   return (
     <div
-      className={`p-4 rounded ${onClick ? 'cursor-pointer hover:ring-1 transition-shadow' : ''}`}
-      style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)', borderTop: `2px solid ${color}` }}
+      className={`px-4 py-3 rounded ${onClick ? 'cursor-pointer hover:bg-bg-raised transition-colors' : ''}`}
+      style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
       onKeyDown={onClick ? (e) => { if (e.key === 'Enter') onClick() } : undefined}
     >
-      <p className="text-[10px] font-sans font-semibold tracking-widest uppercase mb-1" style={{ color: 'var(--text-muted)' }}>{label}</p>
-      {loading
-        ? <Skeleton style={{ height: 36, width: 80 }} />
-        : <p className="font-display font-bold text-4xl" style={{ color }}>{value}</p>}
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-sans font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>{label}</span>
+        {loading
+          ? <Skeleton style={{ height: 20, width: 40 }} />
+          : <span className="font-mono font-bold text-xl" style={{ color }}>{value}</span>}
+      </div>
       {extra}
     </div>
   )
@@ -218,7 +220,7 @@ function KPICard({ label, value, color, loading, extra, onClick }) {
 
 function SectionHeader({ children }) {
   return (
-    <p className="text-[10px] font-sans font-semibold tracking-widest uppercase" style={{ color: 'var(--text-muted)' }}>
+    <p className="text-[11px] font-sans font-semibold tracking-wider uppercase" style={{ color: 'var(--text-muted)' }}>
       {children}
     </p>
   )

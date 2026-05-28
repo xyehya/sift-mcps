@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useStore } from '../../store/useStore'
 import { postDelta, deleteDelta, getAudit } from '../../api/endpoints'
 import { formatDistanceToNow } from 'date-fns'
@@ -13,6 +13,13 @@ const CONF_COLOR = {
 }
 
 const CONF_SHAPE = { HIGH: '▲', MEDIUM: '◆', LOW: '●', SPECULATIVE: '◇' }
+
+const CONF_DIM = {
+  HIGH:        'var(--crimson-dim)',
+  MEDIUM:      'var(--amber-dim)',
+  LOW:         'var(--cyan-dim)',
+  SPECULATIVE: 'var(--violet-dim)',
+}
 const PROV_ICON = { MCP: '●', HOOK: '○', SHELL: '▲', MIXED: '◑', NONE: '✕' }
 
 export function getTagString(t) {
@@ -23,7 +30,7 @@ export function getTagString(t) {
 }
 
 export function FindingsTab() {
-  const { findings, delta, setDelta, selectedFindingId, setSelectedFindingId, timeline, addToast, isLoading, findingsFilter, setFindingsFilter, findingsHostFilter, setFindingsHostFilter, findingsAccountFilter, setFindingsAccountFilter } = useStore()
+  const { findings, delta, setDelta, selectedFindingId, setSelectedFindingId, timeline, addToast, isLoading, findingsFilter, setFindingsFilter, findingsHostFilter, setFindingsHostFilter, findingsAccountFilter, setFindingsAccountFilter, commandPaletteOpen } = useStore()
   const filter = findingsFilter
   const setFilter = (f) => { setFindingsFilter(f); setSelectedFindingId(null) }
   const [search, setSearch] = useState('')
@@ -113,6 +120,41 @@ export function FindingsTab() {
 
   const loading = isLoading
 
+  const filteredRef = useRef(filtered)
+  const selectedRef = useRef(selectedFindingId)
+  const stageRef = useRef(stageAction)
+  useEffect(() => { filteredRef.current = filtered }, [filtered])
+  useEffect(() => { selectedRef.current = selectedFindingId }, [selectedFindingId])
+  useEffect(() => { stageRef.current = stageAction }, [stageAction])
+
+  useEffect(() => {
+    function handleKeyDown(e) {
+      const tag = document.activeElement?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (document.activeElement?.isContentEditable) return
+      if (commandPaletteOpen) return
+      const list = filteredRef.current
+      const curId = selectedRef.current
+      const idx = list.findIndex((f) => f.id === curId)
+      if (e.key === 'j') {
+        e.preventDefault()
+        const next = idx < 0 ? list[0] : list[idx + 1]
+        if (next) setSelectedFindingId(next.id)
+      } else if (e.key === 'k') {
+        e.preventDefault()
+        if (idx > 0) setSelectedFindingId(list[idx - 1].id)
+      } else if (e.key === 'a' && curId) {
+        e.preventDefault()
+        stageRef.current(curId, 'approve')
+      } else if (e.key === 'r' && curId) {
+        e.preventDefault()
+        stageRef.current(curId, 'reject')
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [commandPaletteOpen, setSelectedFindingId])
+
   return (
     <div className="flex h-full overflow-hidden" style={{ background: 'var(--bg-base)' }}>
       {/* Sidebar */}
@@ -132,7 +174,7 @@ export function FindingsTab() {
         <div className="flex border-b" style={{ borderColor: 'var(--border-faint)' }}>
           {['pending', 'approved', 'rejected', 'all'].map((f) => (
             <button key={f} onClick={() => setFilter(f)}
-              className="flex-1 py-1.5 text-[10px] font-sans font-semibold uppercase tracking-wider transition-colors capitalize"
+              className="flex-1 py-1.5 text-[11px] font-sans font-semibold uppercase tracking-wider transition-colors capitalize"
               style={{
                 color: filter === f ? 'var(--cyan)' : 'var(--text-muted)',
                 borderBottom: filter === f ? '2px solid var(--cyan)' : '2px solid transparent',
@@ -185,10 +227,8 @@ export function FindingsTab() {
                       setSelectedFindingId(f.id)
                     }
                   }}
-                  className="w-full text-left px-3 py-2.5 flex items-start gap-2 transition-colors border-l-2 text-xs"
+                  className="w-full text-left px-3 py-2.5 flex items-start gap-2 transition-colors text-xs"
                   style={{
-                    borderLeftColor: color,
-                    borderLeftStyle: staged ? 'dashed' : 'solid',
                     background: isActive ? 'var(--bg-raised)' : 'transparent',
                   }}>
                   {selectMode && (
@@ -197,6 +237,7 @@ export function FindingsTab() {
                       {isSelected && '✓'}
                     </span>
                   )}
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-1" style={{ background: color }} title={f.confidence ?? ''} />
                   <span className="font-mono shrink-0" style={{ color: 'var(--text-muted)', width: 40 }}>{f.id}</span>
                   <span className="flex-1 truncate font-sans" style={{ color: 'var(--text-primary)' }}>{f.title}</span>
                   {staged && (
@@ -212,7 +253,7 @@ export function FindingsTab() {
         </div>
 
         {/* Footer */}
-        <div className="p-2 border-t text-[10px] font-sans flex items-center justify-between"
+        <div className="p-2 border-t text-[11px] font-sans flex items-center justify-between"
           style={{ borderColor: 'var(--border-faint)', color: 'var(--text-muted)' }}>
           <span>{findings.filter((f) => (f.status ?? '').toLowerCase() === 'draft').length} pending · {findings.filter((f) => (f.status ?? '').toLowerCase() !== 'draft').length} reviewed</span>
           <button onClick={() => { setSelectMode(!selectMode); setSelected(new Set()) }}
@@ -381,7 +422,7 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
         
         {/* Sticky Header Bar */}
         <div className="p-4 rounded sticky top-0 z-10 shadow-md"
-          style={{ background: 'var(--bg-surface)', border: `1px solid var(--border-faint)`, borderLeft: `3px solid ${confColor}` }}>
+          style={{ background: CONF_DIM[finding.confidence] ?? 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}>
           <div className="flex items-center gap-3">
             <span className="font-mono text-sm shrink-0" style={{ color: 'var(--text-muted)' }}>{finding.id}</span>
             <div className="flex-1 min-w-0">
@@ -968,7 +1009,7 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
           </>
         )}
         <div className="flex-1" />
-        <span className="text-[10px] font-mono self-center" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-[11px] font-mono self-center" style={{ color: 'var(--text-muted)' }}>
           j/k navigate · a approve · r reject
         </span>
       </div>

@@ -16,7 +16,7 @@ export default {
         'text-bright':  '#eef2ff',
         'text-primary': '#c8d4f0',
         'text-muted':   '#6b7fa3',
-        'text-ghost':   '#3a4a6b',
+        'text-ghost':   '#4e5e80',
         cyan:    '#00d4ff',
         amber:   '#ffb347',
         crimson: '#ff3864',

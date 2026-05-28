@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
-  "gitCommitHash": "9caed6c74ed0da98160187e3c857ae20e350922e",
-  "generatedAt": "2026-05-27T22:28:23.431Z",
+  "gitCommitHash": "b2c5e1225a531a44b80839e87a84c918327d8e9d",
+  "generatedAt": "2026-05-28T18:26:24.553Z",
   "files": {
     ".antigravitycli/c3ba2944-5983-4952-8fc8-a042c8407a66.json": {
       "filePath": ".antigravitycli/c3ba2944-5983-4952-8fc8-a042c8407a66.json",
@@ -43,6 +43,46 @@
       "totalLines": 34,
       "hasStructuralAnalysis": false
     },
+    ".understand-anything/fingerprints.json": {
+      "filePath": ".understand-anything/fingerprints.json",
+      "contentHash": "a9795359d0733cf7a0da37115817a408f16911282082f563bd5b43771b0ca99c",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 34909,
+      "hasStructuralAnalysis": true
+    },
+    ".understand-anything/knowledge-graph.json": {
+      "filePath": ".understand-anything/knowledge-graph.json",
+      "contentHash": "3f37b4266e0d6751fde4657fbcea3dfc94570411759912dfea1e869da2e57305",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 61107,
+      "hasStructuralAnalysis": true
+    },
+    ".understand-anything/meta.json": {
+      "filePath": ".understand-anything/meta.json",
+      "contentHash": "f9fb6a6a82c8565a40080e24c22e2e0b220d30dbdcf4fdc9b7196ca6eaa928a8",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 6,
+      "hasStructuralAnalysis": true
+    },
+    ".understand-anything/tmp/changed-files.txt": {
+      "filePath": ".understand-anything/tmp/changed-files.txt",
+      "contentHash": "da00b014ca3a684ef57b87bfc149d04495489e3300e88cfc1a3286946711b297",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 62,
+      "hasStructuralAnalysis": false
+    },
     "AGENTS.md": {
       "filePath": "AGENTS.md",
       "contentHash": "ea4fcaedf4c2658e408bf97a61cd864917c2e7ce3ed397ebe69e3d8d340791dd",
@@ -51,16 +91,6 @@
       "imports": [],
       "exports": [],
       "totalLines": 396,
-      "hasStructuralAnalysis": true
-    },
-    "CLAUDE.md": {
-      "filePath": "CLAUDE.md",
-      "contentHash": "2af8d68d12c8ea01f29717ca4c45ee1eed8643cf1353787e0a16bc52a8daa26e",
-      "functions": [],
-      "classes": [],
-      "imports": [],
-      "exports": [],
-      "totalLines": 2,
       "hasStructuralAnalysis": true
     },
     "configs/apparmor/sift-gateway.template": {
@@ -171,6 +201,16 @@
       "imports": [],
       "exports": [],
       "totalLines": 319,
+      "hasStructuralAnalysis": true
+    },
+    "docs/frontend-dashboard.md": {
+      "filePath": "docs/frontend-dashboard.md",
+      "contentHash": "d406a0b380c3fd6fed8e3f38f47d6c8187e97b86cd5932f671f5452262fe345e",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 502,
       "hasStructuralAnalysis": true
     },
     "docs/README.md": {
@@ -3534,6 +3574,1954 @@
       "totalLines": 42,
       "hasStructuralAnalysis": true
     },
+    "packages/case-dashboard/frontend/eslint.config.js": {
+      "filePath": "packages/case-dashboard/frontend/eslint.config.js",
+      "contentHash": "0197d9a843aaae267303c4d1ab1a43afad1afacc7646cdf6cf94a5af6b815fb8",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "@eslint/js",
+          "specifiers": [
+            "js"
+          ]
+        },
+        {
+          "source": "globals",
+          "specifiers": [
+            "globals"
+          ]
+        },
+        {
+          "source": "eslint-plugin-react-hooks",
+          "specifiers": [
+            "reactHooks"
+          ]
+        },
+        {
+          "source": "eslint-plugin-react-refresh",
+          "specifiers": [
+            "reactRefresh"
+          ]
+        },
+        {
+          "source": "eslint/config",
+          "specifiers": [
+            "defineConfig",
+            "globalIgnores"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 22,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/index.html": {
+      "filePath": "packages/case-dashboard/frontend/index.html",
+      "contentHash": "21ff89f9c9e3ba1be4f85b74a8b9b564aebabd2ff14ab2c3898dcd7f6f583e26",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 13,
+      "hasStructuralAnalysis": false
+    },
+    "packages/case-dashboard/frontend/package.json": {
+      "filePath": "packages/case-dashboard/frontend/package.json",
+      "contentHash": "a142ad48456a37ca61e9589b6a1f1925e882fac976795b7680b800770bd9f1f1",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 42,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/postcss.config.js": {
+      "filePath": "packages/case-dashboard/frontend/postcss.config.js",
+      "contentHash": "190c877db466995bf1482f4a16abd06e04a89ede3119341e2a86ff96e1737b27",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 7,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/README.md": {
+      "filePath": "packages/case-dashboard/frontend/README.md",
+      "contentHash": "a460b4dc7e6392e76aa54d844c9261b8db0adb7f967ba8300526456f1dcf5fb4",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 17,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/api/client.js": {
+      "filePath": "packages/case-dashboard/frontend/src/api/client.js",
+      "contentHash": "fddf0433e2ff1f1a1e1dc370bc1adf870d85df91d4e03064fba22617604ca5ff",
+      "functions": [
+        {
+          "name": "emitUnauthorized",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "onUnauthorized",
+          "params": [
+            "cb"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "apiFetch",
+          "params": [
+            "path"
+          ],
+          "exported": true,
+          "lineCount": 36
+        },
+        {
+          "name": "apiPost",
+          "params": [
+            "path",
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "apiDelete",
+          "params": [
+            "path"
+          ],
+          "exported": true,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "emitUnauthorized",
+        "onUnauthorized",
+        "apiFetch",
+        "apiPost",
+        "apiDelete"
+      ],
+      "totalLines": 60,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/api/crypto.js": {
+      "filePath": "packages/case-dashboard/frontend/src/api/crypto.js",
+      "contentHash": "a444adc89570b40eaf24ff1ed600ee940dae1d971f27cdddb3fd4e1f2513f61b",
+      "functions": [
+        {
+          "name": "hexToBytes",
+          "params": [
+            "hex"
+          ],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "bytesToHex",
+          "params": [
+            "bytes"
+          ],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "computeChallengeResponse",
+          "params": [
+            "password",
+            "challenge"
+          ],
+          "exported": true,
+          "lineCount": 14
+        },
+        {
+          "name": "computeSimpleChallengeResponse",
+          "params": [
+            "password",
+            "challenge"
+          ],
+          "exported": true,
+          "lineCount": 12
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "computeChallengeResponse",
+        "computeSimpleChallengeResponse"
+      ],
+      "totalLines": 41,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/api/endpoints.js": {
+      "filePath": "packages/case-dashboard/frontend/src/api/endpoints.js",
+      "contentHash": "a90c1a1bb63be8f013dceb9863a242da1ab5501ca1dc889fa2c8bb5338728f55",
+      "functions": [
+        {
+          "name": "getSetupRequired",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postSetup",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getChallenge",
+          "params": [
+            "examiner"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postLogin",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postLogout",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postResetPassword",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getMe",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getCases",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postCaseCreate",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getCaseActivateChallenge",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postCaseActivate",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getCase",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getFindings",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getFinding",
+          "params": [
+            "id"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getTimeline",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getEvidence",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getIocs",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getTodos",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getSummary",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getAudit",
+          "params": [
+            "findingId"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getDelta",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postDelta",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "deleteDelta",
+          "params": [
+            "id"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getCommitChallenge",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postCommit",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getChainStatus",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postChainRescan",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getChainChallenge",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postChainSeal",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postChainAnchor",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postChainVerifyHmac",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postVerifyEvidence",
+          "params": [
+            "path"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postChainIgnore",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postChainRetire",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getResponseGuardStatus",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postResponseGuardOverride",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postResponseGuardOverrideCancel",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getTokens",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postToken",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "deleteToken",
+          "params": [
+            "id"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postRotateToken",
+          "params": [
+            "id"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getReports",
+          "params": [],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postReportGenerate",
+          "params": [
+            "body"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "postReportSave",
+          "params": [
+            "id"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "getReport",
+          "params": [
+            "id"
+          ],
+          "exported": true,
+          "lineCount": 1
+        },
+        {
+          "name": "downloadReport",
+          "params": [
+            "id"
+          ],
+          "exported": true,
+          "lineCount": 1
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "./client",
+          "specifiers": [
+            "apiFetch",
+            "apiPost",
+            "apiDelete"
+          ]
+        }
+      ],
+      "exports": [
+        "getSetupRequired",
+        "postSetup",
+        "getChallenge",
+        "postLogin",
+        "postLogout",
+        "postResetPassword",
+        "getMe",
+        "getCases",
+        "postCaseCreate",
+        "getCaseActivateChallenge",
+        "postCaseActivate",
+        "getCase",
+        "getFindings",
+        "getFinding",
+        "getTimeline",
+        "getEvidence",
+        "getIocs",
+        "getTodos",
+        "getSummary",
+        "getAudit",
+        "getDelta",
+        "postDelta",
+        "deleteDelta",
+        "getCommitChallenge",
+        "postCommit",
+        "getChainStatus",
+        "postChainRescan",
+        "getChainChallenge",
+        "postChainSeal",
+        "postChainAnchor",
+        "postChainVerifyHmac",
+        "postVerifyEvidence",
+        "postChainIgnore",
+        "postChainRetire",
+        "getResponseGuardStatus",
+        "postResponseGuardOverride",
+        "postResponseGuardOverrideCancel",
+        "getTokens",
+        "postToken",
+        "deleteToken",
+        "postRotateToken",
+        "getReports",
+        "postReportGenerate",
+        "postReportSave",
+        "getReport",
+        "downloadReport"
+      ],
+      "totalLines": 64,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/App.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/App.jsx",
+      "contentHash": "29dccbadcfeb44756966a76489e494503dff7ad1de0b345c940c2921d83c092e",
+      "functions": [
+        {
+          "name": "App",
+          "params": [],
+          "exported": true,
+          "lineCount": 34
+        },
+        {
+          "name": "AuthedApp",
+          "params": [],
+          "exported": false,
+          "lineCount": 41
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useEffect"
+          ]
+        },
+        {
+          "source": "./store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "./hooks/useDataPolling",
+          "specifiers": [
+            "useDataPolling"
+          ]
+        },
+        {
+          "source": "./api/client",
+          "specifiers": [
+            "onUnauthorized"
+          ]
+        },
+        {
+          "source": "./api/endpoints",
+          "specifiers": [
+            "getMe"
+          ]
+        },
+        {
+          "source": "./components/auth/LoginCard",
+          "specifiers": [
+            "LoginCard"
+          ]
+        },
+        {
+          "source": "./components/layout/NavRail",
+          "specifiers": [
+            "NavRail"
+          ]
+        },
+        {
+          "source": "./components/layout/Header",
+          "specifiers": [
+            "Header"
+          ]
+        },
+        {
+          "source": "./components/layout/StatusBar",
+          "specifiers": [
+            "StatusBar"
+          ]
+        },
+        {
+          "source": "./components/overview/OverviewTab",
+          "specifiers": [
+            "OverviewTab"
+          ]
+        },
+        {
+          "source": "./components/findings/FindingsTab",
+          "specifiers": [
+            "FindingsTab"
+          ]
+        },
+        {
+          "source": "./components/timeline/TimelineTab",
+          "specifiers": [
+            "TimelineTab"
+          ]
+        },
+        {
+          "source": "./components/evidence/EvidenceTab",
+          "specifiers": [
+            "EvidenceTab"
+          ]
+        },
+        {
+          "source": "./components/settings/SettingsTab",
+          "specifiers": [
+            "SettingsTab"
+          ]
+        },
+        {
+          "source": "./components/reports/ReportsTab",
+          "specifiers": [
+            "ReportsTab"
+          ]
+        },
+        {
+          "source": "./components/hosts/HostsTab",
+          "specifiers": [
+            "HostsTab"
+          ]
+        },
+        {
+          "source": "./components/accounts/AccountsTab",
+          "specifiers": [
+            "AccountsTab"
+          ]
+        },
+        {
+          "source": "./components/iocs/IocsTab",
+          "specifiers": [
+            "IocsTab"
+          ]
+        },
+        {
+          "source": "./components/todos/TodosTab",
+          "specifiers": [
+            "TodosTab"
+          ]
+        },
+        {
+          "source": "./components/common/Toaster",
+          "specifiers": [
+            "Toaster"
+          ]
+        },
+        {
+          "source": "./components/layout/CommitDrawer",
+          "specifiers": [
+            "CommitDrawer"
+          ]
+        },
+        {
+          "source": "./components/layout/CommandPalette",
+          "specifiers": [
+            "CommandPalette"
+          ]
+        }
+      ],
+      "exports": [
+        "App"
+      ],
+      "totalLines": 101,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/accounts/AccountsTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/accounts/AccountsTab.jsx",
+      "contentHash": "aabe368c0c726b2193a2de00489d7fd6c8714c41a609b39b962cdf90e80b8698",
+      "functions": [
+        {
+          "name": "getAccountsForFinding",
+          "params": [
+            "f"
+          ],
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "AccountsTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 211
+        },
+        {
+          "name": "Badge",
+          "params": [],
+          "exported": false,
+          "lineCount": 14
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useMemo"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../common/Skeleton",
+          "specifiers": [
+            "SkeletonBlock"
+          ]
+        }
+      ],
+      "exports": [
+        "AccountsTab"
+      ],
+      "totalLines": 252,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/auth/LoginCard.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/auth/LoginCard.jsx",
+      "contentHash": "6b35e5db90177d5a68455e74076455003d66c94204672a2b772b6eba82b19cf0",
+      "functions": [
+        {
+          "name": "Input",
+          "params": [],
+          "exported": false,
+          "lineCount": 15
+        },
+        {
+          "name": "SetupForm",
+          "params": [],
+          "exported": false,
+          "lineCount": 39
+        },
+        {
+          "name": "LoginCard",
+          "params": [],
+          "exported": true,
+          "lineCount": 57
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useEffect"
+          ]
+        },
+        {
+          "source": "../../api/endpoints",
+          "specifiers": [
+            "getChallenge",
+            "postLogin",
+            "getSetupRequired",
+            "postSetup"
+          ]
+        },
+        {
+          "source": "../../api/crypto",
+          "specifiers": [
+            "computeChallengeResponse"
+          ]
+        }
+      ],
+      "exports": [
+        "LoginCard"
+      ],
+      "totalLines": 118,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/common/Skeleton.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/common/Skeleton.jsx",
+      "contentHash": "05f014c4485e30aca4e7ad5430c856e5edb4005d83b97bb32de6b5f99567e495",
+      "functions": [
+        {
+          "name": "Skeleton",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "SkeletonBlock",
+          "params": [],
+          "exported": true,
+          "lineCount": 9
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [
+        "Skeleton",
+        "SkeletonBlock"
+      ],
+      "totalLines": 14,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/common/Toaster.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/common/Toaster.jsx",
+      "contentHash": "6a6fd22f40c04d47bdff60355c8908afa2317807ea830add56c6eef0d850457c",
+      "functions": [
+        {
+          "name": "Toaster",
+          "params": [],
+          "exported": true,
+          "lineCount": 22
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        }
+      ],
+      "exports": [
+        "Toaster"
+      ],
+      "totalLines": 32,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/evidence/EvidenceTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/evidence/EvidenceTab.jsx",
+      "contentHash": "19f8ddfe9c7d3445a1cce01286b29f829c1cfc3d73d253aa6365edb9fecd6fcd",
+      "functions": [
+        {
+          "name": "formatTime",
+          "params": [
+            "timestamp"
+          ],
+          "exported": false,
+          "lineCount": 10
+        },
+        {
+          "name": "EvidenceTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 1053
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useEffect",
+            "useMemo"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../../api/endpoints",
+          "specifiers": [
+            "getEvidence",
+            "getChainStatus",
+            "postChainRescan",
+            "getChainChallenge",
+            "postChainSeal",
+            "postChainAnchor",
+            "postChainVerifyHmac",
+            "postVerifyEvidence",
+            "postChainIgnore",
+            "postChainRetire"
+          ]
+        },
+        {
+          "source": "../../api/crypto",
+          "specifiers": [
+            "computeSimpleChallengeResponse"
+          ]
+        },
+        {
+          "source": "../common/Skeleton",
+          "specifiers": [
+            "SkeletonBlock"
+          ]
+        }
+      ],
+      "exports": [
+        "EvidenceTab"
+      ],
+      "totalLines": 1082,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/findings/FindingsTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/findings/FindingsTab.jsx",
+      "contentHash": "9a78f8ed58358c4a3d4f74f22ff447b1483bd8b95b0c4c4725a1ceaee6f4e933",
+      "functions": [
+        {
+          "name": "getTagString",
+          "params": [
+            "t"
+          ],
+          "exported": true,
+          "lineCount": 6
+        },
+        {
+          "name": "FindingsTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 236
+        },
+        {
+          "name": "FindingDetail",
+          "params": [],
+          "exported": false,
+          "lineCount": 716
+        },
+        {
+          "name": "EditableField",
+          "params": [],
+          "exported": false,
+          "lineCount": 125
+        },
+        {
+          "name": "AuditTrailPanel",
+          "params": [],
+          "exported": false,
+          "lineCount": 164
+        },
+        {
+          "name": "Badge",
+          "params": [],
+          "exported": false,
+          "lineCount": 12
+        },
+        {
+          "name": "Label",
+          "params": [],
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "ActionBtn",
+          "params": [],
+          "exported": false,
+          "lineCount": 8
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useMemo",
+            "useEffect"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../../api/endpoints",
+          "specifiers": [
+            "postDelta",
+            "deleteDelta",
+            "getAudit"
+          ]
+        },
+        {
+          "source": "date-fns",
+          "specifiers": [
+            "formatDistanceToNow"
+          ]
+        },
+        {
+          "source": "../common/Skeleton",
+          "specifiers": [
+            "Skeleton"
+          ]
+        },
+        {
+          "source": "clsx",
+          "specifiers": [
+            "clsx"
+          ]
+        }
+      ],
+      "exports": [
+        "getTagString",
+        "FindingsTab"
+      ],
+      "totalLines": 1299,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/hosts/HostsTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/hosts/HostsTab.jsx",
+      "contentHash": "c520aab42444c38a7eafa93bba7574b3d270b1c08799270d3c253394536f993a",
+      "functions": [
+        {
+          "name": "getAccountsForFinding",
+          "params": [
+            "f"
+          ],
+          "exported": false,
+          "lineCount": 11
+        },
+        {
+          "name": "HostsTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 182
+        },
+        {
+          "name": "Badge",
+          "params": [],
+          "exported": false,
+          "lineCount": 14
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useMemo"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../common/Skeleton",
+          "specifiers": [
+            "SkeletonBlock"
+          ]
+        }
+      ],
+      "exports": [
+        "HostsTab"
+      ],
+      "totalLines": 223,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/iocs/IocsTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/iocs/IocsTab.jsx",
+      "contentHash": "a57ff02c2c5932af0cd55492b538b8fd8c9a72ab8ee01953d8a3ed7a3e149c97",
+      "functions": [
+        {
+          "name": "IocsTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 326
+        },
+        {
+          "name": "Badge",
+          "params": [],
+          "exported": false,
+          "lineCount": 14
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useMemo"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../common/Skeleton",
+          "specifiers": [
+            "SkeletonBlock"
+          ]
+        }
+      ],
+      "exports": [
+        "IocsTab"
+      ],
+      "totalLines": 361,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/layout/CommandPalette.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/layout/CommandPalette.jsx",
+      "contentHash": "b1b0311d03f2f10006599774176b45f58ca75cbe41f949653f2472f0acf3b7db",
+      "functions": [
+        {
+          "name": "CommandPalette",
+          "params": [],
+          "exported": true,
+          "lineCount": 299
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useEffect",
+            "useCallback"
+          ]
+        },
+        {
+          "source": "cmdk",
+          "specifiers": [
+            "Command"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../../api/endpoints",
+          "specifiers": [
+            "postDelta",
+            "postLogout"
+          ]
+        }
+      ],
+      "exports": [
+        "CommandPalette"
+      ],
+      "totalLines": 307,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/layout/CommitDrawer.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/layout/CommitDrawer.jsx",
+      "contentHash": "0a37c0f36058dc542519bb947152f5104bb2080b65f4e9779078bffef9b545ae",
+      "functions": [
+        {
+          "name": "CommitDrawer",
+          "params": [],
+          "exported": true,
+          "lineCount": 163
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useRef"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../../api/endpoints",
+          "specifiers": [
+            "getCommitChallenge",
+            "postCommit",
+            "deleteDelta"
+          ]
+        },
+        {
+          "source": "../../api/crypto",
+          "specifiers": [
+            "computeSimpleChallengeResponse"
+          ]
+        }
+      ],
+      "exports": [
+        "CommitDrawer"
+      ],
+      "totalLines": 169,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/layout/Header.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/layout/Header.jsx",
+      "contentHash": "fb5ed3c4e7d9261d2237af9716c113e8b247bfdb59a1f98c26d444fcd173b596",
+      "functions": [
+        {
+          "name": "Header",
+          "params": [],
+          "exported": true,
+          "lineCount": 193
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useRef",
+            "useEffect"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../../api/endpoints",
+          "specifiers": [
+            "postLogout",
+            "postCaseActivate",
+            "getCaseActivateChallenge"
+          ]
+        },
+        {
+          "source": "../../api/crypto",
+          "specifiers": [
+            "computeSimpleChallengeResponse"
+          ]
+        }
+      ],
+      "exports": [
+        "Header"
+      ],
+      "totalLines": 199,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/layout/NavRail.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/layout/NavRail.jsx",
+      "contentHash": "4aedcfdaa0ab627ddaf5601127b95e64a7699cb3bd2a1464824dd5e8ee48d97d",
+      "functions": [
+        {
+          "name": "NavRail",
+          "params": [],
+          "exported": true,
+          "lineCount": 45
+        },
+        {
+          "name": "NavButton",
+          "params": [],
+          "exported": false,
+          "lineCount": 28
+        },
+        {
+          "name": "IconGrid",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "IconList",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "IconClock",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "IconShield",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "IconTarget",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "IconCheck",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "IconGear",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "IconFile",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        },
+        {
+          "name": "IconHost",
+          "params": [],
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "IconUser",
+          "params": [],
+          "exported": false,
+          "lineCount": 8
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "clsx",
+          "specifiers": [
+            "clsx"
+          ]
+        }
+      ],
+      "exports": [
+        "NavRail"
+      ],
+      "totalLines": 141,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/layout/StatusBar.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/layout/StatusBar.jsx",
+      "contentHash": "deacb18508556156e7a56e05340ceee924351c535ed3c4596f9f11fb371c58a0",
+      "functions": [
+        {
+          "name": "StatusBar",
+          "params": [],
+          "exported": true,
+          "lineCount": 94
+        },
+        {
+          "name": "Divider",
+          "params": [],
+          "exported": false,
+          "lineCount": 3
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "date-fns",
+          "specifiers": [
+            "formatDistanceToNow"
+          ]
+        },
+        {
+          "source": "clsx",
+          "specifiers": [
+            "clsx"
+          ]
+        }
+      ],
+      "exports": [
+        "StatusBar"
+      ],
+      "totalLines": 103,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/overview/OverviewTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/overview/OverviewTab.jsx",
+      "contentHash": "2356059bb66a7fbaaf8b5caa6d26b6cb7a0556b0f92b4f63b2bda66360863f33",
+      "functions": [
+        {
+          "name": "OverviewTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 186
+        },
+        {
+          "name": "KPICard",
+          "params": [],
+          "exported": false,
+          "lineCount": 18
+        },
+        {
+          "name": "SectionHeader",
+          "params": [],
+          "exported": false,
+          "lineCount": 7
+        },
+        {
+          "name": "ActivityFeed",
+          "params": [],
+          "exported": false,
+          "lineCount": 74
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../common/Skeleton",
+          "specifiers": [
+            "Skeleton"
+          ]
+        },
+        {
+          "source": "date-fns",
+          "specifiers": [
+            "formatDistanceToNow"
+          ]
+        }
+      ],
+      "exports": [
+        "OverviewTab"
+      ],
+      "totalLines": 309,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/reports/ReportsTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/reports/ReportsTab.jsx",
+      "contentHash": "7402848567dd8c3db9e983178c13efaaca98c299d928fc8b25afc2e13c8ab93b",
+      "functions": [
+        {
+          "name": "ReportsTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 860
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useEffect"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../../api/endpoints",
+          "specifiers": [
+            "getReports",
+            "postReportGenerate",
+            "postReportSave",
+            "getReport"
+          ]
+        }
+      ],
+      "exports": [
+        "ReportsTab"
+      ],
+      "totalLines": 897,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/settings/SettingsTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/settings/SettingsTab.jsx",
+      "contentHash": "509af1e25a69788bf8da8fccb4c90486e89d8d6992d346c984c5c8b135eb485e",
+      "functions": [
+        {
+          "name": "SettingsTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 202
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useEffect"
+          ]
+        },
+        {
+          "source": "../../api/endpoints",
+          "specifiers": [
+            "getTokens",
+            "postToken",
+            "deleteToken",
+            "postRotateToken"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        }
+      ],
+      "exports": [
+        "SettingsTab"
+      ],
+      "totalLines": 207,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/timeline/TimelineTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/timeline/TimelineTab.jsx",
+      "contentHash": "42931b48211d586a3be4b157534bdcc25e83856042d22ed73a63c019cb07be04",
+      "functions": [
+        {
+          "name": "TimelineTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 159
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useMemo"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "date-fns",
+          "specifiers": [
+            "formatDistanceToNow"
+          ]
+        },
+        {
+          "source": "../common/Skeleton",
+          "specifiers": [
+            "SkeletonBlock"
+          ]
+        }
+      ],
+      "exports": [
+        "TimelineTab"
+      ],
+      "totalLines": 181,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/components/todos/TodosTab.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/components/todos/TodosTab.jsx",
+      "contentHash": "d09f7f62231a3f4200a1264f2ea790adf6f1d8de01b67c33b984b98a2282e4de",
+      "functions": [
+        {
+          "name": "TodosTab",
+          "params": [],
+          "exported": true,
+          "lineCount": 208
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useState",
+            "useMemo"
+          ]
+        },
+        {
+          "source": "../../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../common/Skeleton",
+          "specifiers": [
+            "SkeletonBlock"
+          ]
+        }
+      ],
+      "exports": [
+        "TodosTab"
+      ],
+      "totalLines": 228,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/hooks/useDataPolling.js": {
+      "filePath": "packages/case-dashboard/frontend/src/hooks/useDataPolling.js",
+      "contentHash": "6eb1325310e5274753feb2d4706982de8b5f13e4731d34952336d9a633d2773f",
+      "functions": [
+        {
+          "name": "useDataPolling",
+          "params": [],
+          "exported": true,
+          "lineCount": 36
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "./usePolling",
+          "specifiers": [
+            "usePolling"
+          ]
+        },
+        {
+          "source": "../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        },
+        {
+          "source": "../api/endpoints",
+          "specifiers": [
+            "getCase",
+            "getCases",
+            "getSummary",
+            "getFindings",
+            "getDelta",
+            "getTimeline",
+            "getChainStatus",
+            "getIocs",
+            "getTodos",
+            "getReports"
+          ]
+        }
+      ],
+      "exports": [
+        "useDataPolling"
+      ],
+      "totalLines": 45,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/hooks/usePolling.js": {
+      "filePath": "packages/case-dashboard/frontend/src/hooks/usePolling.js",
+      "contentHash": "94abb1452273f6e1324d29779ea8d33c69705a50d008516889b5b1a29aaf2513",
+      "functions": [
+        {
+          "name": "usePolling",
+          "params": [
+            "fn"
+          ],
+          "exported": true,
+          "lineCount": 17
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "useEffect",
+            "useRef"
+          ]
+        }
+      ],
+      "exports": [
+        "usePolling"
+      ],
+      "totalLines": 20,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/index.css": {
+      "filePath": "packages/case-dashboard/frontend/src/index.css",
+      "contentHash": "784e6313c7486fe3e7603bcdfc60cba389298e62307c740e9df651ac87f6b3bc",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 100,
+      "hasStructuralAnalysis": false
+    },
+    "packages/case-dashboard/frontend/src/main.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/main.jsx",
+      "contentHash": "4b4b864dbe45253425d0c925337180ec07e204295179f80f59551216f466f618",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "react",
+          "specifiers": [
+            "StrictMode"
+          ]
+        },
+        {
+          "source": "react-dom/client",
+          "specifiers": [
+            "createRoot"
+          ]
+        },
+        {
+          "source": "./index.css",
+          "specifiers": []
+        },
+        {
+          "source": "./App.jsx",
+          "specifiers": [
+            "App"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 11,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/store/useStore.js": {
+      "filePath": "packages/case-dashboard/frontend/src/store/useStore.js",
+      "contentHash": "e8905c436f62374e0a7d4e70b60de7fc3bacb509eee20069c91fd51f0fab115e",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "zustand",
+          "specifiers": [
+            "create"
+          ]
+        }
+      ],
+      "exports": [
+        "useStore"
+      ],
+      "totalLines": 84,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/test/CommandPalette.test.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/test/CommandPalette.test.jsx",
+      "contentHash": "ca41c8c0e6472164d4cef7131ef300488a2ed836eb9a3970eae6b610d0882e45",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "vitest",
+          "specifiers": [
+            "describe",
+            "it",
+            "expect",
+            "beforeEach",
+            "vi"
+          ]
+        },
+        {
+          "source": "../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 309,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/test/SessionChanges.test.jsx": {
+      "filePath": "packages/case-dashboard/frontend/src/test/SessionChanges.test.jsx",
+      "contentHash": "9fce0b552efcf9afeca4ebd46924ed7a8eb3ecc39091741abec701b1c6d8d795",
+      "functions": [
+        {
+          "name": "resetStore",
+          "params": [],
+          "exported": false,
+          "lineCount": 25
+        }
+      ],
+      "classes": [],
+      "imports": [
+        {
+          "source": "vitest",
+          "specifiers": [
+            "describe",
+            "it",
+            "expect",
+            "beforeEach"
+          ]
+        },
+        {
+          "source": "../store/useStore",
+          "specifiers": [
+            "useStore"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 679,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/src/test/setup.js": {
+      "filePath": "packages/case-dashboard/frontend/src/test/setup.js",
+      "contentHash": "27b9e0f69d156c680ff63560e58a12c01a4abec1bdb4756534c93e13c1f278ea",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "@testing-library/jest-dom",
+          "specifiers": []
+        }
+      ],
+      "exports": [],
+      "totalLines": 2,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/tailwind.config.js": {
+      "filePath": "packages/case-dashboard/frontend/tailwind.config.js",
+      "contentHash": "eb9c83a4cef9c9dc389ab370a2fd5d8f2c81f78520aa8b27553e17a25d41956d",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 46,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/vite.config.js": {
+      "filePath": "packages/case-dashboard/frontend/vite.config.js",
+      "contentHash": "90dc8e82a2935d3b2c3e9f91dc6269d979c2218258fa678bdfa56ba3899ef6f5",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "vite",
+          "specifiers": [
+            "defineConfig"
+          ]
+        },
+        {
+          "source": "@vitejs/plugin-react",
+          "specifiers": [
+            "react"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 21,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/frontend/vitest.config.js": {
+      "filePath": "packages/case-dashboard/frontend/vitest.config.js",
+      "contentHash": "a139dc359e51727eb72c1da97b4ed4b3b7d5750901f832529cbff119bcce24dd",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "vitest/config",
+          "specifiers": [
+            "defineConfig"
+          ]
+        },
+        {
+          "source": "@vitejs/plugin-react",
+          "specifiers": [
+            "react"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 12,
+      "hasStructuralAnalysis": true
+    },
     "packages/case-dashboard/pyproject.toml": {
       "filePath": "packages/case-dashboard/pyproject.toml",
       "contentHash": "31d33a185c7e1aa514c28a3de191de69664ee170fa530a463dac9f966e4d9613",
@@ -3639,7 +5627,7 @@
     },
     "packages/case-dashboard/src/case_dashboard/routes.py": {
       "filePath": "packages/case-dashboard/src/case_dashboard/routes.py",
-      "contentHash": "f09bc1c0be281d30492a908fafb91e78f24fc5a177bb9cf646b9a0a4c81923bc",
+      "contentHash": "a7dbdaa1512cda4d6439a06b6edd49703395b13f7edff91b552726f31ea71535",
       "functions": [
         {
           "name": "_resolve_case_dir",
@@ -4197,6 +6185,15 @@
           "lineCount": 8
         },
         {
+          "name": "serve_v2_assets",
+          "params": [
+            "request"
+          ],
+          "returnType": "Response",
+          "exported": true,
+          "lineCount": 11
+        },
+        {
           "name": "serve_v2_index",
           "params": [
             "request"
@@ -4347,11 +6344,65 @@
           "lineCount": 161
         },
         {
+          "name": "_serialize_to_markdown",
+          "params": [
+            "report"
+          ],
+          "returnType": "str",
+          "exported": true,
+          "lineCount": 203
+        },
+        {
+          "name": "get_reports",
+          "params": [
+            "request"
+          ],
+          "returnType": "JSONResponse",
+          "exported": true,
+          "lineCount": 33
+        },
+        {
+          "name": "generate_report_route",
+          "params": [
+            "request"
+          ],
+          "returnType": "JSONResponse",
+          "exported": true,
+          "lineCount": 74
+        },
+        {
+          "name": "save_report_route",
+          "params": [
+            "request"
+          ],
+          "returnType": "JSONResponse",
+          "exported": true,
+          "lineCount": 40
+        },
+        {
+          "name": "get_report_by_id",
+          "params": [
+            "request"
+          ],
+          "returnType": "JSONResponse",
+          "exported": true,
+          "lineCount": 32
+        },
+        {
+          "name": "download_report",
+          "params": [
+            "request"
+          ],
+          "returnType": "Response",
+          "exported": true,
+          "lineCount": 46
+        },
+        {
           "name": "_dashboard_api_routes",
           "params": [],
           "returnType": "list[Route]",
           "exported": true,
-          "lineCount": 49
+          "lineCount": 54
         },
         {
           "name": "create_dashboard_app",
@@ -4384,7 +6435,7 @@
           ],
           "returnType": "Starlette",
           "exported": true,
-          "lineCount": 61
+          "lineCount": 62
         }
       ],
       "classes": [
@@ -4469,6 +6520,12 @@
           "source": "inspect",
           "specifiers": [
             "inspect"
+          ]
+        },
+        {
+          "source": "uuid",
+          "specifiers": [
+            "uuid"
           ]
         },
         {
@@ -4648,6 +6705,7 @@
         "post_auth_logout",
         "get_auth_me",
         "serve_index",
+        "serve_v2_assets",
         "serve_v2_index",
         "SecurityHeadersMiddleware",
         "_token_config_write",
@@ -4666,12 +6724,18 @@
         "get_case_activate_challenge",
         "post_case_activate",
         "post_case_create",
+        "_serialize_to_markdown",
+        "get_reports",
+        "generate_report_route",
+        "save_report_route",
+        "get_report_by_id",
+        "download_report",
         "_dashboard_api_routes",
         "create_dashboard_app",
         "serve_v2_static",
         "create_dashboard_v2_app"
       ],
-      "totalLines": 3610,
+      "totalLines": 4089,
       "hasStructuralAnalysis": true
     },
     "packages/case-dashboard/src/case_dashboard/session_jwt.py": {
@@ -4797,14 +6861,1897 @@
       "totalLines": 2935,
       "hasStructuralAnalysis": false
     },
-    "packages/case-dashboard/src/case_dashboard/static/v2/index.html": {
-      "filePath": "packages/case-dashboard/src/case_dashboard/static/v2/index.html",
-      "contentHash": "b80979949edbde2a8b45c60cf293b7fe24d829dad71085d3bba73134f7bc4781",
+    "packages/case-dashboard/src/case_dashboard/static/v2/assets/index-BpKlnS5W.js": {
+      "filePath": "packages/case-dashboard/src/case_dashboard/static/v2/assets/index-BpKlnS5W.js",
+      "contentHash": "e1df6271e69b128c9a64bc935b7716618569d379612f4915422ea36b7b03167f",
+      "functions": [
+        {
+          "name": "o",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "s",
+          "params": [
+            "e",
+            "i",
+            "o",
+            "s"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "c",
+          "params": [
+            "n",
+            "r",
+            "a"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "y",
+          "params": [],
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "x",
+          "params": [],
+          "exported": false,
+          "lineCount": 9
+        },
+        {
+          "name": "S",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "C",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "T",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "k",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "A",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "j",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "M",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "N",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "P",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "F",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "I",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "L",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ee",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "te",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ne",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "re",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ie",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "R",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ae",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "oe",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "se",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ce",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "le",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ue",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "de",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "fe",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "pe",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "me",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "he",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ge",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "_e",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ve",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ye",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "be",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "xe",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Se",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ce",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "we",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Te",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ee",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "De",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Oe",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ke",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ae",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "je",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Me",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ne",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Pe",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Fe",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ie",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Le",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Re",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Be",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ve",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "He",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ue",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "We",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "qe",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Je",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ye",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Xe",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ze",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Qe",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "$e",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "et",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "tt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "nt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "rt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "it",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "at",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "dt",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ft",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "mt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ht",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "gt",
+          "params": [
+            "e",
+            "...t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "_t",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "vt",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "yt",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "bt",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "xt",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "St",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ct",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "wt",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Tt",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Et",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ot",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "kt",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Mt",
+          "params": [
+            "e",
+            "t",
+            "n",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Nt",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ft",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "It",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Lt",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Rt",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Bt",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Vt",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ht",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ut",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Wt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Gt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "qt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Jt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Yt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Zt",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "en",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "tn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "nn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "rn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "an",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "on",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "sn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "cn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "fn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "pn",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "mn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "hn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "_n",
+          "params": [],
+          "exported": false,
+          "lineCount": 2
+        },
+        {
+          "name": "bn",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "xn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Sn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Tn",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "En",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Dn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "jn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Mn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ln",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "zn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Bn",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "$n",
+          "params": [
+            "e",
+            "t",
+            "n",
+            "r",
+            "i",
+            "a",
+            "o"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "er",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "tr",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "nr",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "rr",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ir",
+          "params": [
+            "...e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ar",
+          "params": [
+            "...e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "or",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "sr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "cr",
+          "params": [
+            "...e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "fr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "mr",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "hr",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "gr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "vr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "yr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "xr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Sr",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Cr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Tr",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Er",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Dr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Lr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Rr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "zr",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Br",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "qr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Jr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Yr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Xr",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Zr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Qr",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "$r",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ti",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ni",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ri",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "si",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ci",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "li",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ui",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "di",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "mi",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "hi",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "gi",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "_i",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "vi",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ci",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "wi",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Di",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Oi",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ki",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ai",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ji",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Mi",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "V",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Fi",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ii",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Li",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ri",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "zi",
+          "params": [],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "Bi",
+          "params": [],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "Vi",
+          "params": [],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "Ui",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "Wi",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "Gi",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "Ji",
+          "params": [
+            "e",
+            "t",
+            "n",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "Yi",
+          "params": [],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "Xi",
+          "params": [],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "Zi",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 38
+        },
+        {
+          "name": "ta",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "na",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "ra",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "ia",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "aa",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "oa",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "sa",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "ca",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "la",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "ua",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "da",
+          "params": [
+            "e",
+            "t",
+            "n",
+            "r",
+            "i"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "fa",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "pa",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "ma",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "ha",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "ga",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 4
+        },
+        {
+          "name": "ya",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ba",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ca",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Oa",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ka",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Aa",
+          "params": [
+            "e",
+            "t",
+            "n",
+            "r"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ja",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "La",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Ua",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ao",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "lo",
+          "params": [],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "H",
+          "params": [],
+          "exported": false,
+          "lineCount": 5
+        },
+        {
+          "name": "_o",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "vo",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "yo",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "bo",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "So",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Co",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "wo",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "No",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Fo",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Lo",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Yo",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Xo",
+          "params": [
+            "e",
+            "t"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "Zo",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "$o",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "es",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ts",
+          "params": [
+            "e",
+            "t",
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ns",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "rs",
+          "params": [
+            "e"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "is",
+          "params": [
+            "n"
+          ],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ss",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "cs",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        },
+        {
+          "name": "ls",
+          "params": [],
+          "exported": false,
+          "lineCount": 1
+        }
+      ],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 54,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/src/case_dashboard/static/v2/assets/index-DXuLPM6N.css": {
+      "filePath": "packages/case-dashboard/src/case_dashboard/static/v2/assets/index-DXuLPM6N.css",
+      "contentHash": "b55dafc74c84cac1ad84ac59592ba5f006cd8edd5406e4e9b23536ee52dc845a",
       "functions": [],
       "classes": [],
       "imports": [],
       "exports": [],
-      "totalLines": 5546,
+      "totalLines": 2,
+      "hasStructuralAnalysis": false
+    },
+    "packages/case-dashboard/src/case_dashboard/static/v2/index.html": {
+      "filePath": "packages/case-dashboard/src/case_dashboard/static/v2/index.html",
+      "contentHash": "9a4b3b11a7ddfc40fd27edbe1fb9891b1b702920f2d34023e01774a6f53f250b",
+      "functions": [],
+      "classes": [],
+      "imports": [],
+      "exports": [],
+      "totalLines": 14,
       "hasStructuralAnalysis": false
     },
     "packages/case-dashboard/tests/__init__.py": {
@@ -5805,6 +9752,123 @@
         "test_examiner_cookie_role_is_allowed_by_write_guard"
       ],
       "totalLines": 38,
+      "hasStructuralAnalysis": true
+    },
+    "packages/case-dashboard/tests/test_reports_endpoints.py": {
+      "filePath": "packages/case-dashboard/tests/test_reports_endpoints.py",
+      "contentHash": "fec4a7d8be2b278501937e2c645acb8a49efcc947b37fd9d26a7fee00edb3e6c",
+      "functions": [
+        {
+          "name": "client",
+          "params": [],
+          "exported": true,
+          "lineCount": 3
+        },
+        {
+          "name": "auth_examiner_cookie",
+          "params": [
+            "client"
+          ],
+          "exported": true,
+          "lineCount": 4
+        },
+        {
+          "name": "auth_readonly_cookie",
+          "params": [
+            "client"
+          ],
+          "exported": true,
+          "lineCount": 4
+        }
+      ],
+      "classes": [
+        {
+          "name": "TestReportsEndpoints",
+          "methods": [
+            "test_unauthenticated_returns_401",
+            "test_readonly_returns_403",
+            "test_no_active_case_returns_404",
+            "test_invalid_uuid_returns_400",
+            "test_unknown_profile_returns_400",
+            "test_rate_limit_max_1_in_flight",
+            "test_generate_save_load_download_flow"
+          ],
+          "properties": [],
+          "exported": true,
+          "lineCount": 107
+        }
+      ],
+      "imports": [
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        },
+        {
+          "source": "secrets",
+          "specifiers": [
+            "secrets"
+          ]
+        },
+        {
+          "source": "uuid",
+          "specifiers": [
+            "uuid"
+          ]
+        },
+        {
+          "source": "pathlib",
+          "specifiers": [
+            "Path"
+          ]
+        },
+        {
+          "source": "unittest.mock",
+          "specifiers": [
+            "MagicMock",
+            "patch"
+          ]
+        },
+        {
+          "source": "pytest",
+          "specifiers": [
+            "pytest"
+          ]
+        },
+        {
+          "source": "starlette.testclient",
+          "specifiers": [
+            "TestClient"
+          ]
+        },
+        {
+          "source": "case_dashboard.routes",
+          "specifiers": [
+            "routes_mod"
+          ]
+        },
+        {
+          "source": "case_dashboard.routes",
+          "specifiers": [
+            "create_dashboard_v2_app"
+          ]
+        },
+        {
+          "source": "case_dashboard.session_jwt",
+          "specifiers": [
+            "COOKIE_NAME",
+            "generate_jwt"
+          ]
+        }
+      ],
+      "exports": [
+        "client",
+        "auth_examiner_cookie",
+        "auth_readonly_cookie",
+        "TestReportsEndpoints"
+      ],
+      "totalLines": 148,
       "hasStructuralAnalysis": true
     },
     "packages/case-dashboard/tests/test_response_guard_portal.py": {
@@ -9065,7 +13129,7 @@
     },
     "packages/forensic-mcp/src/forensic_mcp/case/manager.py": {
       "filePath": "packages/forensic-mcp/src/forensic_mcp/case/manager.py",
-      "contentHash": "5bd65102e55f8ae6b2922c992157dbd3780c67a06bd35c2d1215b00b0ca0e9d2",
+      "contentHash": "bbe6bf7c9d4e1b619778abb49ec1c7a3c21f2bb60beb170fa2aaa02d6356a7fa",
       "functions": [
         {
           "name": "_atomic_write",
@@ -9242,7 +13306,7 @@
           ],
           "properties": [],
           "exported": true,
-          "lineCount": 1501
+          "lineCount": 1502
         }
       ],
       "imports": [
@@ -9342,7 +13406,7 @@
         "_infer_event_type",
         "CaseManager"
       ],
-      "totalLines": 1949,
+      "totalLines": 1950,
       "hasStructuralAnalysis": true
     },
     "packages/forensic-mcp/src/forensic_mcp/discipline/__init__.py": {
@@ -9531,7 +13595,7 @@
     },
     "packages/forensic-mcp/src/forensic_mcp/discipline/validation.py": {
       "filePath": "packages/forensic-mcp/src/forensic_mcp/discipline/validation.py",
-      "contentHash": "7840b44d20b144ac7ef69b6e7b4e794b953618813ab5009c6e94eb8e015e815d",
+      "contentHash": "fbd6e98db4b72dfab2c91b7efe5e7ac0231abf8442e1bbe5269bc2bf6694a69a",
       "functions": [
         {
           "name": "_get_confidence_defs",
@@ -9592,7 +13656,7 @@
     },
     "packages/forensic-mcp/src/forensic_mcp/server.py": {
       "filePath": "packages/forensic-mcp/src/forensic_mcp/server.py",
-      "contentHash": "27b5d4b9313fc31e943e4aa19a0e15f5a6bed0a99619684906be681bf1b833fc",
+      "contentHash": "61d73e7312de5909806e888e9efa26fc29a4096f8675d65c2199003a211231ce",
       "functions": [
         {
           "name": "_validate_str_length",
@@ -34880,6 +38944,29 @@
       "imports": [],
       "exports": [],
       "totalLines": 91,
+      "hasStructuralAnalysis": true
+    },
+    "test_mcp.py": {
+      "filePath": "test_mcp.py",
+      "contentHash": "5836addede7e8d983dce6691477e0535f9588a044177ab3f622192b38d53a87e",
+      "functions": [],
+      "classes": [],
+      "imports": [
+        {
+          "source": "urllib.request",
+          "specifiers": [
+            "urllib.request"
+          ]
+        },
+        {
+          "source": "json",
+          "specifiers": [
+            "json"
+          ]
+        }
+      ],
+      "exports": [],
+      "totalLines": 51,
       "hasStructuralAnalysis": true
     },
     "verify-ingest-prereqs.sh": {

@@ -30,7 +30,7 @@ export function NavRail() {
   }
 
   return (
-    <nav className="flex flex-col items-center w-12 shrink-0 bg-bg-surface border-r border-border-faint py-3 z-20">
+    <nav className="flex flex-col items-center w-[72px] shrink-0 bg-bg-surface border-r border-border-faint py-3 z-20">
       <div className="flex flex-col gap-1 flex-1">
         {NAV_ITEMS.map(({ id, label, icon: Icon, badge }) => {
           const count = badge ? getBadge(badge) : null
@@ -67,27 +67,24 @@ function NavButton({ active, onClick, label, count, children }) {
   return (
     <button
       onClick={onClick}
-      title={label}
       className={clsx(
-        'relative w-9 h-9 rounded flex items-center justify-center transition-colors duration-100 group',
+        'relative w-full px-1 py-1.5 rounded flex flex-col items-center gap-0.5 transition-colors duration-100',
         active
           ? 'bg-cyan-dim text-cyan'
           : 'text-text-muted hover:text-text-primary hover:bg-bg-raised'
       )}
       style={active ? { backgroundColor: 'var(--cyan-dim)', color: 'var(--cyan)' } : {}}
     >
-      <span className="w-5 h-5">{children}</span>
-      {count != null && (
-        <span className="absolute top-0.5 right-0.5 min-w-[14px] h-[14px] px-[3px] rounded-full bg-crimson text-white font-mono text-[9px] flex items-center justify-center leading-none"
-          style={{ backgroundColor: 'var(--crimson)', color: '#fff' }}>
-          {count > 99 ? '99+' : count}
-        </span>
-      )}
-      {/* Tooltip */}
-      <span className="pointer-events-none absolute left-11 px-2 py-1 rounded text-xs font-sans whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50"
-        style={{ background: 'var(--bg-overlay)', color: 'var(--text-primary)', border: '1px solid var(--border-soft)' }}>
-        {label}
+      <span className="relative w-4 h-4">
+        {children}
+        {count != null && (
+          <span className="absolute -top-1 -right-2 min-w-[14px] h-[14px] px-[3px] rounded-full font-mono text-[9px] flex items-center justify-center leading-none"
+            style={{ backgroundColor: 'var(--crimson)', color: '#fff' }}>
+            {count > 99 ? '99+' : count}
+          </span>
+        )}
       </span>
+      <span className="text-[10px] font-sans leading-none tracking-wide">{label}</span>
     </button>
   )
 }
