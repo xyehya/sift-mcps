@@ -20,7 +20,7 @@
 | Phase | Total | Done | Remaining |
 |---|---|---|---|
 | 0 — Reconciliation | 1 | 1 | 0 |
-| 1 — Missing features | 8 | 2 | 6 |
+| 1 — Missing features | 8 | 5 | 3 |
 | 2 — Security gate | 4 | 0 | 4 |
 | 3 — Polish | 7 | 0 | 7 |
 
@@ -107,48 +107,45 @@ Then UI: Generate `executive` → see preview render → Save → confirm appear
 
 ---
 
-### ☐ T-03 — Accounts tab
+### ☑ T-03 — Accounts tab
 
 **Spec:** §4 Accounts Tab, §6 (planned)
-**Files:** `frontend/src/components/accounts/AccountsTab.jsx` (new), `NavRail.jsx`, `App.jsx`
+**Files:** `frontend/src/components/accounts/AccountsTab.jsx` (new), `NavRail.jsx`, `App.jsx`, `FindingsTab.jsx`, `useStore.js`
 **Acceptance:**
-- [ ] Table: Account · Findings · Hosts (count) · Best Confidence · Time Range · Status Summary
-- [ ] Click row → switch to Findings filtered by account
-- [ ] Empty state copy
-**Verify:** Similar to Hosts. `CORP\jsmith` row → Findings narrowed.
+- [x] Table: Account · Findings · Hosts (count) · Host List · Best Confidence · Time Range · Status Summary (badges)
+- [x] "Unknown" / empty account → "N/A" badge with neutral styling
+- [x] Click row → switch to Findings filtered by that account (extended store with `findingsAccountFilter` + banner in FindingsTab)
+- [x] Empty state: "No accounts in scope yet."
+**Verify:** 26 findings → 5 unique accounts in UI (fred.rocba@outlook.com, fredr, srl-h, srl-helpdesk@outlook.com, N/A). Raw `affected_account` has 4 values (one comma-separated). Account filter banner in Findings clears with ✕.
 **Security gate:** N/A.
 
 ---
 
-### ☐ T-04 — IOCs tab
+### ☑ T-04 — IOCs tab
 
 **Spec:** §3 (`GET /api/iocs`), §4 IOCs Tab, §6
-**Files:** `frontend/src/components/iocs/IocsTab.jsx` (new), `NavRail.jsx`, `App.jsx`, `endpoints.js` already has `getIocs`
+**Files:** `frontend/src/components/iocs/IocsTab.jsx` (new), `NavRail.jsx`, `App.jsx`, `useStore.js`, `useDataPolling.js`, `endpoints.js` already has `getIocs`
 **Acceptance:**
-- [ ] Table: Value (monospace, copy button) · Type · Category · Confidence badge · Hosts · Source Findings (clickable F-IDs) · Status badge
-- [ ] Filters: category dropdown, status dropdown (DRAFT/APPROVED/REJECTED/ALL), search box
-- [ ] Expandable rows show MITRE techniques + tags
-- [ ] Click F-ID link → switch to Findings, select that finding
-- [ ] Empty state
-**Verify (SIFT VM):**
-```bash
-curl -sk -b "agentir_session=$SID" $BASE/iocs | python3 -m json.tool | head -50
-```
-Confirm IOC count in UI matches array length.
+- [x] Table: Value (monospace, copy button) · Type · Category · Confidence badge · Hosts · Source Findings (clickable F-IDs) · Status badge
+- [x] Filters: category dropdown, status dropdown (DRAFT/APPROVED/REJECTED/ALL), search box
+- [x] Expandable rows show MITRE techniques + tags
+- [x] Click F-ID link → switch to Findings, select that finding
+- [x] Empty state ("No IOCs match the current filters.")
+**Verify (SIFT VM):** 24 IOCs confirmed. API returns 24; UI table shows 24 (4 categories: network/identity/host/unknown; 20 DRAFT, 4 APPROVED). Filters correctly narrow results.
 **Security gate:** N/A.
 
 ---
 
-### ☐ T-05 — TODOs tab
+### ☑ T-05 — TODOs tab
 
 **Spec:** §3 (`GET /api/todos`), §4 TODOs Tab, §6
-**Files:** `frontend/src/components/todos/TodosTab.jsx` (new), `NavRail.jsx`, `App.jsx`
+**Files:** `frontend/src/components/todos/TodosTab.jsx` (new), `NavRail.jsx`, `App.jsx`, `useStore.js`, `useDataPolling.js`
 **Acceptance:**
-- [ ] Table: ID · Title · Description · Priority (high/med/low — shape disambiguated badge) · Examiner · Status · Related findings (clickable) · Created at
-- [ ] Filters: priority, status
-- [ ] Default sort: priority desc, then created_at asc
-- [ ] NavRail badge: count of open TODOs
-**Verify:** open count in NavRail badge matches `/api/summary` `todos.open`.
+- [x] Table: ID · Title · Description · Priority (high/med/low — shape disambiguated badge) · Examiner · Status · Related findings (clickable) · Created at
+- [x] Filters: priority, status
+- [x] Default sort: priority desc, then created_at asc
+- [x] NavRail badge: count of open TODOs
+**Verify:** open count in NavRail badge matches `/api/summary` `todos.open` (both 0 for test-rocba-2026; badge hidden when count 0).
 **Security gate:** N/A.
 
 ---
@@ -364,3 +361,6 @@ Pulled from Spec §8.1. After any tab change, run the rows that apply.
 | 2026-05-28 | 6 | Doc revamp: `ux-migration.md` → `ux-spec.md` (rewritten as stable spec), `ux-tasks.md` (rewritten as clean queue with five-line task format). Audit reconciliation: BUG-7/8/9/12/14/F10/VIS-1-2/UX-1-2/SEC-1/4/5 verified as already done in code; collapsed into T-00. New scope added per user decisions: Hosts/Accounts tabs, Reports backend+UI, security as blocking gate. | Spec is the anti-drift anchor; tasks file has 19 tickable items across 3 phases. |
 | 2026-05-28 | 7 | T-01 | Implemented reports REST endpoints and frontend ReportsTab, added unit tests, verified end-to-end on SIFT VM |
 | 2026-05-28 | 8 | T-02 | Created HostsTab component, updated store and sidebar findings filtering by host, built and deployed on SIFT VM |
+| 2026-05-28 | 9 | T-03 | Created AccountsTab component (aggregates by affected_account, handles comma-separated/array/string), added findingsAccountFilter to store + FindingsTab banner, N/A badge for empty accounts |
+| 2026-05-28 | 10 | T-04 | Created IocsTab with table (value+copy, type, category, confidence, hosts, source findings, status), category/status/search filters, expandable MITRE+tags rows, clickable F-ID links, added iocs to store + polling |
+| 2026-05-28 | 11 | T-05 | Created TodosTab with priority shape-disambiguated badges, status/priority filters, default sort, NavRail badge wired to summary.todos.open, todos store + polling |

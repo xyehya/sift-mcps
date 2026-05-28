@@ -23,7 +23,7 @@ export function getTagString(t) {
 }
 
 export function FindingsTab() {
-  const { findings, delta, setDelta, selectedFindingId, setSelectedFindingId, timeline, addToast, isLoading, findingsFilter, setFindingsFilter, findingsHostFilter, setFindingsHostFilter } = useStore()
+  const { findings, delta, setDelta, selectedFindingId, setSelectedFindingId, timeline, addToast, isLoading, findingsFilter, setFindingsFilter, findingsHostFilter, setFindingsHostFilter, findingsAccountFilter, setFindingsAccountFilter } = useStore()
   const filter = findingsFilter
   const setFilter = (f) => { setFindingsFilter(f); setSelectedFindingId(null) }
   const [search, setSearch] = useState('')
@@ -44,12 +44,29 @@ export function FindingsTab() {
         return match
       })
     }
+    if (findingsAccountFilter !== null) {
+      if (findingsAccountFilter === '') {
+        // N/A filter: findings with no affected_account
+        list = list.filter((f) => {
+          const raw = f.affected_account || f.account
+          return !raw || (typeof raw === 'string' && raw.trim() === '') || (Array.isArray(raw) && raw.length === 0)
+        })
+      } else {
+        list = list.filter((f) => {
+          const raw = f.affected_account || f.account
+          if (!raw) return false
+          if (Array.isArray(raw)) return raw.some(a => (typeof a === 'string' ? a : a?.value ?? '') === findingsAccountFilter)
+          if (typeof raw === 'string') return raw.split(',').map(s => s.trim()).includes(findingsAccountFilter)
+          return false
+        })
+      }
+    }
     if (search) {
       const q = search.toLowerCase()
       list = list.filter((f) => f.id.toLowerCase().includes(q) || (f.title ?? '').toLowerCase().includes(q))
     }
     return list
-  }, [findings, filter, search, findingsHostFilter])
+  }, [findings, filter, search, findingsHostFilter, findingsAccountFilter])
 
   const currentFinding = findings.find((f) => f.id === selectedFindingId) ?? null
   const stagedItem = currentFinding ? delta.find((d) => d.id === currentFinding.id) : null
@@ -130,6 +147,14 @@ export function FindingsTab() {
             style={{ borderColor: 'var(--border-faint)', background: 'var(--bg-raised)' }}>
             <span style={{ color: 'var(--text-muted)' }}>Host: <strong style={{ color: 'var(--cyan)' }}>{findingsHostFilter}</strong></span>
             <button onClick={() => setFindingsHostFilter(null)} className="text-text-muted hover:text-crimson font-sans text-xs font-semibold px-1">✕</button>
+          </div>
+        )}
+
+        {findingsAccountFilter !== null && (
+          <div className="px-3 py-1.5 border-b flex items-center justify-between text-[11px] font-mono"
+            style={{ borderColor: 'var(--border-faint)', background: 'var(--bg-raised)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Account: <strong style={{ color: 'var(--violet)' }}>{findingsAccountFilter === '' ? 'N/A' : findingsAccountFilter}</strong></span>
+            <button onClick={() => setFindingsAccountFilter(null)} className="text-text-muted hover:text-crimson font-sans text-xs font-semibold px-1">✕</button>
           </div>
         )}
 

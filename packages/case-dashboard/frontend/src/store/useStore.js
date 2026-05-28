@@ -30,10 +30,20 @@ export const useStore = create((set, get) => ({
   setFindingsFilter: (f) => set({ findingsFilter: f }),
   findingsHostFilter: null,
   setFindingsHostFilter: (host) => set({ findingsHostFilter: host }),
+  findingsAccountFilter: null,
+  setFindingsAccountFilter: (account) => set({ findingsAccountFilter: account }),
 
   // Delta (staged changes)
   delta: [],
   setDelta: (delta) => set({ delta }),
+
+  // IOCs
+  iocs: [],
+  setIocs: (iocs) => set({ iocs }),
+
+  // TODOs
+  todos: [],
+  setTodos: (todos) => set({ todos }),
 
   // Timeline
   timeline: [],

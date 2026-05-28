@@ -313,25 +313,29 @@ Legend: ☑ done · ◐ partial · ☐ missing · ✕ explicitly dropped
 | Aggregate findings by host: name, finding count, accounts, best confidence, time range | ☑ | `hosts/HostsTab.jsx` (new) |
 | Click row → switch to Findings filtered by host | ☑ | `findings/FindingsTab` |
 
-### Accounts Tab (planned)
+### Accounts Tab
 | Feature | Status | Component |
 |---|---|---|
-| Aggregate findings by account: account, count, hosts, confidence, time range | ☐ | `accounts/AccountsTab.jsx` (new) |
-| Click row → switch to Findings filtered by account | ☐ | — |
+| Aggregate findings by account: account, count, hosts, confidence, time range | ☑ | `accounts/AccountsTab.jsx` (new) |
+| Click row → switch to Findings filtered by account | ☑ | `FindingsTab` (banner + filter) |
+| N/A badge for empty/unknown affected_account | ☑ | `accounts/AccountsTab.jsx` |
 
-### IOCs Tab (planned)
+### IOCs Tab
 | Feature | Status | Component |
 |---|---|---|
-| Table: value, type, category, confidence, hosts, source findings, status | ☐ | `iocs/IocsTab.jsx` (new) |
-| Filters: category, status, search | ☐ | — |
-| Expandable rows: full value, MITRE techniques, tags | ☐ | — |
-| Click source-finding link → switch to Findings | ☐ | — |
+| Table: value (monospace + copy), type, category, confidence, hosts, source findings, status | ☑ | `iocs/IocsTab.jsx` |
+| Filters: category, status (DRAFT/APPROVED/REJECTED/ALL), search | ☑ | `iocs/IocsTab.jsx` |
+| Expandable rows: MITRE techniques, tags, ID footer | ☑ | `iocs/IocsTab.jsx` |
+| Click source-finding link → switch to Findings, select that finding | ☑ | `iocs/IocsTab.jsx` |
 
-### TODOs Tab (planned)
+### TODOs Tab
 | Feature | Status | Component |
 |---|---|---|
-| Table: id, title, description, priority, examiner, status, related findings, created_at | ☐ | `todos/TodosTab.jsx` (new) |
-| Filters: priority, status | ☐ | — |
+| Table: id, title, description, priority, examiner, status, related findings, created_at | ☑ | `todos/TodosTab.jsx` |
+| Filters: priority, status | ☑ | `todos/TodosTab.jsx` |
+| Default sort: priority desc → created_at asc | ☑ | `todos/TodosTab.jsx` |
+| NavRail badge: open TODOs count | ☑ | `layout/NavRail` |
+| Priority shape-disambiguated badge (▲ high, ◆ medium, ● low) | ☑ | `todos/TodosTab.jsx` |
 
 ### Reports Tab (planned — backend + UI)
 | Feature | Status | Component |
@@ -494,14 +498,28 @@ For each component: purpose, what it shows, what's editable, what actions exist.
 **Shows:** Table displaying unique hosts, finding counts, unique accounts count, best confidence, time range, and status summary badges.
 **Interactions:** Click row → navigates to findings list filtered by that host.
 
+### `accounts/AccountsTab.jsx` (new)
+**Purpose:** Aggregate findings by affected_account.
+**Shows:** Table displaying unique accounts (split on commas, handles arrays), finding counts, unique host count, host list chips, best confidence, time range, and status summary badges. Findings with missing/empty `affected_account` are grouped under an "N/A" badge with neutral styling.
+**Interactions:** Click row → navigates to findings list filtered by that account.
+
+### `iocs/IocsTab.jsx` (new)
+**Purpose:** IOC triage and enrichment review.
+**Shows:** Table with value (monospace + copy-on-hover), type badge, category, confidence badge (shape+color), host chips, clickable source finding links, status badge. Filters by category dropdown, status dropdown, and free-text search. Expandable rows reveal MITRE technique chips, tags, and metadata footer (ID, examiner, created_at). Data sourced from `/api/iocs` via 15s polling through the store.
+**Interactions:** Click source-finding link → navigates to Findings tab and selects that finding. Click chevron → expands/collapses MITRE + tags detail.
+
 ### `reports/ReportsTab.jsx` (new)
 **Purpose:** Examiner report builder.
 **Shows:** List of saved reports, profile selector, generate preview, and save/download actions.
 
+### `todos/TodosTab.jsx` (new)
+**Purpose:** Examiner task tracking.
+**Shows:** Table with columns: ID (monospace), Title/Description, Priority (shape-disambiguated ▲high/◆medium/●low badge), Examiner, Status (OPEN/COMPLETED badge), Related findings (clickable cyan links), Created at. Header shows open/completed counts from summary.
+**Filters:** Priority dropdown (high/medium/low/all), Status dropdown (open/completed/all).
+**Sort:** Priority desc (high→medium→low), then created_at asc.
+**Interactions:** Click related finding link → switch to Findings tab + select that finding.
+
 ### Planned components (live in `ux-tasks.md`)
-- `accounts/AccountsTab.jsx`
-- `iocs/IocsTab.jsx`
-- `todos/TodosTab.jsx`
 - `layout/CommandPalette.jsx`
 
 ---

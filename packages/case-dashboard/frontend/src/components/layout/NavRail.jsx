@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { id: 'timeline',  label: 'Timeline',  icon: IconClock },
   { id: 'evidence',  label: 'Evidence',  icon: IconShield },
   { id: 'hosts',     label: 'Hosts',     icon: IconHost },
+  { id: 'accounts',  label: 'Accounts',  icon: IconUser },
   { id: 'iocs',      label: 'IOCs',      icon: IconTarget },
   { id: 'todos',     label: 'TODOs',     icon: IconCheck,  badge: 'todoCount' },
   { id: 'reports',   label: 'Reports',   icon: IconFile },
@@ -17,13 +18,14 @@ const BOTTOM_ITEMS = [
 ]
 
 export function NavRail() {
-  const { activeTab, setActiveTab, findings, delta } = useStore()
+  const { activeTab, setActiveTab, findings, delta, summary } = useStore()
   const pendingCount = findings.filter((f) => f.status === 'draft').length
   const stagedCount = delta.length
+  const todoOpenCount = summary?.todos?.open ?? 0
 
   function getBadge(key) {
     if (key === 'pendingCount') return pendingCount > 0 ? pendingCount : null
-    if (key === 'todoCount') return null
+    if (key === 'todoCount') return todoOpenCount > 0 ? todoOpenCount : null
     return null
   }
 
@@ -123,6 +125,15 @@ function IconHost() {
       <rect x="3" y="3" width="14" height="10" rx="1.5" />
       <line x1="6" y1="16" x2="14" y2="16" />
       <line x1="10" y1="13" x2="10" y2="16" />
+    </svg>
+  )
+}
+
+function IconUser() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <circle cx="10" cy="7" r="3.5" />
+      <path d="M4 17c0-3.3 2.7-6 6-6s6 2.7 6 6" />
     </svg>
   )
 }

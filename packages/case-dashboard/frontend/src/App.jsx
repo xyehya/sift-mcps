@@ -14,6 +14,9 @@ import { EvidenceTab } from './components/evidence/EvidenceTab'
 import { SettingsTab } from './components/settings/SettingsTab'
 import { ReportsTab } from './components/reports/ReportsTab'
 import { HostsTab } from './components/hosts/HostsTab'
+import { AccountsTab } from './components/accounts/AccountsTab'
+import { IocsTab } from './components/iocs/IocsTab'
+import { TodosTab } from './components/todos/TodosTab'
 import { Toaster } from './components/common/Toaster'
 import { CommitDrawer } from './components/layout/CommitDrawer'
 
@@ -66,8 +69,9 @@ function AuthedApp({ onLogout, activeTab }) {
           {activeTab === 'timeline'  && <TimelineTab />}
           {activeTab === 'evidence'  && <EvidenceTab />}
           {activeTab === 'hosts'     && <HostsTab />}
-          {activeTab === 'iocs'      && <PlaceholderTab label="IOCs" />}
-          {activeTab === 'todos'     && <PlaceholderTab label="TODOs" />}
+          {activeTab === 'accounts'  && <AccountsTab />}
+          {activeTab === 'iocs'      && <IocsTab />}
+          {activeTab === 'todos'     && <TodosTab />}
           {activeTab === 'reports'   && <ReportsTab />}
           {activeTab === 'settings'  && <SettingsTab />}
         </main>
@@ -79,10 +83,3 @@ function AuthedApp({ onLogout, activeTab }) {
   )
 }
 
-function PlaceholderTab({ label }) {
-  return (
-    <div className="flex items-center justify-center h-full" style={{ color: 'var(--text-muted)' }}>
-      <p className="font-mono text-sm">{label} — coming soon</p>
-    </div>
-  )
-}

@@ -3,18 +3,18 @@ import { useStore } from '../store/useStore'
 import {
   getCase, getCases, getSummary,
   getFindings, getDelta, getTimeline,
-  getChainStatus,
+  getChainStatus, getIocs, getTodos,
 } from '../api/endpoints'
 
 export function useDataPolling() {
   const {
     setActiveCase, setCases, setSummary,
     setFindings, setDelta, setTimeline,
-    setChainStatus, setLastSync, setIsLoading,
+    setChainStatus, setLastSync, setIsLoading, setIocs, setTodos,
   } = useStore()
 
   usePolling(async () => {
-    const [cas, cases, summary, findings, delta, timeline, chain] = await Promise.allSettled([
+    const [cas, cases, summary, findings, delta, timeline, chain, iocs, todos] = await Promise.allSettled([
       getCase(),
       getCases(),
       getSummary(),
@@ -22,6 +22,8 @@ export function useDataPolling() {
       getDelta(),
       getTimeline(),
       getChainStatus(),
+      getIocs(),
+      getTodos(),
     ])
 
     if (cas.status === 'fulfilled' && cas.value) setActiveCase(cas.value)
@@ -31,6 +33,8 @@ export function useDataPolling() {
     if (delta.status === 'fulfilled' && delta.value) setDelta(delta.value.items ?? [])
     if (timeline.status === 'fulfilled' && timeline.value) setTimeline(timeline.value)
     if (chain.status === 'fulfilled' && chain.value) setChainStatus(chain.value)
+    if (iocs.status === 'fulfilled' && iocs.value) setIocs(iocs.value)
+    if (todos.status === 'fulfilled' && todos.value) setTodos(todos.value)
 
     setLastSync(Date.now())
     setIsLoading(false)
