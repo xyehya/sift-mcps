@@ -54,3 +54,10 @@ export const getTokens = () => apiFetch('/api/tokens')
 export const postToken = (body) => apiPost('/api/tokens', body)
 export const deleteToken = (id) => apiDelete(`/api/tokens/${id}`)
 export const postRotateToken = (id) => apiPost(`/api/tokens/${id}/rotate`, {})
+
+// --- Reports ---
+export const getReports = () => apiFetch('/api/reports')
+export const postReportGenerate = (body) => apiPost('/api/reports/generate', body)
+export const postReportSave = (id) => apiPost(`/api/reports/${id}/save`, {})
+export const getReport = (id) => apiFetch(`/api/reports/${id}`)
+export const downloadReport = (id) => apiFetch(`/api/reports/${id}/download`)

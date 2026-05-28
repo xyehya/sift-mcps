@@ -23,7 +23,7 @@ export function getTagString(t) {
 }
 
 export function FindingsTab() {
-  const { findings, delta, setDelta, selectedFindingId, setSelectedFindingId, timeline, addToast, isLoading, findingsFilter, setFindingsFilter } = useStore()
+  const { findings, delta, setDelta, selectedFindingId, setSelectedFindingId, timeline, addToast, isLoading, findingsFilter, setFindingsFilter, findingsHostFilter, setFindingsHostFilter } = useStore()
   const filter = findingsFilter
   const setFilter = (f) => { setFindingsFilter(f); setSelectedFindingId(null) }
   const [search, setSearch] = useState('')
@@ -36,12 +36,20 @@ export function FindingsTab() {
     if (filter === 'pending')  list = list.filter((f) => st(f) === 'draft')
     if (filter === 'approved') list = list.filter((f) => st(f) === 'approved')
     if (filter === 'rejected') list = list.filter((f) => st(f) === 'rejected')
+    if (findingsHostFilter) {
+      console.log('Filtering findings by host:', findingsHostFilter)
+      list = list.filter((f) => {
+        const match = (f.host ?? '').toUpperCase() === findingsHostFilter.toUpperCase()
+        console.log(`Finding ${f.id} host: "${f.host}" match:`, match)
+        return match
+      })
+    }
     if (search) {
       const q = search.toLowerCase()
       list = list.filter((f) => f.id.toLowerCase().includes(q) || (f.title ?? '').toLowerCase().includes(q))
     }
     return list
-  }, [findings, filter, search])
+  }, [findings, filter, search, findingsHostFilter])
 
   const currentFinding = findings.find((f) => f.id === selectedFindingId) ?? null
   const stagedItem = currentFinding ? delta.find((d) => d.id === currentFinding.id) : null
@@ -116,6 +124,14 @@ export function FindingsTab() {
             </button>
           ))}
         </div>
+
+        {findingsHostFilter && (
+          <div className="px-3 py-1.5 border-b flex items-center justify-between text-[11px] font-mono"
+            style={{ borderColor: 'var(--border-faint)', background: 'var(--bg-raised)' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Host: <strong style={{ color: 'var(--cyan)' }}>{findingsHostFilter}</strong></span>
+            <button onClick={() => setFindingsHostFilter(null)} className="text-text-muted hover:text-crimson font-sans text-xs font-semibold px-1">✕</button>
+          </div>
+        )}
 
         {/* Finding list */}
         <div className="flex-1 overflow-y-auto">

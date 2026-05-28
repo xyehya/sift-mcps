@@ -143,6 +143,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         - confidence: SPECULATIVE, LOW, MEDIUM, or HIGH
         - confidence_justification (str): why this confidence level
         - type: finding, conclusion, attribution (requires 3+ audit_ids), or exclusion
+        - host (str): REQUIRED. The exact hostname of the system where this evidence was found (e.g., "wkstn05" or "dc01"). Do not omit.
         - audit_ids (list[str]): IDs from MCP tool responses.
           Use [] if providing supporting_commands only.
         - event_timestamp (str, ISO 8601): when the incident event occurred
@@ -151,7 +152,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
           Required for type=finding. Optional for other types.
 
         Context (recommended):
-        - host (str): which system, e.g., "wkstn05" or "dc01"
         - affected_account (str): which account, e.g., "shieldbase\\wacsvc"
 
         Optional: mitre_ids, iocs, event_type, artifact_ref, related_findings

@@ -12,6 +12,8 @@ import { FindingsTab } from './components/findings/FindingsTab'
 import { TimelineTab } from './components/timeline/TimelineTab'
 import { EvidenceTab } from './components/evidence/EvidenceTab'
 import { SettingsTab } from './components/settings/SettingsTab'
+import { ReportsTab } from './components/reports/ReportsTab'
+import { HostsTab } from './components/hosts/HostsTab'
 import { Toaster } from './components/common/Toaster'
 import { CommitDrawer } from './components/layout/CommitDrawer'
 
@@ -63,8 +65,10 @@ function AuthedApp({ onLogout, activeTab }) {
           {activeTab === 'findings'  && <FindingsTab />}
           {activeTab === 'timeline'  && <TimelineTab />}
           {activeTab === 'evidence'  && <EvidenceTab />}
+          {activeTab === 'hosts'     && <HostsTab />}
           {activeTab === 'iocs'      && <PlaceholderTab label="IOCs" />}
           {activeTab === 'todos'     && <PlaceholderTab label="TODOs" />}
+          {activeTab === 'reports'   && <ReportsTab />}
           {activeTab === 'settings'  && <SettingsTab />}
         </main>
       </div>

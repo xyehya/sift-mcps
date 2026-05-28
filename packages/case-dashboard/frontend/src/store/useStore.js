@@ -28,6 +28,8 @@ export const useStore = create((set, get) => ({
   setSelectedFindingId: (id) => set({ selectedFindingId: id }),
   findingsFilter: 'pending',
   setFindingsFilter: (f) => set({ findingsFilter: f }),
+  findingsHostFilter: null,
+  setFindingsHostFilter: (host) => set({ findingsHostFilter: host }),
 
   // Delta (staged changes)
   delta: [],

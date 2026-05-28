@@ -307,11 +307,11 @@ Legend: ☑ done · ◐ partial · ☐ missing · ✕ explicitly dropped
 | Registered evidence table: sortable, verify per file, referenced_by links | ☑ | `evidence/EvidenceTab` |
 | Ignore file (HMAC) | ☑ | `evidence/EvidenceTab` |
 
-### Hosts Tab (planned)
+### Hosts Tab
 | Feature | Status | Component |
 |---|---|---|
-| Aggregate findings by host: name, finding count, accounts, best confidence, time range | ☐ | `hosts/HostsTab.jsx` (new) |
-| Click row → switch to Findings filtered by host | ☐ | (uses existing `findingsFilter`) |
+| Aggregate findings by host: name, finding count, accounts, best confidence, time range | ☑ | `hosts/HostsTab.jsx` (new) |
+| Click row → switch to Findings filtered by host | ☑ | `findings/FindingsTab` |
 
 ### Accounts Tab (planned)
 | Feature | Status | Component |
@@ -336,9 +336,9 @@ Legend: ☑ done · ◐ partial · ☐ missing · ✕ explicitly dropped
 ### Reports Tab (planned — backend + UI)
 | Feature | Status | Component |
 |---|---|---|
-| Backend: `GET /api/reports`, `POST /api/reports/generate`, `GET /api/reports/{id}`, `GET /api/reports/{id}/download` | ☐ | `routes.py` |
-| UI: list reports, profile selector, generate button, preview pane | ☐ | `reports/ReportsTab.jsx` (new) |
-| NavRail icon + badge | ☐ | `layout/NavRail` |
+| Backend: `GET /api/reports`, `POST /api/reports/generate`, `GET /api/reports/{id}`, `GET /api/reports/{id}/download` | ☑ | `routes.py` |
+| UI: list reports, profile selector, generate button, preview pane | ☑ | `reports/ReportsTab.jsx` (new) |
+| NavRail icon + badge | ☑ | `layout/NavRail` |
 
 ### Settings Tab
 | Feature | Status | Component |
@@ -489,12 +489,19 @@ For each component: purpose, what it shows, what's editable, what actions exist.
 **Shows:** create form (agent_id, label, optional ISO datetime expiry), token table (rotate/revoke per row), copy-once banner for new token.
 **Confirmation:** rotate and revoke open a confirm dialog.
 
+### `hosts/HostsTab.jsx` (new)
+**Purpose:** Aggregate findings by host.
+**Shows:** Table displaying unique hosts, finding counts, unique accounts count, best confidence, time range, and status summary badges.
+**Interactions:** Click row → navigates to findings list filtered by that host.
+
+### `reports/ReportsTab.jsx` (new)
+**Purpose:** Examiner report builder.
+**Shows:** List of saved reports, profile selector, generate preview, and save/download actions.
+
 ### Planned components (live in `ux-tasks.md`)
-- `hosts/HostsTab.jsx`
 - `accounts/AccountsTab.jsx`
 - `iocs/IocsTab.jsx`
 - `todos/TodosTab.jsx`
-- `reports/ReportsTab.jsx`
 - `layout/CommandPalette.jsx`
 
 ---

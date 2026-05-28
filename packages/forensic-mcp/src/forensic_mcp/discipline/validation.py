@@ -29,7 +29,7 @@ def validate(finding: dict) -> dict:
     confidence_defs = _get_confidence_defs()
 
     # Required fields
-    required = ["title", "observation", "interpretation", "confidence", "type"]
+    required = ["title", "observation", "interpretation", "confidence", "type", "host"]
     for field in required:
         if not finding.get(field):
             errors.append(f"Missing required field: {field}")

@@ -20,7 +20,7 @@
 | Phase | Total | Done | Remaining |
 |---|---|---|---|
 | 0 — Reconciliation | 1 | 1 | 0 |
-| 1 — Missing features | 8 | 0 | 8 |
+| 1 — Missing features | 8 | 2 | 6 |
 | 2 — Security gate | 4 | 0 | 4 |
 | 3 — Polish | 7 | 0 | 7 |
 
@@ -51,7 +51,7 @@ If you find one of these claims is **not** actually true in code, demote it back
 Each task is the same five-line block:
 **Spec §** · **Files** · **Acceptance** · **Verify** · **Security gate**.
 
-### ☐ T-01 — Reports backend + UI (HIGH priority — completes operator loop)
+### ☑ T-01 — Reports backend + UI (HIGH priority — completes operator loop)
 
 **Spec:** §3 Reports (planned), §4 Reports Tab, §6 (planned ReportsTab.jsx), §7 (rate limit + error scrubbing)
 **Background:** `report_mcp.server.generate_report(profile, case_id, finding_ids?, start_date?, end_date?)` returns a structured dict `{ report_data, sections, guidance }`. `report_mcp.save_report` persists. Profiles: `full, executive, timeline, ioc, findings, status` (see `list_profiles`). The portal routes are a thin REST wrapper — case_id comes from the active session, not the body.
@@ -62,20 +62,20 @@ Each task is the same five-line block:
 - `packages/case-dashboard/frontend/src/components/layout/NavRail.jsx` — add Reports icon + route
 - `packages/case-dashboard/frontend/src/App.jsx` — route case for `'reports'`
 **Acceptance (backend):**
-- [ ] `GET /portal/api/reports` returns saved reports for active case `[{ id, profile, created_at, examiner }]`
-- [ ] `POST /portal/api/reports/generate` body `{ profile, finding_ids?, start_date?, end_date? }` → calls `generate_report` with active case_id → returns `{ id, profile, report_data, sections, guidance }`. The `id` is server-assigned and held until save.
-- [ ] `POST /portal/api/reports/{id}/save` persists via `save_report`
-- [ ] `GET /portal/api/reports/{id}` returns saved report content + metadata
-- [ ] `GET /portal/api/reports/{id}/download` streams markdown (`Content-Type: text/markdown`, `Content-Disposition: attachment; filename="…"`)
-- [ ] Unknown profile → 400 with "Unknown profile" message (mirror the MCP tool's error shape)
-- [ ] All endpoints require examiner role; readonly returns 403
+- [x] `GET /portal/api/reports` returns saved reports for active case `[{ id, profile, created_at, examiner }]`
+- [x] `POST /portal/api/reports/generate` body `{ profile, finding_ids?, start_date?, end_date? }` → calls `generate_report` with active case_id → returns `{ id, profile, report_data, sections, guidance }`. The `id` is server-assigned and held until save.
+- [x] `POST /portal/api/reports/{id}/save` persists via `save_report`
+- [x] `GET /portal/api/reports/{id}` returns saved report content + metadata
+- [x] `GET /portal/api/reports/{id}/download` streams markdown (`Content-Type: text/markdown`, `Content-Disposition: attachment; filename="…"`)
+- [x] Unknown profile → 400 with "Unknown profile" message (mirror the MCP tool's error shape)
+- [x] All endpoints require examiner role; readonly returns 403
 **Acceptance (UI):**
-- [ ] NavRail icon + Reports tab visible
-- [ ] Profile selector populated from a static list (mirror the 6 profiles), with descriptions in tooltip
-- [ ] Generate button → shows preview pane (markdown render of `report_data.summary` / `sections`)
-- [ ] Save button persists the draft
-- [ ] List pane shows saved reports; click → preview; Download button per row
-- [ ] Generate button disabled while a generation is in-flight
+- [x] NavRail icon + Reports tab visible
+- [x] Profile selector populated from a static list (mirror the 6 profiles), with descriptions in tooltip
+- [x] Generate button → shows preview pane (markdown render of `report_data.summary` / `sections`)
+- [x] Save button persists the draft
+- [x] List pane shows saved reports; click → preview; Download button per row
+- [x] Generate button disabled while a generation is in-flight
 **Verify (SIFT VM):**
 ```bash
 SID=…
@@ -86,22 +86,22 @@ curl -sk -b "agentir_session=$SID" -X POST -H 'Content-Type: application/json' \
 ```
 Then UI: Generate `executive` → see preview render → Save → confirm appears in list → Download → file contains approved findings.
 **Security gate (Spec §7):**
-- [ ] Rate-limit generation server-side (max 1 in-flight per case)
-- [ ] `{id}` validated as UUID (no path traversal)
-- [ ] Error map: generation failure → "Report generation failed. Check the case status."
-- [ ] No filesystem paths leak into UI errors
+- [x] Rate-limit generation server-side (max 1 in-flight per case)
+- [x] `{id}` validated as UUID (no path traversal)
+- [x] Error map: generation failure → "Report generation failed. Check the case status."
+- [x] No filesystem paths leak into UI errors
 
 ---
 
-### ☐ T-02 — Hosts tab
+### ☑ T-02 — Hosts tab
 
 **Spec:** §4 Hosts Tab, §6 (planned)
 **Files:** `frontend/src/components/hosts/HostsTab.jsx` (new), `NavRail.jsx`, `App.jsx`
 **Acceptance:**
-- [ ] Table renders one row per unique `host` value found across findings
-- [ ] Columns: Host · Findings · Accounts (count) · Best Confidence · Time Range · Status Summary (badges)
-- [ ] Click row → `setActiveTab('findings')` + filter findings by host (use existing `findingsFilter` or extend store with `findingsHostFilter`)
-- [ ] Empty state: "No hosts in scope yet."
+- [x] Table renders one row per unique `host` value found across findings
+- [x] Columns: Host · Findings · Accounts (count) · Best Confidence · Time Range · Status Summary (badges)
+- [x] Click row → `setActiveTab('findings')` + filter findings by host (use existing `findingsFilter` or extend store with `findingsHostFilter`)
+- [x] Empty state: "No hosts in scope yet."
 **Verify:** Open tab → 3 hosts shown matching the case → click `SRV-DC01` → Findings tab opens with sidebar narrowed to that host.
 **Security gate:** N/A (read-only client aggregation).
 
@@ -362,3 +362,5 @@ Pulled from Spec §8.1. After any tab change, run the rows that apply.
 | 2026-05-28 | 4 | BUG-1 through BUG-6, VIS-1/2, UX-1/2, SEC-1/4/5 | Font weights, isLoading flag, gap pills, color shape disambiguation, etc. |
 | 2026-05-28 | 5 | BUG-7 (chain status), C4 (evidence verify) | Client-side PBKDF2/HMAC for chain ops; UI modals responsive |
 | 2026-05-28 | 6 | Doc revamp: `ux-migration.md` → `ux-spec.md` (rewritten as stable spec), `ux-tasks.md` (rewritten as clean queue with five-line task format). Audit reconciliation: BUG-7/8/9/12/14/F10/VIS-1-2/UX-1-2/SEC-1/4/5 verified as already done in code; collapsed into T-00. New scope added per user decisions: Hosts/Accounts tabs, Reports backend+UI, security as blocking gate. | Spec is the anti-drift anchor; tasks file has 19 tickable items across 3 phases. |
+| 2026-05-28 | 7 | T-01 | Implemented reports REST endpoints and frontend ReportsTab, added unit tests, verified end-to-end on SIFT VM |
+| 2026-05-28 | 8 | T-02 | Created HostsTab component, updated store and sidebar findings filtering by host, built and deployed on SIFT VM |

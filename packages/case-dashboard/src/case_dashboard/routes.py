@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import inspect
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -3485,9 +3486,461 @@ async def post_case_create(request: Request) -> JSONResponse:
         _case_create_lock.release()
 
 
+# --- Reports Endpoints ---
+
+_PENDING_REPORTS: dict[str, dict] = {}
+_IN_FLIGHT_GENERATIONS = set()
+_GENERATION_LOCK = threading.Lock()
+
+
+def _serialize_to_markdown(report: dict) -> str:
+    """Serialize structured report dict into a clean, comprehensive markdown format."""
+    meta = report.get("report_data", {}).get("metadata", {}) or {}
+    profile = report.get("profile", "full").upper()
+    generated_at = report.get("generated_at", "")
+    examiner = report.get("examiner", "Unknown")
+    case_name = meta.get("name", "Unknown Case")
+    case_id = meta.get("case_id", "Unknown ID")
+
+    md = []
+    md.append(f"# Forensic Incident Report: {case_name}")
+    md.append("")
+    md.append("## Report Metadata")
+    md.append(f"- **Case ID**: {case_id}")
+    md.append(f"- **Report Profile**: {profile}")
+    md.append(f"- **Generated At**: {generated_at}")
+    md.append(f"- **Examiner**: {examiner}")
+    md.append("")
+
+    # Integrity Warnings
+    if "integrity_warning" in report:
+        md.append("> [!CAUTION]")
+        md.append(f"> **Evidence Integrity Warning**: {report['integrity_warning']}")
+        md.append("")
+    elif "evidence_chain_warning" in report:
+        md.append("> [!WARNING]")
+        md.append(f"> **Evidence Chain Warning**: {report['evidence_chain_warning']}")
+        md.append("")
+
+    # Render sections based on their order in report
+    sections = report.get("sections", []) or []
+    report_data = report.get("report_data", {}) or {}
+    zg = report.get("zeltser_guidance", {}) or {}
+
+    for sec in sections:
+        name = sec.get("name", "Section")
+        data_key = sec.get("data_key")
+
+        md.append(f"## {name}")
+        md.append("")
+
+        if not data_key:
+            # Narrative/guidance section
+            guidance = zg.get(name, {})
+            if isinstance(guidance, dict):
+                instr = guidance.get("instructions", [])
+                if instr:
+                    md.append("### Guidance & Instructions")
+                    for ins in instr:
+                        md.append(f"- {ins}")
+                    md.append("")
+            # Placeholders for human input
+            matching_hr = [hr for hr in report.get("human_review_required", []) or [] if hr.get("section") == name]
+            if matching_hr:
+                md.append("> [!IMPORTANT]")
+                md.append(f"> **Human Curation Required**: {matching_hr[0].get('reason')}")
+                md.append(f"> {matching_hr[0].get('prompt')}")
+                md.append("")
+            else:
+                md.append(f"[Draft Section: Write narrative for {name} here]")
+                md.append("")
+        else:
+            # Data section
+            data = report_data.get(data_key)
+            if data is None:
+                # Fallback check for count suffix keys
+                if f"{data_key}_count" in report_data:
+                    md.append(f"Total count of {data_key}: **{report_data[f'{data_key}_count']}**")
+                    md.append("")
+                else:
+                    md.append("*No data available for this section.*")
+                    md.append("")
+                continue
+
+            if data_key == "summary":
+                md.append("| Metric | Count |")
+                md.append("|---|---|")
+                for k, v in data.items():
+                    if isinstance(v, (int, float)):
+                        name_pretty = k.replace("_", " ").title()
+                        md.append(f"| {name_pretty} | {v} |")
+                md.append("")
+            elif data_key == "findings":
+                if not data:
+                    md.append("*No approved findings in this report.*")
+                    md.append("")
+                else:
+                    for f in data:
+                        fid = f.get("id", "N/A")
+                        ftitle = f.get("title", "Untitled")
+                        fconfidence = f.get("confidence", "N/A")
+                        ftype = f.get("type", "N/A")
+                        fhost = f.get("host", "N/A")
+                        facc = f.get("affected_account", "N/A")
+                        fts = f.get("event_timestamp") or f.get("timestamp", "N/A")
+
+                        md.append(f"### Finding {fid}: {ftitle}")
+                        md.append(f"- **Type**: {ftype}")
+                        md.append(f"- **Confidence**: {fconfidence}")
+                        md.append(f"- **Host**: {fhost}")
+                        md.append(f"- **Affected Account**: {facc}")
+                        md.append(f"- **Event Timestamp**: {fts}")
+                        if f.get("tags"):
+                            md.append(f"- **Tags**: {', '.join(f.get('tags'))}")
+                        md.append("")
+
+                        if f.get("observation"):
+                            md.append("#### Observation")
+                            md.append(str(f["observation"]))
+                            md.append("")
+                        if f.get("interpretation"):
+                            md.append("#### Interpretation")
+                            md.append(str(f["interpretation"]))
+                            md.append("")
+            elif data_key == "timeline":
+                if not data:
+                    md.append("*No timeline events included.*")
+                    md.append("")
+                else:
+                    md.append("| Timestamp | Host | Type | Description |")
+                    md.append("|---|---|---|---|")
+                    for t in data:
+                        ts = t.get("timestamp", "N/A")
+                        host = t.get("host", "N/A")
+                        ttype = t.get("type", "N/A")
+                        desc = t.get("description", "No description")
+                        md.append(f"| {ts} | {host} | {ttype} | {desc} |")
+                    md.append("")
+            elif data_key == "iocs":
+                if not data:
+                    md.append("*No indicators of compromise.*")
+                    md.append("")
+                else:
+                    md.append("| Value | Type | Category | Host | Source Findings |")
+                    md.append("|---|---|---|---|---|")
+                    rows: list[dict] = []
+                    if isinstance(data, dict):
+                        for ioc_type, items in data.items():
+                            if not isinstance(items, list):
+                                continue
+                            for it in items:
+                                if isinstance(it, dict):
+                                    rows.append({**it, "type": it.get("type") or ioc_type})
+                                elif isinstance(it, str):
+                                    rows.append({"value": it, "type": ioc_type})
+                    elif isinstance(data, list):
+                        for it in data:
+                            if isinstance(it, dict):
+                                rows.append(it)
+                            elif isinstance(it, str):
+                                rows.append({"value": it})
+                    for i in rows:
+                        val = i.get("value", "N/A")
+                        itype = i.get("type", "N/A")
+                        cat = i.get("category", "N/A")
+                        host = i.get("host", "N/A")
+                        src = ", ".join(i.get("source_findings", []))
+                        md.append(f"| {val} | {itype} | {cat} | {host} | {src} |")
+                    md.append("")
+            elif data_key == "mitre_mapping":
+                if not data:
+                    md.append("*No MITRE ATT&CK mapping.*")
+                    md.append("")
+                else:
+                    md.append("| Technique ID | Technique Name | Findings |")
+                    md.append("|---|---|---|")
+                    for tech_id, tech_info in data.items():
+                        tname = tech_info.get("name", "Unknown Technique")
+                        tfindings = ", ".join(tech_info.get("findings", []))
+                        md.append(f"| {tech_id} | {tname} | {tfindings} |")
+                    md.append("")
+            elif data_key == "evidence":
+                if not data:
+                    md.append("*No evidence files registered.*")
+                    md.append("")
+                else:
+                    md.append("| Path | Size (Bytes) | Hash | Status |")
+                    md.append("|---|---|---|---|")
+                    for ev in data:
+                        path = ev.get("path", "N/A")
+                        sz = ev.get("size_bytes", 0)
+                        hsh = ev.get("sha256", "N/A")
+                        stat = ev.get("status", "N/A")
+                        md.append(f"| {path} | {sz} | `{hsh}` | {stat} |")
+                    md.append("")
+            elif data_key == "todos":
+                if not data:
+                    md.append("*No open TODOs.*")
+                    md.append("")
+                else:
+                    for t in data:
+                        title = t.get("title", "Untitled")
+                        desc = t.get("description", "No description")
+                        prio = t.get("priority", "N/A")
+                        ex = t.get("examiner", "N/A")
+                        md.append(f"- **{title}** (Priority: {prio}, Assigned: {ex})")
+                        md.append(f"  {desc}")
+                    md.append("")
+            else:
+                md.append(f"```json\n{json.dumps(data, indent=2)}\n```")
+                md.append("")
+
+    return "\n".join(md)
+
+
+async def get_reports(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    reports_dir = case_dir / "reports"
+    if not reports_dir.exists():
+        return JSONResponse([])
+
+    reports = []
+    for p in sorted(reports_dir.iterdir()):
+        if p.is_file() and p.suffix == ".json":
+            try:
+                stem = p.stem
+                uuid.UUID(stem)
+                data = json.loads(p.read_text(encoding="utf-8"))
+                reports.append({
+                    "id": data.get("id"),
+                    "profile": data.get("profile"),
+                    "created_at": data.get("created_at"),
+                    "examiner": data.get("examiner"),
+                })
+            except (ValueError, json.JSONDecodeError, OSError):
+                continue
+    reports.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return JSONResponse(reports)
+
+
+async def generate_report_route(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+    case_id = case_dir.name
+
+    with _GENERATION_LOCK:
+        if case_id in _IN_FLIGHT_GENERATIONS:
+            return JSONResponse({"error": "Too many attempts. A report generation is already in progress for this case."}, status_code=429)
+        _IN_FLIGHT_GENERATIONS.add(case_id)
+
+    try:
+        try:
+            body = await request.json()
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+        profile = body.get("profile", "full")
+        from report_mcp.profiles import PROFILES
+        if profile not in PROFILES:
+            return JSONResponse({
+                "error": f"Unknown profile: {profile}. Valid profiles: {', '.join(sorted(PROFILES))}"
+            }, status_code=400)
+
+        finding_ids = body.get("finding_ids")
+        start_date = body.get("start_date", "")
+        end_date = body.get("end_date", "")
+
+        from report_mcp.server import _generate
+        result = _generate(
+            profile_name=profile,
+            case_dir=case_dir,
+            finding_ids=finding_ids,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        if isinstance(result, dict) and "error" in result:
+             logger.error("Report generation internal error: %s", result["error"])
+             return JSONResponse({"error": "Report generation failed. Check the case status."}, status_code=500)
+
+        report_id = str(uuid.uuid4())
+        result["id"] = report_id
+        result["examiner"] = examiner
+        result["created_at"] = datetime.now(timezone.utc).isoformat()
+
+        _PENDING_REPORTS[report_id] = result
+
+        response_payload = {
+            "id": report_id,
+            "profile": profile,
+            "report_data": result.get("report_data"),
+            "sections": result.get("sections"),
+            "guidance": result.get("writing_guidance"),
+            "evidence_chain": result.get("evidence_chain"),
+            "integrity_warning": result.get("integrity_warning"),
+            "evidence_chain_warning": result.get("evidence_chain_warning"),
+            "verification_alerts": result.get("verification_alerts"),
+        }
+        return JSONResponse(response_payload)
+
+    except Exception as e:
+        logger.exception("Failed to generate report for case %s: %s", case_id, e)
+        return JSONResponse({"error": "Report generation failed. Check the case status."}, status_code=500)
+    finally:
+        with _GENERATION_LOCK:
+            _IN_FLIGHT_GENERATIONS.discard(case_id)
+
+
+async def save_report_route(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    report_id = request.path_params["id"]
+    try:
+        uuid.UUID(report_id)
+    except ValueError:
+        return JSONResponse({"error": "Invalid report ID format. Must be a UUID."}, status_code=400)
+
+    if report_id not in _PENDING_REPORTS:
+        return JSONResponse({"error": "Report draft not found or expired"}, status_code=404)
+
+    report_draft = _PENDING_REPORTS[report_id]
+    reports_dir = case_dir / "reports"
+    reports_dir.mkdir(exist_ok=True)
+
+    from agentir_core.case_io import _protected_write
+    try:
+        report_path = reports_dir / f"{report_id}.json"
+        _protected_write(report_path, json.dumps(report_draft, indent=2, default=str))
+        logger.info("Saved report draft %s to case %s", report_id, case_dir.name)
+
+        return JSONResponse({
+            "status": "saved",
+            "id": report_id,
+            "filename": f"{report_id}.json",
+            "profile": report_draft.get("profile"),
+        })
+    except Exception as e:
+        logger.exception("Failed to save report %s: %s", report_id, e)
+        return JSONResponse({"error": "Failed to save report. Check console/logs."}, status_code=500)
+
+
+async def get_report_by_id(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    report_id = request.path_params["id"]
+    try:
+        uuid.UUID(report_id)
+    except ValueError:
+        return JSONResponse({"error": "Invalid report ID format. Must be a UUID."}, status_code=400)
+
+    reports_dir = case_dir / "reports"
+    report_path = reports_dir / f"{report_id}.json"
+
+    if not report_path.is_relative_to(reports_dir) or not report_path.exists():
+        if report_id in _PENDING_REPORTS:
+            return JSONResponse(_PENDING_REPORTS[report_id])
+        return JSONResponse({"error": f"Report {report_id} not found"}, status_code=404)
+
+    try:
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+        return JSONResponse(data)
+    except Exception as e:
+        logger.exception("Failed to load report %s: %s", report_id, e)
+        return JSONResponse({"error": "Failed to load report."}, status_code=500)
+
+
+async def download_report(request: Request) -> Response:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return Response("Authentication required", status_code=401)
+    if getattr(request.state, "role", None) != "examiner":
+        return Response("Examiner role required", status_code=403)
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return Response("No active case.", status_code=404)
+
+    report_id = request.path_params["id"]
+    try:
+        uuid.UUID(report_id)
+    except ValueError:
+        return Response("Invalid report ID format.", status_code=400)
+
+    reports_dir = case_dir / "reports"
+    report_path = reports_dir / f"{report_id}.json"
+
+    report_data = None
+    if report_path.is_relative_to(reports_dir) and report_path.exists():
+        try:
+            report_data = json.loads(report_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    if not report_data and report_id in _PENDING_REPORTS:
+        report_data = _PENDING_REPORTS[report_id]
+
+    if not report_data:
+        return Response("Report not found.", status_code=404)
+
+    try:
+        markdown_content = _serialize_to_markdown(report_data)
+        profile = report_data.get("profile", "report")
+        filename = f"report_{profile}_{report_id[:8]}.md"
+
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Type": "text/markdown; charset=utf-8",
+        }
+        return Response(markdown_content, headers=headers)
+    except Exception as e:
+        logger.exception("Failed to serialize/download report: %s", e)
+        return Response("Failed to generate markdown report.", status_code=500)
+
+
 def _dashboard_api_routes() -> list[Route]:
     """API routes shared by v1 and v2 dashboard apps."""
     return [
+        Route("/api/reports", get_reports, methods=["GET"]),
+        Route("/api/reports/generate", generate_report_route, methods=["POST"]),
+        Route("/api/reports/{id}/save", save_report_route, methods=["POST"]),
+        Route("/api/reports/{id}", get_report_by_id, methods=["GET"]),
+        Route("/api/reports/{id}/download", download_report, methods=["GET"]),
         Route("/api/findings", get_findings, methods=["GET"]),
         Route("/api/findings/{id}", get_finding_by_id, methods=["GET"]),
         Route("/api/timeline", get_timeline, methods=["GET"]),

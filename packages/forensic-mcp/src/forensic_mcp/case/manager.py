@@ -717,9 +717,10 @@ class CaseManager:
         # Allowlist: only accepted fields pass through from user input
         sanitized = {k: v for k, v in finding.items() if k in _ALLOWED_FINDING_FIELDS}
 
-        # Truncate string fields with explicit limits
+        # Truncate string fields with explicit limits.
+        # host is uppercased so aggregation by host doesn't split on casing.
         if sanitized.get("host"):
-            sanitized["host"] = str(sanitized["host"])[:200]
+            sanitized["host"] = str(sanitized["host"]).strip()[:200].upper()
         if sanitized.get("affected_account"):
             sanitized["affected_account"] = str(sanitized["affected_account"])[:200]
 
