@@ -3,22 +3,23 @@ import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 
 export function StatusBar() {
-  const { chainStatus, delta, lastSync, user, setCommitDrawerOpen } = useStore()
+  const { chainStatus, delta, lastSync, user, setCommitDrawerOpen, setActiveTab } = useStore()
   const stagedCount = delta.length
 
+  const isSealed = chainStatus && chainStatus.status !== 'unsealed' && chainStatus.manifest_version > 0
   const sealColor = !chainStatus
     ? 'var(--text-muted)'
-    : chainStatus.sealed && chainStatus.hmac_verified
+    : isSealed && !chainStatus.hmac_verify_needed
       ? 'var(--jade)'
-      : chainStatus.sealed
+      : isSealed
         ? 'var(--amber)'
         : 'var(--crimson)'
 
   const sealLabel = !chainStatus
     ? 'LOADING'
-    : chainStatus.sealed && chainStatus.hmac_verified
+    : isSealed && !chainStatus.hmac_verify_needed
       ? 'SEALED ✓'
-      : chainStatus.sealed
+      : isSealed
         ? 'SEALED · verify pending'
         : 'UNSEALED'
 
@@ -36,15 +37,22 @@ export function StatusBar() {
       }}
     >
       {/* Seal status */}
-      <span className="flex items-center gap-1.5 mr-3">
+      <button
+        onClick={() => setActiveTab('evidence')}
+        className="flex items-center gap-1.5 mr-3 px-1 py-0.5 rounded cursor-pointer transition-colors"
+        style={{ border: 'none', background: 'none' }}
+        title="Go to Evidence tab"
+        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-raised)'}
+        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+      >
         <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: sealColor }} />
         <span style={{ color: sealColor }}>{sealLabel}</span>
-      </span>
+      </button>
 
       <Divider />
 
       {/* HMAC write-block */}
-      {chainStatus?.write_blocked && (
+      {chainStatus?.write_protected && (
         <>
           <span style={{ color: 'var(--cyan)' }}>write-protected</span>
           <Divider />

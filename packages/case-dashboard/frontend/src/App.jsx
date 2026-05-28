@@ -19,6 +19,7 @@ import { IocsTab } from './components/iocs/IocsTab'
 import { TodosTab } from './components/todos/TodosTab'
 import { Toaster } from './components/common/Toaster'
 import { CommitDrawer } from './components/layout/CommitDrawer'
+import { CommandPalette } from './components/layout/CommandPalette'
 
 export default function App() {
   const { setUser, user } = useStore()
@@ -56,7 +57,20 @@ export default function App() {
 }
 
 function AuthedApp({ onLogout, activeTab }) {
+  const { setCommandPaletteOpen } = useStore()
   useDataPolling()
+
+  // Ctrl+K / Cmd+K → toggle command palette
+  useEffect(() => {
+    function onKeyDown(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setCommandPaletteOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [setCommandPaletteOpen])
 
   return (
     <div className="flex flex-col h-screen overflow-hidden" style={{ background: 'var(--bg-base)' }}>
@@ -78,6 +92,7 @@ function AuthedApp({ onLogout, activeTab }) {
       </div>
       <StatusBar />
       <CommitDrawer />
+      <CommandPalette />
       <Toaster />
     </div>
   )

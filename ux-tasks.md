@@ -20,11 +20,11 @@
 | Phase | Total | Done | Remaining |
 |---|---|---|---|
 | 0 — Reconciliation | 1 | 1 | 0 |
-| 1 — Missing features | 8 | 5 | 3 |
+| 1 — Bugs & features | 15 | 13 | 0 |
 | 2 — Security gate | 4 | 0 | 4 |
 | 3 — Polish | 7 | 0 | 7 |
 
-Update this table when ticking tasks.
+T-07 and T-08 are on hold (◐), not counted as remaining.
 
 ---
 
@@ -150,49 +150,150 @@ Then UI: Generate `executive` → see preview render → Save → confirm appear
 
 ---
 
-### ☐ T-06 — Command palette
+### ☑ T-06 — Command palette
 
 **Spec:** §4 Cross-cutting, §6 (planned CommandPalette.jsx)
 **Files:** `frontend/src/components/layout/CommandPalette.jsx` (new), `App.jsx` (Ctrl+K binding), `useStore.js` already has `commandPaletteOpen`
 **Acceptance:**
-- [ ] `Ctrl+K` (and `Cmd+K`) opens palette anywhere
-- [ ] Search across findings (id, title) + actions
-- [ ] Quick actions: approve current, reject current, open commit drawer, refresh, sign out
-- [ ] Esc closes; arrow keys navigate; Enter executes
-- [ ] Recently selected items at top
-- [ ] Use the `cmdk` package (already in `package.json`)
-**Verify:** Ctrl+K → type "F-001" → Enter → finding opens.
+- [x] `Ctrl+K` (and `Cmd+K`) opens palette anywhere
+- [x] Search across findings (id, title) + actions
+- [x] Quick actions: approve current, reject current, open commit drawer, refresh, sign out
+- [x] Esc closes; arrow keys navigate; Enter executes
+- [x] Recently selected items at top
+- [x] Use the `cmdk` package (already in `package.json`)
+**Verify:** 20 frontend tests pass (`npm test`). Ctrl+K → "F-001" → Enter opens finding (manual). cmdk Command.Dialog provides native focus trap + keyboard nav.
+**Test files:** `frontend/src/test/CommandPalette.test.jsx` (20 tests: store, delta staging, keyboard shortcuts, security gate, recent items), `frontend/vitest.config.js`
 **Security gate:**
-- [ ] Focus trap inside palette (Spec §7)
-- [ ] No actions that require password are executable without going through their normal modal
+- [x] Focus trap inside palette — cmdk's Command.Dialog wraps @radix-ui/react-dialog which provides proper focus trapping
+- [x] No actions that require password are executable without going through their normal modal — approve/reject only stage deltas (no password needed); commit opens drawer (password required inside); sign out uses standard flow
 
 ---
 
-### ☐ T-07 — Audit trail panel (full surface)
-
-**Spec:** §4 Findings → "Audit trail panel" (currently ◐), §6 FindingsTab
-**Files:** `frontend/src/components/findings/FindingsTab.jsx`
-**Acceptance:**
-- [ ] `GET /api/audit/{finding_id}` called lazily when audit panel is opened
-- [ ] Panel renders chronological audit entries: timestamp, tool, command, output excerpt, examiner action, audit_id (monospace)
-- [ ] Visible from main detail view (not just Zone 2 — surface as a collapsible section above modifications)
-- [ ] Errors render as scrubbed message (Spec §7)
-**Verify:** Pick a finding with multiple audit entries → expand → all entries render → timestamps human-readable.
-**Security gate:** Error scrubbing for the audit fetch.
+### ◐ T-07 — Audit trail panel (full surface) — ON HOLD
+*On hold per user direction 2026-05-28. Defer to Phase 4. Existing audit panel inside Zone 2 is functional and sufficient for current workflow.*
 
 ---
 
-### ☐ T-08 — Review velocity sparkline
+### ◐ T-08 — Review velocity sparkline — ON HOLD
+*On hold per user direction 2026-05-28. Defer to Phase 4.*
 
-**Spec:** §4 Overview → "Review velocity sparkline" (currently ☐), §5 (animation budget — one-shot only)
-**Files:** `frontend/src/components/overview/ReviewSparkline.jsx` (new), `OverviewTab.jsx`
+---
+
+### ☑ B-01 — Case list not populating (BLOCKING)
+
+**Spec:** §3 Cases, §4 Header / Case Selector
+**Root cause:** `useDataPolling.js:30` — `setCases(cases.value)` stores the full API response object `{ cases: [...], cases_root, active_case_dir }` instead of extracting the array. `Header.jsx` calls `cases.map()` which silently fails on an object — dropdown renders empty.
+**Files:** `frontend/src/hooks/useDataPolling.js`, `frontend/src/components/layout/Header.jsx`
 **Acceptance:**
-- [ ] 24h bar chart of approval velocity, derived from `findings[].approved_at`
-- [ ] Inline SVG, no chart library (Recharts is already in deps but a 30-line SVG is simpler and matches the density aesthetic)
-- [ ] Tooltip on hover shows count + hour
-- [ ] No animation after first render
-**Verify:** Approve a finding → reload Overview → bar in the current hour ticks up by 1.
+- [x] `useDataPolling.js` extracts `.cases` from the response: `setCases(cases.value?.cases ?? [])`
+- [x] Header case dropdown shows all cases from `GET /api/cases`
+- [x] Active case is visually distinguished (green dot: `var(--jade)`) from inactive cases (grey dot: `var(--border-hard)`)
+- [x] Clicking a non-active case opens the password-protected activation modal (already exists)
+**Verify:** On SIFT VM: login → click case selector → see all cases listed → active one has green dot.
 **Security gate:** N/A.
+**Discovery:** `case_list_data()` confirmed via `.venv` to return `{ cases: [{ id, name, status, active }], cases_root, active_case_dir }`. Case items use `.id` (from `CASE.yaml` `case_id`), not `.case_id`. The `active` boolean is set by comparing `entry.name` against `AGENTIR_CASE_DIR` env var.
+
+---
+
+### ☑ B-02 — Case banner shows wrong identifier
+
+**Spec:** §4 Overview Tab, §6 `overview/OverviewTab.jsx`
+**Root cause:** `OverviewTab.jsx:53-54` accesses `activeCase.id` (does not exist — CASE.yaml uses `case_id`) and `activeCase.title` (shows the description "Intrusion and Ransomware"). The primary identifier should be the case_id (e.g. `test-rocba-2026`), with title/description expandable.
+**Files:** `frontend/src/components/overview/OverviewTab.jsx`
+**Acceptance:**
+- [x] Banner primary text is `activeCase.case_id` (the machine identifier), not undefined/description
+- [x] Banner is expandable (chevron toggle) to show CASE.yaml metadata: name, title, status, examiner, created
+- [x] Metadata section is compact — grid of label/value pairs
+- [x] Entire banner element is clickable to expand, not just the chevron
+- [x] Chevron sized proportionally to the ACTIVE badge (inline-flex, 22x20px)
+**Verify:** Overview → banner shows `rocba-drive-20260526-1417` → click anywhere on banner → metadata expands with name/title/status/examiner/created.
+**Security gate:** N/A.
+**Discovery:** `/api/case` returns raw CASE.yaml JSON with keys `case_id`, `name`, `title`, `status`, `examiner`, `created`, `created_at`. The `title` and `name` fields both contained "Intrusion and Ransomware" in the test case. Header's active-case display also affected — fixed to use `activeCase?.case_id || activeCase?.id`.
+
+---
+
+### ☑ B-03 — Evidence integrity: retire big Overview widget, use StatusBar indicator with click-to-navigate
+
+**Spec:** §4 Overview Tab, §4 Evidence Tab, §6 `layout/StatusBar.jsx`, §6 `overview/OverviewTab.jsx`
+**Root cause:** There were TWO evidence integrity surfaces. The big widget was redundant. The StatusBar checked fields that don't exist in the API response — `chainStatus.sealed` and `chainStatus.hmac_verified`. The actual API returns `status` ("ok"/"unsealed"), `manifest_version` (number, >0 = sealed), `hmac_verify_needed` (bool), `write_protected` (bool, not `write_blocked`). Because the code checked wrong field names, the seal dot always displayed UNSEALED/crimson.
+**Files:**
+- `frontend/src/components/layout/StatusBar.jsx` — add `setActiveTab`; make seal section a `<button>` with onClick → `setActiveTab('evidence')`; fix field names to `status`/`manifest_version`/`hmac_verify_needed`/`write_protected`
+- `frontend/src/components/overview/OverviewTab.jsx` — remove Evidence Integrity widget; remove `chainStatus`/`sealColor`/`sealLabel` from destructure
+**Acceptance:**
+- [x] StatusBar seal dot + label is clickable → navigates to Evidence tab
+- [x] Hover state on seal section: cursor pointer + background change to `var(--bg-raised)`
+- [x] The large "EVIDENCE INTEGRITY" widget in Overview middle row is completely removed
+- [x] Seal state uses correct API fields: `status !== 'unsealed'` + `manifest_version > 0` = sealed; `!hmac_verify_needed` = verified
+- [x] Write-protection field corrected: `write_protected` (not `write_blocked`)
+**Verify:** From any tab, click the seal dot in StatusBar → Evidence tab opens. If evidence is sealed and HMAC verified → jade "SEALED ✓". If sealed but unverified → amber "SEALED · verify pending". If unsealed → crimson "UNSEALED".
+**Security gate:** The seal indicator must never show a false SEALED state. If chainStatus is null → "LOADING". Uses `manifest_version > 0` as the authoritative seal check (not a separate `sealed` flag).
+
+---
+
+### ☑ B-04 — Recent activity feed not clickable, missing time filter
+
+**Spec:** §4 Overview Tab
+**Root cause:** `ActivityFeed` rendered entries as bare `<div>` — no onClick, no cursor, no navigation. Hardcoded `.slice(0, 8)` with no recency filter. Additional root cause: findings have `timestamp: null` — only `event_timestamp` (incident date from Nov 2020) and `modified_at` (system record time from May 2026) are populated. Using `event_timestamp` made all time filters empty because events are 5+ years old.
+**Files:** `frontend/src/components/overview/OverviewTab.jsx`
+**Acceptance:**
+- [x] Each activity row is clickable `<button>` → navigates to Findings tab and selects that finding
+- [x] Rows have hover state (background `var(--bg-raised)` on mouse enter)
+- [x] Time-range selector: Last hour · Last 24h · Last 7d · Last 30d · All (segmented buttons)
+- [x] Feed updates when filter changes (client-side filter, default: Last 24h)
+- [x] Timestamp fallback chain: `modified_at` → `timestamp` → `event_timestamp` (findings without any timestamp are filtered out except on "All")
+**Verify:** Time filters work correctly against `modified_at` (May 2026 dates). Click a row → Findings tab opens with that finding selected.
+**Security gate:** N/A.
+
+---
+
+### ☑ B-05 — Replace evidence integrity widget with Reports section in Overview
+
+**Spec:** §3 Reports, §4 Reports Tab, §6 `overview/OverviewTab.jsx`
+**Root cause:** The middle-row right cell was freed by B-03. The `/api/reports` endpoint already returned `[{ id, profile, created_at, examiner }]` — report data was available but not surfaced on Overview.
+**Files:**
+- `frontend/src/components/overview/OverviewTab.jsx` — replaced evidence integrity widget with Reports section showing: profile (capitalized via `textTransform`), truncated UUID, examiner, locale-formatted date
+- `frontend/src/store/useStore.js` — added `reports: []`, `setReports`
+- `frontend/src/hooks/useDataPolling.js` — added `getReports` import, `setReports` destructure, `getReports()` to `Promise.allSettled`, `reports` in destructuring array, `setReports(reports.value)` call
+**Acceptance:**
+- [x] Middle-row right cell shows "REPORTS" section header
+- [x] Lists clickable report items: capitalized profile, ID (8-char truncated UUID), examiner, date (toLocaleDateString)
+- [x] Clicking a report item navigates to the Reports tab
+- [x] Empty state: "No reports generated yet · Generate one from the Reports tab"
+- [x] Store updated: `reports: []`, `setReports`, polled via `getReports()` every 15s
+- [x] Polling updated: `getReports()` in `Promise.allSettled` batch
+**Verify:** Generate a report from Reports tab → return to Overview → see it listed with profile/examiner/date → click → navigates to Reports tab.
+**Security gate:** N/A.
+
+---
+
+### ☑ B-06 — MITRE ATT&CK tag cloud extracts from wrong field
+
+**Spec:** §3.1 Finding shape (`mitre_ids[]` vs `tags[]`), §4 Overview Tab
+**Root cause:** `OverviewTab.jsx:32-33` computed `mitreIds` from `f.tags` with regex `/^T\d{4}/`. MITRE technique IDs are stored in `f.mitre_ids` — a dedicated array field. The tag cloud was always empty because `tags` doesn't contain MITRE IDs.
+**Files:** `frontend/src/components/overview/OverviewTab.jsx`
+**Acceptance:**
+- [x] Changed source from `f.tags.filter(t => /^T\d{4}/.test(t))` to `f.mitre_ids ?? []` (no regex)
+- [x] Tag cloud renders MITRE technique badges (cyan, consistent with FindingsTab)
+- [x] Empty state: "No MITRE technique IDs found in findings." (updated from "finding tags")
+**Verify:** Findings with `mitre_ids: ["T1059", "T1003"]` → Overview MITRE cloud shows T1059 and T1003 badges.
+**Security gate:** N/A.
+
+---
+
+### ☑ B-07 — Case activation sends wrong field name (discovered during B-01 verification)
+
+**Spec:** §3 Cases, §4 Header / Case Selector
+**Root cause:** `Header.jsx:31` sent `{ id: activatingCase.id, ... }` but the backend (`routes.py:3223`) expects `{ case_id: ..., challenge_id: ..., response: ... }`. Field name mismatch caused every activation attempt to fail with "Missing case_id". Additionally, after a successful activation, no data was refreshed — old case data persisted until the next 15s poll.
+**Files:** `frontend/src/components/layout/Header.jsx`
+**Acceptance:**
+- [x] `postCaseActivate` payload uses `case_id` (not `id`)
+- [x] After successful activation: all case-scoped stores reset to empty (`findings`, `timeline`, `delta`, `chainStatus`, `iocs`, `todos`, `reports`, `summary`, `activeCase`) and `isLoading` set to `true`
+- [x] Activate button shows "Activating..." during request, disabled to prevent double-submit
+- [x] Cancel button clears password from state
+- [x] Click-outside-to-close on case dropdown (useRef + useEffect + mousedown listener)
+- [x] Dropdown rows show case name (truncated) + ACTIVE badge for active case
+**Verify:** Click non-active case → password modal → submit → "Activating..." → modal closes → skeleton shows → data refreshes for new case.
+**Security gate:** Password cleared from React state immediately after challenge-response computation (before network round-trip). Activation requires HMAC-SHA256 challenge-response — cannot be bypassed.
 
 ---
 
@@ -364,3 +465,6 @@ Pulled from Spec §8.1. After any tab change, run the rows that apply.
 | 2026-05-28 | 9 | T-03 | Created AccountsTab component (aggregates by affected_account, handles comma-separated/array/string), added findingsAccountFilter to store + FindingsTab banner, N/A badge for empty accounts |
 | 2026-05-28 | 10 | T-04 | Created IocsTab with table (value+copy, type, category, confidence, hosts, source findings, status), category/status/search filters, expandable MITRE+tags rows, clickable F-ID links, added iocs to store + polling |
 | 2026-05-28 | 11 | T-05 | Created TodosTab with priority shape-disambiguated badges, status/priority filters, default sort, NavRail badge wired to summary.todos.open, todos store + polling |
+| 2026-05-28 | 12 | T-06 | Created CommandPalette using cmdk: Ctrl+K opens, unified search across findings + actions, approve/reject/commit/refresh/sign-out quick actions, recent items, focus trap via Command.Dialog |
+| 2026-05-28 | 13 | B-01 through B-06 filed | T-07 and T-08 placed on hold. 6 bugs identified and filed: case list broken (B-01), wrong case banner (B-02), evidence integrity redundant/stale (B-03), activity feed unclickable (B-04), Reports section missing from Overview (B-05), MITRE tag cloud wrong field (B-06). All root causes traced to specific lines. |
+| 2026-05-28 | 14 | B-01 through B-07 resolved | All 7 bugs fixed. B-01: `.cases` extraction. B-02: `case_id` + expandable banner. B-03: StatusBar clickable, field names fixed (`status`/`hmac_verify_needed`/`write_protected`). B-04: `modified_at` fallback chain + clickable rows + time-range selector. B-05: Reports store + polling + Overview widget. B-06: `mitre_ids` source. B-07: `id`→`case_id` + post-activation data reset + click-outside dropdown. 60 new tests (SessionChanges.test.jsx) covering all bugs, activation flow, chain status logic, XSS prevention, bypass resistance, edge cases, response times. 80 total frontend tests passing. |

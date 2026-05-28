@@ -1,21 +1,39 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useStore } from '../../store/useStore'
 import { postLogout, postCaseActivate, getCaseActivateChallenge } from '../../api/endpoints'
 import { computeSimpleChallengeResponse } from '../../api/crypto'
 
 export function Header({ onLogout }) {
-  const { user, activeCase, cases, delta, setActiveCase } = useStore()
+  const {
+    user, activeCase, cases, delta, setActiveCase,
+    setFindings, setTimeline, setDelta, setChainStatus,
+    setIocs, setTodos, setReports, setSummary, setIsLoading,
+  } = useStore()
   const [caseMenuOpen, setCaseMenuOpen] = useState(false)
   const [activatingCase, setActivatingCase] = useState(null)
   const [activatePassword, setActivatePassword] = useState('')
   const [activateErr, setActivateErr] = useState('')
+  const [activating, setActivating] = useState(false)
+  const menuRef = useRef(null)
 
-  async function handleLogout() {
-    await postLogout().catch(() => {})
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setCaseMenuOpen(false)
+      }
+    }
+    if (caseMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [caseMenuOpen])
+
+  function handleLogout() {
+    postLogout().catch(() => {})
     onLogout()
   }
 
-  async function switchCase(c) {
+  function switchCase(c) {
     setCaseMenuOpen(false)
     if (c.active) return
     setActivatingCase(c)
@@ -24,19 +42,34 @@ export function Header({ onLogout }) {
   async function confirmActivate(e) {
     e.preventDefault()
     setActivateErr('')
+    setActivating(true)
     try {
       const challenge = await getCaseActivateChallenge()
       const response = await computeSimpleChallengeResponse(activatePassword, challenge)
       setActivatePassword('')
-      await postCaseActivate({ id: activatingCase.id, challenge_id: challenge.challenge_id, response })
+      await postCaseActivate({ case_id: activatingCase.id, challenge_id: challenge.challenge_id, response })
       setActivatingCase(null)
+      setActivating(false)
+      // Reset all case-scoped data; next poll will pick up the new case
+      setFindings([])
+      setTimeline([])
+      setDelta([])
+      setChainStatus(null)
+      setIocs([])
+      setTodos([])
+      setReports([])
+      setSummary(null)
+      setActiveCase(null)
+      setIsLoading(true)
     } catch (ex) {
       console.error('Activation failed:', ex)
+      setActivating(false)
       setActivateErr('Activation failed. Verify password and try again.')
     }
   }
 
   const agentPulse = delta.length > 0
+  const activeCaseId = activeCase?.case_id || activeCase?.id
 
   return (
     <>
@@ -50,7 +83,7 @@ export function Header({ onLogout }) {
         </div>
 
         {/* Case selector */}
-        <div className="relative">
+        <div className="relative" ref={menuRef}>
           <button
             onClick={() => setCaseMenuOpen(!caseMenuOpen)}
             className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-mono transition-colors"
@@ -59,7 +92,7 @@ export function Header({ onLogout }) {
             {activeCase ? (
               <>
                 <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: 'var(--jade)' }} />
-                <span>{activeCase.id}</span>
+                <span>{activeCaseId}</span>
               </>
             ) : (
               <span style={{ color: 'var(--text-muted)' }}>No case active</span>
@@ -68,15 +101,24 @@ export function Header({ onLogout }) {
           </button>
 
           {caseMenuOpen && (
-            <div className="absolute top-full left-0 mt-1 w-64 rounded shadow-lg z-40 overflow-hidden"
+            <div className="absolute top-full left-0 mt-1 w-72 rounded shadow-lg z-40 overflow-hidden"
               style={{ background: 'var(--bg-overlay)', border: '1px solid var(--border-soft)' }}>
               {cases.map((c) => (
                 <button key={c.id} onClick={() => switchCase(c)}
-                  className="w-full text-left px-3 py-2 text-xs font-mono flex items-center gap-2 hover:bg-bg-raised transition-colors"
+                  className="w-full text-left px-3 py-2 text-xs font-mono flex items-center gap-2 hover:bg-bg-raised transition-colors border-b border-border-faint last:border-b-0"
                   style={{ color: c.active ? 'var(--cyan)' : 'var(--text-primary)' }}>
-                  <span className="w-1.5 h-1.5 rounded-full inline-block"
+                  <span className="w-1.5 h-1.5 rounded-full inline-block shrink-0"
                     style={{ background: c.active ? 'var(--jade)' : 'var(--border-hard)' }} />
-                  {c.id}
+                  <span className="flex-1 truncate">{c.id}</span>
+                  {c.name && c.name !== c.id && (
+                    <span className="text-[10px] truncate max-w-[120px]" style={{ color: 'var(--text-muted)' }}>{c.name}</span>
+                  )}
+                  {c.active && (
+                    <span className="px-1 py-0.5 rounded text-[9px] font-sans shrink-0"
+                      style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}>
+                      ACTIVE
+                    </span>
+                  )}
                 </button>
               ))}
               {cases.length === 0 && (
@@ -136,11 +178,13 @@ export function Header({ onLogout }) {
                 autoFocus required />
             </label>
             <div className="flex gap-2">
-              <button type="submit" className="flex-1 py-1.5 rounded text-xs font-sans font-semibold"
+              <button type="submit" disabled={activating}
+                className="flex-1 py-1.5 rounded text-xs font-sans font-semibold disabled:opacity-60"
                 style={{ background: 'var(--cyan)', color: 'var(--bg-base)' }}>
-                Activate
+                {activating ? 'Activating...' : 'Activate'}
               </button>
-              <button type="button" onClick={() => setActivatingCase(null)}
+              <button type="button" disabled={activating}
+                onClick={() => { setActivatingCase(null); setActivatePassword('') }}
                 className="px-3 py-1.5 rounded text-xs font-sans"
                 style={{ border: '1px solid var(--border-soft)', color: 'var(--text-muted)' }}>
                 Cancel

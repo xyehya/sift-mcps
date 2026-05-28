@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useStore } from '../../store/useStore'
 import { Skeleton } from '../common/Skeleton'
 import { formatDistanceToNow } from 'date-fns'
@@ -10,7 +11,8 @@ const CONFIDENCE_COLORS = {
 }
 
 export function OverviewTab() {
-  const { activeCase, summary, findings, chainStatus, delta, isLoading, setActiveTab, setFindingsFilter, setCommitDrawerOpen } = useStore()
+  const { activeCase, summary, findings, reports, delta, isLoading, setActiveTab, setFindingsFilter, setCommitDrawerOpen, setSelectedFindingId } = useStore()
+  const [bannerExpanded, setBannerExpanded] = useState(false)
 
   // API shape: { findings: { total, by_status: {DRAFT, APPROVED, REJECTED} }, timeline, evidence, todos }
   const fstats    = summary?.findings ?? {}
@@ -28,41 +30,59 @@ export function OverviewTab() {
   const specCount = findings.filter((f) => conf(f) === 'SPECULATIVE').length
   const maxCount  = Math.max(highCount, medCount, lowCount, specCount, 1)
 
-  // MITRE IDs from tags
   const mitreIds = [...new Set(
-    findings.flatMap((f) => (f.tags ?? []).filter((t) => /^T\d{4}/.test(t)))
+    findings.flatMap((f) => f.mitre_ids ?? [])
   )]
-
-  const sealColor = !chainStatus
-    ? 'var(--text-muted)'
-    : chainStatus.sealed && chainStatus.hmac_verified
-      ? 'var(--jade)'
-      : chainStatus.sealed ? 'var(--amber)' : 'var(--crimson)'
-
-  const sealLabel = !chainStatus ? '—'
-    : chainStatus.sealed && chainStatus.hmac_verified ? 'SEALED ✓'
-    : chainStatus.sealed ? 'SEALED · unverified'
-    : 'UNSEALED'
 
   return (
     <div className="h-full overflow-y-auto p-5" style={{ background: 'var(--bg-base)' }}>
       {/* Case banner */}
       {activeCase && (
-        <div className="mb-4 px-4 py-2.5 rounded flex items-center gap-3 text-xs font-mono"
-          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}>
-          <span style={{ color: 'var(--text-muted)' }}>CASE</span>
-          <span style={{ color: 'var(--text-bright)' }}>{activeCase.id}</span>
-          {activeCase.title && (
-            <>
-              <span style={{ color: 'var(--border-hard)' }}>·</span>
-              <span style={{ color: 'var(--text-primary)' }}>{activeCase.title}</span>
-            </>
+        <button
+          onClick={() => setBannerExpanded(!bannerExpanded)}
+          className="mb-4 w-full text-left px-4 py-2.5 rounded text-xs font-mono cursor-pointer transition-colors"
+          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}
+        >
+          <div className="flex items-center gap-3">
+            <span style={{ color: 'var(--text-muted)' }}>CASE</span>
+            <span style={{ color: 'var(--text-bright)' }}>{activeCase.case_id}</span>
+            {activeCase.name && activeCase.name !== activeCase.case_id && (
+              <>
+                <span style={{ color: 'var(--border-hard)' }}>·</span>
+                <span style={{ color: 'var(--text-primary)' }}>{activeCase.name}</span>
+              </>
+            )}
+            <span
+              className="ml-auto inline-flex items-center justify-center transition-transform"
+              style={{
+                color: 'var(--text-muted)', fontSize: '10px',
+                width: '22px', height: '20px',
+                transform: bannerExpanded ? 'rotate(180deg)' : undefined,
+              }}
+            >
+              ▾
+            </span>
+            <span className="px-1.5 py-0.5 rounded text-[10px]"
+              style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}>
+              ACTIVE
+            </span>
+          </div>
+          {bannerExpanded && (
+            <div className="mt-2 pt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5"
+              style={{ borderTop: '1px solid var(--border-faint)' }}>
+              <span style={{ color: 'var(--text-muted)' }}>name</span>
+              <span style={{ color: 'var(--text-primary)' }}>{activeCase.name ?? '—'}</span>
+              <span style={{ color: 'var(--text-muted)' }}>title</span>
+              <span style={{ color: 'var(--text-primary)' }}>{activeCase.title ?? '—'}</span>
+              <span style={{ color: 'var(--text-muted)' }}>status</span>
+              <span style={{ color: 'var(--text-primary)' }}>{activeCase.status ?? '—'}</span>
+              <span style={{ color: 'var(--text-muted)' }}>examiner</span>
+              <span style={{ color: 'var(--text-primary)' }}>{activeCase.examiner ?? '—'}</span>
+              <span style={{ color: 'var(--text-muted)' }}>created</span>
+              <span style={{ color: 'var(--text-primary)' }}>{activeCase.created ?? '—'}</span>
+            </div>
           )}
-          <span className="ml-auto px-1.5 py-0.5 rounded text-[10px]"
-            style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}>
-            ACTIVE
-          </span>
-        </div>
+        </button>
       )}
 
       {/* KPI row */}
@@ -111,26 +131,37 @@ export function OverviewTab() {
           </div>
         </div>
 
-        {/* Evidence integrity */}
+        {/* Reports */}
         <div className="p-4 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}>
-          <SectionHeader>EVIDENCE INTEGRITY</SectionHeader>
-          {chainStatus ? (
-            <div className="mt-3 space-y-2">
-              <div className="flex items-center gap-2 text-xs font-mono">
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ background: sealColor }} />
-                <span style={{ color: sealColor }}>{sealLabel}</span>
-              </div>
-              {chainStatus.write_blocked && (
-                <div className="text-xs font-mono" style={{ color: 'var(--cyan)' }}>Write-protected</div>
-              )}
-              {chainStatus.total_entries != null && (
-                <div className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-                  {chainStatus.total_entries} evidence entries
-                </div>
-              )}
+          <SectionHeader>REPORTS</SectionHeader>
+          {reports.length > 0 ? (
+            <div className="mt-3 space-y-1.5">
+              {reports.slice(0, 5).map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => setActiveTab('reports')}
+                  className="w-full text-left flex items-center gap-3 text-xs font-mono px-1 py-1 rounded cursor-pointer transition-colors"
+                  style={{ background: 'none', border: 'none' }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-raised)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                >
+                  <span style={{ color: 'var(--text-primary)', textTransform: 'capitalize' }}>{r.profile}</span>
+                  <span className="font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    {(r.id ?? '').slice(0, 8)}
+                  </span>
+                  {r.examiner && (
+                    <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{r.examiner}</span>
+                  )}
+                  <span className="ml-auto text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>
+                    {r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}
+                  </span>
+                </button>
+              ))}
             </div>
           ) : (
-            <div className="mt-3"><Skeleton style={{ width: '70%' }} /></div>
+            <p className="mt-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+              No reports generated yet · Generate one from the Reports tab
+            </p>
           )}
         </div>
       </div>
@@ -140,7 +171,7 @@ export function OverviewTab() {
         {/* Activity feed */}
         <div className="p-4 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}>
           <SectionHeader>RECENT ACTIVITY</SectionHeader>
-          <ActivityFeed findings={findings} delta={delta} />
+          <ActivityFeed findings={findings} delta={delta} setActiveTab={setActiveTab} setSelectedFindingId={setSelectedFindingId} />
         </div>
 
         {/* MITRE ATT&CK */}
@@ -157,7 +188,7 @@ export function OverviewTab() {
             </div>
           ) : (
             <p className="mt-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-              No MITRE technique IDs found in finding tags.
+              No MITRE technique IDs found in findings.
             </p>
           )}
         </div>
@@ -193,36 +224,85 @@ function SectionHeader({ children }) {
   )
 }
 
-function ActivityFeed({ findings, delta }) {
-  const recent = [...findings]
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+const TIME_RANGES = [
+  { label: 'Last hour', value: '1h', ms: 60 * 60 * 1000 },
+  { label: 'Last 24h', value: '24h', ms: 24 * 60 * 60 * 1000 },
+  { label: 'Last 7d', value: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
+  { label: 'Last 30d', value: '30d', ms: 30 * 24 * 60 * 60 * 1000 },
+  { label: 'All', value: 'all', ms: Infinity },
+]
+
+function ActivityFeed({ findings, delta, setActiveTab, setSelectedFindingId }) {
+  const [timeRange, setTimeRange] = useState('24h')
+
+  const cutoff = TIME_RANGES.find((t) => t.value === timeRange)?.ms ?? Infinity
+
+  const filtered = [...findings]
+    .filter((f) => {
+      if (cutoff === Infinity) return true
+      const ts = f.modified_at || f.timestamp || f.event_timestamp
+      if (!ts) return false
+      return Date.now() - new Date(ts).getTime() < cutoff
+    })
+    .sort((a, b) => new Date(b.modified_at || b.timestamp || b.event_timestamp) - new Date(a.modified_at || a.timestamp || a.event_timestamp))
     .slice(0, 8)
 
-  if (recent.length === 0) {
-    return <p className="mt-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>No findings yet.</p>
+  function handleClick(f) {
+    setSelectedFindingId(f.id)
+    setActiveTab('findings')
   }
 
   return (
-    <div className="mt-3 space-y-1.5">
-      {recent.map((f) => {
-        const color = CONFIDENCE_COLORS[f.confidence] ?? 'var(--text-muted)'
-        const staged = delta.find((d) => d.id === f.id)
-        return (
-          <div key={f.id} className="flex items-center gap-2 text-xs">
-            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
-            <span className="font-mono" style={{ color: 'var(--text-muted)', width: 44, shrink: 0 }}>{f.id}</span>
-            <span className="flex-1 truncate" style={{ color: 'var(--text-primary)' }}>{f.title}</span>
-            {staged && (
-              <span className="font-mono text-[10px]" style={{ color: 'var(--amber)' }}>staged</span>
-            )}
-            {f.timestamp && (
-              <span className="font-mono text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>
-                {formatDistanceToNow(new Date(f.timestamp), { addSuffix: true })}
-              </span>
-            )}
-          </div>
-        )
-      })}
-    </div>
+    <>
+      <div className="mt-3 mb-2 flex gap-1">
+        {TIME_RANGES.map((t) => (
+          <button
+            key={t.value}
+            onClick={() => setTimeRange(t.value)}
+            className="px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors"
+            style={{
+              background: timeRange === t.value ? 'var(--cyan-dim)' : 'var(--bg-raised)',
+              color: timeRange === t.value ? 'var(--cyan)' : 'var(--text-muted)',
+              border: `1px solid ${timeRange === t.value ? 'var(--border-soft)' : 'var(--border-faint)'}`,
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>No findings in this period.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {filtered.map((f) => {
+            const color = CONFIDENCE_COLORS[f.confidence] ?? 'var(--text-muted)'
+            const staged = delta.find((d) => d.id === f.id)
+            return (
+              <button
+                key={f.id}
+                onClick={() => handleClick(f)}
+                className="w-full text-left flex items-center gap-2 text-xs px-1 py-0.5 rounded cursor-pointer transition-colors"
+                style={{ background: 'none', border: 'none' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-raised)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+              >
+                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
+                <span className="font-mono" style={{ color: 'var(--text-muted)', width: 44, flexShrink: 0 }}>{f.id}</span>
+                <span className="flex-1 truncate" style={{ color: 'var(--text-primary)' }}>{f.title}</span>
+                {staged && (
+                  <span className="font-mono text-[10px]" style={{ color: 'var(--amber)' }}>staged</span>
+                )}
+                {f.timestamp && (
+                  <span className="font-mono text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>
+                    {formatDistanceToNow(new Date(f.timestamp), { addSuffix: true })}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </>
   )
 }

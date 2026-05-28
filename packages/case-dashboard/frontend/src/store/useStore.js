@@ -45,6 +45,10 @@ export const useStore = create((set, get) => ({
   todos: [],
   setTodos: (todos) => set({ todos }),
 
+  // Reports
+  reports: [],
+  setReports: (reports) => set({ reports }),
+
   // Timeline
   timeline: [],
   setTimeline: (timeline) => set({ timeline }),

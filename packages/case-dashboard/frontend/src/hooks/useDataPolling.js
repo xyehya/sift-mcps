@@ -3,18 +3,18 @@ import { useStore } from '../store/useStore'
 import {
   getCase, getCases, getSummary,
   getFindings, getDelta, getTimeline,
-  getChainStatus, getIocs, getTodos,
+  getChainStatus, getIocs, getTodos, getReports,
 } from '../api/endpoints'
 
 export function useDataPolling() {
   const {
     setActiveCase, setCases, setSummary,
     setFindings, setDelta, setTimeline,
-    setChainStatus, setLastSync, setIsLoading, setIocs, setTodos,
+    setChainStatus, setLastSync, setIsLoading, setIocs, setTodos, setReports,
   } = useStore()
 
   usePolling(async () => {
-    const [cas, cases, summary, findings, delta, timeline, chain, iocs, todos] = await Promise.allSettled([
+    const [cas, cases, summary, findings, delta, timeline, chain, iocs, todos, reports] = await Promise.allSettled([
       getCase(),
       getCases(),
       getSummary(),
@@ -24,10 +24,11 @@ export function useDataPolling() {
       getChainStatus(),
       getIocs(),
       getTodos(),
+      getReports(),
     ])
 
     if (cas.status === 'fulfilled' && cas.value) setActiveCase(cas.value)
-    if (cases.status === 'fulfilled' && cases.value) setCases(cases.value)
+    if (cases.status === 'fulfilled' && cases.value) setCases(cases.value?.cases ?? [])
     if (summary.status === 'fulfilled' && summary.value) setSummary(summary.value)
     if (findings.status === 'fulfilled' && findings.value) setFindings(findings.value)
     if (delta.status === 'fulfilled' && delta.value) setDelta(delta.value.items ?? [])
@@ -35,6 +36,7 @@ export function useDataPolling() {
     if (chain.status === 'fulfilled' && chain.value) setChainStatus(chain.value)
     if (iocs.status === 'fulfilled' && iocs.value) setIocs(iocs.value)
     if (todos.status === 'fulfilled' && todos.value) setTodos(todos.value)
+    if (reports.status === 'fulfilled' && reports.value) setReports(reports.value)
 
     setLastSync(Date.now())
     setIsLoading(false)

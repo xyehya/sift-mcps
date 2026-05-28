@@ -1,6 +1,6 @@
 # Examiner Portal — Architecture & Data Flow
 
-> **Purpose:** Single source of truth for how the portal works. Read this before adding a new tab, extending a store field, or changing how data flows between components. Updated as of session 11 (2026-05-28).
+> **Purpose:** Single source of truth for how the portal works. Read this before adding a new tab, extending a store field, or changing how data flows between components. Updated as of session 12 (2026-05-28).
 
 ---
 
@@ -59,6 +59,7 @@ App.jsx
     │   └── SettingsTab
     ├── StatusBar (seal dot, HMAC state, staged count, sync age)
     ├── CommitDrawer (slide-in, hold-to-commit)
+    ├── CommandPalette (Ctrl+K, cmdk-powered search + actions)
     └── Toaster (floating notifications)
 ```
 
@@ -73,7 +74,7 @@ App.jsx
 ```
 useDataPolling()          Zustand store            Components
 ─────────────────         ─────────────            ──────────
-Every 15 seconds:          ┌──────────┐            OverviewTab reads: summary, findings, chainStatus, delta
+Every 15 seconds:          ┌──────────┐            OverviewTab reads: summary, findings, reports, delta
   getCase() ──────────────→│activeCase│            FindingsTab reads: findings, delta, findingsFilter,
   getCases() ─────────────→│cases     │              findingsHostFilter, findingsAccountFilter
   getSummary() ───────────→│summary   │            TimelineTab reads: timeline, findings
@@ -83,14 +84,22 @@ Every 15 seconds:          ┌──────────┐            Overv
   getChainStatus() ───────→│chainStatus│           IocsTab reads: iocs
   getIocs() ──────────────→│iocs      │            SettingsTab reads: tokens (local fetch)
   getTodos() ─────────────→│todos     │            ReportsTab reads: reports (local fetch)
-                         └──────────┘            TodosTab reads: todos
+  getReports() ───────────→│reports   │            TodosTab reads: todos
+                         └──────────┘            StatusBar reads: chainStatus, delta, lastSync
 ```
 
 **Key behavior:**
-- All 9 API calls fire in parallel via `Promise.allSettled` — a single failed call does not block others.
+- All 10 API calls fire in parallel via `Promise.allSettled` — a single failed call does not block others.
 - `setIsLoading(false)` fires after the **first** poll cycle completes. All tabs show skeleton until this flips.
 - Each subsequent poll updates the store silently (no re-skeleton).
+- **Response shape extraction**: Some endpoints return wrapper objects that must be destructured before storing:
+  - `getCases()` returns `{ cases: [...], cases_root, active_case_dir }` → store needs `.cases` array (fixed B-01)
+  - `getDelta()` returns `{ items: [...], version, case_id }` → store needs `.items` array
+  - `getCase()` returns raw CASE.yaml as JSON (keys: `case_id`, `name`, `title`, `status`, `examiner`, `created`, `created_at`)
+  - Component code references `activeCase.case_id`, **not** `activeCase.id`
 - `setLastSync(Date.now())` updates the sync timestamp shown in the StatusBar.
+- **Chain status field names** (`/api/evidence/chain/status`): `status` ("ok"/"unsealed"), `manifest_version` (number, >0 = sealed), `hmac_verify_needed` (bool), `hmac_last_verified_at`, `hmac_last_verified_by`, `write_protected` (bool, not `write_blocked`). There is no `sealed` or `hmac_verified` field in the response.
+- **Finding timestamps**: `timestamp` is often `null`. Use fallback chain `modified_at` → `timestamp` → `event_timestamp`. `modified_at` is the system modification time and the most reliable recency indicator.
 
 ### 3.2 Write Path (Delta / Commit)
 
@@ -141,14 +150,18 @@ App mounts → getMe() → session check
   setUser: (user) => {},
 
   // Case
-  activeCase: null,               // CASE.yaml as JSON
+  activeCase: null,               // CASE.yaml as JSON (keys: case_id, name, title, status, examiner, created, created_at)
   setActiveCase: (c) => {},
-  cases: [],                      // list of all cases
+  cases: [],                      // array of case objects [{ id, name, status, active }]
   setCases: (cases) => {},
 
   // Summary (Overview KPIs)
   summary: null,                  // { findings: { total, by_status }, timeline, evidence, todos }
   setSummary: (summary) => {},
+
+  // Reports (polled every 15s — B-05 resolved)
+  reports: [],                    // [{ id, profile, created_at, examiner }] from /api/reports
+  setReports: (reports) => {},
 
   // Findings (primary data — drives 5 tabs)
   findings: [],                   // array of finding objects (spec §3.1)
@@ -204,8 +217,8 @@ App mounts → getMe() → session check
 | Component | Reads from store | Writes to store (via setters) |
 |---|---|---|
 | **App.jsx** | `user`, `activeTab` | `setUser` |
-| **useDataPolling** | (none — writes only) | `setActiveCase`, `setCases`, `setSummary`, `setFindings`, `setDelta`, `setTimeline`, `setChainStatus`, `setIocs`, `setTodos`, `setLastSync`, `setIsLoading` |
-| **OverviewTab** | `activeCase`, `summary`, `findings`, `chainStatus`, `delta`, `isLoading` | `setActiveTab`, `setFindingsFilter`, `setCommitDrawerOpen` |
+| **useDataPolling** | (none — writes only) | `setActiveCase`, `setCases`, `setSummary`, `setFindings`, `setDelta`, `setTimeline`, `setChainStatus`, `setIocs`, `setTodos`, `setReports`, `setLastSync`, `setIsLoading` |
+| **OverviewTab** | `activeCase`, `summary`, `findings`, `reports`, `delta`, `isLoading` | `setActiveTab`, `setFindingsFilter`, `setCommitDrawerOpen`, `setSelectedFindingId` |
 | **FindingsTab** | `findings`, `delta`, `selectedFindingId`, `timeline`, `isLoading`, `findingsFilter`, `findingsHostFilter`, `findingsAccountFilter` | `setDelta`, `setSelectedFindingId`, `setFindingsFilter`, `setFindingsHostFilter`, `setFindingsAccountFilter`, `addToast` |
 | **TimelineTab** | `timeline`, `findings`, `isLoading` | `setSelectedFindingId`, `setActiveTab` |
 | **EvidenceTab** | `chainStatus`, `delta`, `findings`, `isLoading` | `setChainStatus`, `setActiveTab`, `setSelectedFindingId`, `setFindingsFilter`, `addToast` |
@@ -213,11 +226,12 @@ App mounts → getMe() → session check
 | **AccountsTab** | `findings`, `isLoading` | `setActiveTab`, `setFindingsAccountFilter` |
 | **IocsTab** | `iocs`, `findings`, `isLoading` | `setActiveTab`, `setSelectedFindingId` |
 | **TodosTab** | `todos`, `summary`, `isLoading` | `setActiveTab`, `setSelectedFindingId` |
-| **ReportsTab** | `isLoading` | (local fetch — no store writes) |
+| **ReportsTab** | `reports`, `isLoading` | (local fetch for generate/save/download; list reads from store via polling) |
 | **SettingsTab** | `isLoading` | (local fetch — no store writes) |
 | **CommitDrawer** | `commitDrawerOpen`, `delta` | `setCommitDrawerOpen`, `setDelta`, `addToast` |
-| **StatusBar** | `chainStatus`, `delta`, `lastSync` | `setCommitDrawerOpen` |
-| **Header** | `user`, `activeCase`, `cases` | `setActiveCase`, `setCases` |
+| **CommandPalette** | `commandPaletteOpen`, `findings`, `selectedFindingId`, `delta` | `setCommandPaletteOpen`, `setSelectedFindingId`, `setActiveTab`, `setDelta`, `setCommitDrawerOpen`, `setUser`, `addToast` |
+| **StatusBar** | `chainStatus`, `delta`, `lastSync`, `user` | `setCommitDrawerOpen`, `setActiveTab` (seal dot → evidence tab) |
+| **Header** | `user`, `activeCase`, `cases`, `delta` | `setActiveCase`, `setCases`, `setFindings`, `setTimeline`, `setDelta`, `setChainStatus`, `setIocs`, `setTodos`, `setReports`, `setSummary`, `setIsLoading` (post-activation data reset) |
 | **NavRail** | `activeTab`, `findings`, `delta`, `summary` | `setActiveTab` |
 
 ---
@@ -230,7 +244,9 @@ This is the critical "edges" diagram — how components trigger navigation to ot
 OverviewTab
   ├── Click "APPROVED" KPI → setActiveTab('findings') + setFindingsFilter('approved')
   ├── Click "PENDING" KPI  → setActiveTab('findings') + setFindingsFilter('pending')
-  └── Click "STAGED" KPI   → setCommitDrawerOpen(true)
+  ├── Click "STAGED" KPI   → setCommitDrawerOpen(true)
+  ├── Click activity row   → setSelectedFindingId(f.id) + setActiveTab('findings')
+  └── Click report row     → setActiveTab('reports')
 
 HostsTab
   └── Click host row → setFindingsHostFilter(host) + setActiveTab('findings')
@@ -255,8 +271,12 @@ FindingsTab (internal)
   ├── host filter banner ✕ → setFindingsHostFilter(null)
   └── account filter banner ✕ → setFindingsAccountFilter(null)
 
+ReportsTab
+  └── Overview reports widget → setActiveTab('reports')
+
 StatusBar
-  └── Click "↑ COMMIT" → setCommitDrawerOpen(true)
+  ├── Click "↑ COMMIT" → setCommitDrawerOpen(true) (only when staged > 0)
+  └── Click seal dot → setActiveTab('evidence')
 ```
 
 **Pattern for adding a new cross-tab navigation:**
@@ -478,4 +498,4 @@ When navigating from Tab X to Findings:
 
 ---
 
-*Updated 2026-05-28, session 11. Covers state through T-05 completion.*
+*Updated 2026-05-28, session 14. Covers state through B-07 resolution. All 7 bugs fixed (B-01 through B-07). Reports polling active. Chain status uses correct API field names. Case activation fixed + post-activation refresh. ActivityFeed clickable with time-range filter. Frontend tests: `cd frontend && npm test` (vitest + jsdom, 80 tests: 20 CommandPalette + 60 SessionChanges). Phase 1 complete (T-07/T-08 on hold). Next: Phase 2 security gate (T-09 through T-12).*

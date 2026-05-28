@@ -369,7 +369,7 @@ Legend: ☑ done · ◐ partial · ☐ missing · ✕ explicitly dropped
 | 15s data polling with `Promise.allSettled` | ☑ | `hooks/useDataPolling` |
 | Toast system | ☑ | `common/Toaster` |
 | Skeleton loading states with `isLoading` flag | ☑ | `common/Skeleton`, `store/useStore` |
-| Command palette (Ctrl+K) | ☐ | `layout/CommandPalette.jsx` (new) |
+| Command palette (Ctrl+K) | ☑ | `layout/CommandPalette.jsx` |
 | Empty states with icon + action hint | ☐ | per-tab |
 | Error states with retry | ☐ | per-tab |
 | Theme toggle (dark/light) | ✕ deferred | rationale: single-operator forensic tool |
@@ -519,8 +519,13 @@ For each component: purpose, what it shows, what's editable, what actions exist.
 **Sort:** Priority desc (high→medium→low), then created_at asc.
 **Interactions:** Click related finding link → switch to Findings tab + select that finding.
 
+### `layout/CommandPalette.jsx` (new)
+**Purpose:** Keyboard-driven command palette for rapid navigation and actions.
+**Shows:** Search input, recently selected findings group, Findings group (id + title), Actions group (approve current, reject current, open commit drawer, refresh, sign out). Footer with keyboard hints.
+**Keyboard:** Ctrl+K / Cmd+K opens; Esc closes; ↑↓ navigate; Enter selects. Built on `cmdk` (Command.Dialog) which provides native focus trap via @radix-ui/react-dialog.
+**Security:** Approve/reject only stage deltas (no password); commit opens the normal drawer (password required there); sign out uses standard logout flow. No password action bypasses its normal modal.
+
 ### Planned components (live in `ux-tasks.md`)
-- `layout/CommandPalette.jsx`
 
 ---
 
