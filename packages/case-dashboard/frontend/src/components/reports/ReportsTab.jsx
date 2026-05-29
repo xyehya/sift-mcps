@@ -55,7 +55,17 @@ export function ReportsTab() {
     setReportsLoading(true)
     try {
       const list = await getReports()
-      setReports(list || [])
+      const sortedChronological = [...(list || [])].reverse()
+      const profileCounts = {}
+      const mappedList = sortedChronological.map(r => {
+        profileCounts[r.profile] = (profileCounts[r.profile] || 0) + 1
+        return {
+          ...r,
+          version: `v${profileCounts[r.profile]}`
+        }
+      })
+      mappedList.reverse()
+      setReports(mappedList || [])
     } catch (err) {
       addToast('Failed to load reports: ' + (err.message || err), 'error')
     } finally {
@@ -155,6 +165,21 @@ export function ReportsTab() {
     if (!isoStr) return ''
     try {
       return new Date(isoStr).toLocaleString()
+    } catch (e) {
+      return isoStr
+    }
+  }
+
+  const formatReportDate = (isoStr) => {
+    if (!isoStr) return ''
+    try {
+      const d = new Date(isoStr)
+      const month = d.getMonth() + 1
+      const day = d.getDate()
+      const year = d.getFullYear()
+      const hours = String(d.getHours()).padStart(2, '0')
+      const minutes = String(d.getMinutes()).padStart(2, '0')
+      return `${month}/${day}/${year} ${hours}:${minutes}`
     } catch (e) {
       return isoStr
     }
@@ -370,7 +395,7 @@ export function ReportsTab() {
           <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-text-muted">Generate Report</h2>
           
           <div className="flex flex-col gap-1 relative group">
-            <label className="text-[11px] font-sans font-medium text-text-muted">Profile Profile</label>
+            <label className="text-[11px] font-sans font-medium text-text-muted">Report Profile</label>
             <select
               value={activeProfile}
               onChange={(e) => setActiveProfile(e.target.value)}
@@ -481,7 +506,9 @@ export function ReportsTab() {
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-text-primary">{PROFILES[r.profile]?.label || r.profile}</span>
+                    <span className="text-xs font-bold text-text-primary">
+                      {PROFILES[r.profile]?.label || r.profile} — {r.version || 'v1'} · {formatReportDate(r.created_at)}
+                    </span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
@@ -496,7 +523,7 @@ export function ReportsTab() {
                     </button>
                   </div>
                   <div className="flex items-center justify-between text-[10px] text-text-muted font-mono mt-1">
-                    <span>{formatDate(r.created_at).split(',')[0]}</span>
+                    <span title={r.id}>ID: {r.id.slice(0, 8)}...</span>
                     <span>{r.examiner}</span>
                   </div>
                 </div>
@@ -530,8 +557,8 @@ export function ReportsTab() {
                 }`}>
                   {draftReport ? 'Draft Briefing' : 'Saved Report'}
                 </span>
-                <span className="text-xs font-mono text-text-muted">
-                  ID: <span className="text-text-primary">{currentReport.id}</span>
+                <span className="text-xs font-mono text-text-muted cursor-help" title={currentReport.id}>
+                  ID: <span className="text-text-primary">{currentReport.id.slice(0, 8)}...</span>
                 </span>
               </div>
 
@@ -619,7 +646,7 @@ export function ReportsTab() {
                           <span className="text-text-primary font-bold">{currentReport.report_data?.metadata?.case_id || 'N/A'}</span>
                         </div>
                         <div>
-                          <span className="text-text-muted">Profile Profile:</span>{' '}
+                          <span className="text-text-muted">Report Profile:</span>{' '}
                           <span className="text-text-primary font-bold">{(currentReport.profile || 'full').toUpperCase()}</span>
                         </div>
                         <div>

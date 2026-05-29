@@ -377,11 +377,12 @@ export function EvidenceTab() {
                   <div className="text-[11px] opacity-80 mb-2">
                     Evidence directory is NOT write-protected (mounted read-write). Forensic best practice requires mounting evidence read-only.
                   </div>
-                  {chainStatus.write_block_warning && (
-                    <div className="text-[10px] font-mono opacity-60">
-                      {chainStatus.write_block_warning}
-                    </div>
-                  )}
+                  <div className="mt-3">
+                    <p className="text-[10px] uppercase font-sans font-semibold text-text-muted mb-1">Recommended Mount Command:</p>
+                    <pre className="p-2 rounded bg-bg-void border border-border-faint text-text-bright font-mono text-[10px] select-all">
+                      mount -o ro,noatime /dev/sdX /mnt/evidence
+                    </pre>
+                  </div>
                 </div>
               )
             ) : (
@@ -404,7 +405,12 @@ export function EvidenceTab() {
                     <div className="bg-[rgba(0,255,148,0.04)] border border-[rgba(0,255,148,0.15)] text-[var(--jade)] p-3 rounded text-xs flex justify-between items-start gap-2">
                       <div>
                         <div className="font-semibold flex items-center gap-1.5 mb-1">
-                          <span>⛓</span> On-chain Anchored
+                          <span className="inline-flex items-center gap-1.5 font-semibold">
+                            <svg className="h-3.5 w-3.5 text-current" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+                            </svg>
+                            On-chain Anchored
+                          </span>
                         </div>
                         <div className="text-[11px] opacity-80 font-mono">
                           Manifest v{a.manifest_version} anchored on Solana ({a.cluster || 'mainnet'}) at {formatTime(a.timestamp)}
@@ -422,7 +428,12 @@ export function EvidenceTab() {
                     <div className="bg-[rgba(255,179,71,0.06)] border border-[rgba(255,179,71,0.2)] text-[var(--amber)] p-3 rounded text-xs flex justify-between items-start gap-2">
                       <div>
                         <div className="font-semibold flex items-center gap-1.5 mb-1">
-                          <span>⏳</span> Anchor Pending
+                          <span className="inline-flex items-center gap-1.5 font-semibold">
+                            <svg className="h-3.5 w-3.5 text-current animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            Anchor Pending
+                          </span>
                         </div>
                         <div className="text-[11px] opacity-80 font-mono">
                           TX submitted, awaiting confirmation.
@@ -440,7 +451,12 @@ export function EvidenceTab() {
                     <div className="bg-[rgba(255,179,71,0.03)] border border-[rgba(255,179,71,0.15)] text-[var(--amber)] p-3 rounded text-xs flex justify-between items-center gap-4">
                       <div>
                         <div className="font-semibold flex items-center gap-1.5 mb-1">
-                          <span>⛓</span> Unanchored
+                          <span className="inline-flex items-center gap-1.5 font-semibold">
+                            <svg className="h-3.5 w-3.5 text-current" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+                            </svg>
+                            Unanchored
+                          </span>
                         </div>
                         <div className="text-[11px] opacity-80">
                           Manifest v{a.manifest_version} not yet anchored on Solana.
@@ -454,7 +470,12 @@ export function EvidenceTab() {
                 } else {
                   return (
                     <div className="bg-transparent border border-[var(--border-soft)] text-[var(--text-muted)] p-3 rounded text-xs">
-                      <span>⛓ Solana anchoring not configured. Set <code className="font-mono text-[var(--text-primary)]">AGENTIR_SOLANA_KEYPAIR</code> in the gateway environment to enable on-chain timestamping.</span>
+                      <span className="inline-flex items-start gap-1.5">
+                        <svg className="h-3.5 w-3.5 text-current shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+                        </svg>
+                        <span>Solana anchoring not configured. Set <code className="font-mono text-[var(--text-primary)]">AGENTIR_SOLANA_KEYPAIR</code> in the gateway environment to enable on-chain timestamping.</span>
+                      </span>
                     </div>
                   )
                 }
@@ -627,8 +648,19 @@ export function EvidenceTab() {
         {evidenceLoading ? (
           <SkeletonBlock rows={5} gap={8} />
         ) : evidence.length === 0 ? (
-          <div className="text-center py-8 border rounded" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
-            No evidence registered.
+          <div className="flex flex-col items-center justify-center p-8 text-center border rounded-lg bg-bg-surface py-12" style={{ borderColor: 'var(--border-soft)' }}>
+            <svg className="h-12 w-12 text-text-muted mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+            </svg>
+            <p className="text-sm font-semibold text-text-primary">No evidence registered.</p>
+            <p className="text-xs text-text-muted mt-1 max-w-xs mb-4">No forensic evidence files are currently tracked in this case manifest.</p>
+            <button
+              onClick={handleRescan}
+              className="px-3 py-1.5 rounded text-xs font-sans font-semibold transition-colors cursor-pointer bg-cyan text-bg-base hover:bg-opacity-95"
+              style={{ backgroundColor: 'var(--cyan)' }}
+            >
+              Rescan Directory
+            </button>
           </div>
         ) : (
           <div className="overflow-x-auto border rounded" style={{ borderColor: 'var(--border-soft)', background: 'var(--bg-surface)' }}>
