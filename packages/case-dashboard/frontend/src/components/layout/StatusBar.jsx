@@ -72,13 +72,7 @@ export function StatusBar() {
       {/* Sync time */}
       <span>{syncLabel}</span>
 
-      {/* Examiner */}
-      {user && (
-        <>
-          <Divider />
-          <span style={{ color: 'var(--text-muted)' }}>{user.examiner}</span>
-        </>
-      )}
+
 
       <div className="flex-1" />
 

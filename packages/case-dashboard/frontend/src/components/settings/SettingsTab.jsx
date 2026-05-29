@@ -175,13 +175,22 @@ export function SettingsTab() {
                     <td colSpan="4" className="py-8 text-center text-text-muted font-mono">No active agent tokens.</td>
                   </tr>
                 ) : (
-                  tokens.map((t) => (
-                    <tr key={t.token_id} className="border-b" style={{ borderColor: 'var(--border-faint)' }}>
-                      <td className="py-3 font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>{t.agent_id}</td>
-                      <td className="py-3 animate-fade-in" style={{ color: 'var(--text-primary)' }}>{t.label}</td>
-                      <td className="py-3 font-mono text-text-muted text-[11px]">
-                        {t.expires_at ? new Date(t.expires_at).toLocaleString() : 'Never'}
-                      </td>
+                  tokens.map((t) => {
+                    const isDuplicate = tokens.filter(x => x.agent_id === t.agent_id && x.label === t.label).length > 1;
+                    return (
+                      <tr key={t.token_id} className="border-b" style={{ borderColor: 'var(--border-faint)' }}>
+                        <td className="py-3 font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>{t.agent_id}</td>
+                        <td className="py-3 animate-fade-in" style={{ color: 'var(--text-primary)' }}>
+                          {t.label}
+                          {isDuplicate && (
+                            <span className="text-[10px] text-text-muted ml-1.5 font-mono">
+                              ({t.created_at ? new Date(t.created_at).toLocaleString() : t.token_id.slice(0, 8)})
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 font-mono text-text-muted text-[11px]">
+                          {t.expires_at ? new Date(t.expires_at).toLocaleString() : 'Never'}
+                        </td>
                       <td className="py-3 text-right space-x-1.5">
                         <button onClick={() => handleRotate(t.token_id)} className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
                           style={{ background: 'var(--amber-dim)', color: 'var(--amber)', borderColor: 'var(--amber)' }}>
@@ -193,7 +202,8 @@ export function SettingsTab() {
                         </button>
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>

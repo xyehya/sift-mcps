@@ -2,12 +2,14 @@ import { useState, useRef, useEffect } from 'react'
 import { useStore } from '../../store/useStore'
 import { postLogout, postCaseActivate, getCaseActivateChallenge } from '../../api/endpoints'
 import { computeSimpleChallengeResponse } from '../../api/crypto'
+import { Icon } from '../common/Icon'
 
 export function Header({ onLogout }) {
   const {
     user, activeCase, cases, delta, setActiveCase,
     setFindings, setTimeline, setDelta, setChainStatus,
     setIocs, setTodos, setReports, setSummary, setIsLoading,
+    chainStatus,
   } = useStore()
   const [caseMenuOpen, setCaseMenuOpen] = useState(false)
   const [activatingCase, setActivatingCase] = useState(null)
@@ -71,6 +73,24 @@ export function Header({ onLogout }) {
   const agentPulse = delta.length > 0
   const activeCaseId = activeCase?.case_id || activeCase?.id
 
+  const isError = chainStatus?.status === 'violation'
+  const isProcessing = agentPulse
+  const isIdle = !isProcessing && !isError
+
+  let agentStatusLabel = 'idle'
+  let agentStatusColor = 'var(--text-ghost)'
+  let agentStatusTooltip = 'Agent status: idle — no analysis running'
+
+  if (isError) {
+    agentStatusLabel = 'error'
+    agentStatusColor = 'var(--status-rejected)'
+    agentStatusTooltip = 'Agent status: error — integrity violation'
+  } else if (isProcessing) {
+    agentStatusLabel = 'processing'
+    agentStatusColor = 'var(--status-pending)'
+    agentStatusTooltip = 'Agent status: processing'
+  }
+
   return (
     <>
       <header className="flex items-center h-[52px] px-4 shrink-0 border-b border-border-faint bg-bg-surface z-30"
@@ -86,18 +106,17 @@ export function Header({ onLogout }) {
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setCaseMenuOpen(!caseMenuOpen)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-mono transition-colors"
-            style={{ background: 'var(--bg-raised)', color: 'var(--text-primary)', border: '1px solid var(--border-soft)' }}
+            className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-mono transition-colors bg-bg-raised hover:bg-bg-overlay border border-border-soft cursor-pointer text-text-primary"
           >
             {activeCase ? (
               <>
-                <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: 'var(--jade)' }} />
+                <span className="w-1.5 h-1.5 rounded-full inline-block shrink-0" style={{ background: 'var(--jade)' }} />
                 <span>{activeCaseId}</span>
               </>
             ) : (
-              <span style={{ color: 'var(--text-muted)' }}>No case active</span>
+              <span className="text-text-muted">No case active</span>
             )}
-            <span style={{ color: 'var(--text-muted)' }}>▾</span>
+            <Icon name="chevron-down" className="w-3.5 h-3.5 text-text-muted shrink-0" />
           </button>
 
           {caseMenuOpen && (
@@ -130,19 +149,19 @@ export function Header({ onLogout }) {
 
         <div className="flex-1" />
 
-        {/* Agent pulse */}
+        {/* Agent status */}
         <div className="flex items-center gap-1.5 mr-4 text-xs font-sans"
-          style={{ color: agentPulse ? 'var(--jade)' : 'var(--text-muted)' }}>
-          <span className={agentPulse ? 'pulse' : ''} style={{
+          title={agentStatusTooltip}
+          style={{ color: 'var(--text-muted)', cursor: 'help' }}>
+          <span className={isProcessing ? 'pulse' : ''} style={{
             width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
-            background: agentPulse ? 'var(--jade)' : 'var(--text-ghost)',
+            background: agentStatusColor,
           }} />
-          <span>{agentPulse ? 'activity' : 'idle'}</span>
+          <span>{agentStatusLabel}</span>
         </div>
 
         {/* User */}
         <div className="flex items-center gap-2 text-xs font-sans" style={{ color: 'var(--text-muted)' }}>
-          <span style={{ color: 'var(--text-primary)' }}>{user?.examiner ?? '—'}</span>
           {user?.role && (
             <span className="px-1.5 py-0.5 rounded font-mono text-[10px]"
               style={{ background: 'var(--bg-raised)', color: 'var(--text-muted)', border: '1px solid var(--border-faint)' }}>

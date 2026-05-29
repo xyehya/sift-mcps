@@ -41,6 +41,22 @@
   --dur-fast:     100ms;
   --dur-normal:   200ms;
   --dur-slow:     350ms;
+
+  /* Status Colors */
+  --status-approved: var(--jade);
+  --status-pending:  var(--amber);   /* "draft" / needs review */
+  --status-staged:   var(--violet);  /* uncommitted changes */
+  --status-rejected: var(--crimson);
+
+  /* Severity Levels */
+  --sev-high: var(--crimson);
+  --sev-med:  var(--amber);
+  --sev-low:  var(--text-ghost);
+
+  /* Forensic Grade Scales */
+  --grade-full:    var(--jade);
+  --grade-partial: var(--amber);
+  --grade-none:    var(--text-ghost);
 }
 
 *, *::before, *::after {
