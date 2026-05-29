@@ -9,7 +9,37 @@ const CONF_COLOR = {
   SPECULATIVE: 'var(--violet)',
 }
 
-const CONF_SHAPE = { HIGH: '▲', MEDIUM: '◆', LOW: '●', SPECULATIVE: '◇' }
+const displayHost = (h) => (h ? h.toUpperCase() : 'UNKNOWN');
+
+function ConfidenceIcon({ confidence }) {
+  const size = "w-3 h-3 inline-block mr-1 align-middle";
+  if (confidence === 'HIGH') {
+    return (
+      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2L2 22h20L12 2z" />
+      </svg>
+    )
+  }
+  if (confidence === 'MEDIUM') {
+    return (
+      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2L2 12l10 10 10-10L12 2z" />
+      </svg>
+    )
+  }
+  if (confidence === 'LOW') {
+    return (
+      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
+        <circle cx="12" cy="12" r="10" />
+      </svg>
+    )
+  }
+  return (
+    <svg className={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+      <path d="M12 2L2 12l10 10 10-10L12 2z" />
+    </svg>
+  )
+}
 
 function getAccountsForFinding(f) {
   const raw = f.affected_account || f.account
@@ -25,6 +55,12 @@ function getAccountsForFinding(f) {
 
 export function AccountsTab() {
   const { findings, setActiveTab, setFindingsAccountFilter, isLoading } = useStore()
+
+  const uniqueHosts = useMemo(() => {
+    return [...new Set(findings.map((f) => f.host).filter(Boolean).map((h) => h.toUpperCase()))]
+  }, [findings])
+  const isSingleHost = uniqueHosts.length === 1
+  const singleHostName = isSingleHost ? displayHost(uniqueHosts[0]) : null
 
   const accountsData = useMemo(() => {
     const groups = {}
@@ -49,7 +85,7 @@ export function AccountsTab() {
       const hostsSet = new Set()
       for (const f of list) {
         const host = (f.host ?? '').trim()
-        if (host) hostsSet.add(host.toUpperCase())
+        if (host) hostsSet.add(displayHost(host))
       }
       const hosts = [...hostsSet].sort()
 
@@ -138,7 +174,9 @@ export function AccountsTab() {
       {/* Header */}
       <div className="shrink-0 flex justify-between items-center pb-2 border-b" style={{ borderColor: 'var(--border-faint)' }}>
         <div className="flex items-baseline gap-2">
-          <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>Accounts in Scope</h1>
+          <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>
+            Accounts in Scope {isSingleHost && `— Host: ${singleHostName}`}
+          </h1>
           <span className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
             ({accountsData.length} total)
           </span>
@@ -161,8 +199,8 @@ export function AccountsTab() {
               <tr className="border-b" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Account</th>
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px] text-right">Findings</th>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px] text-right">Hosts</th>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Host List</th>
+                {!isSingleHost && <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px] text-right">Hosts</th>}
+                {!isSingleHost && <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Host List</th>}
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Best Confidence</th>
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Time Range</th>
                 <th className="py-2.5 font-sans font-semibold uppercase tracking-wider text-[10px]">Status Summary</th>
@@ -180,7 +218,7 @@ export function AccountsTab() {
                   >
                     <td className="py-3 pr-4 font-mono font-semibold" style={{ color: isNa ? 'var(--text-muted)' : 'var(--text-bright)' }}>
                       {isNa ? (
-                        <Badge color="var(--text-muted)">N/A</Badge>
+                        <span className="italic" style={{ color: 'var(--text-muted)' }}>Unattributed Account</span>
                       ) : (
                         account
                       )}
@@ -188,24 +226,28 @@ export function AccountsTab() {
                     <td className="py-3 pr-4 font-mono text-right" style={{ color: 'var(--text-primary)' }}>
                       {findingsCount}
                     </td>
-                    <td className="py-3 pr-4 font-mono text-right" style={{ color: 'var(--text-primary)' }}>
-                      {hostCount}
-                    </td>
-                    <td className="py-3 pr-4">
-                      <div className="flex flex-wrap gap-1 max-w-[240px]">
-                        {hosts.map(h => (
-                          <span key={h} className="font-mono text-[10px] px-1 py-0.5 rounded" style={{ color: 'var(--text-muted)', background: 'var(--bg-raised)' }}>
-                            {h}
-                          </span>
-                        ))}
-                        {hosts.length === 0 && (
-                          <span style={{ color: 'var(--text-ghost)' }}>—</span>
-                        )}
-                      </div>
-                    </td>
+                    {!isSingleHost && (
+                      <td className="py-3 pr-4 font-mono text-right" style={{ color: 'var(--text-primary)' }}>
+                        {hostCount}
+                      </td>
+                    )}
+                    {!isSingleHost && (
+                      <td className="py-3 pr-4">
+                        <div className="flex flex-wrap gap-1 max-w-[240px]">
+                          {hosts.map(h => (
+                            <span key={h} className="font-mono text-[10px] px-1 py-0.5 rounded" style={{ color: 'var(--text-muted)', background: 'var(--bg-raised)' }}>
+                              {displayHost(h)}
+                            </span>
+                          ))}
+                          {hosts.length === 0 && (
+                            <span style={{ color: 'var(--text-ghost)' }}>—</span>
+                          )}
+                        </div>
+                      </td>
+                    )}
                     <td className="py-3 pr-4">
                       <Badge color={confColor}>
-                        {CONF_SHAPE[bestConfidence] || '◇'} {bestConfidence}
+                        <ConfidenceIcon confidence={bestConfidence} /> {bestConfidence}
                       </Badge>
                     </td>
                     <td className="py-3 pr-4 font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>
