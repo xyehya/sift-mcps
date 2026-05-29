@@ -238,7 +238,7 @@ export function FindingsTab() {
                     </span>
                   )}
                   <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-1" style={{ background: color }} title={f.confidence ?? ''} />
-                  <span className="font-mono shrink-0" style={{ color: 'var(--text-muted)', width: 40 }}>{f.id}</span>
+                  <span className="font-mono shrink-0" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{f.id}</span>
                   <span className="flex-1 truncate font-sans" style={{ color: 'var(--text-primary)' }}>{f.title}</span>
                   {staged && (
                     <span className="font-mono text-[9px] shrink-0"
@@ -447,7 +447,7 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
           
           <div className="flex flex-wrap gap-2 mt-2.5 items-center text-xs">
             <Badge color={confColor}>{CONF_SHAPE[eff.confidence]} {eff.confidence}</Badge>
-            <Badge color="var(--text-muted)" subtle>{finding.type}</Badge>
+            <Badge color="var(--text-bright)" subtle>{finding.type}</Badge>
             
             {/* Status Badge */}
             {stagedItem ? (
@@ -455,21 +455,28 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
                 {stagedItem.action === 'approve' ? '✓ STAGED APPROVE' : stagedItem.action === 'reject' ? '✗ STAGED REJECT' : '✎ STAGED EDITS'}
               </Badge>
             ) : (
-              <Badge color={finding.status?.toLowerCase() === 'approved' ? 'var(--jade)' : finding.status?.toLowerCase() === 'rejected' ? 'var(--crimson)' : 'var(--text-muted)'}>
+              <Badge color={finding.status?.toLowerCase() === 'approved' ? 'var(--jade)' : finding.status?.toLowerCase() === 'rejected' ? 'var(--crimson)' : 'var(--status-pending)'}>
                 {finding.status?.toLowerCase() === 'approved' ? '✓ APPROVED' : finding.status?.toLowerCase() === 'rejected' ? '✗ REJECTED' : 'DRAFT'}
               </Badge>
             )}
 
             {/* Provenance Grade */}
             {finding.provenance_grade && (
-              <span className="px-1.5 py-0.5 rounded font-mono text-[10px] tracking-wider uppercase border"
-                style={{
-                  color: finding.provenance_grade === 'FULL' ? 'var(--jade)' : 'var(--amber)',
-                  borderColor: finding.provenance_grade === 'FULL' ? 'var(--jade)44' : 'var(--amber)44',
-                  background: 'transparent'
-                }}>
-                Grade: {finding.provenance_grade}
-              </span>
+              <div className="relative group inline-flex items-center gap-1">
+                <span className="px-1.5 py-0.5 rounded font-mono text-[10px] tracking-wider uppercase border"
+                  style={{
+                    color: eff.provenance_grade === 'FULL' ? 'var(--grade-full)' : eff.provenance_grade === 'PARTIAL' ? 'var(--grade-partial)' : 'var(--grade-none)',
+                    borderColor: eff.provenance_grade === 'FULL' ? 'var(--grade-full)44' : eff.provenance_grade === 'PARTIAL' ? 'var(--grade-partial)44' : 'var(--grade-none)44',
+                    background: 'transparent'
+                  }}>
+                  Grade: {eff.provenance_grade}
+                </span>
+                <span className="cursor-help" title="Grade indicates evidence provenance: FULL (fully verified MCP logs), PARTIAL (partially verified), or UNGRADED (manual/unverified findings).">
+                  <svg className="h-3.5 w-3.5 text-text-muted hover:text-text-primary transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+                  </svg>
+                </span>
+              </div>
             )}
 
             {/* Event Timestamp and Host Context */}
@@ -726,9 +733,11 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
 
         {/* Zone 2 Evidence & Context (Collapsible Details) */}
         <details className="group border border-border-faint rounded" open={zone2Open} onToggle={(e) => setZone2Open(e.target.open)}>
-          <summary className="px-3 py-2 text-xs font-semibold cursor-pointer select-none flex items-center justify-between bg-bg-surface hover:bg-bg-raised text-text-primary">
-            <span>Evidence & Context (Collapsible Details)</span>
-            <span className="text-text-muted transition-transform group-open:rotate-90">▶</span>
+          <summary className="px-3 py-2 text-xs font-semibold cursor-pointer select-none flex items-center bg-bg-surface hover:bg-bg-raised text-text-primary list-none [&::-webkit-details-marker]:hidden">
+            <span className="flex items-center gap-2">
+              <span className="text-[10px] text-text-muted transition-transform inline-block transform group-open:rotate-90">▶</span>
+              <span>Evidence & Context Detail</span>
+            </span>
           </summary>
           
           <div className="flex flex-col md:flex-row gap-5 p-4 border-t border-border-faint bg-bg-base">

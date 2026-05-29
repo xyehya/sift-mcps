@@ -118,7 +118,18 @@ export function TodosTab() {
 
       {/* Table */}
       <div className="flex-1 overflow-auto min-h-0">
-        {sortedTodos.length === 0 ? (
+        {todos.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center" style={{ color: 'var(--text-muted)' }}>
+            <svg className="w-12 h-12 mb-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="8" y1="9" x2="16" y2="9" />
+              <line x1="8" y1="13" x2="16" y2="13" />
+              <line x1="8" y1="17" x2="12" y2="17" />
+            </svg>
+            <p className="font-mono text-sm">No TODOs created for this case.</p>
+            <p className="text-xs text-text-muted mt-1 max-w-xs">Tasks will appear once the agent or examiner registers them.</p>
+          </div>
+        ) : sortedTodos.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center" style={{ color: 'var(--text-muted)' }}>
             <svg className="w-12 h-12 mb-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <rect x="3" y="4" width="18" height="16" rx="2" />
@@ -127,6 +138,7 @@ export function TodosTab() {
               <line x1="8" y1="17" x2="12" y2="17" />
             </svg>
             <p className="font-mono text-sm">No TODOs match the current filters.</p>
+            <p className="text-xs text-text-muted mt-1 max-w-xs">Try resetting the priority or status filters.</p>
           </div>
         ) : (
           <table className="w-full text-left text-xs" style={{ borderCollapse: 'collapse' }}>

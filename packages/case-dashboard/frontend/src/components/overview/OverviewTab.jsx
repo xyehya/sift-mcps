@@ -95,13 +95,13 @@ export function OverviewTab() {
         <KPICard
           label="STAGED"
           value={`${staged}`}
-          color="var(--amber)"
+          color="var(--status-staged)"
           loading={isLoading}
           onClick={() => staged > 0 && setCommitDrawerOpen(true)}
           extra={
             <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ background: 'var(--bg-raised)' }}>
               <div className="h-full rounded-full transition-all"
-                style={{ width: `${reviewPct}%`, background: 'var(--amber)' }} />
+                style={{ width: `${reviewPct}%`, background: 'var(--status-staged)' }} />
             </div>
           }
         />
@@ -290,10 +290,10 @@ function ActivityFeed({ findings, delta, setActiveTab, setSelectedFindingId }) {
                 onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
               >
                 <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
-                <span className="font-mono" style={{ color: 'var(--text-muted)', width: 44, flexShrink: 0 }}>{f.id}</span>
+                <span className="font-mono" style={{ color: 'var(--text-muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>{f.id}</span>
                 <span className="flex-1 truncate" style={{ color: 'var(--text-primary)' }}>{f.title}</span>
                 {staged && (
-                  <span className="font-mono text-[10px]" style={{ color: 'var(--amber)' }}>staged</span>
+                  <span className="font-mono text-[10px]" style={{ color: 'var(--status-staged)' }}>staged</span>
                 )}
                 {f.timestamp && (
                   <span className="font-mono text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>
