@@ -9,7 +9,37 @@ const CONF_COLOR = {
   SPECULATIVE: 'var(--violet)',
 }
 
-const CONF_SHAPE = { HIGH: '▲', MEDIUM: '◆', LOW: '●', SPECULATIVE: '◇' }
+const displayHost = (h) => (h ? h.toUpperCase() : 'UNKNOWN');
+
+function ConfidenceIcon({ confidence }) {
+  const size = "w-3 h-3 inline-block mr-1 align-middle";
+  if (confidence === 'HIGH') {
+    return (
+      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2L2 22h20L12 2z" />
+      </svg>
+    )
+  }
+  if (confidence === 'MEDIUM') {
+    return (
+      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2L2 12l10 10 10-10L12 2z" />
+      </svg>
+    )
+  }
+  if (confidence === 'LOW') {
+    return (
+      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
+        <circle cx="12" cy="12" r="10" />
+      </svg>
+    )
+  }
+  return (
+    <svg className={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+      <path d="M12 2L2 12l10 10 10-10L12 2z" />
+    </svg>
+  )
+}
 
 function getAccountsForFinding(f) {
   const raw = f.affected_account || f.account
@@ -31,7 +61,7 @@ export function HostsTab() {
     for (const f of findings) {
       const rawHost = f.host
       if (!rawHost) continue
-      const host = rawHost.toUpperCase()
+      const host = displayHost(rawHost)
       if (!groups[host]) {
         groups[host] = []
       }
@@ -166,7 +196,7 @@ export function HostsTab() {
                     style={{ color: 'var(--text-primary)' }}
                   >
                     <td className="py-3 pr-4 font-mono font-semibold" style={{ color: 'var(--text-bright)' }}>
-                      {host}
+                      {displayHost(host)}
                     </td>
                     <td className="py-3 pr-4 font-mono text-right" style={{ color: 'var(--text-primary)' }}>
                       {findingsCount}
@@ -176,7 +206,7 @@ export function HostsTab() {
                     </td>
                     <td className="py-3 pr-4">
                       <Badge color={confColor}>
-                        {CONF_SHAPE[bestConfidence] || '◇'} {bestConfidence}
+                        <ConfidenceIcon confidence={bestConfidence} /> {bestConfidence}
                       </Badge>
                     </td>
                     <td className="py-3 pr-4 font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>

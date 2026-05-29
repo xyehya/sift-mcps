@@ -9,7 +9,37 @@ const CONF_COLOR = {
   SPECULATIVE: 'var(--violet)',
 }
 
-const CONF_SHAPE = { HIGH: '▲', MEDIUM: '◆', LOW: '●', SPECULATIVE: '◇' }
+const displayHost = (h) => (h ? h.toUpperCase() : 'UNKNOWN');
+
+function ConfidenceIcon({ confidence }) {
+  const size = "w-3 h-3 inline-block mr-1 align-middle";
+  if (confidence === 'HIGH') {
+    return (
+      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2L2 22h20L12 2z" />
+      </svg>
+    )
+  }
+  if (confidence === 'MEDIUM') {
+    return (
+      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2L2 12l10 10 10-10L12 2z" />
+      </svg>
+    )
+  }
+  if (confidence === 'LOW') {
+    return (
+      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
+        <circle cx="12" cy="12" r="10" />
+      </svg>
+    )
+  }
+  return (
+    <svg className={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+      <path d="M12 2L2 12l10 10 10-10L12 2z" />
+    </svg>
+  )
+}
 
 const STATUS_COLOR = {
   DRAFT:    'var(--amber)',
@@ -23,6 +53,12 @@ export function IocsTab() {
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [expandedRows, setExpandedRows] = useState(new Set())
+
+  const uniqueHosts = useMemo(() => {
+    return [...new Set(findings.map((f) => f.host).filter(Boolean).map((h) => h.toUpperCase()))]
+  }, [findings])
+  const isSingleHost = uniqueHosts.length === 1
+  const singleHostName = isSingleHost ? displayHost(uniqueHosts[0]) : null
 
   // Collect unique categories from data
   const categories = useMemo(() => {
@@ -93,7 +129,9 @@ export function IocsTab() {
       <div className="shrink-0 space-y-3 pb-2 border-b" style={{ borderColor: 'var(--border-faint)' }}>
         <div className="flex justify-between items-center">
           <div className="flex items-baseline gap-2">
-            <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>Indicators of Compromise</h1>
+            <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>
+              Indicators of Compromise {isSingleHost && `— Host: ${singleHostName}`}
+            </h1>
             <span className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
               ({filtered.length} of {iocs.length})
             </span>
@@ -167,7 +205,7 @@ export function IocsTab() {
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Type</th>
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Category</th>
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Confidence</th>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Hosts</th>
+                {!isSingleHost && <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Hosts</th>}
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Source Findings</th>
                 <th className="py-2.5 font-sans font-semibold uppercase tracking-wider text-[10px]">Status</th>
               </tr>
@@ -235,25 +273,27 @@ export function IocsTab() {
                     {/* Confidence */}
                     <td className="py-3 pr-4">
                       <Badge color={confColor}>
-                        {CONF_SHAPE[ioc.confidence] || '◇'} {ioc.confidence}
+                        <ConfidenceIcon confidence={ioc.confidence} /> {ioc.confidence}
                       </Badge>
                     </td>
 
                     {/* Hosts */}
-                    <td className="py-3 pr-4">
-                      <div className="flex flex-wrap gap-1 max-w-[160px]">
-                        {hosts.map((h) => (
-                          <span
-                            key={h}
-                            className="font-mono text-[10px] px-1 py-0.5 rounded"
-                            style={{ color: 'var(--text-muted)', background: 'var(--bg-raised)' }}
-                          >
-                            {h}
-                          </span>
-                        ))}
-                        {hosts.length === 0 && <span style={{ color: 'var(--text-ghost)' }}>—</span>}
-                      </div>
-                    </td>
+                    {!isSingleHost && (
+                      <td className="py-3 pr-4">
+                        <div className="flex flex-wrap gap-1 max-w-[160px]">
+                          {hosts.map((h) => (
+                            <span
+                              key={h}
+                              className="font-mono text-[10px] px-1 py-0.5 rounded"
+                              style={{ color: 'var(--text-muted)', background: 'var(--bg-raised)' }}
+                            >
+                              {displayHost(h)}
+                            </span>
+                          ))}
+                          {hosts.length === 0 && <span style={{ color: 'var(--text-ghost)' }}>—</span>}
+                        </div>
+                      </td>
+                    )}
 
                     {/* Source Findings */}
                     <td className="py-3 pr-4">
@@ -298,15 +338,24 @@ export function IocsTab() {
                   MITRE:
                 </span>
                 <div className="flex flex-wrap gap-1">
-                  {ioc.mitre_techniques.map((t) => (
-                    <span
-                      key={t}
-                      className="font-mono text-[10px] px-1.5 py-0.5 rounded"
-                      style={{ color: 'var(--cyan)', background: 'var(--cyan-dim)' }}
-                    >
-                      {t}
-                    </span>
-                  ))}
+                  {ioc.mitre_techniques.map((t) => {
+                    const isSub = t.includes('.')
+                    return (
+                      <span
+                        key={t}
+                        className="font-mono text-[10px] px-1.5 py-0.5 rounded"
+                        style={{
+                          color: 'var(--cyan)',
+                          background: 'var(--cyan-dim)',
+                          opacity: isSub ? 0.65 : 1,
+                          fontSize: isSub ? '9px' : '10px',
+                          marginLeft: isSub ? '4px' : '0px',
+                        }}
+                      >
+                        {t}
+                      </span>
+                    )
+                  })}
                 </div>
               </div>
             )}

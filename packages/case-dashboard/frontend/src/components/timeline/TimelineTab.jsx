@@ -3,6 +3,21 @@ import { useStore } from '../../store/useStore'
 import { formatDistanceToNow } from 'date-fns'
 import { SkeletonBlock } from '../common/Skeleton'
 
+function humanizeGap(gapMs) {
+  const totalMinutes = Math.round(gapMs / 60000)
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m`
+  }
+  const totalHours = Math.floor(totalMinutes / 60)
+  const mins = totalMinutes % 60
+  if (totalHours < 24) {
+    return mins > 0 ? `${totalHours}h ${mins}m` : `${totalHours}h`
+  }
+  const days = Math.floor(totalHours / 24)
+  const hours = totalHours % 24
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`
+}
+
 const TYPE_COLOR = {
   auth:        'var(--amber)',
   execution:   'var(--crimson)',
@@ -56,17 +71,20 @@ export function TimelineTab() {
         style={{ borderColor: 'var(--border-faint)', background: 'var(--bg-surface)' }}>
         {/* Type filters */}
         <div className="flex gap-1 flex-wrap">
-          {ALL_TYPES.map((t) => (
-            <button key={t} onClick={() => toggleType(t)}
-              className="px-2 py-0.5 rounded font-mono text-[10px] transition-colors capitalize"
-              style={{
-                background: typeFilter.has(t) ? TYPE_COLOR[t] + '22' : 'transparent',
-                color: typeFilter.has(t) ? TYPE_COLOR[t] : 'var(--text-muted)',
-                border: `1px solid ${typeFilter.has(t) ? TYPE_COLOR[t] : 'var(--border-soft)'}`,
-              }}>
-              {t}
-            </button>
-          ))}
+          {ALL_TYPES.map((t) => {
+            const isActive = typeFilter.has(t)
+            return (
+              <button key={t} onClick={() => toggleType(t)}
+                className={`px-2 py-0.5 rounded font-mono text-[10px] transition-colors capitalize ${isActive ? 'font-semibold' : ''}`}
+                style={{
+                  background: isActive ? TYPE_COLOR[t] : 'transparent',
+                  color: isActive ? 'var(--bg-base)' : 'var(--text-muted)',
+                  border: `1px solid ${isActive ? TYPE_COLOR[t] : 'var(--border-soft)'}`,
+                }}>
+                {t}
+              </button>
+            )
+          })}
         </div>
 
         {/* Host filter */}
@@ -107,7 +125,7 @@ export function TimelineTab() {
                     <div className="flex-1 h-px" style={{ background: 'var(--border-faint)' }} />
                     <span className="font-mono text-[10px] px-1.5 py-px rounded-full shrink-0"
                       style={{ color: 'var(--amber)', border: '1px solid var(--amber)', background: 'var(--amber-dim)' }}>
-                      ▲ {Math.round(gap / 60000)}m gap
+                      ▲ {humanizeGap(gap)} gap
                     </span>
                     <div className="flex-1 h-px" style={{ background: 'var(--border-faint)' }} />
                   </div>
@@ -127,36 +145,44 @@ export function TimelineTab() {
                     {new Date(ev.timestamp).toISOString().substring(11, 19)}
                   </span>
                   <span className="font-mono text-[10px] w-16 shrink-0 capitalize" style={{ color }}>
-                    [{ev.type}]
+                    {ev.type ? `[${ev.type}]` : ''}
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-sans" style={{ color: 'var(--text-primary)' }}>
                       {ev.description}
                     </div>
-                    {(ev.auto_created_from || (ev.related_findings && ev.related_findings.length > 0)) && (
-                      <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] font-mono">
-                        {ev.auto_created_from && (
-                          <span style={{ color: 'var(--text-muted)' }}>
-                            auto-linked from{' '}
-                            <a onClick={(e) => { e.preventDefault(); navigateToFinding(ev.auto_created_from) }}
-                              className="text-cyan hover:underline cursor-pointer">
-                              [{ev.auto_created_from}]
-                            </a>
-                          </span>
-                        )}
-                        {ev.related_findings && ev.related_findings.length > 0 && (
-                          <span style={{ color: 'var(--text-muted)' }}>
-                            related:{' '}
-                            {ev.related_findings.map((fid) => (
-                              <a key={fid} onClick={(e) => { e.preventDefault(); navigateToFinding(fid) }}
-                                className="text-cyan hover:underline cursor-pointer mr-1">
-                                [{fid}]
+                    {(() => {
+                      const filteredRelated = (ev.related_findings ?? []).filter(fid => fid !== ev.auto_created_from)
+                      const hasAutoLink = !!ev.auto_created_from
+                      const hasRelated = filteredRelated.length > 0
+
+                      if (!hasAutoLink && !hasRelated) return null
+
+                      return (
+                        <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] font-mono">
+                          {hasAutoLink && (
+                            <span style={{ color: 'var(--text-muted)' }}>
+                              auto-linked from{' '}
+                              <a onClick={(e) => { e.preventDefault(); navigateToFinding(ev.auto_created_from) }}
+                                className="text-cyan hover:underline cursor-pointer">
+                                [{ev.auto_created_from}]
                               </a>
-                            ))}
-                          </span>
-                        )}
-                      </div>
-                    )}
+                            </span>
+                          )}
+                          {hasRelated && (
+                            <span style={{ color: 'var(--text-muted)' }}>
+                              related:{' '}
+                              {filteredRelated.map((fid) => (
+                                <a key={fid} onClick={(e) => { e.preventDefault(); navigateToFinding(fid) }}
+                                  className="text-cyan hover:underline cursor-pointer mr-1">
+                                  [{fid}]
+                                </a>
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
                   {/* Finding refs */}
                   {ev.finding_refs?.map((fid) => (
