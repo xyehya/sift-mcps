@@ -343,15 +343,6 @@ The correlation regex targets `Proc:`, `Img:`, `TgtImg:` only (forward process, 
 `PProc:` and `PImg:` are deliberately excluded to avoid over-flagging processes that are
 merely parents of suspicious children.
 
-## Implementation Log
-
-| Date | Item | Status | Notes |
-|---|---|---|---|
-| 2026-05-27 | Hayabusa↔memory correlation | **Done** | `_enrich_hayabusa_memory_correlation` in `triage_remote.py`; 9 tests; 928/928 pass; deployed to VM; runs as gateway-independent enrichment pass inside `idx_enrich_triage` |
-| 2026-05-27 | psscan + netscan → Tier 1 | **Done** | `parse_memory.py` TIER_1 promoted; TIER_2 deduped; 4 new regression tests; 953/953 pass |
-| 2026-05-27 | `coverage_state` in `idx_case_summary` | **Done** | `_build_coverage_state(artifacts, enrichment)` added to `server.py`; injected as `coverage_state` field; 25 unit tests; disk/memory/enrichment/gaps; reuses `_plugin_to_index_suffix` from `parse_memory.py` |
-| 2026-05-27 | Live validation — psscan/netscan + coverage_state | **Verified** | Force re-ingest of `Rocba-Memory.raw` on rocba-drive-20260526-1417: 10-plugin Tier 1 run (pid 1664039, 1m). psscan: 2,212 docs; netscan: 430 docs. coverage_state returned correct state before and after. EVTX `unknown error` on disk ingest is pre-existing across all historical runs — not a regression. |
-
 ## Next Work Queue
 
 Ordered by the priority framework established 2026-05-27 (Group 1 → response enrichment,
@@ -364,29 +355,167 @@ Group 2 → small targeted extensions, Group 3 → new capability modules):
 
 ### Group 2 — Small targeted extensions (one file each)
 
-**3. Filesystem metadata sidecar during ingest** (`containers.py`)
-`fdisk -l` output is already computed during E01 mount to parse partition offsets. Capture
-it plus mounted volume paths into `agent/ingest/<run_id>-filesystem-meta.json` instead of
-discarding. Return path in ingest response. Covers `mmls/fsstat` skill intent with zero
-new tool.
+**3. Filesystem metadata sidecar during ingest** (`containers.py` + `server.py`)
+
+**Decisions locked 2026-05-29** — see Design Decisions section below.
+
+Use TSK stack (`img_stat` + `mmls` + `fsstat`), NOT `fdisk`/`ewfinfo`. Schema differs by
+image type: volume image vs partitioned disk vs memory. Add `source_path` to
+`ingest_status.py:write_status()`. Reference sidecar path in `coverage_state`; N/A if not
+present. Return path in ingest response.
+
+Still needs: live test of `mmls` → `fsstat -o <offset>` path on a **partitioned disk image**.
+No such image on VM. Create a synthetic 200 MB test image at session start (see kickoff
+prompt) before implementing the partitioned-disk code path. Unit test covers the rest.
 
 **4. Autorunsc CSV ingest** (`idx_ingest(format="autorunsc")`)
 New `parse_autorunsc.py` (~100 lines, same pattern as `parse_csv.py`). New index suffix
 `autoruns`. Triage enrichment already handles file paths via `check_artifact`. Examiner
 drops Autorunsc CSV into `evidence/`; agent calls `idx_ingest(format="autorunsc")`.
+`coverage_state` already has `"autoruns": (set(), "not_available")` as a placeholder.
 
-### Group 3 — New capability modules (separate PRs, do when specifically needed)
+### Group 3 — Reclassified: run_command + guidance only (no new MCP tools)
 
-- Optional Plaso timeline job (`idx_generate_timeline`)
-- YARA sweep framework (`idx_yara_sweep`) — verify `yara`/`yarac` in VM PATH first
+**Decision locked 2026-05-29**: Plaso and YARA are NOT MCP tools. Reasons:
+- Plaso is expensive, examiner-deliverable, not a query target. Agent runs
+  `log2timeline.py` via `run_command`, saves to `agent/timelines/`. Dashboard
+  integration (timeline viewer) is a future portal task.
+- YARA requires examiner-chosen rules, is noisy, and must be agent-initiated only when
+  specific IOCs exist. Keep as `run_command` with structured guidance. The missing piece:
+  `_build_coverage_state` does not currently emit a YARA gap hint. Add one that fires when
+  `threat_intel` enrichment found hits but no YARA output file exists under `agent/yara/`.
+
+- Browser artifact ingestion (Plaso targeted or native SQLite) — still Group 3 MCP work.
+
+## Design Decisions (2026-05-29)
+
+### Filesystem Sidecar — Tool Stack
+
+**Decision**: Use Sleuth Kit (`img_stat`, `mmls`, `fsstat`), not `fdisk` + `ewfinfo`.
+
+**Why**: Tested live on rocba E01 (22 GB, Windows C: drive, NTFS volume image):
+- `fdisk` on the EWF-mounted raw file produces **garbage partition entries** with start
+  sectors (1,920,221,984) exceeding total disk sectors (170,764,280). Do not save this.
+- `mmls` on the E01 directly returns **empty** — correct, because this is a volume image
+  with no partition table. Empty mmls = volume image; populated mmls = partitioned disk.
+- `fsstat` on the E01 directly returns real filesystem metadata: `NTFS`, volume name
+  `Windows`, cluster size 4096, sector size 512, MFT range, volume serial number.
+- `img_stat` on the E01 returns image-level metadata: `ewf`, size 87,431,311,360 bytes,
+  sector size 512, MD5. Subset of `ewfinfo` output, already in TSK.
+- TSK tools understand EWF natively — no `ewfmount` step required.
+
+**Three distinct sidecar schemas by image type:**
+
+| Image type | Detection | Tools run | Sidecar key fields |
+|---|---|---|---|
+| EWF/raw NTFS volume | `mmls` returns empty | `img_stat` + `fsstat` at offset 0 | `image_type: ntfs_volume`, fs_type, volume_name, cluster_size, md5 |
+| Partitioned disk | `mmls` returns partition table | `img_stat` + `mmls` + `fsstat -o <offset>` per NTFS/ext partition | `image_type: partitioned_disk`, partition list with offsets, per-partition fs metadata |
+| Memory image | `format="memory"` at ingest call | none (not mountable) | `image_type: memory_image`, size, detected magic (LiME/HIBR/PAGEDU64/raw) |
+
+**RAM test result**: `Rocba-Memory.raw` (18 GB) — all-zero header, no LiME/HIBR/PAGEDU64
+magic. Plain raw acquisition.
+
+**Partitioned disk path not yet live-tested** — no full disk image with MBR/GPT on VM.
+Must create synthetic test image before implementing that code path.
+
+### Evidence Cross-Reference — Minimal Change
+
+**Decision**: Add `source_path` to `ingest_status.py:write_status()`. One field. No new
+tool. `coverage_state` in `idx_case_summary` then cross-references manifest (sealed
+files) against ingest status records (by path) and emits a compact per-evidence table:
+path / sealed (T/F) / ingested (T/F) / index_suffixes.
+
+**Why not a new `idx_evidence_status()` tool**: The cross-reference is derivable from
+existing data once `source_path` is stored. Adding a tool before the data exists adds
+complexity without payoff.
+
+**What `load_manifest` does and does not do** (verified in code):
+- Pure JSON reader. Reads `evidence-manifest.json` fresh on every call. No caching, no
+  startup state, no file-type classification.
+- Per-file fields: `path`, `sha256`, `bytes`, `mtime_ns`, `registered_at`,
+  `registered_by`, `source` (examiner free text), `description` (examiner free text),
+  `status` (ACTIVE/IGNORED/RETIRED).
+- Does NOT store: file type, whether ingested, index suffixes, partition metadata.
+- Called from: `case-mcp` (`evidence_list`), `case-dashboard` (portal routes), `report-mcp`
+  (report generation), `evidence_chain.py` (seal/ignore/retire/chain_status).
+- **Do not add ingest state to the manifest** — it is chain-of-custody data only.
+  Keep the systems separate.
+
+### YARA and Plaso — run_command Only
+
+**Decision**: No MCP wrappers for either.
+
+YARA gap hint to add to `_build_coverage_state` (`server.py`):
+```python
+# Fire when threat_intel found hits but no agent/yara/ output exists
+if enrichment_state["threat_intel"] == "done" and not _yara_output_exists(case_dir):
+    gaps.append({
+        "coverage_gap": "YARA sweep not run — IOCs enriched but no file sweep performed.",
+        "when_to_run": "When specific IOC strings, hashes, or malware family rules are available.",
+        "command": "run_command(['yara', '-r', '-s', '/path/to/rules.yar', 'evidence/'], ...)",
+        "output_path": "agent/yara/ioc_sweep.txt",
+        "next_mcp_step": "Summarize matching rule names, paths, offsets only. Do not paste full output.",
+        "warning": "Community rules are noisy. Treat hits as leads, not findings.",
+    })
+```
+
+## Implementation Log
+
+| Date | Item | Status | Notes |
+|---|---|---|---|
+| 2026-05-27 | Hayabusa↔memory correlation | **Done** | `_enrich_hayabusa_memory_correlation` in `triage_remote.py`; 9 tests; 928/928 pass; deployed to VM; runs as gateway-independent enrichment pass inside `idx_enrich_triage` |
+| 2026-05-27 | psscan + netscan → Tier 1 | **Done** | `parse_memory.py` TIER_1 promoted; TIER_2 deduped; 4 new regression tests; 953/953 pass |
+| 2026-05-27 | `coverage_state` in `idx_case_summary` | **Done** | `_build_coverage_state(artifacts, enrichment)` added to `server.py`; injected as `coverage_state` field; 25 unit tests; disk/memory/enrichment/gaps; reuses `_plugin_to_index_suffix` from `parse_memory.py` |
+| 2026-05-27 | Live validation — psscan/netscan + coverage_state | **Verified** | Force re-ingest of `Rocba-Memory.raw` on rocba-drive-20260526-1417: 10-plugin Tier 1 run (pid 1664039, 1m). psscan: 2,212 docs; netscan: 430 docs. coverage_state returned correct state before and after. EVTX `unknown error` on disk ingest is pre-existing across all historical runs — not a regression. |
+| 2026-05-29 | Filesystem sidecar design | **Decided, not implemented** | TSK stack chosen (img_stat+mmls+fsstat). fdisk discarded. Live-tested on rocba E01. Partitioned disk path untested (no full disk image on VM). See Design Decisions section. |
+| 2026-05-29 | Evidence cross-reference design | **Decided, not implemented** | Add `source_path` to `ingest_status.py:write_status()`. No new tool. |
+| 2026-05-29 | YARA/Plaso as run_command only | **Decided** | No MCP wrappers. YARA gap hint to be added to `_build_coverage_state`. |
+
+## Next Work Queue
+
+Ordered by the priority framework established 2026-05-27 (Group 1 → response enrichment,
+Group 2 → small targeted extensions, Group 3 → new capability modules):
+
+### Group 1 — Complete
+
+**1. psscan + netscan → Tier 1** — Done 2026-05-27
+**2. `coverage_state` in `idx_case_summary`** — Done 2026-05-27
+
+### Group 2 — Next up
+
+**3a. Synthetic partitioned disk test** — prerequisite for 3b
+Create a ~200 MB test image on the VM: `dd` + `fdisk` (MBR, one NTFS partition) + `mkfs.ntfs`.
+Verify: `mmls` returns partition table → `fsstat -o <offset>` returns NTFS metadata.
+This confirms the partitioned-disk code path before writing it.
+
+**3b. Filesystem metadata sidecar** (`containers.py` + `server.py` + `ingest_status.py`)
+- `containers.py`: add `_collect_filesystem_meta(image_path, container_format)` → runs
+  `img_stat`, `mmls`, `fsstat` (per volume if partitioned, at offset 0 if volume image).
+  Returns structured dict. Handles empty mmls (volume image) and populated mmls
+  (partitioned disk) as separate branches. Graceful fallback if any TSK tool missing.
+- `server.py`: write sidecar to `agent/ingest/<run_id>-filesystem-meta.json` after mount,
+  for both disk and memory ingest paths. Return `filesystem_meta_path` in ingest response
+  (N/A string if collection failed). Add path reference to `coverage_state`.
+- `ingest_status.py`: add `source_path` field to `write_status()` calls in ingest flow.
+  Enables evidence cross-reference in `coverage_state`.
+
+**4. Autorunsc CSV ingest** (`idx_ingest(format="autorunsc")`)
+New `parse_autorunsc.py` (~100 lines). New index suffix `autoruns`. Placeholder already
+in `coverage_state`. Examiner drops CSV into `evidence/`; agent calls
+`idx_ingest(format="autorunsc")`.
+
+### Group 3 — run_command + guidance only
+
+- YARA: add gap hint to `_build_coverage_state` (see Design Decisions above)
+- Plaso: agent uses `run_command` → `agent/timelines/`. Dashboard integration is a future portal task.
 - Browser artifact ingestion (Plaso targeted or native SQLite)
 
 ## Target End State
 
 The agent should be able to ask `idx_case_summary()` and see:
 
-- what evidence exists,
-- what was ingested,
+- what evidence exists (per-file: path, sealed, ingested, index suffixes),
+- what was ingested and from which source file,
 - what enrichment ran,
 - which SIFT skill areas are covered,
 - which skill areas are intentionally not covered,
