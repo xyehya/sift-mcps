@@ -177,6 +177,471 @@ The 5 surface questions are largely answered by F-claude-001..018 / F-lms-001..0
 
 ---
 
+## F-016 · CRITICAL · `_case` envelope duplicated on EVERY tool response — systemic token bleed
+
+- **What:** Every single MCP tool response (all 68 tools, all 11 backends) includes a redundant
+  `_case` wrapper:
+  ```json
+  "_case": {
+    "id": "rocba-drive-20260526-1417",
+    "dir": "/cases/rocba-drive-20260526-1417",
+    "evidence_dir": "/cases/rocba-drive-20260526-1417/evidence",
+    "agent_dir": "/cases/rocba-drive-20260526-1417/agent"
+  }
+  ```
+  This is ~300 bytes (4 lines) of identical, never-changing data per response. An agent making
+  50 tool calls per session wastes 15,000 bytes of context tokens on this alone. With case_id,
+  evidence_dir, and agent_dir already available from `workflow_status` (the mandatory first
+  call), this repetition has zero information value after the initial orientation.
+
+- **Impact:** Over a multi-hour investigation producing 100–300 tool calls, the `_case` envelope
+  alone burns 30,000–90,000 characters — about 7,500–22,500 tokens. This is context that could
+  hold 5–10 additional search results, or a complete finding with evidence artifacts. It directly
+  accelerates context compaction (the #1 failure mode the user named: "out of context with no
+  results").
+
+- **Where:** Injected by the gateway's MCP response normalization — appears in every backend
+  tool response (`mcp_endpoint.py` or `server.py` response wrapper).
+
+- **Proposed fix:**
+  **(a) Immediate:** Remove `_case` from all individual tool responses. Keep it ONLY on the
+  orientation tools where it matters: `workflow_status`, `case_status`, `environment_summary`.
+  The agent already has `case_id` from the first call; paths are derivable.
+
+  **(b) Elite approach — "Case Spine" pattern:** Instead of injecting a static envelope,
+  produce a *case-header* only when the gateway detects a case boundary change (first tool call
+  in a session, or when the portal switches cases). Otherwise, inject nothing. This is the MCP
+  equivalent of HTTP `Connection: keep-alive` headers — stateful context, not per-message noise.
+
+  **(c) Alternatively:** If removal is architecturally hard, compress to a single opaque
+  reference: `"_case_ref": "rocba-drive-20260526-1417"` and have `case_status` resolve it.
+  Every byte counts when context windows are the limiting reagent for autonomous investigation.
+
+  **Token savings:** At 300 bytes/response × 200 calls = 60KB saved = the difference between
+  the agent keeping 3 prior search results vs. losing them to compaction.
+
+## F-017 · HIGH · `idx_search` error on malformed query is opaque — no self-correction path
+
+- **What:** `idx_search(query='INVALID:SYNTAX:::test')` returns:
+  `"Error executing tool idx_search: Query error: all shards failed"`
+  That's the entire error. No hint about what was wrong, no suggestion for correction,
+  no example of valid syntax. The agent has no lever to fix the query.
+
+- **Why it matters for autonomy:** When an agent encounters a query error, the autonomy loop
+  looks like:
+  1. Try query → error
+  2. Try with quotes → error
+  3. Try with different field name → error
+  4. Give up, miss the evidence → produce confidently-wrong finding
+
+  The difference between a competent DFIR agent and a broken one is **how many self-correction
+  attempts succeed before the agent gives up**. An opaque error puts the agent's error-recovery
+  budget at $0.
+
+- **Proposed fix:**
+  **(a) Structured error envelope:**
+  ```json
+  {
+    "error": "query_parse_failure",
+    "detail": "Unexpected ':::' at position 8. Colon (:) is a field separator — use quotes for literal colons.",
+    "invalid_query": "INVALID:SYNTAX:::test",
+    "hint": "Try: query='user.name:admin' for exact field match, or wrap values with special chars in quotes: source.ip:\"::1\"",
+    "examples": [
+      "event.code:4624 AND user.name:admin",
+      "process.name:*powershell*",
+      "source.ip:\"192.168.1.1\""
+    ]
+  }
+  ```
+
+  **(b) Auto-correction heuristics:** Common failure patterns the gateway can detect and fix:
+  - Triple colons `:::` → suggest quoting
+  - Missing field colon `4624` → suggest `event.code:4624`
+  - Unbalanced quotes → point to the break
+  - Regex characters in literal strings `[2020` → suggest escaping or quoting
+
+  **(c) Query preview mode:** `idx_search(dry_run=true)` that validates syntax and returns
+  estimated hit count without fetching docs — the agent can iterate fast without paying
+  the full token cost of a bad search.
+
+## F-018 · HIGH · `idx_field_values` returns empty `[]` silently — agent cannot distinguish failure modes
+
+- **What:** `idx_field_values(field='process.name', query='event.code:7045')` returned:
+  ```json
+  {"field": "process.name", "values": [], "truncated": false}
+  ```
+  Meanwhile `idx_count(query='event.code:7045')` confirms 41 matching docs exist. The values
+  are NOT empty — the field `process.name` simply doesn't exist in the hayabusa index where
+  those 7045 events live (hayabusa uses different field names). But the response gives zero
+  indication of *why* it's empty.
+
+- **Impact:** Agent sees `values: []` and concludes "no processes associated with 7045 events."
+  This is a silent false-negative of the same class as F-003 and F-011. The agent has no way
+  to know that `process.name` exists in other indices but not in the one that matched the query.
+
+- **Proposed fix:**
+  **(a) Diagnostic annotation on empty results:**
+  ```json
+  {
+    "field": "process.name",
+    "values": [],
+    "truncated": false,
+    "diagnostic": {
+      "matching_docs": 41,
+      "field_exists_in_matched_docs": false,
+      "hint": "Field 'process.name' not found in documents matching 'event.code:7045'. Hayabusa-detected events use different field names. Try: field='Details' or check idx_case_summary(include_fields=true) for per-artifact field mappings."
+    }
+  }
+  ```
+
+  **(b) Cross-index field awareness:** `idx_case_summary(include_fields=true)` should be the
+  canonical field-discovery mechanism, and `idx_field_values` should reference it when results
+  are empty. Better yet: `idx_field_values` should auto-expand across all indices and return
+  per-index field availability, so the agent can discover which indices actually have the field.
+
+  **(c) Elite approach — "field intent resolution":** The gateway knows the case's index set
+  and field mappings. When an agent queries `field='process.name'` on a query that only matches
+  hayabusa indices (where the field is called something else), the gateway could auto-translate
+  or at minimum warn: "process.name not in matched indices; did you mean hayabusa's
+  'Details' field?"
+
+## F-019 · MEDIUM · `idx_aggregate` returns opaque integer keys for event codes — requires external knowledge
+
+- **What:** `idx_aggregate(field='event.code')` returns:
+  ```json
+  {"key": 5857, "count": 525},
+  {"key": 4625, "count": 469},
+  {"key": 4776, "count": 466},
+  {"key": 5858, "count": 461}
+  ```
+  An LLM seeing `5857` has no idea this is "WinRM Operational" and that a count of 525 means
+  heavy WinRM activity. Similarly, `4625` → "failed logon", `4776` → "credential validation",
+  etc. The agent must either (a) already know these mappings from training data (unreliable for
+  obscure codes) or (b) waste turns asking external knowledge.
+
+- **Impact:** Distribution analysis is the #1 pattern an autonomous agent uses to orient:
+  "what are the most common events?" → "what is unusual?" The tool gives numbers but not meaning.
+  Without meaning, the agent can't prioritise. "Code 5857 has 525 occurrences" is inert data;
+  "WinRM Operational has 525 occurrences, WinRM often dominates, consider excluding" is
+  actionable intelligence.
+
+- **Proposed fix:**
+  **(a) Inline event code descriptions for common Windows events:**
+  ```json
+  {"key": 4625, "count": 469, "label": "Failed logon (4625)", "significance": "auth_failure"},
+  {"key": 4624, "count": 312, "label": "Successful logon (4624)", "significance": "auth_success"},
+  {"key": 4688, "count": 204, "label": "Process creation (4688)", "significance": "execution"},
+  {"key": 7045, "count": 41,  "label": "Service installed (7045)", "significance": "persistence"}
+  ```
+
+  **(b) Maintain a static lookup of the top ~200 Windows Security event IDs + common
+  Hayabusa rule titles (the `event.code` field in the hayabusa index uses Hayabusa
+  internal codes, not Windows EIDs — this is the same F-003 normalization problem).**
+
+  **(c) Elite approach:** Include `significance_category` tags (auth, execution, persistence,
+  lateral_movement, defense_evasion, noise) to let the agent auto-filter:
+  `"exclude noise, focus on persistence + lateral_movement events"` becomes a one-liner
+  instead of "look up 15 event codes one by one."
+
+## F-020 · MEDIUM · `check_system` / `check_artifact` baseline gaps return UNKNOWN on core Windows components
+
+- **What:** `check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro')` returns
+  `"verdict": "UNKNOWN", "reasons": ["Service not in baseline"]`. But EventLog is a core
+  Windows service present in every single Windows installation since NT 4.0. This is NOT
+  unknown — it is definitively expected. The baseline database simply lacks an entry.
+
+- **Impact:** An autonomous agent doing triage validation sees `UNKNOWN` on EventLog, svchost,
+  or other core system components and can go down a rabbit hole investigating false positives.
+  The current `interpretation_constraint` says "UNKNOWN requires context and does not confirm
+  malicious persistence" — but this puts the classification burden on the LLM, which may not
+  have the OS-specific knowledge to correctly classify a gap vs. genuine unknown.
+
+  Worse: the agent is being trained to trust these tools. When they say UNKNOWN on definitively
+  known entities, the agent learns "these tools are unreliable" and may stop using them entirely.
+
+- **Proposed fix:**
+  **(a) Tiered verdicts for gaps:**
+  - `EXPECTED` — in baseline, confirmed expected
+  - `EXPECTED_IMPLIED` — not in baseline, but matches a known pattern (core OS path, Microsoft-signed,
+    standard Windows service name, system32 directory)
+  - `UNKNOWN` — genuinely unknown, no heuristics apply
+  - `SUSPICIOUS` — matches known-bad or anomalous patterns
+
+  For `EventLog`, the tool should return `EXPECTED_IMPLIED` with reason:
+  `"Core Windows service (present in all Windows installations); baseline entry not needed for
+  confirmation."`
+
+  **(b) Heuristic tier for path-based checks:** Any binary under `C:\Windows\System32\` that is
+  Microsoft-signed and matches a known Windows component naming pattern should get
+  `EXPECTED_IMPLIED`, not `UNKNOWN`.
+
+  **(c) Minimum:** Add a `known_core_component` boolean to the response so the agent can see
+  the system's internal classification vs. the baseline result.
+
+## F-021 · HIGH · No index-to-artifact-type mapping tool — agent must guess where data lives
+
+- **What:** The agent needs to answer "I want to query 4624 logon events → which indices?"
+  The answer is: `case-rocba-drive-20260526-1417-hayabusa-srl-forge` AND
+  `case-rocba-drive-20260526-1417-evtx-srl-forge` (with DIFFERENT field names in each).
+  Currently the agent must:
+  1. Call `idx_case_summary` to get artifact list (short tokens only: `hayabusa`, `evtx`)
+  2. Manually derive full index names from the artifact-to-index mapping buried in
+     `artifacts.{type}.indices[]`
+  3. Know from DFIR training data that 4624 events live in both hayabusa and evtx
+  4. Know that hayabusa uses `EventID` (string) while evtx uses `event.code` (integer)
+
+  This is too many degrees of separation for reliable autonomous operation.
+
+- **Impact:** F-012 already documented that short artifact tokens are rejected by `idx_search`.
+  Even with that fixed, the agent has no way to discover "for query X, search indices A, B, C"
+  without deep Windows event log knowledge that most LLMs have unreliably.
+
+- **Proposed fix:**
+  **(a) `idx_resolve_indices` tool:**
+  ```json
+  // Input: {"query_type": "logon_events", "event_ids": [4624, 4625]}
+  // Output: {
+  //   "indices": ["case-...-hayabusa-srl-forge", "case-...-evtx-srl-forge"],
+  //   "field_mapping": {
+  //     "hayabusa": {"event_id_field": "EventID", "timestamp_field": "Timestamp", "is_date_typed": false},
+  //     "evtx": {"event_id_field": "event.code", "timestamp_field": "@timestamp", "is_date_typed": true}
+  //   },
+  //   "preferred_index": "case-...-evtx-srl-forge",
+  //   "preferred_reason": "Native EVTX has date-typed @timestamp; Hayabusa Timestamp is text (see F-011)"
+  // }
+  ```
+
+  **(b) Least-effort fix:** `idx_case_summary` should return index names directly alongside
+  artifact tokens, and include field-type mappings by default (not behind `include_fields=true`).
+  The current `include_fields` parameter is a discoverability trap — most agents won't know
+  to pass it.
+
+  **(c) Elite approach — "intent-based query routing":** `idx_search(query='event.code:4624')`
+  should internally expand to search both evtx AND hayabusa indices, translating field names
+  as needed. The agent writes one query; the gateway resolves to the right indices. This is
+  how GraphQL resolvers work and it's the right pattern for multi-source data federation.
+
+## F-022 · MEDIUM · `generate_report` output is massive even for `executive` profile — no compact mode
+
+- **What:** `generate_report(profile='executive')` returned 200+ lines containing:
+  - 5 full finding documents with observation/interpretation/justification (some 500+ words each)
+  - 50+ verification_alerts entries
+  - Full writing_guidance block
+  - 5 human_review_required sections with prompts
+  - Full zeltser_guidance tool list
+
+  The agent asked for a 1-2 page executive summary and got raw data + metadata at ~15KB.
+
+- **Impact:** Report generation is the culmination of an investigation. An agent needs to
+  iterate: generate → review structure → identify gaps → regenerate. If every iteration
+  costs 15KB of context, the agent can iterate 3-4 times before context exhaustion. This is
+  incompatible with the autonomous workflow the user wants.
+
+- **Proposed fix:**
+  **(a) Two-phase report generation:**
+  - Phase 1 — `generate_report(profile='executive', preview=true)`: returns ONLY the section
+    structure, summary counts, and writing guidance. No raw finding text. ~500 bytes.
+  - Phase 2 — `generate_report(profile='executive', sections=['findings'])`: returns only
+    the requested sections. Agent pulls sections one at a time as needed.
+
+  **(b) Smart projection:** The executive profile should include finding titles + 1-line
+  summaries, not the full observation/interpretation. The agent can request full detail
+  for specific findings via `finding_ids=[...]`.
+
+  **(c) Remove verification_alerts from the default report response.** These are integrity
+  metadata, not report content. Provide a separate `report_integrity` endpoint or a
+  `include_verification=false` default.
+
+## F-023 · MEDIUM · `search_threat_intel` truncates MITRE descriptions mid-sentence
+
+- **What:** `search_threat_intel(query='APT28')` returns threat actor descriptions that are
+  cut off mid-word:
+  `"...GRU 85th Main Special Service Center (GTsSS) military unit 26165.(Citat"`
+  The MITRE description text is truncated, losing the reference and potentially critical
+  details about the threat actor's TTPs.
+
+- **Impact:** The agent sees a truncated description and cannot determine whether the missing
+  portion contains relevant indicators. For attribution work (which the user specifically asked
+  for in T-B), this is a hard block.
+
+- **Proposed fix:** Increase the text field length limit in the OpenCTI MCP backend. The
+  descriptions are pulled from the OpenCTI API and likely truncated by a `text[:N]` or
+  `str[:max_length]` in the response serialization. MITRE descriptions can exceed 500 chars —
+  budget at least 2,000.
+
+## F-024 · LOW · `environment_summary` output is enormous — defeats its purpose as an "overview"
+
+- **What:** `environment_summary` returns all 6 backend health checks with full tool output
+  inline — `evidence_list` result, `idx_status` with all 25 indices, `get_knowledge_stats`
+  with 67 sources, `server_status` with all cache statistics, and `list_available_tools`
+  with all 65 tools. The response is ~15KB.
+
+  An agent wanting a quick "are we ready?" check gets a firehose of data it didn't ask for.
+
+- **Impact:** The tool's own description says: "Single-call environment overview. Call this
+  after workflow_status for a complete picture of platform readiness." But calling it means
+  burning 15KB of context on data the agent already has or doesn't need yet. Agents will
+  stop calling it, making the "single-call overview" pattern useless.
+
+- **Proposed fix:**
+  **(a) Default to health-only:** Return `{backends: {name: {status, degraded_since?}}}` on
+  default call. The agent just wants to know "everything green?"
+
+  **(b) Add `detail` parameter:** `environment_summary(detail='full'|'health'|'stats')`.
+  Default to `health`. Agent escalates detail only when something is degraded.
+
+  **(c) The elite inversion:** Instead of a giant aggregate response, make it a push-based
+  health dashboard: the gateway emits a `health_summary` event at session start and on state
+  change. The agent never needs to poll for health — it's reported proactively.
+
+## F-025 · MEDIUM · `idx_field_values` and `idx_aggregate` need `.keyword` suffix for CSV/registry fields — undiscoverable
+
+- **What:** The tool description for `idx_aggregate` notes:
+  `"CSV/registry fields (Path, KeyPath, ValueData) require .keyword suffix: field='Path.keyword'"`
+  This is buried in the description text. An agent scanning quickly may miss it.
+  If it queries `field='Path'` (no suffix), it gets the text-analyzed version which returns
+  tokenized garbage instead of the actual path — or worse, an error.
+
+- **Impact:** Middle of the discoverability spectrum — the info IS present, but an agent
+  making 50+ tool calls may not re-read descriptions on each call. The first time it hits
+  this, it wastes a turn debugging "why are my Path results showing 'users' and 'windows'
+  instead of 'C:\Users\...'"
+
+- **Proposed fix:**
+  **(a) Auto-suffix when needed:** If the field is known to be a text/analyzed type and the
+  `.keyword` sub-field exists, the gateway should auto-append `.keyword` and return a note:
+  `"field 'Path' auto-resolved to 'Path.keyword' (text field, using keyword sub-field for
+  exact matching)."`
+
+  **(b) Minimum:** When an aggregation returns obviously tokenized results (single-word
+  values for a path-like field), the response should include a hint: "Results appear
+  tokenized. If querying file paths, use field='Path.keyword' for exact values."
+
+  **(c) `idx_case_summary` field metadata should be surfaced by default**, not behind
+  `include_fields=true`. The agent needs to know field types to write correct queries.
+
+## F-026 · LOW · `set_case_metadata` accepts potentially invalid enum values
+
+- **What:** `set_case_metadata(field='severity', value='critical')` returned `"status": "set"`.
+  The tool silently accepted the value without confirming it's a recognized severity level.
+  The SIFT/CASE spec may define a specific severity enum — if "critical" isn't valid, the
+  error will surface later (e.g., during report generation), far from the set point.
+
+- **Proposed fix:** Return valid options alongside accepted values, or reject unknown enum
+  values with a list of valid options (mirrors the pattern already used for protected/unknown
+  fields).
+
+## F-027 · INFO · Positive: `record_finding` validation is excellent — gold standard for input guarding
+
+- `record_finding` with a deliberately incomplete payload returned:
+  ```json
+  {
+    "status": "VALIDATION_FAILED",
+    "errors": [
+      "Missing required field: observation",
+      "Missing required field: interpretation",
+      "Missing required field: confidence",
+      "Missing required field: type",
+      "Missing required field: host",
+      "Missing confidence_justification (FD-005: confidence must be justified)"
+    ],
+    "guidance": ["FD-005: Confidence must be justified — cite specific evidence for your confidence level"]
+  }
+  ```
+  This is exactly what an autonomous agent needs: clear, field-level, actionable errors with
+  rule references. The agent can fix all 6 issues in one shot and retry. This pattern should
+  be replicated across ALL mutation tools (`record_timeline_event`, `manage_todo`, etc.).
+
+## F-028 · INFO · Positive: `get_tool_help` response is the blueprint for tool discoverability
+
+- `get_tool_help(tool_name='vol3')` returns:
+  ```json
+  {
+    "investigation_sequence": ["Start with windows.info...", "Run windows.pslist...", ...],
+    "field_meanings": {"PID": "Process identifier", "PPID": "Parent process identifier", ...},
+    "advisories": ["Always run pslist AND psscan — comparing results reveals HIDDEN PROCESSES..."],
+    "caveats": ["Requires a full physical memory dump...", "Anti-forensics techniques..."],
+    "quick_start": "vol -f memory_dump.raw windows.info",
+    "cross_mcp_checks": [...]
+  }
+  ```
+  This is the platonic ideal of a tool-help response. It provides: workflow sequence (HOW to use
+  the tool in an investigation), field meanings (WHAT the output columns mean), advisories
+  (WHAT to watch for), and cross-MCP integration hooks (WHERE to go next). Every tool in the
+  catalog should aspire to this depth. The `investigation_sequence` field in particular is the
+  missing piece that would make `list_available_tools` + `get_tool_help` a self-contained
+  onboarding path for an agent encountering an unfamiliar forensic tool.
+
+## F-029 · MEDIUM · No `case_id` / session affinity is visible in the tool contract — agent cannot self-confirm context
+
+- **What:** The active case is set by the portal and propagated via `AGENTIR_CASE_DIR`.
+  The agent gets `case_id` from `workflow_status` and then passes it to Opensearch tools.
+  But many tools (evidence_list, case_status, etc.) auto-resolve the case from the environment
+  with no `case_id` parameter. The agent has no way to know: "am I still operating on the
+  right case?"
+
+- **Why it matters:** In a multi-case investigation, if the portal switches the active case
+  mid-session, the agent's tool calls silently start operating on the wrong case. Context
+  compaction could drop the `case_id` knowledge entirely. The agent needs a cheap way to
+  re-confirm "I'm still on case X" without re-calling `workflow_status` (which is heavy).
+
+- **Proposed fix:**
+  **(a) `case_identity` tool:** A zero-parameter, sub-100-byte response:
+  ```json
+  {"case_id": "rocba-drive-20260526-1417", "context_confirmed": true}
+  ```
+  The agent calls this before every mutation (record_finding, manage_todo, idx_ingest) to
+  confirm context. Cost: 1 token in, ~10 tokens out.
+
+  **(b) Include `case_id` in the tool response header (not the full `_case` envelope — just
+  the ID). This adds ~20 bytes per response, a 10× improvement over the full `_case` block.**
+
+## F-030 · LOW · `idx_inspect_container` returns `aquairy_info` (typo for `acquiry_info`)
+
+- **What:** The description says `acquiry_info` but the actual response key is `acquiry`.
+  Small, but an agent that extracts fields by key name will miss it. The agent description
+  promises one key; the response delivers a differently-named key.
+
+- **Proposed fix:** Standardize to `acquiry_info` (or fix the description to match `acquiry`).
+
+---
+
+## Design Principles for Autonomous Agent DFIR (from these findings)
+
+1. **Every byte in a tool response is a byte the agent CANNOT use for evidence in context.**
+   The `_case` envelope, verbose `environment_summary`, and full-finding `generate_report`
+   responses all violate this principle. Treat tool response payloads as a zero-sum budget
+   against the context window.
+
+2. **Silent false-negatives are worse than errors.** F-003 (empty event.code on hayabusa),
+   F-011 (date range silently 0), and F-018 (empty field values with no diagnostic) are the
+   same failure class: the tool says "nothing here" when there IS something. An error the
+   agent can see and fix is recoverable. A silent empty set is an investigation-killer.
+
+3. **The agent's "field discovery loop" must be O(1), not O(n).** Currently, to answer
+   "what field holds the event ID in index X?" the agent must: call idx_case_summary,
+   re-call with include_fields=true, parse the field mappings, cross-reference with the
+   artifact type. That's 3 calls and ~5KB of tokens. A unified `idx_resolve_indices` tool
+   collapses this to 1 call / ~200 bytes.
+
+4. **Mutation tools need `record_finding`-quality validation.** F-027 shows the gold
+   standard: field-level errors, rule references, fixable in one shot. `manage_todo`,
+   `record_timeline_event`, and `set_case_metadata` should match this.
+
+5. **Tool discovery should be knowledge-driven, not search-driven.** `get_tool_help` (F-028)
+   is excellent because it organizes information the way a DFIR investigator THINKS:
+   "first do X, then Y, watch out for Z." The `investigation_sequence`, `field_meanings`,
+   and `cross_mcp_checks` fields should be standard on every tool-help response. The agent
+   should be able to `get_tool_help('evtx')` and receive a complete mini-playbook, not just
+   flags and caveats.
+
+6. **Date/time must work universally or fail loudly.** F-011 showed that date ranges on
+   hayabusa's `Timestamp` field silently return 0. The fix isn't just hayabusa-specific —
+   every tool that accepts `time_from`/`time_to` should validate that the target index's
+   timestamp field is `date`-typed, and warn if it's not.
+
+---
+
 ## Hard rule
 - Do NOT generate_report() until the deeper layer resolves. Premature report = the failure the
   committee is hinting at.
