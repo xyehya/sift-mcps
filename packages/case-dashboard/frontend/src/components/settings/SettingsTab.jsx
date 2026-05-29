@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getTokens, postToken, deleteToken, postRotateToken } from '../../api/endpoints'
+import { getTokens, postToken, deleteToken, postRotateToken, postReactivateToken } from '../../api/endpoints'
 import { useStore } from '../../store/useStore'
 
 export function SettingsTab() {
@@ -82,6 +82,19 @@ export function SettingsTab() {
       await fetchTokens()
     } catch (ex) {
       addToast(ex.message || 'Failed to revoke token', 'error')
+    }
+  }
+
+  async function handleReactivate(tokenId) {
+    if (!confirm('Are you sure you want to reactivate this agent token?')) {
+      return
+    }
+    try {
+      await postReactivateToken(tokenId)
+      addToast('Token reactivated successfully', 'success')
+      await fetchTokens()
+    } catch (ex) {
+      addToast(ex.message || 'Failed to reactivate token', 'error')
     }
   }
 
@@ -179,9 +192,14 @@ export function SettingsTab() {
                     const isDuplicate = tokens.filter(x => x.agent_id === t.agent_id && x.label === t.label).length > 1;
                     return (
                       <tr key={t.token_id} className="border-b" style={{ borderColor: 'var(--border-faint)' }}>
-                        <td className="py-3 font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>{t.agent_id}</td>
-                        <td className="py-3 animate-fade-in" style={{ color: 'var(--text-primary)' }}>
+                        <td className="py-3 font-mono font-semibold" style={{ color: t.revoked_at ? 'var(--text-muted)' : 'var(--text-primary)' }}>{t.agent_id}</td>
+                        <td className="py-3 animate-fade-in" style={{ color: t.revoked_at ? 'var(--text-muted)' : 'var(--text-primary)' }}>
                           {t.label}
+                          {t.revoked_at && (
+                            <span className="px-1.5 py-0.5 ml-2 rounded font-mono text-[9px] bg-bg-raised text-text-muted border border-border-faint">
+                              INACTIVE
+                            </span>
+                          )}
                           {isDuplicate && (
                             <span className="text-[10px] text-text-muted ml-1.5 font-mono">
                               ({t.created_at ? new Date(t.created_at).toLocaleString() : t.token_id.slice(0, 8)})
@@ -196,10 +214,17 @@ export function SettingsTab() {
                           style={{ background: 'var(--amber-dim)', color: 'var(--amber)', borderColor: 'var(--amber)' }}>
                           Rotate
                         </button>
-                        <button onClick={() => handleRevoke(t.token_id)} className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
-                          style={{ background: 'var(--crimson-dim)', color: 'var(--crimson)', borderColor: 'var(--crimson)' }}>
-                          Revoke
-                        </button>
+                        {t.revoked_at ? (
+                          <button onClick={() => handleReactivate(t.token_id)} className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
+                            style={{ background: 'var(--jade-dim)', color: 'var(--jade)', borderColor: 'var(--jade)' }}>
+                            Reactivate
+                          </button>
+                        ) : (
+                          <button onClick={() => handleRevoke(t.token_id)} className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
+                            style={{ background: 'var(--crimson-dim)', color: 'var(--crimson)', borderColor: 'var(--crimson)' }}>
+                            Revoke
+                          </button>
+                        )}
                       </td>
                     </tr>
                     );

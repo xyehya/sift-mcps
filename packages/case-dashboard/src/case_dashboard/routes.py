@@ -2621,7 +2621,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; "
             "script-src 'unsafe-inline'; "
-            "style-src 'unsafe-inline'; "
+            "style-src 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src https://fonts.gstatic.com; "
             "img-src 'self'; "
             "connect-src 'self'"
         )
@@ -3017,6 +3018,58 @@ async def rotate_token(request: Request) -> JSONResponse:
         },
         status_code=201,
     )
+
+
+async def reactivate_token(request: Request) -> JSONResponse:
+    """POST /api/tokens/{token_id}/reactivate — reactivate a revoked service token."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    must_err = _must_reset_check(examiner)
+    if must_err:
+        return must_err
+
+    if _GATEWAY_CONFIG_PATH is None:
+        return JSONResponse(
+            {"error": "Token management unavailable: gateway config path not set"},
+            status_code=503,
+        )
+
+    token_id = request.path_params["token_id"]
+
+    # Find the matching raw token
+    found_raw: str | None = None
+    found_info: dict | None = None
+    for raw_token, info in _API_KEYS.items():
+        if isinstance(info, dict) and info.get("token_id") == token_id:
+            found_raw = raw_token
+            found_info = dict(info)
+            break
+
+    if found_raw is None:
+        return JSONResponse({"error": "Token not found"}, status_code=404)
+
+    if not found_info.get("revoked_at"):
+        return JSONResponse({"error": "Token is not revoked (already active)"}, status_code=409)
+
+    found_info["revoked_at"] = None
+
+    try:
+        with _GATEWAY_CONFIG_LOCK:
+            _token_config_write({found_raw: found_info})
+    except (OSError, RuntimeError) as e:
+        logger.error("Failed to reactivate token %s: %s", token_id, e)
+        return JSONResponse(
+            {"error": "Failed to reactivate token — check gateway logs"},
+            status_code=500,
+        )
+
+    logger.info("Service token reactivated: token_id=%s by=%s", token_id, examiner)
+    return JSONResponse({"ok": True, "token_id": token_id})
 
 
 def _resolve_gateway(request: Request):
@@ -3982,6 +4035,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/tokens", create_token, methods=["POST"]),
         Route("/api/tokens/{token_id}", revoke_token, methods=["DELETE"]),
         Route("/api/tokens/{token_id}/rotate", rotate_token, methods=["POST"]),
+        Route("/api/tokens/{token_id}/reactivate", reactivate_token, methods=["POST"]),
         Route("/api/case/create", post_case_create, methods=["POST"]),
         Route("/api/cases", get_cases, methods=["GET"]),
         Route("/api/case/activate/challenge", get_case_activate_challenge, methods=["GET"]),

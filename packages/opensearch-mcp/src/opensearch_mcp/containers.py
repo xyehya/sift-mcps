@@ -504,6 +504,189 @@ def _parse_fdisk_output(output: str) -> list[dict]:
     return partitions
 
 
+# ---------------------------------------------------------------------------
+# TSK-based filesystem metadata helpers
+# ---------------------------------------------------------------------------
+
+_MEMORY_MAGIC: list[tuple[bytes, int, str]] = [
+    (b"LIME", 0, "lime"),
+    (b"HIBR", 0, "hibr"),
+    (b"PAGEDU64", 0, "pagedu64"),
+]
+
+
+def _run_tsk(tool: str, *args: str) -> tuple[str, int]:
+    """Run a Sleuth Kit tool, return (stdout, returncode). Returns ("", -1) if not installed."""
+    try:
+        result = subprocess.run([tool, *args], capture_output=True, text=True)
+        return result.stdout, result.returncode
+    except FileNotFoundError:
+        return "", -1
+
+
+def _parse_mmls_output(output: str) -> list[dict]:
+    """Parse mmls partition table output, returning real (non-meta) partition rows.
+
+    mmls row format:
+      NNN:  NNN:NNN   SSSSSSSS   EEEEEEEE   LLLLLLLL   Description
+    Meta/unallocated rows have 'Meta' or '-------' in the slot field.
+    """
+    partitions = []
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        # Outer counter ends with ':'
+        if not parts[0].endswith(":"):
+            continue
+        slot = parts[1]
+        # Skip meta and unallocated rows
+        if slot == "Meta" or slot.startswith("-"):
+            continue
+        # Real partitions have slot like "000:000"
+        if ":" not in slot:
+            continue
+        try:
+            start = int(parts[2])
+            end = int(parts[3])
+            length = int(parts[4])
+        except (ValueError, IndexError):
+            continue
+        description = " ".join(parts[5:]) if len(parts) > 5 else ""
+        partitions.append({
+            "slot": slot,
+            "start": start,
+            "end": end,
+            "length": length,
+            "description": description,
+        })
+    return partitions
+
+
+def _parse_fsstat_output(output: str) -> dict:
+    """Parse fsstat output. Note: fsstat uses 'Sector Size' (capital S)."""
+    result: dict = {}
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key == "File System Type":
+            result["fs_type"] = value
+        elif key == "Cluster Size":
+            try:
+                result["cluster_size"] = int(value)
+            except ValueError:
+                pass
+        elif key == "Sector Size":
+            try:
+                result["sector_size"] = int(value)
+            except ValueError:
+                pass
+    return result
+
+
+def _parse_img_stat_output(output: str) -> dict:
+    """Parse img_stat output. Note: img_stat uses 'Sector size' (lowercase s)."""
+    result: dict = {}
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key == "Image Type":
+            result["image_format"] = value
+        elif key == "Size in bytes":
+            try:
+                result["size_bytes"] = int(value)
+            except ValueError:
+                pass
+        elif key == "Sector size":
+            try:
+                result["sector_size"] = int(value)
+            except ValueError:
+                pass
+    return result
+
+
+def _fs_meta_memory(image_path: str) -> dict:
+    """Collect metadata for a memory image via magic-byte detection."""
+    size_bytes = 0
+    try:
+        size_bytes = Path(image_path).stat().st_size
+    except OSError:
+        pass
+
+    memory_format = "raw"
+    try:
+        with open(image_path, "rb") as f:
+            header = f.read(16)
+        for magic, offset, fmt in _MEMORY_MAGIC:
+            if header[offset : offset + len(magic)] == magic:
+                memory_format = fmt
+                break
+    except OSError:
+        pass
+
+    return {
+        "image_type": "memory_image",
+        "memory_format": memory_format,
+        "size_bytes": size_bytes,
+    }
+
+
+def _fs_meta_disk(image_path: str) -> dict:
+    """Collect filesystem metadata for a disk/EWF image via TSK.
+
+    Three outcomes:
+    - partitioned_disk: mmls exits 0 and returns real partition rows
+    - ntfs_volume: mmls exits non-zero; fsstat at offset 0 succeeds
+    - unknown: all TSK probes fail or tools absent
+    """
+    mmls_out, mmls_rc = _run_tsk("mmls", image_path)
+    partitions = _parse_mmls_output(mmls_out) if mmls_rc == 0 else []
+
+    stat_out, stat_rc = _run_tsk("img_stat", image_path)
+    img_meta = _parse_img_stat_output(stat_out) if stat_rc == 0 else {}
+
+    if partitions:
+        partition_meta = []
+        for p in partitions:
+            fs_out, fs_rc = _run_tsk("fsstat", "-o", str(p["start"]), image_path)
+            fs_meta = _parse_fsstat_output(fs_out) if fs_rc == 0 else {}
+            partition_meta.append({
+                "slot": p["slot"],
+                "start_sector": p["start"],
+                "length_sectors": p["length"],
+                "description": p["description"],
+                **fs_meta,
+            })
+        return {"image_type": "partitioned_disk", "partitions": partition_meta, **img_meta}
+
+    # No partition table — try fsstat at offset 0 (raw volume image)
+    fs_out, fs_rc = _run_tsk("fsstat", image_path)
+    if fs_rc == 0:
+        return {"image_type": "ntfs_volume", **img_meta, **_parse_fsstat_output(fs_out)}
+
+    return {"image_type": "unknown"}
+
+
+def _collect_filesystem_meta(image_path: str, container_format: str) -> dict:
+    """Collect filesystem metadata sidecar for disk or memory images.
+
+    Returns a dict suitable for JSON serialisation. Always returns at minimum
+    {"image_type": "unknown"} — never raises.
+    """
+    try:
+        if container_format == "memory":
+            return _fs_meta_memory(image_path)
+        return _fs_meta_disk(image_path)
+    except Exception:
+        return {"image_type": "unknown"}
+
+
 def _mount_nbd(path: Path, dest: Path, ctx: MountContext) -> list[Path]:
     """Mount VMDK/VHD/VHDX via qemu-nbd."""
     check_sudo()

@@ -1,1 +1,1 @@
-"""Valhuntir case management MCP server."""
+"""agentir case management MCP server."""

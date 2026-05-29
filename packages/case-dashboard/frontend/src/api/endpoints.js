@@ -54,6 +54,7 @@ export const getTokens = () => apiFetch('/api/tokens')
 export const postToken = (body) => apiPost('/api/tokens', body)
 export const deleteToken = (id) => apiDelete(`/api/tokens/${id}`)
 export const postRotateToken = (id) => apiPost(`/api/tokens/${id}/rotate`, {})
+export const postReactivateToken = (id) => apiPost(`/api/tokens/${id}/reactivate`, {})
 
 // --- Reports ---
 export const getReports = () => apiFetch('/api/reports')

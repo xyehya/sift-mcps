@@ -21,6 +21,7 @@ from opensearchpy.exceptions import (
 )
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
 from sift_common.audit import AuditWriter
+from sift_common.instructions import OPENSEARCH
 
 from opensearch_mcp.client import get_client
 from opensearch_mcp.host_dictionary import detect_host_id_mapping_type
@@ -44,7 +45,7 @@ def _validate_index(index: str) -> str | None:
     return None
 
 
-server = FastMCP("opensearch-mcp")
+server = FastMCP("opensearch-mcp", instructions=OPENSEARCH)
 audit = AuditWriter(mcp_name="opensearch-mcp")
 
 # --- Enrichment Token Budget: Layer 11 shimcache/amcache decay ---
@@ -156,13 +157,19 @@ def _add_investigation_hints(resp: dict, artifacts: dict) -> None:
     _hints_delivered = True
 
 
-def _build_coverage_state(artifacts: dict, enrichment: dict) -> dict:
+def _build_coverage_state(
+    artifacts: dict,
+    enrichment: dict,
+    case_dir: "Path | None" = None,
+) -> dict:
     """Compute coverage state for idx_case_summary.
 
-    Pure computation — compares present artifact keys against expected registry.
-    Returns disk_artifacts, memory tier/plugin state, enrichment status, and
-    actionable gaps. No new OpenSearch queries.
+    Compares present artifact keys against expected registry. Returns
+    disk_artifacts, memory tier/plugin state, enrichment status, actionable
+    gaps, and filesystem_meta_path (relative path to the most recent sidecar,
+    or None). No new OpenSearch queries.
     """
+    from pathlib import Path as _Path
     from opensearch_mcp.parse_memory import TIER_1, TIER_2, TIER_3, _plugin_to_index_suffix
 
     art_keys = set(artifacts.keys())
@@ -281,11 +288,26 @@ def _build_coverage_state(artifacts: dict, enrichment: dict) -> dict:
             "warning": "Takes 15-60 minutes for large IOC corpora.",
         })
 
+    # Locate most-recent filesystem sidecar for this case
+    filesystem_meta_path: str | None = None
+    if case_dir is not None:
+        sidecars = sorted(
+            _Path(case_dir).glob("agent/ingest/*-filesystem-meta.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if sidecars:
+            try:
+                filesystem_meta_path = str(sidecars[0].relative_to(case_dir))
+            except ValueError:
+                filesystem_meta_path = str(sidecars[0])
+
     return {
         "disk_artifacts": disk_artifacts,
         "memory": memory,
         "enrichment": enrichment_state,
         "gaps": gaps,
+        "filesystem_meta_path": filesystem_meta_path,
     }
 
 
@@ -699,13 +721,24 @@ def idx_search(
 ) -> dict:
     """Search indexed evidence using OpenSearch query_string syntax.
 
-    Results are compact by default -- bloat fields excluded, long values
-    truncated to 500 chars. Use compact=False for full documents, or
-    idx_get_event(id, index) to fetch individual full documents.
+    Use for targeted lookups by indicator, user, IP, hash, or exact field value.
+    Prefer idx_aggregate for frequency counts; prefer idx_timeline for activity spikes.
 
-    IMPORTANT: OpenSearch tokenizes on dots/hyphens. For filename searches,
-    include the extension: 'ServiceUpdater.exe' not 'ServiceUpdater'.
-    Use wildcards for partial matches: '*ServiceUpdater*'.
+    Returns: {hits: [{_id, _index, @timestamp, <fields>}], total, offset, truncated}
+    Output cap: limit max 200; compact=True strips bloat fields and truncates values
+      to 500 chars. Use idx_get_event(event_id, index) to fetch a full document.
+
+    Example:
+      idx_search(query='event.code:4688 AND process.name:*powershell*',
+                 case_id='rocba-drive-20260526-1417')
+
+    Notes:
+      - OpenSearch tokenizes on dots/hyphens — include the extension:
+        'ServiceUpdater.exe' not 'ServiceUpdater'. Use wildcards: '*ServiceUpdater*'.
+      - Quote values with special chars: source.ip:"::1" (IPv6 needs quotes).
+      - WinRM/Operational often dominates (50%+). Add
+        NOT winlog.channel:"Microsoft-Windows-WinRM/Operational" to focus queries.
+      - Use offset for pagination when total > limit.
 
     Args:
         query: OpenSearch query_string (e.g., 'event.code:4624 AND user.name:admin').
@@ -801,7 +834,16 @@ def idx_count(
     index: str = "",
     case_id: str = "",
 ) -> dict:
-    """Count matching documents.
+    """Count matching documents — returns a scalar, no documents returned.
+
+    Use to verify index population or check magnitude before committing to
+    idx_search. Faster than idx_search with limit=0. Use idx_aggregate when
+    you need counts per value, not a single total.
+
+    Returns: {count: N, audit_id}
+
+    Example:
+      idx_count(query='event.code:4624', case_id='rocba-drive-20260526-1417')
 
     Args:
         query: OpenSearch query_string (default: all).
@@ -838,7 +880,25 @@ def idx_aggregate(
     case_id: str = "",
     limit: int = 50,
 ) -> dict:
-    """Aggregate (group by) a field with optional query filter.
+    """Aggregate (group by) a field — frequency analysis, top-N counts.
+
+    Use for distribution overview: top event codes, top users, top process names.
+    Prefer over idx_search when you need a distribution, not individual documents.
+    Use idx_field_values when you only need the value set without frequency ranking.
+
+    Returns: {field, total_docs, buckets: [{key, count}], truncated, audit_id}
+    Output cap: limit max 500 buckets; truncated=true when capped.
+
+    Example:
+      idx_aggregate(field='event.code', case_id='rocba-drive-20260526-1417')
+
+    Notes:
+      - CSV/registry fields (Path, KeyPath, ValueData) require .keyword suffix:
+        field='Path.keyword'. evtx fields (event.code, process.name) are already
+        keyword-typed — no suffix needed. Check idx_case_summary include_fields=True
+        to confirm field types.
+      - Scope with query= first: query='user.name:SYSTEM' then aggregate on
+        process.name to see only SYSTEM-context processes.
 
     Args:
         field: Field to aggregate on (e.g., 'host.name', 'event.code').
@@ -891,7 +951,21 @@ def idx_get_event(
     event_id: str,
     index: str,
 ) -> dict:
-    """Retrieve a single document by its _id.
+    """Retrieve a single full document by its _id — all fields, no truncation.
+
+    Use after idx_search returns a hit worth inspecting completely.
+    idx_search compact=True strips fields and truncates values to 500 chars;
+    this returns the complete source with every field intact.
+
+    Returns: {_id, _index, <all source fields>, _note}
+
+    Example:
+      idx_get_event(event_id='abc123def456',
+                    index='case-rocba-drive-20260526-1417-evtx-srl-forge')
+
+    Notes:
+      - index must be an exact index name, not a wildcard pattern.
+      - Obtain _id and _index from idx_search hit objects.
 
     Args:
         event_id: Document _id from search results.
@@ -925,7 +999,22 @@ def idx_timeline(
     time_from: str = "",
     time_to: str = "",
 ) -> dict:
-    """Show event count over time as a date histogram.
+    """Show event count over time as a date histogram — temporal spike detection.
+
+    Use to identify activity bursts and narrow a time window before idx_search
+    or idx_aggregate. After locating a spike, scope subsequent queries with
+    time_from/time_to to focus on that period.
+
+    Returns: {total_docs, interval, buckets: [{time: ISO8601, count: N}], audit_id}
+
+    Example:
+      idx_timeline(query='event.code:4688', case_id='rocba-drive-20260526-1417',
+                   interval='1h', time_from='2026-05-01T00:00:00Z')
+
+    Notes:
+      - interval must match \\d+[smhd]: 30m, 1h, 6h, 1d. Invalid format returns error.
+      - Narrow with time_from/time_to before querying large indices — full-case
+        histograms on 1M+ events produce thousands of buckets.
 
     Args:
         query: OpenSearch query_string filter.
@@ -1007,7 +1096,24 @@ def idx_field_values(
     case_id: str = "",
     limit: int = 50,
 ) -> dict:
-    """List unique values for a field (terms aggregation).
+    """List unique values for a field with occurrence counts — field discovery.
+
+    Use to enumerate what values exist before writing targeted queries: all
+    usernames, all process names, all registry key paths. Use idx_aggregate
+    when ranked frequency matters more than the value set.
+
+    Returns: {field, values: [{value, count}], truncated, audit_id}
+    Output cap: limit max 500 values; truncated=true when capped.
+
+    Example:
+      idx_field_values(field='winlog.provider_name',
+                       case_id='rocba-drive-20260526-1417')
+
+    Notes:
+      - Append .keyword for CSV/text fields: field='Path.keyword'.
+        evtx fields (event.code, process.name) are already keyword-typed.
+      - Scope with query= to narrow: query='event.code:4624' to enumerate
+        only logon source users.
 
     Args:
         field: Field to enumerate (e.g., 'winlog.provider_name').
@@ -1052,7 +1158,13 @@ def idx_field_values(
 
 @server.tool(annotations={"readOnlyHint": True})
 def idx_status() -> dict:
-    """Show OpenSearch cluster and case index status across all cases."""
+    """Show OpenSearch cluster health and all case index doc counts.
+
+    Use to verify the cluster is reachable and see what cases have indexed data.
+    Use idx_case_summary for per-case artifact breakdown and coverage state.
+
+    Returns: {cluster_status, indices: [{index, docs, size, status}], total_indices}
+    """
     client = _get_os()
 
     indices = _os_call(client.cat.indices, format="json")
@@ -1094,10 +1206,12 @@ def idx_status() -> dict:
 def idx_shard_status() -> dict:
     """Report OpenSearch shard usage and capacity headroom.
 
-    Returns current shard count, configured max_shards_per_node,
-    effective cluster-wide max (max_per_node x data_nodes), and
-    headroom percentage. Use before large ingests to sanity-check
-    capacity.
+    Use before large ingests to check whether the cluster can accept new indices.
+    A full disk image ingest can add 40+ shards. status=warning at <10% headroom;
+    status=critical at <2%.
+
+    Returns: {current_shards, max_shards_per_node, data_nodes, max_total,
+      headroom_pct, status: ok|warning|critical, top_indices_by_shard_count}
     """
     from opensearch_mcp.shard_capacity import _resolve_setting
 
@@ -1231,10 +1345,36 @@ def idx_install_pipelines() -> dict:
 
 @server.tool(annotations={"readOnlyHint": True})
 def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
-    """Get a complete overview of indexed evidence for a case.
+    """Get complete coverage overview for a case — first call every indexed session.
 
-    First call in any indexed investigation. Returns hosts, artifact types
-    with doc counts, and enrichment status.
+    Returns hosts, artifact types with doc counts, enrichment state, and
+    coverage_state with gaps that include exact idx_ingest commands to fill them.
+    Call this before any other idx_* tool to understand what's indexed and what's missing.
+
+    Returns:
+      {case_id, hosts: [str],
+       artifacts: {type: {docs, hosts, indices}},
+       total_docs, time_range,
+       enrichment: {triage: {checked, suspicious}},
+       investigation_hints: [str],
+       coverage_state: {
+         disk_artifacts: {type: indexed|not_run|not_available},
+         memory: {tier_run, plugins_run: [str], plugins_not_run: [str]},
+         enrichment: {triage: done|not_run, threat_intel: done|not_run},
+         gaps: [{coverage_gap, when_to_run, command, next_mcp_step, warning}],
+         filesystem_meta_path: str|null
+       },
+       audit_id}
+
+    Example:
+      idx_case_summary(case_id='rocba-drive-20260526-1417')
+
+    Notes:
+      - gaps[].command is the exact idx_ingest call to fill the gap — use verbatim.
+      - filesystem_meta_path is the partition/filesystem sidecar JSON from ingest
+        (null if not collected).
+      - Call with include_fields=True to get field type mappings per artifact,
+        needed to determine .keyword suffix requirements in aggregations.
 
     Args:
         case_id: Case ID from case_status. If omitted, defaults to the active
@@ -1446,7 +1586,9 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
     if fields_per_type:
         resp["fields_per_type"] = fields_per_type
     _add_investigation_hints(resp, artifacts)
-    resp["coverage_state"] = _build_coverage_state(artifacts, enrichment)
+    _case_dir_env = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    _summary_case_dir = Path(_case_dir_env) if _case_dir_env else None
+    resp["coverage_state"] = _build_coverage_state(artifacts, enrichment, case_dir=_summary_case_dir)
     aid = audit.log(
         tool="idx_case_summary",
         params={"case_id": cid},
@@ -1459,20 +1601,25 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
 
 @server.tool(annotations={"readOnlyHint": True})
 def idx_inspect_container(path: str) -> dict:
-    """Inspect a forensic container file (E01, raw image) without mounting.
+    """Inspect a forensic container (E01, raw image) without mounting — pre-ingest survey.
 
-    Uses ewfinfo for E01 files (metadata, hashes, acquiry info) and
-    fdisk/img_stat for raw images (size, sector count). Does NOT mount
-    the container — safe for initial survey before committing to a full
-    idx_ingest.
+    Use before idx_ingest to verify integrity, check size, and identify partitions.
+    Does NOT mount the image. Follow with idx_ingest(dry_run=True) for the full plan.
+
+    Returns: {container_type, size_bytes, size_human, hashes, partitions[],
+      acquiry_info (E01 only), tool_available}
+
+    Example:
+      idx_inspect_container(path='evidence/rocba-cdrive.e01')
+
+    Notes:
+      - Uses ewfinfo for E01; fdisk/img_stat for raw images.
+      - tool_available=false means the inspection tool wasn't found on the SIFT VM —
+        fall back to run_command(['ewfinfo', path]) directly.
 
     Args:
         path: Container path under the active case. Bare filenames resolve
             to AGENTIR_CASE_DIR/evidence/.
-
-    Returns:
-        {container_type, size_bytes, size_human, hashes, partitions[],
-         acquiry_info (E01 only), tool_available}
     """
     import subprocess
 
@@ -1685,6 +1832,21 @@ def _launch_container_ingest(
     proc = _spawn_ingest(cmd, env, log_fh, run_id)
     log_fh.close()
 
+    # Collect filesystem metadata sidecar while the ingest subprocess starts
+    from opensearch_mcp.containers import _collect_filesystem_meta
+
+    _fs_meta = _collect_filesystem_meta(resolved_path, "disk")
+    _fs_meta_rel: str | None = None
+    _case_dir_env_ci = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    if _case_dir_env_ci and _fs_meta.get("image_type") != "unknown":
+        import json as _json_ci
+
+        _sidecar_dir = Path(_case_dir_env_ci) / "agent" / "ingest"
+        _sidecar_dir.mkdir(parents=True, exist_ok=True)
+        _sidecar_path = _sidecar_dir / f"{run_id}-filesystem-meta.json"
+        _sidecar_path.write_text(_json_ci.dumps(_fs_meta, indent=2))
+        _fs_meta_rel = f"agent/ingest/{run_id}-filesystem-meta.json"
+
     host_names = [h.hostname for h in hosts] if hosts else ([hostname] if hostname else [])
     aid = audit.log(
         tool="idx_ingest",
@@ -1710,6 +1872,8 @@ def _launch_container_ingest(
             "Continue polling until status is 'complete' or 'failed'."
         ),
     }
+    if _fs_meta_rel:
+        resp["filesystem_meta_path"] = _fs_meta_rel
     if aid:
         resp["audit_id"] = aid
     return resp
@@ -1756,6 +1920,12 @@ def idx_ingest(
         idx_ingest(path="evidence/access.log", format="accesslog", hostname="web01")
       - memory: Volatility 3 memory-image parsing. Example:
         idx_ingest(path="evidence/memdump.raw", format="memory", hostname="host1", tier=1)
+
+    Memory tier plugins (format="memory"):
+      Tier 1 (default): pslist, psscan, pstree, cmdline, netstat, netscan,
+        svcscan, modules, registry.hivelist, windows.info — run first.
+      Tier 2: dlllist, envars, getsids, ldrmodules — after suspicious PIDs found.
+      Tier 3: malfind, vadinfo, dumpfiles — targeted, high cost, high noise.
 
     Ingest can add baseline context automatically for supported artifacts.
     Keep enrichment decisions explicit after ingest: use idx_case_summary to
@@ -3352,6 +3522,20 @@ def idx_ingest_memory(
     _pid0_m = _vd() / "ingest-status" / f"{_safe_case_m}-0.json"
     _pid0_m.unlink(missing_ok=True)
 
+    # Collect filesystem metadata sidecar for memory image
+    from opensearch_mcp.containers import _collect_filesystem_meta as _cfm_mem
+    import json as _json_mem
+
+    _fs_meta_m = _cfm_mem(resolved_path, "memory")
+    _fs_meta_rel_m: str | None = None
+    _case_dir_env_m = _os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    if _case_dir_env_m and _fs_meta_m.get("image_type") != "unknown":
+        _sidecar_dir_m = Path(_case_dir_env_m) / "agent" / "ingest"
+        _sidecar_dir_m.mkdir(parents=True, exist_ok=True)
+        _sidecar_path_m = _sidecar_dir_m / f"{run_id}-filesystem-meta.json"
+        _sidecar_path_m.write_text(_json_mem.dumps(_fs_meta_m, indent=2))
+        _fs_meta_rel_m = f"agent/ingest/{run_id}-filesystem-meta.json"
+
     resp = {
         "status": "started",
         "pid": proc.pid,
@@ -3362,6 +3546,8 @@ def idx_ingest_memory(
             "This may take several minutes. Use idx_ingest_status() to monitor."
         ),
     }
+    if _fs_meta_rel_m:
+        resp["filesystem_meta_path"] = _fs_meta_rel_m
     aid = audit.log(
         tool="idx_ingest_memory",
         params={"path": resolved_path, "tier": tier, "pid": proc.pid, "run_id": run_id},

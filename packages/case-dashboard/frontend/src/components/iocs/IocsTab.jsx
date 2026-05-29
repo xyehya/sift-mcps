@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, Fragment } from 'react'
 import { useStore } from '../../store/useStore'
 import { SkeletonBlock } from '../common/Skeleton'
 
@@ -218,177 +218,175 @@ export function IocsTab() {
                 const hosts = [...new Set((ioc.sightings ?? []).map((s) => s.host).filter(Boolean))]
 
                 return (
-                  <tr key={ioc.id} className="group" style={{ color: 'var(--text-primary)' }}>
-                    {/* Expand chevron */}
-                    <td className="py-3 pr-4">
-                      <button
-                        onClick={() => toggleRow(ioc.id)}
-                        className="text-text-muted hover:text-text-primary transition-colors"
-                        title={isExpanded ? 'Collapse' : 'Expand'}
-                      >
-                        <svg
-                          viewBox="0 0 12 12"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                          className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                        >
-                          <path d="M4 2l4 4-4 4" />
-                        </svg>
-                      </button>
-                    </td>
-
-                    {/* Value + copy */}
-                    <td className="py-3 pr-4">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-[11px] truncate max-w-[280px]" style={{ color: 'var(--text-bright)' }}>
-                          {ioc.value}
-                        </span>
+                  <Fragment key={ioc.id}>
+                    <tr className="group" style={{ color: 'var(--text-primary)' }}>
+                      {/* Expand chevron */}
+                      <td className="py-3 pr-4">
                         <button
-                          onClick={() => handleCopy(ioc.value)}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-bg-raised"
-                          title="Copy to clipboard"
-                          style={{ color: 'var(--text-muted)' }}
+                          onClick={() => toggleRow(ioc.id)}
+                          className="text-text-muted hover:text-text-primary transition-colors"
+                          title={isExpanded ? 'Collapse' : 'Expand'}
                         >
-                          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3">
-                            <rect x="5" y="5" width="8" height="8" rx="1" />
-                            <path d="M3 9H2a1 1 0 01-1-1V3a1 1 0 011-1h5a1 1 0 011 1v1" />
+                          <svg
+                            viewBox="0 0 12 12"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                          >
+                            <path d="M4 2l4 4-4 4" />
                           </svg>
                         </button>
-                      </div>
-                    </td>
+                      </td>
 
-                    {/* Type */}
-                    <td className="py-3 pr-4">
-                      <Badge color="var(--text-muted)">{ioc.type}</Badge>
-                    </td>
-
-                    {/* Category */}
-                    <td className="py-3 pr-4">
-                      <span className="font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                        {ioc.category}
-                      </span>
-                    </td>
-
-                    {/* Confidence */}
-                    <td className="py-3 pr-4">
-                      <Badge color={confColor}>
-                        <ConfidenceIcon confidence={ioc.confidence} /> {ioc.confidence}
-                      </Badge>
-                    </td>
-
-                    {/* Hosts */}
-                    {!isSingleHost && (
+                      {/* Value + copy */}
                       <td className="py-3 pr-4">
-                        <div className="flex flex-wrap gap-1 max-w-[160px]">
-                          {hosts.map((h) => (
-                            <span
-                              key={h}
-                              className="font-mono text-[10px] px-1 py-0.5 rounded"
-                              style={{ color: 'var(--text-muted)', background: 'var(--bg-raised)' }}
-                            >
-                              {displayHost(h)}
-                            </span>
-                          ))}
-                          {hosts.length === 0 && <span style={{ color: 'var(--text-ghost)' }}>—</span>}
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[11px] truncate max-w-[280px]" style={{ color: 'var(--text-bright)' }}>
+                            {ioc.value}
+                          </span>
+                          <button
+                            onClick={() => handleCopy(ioc.value)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-bg-raised"
+                            title="Copy to clipboard"
+                            style={{ color: 'var(--text-muted)' }}
+                          >
+                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3">
+                              <rect x="5" y="5" width="8" height="8" rx="1" />
+                              <path d="M3 9H2a1 1 0 01-1-1V3a1 1 0 011-1h5a1 1 0 011 1v1" />
+                            </svg>
+                          </button>
                         </div>
                       </td>
+
+                      {/* Type */}
+                      <td className="py-3 pr-4">
+                        <Badge color="var(--text-muted)">{ioc.type}</Badge>
+                      </td>
+
+                      {/* Category */}
+                      <td className="py-3 pr-4">
+                        <span className="font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          {ioc.category}
+                        </span>
+                      </td>
+
+                      {/* Confidence */}
+                      <td className="py-3 pr-4">
+                        <Badge color={confColor}>
+                          <ConfidenceIcon confidence={ioc.confidence} /> {ioc.confidence}
+                        </Badge>
+                      </td>
+
+                      {/* Hosts */}
+                      {!isSingleHost && (
+                        <td className="py-3 pr-4">
+                          <div className="flex flex-wrap gap-1 max-w-[160px]">
+                            {hosts.map((h) => (
+                              <span
+                                key={h}
+                                className="font-mono text-[10px] px-1 py-0.5 rounded"
+                                style={{ color: 'var(--text-muted)', background: 'var(--bg-raised)' }}
+                              >
+                                {displayHost(h)}
+                              </span>
+                            ))}
+                            {hosts.length === 0 && <span style={{ color: 'var(--text-ghost)' }}>—</span>}
+                          </div>
+                        </td>
+                      )}
+
+                      {/* Source Findings */}
+                      <td className="py-3 pr-4">
+                        <div className="flex flex-wrap gap-1">
+                          {(ioc.source_findings ?? []).map((fid) => (
+                            <button
+                              key={fid}
+                              onClick={(e) => { e.stopPropagation(); handleFindingClick(fid) }}
+                              className="font-mono text-[11px] px-1 py-0.5 rounded cursor-pointer hover:underline"
+                              style={{ color: 'var(--cyan)', background: 'var(--cyan-dim)' }}
+                            >
+                              {fid}
+                            </button>
+                          ))}
+                        </div>
+                      </td>
+
+                      {/* Status */}
+                      <td className="py-3">
+                        <Badge color={statusColor}>{ioc.status}</Badge>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr className="bg-bg-surface">
+                        <td colSpan={isSingleHost ? 7 : 8} className="p-4 border-b" style={{ borderColor: 'var(--border-faint)' }}>
+                          <div className="space-y-2">
+                            {/* MITRE techniques */}
+                            {(ioc.mitre_techniques ?? []).length > 0 && (
+                              <div className="flex items-start gap-2">
+                                <span className="font-mono text-[10px] uppercase tracking-wider shrink-0 mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                  MITRE:
+                                </span>
+                                <div className="flex flex-wrap gap-1">
+                                  {ioc.mitre_techniques.map((t) => {
+                                    const isSub = t.includes('.')
+                                    return (
+                                      <span
+                                        key={t}
+                                        className="font-mono text-[10px] px-1.5 py-0.5 rounded"
+                                        style={{
+                                          color: 'var(--cyan)',
+                                          background: 'var(--cyan-dim)',
+                                          opacity: isSub ? 0.65 : 1,
+                                          fontSize: isSub ? '9px' : '10px',
+                                          marginLeft: isSub ? '4px' : '0px',
+                                        }}
+                                      >
+                                        {t}
+                                      </span>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Tags */}
+                            {(ioc.tags ?? []).length > 0 && (
+                              <div className="flex items-start gap-2">
+                                <span className="font-mono text-[10px] uppercase tracking-wider shrink-0 mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                  Tags:
+                                </span>
+                                <div className="flex flex-wrap gap-1">
+                                  {ioc.tags.map((t) => (
+                                    <span
+                                      key={t}
+                                      className="font-mono text-[10px] px-1.5 py-0.5 rounded"
+                                      style={{ color: 'var(--amber)', background: 'var(--amber-dim)' }}
+                                    >
+                                      {t}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* ID footer */}
+                            <div className="flex gap-4 text-[10px] font-mono" style={{ color: 'var(--text-ghost)' }}>
+                              <span>ID: {ioc.id}</span>
+                              {ioc.examiner && <span>Examiner: {ioc.examiner}</span>}
+                              {ioc.created_at && <span>Created: {new Date(ioc.created_at).toISOString().replace('T', ' ').substring(0, 19)}</span>}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
                     )}
-
-                    {/* Source Findings */}
-                    <td className="py-3 pr-4">
-                      <div className="flex flex-wrap gap-1">
-                        {(ioc.source_findings ?? []).map((fid) => (
-                          <button
-                            key={fid}
-                            onClick={(e) => { e.stopPropagation(); handleFindingClick(fid) }}
-                            className="font-mono text-[11px] px-1 py-0.5 rounded cursor-pointer hover:underline"
-                            style={{ color: 'var(--cyan)', background: 'var(--cyan-dim)' }}
-                          >
-                            {fid}
-                          </button>
-                        ))}
-                      </div>
-                    </td>
-
-                    {/* Status */}
-                    <td className="py-3">
-                      <Badge color={statusColor}>{ioc.status}</Badge>
-                    </td>
-                  </tr>
+                  </Fragment>
                 )
               })}
             </tbody>
           </table>
         )}
       </div>
-
-      {/* Expanded rows (rendered below the table as detail panels) */}
-      {filtered.filter((ioc) => expandedRows.has(ioc.id)).map((ioc) => (
-        <div
-          key={`exp-${ioc.id}`}
-          className="mx-5 mb-3 p-3 rounded border"
-          style={{ borderColor: 'var(--border-faint)', background: 'var(--bg-surface)' }}
-        >
-          <div className="space-y-2">
-            {/* MITRE techniques */}
-            {(ioc.mitre_techniques ?? []).length > 0 && (
-              <div className="flex items-start gap-2">
-                <span className="font-mono text-[10px] uppercase tracking-wider shrink-0 mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  MITRE:
-                </span>
-                <div className="flex flex-wrap gap-1">
-                  {ioc.mitre_techniques.map((t) => {
-                    const isSub = t.includes('.')
-                    return (
-                      <span
-                        key={t}
-                        className="font-mono text-[10px] px-1.5 py-0.5 rounded"
-                        style={{
-                          color: 'var(--cyan)',
-                          background: 'var(--cyan-dim)',
-                          opacity: isSub ? 0.65 : 1,
-                          fontSize: isSub ? '9px' : '10px',
-                          marginLeft: isSub ? '4px' : '0px',
-                        }}
-                      >
-                        {t}
-                      </span>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Tags */}
-            {(ioc.tags ?? []).length > 0 && (
-              <div className="flex items-start gap-2">
-                <span className="font-mono text-[10px] uppercase tracking-wider shrink-0 mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  Tags:
-                </span>
-                <div className="flex flex-wrap gap-1">
-                  {ioc.tags.map((t) => (
-                    <span
-                      key={t}
-                      className="font-mono text-[10px] px-1.5 py-0.5 rounded"
-                      style={{ color: 'var(--amber)', background: 'var(--amber-dim)' }}
-                    >
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ID footer */}
-            <div className="flex gap-4 text-[10px] font-mono" style={{ color: 'var(--text-ghost)' }}>
-              <span>ID: {ioc.id}</span>
-              {ioc.examiner && <span>Examiner: {ioc.examiner}</span>}
-              {ioc.created_at && <span>Created: {new Date(ioc.created_at).toISOString().replace('T', ' ').substring(0, 19)}</span>}
-            </div>
-          </div>
-        </div>
-      ))}
     </div>
   )
 }

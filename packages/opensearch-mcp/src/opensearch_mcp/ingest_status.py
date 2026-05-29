@@ -26,6 +26,7 @@ def write_status(
     bulk_failed_reason: str = "",
     elapsed_seconds: float = 0.0,
     log_file: str = "",
+    source_path: str = "",
 ) -> None:
     """Write ingest progress atomically.
 
@@ -71,6 +72,8 @@ def write_status(
     }
     if log_file:
         data["log_file"] = log_file
+    if source_path:
+        data["source_path"] = source_path
     fd, tmp = tempfile.mkstemp(dir=str(_STATUS_DIR), suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:

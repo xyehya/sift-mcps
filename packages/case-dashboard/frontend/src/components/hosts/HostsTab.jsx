@@ -162,8 +162,8 @@ export function HostsTab() {
         </div>
       </div>
 
-      {/* Main Content Area */}
-      <div className="flex-1 overflow-x-auto min-h-0">
+      {/* Main Content Area Card */}
+      <div className="rounded border bg-bg-surface border-border-soft p-4 overflow-x-auto">
         {hostsData.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center" style={{ color: 'var(--text-muted)' }}>
             <svg className="w-12 h-12 mb-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">

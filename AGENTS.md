@@ -144,6 +144,9 @@ Browser      ──HTTPS──▶     │
 - Live verify: `curl -s -k https://192.168.122.81:4508/api/v1/health | python3 -m json.tool`
 - MCP tools/list: initialize session at `/mcp`, then `tools/list` with session ID
 
+
+**If Agent has been configured with the MCP, it can directly use tool calls for testing**
+
 ---
 ## Hardened Installer (install.sh)
 

@@ -665,21 +665,24 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
 
               {/* Justification Text */}
               {editingField === 'confidence_justification' ? (
-                <div className="flex gap-2 items-center flex-1">
-                  <input value={editVal} onChange={(e) => setEditVal(e.target.value)}
-                    className="flex-1 px-2 py-0.5 rounded text-xs focus:outline-none"
+                <div className="flex flex-col gap-2 flex-1 mt-1">
+                  <textarea value={editVal} onChange={(e) => setEditVal(e.target.value)}
+                    rows={3}
+                    className="w-full p-2 rounded text-xs font-sans focus:outline-none resize-y"
                     style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }} />
-                  <button onClick={() => saveEdit('confidence_justification')} className="px-2 py-0.5 rounded text-xs font-sans font-semibold"
-                    style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}>Save</button>
-                  <button onClick={cancelEdit} className="px-2 py-0.5 rounded text-xs font-sans"
-                    style={{ color: 'var(--text-muted)' }}>Cancel</button>
+                  <div className="flex gap-2 justify-end">
+                    <button onClick={() => saveEdit('confidence_justification')} className="px-2 py-0.5 rounded text-xs font-sans font-semibold"
+                      style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}>Save</button>
+                    <button onClick={cancelEdit} className="px-2 py-0.5 rounded text-xs font-sans"
+                      style={{ color: 'var(--text-muted)' }}>Cancel</button>
+                  </div>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                  <span className="font-sans text-xs italic text-text-primary truncate">
+                <div className="flex items-start gap-1.5 flex-1 min-w-0">
+                  <span className="font-sans text-xs italic text-text-primary break-words whitespace-pre-wrap flex-1">
                     — {eff.confidence_justification || <span style={{ color: 'var(--text-muted)' }}>No confidence justification.</span>}
                   </span>
-                  <button onClick={() => startEdit('confidence_justification', eff.confidence_justification)} className="text-text-muted hover:text-cyan text-[11px]" title="Edit justification">✎</button>
+                  <button onClick={() => startEdit('confidence_justification', eff.confidence_justification)} className="text-text-muted hover:text-cyan text-[11px] shrink-0 mt-0.5" title="Edit justification">✎</button>
                 </div>
               )}
             </div>
@@ -689,7 +692,7 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
           <div className="border border-border-faint rounded overflow-hidden">
             <button onClick={() => setShowContext(!showContext)} className="w-full text-left px-3 py-2 text-xs font-sans flex items-center justify-between bg-bg-surface hover:bg-bg-raised text-text-primary">
               <span className="flex items-center gap-2">
-                <span className="text-[10px] text-text-muted transition-transform inline-block transform" style={{ transform: showContext ? 'rotate(90deg)' : 'none' }}>▶</span>
+                <span className="text-[10px] text-text-muted">{showContext ? '▼' : '▶'}</span>
                 <span className="font-semibold">Examiner Context Notes</span>
               </span>
             </button>
@@ -735,7 +738,7 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
         <details className="group border border-border-faint rounded" open={zone2Open} onToggle={(e) => setZone2Open(e.target.open)}>
           <summary className="px-3 py-2 text-xs font-semibold cursor-pointer select-none flex items-center bg-bg-surface hover:bg-bg-raised text-text-primary list-none [&::-webkit-details-marker]:hidden">
             <span className="flex items-center gap-2">
-              <span className="text-[10px] text-text-muted transition-transform inline-block transform group-open:rotate-90">▶</span>
+              <span className="text-[10px] text-text-muted">{zone2Open ? '▼' : '▶'}</span>
               <span>Evidence & Context Detail</span>
             </span>
           </summary>
@@ -918,9 +921,12 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
 
               {/* Integrity */}
               <details className="group border border-border-faint rounded p-2.5">
-                <summary className="text-[11px] font-semibold cursor-pointer select-none text-text-muted flex justify-between">
+                <summary className="text-[11px] font-semibold cursor-pointer select-none text-text-muted flex items-center gap-2 list-none [&::-webkit-details-marker]:hidden">
+                  <span className="text-[10px] text-text-muted">
+                    <span className="group-open:hidden">▶</span>
+                    <span className="hidden group-open:inline">▼</span>
+                  </span>
                   <span>Cryptographic Integrity</span>
-                  <span>▼</span>
                 </summary>
                 <div className="mt-2 space-y-1 text-[10px] font-mono text-text-muted">
                   <div>Verification: <span className={clsx(
@@ -1251,7 +1257,7 @@ function AuditTrailPanel({ auditData, finding }) {
             <div key={eid} className="border border-border-soft rounded overflow-hidden">
               <button onClick={() => toggleOpen(eid)} className="w-full text-left px-3 py-2 text-xs font-mono flex items-center justify-between bg-bg-raised hover:bg-bg-overlay text-text-primary">
                 <span className="flex items-center gap-2">
-                  <span className="text-[10px] text-text-muted transition-transform inline-block transform" style={{ transform: isOpen ? 'rotate(90deg)' : 'none' }}>▶</span>
+                  <span className="text-[10px] text-text-muted">{isOpen ? '▼' : '▶'}</span>
                   <span className="font-bold">{eid}</span>
                   <span className="text-text-muted">({backend})</span>
                 </span>

@@ -15,10 +15,10 @@
   --border-soft:  #232d45;
   --border-hard:  #2e3d5f;
 
-  --text-bright:  #eef2ff;
-  --text-primary: #c8d4f0;
-  --text-muted:   #6b7fa3;
-  --text-ghost:   #4e5e80;
+  --text-bright:  #f8fafc;
+  --text-primary: #e2e8f0;
+  --text-muted:   #94a3b8;
+  --text-ghost:   #64748b;
 
   --cyan:         #00d4ff;
   --cyan-dim:     rgba(0, 212, 255, 0.12);

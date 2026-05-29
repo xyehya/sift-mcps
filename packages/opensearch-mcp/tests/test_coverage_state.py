@@ -11,7 +11,8 @@ def _build(**kwargs):
 
     artifacts = kwargs.get("artifacts", {})
     enrichment = kwargs.get("enrichment", {})
-    return _build_coverage_state(artifacts, enrichment)
+    case_dir = kwargs.get("case_dir", None)
+    return _build_coverage_state(artifacts, enrichment, case_dir=case_dir)
 
 
 class TestEmptyCase:
@@ -157,3 +158,36 @@ class TestEnrichmentState:
         )
         gap_cmds = [g["command"] for g in state["gaps"]]
         assert not any("enrich" in c for c in gap_cmds)
+
+
+class TestFilesystemMetaPath:
+    def test_no_case_dir_returns_none(self):
+        state = _build()
+        assert state["filesystem_meta_path"] is None
+
+    def test_case_dir_no_sidecar_returns_none(self, tmp_path):
+        state = _build(case_dir=tmp_path)
+        assert state["filesystem_meta_path"] is None
+
+    def test_sidecar_present_returns_relative_path(self, tmp_path):
+        sidecar_dir = tmp_path / "agent" / "ingest"
+        sidecar_dir.mkdir(parents=True)
+        sidecar = sidecar_dir / "abc123-filesystem-meta.json"
+        sidecar.write_text('{"image_type": "ntfs_volume"}')
+
+        state = _build(case_dir=tmp_path)
+        assert state["filesystem_meta_path"] == "agent/ingest/abc123-filesystem-meta.json"
+
+    def test_most_recent_sidecar_wins(self, tmp_path):
+        import time
+
+        sidecar_dir = tmp_path / "agent" / "ingest"
+        sidecar_dir.mkdir(parents=True)
+        old = sidecar_dir / "run-old-filesystem-meta.json"
+        new = sidecar_dir / "run-new-filesystem-meta.json"
+        old.write_text('{"image_type": "partitioned_disk"}')
+        time.sleep(0.01)
+        new.write_text('{"image_type": "ntfs_volume"}')
+
+        state = _build(case_dir=tmp_path)
+        assert "run-new" in state["filesystem_meta_path"]

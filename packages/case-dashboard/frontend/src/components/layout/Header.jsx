@@ -78,17 +78,17 @@ export function Header({ onLogout }) {
   const isIdle = !isProcessing && !isError
 
   let agentStatusLabel = 'idle'
-  let agentStatusColor = 'var(--text-ghost)'
-  let agentStatusTooltip = 'Agent status: idle — no analysis running'
+  let agentStatusColor = '#94a3b8'
+  let agentStatusTooltip = 'Agent status: idle — No AI analysis tasks running.'
 
   if (isError) {
     agentStatusLabel = 'error'
-    agentStatusColor = 'var(--status-rejected)'
-    agentStatusTooltip = 'Agent status: error — integrity violation'
+    agentStatusColor = '#ef4444'
+    agentStatusTooltip = 'Agent status: error — Integrity violation or system error.'
   } else if (isProcessing) {
     agentStatusLabel = 'processing'
-    agentStatusColor = 'var(--status-pending)'
-    agentStatusTooltip = 'Agent status: processing'
+    agentStatusColor = '#eab308'
+    agentStatusTooltip = 'Agent status: processing — AI analysis tasks are active.'
   }
 
   return (
@@ -106,17 +106,18 @@ export function Header({ onLogout }) {
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setCaseMenuOpen(!caseMenuOpen)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded text-xs font-mono transition-colors bg-bg-raised hover:bg-bg-overlay border border-border-soft cursor-pointer text-text-primary"
+            className="flex items-center gap-2 px-3 py-1.5 rounded border transition-colors cursor-pointer text-text-primary hover:bg-bg-raised hover:border-text-muted bg-bg-surface font-mono text-xs"
+            style={{ borderColor: 'var(--border-soft)' }}
           >
             {activeCase ? (
               <>
                 <span className="w-1.5 h-1.5 rounded-full inline-block shrink-0" style={{ background: 'var(--jade)' }} />
-                <span>{activeCaseId}</span>
+                <span className="font-semibold">{activeCaseId}</span>
               </>
             ) : (
               <span className="text-text-muted">No case active</span>
             )}
-            <Icon name="chevron-down" className="w-3.5 h-3.5 text-text-muted shrink-0" />
+            <Icon name="chevron-down" className="w-4 h-4 text-text-primary shrink-0 transition-transform" style={{ transform: caseMenuOpen ? 'rotate(180deg)' : 'none' }} />
           </button>
 
           {caseMenuOpen && (

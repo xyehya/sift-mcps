@@ -69,7 +69,7 @@ def test_csp_only_on_portal_html_responses(client):
     assert resp_portal_html.status_code == 200
     assert "Content-Security-Policy" in resp_portal_html.headers
     assert resp_portal_html.headers["Content-Security-Policy"] == (
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com"
     )
 
     # HTML page under /dashboard -> should have CSP
@@ -77,7 +77,7 @@ def test_csp_only_on_portal_html_responses(client):
     assert resp_dash_html.status_code == 200
     assert "Content-Security-Policy" in resp_dash_html.headers
     assert resp_dash_html.headers["Content-Security-Policy"] == (
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com"
     )
 
     # JSON API response under /portal -> should NOT have CSP

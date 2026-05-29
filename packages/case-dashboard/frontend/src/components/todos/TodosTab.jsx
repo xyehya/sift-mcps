@@ -116,8 +116,8 @@ export function TodosTab() {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="flex-1 overflow-auto min-h-0">
+      {/* Table Container Card */}
+      <div className="rounded border bg-bg-surface border-border-soft p-4 overflow-x-auto">
         {todos.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center" style={{ color: 'var(--text-muted)' }}>
             <svg className="w-12 h-12 mb-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">

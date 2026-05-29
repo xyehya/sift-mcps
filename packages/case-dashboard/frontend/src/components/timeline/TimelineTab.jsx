@@ -44,7 +44,15 @@ export function TimelineTab() {
 
   const filtered = useMemo(() => {
     let list = timeline
-    if (typeFilter.size > 0) list = list.filter((e) => typeFilter.has(e.type))
+    if (typeFilter.size > 0) {
+      list = list.filter((e) => {
+        let t = (e.event_type || e.type || 'other').toLowerCase()
+        if (!ALL_TYPES.includes(t)) {
+          t = 'other'
+        }
+        return typeFilter.has(t)
+      })
+    }
     if (hostFilter !== 'all') list = list.filter((e) => e.host === hostFilter)
     if (search) {
       const q = search.toLowerCase()
@@ -112,7 +120,8 @@ export function TimelineTab() {
           <p className="text-xs font-mono mt-8 text-center" style={{ color: 'var(--text-muted)' }}>No events match filters.</p>
         ) : (
           filtered.map((ev, i) => {
-            const color = TYPE_COLOR[ev.type] ?? 'var(--text-ghost)'
+            const typeKey = (ev.event_type || ev.type || 'other').toLowerCase()
+            const color = TYPE_COLOR[typeKey] ?? TYPE_COLOR['other']
             const prev = filtered[i - 1]
             const gap = prev ? new Date(ev.timestamp).getTime() - new Date(prev.timestamp).getTime() : 0
             const showGap = gap > GAP_THRESHOLD_MS
@@ -124,7 +133,7 @@ export function TimelineTab() {
                   <div className="flex items-center gap-2 my-1">
                     <div className="flex-1 h-px" style={{ background: 'var(--border-faint)' }} />
                     <span className="font-mono text-[10px] px-1.5 py-px rounded-full shrink-0"
-                      style={{ color: 'var(--amber)', border: '1px solid var(--amber)', background: 'var(--amber-dim)' }}>
+                       style={{ color: 'var(--amber)', border: '1px solid var(--amber)', background: 'var(--amber-dim)' }}>
                       ▲ {humanizeGap(gap)} gap
                     </span>
                     <div className="flex-1 h-px" style={{ background: 'var(--border-faint)' }} />
@@ -145,7 +154,7 @@ export function TimelineTab() {
                     {new Date(ev.timestamp).toISOString().substring(11, 19)}
                   </span>
                   <span className="font-mono text-[10px] w-16 shrink-0 capitalize" style={{ color }}>
-                    {ev.type ? `[${ev.type}]` : ''}
+                    {ev.event_type || ev.type ? `[${ev.event_type || ev.type}]` : ''}
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-sans" style={{ color: 'var(--text-primary)' }}>

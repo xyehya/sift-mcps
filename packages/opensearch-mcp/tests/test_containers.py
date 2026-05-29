@@ -348,3 +348,197 @@ class TestMakeIngestTmpdir:
         monkeypatch.setenv("AGENTIR_CASES_DIR", str(legacy_cases))
         result = make_ingest_tmpdir("portal-case-20260525-1000")
         assert str(result).startswith(str(case_dir / "tmp"))
+
+
+# ---------------------------------------------------------------------------
+# TSK filesystem metadata helpers
+# Fixtures captured from a real SIFT VM test run (2026-05-29).
+# ---------------------------------------------------------------------------
+
+# Real mmls output captured from SIFT VM (2026-05-29) — 200 MiB MBR+NTFS image.
+_MMLS_PARTITIONED = """\
+ DOS Partition Table
+Offset Sector: 0
+Units are in 512-byte sectors
+
+      Slot      Start        End          Length       Description
+000:  Meta      0000000000   0000000000   0000000001   Primary Table (#0)
+001:  -------   0000000000   0000002047   0000002048   Unallocated
+002:  000:000   0000002048   0000409599   0000407552   NTFS / exFAT (0x07)
+"""
+
+# fsstat -o 2048 output on the NTFS partition (same real image).
+_FSSTAT_NTFS = """\
+FILE SYSTEM INFORMATION
+--------------------------------------------
+File System Type: NTFS
+Volume Serial Number: 441CFA4D1B6716A8
+OEM Name: NTFS
+Version: Windows XP
+
+METADATA INFORMATION
+--------------------------------------------
+First Cluster of MFT: 4
+First Cluster of MFT Mirror: 25471
+Size of MFT Entries: 1024 bytes
+Size of Index Records: 4096 bytes
+Range: 0 - 27
+Root Directory: 5
+
+CONTENT INFORMATION
+--------------------------------------------
+Sector Size: 512
+Cluster Size: 4096
+Total Cluster Range: 0 - 50943
+Total Sector Range: 0 - 407551
+"""
+
+# img_stat output — note real output uses a tab after "Sector size:".
+_IMG_STAT = """\
+ IMAGE FILE INFORMATION
+--------------------------------------------
+Image Type: raw
+
+Size in bytes: 209715200
+Sector size:\t512
+"""
+
+
+class TestParseMmlsOutput:
+    def test_partitioned_disk_returns_real_partition(self):
+        from opensearch_mcp.containers import _parse_mmls_output
+
+        parts = _parse_mmls_output(_MMLS_PARTITIONED)
+        assert len(parts) == 1
+        assert parts[0]["slot"] == "000:000"
+        assert parts[0]["start"] == 2048
+        assert parts[0]["length"] == 407552
+
+    def test_meta_and_unallocated_skipped(self):
+        from opensearch_mcp.containers import _parse_mmls_output
+
+        parts = _parse_mmls_output(_MMLS_PARTITIONED)
+        slots = [p["slot"] for p in parts]
+        assert "Meta" not in slots
+        assert "-------" not in slots
+
+    def test_empty_output_returns_empty_list(self):
+        from opensearch_mcp.containers import _parse_mmls_output
+
+        assert _parse_mmls_output("") == []
+
+
+class TestParseFsstatOutput:
+    def test_fs_type(self):
+        from opensearch_mcp.containers import _parse_fsstat_output
+
+        result = _parse_fsstat_output(_FSSTAT_NTFS)
+        assert result["fs_type"] == "NTFS"
+
+    def test_sector_size_uppercase(self):
+        from opensearch_mcp.containers import _parse_fsstat_output
+
+        result = _parse_fsstat_output(_FSSTAT_NTFS)
+        assert result["sector_size"] == 512
+
+    def test_cluster_size(self):
+        from opensearch_mcp.containers import _parse_fsstat_output
+
+        result = _parse_fsstat_output(_FSSTAT_NTFS)
+        assert result["cluster_size"] == 4096
+
+
+class TestParseImgStatOutput:
+    def test_image_format(self):
+        from opensearch_mcp.containers import _parse_img_stat_output
+
+        result = _parse_img_stat_output(_IMG_STAT)
+        assert result["image_format"] == "raw"
+
+    def test_size_bytes(self):
+        from opensearch_mcp.containers import _parse_img_stat_output
+
+        result = _parse_img_stat_output(_IMG_STAT)
+        assert result["size_bytes"] == 209715200
+
+    def test_sector_size_lowercase(self):
+        from opensearch_mcp.containers import _parse_img_stat_output
+
+        result = _parse_img_stat_output(_IMG_STAT)
+        assert result["sector_size"] == 512
+
+
+class TestCollectFilesystemMeta:
+    """Integration-level tests for _collect_filesystem_meta using mocked subprocess."""
+
+    @patch("opensearch_mcp.containers.subprocess")
+    def test_partitioned_disk_branch(self, mock_subprocess):
+        from unittest.mock import MagicMock
+
+        from opensearch_mcp.containers import _collect_filesystem_meta
+
+        def _run(cmd, **kw):
+            tool = cmd[0]
+            if tool == "mmls":
+                return MagicMock(stdout=_MMLS_PARTITIONED, returncode=0)
+            if tool == "img_stat":
+                return MagicMock(stdout=_IMG_STAT, returncode=0)
+            if tool == "fsstat":
+                return MagicMock(stdout=_FSSTAT_NTFS, returncode=0)
+            return MagicMock(stdout="", returncode=1)
+
+        mock_subprocess.run.side_effect = _run
+
+        result = _collect_filesystem_meta("/fake/disk.img", "disk")
+        assert result["image_type"] == "partitioned_disk"
+        assert len(result["partitions"]) == 1
+        assert result["partitions"][0]["start_sector"] == 2048
+        assert result["partitions"][0]["fs_type"] == "NTFS"
+        assert result["size_bytes"] == 209715200
+
+    @patch("opensearch_mcp.containers.subprocess")
+    def test_ntfs_volume_branch(self, mock_subprocess):
+        from unittest.mock import MagicMock
+
+        from opensearch_mcp.containers import _collect_filesystem_meta
+
+        def _run(cmd, **kw):
+            tool = cmd[0]
+            if tool == "mmls":
+                # Volume image: mmls exits non-zero, no output
+                return MagicMock(stdout="", returncode=1)
+            if tool == "img_stat":
+                return MagicMock(stdout=_IMG_STAT, returncode=0)
+            if tool == "fsstat":
+                return MagicMock(stdout=_FSSTAT_NTFS, returncode=0)
+            return MagicMock(stdout="", returncode=1)
+
+        mock_subprocess.run.side_effect = _run
+
+        result = _collect_filesystem_meta("/fake/volume.img", "raw")
+        assert result["image_type"] == "ntfs_volume"
+        assert result["fs_type"] == "NTFS"
+        assert result["size_bytes"] == 209715200
+
+    def test_memory_image_branch(self, tmp_path):
+        from opensearch_mcp.containers import _collect_filesystem_meta
+
+        img = tmp_path / "mem.lime"
+        img.write_bytes(b"LIME" + b"\x00" * 100)
+
+        result = _collect_filesystem_meta(str(img), "memory")
+        assert result["image_type"] == "memory_image"
+        assert result["memory_format"] == "lime"
+        assert result["size_bytes"] == 104
+
+    @patch("opensearch_mcp.containers.subprocess")
+    def test_tool_absent_returns_unknown(self, mock_subprocess):
+        import subprocess as _real_subprocess
+
+        from opensearch_mcp.containers import _collect_filesystem_meta
+
+        mock_subprocess.run.side_effect = FileNotFoundError("mmls not found")
+        mock_subprocess.CalledProcessError = _real_subprocess.CalledProcessError
+
+        result = _collect_filesystem_meta("/fake/disk.img", "disk")
+        assert result["image_type"] == "unknown"
