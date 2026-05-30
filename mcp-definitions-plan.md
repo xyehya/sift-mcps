@@ -92,18 +92,12 @@ file, stat, find, ls, md5sum, sha1sum, sha256sum, xxd, hexdump, readelf, objdump
 bulk_extractor, strings, ssdeep, exiftool, regripper (rip.pl), hashdeep, 7z, dc3dd,
 ewfacquire, ewfmount, vshadowinfo, vshadowmount, fls, icat, mmls, blkls, hayabusa,
 log2timeline.py, mactime, psort.py, vol, AmcacheParser, AppCompatCacheParser, RECmd,
-MFTECmd, EvtxECmd, JLECmd, LECmd, SBECmd, RBCmd, SQLECmd, bstrings
+MFTECmd, EvtxECmd, JLECmd, LECmd, SBECmd, RBCmd, SQLECmd, bstrings, zeek
 
 **NOT available (not installed):**
-- `PECmd` — Prefetch parsing falls back to Plaso. Needs binary from EricZimmerman/PECmd GitHub releases → `/usr/local/bin/PECmd`.
-- `SrumECmd` — SRUM parsing falls back to Plaso. Needs binary from EricZimmerman/Srum GitHub releases → `/usr/local/bin/SrumECmd`. dotnet 9.0.117 is present so .NET executables will run.
-- `zeek` — no PCAP analysis. Needs zeek PPA for Ubuntu 24.04, complex install.
-- `binwalk` — **now installed** (2026-05-29, apt). Firmware analysis available.
+- `PECmd` 
+- `SrumECmd` 
 
-**Installed this session (2026-05-29):**
-- `yara` 4.5.0 — `/usr/bin/yara` — YARA sweeps now viable. Update instructions accordingly.
-- `tshark` 4.2.2 — `/usr/bin/tshark` — PCAP analysis now viable.
-- `binwalk` — `/usr/bin/binwalk` — firmware analysis available.
 
 **TODO — install.sh: add missing tool installation**
 The hardened installer (`install.sh`) must provision these tools so fresh SIFT VM
