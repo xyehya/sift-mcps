@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useStore } from '../../store/useStore'
 import { SkeletonBlock } from '../common/Skeleton'
+import { createTodo, updateTodo, deleteTodo } from '../../api/endpoints'
 
 const PRIORITY_WEIGHT = { high: 3, medium: 2, low: 1 }
 
@@ -17,10 +18,25 @@ const STATUS_COLOR = {
   completed: 'var(--jade)',
 }
 
+const EMPTY_CREATE = { description: '', priority: 'medium', assignee: '', related: '' }
+
 export function TodosTab() {
-  const { todos, summary, setActiveTab, setSelectedFindingId, isLoading } = useStore()
+  const { todos, setTodos, summary, setActiveTab, setSelectedFindingId, isLoading, addToast, user } = useStore()
   const [priorityFilter, setPriorityFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
+
+  const canWrite = user?.role === 'examiner'
+
+  // Create form
+  const [creating, setCreating] = useState(false)
+  const [draft, setDraft] = useState(EMPTY_CREATE)
+  const [savingNew, setSavingNew] = useState(false)
+
+  // Inline edit
+  const [editingId, setEditingId] = useState(null)
+  const [editDraft, setEditDraft] = useState({ description: '', priority: 'medium' })
+  // Per-row in-flight guard (toggle / delete / save)
+  const [busyId, setBusyId] = useState(null)
 
   const sortedTodos = useMemo(() => {
     let list = [...todos]
@@ -49,10 +65,105 @@ export function TodosTab() {
   function formatDate(iso) {
     if (!iso) return '—'
     try {
-      const d = new Date(iso)
-      return d.toLocaleString()
+      return new Date(iso).toLocaleString()
     } catch {
       return iso
+    }
+  }
+
+  // --- CRUD handlers ---
+
+  async function handleCreate() {
+    const description = draft.description.trim()
+    if (!description) {
+      addToast('Description is required', 'error')
+      return
+    }
+    const related = draft.related
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    setSavingNew(true)
+    try {
+      const created = await createTodo({
+        description,
+        priority: draft.priority,
+        assignee: draft.assignee.trim(),
+        related_findings: related,
+      })
+      if (created) {
+        setTodos([...todos, created])
+        addToast(`Created ${created.todo_id}`, 'success')
+        setDraft(EMPTY_CREATE)
+        setCreating(false)
+      }
+    } catch (ex) {
+      addToast(ex.message, 'error')
+    } finally {
+      setSavingNew(false)
+    }
+  }
+
+  async function handleToggleStatus(todo) {
+    const next = (todo.status ?? 'open') === 'completed' ? 'open' : 'completed'
+    setBusyId(todo.todo_id)
+    try {
+      const updated = await updateTodo(todo.todo_id, { status: next })
+      if (updated) {
+        setTodos(todos.map((t) => (t.todo_id === todo.todo_id ? updated : t)))
+        addToast(`${todo.todo_id} marked ${next}`, next === 'completed' ? 'success' : 'info')
+      }
+    } catch (ex) {
+      addToast(ex.message, 'error')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  function startEdit(todo) {
+    setEditingId(todo.todo_id)
+    setEditDraft({ description: todo.description ?? '', priority: todo.priority ?? 'medium' })
+  }
+
+  function cancelEdit() {
+    setEditingId(null)
+  }
+
+  async function handleSaveEdit(todo) {
+    const description = editDraft.description.trim()
+    if (!description) {
+      addToast('Description cannot be empty', 'error')
+      return
+    }
+    setBusyId(todo.todo_id)
+    try {
+      const updated = await updateTodo(todo.todo_id, {
+        description,
+        priority: editDraft.priority,
+      })
+      if (updated) {
+        setTodos(todos.map((t) => (t.todo_id === todo.todo_id ? updated : t)))
+        addToast(`Updated ${todo.todo_id}`, 'success')
+        setEditingId(null)
+      }
+    } catch (ex) {
+      addToast(ex.message, 'error')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function handleDelete(todo) {
+    if (!window.confirm(`Delete ${todo.todo_id}? This cannot be undone.`)) return
+    setBusyId(todo.todo_id)
+    try {
+      await deleteTodo(todo.todo_id)
+      setTodos(todos.filter((t) => t.todo_id !== todo.todo_id))
+      addToast(`Deleted ${todo.todo_id}`, 'info')
+    } catch (ex) {
+      addToast(ex.message, 'error')
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -68,6 +179,12 @@ export function TodosTab() {
         <SkeletonBlock rows={10} gap={12} />
       </div>
     )
+  }
+
+  const inputStyle = {
+    borderColor: 'var(--border-soft)',
+    color: 'var(--text-primary)',
+    background: 'var(--bg-surface)',
   }
 
   return (
@@ -87,14 +204,13 @@ export function TodosTab() {
           </div>
         </div>
 
-        {/* Filter bar */}
+        {/* Filter bar + New */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Priority filter */}
           <select
             value={priorityFilter}
             onChange={(e) => setPriorityFilter(e.target.value)}
             className="px-2 py-1.5 rounded text-[11px] font-mono bg-transparent border focus:outline-none"
-            style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)', background: 'var(--bg-surface)' }}
+            style={inputStyle}
           >
             <option value="all">All Priorities</option>
             <option value="high">▲ High</option>
@@ -102,18 +218,80 @@ export function TodosTab() {
             <option value="low">● Low</option>
           </select>
 
-          {/* Status filter */}
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="px-2 py-1.5 rounded text-[11px] font-mono bg-transparent border focus:outline-none"
-            style={{ borderColor: 'var(--border-soft)', color: 'var(--text-primary)', background: 'var(--bg-surface)' }}
+            style={inputStyle}
           >
             <option value="all">All Status</option>
             <option value="open">Open</option>
             <option value="completed">Completed</option>
           </select>
+
+          {canWrite && (
+            <button
+              onClick={() => setCreating((v) => !v)}
+              className="ml-auto px-3 py-1.5 rounded text-[11px] font-mono font-semibold cursor-pointer transition-colors"
+              style={{
+                background: creating ? 'var(--bg-raised)' : 'var(--cyan-dim)',
+                color: 'var(--cyan)',
+                border: '1px solid var(--border-soft)',
+              }}
+            >
+              {creating ? 'Cancel' : '+ New TODO'}
+            </button>
+          )}
         </div>
+
+        {/* Create form */}
+        {canWrite && creating && (
+          <div className="rounded border p-3 space-y-2" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-soft)' }}>
+            <textarea
+              autoFocus
+              value={draft.description}
+              onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+              placeholder="Describe the task…"
+              rows={2}
+              className="w-full px-2 py-1.5 rounded text-xs font-sans border focus:outline-none resize-y"
+              style={inputStyle}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={draft.priority}
+                onChange={(e) => setDraft({ ...draft, priority: e.target.value })}
+                className="px-2 py-1.5 rounded text-[11px] font-mono border focus:outline-none"
+                style={inputStyle}
+              >
+                <option value="high">▲ High</option>
+                <option value="medium">◆ Medium</option>
+                <option value="low">● Low</option>
+              </select>
+              <input
+                value={draft.assignee}
+                onChange={(e) => setDraft({ ...draft, assignee: e.target.value })}
+                placeholder="Assignee (optional)"
+                className="px-2 py-1.5 rounded text-[11px] font-mono border focus:outline-none"
+                style={inputStyle}
+              />
+              <input
+                value={draft.related}
+                onChange={(e) => setDraft({ ...draft, related: e.target.value })}
+                placeholder="Related findings, comma-separated (optional)"
+                className="flex-1 min-w-[16rem] px-2 py-1.5 rounded text-[11px] font-mono border focus:outline-none"
+                style={inputStyle}
+              />
+              <button
+                onClick={handleCreate}
+                disabled={savingNew}
+                className="px-3 py-1.5 rounded text-[11px] font-mono font-semibold cursor-pointer transition-opacity disabled:opacity-50"
+                style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}
+              >
+                {savingNew ? 'Saving…' : 'Create'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Table Container Card */}
@@ -127,7 +305,9 @@ export function TodosTab() {
               <line x1="8" y1="17" x2="12" y2="17" />
             </svg>
             <p className="font-mono text-sm">No TODOs created for this case.</p>
-            <p className="text-xs text-text-muted mt-1 max-w-xs">Tasks will appear once the agent or examiner registers them.</p>
+            <p className="text-xs text-text-muted mt-1 max-w-xs">
+              {canWrite ? 'Create one with “+ New TODO”, or they appear once the agent registers them.' : 'Tasks will appear once the agent or examiner registers them.'}
+            </p>
           </div>
         ) : sortedTodos.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center" style={{ color: 'var(--text-muted)' }}>
@@ -150,7 +330,8 @@ export function TodosTab() {
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Examiner</th>
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Status</th>
                 <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Related Findings</th>
-                <th className="py-2.5 font-sans font-semibold uppercase tracking-wider text-[10px]">Created</th>
+                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Created</th>
+                {canWrite && <th className="py-2.5 font-sans font-semibold uppercase tracking-wider text-[10px] text-right">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y" style={{ divideColor: 'var(--border-faint)' }}>
@@ -161,39 +342,65 @@ export function TodosTab() {
                 const stat = todo.status ?? 'open'
                 const statusColor = STATUS_COLOR[stat] ?? 'var(--text-muted)'
                 const relatedFids = todo.related_findings ?? []
+                const isEditing = editingId === todo.todo_id
+                const isBusy = busyId === todo.todo_id
 
                 return (
-                  <tr key={todo.todo_id} className="group" style={{ color: 'var(--text-primary)' }}>
+                  <tr key={todo.todo_id} className="group" style={{ color: 'var(--text-primary)', opacity: isBusy ? 0.6 : 1 }}>
                     {/* ID */}
-                    <td className="py-3 pr-4">
-                      <span className="font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    <td className="py-3 pr-4 align-top">
+                      <span className="font-mono text-[11px] whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
                         {todo.todo_id}
                       </span>
                     </td>
                     {/* Title (description) */}
-                    <td className="py-3 pr-4">
-                      <div className="max-w-xs truncate font-sans text-xs" title={todo.description}>
-                        {todo.description || '—'}
-                      </div>
+                    <td className="py-3 pr-4 align-top">
+                      {isEditing ? (
+                        <textarea
+                          autoFocus
+                          value={editDraft.description}
+                          onChange={(e) => setEditDraft({ ...editDraft, description: e.target.value })}
+                          rows={2}
+                          className="w-full min-w-[14rem] px-2 py-1 rounded text-xs font-sans border focus:outline-none resize-y"
+                          style={inputStyle}
+                        />
+                      ) : (
+                        <div className="max-w-xs truncate font-sans text-xs" title={todo.description}>
+                          {todo.description || '—'}
+                        </div>
+                      )}
                     </td>
-                    {/* Priority — shape-disambiguated badge */}
-                    <td className="py-3 pr-4">
-                      <span
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] font-semibold"
-                        style={{ color: priColor, background: priColor + '18' }}
-                      >
-                        <span>{priShape}</span>
-                        <span>{pri}</span>
-                      </span>
+                    {/* Priority */}
+                    <td className="py-3 pr-4 align-top">
+                      {isEditing ? (
+                        <select
+                          value={editDraft.priority}
+                          onChange={(e) => setEditDraft({ ...editDraft, priority: e.target.value })}
+                          className="px-2 py-1 rounded text-[11px] font-mono border focus:outline-none"
+                          style={inputStyle}
+                        >
+                          <option value="high">▲ High</option>
+                          <option value="medium">◆ Medium</option>
+                          <option value="low">● Low</option>
+                        </select>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] font-semibold"
+                          style={{ color: priColor, background: priColor + '18' }}
+                        >
+                          <span>{priShape}</span>
+                          <span>{pri}</span>
+                        </span>
+                      )}
                     </td>
                     {/* Examiner */}
-                    <td className="py-3 pr-4">
+                    <td className="py-3 pr-4 align-top">
                       <span className="font-sans text-[11px]" style={{ color: 'var(--text-muted)' }}>
                         {todo.examiner || todo.created_by || '—'}
                       </span>
                     </td>
                     {/* Status */}
-                    <td className="py-3 pr-4">
+                    <td className="py-3 pr-4 align-top">
                       <span
                         className="inline-flex px-1.5 py-0.5 rounded font-mono text-[10px] font-semibold"
                         style={{ color: statusColor, background: statusColor + '18' }}
@@ -201,8 +408,8 @@ export function TodosTab() {
                         {stat.toUpperCase()}
                       </span>
                     </td>
-                    {/* Related findings — clickable links */}
-                    <td className="py-3 pr-4">
+                    {/* Related findings */}
+                    <td className="py-3 pr-4 align-top">
                       {relatedFids.length > 0 ? (
                         <div className="flex flex-wrap gap-1">
                           {relatedFids.map((fid) => (
@@ -222,11 +429,32 @@ export function TodosTab() {
                       )}
                     </td>
                     {/* Created at */}
-                    <td className="py-3">
-                      <span className="font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                    <td className="py-3 pr-4 align-top">
+                      <span className="font-mono text-[11px] whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
                         {formatDate(todo.created_at)}
                       </span>
                     </td>
+                    {/* Actions */}
+                    {canWrite && (
+                      <td className="py-3 align-top">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {isEditing ? (
+                            <>
+                              <ActionButton onClick={() => handleSaveEdit(todo)} disabled={isBusy} color="var(--jade)">Save</ActionButton>
+                              <ActionButton onClick={cancelEdit} disabled={isBusy} color="var(--text-muted)">Cancel</ActionButton>
+                            </>
+                          ) : (
+                            <>
+                              <ActionButton onClick={() => handleToggleStatus(todo)} disabled={isBusy} color={stat === 'completed' ? 'var(--amber)' : 'var(--jade)'}>
+                                {stat === 'completed' ? 'Reopen' : 'Complete'}
+                              </ActionButton>
+                              <ActionButton onClick={() => startEdit(todo)} disabled={isBusy} color="var(--cyan)">Edit</ActionButton>
+                              <ActionButton onClick={() => handleDelete(todo)} disabled={isBusy} color="var(--crimson)">Delete</ActionButton>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 )
               })}
@@ -235,5 +463,18 @@ export function TodosTab() {
         )}
       </div>
     </div>
+  )
+}
+
+function ActionButton({ onClick, disabled, color, children }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="px-2 py-1 rounded font-mono text-[10px] font-semibold cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      style={{ color, background: color + '14', border: `1px solid ${color}33` }}
+    >
+      {children}
+    </button>
   )
 }

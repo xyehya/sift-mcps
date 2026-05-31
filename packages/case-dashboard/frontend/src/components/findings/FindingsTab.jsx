@@ -214,7 +214,7 @@ export function FindingsTab() {
             </p>
           ) : (
             filtered.map((f) => {
-              const color = CONF_COLOR[f.confidence] ?? 'var(--text-muted)'
+              const color = CONF_COLOR[(f.confidence ?? '').toUpperCase()] ?? 'var(--text-muted)'
               const staged = delta.find((d) => d.id === f.id)
               const isSelected = selectMode && selected.has(f.id)
               const isActive = f.id === (currentFinding?.id)
@@ -302,7 +302,7 @@ export function FindingsTab() {
 
 function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onUnstage }) {
   const { delta, setDelta, findings, addToast, setSelectedFindingId, setActiveTab } = useStore()
-  const confColor = CONF_COLOR[finding.confidence] ?? 'var(--text-muted)'
+  const confColor = CONF_COLOR[(finding.confidence ?? '').toUpperCase()] ?? 'var(--text-muted)'
   const [showContext, setShowContext] = useState(false)
   const [zone2Open, setZone2Open] = useState(false)
   const [auditData, setAuditData] = useState([])
@@ -418,11 +418,16 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex-1 overflow-y-auto p-5 space-y-5">
-        
-        {/* Sticky Header Bar */}
-        <div className="p-4 rounded sticky top-0 z-10 shadow-md"
-          style={{ background: CONF_DIM[finding.confidence] ?? 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-5 space-y-5">
+
+        {/* Sticky Header Bar — opaque surface with a discrete confidence accent on the left edge
+            (no full-width tint; the confidence is shown as a "Severity" chip below). */}
+        <div className="p-5 -mt-5 -mx-5 mb-0 sticky top-0 z-30 shadow-md"
+          style={{
+            background: 'var(--bg-surface)',
+            borderBottom: '1px solid var(--border-faint)',
+            borderLeft: `3px solid ${confColor}`,
+          }}>
           <div className="flex items-center gap-3">
             <span className="font-mono text-sm shrink-0" style={{ color: 'var(--text-muted)' }}>{finding.id}</span>
             <div className="flex-1 min-w-0">
@@ -445,49 +450,33 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
             </div>
           </div>
           
-          <div className="flex flex-wrap gap-2 mt-2.5 items-center text-xs">
-            <Badge color={confColor}>{CONF_SHAPE[eff.confidence]} {eff.confidence}</Badge>
-            <Badge color="var(--text-bright)" subtle>{finding.type}</Badge>
-            
-            {/* Status Badge */}
-            {stagedItem ? (
-              <Badge color="var(--amber)">
-                {stagedItem.action === 'approve' ? '✓ STAGED APPROVE' : stagedItem.action === 'reject' ? '✗ STAGED REJECT' : '✎ STAGED EDITS'}
+          <div className="flex flex-wrap gap-y-2 gap-x-3 mt-2.5 items-center justify-between text-xs">
+            {/* LEFT: Severity (confidence) + finding type */}
+            <div className="flex items-center gap-2 min-w-0">
+              <Badge color={CONF_COLOR[(eff.confidence ?? '').toUpperCase()] ?? 'var(--text-muted)'}>
+                {CONF_SHAPE[(eff.confidence ?? '').toUpperCase()] ?? ''} Severity: {eff.confidence ?? '—'}
               </Badge>
-            ) : (
-              <Badge color={finding.status?.toLowerCase() === 'approved' ? 'var(--jade)' : finding.status?.toLowerCase() === 'rejected' ? 'var(--crimson)' : 'var(--status-pending)'}>
-                {finding.status?.toLowerCase() === 'approved' ? '✓ APPROVED' : finding.status?.toLowerCase() === 'rejected' ? '✗ REJECTED' : 'DRAFT'}
-              </Badge>
-            )}
+              <Badge color="var(--text-bright)" subtle>{finding.type}</Badge>
+            </div>
 
-            {/* Provenance Grade */}
-            {finding.provenance_grade && (
-              <div className="relative group inline-flex items-center gap-1">
-                <span className="px-1.5 py-0.5 rounded font-mono text-[10px] tracking-wider uppercase border"
-                  style={{
-                    color: eff.provenance_grade === 'FULL' ? 'var(--grade-full)' : eff.provenance_grade === 'PARTIAL' ? 'var(--grade-partial)' : 'var(--grade-none)',
-                    borderColor: eff.provenance_grade === 'FULL' ? 'var(--grade-full)44' : eff.provenance_grade === 'PARTIAL' ? 'var(--grade-partial)44' : 'var(--grade-none)44',
-                    background: 'transparent'
-                  }}>
-                  Grade: {eff.provenance_grade}
+            {/* RIGHT: Host · Date · approved/pending indicator at the far end */}
+            <div className="flex items-center gap-3 flex-wrap justify-end">
+              {eff.host && (
+                <span style={{ color: 'var(--text-muted)' }}>Host: <strong style={{ color: 'var(--text-primary)' }}>{eff.host}</strong></span>
+              )}
+              {(eff.event_timestamp || eff.timestamp) && (
+                <span className="font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                  {new Date(eff.event_timestamp || eff.timestamp).toISOString().replace('T', ' ').substring(0, 19)}
                 </span>
-                <span className="cursor-help" title="Grade indicates evidence provenance: FULL (fully verified MCP logs), PARTIAL (partially verified), or UNGRADED (manual/unverified findings).">
-                  <svg className="h-3.5 w-3.5 text-text-muted hover:text-text-primary transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
-                  </svg>
-                </span>
-              </div>
-            )}
-
-            {/* Event Timestamp and Host Context */}
-            {eff.host && (
-              <span style={{ color: 'var(--text-muted)' }}>Host: <strong style={{ color: 'var(--text-primary)' }}>{eff.host}</strong></span>
-            )}
-            {(eff.event_timestamp || eff.timestamp) && (
-              <span className="font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                {new Date(eff.event_timestamp || eff.timestamp).toISOString().replace('T', ' ').substring(0, 19)}
-              </span>
-            )}
+              )}
+              {stagedItem ? (
+                <Badge color="var(--amber)">◷ STAGED {stagedItem.action?.toUpperCase()}</Badge>
+              ) : (
+                <Badge color={finding.status?.toLowerCase() === 'approved' ? 'var(--jade)' : finding.status?.toLowerCase() === 'rejected' ? 'var(--crimson)' : 'var(--status-pending)'}>
+                  {finding.status?.toLowerCase() === 'approved' ? '✓ APPROVED' : finding.status?.toLowerCase() === 'rejected' ? '✗ REJECTED' : '◷ PENDING'}
+                </Badge>
+              )}
+            </div>
           </div>
         </div>
 

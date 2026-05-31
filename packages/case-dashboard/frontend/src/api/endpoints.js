@@ -1,4 +1,4 @@
-import { apiFetch, apiPost, apiDelete } from './client'
+import { apiFetch, apiPost, apiPatch, apiDelete } from './client'
 
 // --- Auth ---
 export const getSetupRequired = () => apiFetch('/api/auth/setup-required')
@@ -23,6 +23,9 @@ export const getTimeline = () => apiFetch('/api/timeline')
 export const getEvidence = () => apiFetch('/api/evidence')
 export const getIocs = () => apiFetch('/api/iocs')
 export const getTodos = () => apiFetch('/api/todos')
+export const createTodo = (body) => apiPost('/api/todos', body)
+export const updateTodo = (id, body) => apiPatch(`/api/todos/${id}`, body)
+export const deleteTodo = (id) => apiDelete(`/api/todos/${id}`)
 export const getSummary = () => apiFetch('/api/summary')
 export const getAudit = (findingId) => apiFetch(`/api/audit/${findingId}`)
 

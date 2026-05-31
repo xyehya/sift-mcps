@@ -1677,8 +1677,31 @@ async def get_evidence(request: Request) -> JSONResponse:
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
-    raw = _load_json(case_dir / "evidence.json")
-    evidence = raw.get("files", []) if isinstance(raw, dict) else (raw or [])
+    # The authoritative registered-evidence record is the SEALED manifest
+    # (evidence-manifest.json). Sealing writes files into the manifest, not into
+    # evidence.json — reading evidence.json left the table empty and made sealed
+    # files appear to "disappear" after verify+seal. Prefer the manifest's ACTIVE
+    # files, falling back to legacy evidence.json only when no manifest exists.
+    manifest = load_manifest(case_dir)
+    manifest_files = manifest.get("files", []) if manifest else []
+    active_files = [e for e in manifest_files if e.get("status", "ACTIVE") == "ACTIVE"]
+    if active_files:
+        evidence = [
+            {
+                "path": e.get("path", ""),
+                "sha256": e.get("sha256", ""),
+                "size_bytes": e.get("bytes"),
+                "source": e.get("source", ""),
+                "description": e.get("description", ""),
+                "registered_at": e.get("registered_at", ""),
+                "registered_by": e.get("registered_by") or e.get("sealed_by") or "",
+                "status": e.get("status", "ACTIVE"),
+            }
+            for e in active_files
+        ]
+    else:
+        raw = _load_json(case_dir / "evidence.json")
+        evidence = raw.get("files", []) if isinstance(raw, dict) else (raw or [])
 
     # Build referenced_by reverse index: evidence path → finding IDs
     findings = _load_json(case_dir / "findings.json") or []
@@ -1798,6 +1821,274 @@ async def get_todos(request: Request) -> JSONResponse:
         return _no_case_response()
     todos = _load_json(case_dir / "todos.json") or []
     return JSONResponse(todos)
+
+
+_TODO_PRIORITIES = ("high", "medium", "low")
+_TODO_STATUSES = ("open", "completed")
+_MAX_TODO_DESC = 2000
+
+
+def _write_todos(case_dir: Path, todos: list) -> JSONResponse | None:
+    """Atomically persist todos.json. Returns an error response on failure, else None.
+
+    Mirrors the forensic-mcp writer (plain todos.json, no chmod-444) but adds the
+    portal's symlink guard and atomic temp-file + rename used by post_delta.
+    """
+    todos_path = case_dir / "todos.json"
+    if todos_path.exists() and os.path.islink(todos_path):
+        return JSONResponse(
+            {"error": "Refusing to write: target is a symlink"},
+            status_code=403,
+        )
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(case_dir), suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(todos, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, str(todos_path))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except OSError as e:
+        logger.error("Failed to write todos file: %s", e)
+        return JSONResponse({"error": "Write failed"}, status_code=500)
+    return None
+
+
+async def _read_todo_body(request: Request) -> tuple[dict | None, JSONResponse | None]:
+    """Size-check, read and JSON-parse a todo request body into a dict."""
+    content_length = request.headers.get("content-length")
+    try:
+        if content_length and int(content_length) > _MAX_DELTA_SIZE:
+            return None, JSONResponse(
+                {"error": "Request body too large (max 1 MB)"}, status_code=413
+            )
+    except ValueError:
+        pass
+    body = await request.body()
+    if len(body) > _MAX_DELTA_SIZE:
+        return None, JSONResponse(
+            {"error": "Request body too large (max 1 MB)"}, status_code=413
+        )
+    if not body:
+        return {}, None
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return None, JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(data, dict):
+        return None, JSONResponse({"error": "Expected JSON object"}, status_code=400)
+    return data, None
+
+
+def _validate_related_findings(value) -> tuple[list | None, JSONResponse | None]:
+    if value is None:
+        return [], None
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        return None, JSONResponse(
+            {"error": "'related_findings' must be a list of strings"}, status_code=400
+        )
+    return value, None
+
+
+async def post_todo(request: Request) -> JSONResponse:
+    """Create a TODO. Direct write — todos are operational tasks, not evidentiary findings."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    data, body_err = await _read_todo_body(request)
+    if body_err:
+        return body_err
+
+    description = (data.get("description") or "").strip()
+    if not description:
+        return JSONResponse({"error": "'description' is required"}, status_code=400)
+    if len(description) > _MAX_TODO_DESC:
+        return JSONResponse(
+            {"error": f"'description' too long (max {_MAX_TODO_DESC} chars)"},
+            status_code=400,
+        )
+    priority = data.get("priority") or "medium"
+    if priority not in _TODO_PRIORITIES:
+        return JSONResponse(
+            {"error": f"'priority' must be one of {_TODO_PRIORITIES}"}, status_code=400
+        )
+    related, rel_err = _validate_related_findings(data.get("related_findings"))
+    if rel_err:
+        return rel_err
+    assignee = data.get("assignee") or ""
+    if not isinstance(assignee, str):
+        return JSONResponse({"error": "'assignee' must be a string"}, status_code=400)
+
+    todos = _load_json(case_dir / "todos.json") or []
+    if not isinstance(todos, list):
+        return JSONResponse({"error": "Corrupt todos.json"}, status_code=500)
+
+    # Match the forensic-mcp ID scheme: TODO-{examiner}-NNN, per-examiner sequence.
+    prefix = f"TODO-{examiner}-"
+    max_num = 0
+    for t in todos:
+        tid = t.get("todo_id", "") if isinstance(t, dict) else ""
+        if tid.startswith(prefix):
+            try:
+                max_num = max(max_num, int(tid[len(prefix):]))
+            except ValueError:
+                pass
+    todo_id = f"{prefix}{max_num + 1:03d}"
+
+    todo = {
+        "todo_id": todo_id,
+        "description": description,
+        "status": "open",
+        "priority": priority,
+        "assignee": assignee,
+        "related_findings": related,
+        "created_by": examiner,
+        "examiner": examiner,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "notes": [],
+        "completed_at": None,
+    }
+    todos.append(todo)
+    write_err = _write_todos(case_dir, todos)
+    if write_err:
+        return write_err
+    return JSONResponse(todo, status_code=201)
+
+
+async def patch_todo(request: Request) -> JSONResponse:
+    """Update a TODO (description, priority, status, assignee, related_findings, note)."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    data, body_err = await _read_todo_body(request)
+    if body_err:
+        return body_err
+
+    todo_id = request.path_params["todo_id"]
+    todos = _load_json(case_dir / "todos.json") or []
+    if not isinstance(todos, list):
+        return JSONResponse({"error": "Corrupt todos.json"}, status_code=500)
+
+    todo = next(
+        (t for t in todos if isinstance(t, dict) and t.get("todo_id") == todo_id), None
+    )
+    if todo is None:
+        return JSONResponse({"error": "TODO not found"}, status_code=404)
+
+    if "description" in data:
+        description = (data.get("description") or "").strip()
+        if not description:
+            return JSONResponse(
+                {"error": "'description' cannot be empty"}, status_code=400
+            )
+        if len(description) > _MAX_TODO_DESC:
+            return JSONResponse(
+                {"error": f"'description' too long (max {_MAX_TODO_DESC} chars)"},
+                status_code=400,
+            )
+        todo["description"] = description
+    if "priority" in data:
+        if data["priority"] not in _TODO_PRIORITIES:
+            return JSONResponse(
+                {"error": f"'priority' must be one of {_TODO_PRIORITIES}"},
+                status_code=400,
+            )
+        todo["priority"] = data["priority"]
+    if "status" in data:
+        if data["status"] not in _TODO_STATUSES:
+            return JSONResponse(
+                {"error": f"'status' must be one of {_TODO_STATUSES}"}, status_code=400
+            )
+        todo["status"] = data["status"]
+        todo["completed_at"] = (
+            datetime.now(timezone.utc).isoformat()
+            if data["status"] == "completed"
+            else None
+        )
+    if "assignee" in data:
+        if not isinstance(data["assignee"], str):
+            return JSONResponse(
+                {"error": "'assignee' must be a string"}, status_code=400
+            )
+        todo["assignee"] = data["assignee"]
+    if "related_findings" in data:
+        related, rel_err = _validate_related_findings(data["related_findings"])
+        if rel_err:
+            return rel_err
+        todo["related_findings"] = related
+    if data.get("note"):
+        if not isinstance(data["note"], str):
+            return JSONResponse({"error": "'note' must be a string"}, status_code=400)
+        todo.setdefault("notes", []).append(
+            {
+                "note": data["note"],
+                "by": examiner,
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    write_err = _write_todos(case_dir, todos)
+    if write_err:
+        return write_err
+    return JSONResponse(todo)
+
+
+async def delete_todo(request: Request) -> JSONResponse:
+    """Delete a TODO by id."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    todo_id = request.path_params["todo_id"]
+    todos = _load_json(case_dir / "todos.json") or []
+    if not isinstance(todos, list):
+        return JSONResponse({"error": "Corrupt todos.json"}, status_code=500)
+
+    remaining = [
+        t for t in todos if not (isinstance(t, dict) and t.get("todo_id") == todo_id)
+    ]
+    if len(remaining) == len(todos):
+        return JSONResponse({"error": "TODO not found"}, status_code=404)
+
+    write_err = _write_todos(case_dir, remaining)
+    if write_err:
+        return write_err
+    return JSONResponse({"status": "deleted", "todo_id": todo_id})
 
 
 async def get_iocs(request: Request) -> JSONResponse:
@@ -4004,6 +4295,9 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/delta/{id}", delete_delta_item, methods=["DELETE"]),
         Route("/api/case", get_case, methods=["GET"]),
         Route("/api/todos", get_todos, methods=["GET"]),
+        Route("/api/todos", post_todo, methods=["POST"]),
+        Route("/api/todos/{todo_id}", patch_todo, methods=["PATCH"]),
+        Route("/api/todos/{todo_id}", delete_todo, methods=["DELETE"]),
         Route("/api/iocs", get_iocs, methods=["GET"]),
         Route("/api/summary", get_summary, methods=["GET"]),
         Route("/api/evidence/{path:path}/verify", verify_evidence, methods=["POST"]),

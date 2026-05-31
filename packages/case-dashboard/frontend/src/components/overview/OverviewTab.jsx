@@ -278,8 +278,9 @@ function ActivityFeed({ findings, delta, setActiveTab, setSelectedFindingId }) {
       ) : (
         <div className="space-y-1.5">
           {filtered.map((f) => {
-            const color = CONFIDENCE_COLORS[f.confidence] ?? 'var(--text-muted)'
+            const color = CONFIDENCE_COLORS[(f.confidence ?? '').toUpperCase()] ?? 'var(--text-muted)'
             const staged = delta.find((d) => d.id === f.id)
+            const activityTs = f.modified_at || f.timestamp || f.event_timestamp
             return (
               <button
                 key={f.id}
@@ -295,9 +296,9 @@ function ActivityFeed({ findings, delta, setActiveTab, setSelectedFindingId }) {
                 {staged && (
                   <span className="font-mono text-[10px]" style={{ color: 'var(--status-staged)' }}>staged</span>
                 )}
-                {f.timestamp && (
+                {activityTs && (
                   <span className="font-mono text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>
-                    {formatDistanceToNow(new Date(f.timestamp), { addSuffix: true })}
+                    {formatDistanceToNow(new Date(activityTs), { addSuffix: true })}
                   </span>
                 )}
               </button>
