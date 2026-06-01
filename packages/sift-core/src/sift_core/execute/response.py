@@ -1,6 +1,6 @@
 """Response envelope builder with forensic-knowledge enrichment.
 
-Every sift-mcp tool response is wrapped in an envelope that includes:
+Every core execute tool response is wrapped in an envelope that includes:
 - Proactive artifact caveats and advisories
 - Corroboration suggestions
 - Field-level interpretation notes

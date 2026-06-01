@@ -1,4 +1,4 @@
-"""Configuration for sift-mcp."""
+"""Configuration for the core execute tools."""
 
 from __future__ import annotations
 

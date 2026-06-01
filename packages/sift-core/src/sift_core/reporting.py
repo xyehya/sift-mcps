@@ -1,46 +1,38 @@
-"""SIFT report generation MCP server.
+"""Core report generation.
 
-Exposes 6 tools for generating case reports, managing case metadata,
-and persisting rendered reports. Data-driven profiles control what
-data is included in each report type.
+Owned by sift-core (Phase 2): assembling a structured report from approved
+case data — findings, timeline, IOCs, MITRE mapping, evidence chain provenance
+and verification reconciliation — is a core capability, not an add-on concern.
+
+Report generation is *triggered* by the examiner in the portal (F-E); the agent
+MCP surface no longer exposes a report tool. This module holds the pure
+generation logic the portal calls into.
 """
 
 from __future__ import annotations
 
 import json
-import logging
-import os
 import re
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
-from mcp.server.fastmcp import FastMCP
-from sift_common.audit import AuditWriter
-from sift_common.instructions import REPORT_MCP as _INSTRUCTIONS
-from sift_common.oplog import setup_logging
 from sift_core.case_io import (
-    cases_root,
     load_case_meta,
     load_findings,
     load_timeline,
     load_todos,
-    resolve_case_path,
 )
-from sift_core.evidence_chain import ChainStatus, chain_status as _ev_chain_status, load_manifest
+from sift_core.evidence_chain import (
+    ChainStatus,
+    chain_status as _ev_chain_status,
+    load_manifest,
+)
 from sift_core.evidence_ops import list_evidence_data
+from sift_core.report_profiles import PROFILES, STRIPPED_FINDING_FIELDS
+from sift_core.verification import VERIFICATION_DIR
 
-from report_mcp.profiles import PROFILES, STRIPPED_FINDING_FIELDS
-
-logger = logging.getLogger(__name__)
-
-_ACTIVE_CASE_FILE = Path.home() / ".sift" / "active_case"
-_MAX_FILENAME = 200
-_MAX_FIELD = 500
-_MAX_REPORT_BYTES = 10 * 1024 * 1024  # 10 MB
-
-# Duplicated from sift-core case_io.py — kept in sync manually.
+# Substantive-field exclusion used when reconciling an approved item against
+# its verification ledger snapshot. Mirrors sift_core.case_io.hmac_text intent.
 _HASH_EXCLUDE_KEYS = {
     "status",
     "approved_at",
@@ -60,7 +52,7 @@ _HASH_EXCLUDE_KEYS = {
 }
 
 
-_WRITING_GUIDANCE = """Report Writing Guidance (forensic-specific):
+WRITING_GUIDANCE = """Report Writing Guidance (forensic-specific):
 
 1. DRAFT STATUS: This is a draft for human curation. Sections marked in
    human_review_required need placeholder guidance, not fabrication. Write
@@ -101,7 +93,7 @@ _WRITING_GUIDANCE = """Report Writing Guidance (forensic-specific):
    the Exchange server logs revealed..."). Do not fabricate specific
    evidence file names or paths not present in the data."""
 
-_HUMAN_REVIEW_REQUIRED = [
+HUMAN_REVIEW_REQUIRED = [
     {
         "section": "Business Impact",
         "reason": "Requires organizational knowledge of affected business processes, revenue impact, and regulatory exposure.",
@@ -129,7 +121,7 @@ _HUMAN_REVIEW_REQUIRED = [
     },
 ]
 
-_GENERATION_CONSTRAINTS = (
+GENERATION_CONSTRAINTS = (
     "This report data contains ONLY approved findings and timeline "
     "events. Never reference, count, or speculate about unapproved, "
     "draft, or rejected items in report output. The summary.findings_total "
@@ -138,156 +130,12 @@ _GENERATION_CONSTRAINTS = (
 )
 
 
-def _validate_str_length(value: str | None, field: str, max_len: int) -> None:
-    """Reject strings exceeding max_len or containing null bytes."""
-    if value is not None and isinstance(value, str):
-        if len(value) > max_len:
-            raise ValueError(f"{field} exceeds maximum length of {max_len} characters")
-        if "\x00" in value:
-            raise ValueError(f"{field} contains invalid null byte")
-
-
-# -- Metadata validation tables --
-
-_ENUM_FIELDS: dict[str, set[str]] = {
-    "incident_type": {
-        "ransomware",
-        "bec",
-        "data_breach",
-        "insider_threat",
-        "supply_chain",
-        "malware",
-        "unauthorized_access",
-        "dos",
-        "other",
-    },
-    "severity": {"critical", "high", "medium", "low"},
-    "tlp": {"WHITE", "GREEN", "AMBER", "AMBER+STRICT", "RED"},
-}
-
-_DATE_FIELDS = {
-    "detected_at",
-    "occurred_at",
-    "reported_at",
-    "contained_at",
-    "eradicated_at",
-    "recovered_at",
-}
-
-_LIST_FIELDS = {
-    "affected_systems",
-    "affected_accounts",
-    "distribution_list",
-    "tags",
-    "related_cases",
-}
-
-_PROTECTED_FIELDS = {
-    "case_id",
-    "status",
-    "created",
-    "examiner",
-    "closed",
-    "close_summary",
-    "name",
-    "description",
-}
-
-# Free text fields that accept any string value
-_TEXT_FIELDS = {"lead_examiner", "client", "point_of_contact", "impact_summary"}
-
-# Valid filename characters
-_FILENAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
-
-
-# -- Helper functions --
-
-
-def _resolve_case_dir(case_id: str = "") -> Path:
-    """Resolve case directory without sys.exit.
-
-    Same priority as SIFT CLI get_case_dir(), but raises ValueError
-    instead of calling sys.exit().
-
-    """
-    if case_id:
-        if ".." in case_id or "/" in case_id or "\\" in case_id:
-            raise ValueError(f"Invalid case ID: {case_id}")
-        case_dir = cases_root() / case_id
-        if not case_dir.exists():
-            raise ValueError(f"Case not found: {case_id}")
-        return case_dir
-
-    # Primary: check env var first via sift_common
-    from sift_common import resolve_case_dir as _resolve_case_dir_env
-    try:
-        env_dir_str = _resolve_case_dir_env()
-        if env_dir_str:
-            case_dir = Path(env_dir_str)
-            if case_dir.is_dir():
-                return case_dir
-    except Exception:
-        pass
-
-    # Legacy CLI fallback — reads active_case_file pointer
-    active_case_file = _ACTIVE_CASE_FILE
-    if active_case_file.exists():
-        try:
-            content = active_case_file.read_text().strip()
-        except OSError:
-            content = ""
-        if content:
-            if os.path.isabs(content):
-                case_dir = Path(content)
-            else:
-                if ".." in content or "/" in content or "\\" in content:
-                    raise ValueError(f"Invalid case ID in active_case_file: {content}")
-                case_dir = cases_root() / content
-            if case_dir.is_dir():
-                return case_dir
-
-    raise ValueError("No active case. Create or select a case in the Examiner Portal first.")
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    """Write file atomically via temp file + rename."""
-    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, str(path))
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-def _protected_write(path: Path, content: str) -> None:
-    """Write to a chmod-444-protected case data file."""
-    try:
-        if path.exists():
-            os.chmod(path, 0o644)
-    except OSError:
-        pass
-    _atomic_write(path, content)
-    try:
-        os.chmod(path, 0o444)
-    except OSError:
-        pass
-
-
 def _strip_finding(finding: dict) -> dict:
     """Remove internal fields from a finding for report output."""
     return {k: v for k, v in finding.items() if k not in STRIPPED_FINDING_FIELDS}
 
 
-def _extract_all_iocs(
-    findings: list[dict],
-) -> dict[str, list[dict]]:
+def extract_all_iocs(findings: list[dict]) -> dict[str, list[dict]]:
     """Extract IOCs from findings with cross-references to source finding IDs.
 
     Returns {type: [{value, source_findings: [ids]}]}.
@@ -351,7 +199,7 @@ def _extract_all_iocs(
     return by_type
 
 
-def _build_mitre_mapping(findings: list[dict]) -> dict[str, dict]:
+def build_mitre_mapping(findings: list[dict]) -> dict[str, dict]:
     """Build MITRE ATT&CK mapping from findings.
 
     Returns {technique_id: {name, findings: [ids]}}.
@@ -384,7 +232,7 @@ def _build_mitre_mapping(findings: list[dict]) -> dict[str, dict]:
     return mapping
 
 
-def _build_summary(
+def build_summary(
     findings: list[dict],
     timeline: list[dict],
     todos: list[dict],
@@ -408,7 +256,7 @@ def _build_summary(
     }
 
 
-def _build_zeltser_guidance(profile_name: str, profile: dict, metadata: dict) -> dict:
+def build_zeltser_guidance(profile_name: str, profile: dict, metadata: dict) -> dict:
     """Construct Zeltser IR Writing MCP guidance for a profile."""
     tools = profile.get("zeltser_tools", [])
     if not tools:
@@ -447,14 +295,19 @@ def _build_zeltser_guidance(profile_name: str, profile: dict, metadata: dict) ->
     return guidance
 
 
-def _generate(
+def generate_report_data(
     profile_name: str,
     case_dir: Path,
     finding_ids: list[str] | None = None,
     start_date: str = "",
     end_date: str = "",
 ) -> dict:
-    """Core report generation logic."""
+    """Core report generation logic.
+
+    Assembles a structured report dict from approved case data, with evidence
+    chain provenance and verification reconciliation. Raises KeyError if the
+    profile is unknown (callers validate the profile name first).
+    """
     profile = PROFILES[profile_name]
 
     # Load all data
@@ -548,16 +401,16 @@ def _generate(
     stripped_findings = [_strip_finding(f) for f in report_findings]
 
     # IOC aggregation
-    iocs = _extract_all_iocs(approved_findings)
+    iocs = extract_all_iocs(approved_findings)
 
     # MITRE mapping
-    mitre = _build_mitre_mapping(approved_findings)
+    mitre = build_mitre_mapping(approved_findings)
 
     # Open TODOs
     open_todos = [t for t in todos if t.get("status") == "open"]
 
     # Build summary with all findings (not just report-filtered)
-    summary = _build_summary(all_findings, all_timeline, todos, evidence_count, iocs)
+    summary = build_summary(all_findings, all_timeline, todos, evidence_count, iocs)
 
     # Assemble report_data based on profile's data_keys
     data_keys = profile.get("data_keys", [])
@@ -587,11 +440,7 @@ def _generate(
     if "evidence" in data_keys:
         report_data["evidence"] = evidence_list
     if "todos" in data_keys:
-        if findings_mode == "count" or timeline_mode == "count":
-            # Status/executive: include open count or full list
-            report_data["todos"] = open_todos
-        else:
-            report_data["todos"] = open_todos
+        report_data["todos"] = open_todos
     if "summary" in data_keys:
         report_data["summary"] = summary
 
@@ -599,7 +448,7 @@ def _generate(
     sections = profile.get("sections", [])
 
     # Build Zeltser guidance
-    zeltser_guidance = _build_zeltser_guidance(profile_name, profile, metadata)
+    zeltser_guidance = build_zeltser_guidance(profile_name, profile, metadata)
 
     result: dict = {
         "profile": profile_name,
@@ -610,9 +459,9 @@ def _generate(
     if zeltser_guidance:
         result["zeltser_guidance"] = zeltser_guidance
 
-    result["writing_guidance"] = _WRITING_GUIDANCE
-    result["human_review_required"] = _HUMAN_REVIEW_REQUIRED
-    result["generation_constraints"] = _GENERATION_CONSTRAINTS
+    result["writing_guidance"] = WRITING_GUIDANCE
+    result["human_review_required"] = HUMAN_REVIEW_REQUIRED
+    result["generation_constraints"] = GENERATION_CONSTRAINTS
 
     # Evidence chain provenance
     result["evidence_chain"] = ev_chain
@@ -645,7 +494,7 @@ def _generate(
     case_id = metadata.get("case_id", "")
     if case_id:
         try:
-            alerts = _reconcile_verification(
+            alerts = reconcile_verification(
                 case_id, approved_findings, approved_timeline
             )
             if alerts:
@@ -667,10 +516,7 @@ def _generate(
     return result
 
 
-VERIFICATION_DIR = Path("/var/lib/sift/verification")
-
-
-def _reconcile_verification(
+def reconcile_verification(
     case_id: str,
     approved_findings: list[dict],
     approved_timeline: list[dict],
@@ -738,318 +584,3 @@ def _reconcile_verification(
             }
         )
     return results
-
-
-def _validate_iso8601(value: str) -> bool:
-    """Check if value looks like an ISO 8601 datetime."""
-    try:
-        datetime.fromisoformat(value)
-        return True
-    except (ValueError, TypeError):
-        return False
-
-
-def create_server() -> FastMCP:
-    """Create and configure the report generation MCP server."""
-    server = FastMCP("report-mcp", instructions=_INSTRUCTIONS)
-    audit = AuditWriter(mcp_name="report-mcp")
-
-    server._audit = audit
-
-    # ------------------------------------------------------------------
-    # Tool 1: generate_report
-    # ------------------------------------------------------------------
-    @server.tool()
-    def generate_report(
-        profile: str = "full",
-        case_id: str = "",
-        finding_ids: list[str] | None = None,
-        start_date: str = "",
-        end_date: str = "",
-    ) -> dict:
-        """Generate a structured report with case data filtered by profile.
-
-        Available profiles: full, executive, timeline, ioc, findings, status.
-        Use list_profiles() to see descriptions and Zeltser tool mappings.
-
-        Workflow: 1) set_case_metadata with incident details, 2) generate_report
-        to create draft, 3) review output, 4) save_report to persist.
-        Metadata must be set before generation — the report uses it for context.
-
-        Returns structured JSON with report_data, sections template, and
-        Zeltser IR Writing MCP guidance for narrative sections.
-
-        Optional filters:
-        - finding_ids: limit findings profile to specific finding IDs
-        - start_date/end_date: limit timeline profile by ISO 8601 date range
-        """
-        try:
-            if profile not in PROFILES:
-                return {
-                    "error": f"Unknown profile: {profile}. "
-                    f"Valid profiles: {', '.join(sorted(PROFILES))}"
-                }
-            case_dir = _resolve_case_dir(case_id)
-            result = _generate(profile, case_dir, finding_ids, start_date, end_date)
-            logged_id = audit.log(
-                tool="generate_report",
-                params={
-                    "profile": profile,
-                    "finding_ids": finding_ids,
-                    "start_date": start_date,
-                    "end_date": end_date,
-                },
-                result_summary={
-                    "profile": profile,
-                    "findings": len(result.get("report_data", {}).get("findings", [])),
-                },
-            )
-            if logged_id is None:
-                result["warning"] = "Audit write failed — action not recorded"
-            return result
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
-
-    # ------------------------------------------------------------------
-    # Tool 2: set_case_metadata
-    # ------------------------------------------------------------------
-    @server.tool()
-    def set_case_metadata(field: str, value: str | list = "") -> dict:
-        """Set a single metadata field in CASE.yaml.
-
-        Validated fields: incident_type, severity, tlp (enums);
-        detected_at, occurred_at, etc. (ISO 8601 dates);
-        affected_systems, tags, etc. (lists).
-
-        Protected fields (case_id, status, name, etc.) are rejected.
-        Unknown fields are rejected with a list of valid options.
-        """
-        try:
-            _validate_str_length(field, "field", _MAX_FIELD)
-            if isinstance(value, str):
-                _validate_str_length(value, "value", 10_000)
-            if field in _PROTECTED_FIELDS:
-                return {
-                    "error": f"Field '{field}' is protected and cannot "
-                    f"be set via this tool. Protected fields: "
-                    f"{', '.join(sorted(_PROTECTED_FIELDS))}"
-                }
-
-            # Validate enum fields (case-insensitive for TLP)
-            if field in _ENUM_FIELDS:
-                valid = _ENUM_FIELDS[field]
-                check_val = value
-                # TLP is uppercase by convention
-                if field == "tlp" and isinstance(value, str):
-                    check_val = value.upper()
-                if check_val not in valid:
-                    return {
-                        "error": f"Invalid value for {field}: {value}. "
-                        f"Valid values: {', '.join(sorted(valid))}"
-                    }
-                value = check_val
-
-            # Validate date fields
-            if field in _DATE_FIELDS:
-                if not isinstance(value, str) or not _validate_iso8601(value):
-                    return {
-                        "error": f"Field '{field}' requires an ISO 8601 "
-                        f"datetime string."
-                    }
-
-            # Validate list fields
-            if field in _LIST_FIELDS:
-                if not isinstance(value, list):
-                    return {
-                        "error": f"Field '{field}' requires a JSON array. "
-                        f'Example: ["{field}_item1", "{field}_item2"]'
-                    }
-
-            # Reject unknown fields
-            _ALLOWED_FIELDS = (
-                _PROTECTED_FIELDS
-                | set(_ENUM_FIELDS)
-                | set(_DATE_FIELDS)
-                | set(_LIST_FIELDS)
-                | set(_TEXT_FIELDS)
-            )
-            if field not in _ALLOWED_FIELDS:
-                return {
-                    "error": f"Unknown metadata field: '{field}'. "
-                    f"Allowed fields: {sorted(_ALLOWED_FIELDS - _PROTECTED_FIELDS)}"
-                }
-
-            case_dir = _resolve_case_dir()
-            meta_file = case_dir / "CASE.yaml"
-            meta = load_case_meta(case_dir)
-            meta[field] = value
-
-            _atomic_write(meta_file, yaml.dump(meta, default_flow_style=False))
-
-            logged_id = audit.log(
-                tool="set_case_metadata",
-                params={"field": field, "value": value},
-                result_summary={"status": "set", "field": field},
-            )
-            result = {"status": "set", "field": field, "value": value}
-            if logged_id is None:
-                result["warning"] = "Audit write failed — action not recorded"
-            return result
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
-
-    # ------------------------------------------------------------------
-    # Tool 3: get_case_metadata
-    # ------------------------------------------------------------------
-    @server.tool(annotations={"readOnlyHint": True})
-    def get_case_metadata(field: str = "") -> dict:
-        """Retrieve case metadata from CASE.yaml.
-
-        If field is empty, returns all metadata. If field is specified,
-        returns that field's value (or null if not set).
-        """
-        try:
-            case_dir = _resolve_case_dir()
-            meta = load_case_meta(case_dir)
-
-            if not field:
-                return meta
-
-            return {"field": field, "value": meta.get(field)}
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
-
-    # ------------------------------------------------------------------
-    # Tool 4: list_profiles
-    # ------------------------------------------------------------------
-    @server.tool(annotations={"readOnlyHint": True})
-    def list_profiles() -> dict:
-        """List available report profiles with descriptions and
-        Zeltser tool mappings."""
-        profiles = []
-        for name, profile in PROFILES.items():
-            profiles.append(
-                {
-                    "name": name,
-                    "description": profile["description"],
-                    "zeltser_tools": profile.get("zeltser_tools", []),
-                }
-            )
-        return {"profiles": profiles}
-
-    # ------------------------------------------------------------------
-    # Tool 5: save_report
-    # ------------------------------------------------------------------
-    @server.tool()
-    def save_report(filename: str, content: str, profile: str = "") -> dict:
-        """Persist a rendered report to the case reports/ directory.
-
-        Bare filenames resolve to SIFT_CASE_DIR/reports/. The explicit
-        reports/<filename> form is also accepted. Path traversal is blocked.
-        """
-        try:
-            _validate_str_length(filename, "filename", _MAX_FILENAME)
-            if len(content.encode("utf-8", errors="replace")) > _MAX_REPORT_BYTES:
-                return {"error": "Report content exceeds maximum size of 10 MB."}
-            case_dir = _resolve_case_dir()
-            reports_dir = case_dir / "reports"
-            reports_dir.mkdir(exist_ok=True)
-
-            try:
-                requested_path = resolve_case_path(
-                    filename,
-                    case_dir=case_dir,
-                    default_subdir="reports",
-                )
-            except ValueError as e:
-                return {
-                    "error": "Path must be within the case directory",
-                    "details": str(e),
-                }
-            if not requested_path.is_relative_to(reports_dir.resolve()):
-                return {"error": "Report path must be within the case reports directory."}
-
-            sanitized = re.sub(r"[^a-zA-Z0-9._-]", "_", requested_path.name)
-            if not sanitized:
-                return {"error": "Filename is empty after sanitization."}
-
-            report_path = reports_dir / sanitized
-
-            # Version: never overwrite existing reports
-            if report_path.exists():
-                stem = report_path.stem
-                suffix = report_path.suffix
-                version = 2
-                while True:
-                    versioned = reports_dir / f"{stem}_v{version}{suffix}"
-                    if not versioned.exists():
-                        report_path = versioned
-                        sanitized = versioned.name
-                        break
-                    version += 1
-                    if version > 999:
-                        return {"error": "Too many report versions (max 999)."}
-
-            _atomic_write(report_path, content)
-
-            logged_id = audit.log(
-                tool="save_report",
-                params={
-                    "filename": sanitized,
-                    "profile": profile,
-                    "characters": len(content),
-                },
-                result_summary={"status": "saved", "filename": sanitized},
-            )
-            result = {
-                "status": "saved",
-                "path": str(report_path),
-                "filename": sanitized,
-                "profile": profile,
-                "characters": len(content),
-            }
-            if logged_id is None:
-                result["warning"] = "Audit write failed — action not recorded"
-            return result
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
-
-    # ------------------------------------------------------------------
-    # Tool 6: list_reports
-    # ------------------------------------------------------------------
-    @server.tool(annotations={"readOnlyHint": True})
-    def list_reports() -> dict:
-        """List saved reports in the case reports/ directory."""
-        try:
-            case_dir = _resolve_case_dir()
-            reports_dir = case_dir / "reports"
-
-            if not reports_dir.exists():
-                return {"reports": []}
-
-            reports = []
-            for p in sorted(reports_dir.iterdir()):
-                if p.is_file():
-                    stat = p.stat()
-                    reports.append(
-                        {
-                            "filename": p.name,
-                            "size_bytes": stat.st_size,
-                            "created_at": datetime.fromtimestamp(
-                                stat.st_ctime, tz=timezone.utc
-                            ).isoformat(),
-                        }
-                    )
-            return {"reports": reports}
-        except (ValueError, OSError) as e:
-            return {"error": str(e)}
-
-    return server
-
-
-def main() -> None:
-    """Run the report-mcp server."""
-    setup_logging("report-mcp")
-    logger.info("Starting report-mcp server")
-    server = create_server()
-    server.run()

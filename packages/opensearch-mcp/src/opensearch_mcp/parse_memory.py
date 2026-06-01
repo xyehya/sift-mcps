@@ -326,7 +326,7 @@ def _index_vol3_records(
 
 
 def _register_memory_evidence(image_path: Path, hostname: str) -> None:
-    """Register memory image with case-mcp (best-effort)."""
+    """Register memory image via the gateway evidence_register tool (best-effort)."""
     try:
         from opensearch_mcp.gateway import call_tool
 

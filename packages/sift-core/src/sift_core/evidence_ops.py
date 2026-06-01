@@ -1,6 +1,6 @@
 """Evidence management data functions.
 
-Pure-data layer (no CLI output). Used by case-mcp.
+Pure-data layer (no CLI output). Used by the core evidence tools.
 """
 
 from __future__ import annotations

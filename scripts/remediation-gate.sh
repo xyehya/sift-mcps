@@ -32,10 +32,10 @@ if grep -rn "sys\.exit" packages/sift-core/ --include="*.py"; then
 fi
 
 echo
-echo "=== shell=True outside sift-mcp ==="
+echo "=== shell=True (executor must use shell=False everywhere) ==="
 if grep -rn "shell=True" packages/ --include="*.py" \
-   | grep -v "packages/sift-mcp\|test_"; then
-    echo "FAIL: shell=True outside sift-mcp"
+   | grep -v "test_"; then
+    echo "FAIL: shell=True in source (use shell=False)"
     FAIL=1
 fi
 

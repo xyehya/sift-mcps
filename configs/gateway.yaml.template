@@ -57,7 +57,7 @@ enrichment:
   enabled: true
   forensic_knowledge: true
   forensic_rag: ${SIFT_RAG_ENABLED}
-  opensearch_context: true
+  opensearch_context: ${SIFT_OPENSEARCH_ENABLED}
   root: "/var/lib/sift/enrichment"
 
 backends:
@@ -76,7 +76,7 @@ backends:
       SIFT_WINDOWS_TRIAGE_DB_DIR: "${SIFT_WINDOWS_TRIAGE_DB_DIR}"
 
   opensearch-mcp:
-    enabled: true
+    enabled: ${SIFT_OPENSEARCH_ENABLED}
     type: stdio
     command: "${UV_BIN}"
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "opensearch-mcp"]

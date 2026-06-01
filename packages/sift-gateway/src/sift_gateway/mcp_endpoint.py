@@ -24,13 +24,10 @@ from mcp.server.lowlevel.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import TextContent, Tool
 from sift_common.instructions import (
-    CASE_MCP,
     FORENSIC_MCP,
     FORENSIC_RAG,
     OPENCTI,
     OPENSEARCH,
-    REPORT_MCP,
-    SIFT_MCP,
     WINDOWS_TRIAGE,
 )
 from sift_common.instructions import GATEWAY as _GATEWAY_INSTRUCTIONS
@@ -56,9 +53,6 @@ logger = logging.getLogger(__name__)
 # regardless of whether the backend subprocess has started yet.
 _BACKEND_INSTRUCTIONS: dict[str, str] = {
     "forensic-mcp": FORENSIC_MCP,
-    "sift-mcp": SIFT_MCP,
-    "case-mcp": CASE_MCP,
-    "report-mcp": REPORT_MCP,
     "forensic-rag-mcp": FORENSIC_RAG,
     "windows-triage-mcp": WINDOWS_TRIAGE,
     "opencti-mcp": OPENCTI,
@@ -303,13 +297,13 @@ def _extract_bearer_token(scope: dict) -> str | None:
 # ---------------------------------------------------------------------------
 
 _ENV_SUMMARY_TOOLS = [
-    ("case_status", "case-mcp", {}),
-    ("evidence_list", "case-mcp", {}),
+    ("case_status", "sift-core", {}),
+    ("evidence_list", "sift-core", {}),
     ("idx_status", "opensearch-mcp", {}),
     ("get_knowledge_stats", "forensic-rag-mcp", {}),
     ("get_health", "opencti-mcp", {}),
     ("server_status", "windows-triage-mcp", {"resource": "health"}),
-    ("list_available_tools", "sift-mcp", {}),
+    ("list_available_tools", "sift-core", {}),
 ]
 
 
@@ -445,17 +439,10 @@ def create_mcp_server(gateway: Any) -> Server:
         "log_reasoning": "findings",
         "log_external_action": "findings",
         "record_action": "findings",
-        # ── reporting: generate and save reports ──
-        "generate_report": "reporting",
-        "set_case_metadata": "reporting",
-        "get_case_metadata": "reporting",
-        "list_profiles": "reporting",
-        "save_report": "reporting",
-        "list_reports": "reporting",
+        # Reporting + case-metadata are portal-owned (F-E) and bundle
+        # export/import is dropped from the agent surface (F-C) — not agent tools.
         # ── admin: maintenance operations ──
         "backup_case": "admin",
-        "export_bundle": "admin",
-        "import_bundle": "admin",
         "open_case_dashboard": "admin",
     }
 
@@ -517,13 +504,8 @@ def create_mcp_server(gateway: Any) -> Server:
         "get_recent_indicators": "TRIAGE",
         "get_relationships": "TRIAGE",
         "search_reports": "TRIAGE",
-        # REPORTING: approved findings — generate report
-        "generate_report": "REPORTING",
-        "set_case_metadata": "REPORTING",
-        "get_case_metadata": "REPORTING",
-        "list_profiles": "REPORTING",
-        "save_report": "REPORTING",
-        "list_reports": "REPORTING",
+        # REPORTING phase is examiner-driven in the portal (F-E); no agent
+        # report tools remain to recommend here.
     }
 
     @server.list_tools()

@@ -1,6 +1,6 @@
 """Case lifecycle operations: init, activate, list, status.
 
-Pure-data functions (no CLI output). Called by case-mcp and the SIFT CLI.
+Pure-data functions (no CLI output). Called by the core case tools and the SIFT CLI.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def case_status_data(case_dir) -> dict:
     }
 
 
-# Backward-compat alias used by case-mcp
+# Backward-compat alias used by the core case tools
 _case_status_data = case_status_data
 
 

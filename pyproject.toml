@@ -10,9 +10,6 @@ forensic-knowledge = { workspace = true }
 sift-common = { workspace = true }
 sift-gateway = { workspace = true }
 forensic-mcp = { workspace = true }
-case-mcp = { workspace = true }
-sift-mcp = { workspace = true }
-report-mcp = { workspace = true }
 opensearch-mcp = { workspace = true }
 rag-mcp = { workspace = true }
 opencti-mcp = { workspace = true }
@@ -40,9 +37,6 @@ core = [
     "sift-common",
     "sift-gateway",
     "forensic-mcp",
-    "case-mcp",
-    "sift-mcp",
-    "report-mcp",
 ]
 standard = [
     "sift-mcps[core]",

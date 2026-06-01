@@ -1,4 +1,4 @@
-"""Audit trail data functions. Used by case-mcp."""
+"""Audit trail data functions. Used by the core audit tools."""
 
 from __future__ import annotations
 

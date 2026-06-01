@@ -15,6 +15,7 @@ export const postCaseCreate = (body) => apiPost('/api/case/create', body)
 export const getCaseActivateChallenge = () => apiFetch('/api/case/activate/challenge')
 export const postCaseActivate = (body) => apiPost('/api/case/activate', body)
 export const getCase = () => apiFetch('/api/case')
+export const postCaseMetadata = (body) => apiPost('/api/case/metadata', body)
 
 // --- Investigation data ---
 export const getFindings = () => apiFetch('/api/findings')

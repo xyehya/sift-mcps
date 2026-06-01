@@ -2,7 +2,7 @@
 
 
 class SiftError(Exception):
-    """Base exception for sift-mcp."""
+    """Base exception for the core execute tools."""
 
 
 class ToolNotFoundError(SiftError):

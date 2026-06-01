@@ -1,5 +1,12 @@
 import { useState, useEffect } from 'react'
-import { getChallenge, postLogin, getSetupRequired, postSetup } from '../../api/endpoints'
+import {
+  getChallenge,
+  getMe,
+  postLogin,
+  postResetPassword,
+  getSetupRequired,
+  postSetup,
+} from '../../api/endpoints'
 import { computeChallengeResponse } from '../../api/crypto'
 
 function Input({ label, value, onChange, type = 'text', autoComplete }) {
@@ -58,6 +65,50 @@ function SetupForm({ onDone }) {
   )
 }
 
+function ResetPasswordForm({ examiner, currentPassword, onDone }) {
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [err, setErr] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function submit(e) {
+    e.preventDefault()
+    if (password !== confirm) { setErr('Passwords do not match'); return }
+    if (password.length < 8) { setErr('Password must be at least 8 characters.'); return }
+    setLoading(true)
+    setErr('')
+    try {
+      const challenge = await getChallenge(examiner)
+      const response = await computeChallengeResponse(currentPassword, challenge)
+      await postResetPassword({ challenge_id: challenge.challenge_id, response, new_password: password })
+      const session = await getMe()
+      if (!session) { setErr('Password reset succeeded. Sign in again.'); return }
+      onDone(session)
+    } catch (ex) {
+      console.error('Password reset failed:', ex)
+      setErr('Password reset failed. Check the current password and try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <div>
+        <p className="font-mono text-cyan text-xs tracking-widest uppercase mb-2">sift-mcps</p>
+        <h1 className="font-display font-extrabold text-2xl text-text-bright">Reset password</h1>
+        <p className="text-text-muted text-xs mt-1">Set a new examiner password before using the portal.</p>
+      </div>
+      {err && <p className="text-crimson text-xs">{err}</p>}
+      <Input label="New password" type="password" value={password} onChange={setPassword} autoComplete="new-password" />
+      <Input label="Confirm password" type="password" value={confirm} onChange={setConfirm} autoComplete="new-password" />
+      <button type="submit" disabled={loading} className="w-full py-2 rounded bg-cyan text-bg-base font-sans font-semibold text-sm hover:opacity-90 transition-opacity disabled:opacity-50">
+        {loading ? 'Updating…' : 'Update password'}
+      </button>
+    </form>
+  )
+}
+
 export function LoginCard({ onLogin }) {
   const [phase, setPhase] = useState('checking')
   const [examiner, setExaminer] = useState('')
@@ -67,7 +118,7 @@ export function LoginCard({ onLogin }) {
 
   useEffect(() => {
     getSetupRequired()
-      .then((data) => setPhase(data?.setup_required ? 'setup' : 'login'))
+      .then((data) => setPhase((data?.setup_required ?? data?.required) ? 'setup' : 'login'))
       .catch(() => setPhase('login'))
   }, [])
 
@@ -79,7 +130,9 @@ export function LoginCard({ onLogin }) {
       const challenge = await getChallenge(examiner)
       const response = await computeChallengeResponse(password, challenge)
       const result = await postLogin({ challenge_id: challenge.challenge_id, examiner, response })
+      if (!result) { setErr('Authentication failed. Check your examiner ID and password.'); return }
       if (result?.error) { setErr(result.error); return }
+      if (result?.must_reset) { setPhase('reset'); return }
       onLogin(result)
     } catch (ex) {
       console.error('Login failed:', ex)
@@ -96,6 +149,8 @@ export function LoginCard({ onLogin }) {
       <div className="w-full max-w-sm p-8 rounded-lg border border-border-soft bg-bg-surface">
         {phase === 'setup' ? (
           <SetupForm onDone={() => setPhase('login')} />
+        ) : phase === 'reset' ? (
+          <ResetPasswordForm examiner={examiner} currentPassword={password} onDone={onLogin} />
         ) : (
           <form onSubmit={handleLogin} className="space-y-4">
             <div>

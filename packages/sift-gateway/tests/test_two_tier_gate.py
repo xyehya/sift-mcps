@@ -83,7 +83,7 @@ def _make_gateway(tool_name: str, read_only: bool | None = None):
     """Return a minimal mock gateway with a _tool_cache entry."""
     gw = MagicMock()
     gw._tool_cache = {tool_name: _make_tool(read_only)}
-    gw._tool_map = {tool_name: "case-mcp"}
+    gw._tool_map = {tool_name: "sift-core"}
     gw.call_tool = AsyncMock(return_value=_TOOL_RESULT)
     # get_tools_list is awaited by Server._get_cached_tool_definition on cache miss
     gw.get_tools_list = AsyncMock(return_value=[])

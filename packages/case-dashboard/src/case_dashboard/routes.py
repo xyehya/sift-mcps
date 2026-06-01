@@ -1815,6 +1815,52 @@ async def get_case(request: Request) -> JSONResponse:
     return JSONResponse(meta)
 
 
+async def post_case_metadata(request: Request) -> JSONResponse:
+    """Set a single case metadata field.
+
+    Examiner-triggered, portal-owned (F-E): metadata setting and report
+    generation are not on the agent MCP surface. Validation/persistence live
+    in sift_core.case_metadata; this route is the operator-facing trigger.
+    """
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+
+    field = body.get("field")
+    if not isinstance(field, str) or not field.strip():
+        return JSONResponse({"error": "'field' is required"}, status_code=400)
+    value = body.get("value", "")
+
+    from sift_core.case_metadata import set_case_metadata
+    try:
+        result = set_case_metadata(case_dir, field.strip(), value)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except OSError as e:
+        logger.exception("Failed to write case metadata for %s: %s", case_dir.name, e)
+        return JSONResponse({"error": "Failed to write case metadata."}, status_code=500)
+
+    if "error" in result:
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
 async def get_todos(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -2534,7 +2580,8 @@ async def get_auth_setup_required(request: Request) -> JSONResponse:
         has_any = _PASSWORDS_DIR.is_dir() and any(_PASSWORDS_DIR.glob("*.json"))
     except OSError:
         has_any = False
-    return JSONResponse({"required": not has_any})
+    required = not has_any
+    return JSONResponse({"required": required, "setup_required": required})
 
 
 async def post_auth_setup(request: Request) -> JSONResponse:
@@ -4111,7 +4158,7 @@ async def generate_report_route(request: Request) -> JSONResponse:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
         profile = body.get("profile", "full")
-        from report_mcp.profiles import PROFILES
+        from sift_core.report_profiles import PROFILES
         if profile not in PROFILES:
             return JSONResponse({
                 "error": f"Unknown profile: {profile}. Valid profiles: {', '.join(sorted(PROFILES))}"
@@ -4121,8 +4168,8 @@ async def generate_report_route(request: Request) -> JSONResponse:
         start_date = body.get("start_date", "")
         end_date = body.get("end_date", "")
 
-        from report_mcp.server import _generate
-        result = _generate(
+        from sift_core.reporting import generate_report_data
+        result = generate_report_data(
             profile_name=profile,
             case_dir=case_dir,
             finding_ids=finding_ids,
@@ -4303,6 +4350,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/delta", post_delta, methods=["POST"]),
         Route("/api/delta/{id}", delete_delta_item, methods=["DELETE"]),
         Route("/api/case", get_case, methods=["GET"]),
+        Route("/api/case/metadata", post_case_metadata, methods=["POST"]),
         Route("/api/todos", get_todos, methods=["GET"]),
         Route("/api/todos", post_todo, methods=["POST"]),
         Route("/api/todos/{todo_id}", patch_todo, methods=["PATCH"]),

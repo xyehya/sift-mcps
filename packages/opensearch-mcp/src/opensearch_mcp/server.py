@@ -2600,7 +2600,7 @@ def idx_ingest_status(case_id: str = "") -> dict:
                     example_type = "amcache"
                     break
             next_steps.append(
-                f"Call suggest_tools(artifact_type='{example_type}') on sift-mcp "
+                f"Call suggest_tools(artifact_type='{example_type}') "
                 "for deep analysis tools beyond OpenSearch queries"
             )
             s["next_steps"] = next_steps

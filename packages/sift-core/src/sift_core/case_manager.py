@@ -1,7 +1,7 @@
 """Case manager: investigation records, TODOs, evidence listing, grounding.
 
 Local-first: each examiner owns a flat case directory. Case lifecycle
-(init, close, activate) is handled by case-mcp and the SIFT CLI.
+(init, close, activate) is handled by the core case tools and the SIFT CLI.
 """
 
 from __future__ import annotations

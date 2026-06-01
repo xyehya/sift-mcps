@@ -107,7 +107,7 @@ class TestReportsEndpoints:
         # Clear pending reports
         routes_mod._PENDING_REPORTS.clear()
 
-        with patch("report_mcp.server._generate", return_value=fake_report):
+        with patch("sift_core.reporting.generate_report_data", return_value=fake_report):
             resp = auth_examiner_cookie.post("/api/reports/generate", json={"profile": "executive"})
             assert resp.status_code == 200
             data = resp.json()

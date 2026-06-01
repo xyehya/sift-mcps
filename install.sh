@@ -172,9 +172,13 @@ sync_workspace() {
   export UV_NO_MANAGED_PYTHON=1
   export UV_PYTHON_DOWNLOADS=never
 
-  # Always use --extra full.  RAG is a core forensic capability.
+  # Default --extra full (RAG is a core forensic capability); core-only installs
+  # use --extra core (gateway + portal + in-process core tools, no add-on backends).
+  local sync_extra="full"
+  [[ "${SIFT_CORE_ONLY:-0}" == "1" ]] && sync_extra="core"
+  log "Workspace extra: $sync_extra"
   "$UV_BIN" sync \
-    --extra full \
+    --extra "$sync_extra" \
     --project "$REPO_DIR" \
     --python "$SYSTEM_PYTHON" \
     --no-managed-python \
@@ -192,7 +196,7 @@ sync_workspace() {
   if [[ "$ok" -eq 0 ]]; then
     warn "Some imports failed.  Attempting one retry with --reinstall..."
     "$UV_BIN" sync \
-      --extra full \
+      --extra "$sync_extra" \
       --project "$REPO_DIR" \
       --python "$SYSTEM_PYTHON" \
       --no-managed-python \
@@ -462,14 +466,16 @@ _render_file() {
   export SIFT_WINDOWS_TRIAGE_DB_DIR
   export SIFT_GATEWAY_TOKEN SIFT_SERVICE_TOKEN SIFT_PORTAL_SESSION_SECRET
   export SIFT_EXAMINER SIFT_MCPS_ROOT UV_BIN PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
-  export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED
+  export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED SIFT_OPENSEARCH_ENABLED
 
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
   OPENCTI_URL="${OPENCTI_URL:-http://127.0.0.1:8080}"
   OPENCTI_TOKEN="${OPENCTI_TOKEN:-}"
-  SIFT_RAG_ENABLED="true"
-  SIFT_WINDOWS_TRIAGE_ENABLED="true"
+  # Honor flags already set by main() (e.g. core-only); default to enabled.
+  SIFT_RAG_ENABLED="${SIFT_RAG_ENABLED:-true}"
+  SIFT_WINDOWS_TRIAGE_ENABLED="${SIFT_WINDOWS_TRIAGE_ENABLED:-true}"
+  SIFT_OPENSEARCH_ENABLED="${SIFT_OPENSEARCH_ENABLED:-true}"
   SIFT_OPENCTI_ENABLED="${SIFT_OPENCTI_ENABLED:-false}"
 
   "$SYSTEM_PYTHON" - "$src" "$dst" "$mode" <<'PY'
@@ -866,6 +872,8 @@ install_systemd_service() {
   SIFT_EXAMINER="$SIFT_EXAMINER"
   export SIFT_MCPS_ROOT UV_BIN PYTHON_BIN SIFT_CONFIG SIFT_EXAMINER
 
+  [[ -x "$VENV_DIR/bin/sift-gateway" ]] || die "Missing gateway entrypoint: $VENV_DIR/bin/sift-gateway. Run install workspace sync first."
+
   if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
     log "Updating systemd user service $GATEWAY_SERVICE_FILE."
   else
@@ -887,13 +895,13 @@ install_systemd_service() {
 # =============================================================================
 
 poll_gateway() {
-  log "Waiting for gateway health (up to 120 s)."
-  for _ in $(seq 1 60); do
+  log "Waiting for gateway health (up to 30 s)."
+  for _ in $(seq 1 30); do
     if curl -kfsS https://127.0.0.1:4508/health >/dev/null 2>&1; then
       log "Gateway health endpoint reachable."
       return
     fi
-    sleep 2
+    sleep 1
   done
   warn "Gateway not reachable.  Check: journalctl --user -u sift-gateway -n 50"
 }
@@ -1022,15 +1030,20 @@ print_summary() {
 # =============================================================================
 
 main() {
+  SIFT_CORE_ONLY="${SIFT_CORE_ONLY:-0}"
   # Parse no-arg flags only (-y, --yes for non-interactive)
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -y|--yes) shift ;;   # accepted but ignored — we are always non-interactive
+      --core-only) SIFT_CORE_ONLY=1; shift ;;
       -h|--help)
-        printf 'Usage: ./install.sh\n\n'
-        printf 'Provisions a complete sift-mcps stack on SIFT Workstation.\n'
+        printf 'Usage: ./install.sh [--core-only]\n\n'
+        printf 'Provisions a sift-mcps stack on SIFT Workstation.\n'
         printf 'No arguments required — everything is auto-detected.\n'
-        printf 'Re-run safe: every step is idempotent.\n'
+        printf 'Re-run safe: every step is idempotent.\n\n'
+        printf '  --core-only   Install gateway + portal + in-process core tools only.\n'
+        printf '                Skips all add-on backends (opensearch, rag, windows-triage,\n'
+        printf '                opencti), OpenSearch/Docker, and forensic-tool downloads.\n'
         exit 0
         ;;
       *)
@@ -1046,15 +1059,27 @@ main() {
   require_cmd awk
   require_cmd curl
 
-  # --- auto-detect OpenCTI ---
-  if _detect_opencti; then
-    SIFT_OPENCTI_ENABLED="true"
-    log "OpenCTI auto-detected: Docker available, sufficient RAM."
-  else
+  # --- backend enablement ---
+  if [[ "$SIFT_CORE_ONLY" == "1" ]]; then
+    log "CORE-ONLY install: gateway + portal + in-process core tools; all add-on backends disabled."
     SIFT_OPENCTI_ENABLED="false"
-    log "OpenCTI not enabled (requires Docker + ≥14 GB RAM)."
+    SIFT_RAG_ENABLED="false"
+    SIFT_WINDOWS_TRIAGE_ENABLED="false"
+    SIFT_OPENSEARCH_ENABLED="false"
+  else
+    SIFT_RAG_ENABLED="${SIFT_RAG_ENABLED:-true}"
+    SIFT_WINDOWS_TRIAGE_ENABLED="${SIFT_WINDOWS_TRIAGE_ENABLED:-true}"
+    SIFT_OPENSEARCH_ENABLED="${SIFT_OPENSEARCH_ENABLED:-true}"
+    # auto-detect OpenCTI
+    if _detect_opencti; then
+      SIFT_OPENCTI_ENABLED="true"
+      log "OpenCTI auto-detected: Docker available, sufficient RAM."
+    else
+      SIFT_OPENCTI_ENABLED="false"
+      log "OpenCTI not enabled (requires Docker + ≥14 GB RAM)."
+    fi
   fi
-  export SIFT_OPENCTI_ENABLED
+  export SIFT_CORE_ONLY SIFT_OPENCTI_ENABLED SIFT_RAG_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED SIFT_OPENSEARCH_ENABLED
 
   # --- install ---
   install_uv_if_needed
@@ -1065,24 +1090,30 @@ main() {
   sync_workspace
   install_state_dirs
   configure_fuse
-  download_triage_databases
-  prepare_enrichment_assets
-  download_rag_index
-  install_hayabusa
   generate_tls
   write_default_examiner
   prepare_opencti_secrets
   write_gateway_config
-  write_opensearch_config
-  start_opensearch
-  configure_opensearch_cluster
-  configure_geoip_pipeline
-  install_opensearch_templates
-  install_opencti
-  install_opencti_feeds
+  prepare_enrichment_assets   # FK enrichment is core (D4: FK data is a core runtime dep)
+
+  if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
+    download_triage_databases
+    download_rag_index
+    install_hayabusa
+    write_opensearch_config
+    start_opensearch
+    configure_opensearch_cluster
+    configure_geoip_pipeline
+    install_opensearch_templates
+    install_opencti
+    install_opencti_feeds
+    install_hayabusa_system_links
+    fix_volatility_permissions
+  else
+    log "CORE-ONLY: skipped add-on backends, OpenSearch/Docker, and forensic-tool downloads."
+  fi
+
   install_systemd_service
-  install_hayabusa_system_links
-  fix_volatility_permissions
   configure_immutable_capability
   configure_auditd
   configure_apparmor

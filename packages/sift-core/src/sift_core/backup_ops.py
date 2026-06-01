@@ -1,4 +1,4 @@
-"""Case backup data functions. Used by case-mcp backup_case tool."""
+"""Case backup data functions. Used by the core backup_case tool."""
 
 from __future__ import annotations
 

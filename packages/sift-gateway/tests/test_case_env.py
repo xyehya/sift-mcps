@@ -63,8 +63,8 @@ async def test_stdio_backend_warns_without_active_case_env(monkeypatch, caplog):
     monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
     monkeypatch.setenv("SIFT_CASES_ROOT", "/cases")
     backend = StdioMCPBackend(
-        "case-mcp",
-        {"type": "stdio", "command": "python", "args": ["-m", "case_mcp.server"]},
+        "demo-backend",
+        {"type": "stdio", "command": "python", "args": ["-c", "raise SystemExit(1)"]},
     )
 
     with caplog.at_level(logging.WARNING):

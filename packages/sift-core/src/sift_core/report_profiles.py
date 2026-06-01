@@ -1,6 +1,10 @@
 """Data-driven report profile definitions.
 
 Adding a new profile = adding a dict entry. No code changes required.
+
+Owned by sift-core: report generation is a core capability (Phase 2). The
+portal triggers generation (F-E, examiner-owned); add-on backends never
+generate reports.
 """
 
 from __future__ import annotations
