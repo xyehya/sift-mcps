@@ -1,0 +1,95 @@
+%% SIFT Protocol Gateway — Target Architecture (v2 · 2026-05-31)
+%% Reflects LOCKED DECISIONS:
+%%   D1 agentir-core -> sift-core (package + env/path surface)
+%%   D2 run_command  -> denylist-default (configurable), shell=False, path-jail
+%%   D3 privileged exec -> capabilities-first, sudoers-allowlist fallback
+%%   D4 methodology tools removed -> served via /skills (POST-MVP, last)
+%%   Evidence gate -> declaration-driven (evidence_class x chain-status)
+%% Render: https://mermaid.live  or the bundled revamp-plan.html
+flowchart TB
+
+  subgraph ANALYST["Analyst / Examiner Side (remote, HTTPS only)"]
+    direction LR
+    HERMES["Hermes AI Agent"]
+    BROWSER["Examiner Browser"]
+    OP["Human Operator<br/>loads a SKILLS pack into agent"]
+  end
+
+  subgraph VM["SIFT VM"]
+    direction TB
+
+    subgraph SPG["SIFT PROTOCOL GATEWAY — CORE (self-contained · zero add-on dependency)"]
+      direction TB
+
+      subgraph EDGE["Trust &amp; Mediation Layer (every /mcp call)"]
+        direction LR
+        AUTH["Auth · RBAC · Rate-limit · TLS"]
+        GATE["Evidence Gate<br/>declaration-driven<br/>evidence_class × chain-status"]
+        GUARD["Response Guard<br/>secret/PII redaction (30 patterns)<br/>+ central output-cap"]
+        AUDITENV["Audit Envelope<br/>append-only, per call"]
+      end
+
+      subgraph SURF["Operator &amp; Agent Surfaces"]
+        direction LR
+        MCP["/mcp<br/>MCP Aggregator<br/>ONLY agent endpoint"]
+        PORTAL["/portal<br/>Examiner Portal + Dashboard"]
+        SKILLS["/skills<br/>versioned SKILLS packs<br/>(methodology corpus · post-MVP)"]
+        REG["Backend Registry<br/>manifest-validate + conformance probe"]
+      end
+
+      subgraph CORESVC["Core Forensic Services — in-process (backed by sift-core)"]
+        direction LR
+        EXEC["Execute (run_command)<br/>denylist policy · privilege tag · audit"]
+        CASE["Case Management + metadata"]
+        EVID["Evidence &amp; Chain-of-Custody"]
+        FIND["Findings · Timeline · TODO"]
+        REPORT["Reporting (signed)"]
+        AUDIT["Audit / reasoning / external-action"]
+      end
+    end
+
+    SANDBOX["Sandboxed Executor<br/>separate proc · cgroup · AppArmor · shell=False<br/>UNPRIV default<br/>caps-first → sudoers-allowlist for root-only tools"]
+    CORELIB["sift-core (was agentir-core)<br/>SINGLE SOURCE OF TRUTH<br/>case_io · case_ops · evidence_chain · evidence_ops<br/>approval_auth · audit_ops · identity · verification"]
+    DATA[("case_root &amp; /var/lib/sift<br/>manifest · ledger · approvals · audit · tokens")]
+    SKILLPACKS[("SKILLS corpus<br/>methodology packs<br/>(absorbs ex-forensic-mcp resources)")]
+
+    subgraph ADDONS["Add-on MCP Backends — OPTIONAL · SIFT Backend Contract v1"]
+      direction LR
+      OS["opensearch-mcp<br/>opensearch_*"]
+      CTI["opencti-mcp<br/>cti_*"]
+      RAG["forensic-rag-mcp<br/>kb_*"]
+      WT["windows-triage-mcp<br/>wintriage_*"]
+      COMM["community backend …<br/>(the extension point)"]
+    end
+  end
+
+  HERMES   -->|HTTPS Bearer sift_svc_*| MCP
+  BROWSER  -->|HTTPS Bearer sift_gw_*| PORTAL
+  OP       -->|HTTPS GET| SKILLS
+
+  MCP --> EDGE
+  EDGE --> CORESVC
+  EXEC -->|narrow IPC| SANDBOX
+  CORESVC --> CORELIB
+  PORTAL --> CORELIB
+  SKILLS --> SKILLPACKS
+  CORELIB --> DATA
+
+  MCP -. "advertises add-on tools only if<br/>conformant + requires[] satisfied" .-> REG
+  REG ==>|stdio / HTTP · sift-backend.json| OS
+  REG ==>|stdio / HTTP · sift-backend.json| CTI
+  REG ==>|stdio / HTTP · sift-backend.json| RAG
+  REG ==>|stdio / HTTP · sift-backend.json| WT
+  REG ==>|stdio / HTTP · sift-backend.json| COMM
+
+  classDef core fill:#0b3d4d,stroke:#16a3c0,stroke-width:2px,color:#eaf6fa;
+  classDef edge fill:#3a2a52,stroke:#9a6cff,stroke-width:1px,color:#f1ecff;
+  classDef addon fill:#143018,stroke:#3fae57,stroke-width:1px,color:#e7f7ea;
+  classDef data fill:#3d2f08,stroke:#d9a826,stroke-width:1px,color:#fbf2d6;
+  classDef sandbox fill:#4d1414,stroke:#e0564f,stroke-width:2px,color:#ffe9e7;
+
+  class MCP,PORTAL,SKILLS,REG,EXEC,CASE,EVID,FIND,REPORT,AUDIT core;
+  class AUTH,GATE,GUARD,AUDITENV edge;
+  class OS,CTI,RAG,WT,COMM addon;
+  class DATA,CORELIB,SKILLPACKS data;
+  class SANDBOX sandbox;
