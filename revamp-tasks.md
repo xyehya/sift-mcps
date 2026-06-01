@@ -292,7 +292,7 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 > Append newest at the top. Use the §3 template.
 
 ### Session 3 — 2026-06-01 — Phase 0.1 (package rename `agentir_core` → `sift_core`)
-- Branch/commit: `revamp/spg-v1` @ `43ff32f` (uncommitted working tree — rename not yet committed).
+- Branch/commit: `revamp/spg-v1` @ `4890f75` (0.1 rename) — preceded by `cc9765e` (stale planning-doc cleanup).
 - Phase: 0 — tasks touched: **0.1** (done). 0.2/0.3/0.4 still todo.
 - DONE (boxes ticked): **0.1**.
 - Tests: per-package baseline captured first, then re-run after rename — **identical counts, all green**: sift-core 225 · case-dashboard 274 · sift-gateway 104 · case-mcp 23 · opensearch 973 (+71 skip) · sift-mcp 4 · report 31 · forensic 20 · win-triage 11. Command: `uv run python -m pytest packages/<pkg>/ -q` (whole-suite `pytest` from root fails on duplicate test basenames across packages — pre-existing, run per-package).
