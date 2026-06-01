@@ -295,7 +295,7 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 > Append newest at the top. Use the §3 template.
 
 ### Session 3 — 2026-06-01 — Phase 0.1 (package rename) + 0.2 env/path rename
-- Branch/commit: `revamp/spg-v1` @ `cf69e97` — chain: `cc9765e` (stale-doc cleanup) → `4890f75` (0.1 rename) → `48ab494` (tracker SHA) → `cf69e97`.
+- Branch/commit: `revamp/spg-v1` @ `d292df9` — chain: `cc9765e` (stale-doc cleanup) → `4890f75` (0.1 rename) → `48ab494` (tracker SHA) → `d292df9`.
 - Phase: 0 — tasks touched: **0.1** (done, ticked), **0.2** (env/path rename done; `/cases` resolver deferred — box marked `[~]`).
 - DONE (boxes ticked): **0.1**. **0.2 rename portion** complete but box left `[~]` (not fully ticked — `/cases` single-resolver clause outstanding).
 - 0.1: `git mv` package `agentir-core`→`sift-core`, `agentir_core`→`sift_core`; dist name + 4 dependents + root workspace; swept all `.py` + install.sh; docs/AGENTS module refs.
