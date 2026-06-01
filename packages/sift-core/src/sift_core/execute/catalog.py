@@ -177,9 +177,8 @@ _security_cache: dict | None = None
 def load_security_policy() -> dict:
     """Load the executor security policy from gateway configuration.
 
-    Returns dict with keys: dangerous_flags (set), tool_allowed_flags (dict of sets),
-    tool_blocked_flags (dict of sets), denied_binaries (frozenset),
-    output_flags (frozenset).
+    Returns dict with executor security mode, allow/deny binary sets, and
+    argument/path policy sets.
     """
     global _security_cache
     if _security_cache is not None:
@@ -196,6 +195,8 @@ def load_security_policy() -> dict:
 
         doc = build_security_policy()
     _security_cache = {
+        "mode": doc.get("mode", "denylist"),
+        "allowed_binaries": frozenset(doc.get("allowed_binaries", [])),
         "dangerous_flags": set(doc.get("dangerous_flags", [])),
         "tool_allowed_flags": {
             k: set(v) for k, v in doc.get("tool_allowed_flags", {}).items()

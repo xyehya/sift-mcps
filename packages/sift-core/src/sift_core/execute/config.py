@@ -31,6 +31,9 @@ class SiftConfig:
     # Max bytes of tool output returned in MCP response (~2,500 tokens)
     response_byte_budget: int = 10_240  # 10KB
 
+    # Optional address-space limit applied inside the isolated worker process.
+    execute_memory_limit_bytes: int = 0
+
     # Hayabusa install location
     hayabusa_dir: str = "/opt/hayabusa"
 
@@ -67,6 +70,14 @@ class SiftConfig:
         if os.environ.get("SIFT_MAX_OUTPUT"):
             try:
                 cfg.max_output_bytes = int(os.environ["SIFT_MAX_OUTPUT"])
+            except ValueError:
+                pass
+
+        if os.environ.get("SIFT_EXECUTE_MEMORY_LIMIT"):
+            try:
+                cfg.execute_memory_limit_bytes = int(
+                    os.environ["SIFT_EXECUTE_MEMORY_LIMIT"]
+                )
             except ValueError:
                 pass
 

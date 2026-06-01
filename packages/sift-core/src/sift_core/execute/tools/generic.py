@@ -11,6 +11,7 @@ from sift_core.execute.exceptions import DeniedBinaryError, ExecutionError
 from sift_core.execute.executor import execute
 from sift_core.execute.security import (
     get_output_flags,
+    is_allowed_by_mode,
     is_denied,
     sanitize_extra_args,
     validate_input_path,
@@ -77,6 +78,10 @@ def run_command(
         raise DeniedBinaryError(
             f"Binary '{binary}' is blocked by security policy. "
             f"This restriction cannot be overridden."
+        )
+    if not is_allowed_by_mode(binary):
+        raise DeniedBinaryError(
+            f"Binary '{binary}' is not allowed by execute.security allowlist mode."
         )
 
     # rm-specific: allow execution but protect evidence directories

@@ -6,10 +6,11 @@ All forensic tool execution goes through this module.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import subprocess
-import threading
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,17 +22,59 @@ from sift_core.execute.exceptions import ExecutionError, ExecutionTimeoutError
 logger = logging.getLogger(__name__)
 
 
-def _read_pipe(pipe, chunks: list[bytes], limit: int, total: list[int]) -> None:
-    """Read from a pipe incrementally, respecting byte limit."""
-    while True:
-        remaining = limit - total[0]
-        if remaining <= 0:
-            break
-        data = pipe.read(min(65536, remaining))
-        if not data:
-            break
-        chunks.append(data)
-        total[0] += len(data)
+def _run_isolated_worker(
+    cmd_list: list[str],
+    *,
+    timeout: int,
+    cwd: str | None,
+    max_output_bytes: int,
+    memory_limit_bytes: int,
+) -> dict[str, Any]:
+    payload = {
+        "cmd": cmd_list,
+        "timeout": timeout,
+        "cwd": cwd,
+        "max_output_bytes": max_output_bytes,
+        "memory_limit_bytes": memory_limit_bytes,
+    }
+    worker_cmd = [sys.executable, "-m", "sift_core.execute.worker"]
+    try:
+        proc = subprocess.run(
+            worker_cmd,
+            input=json.dumps(payload),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout + 10,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ExecutionTimeoutError(
+            f"Executor worker timed out after {timeout + 10}s: {' '.join(cmd_list)}"
+        ) from exc
+
+    if proc.returncode != 0:
+        stderr = _truncate(proc.stderr or "", 2000)
+        raise ExecutionError(f"Executor worker failed with exit {proc.returncode}: {stderr}")
+
+    try:
+        result = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        stderr = _truncate(proc.stderr or "", 2000)
+        raise ExecutionError(f"Executor worker returned invalid JSON: {stderr}") from exc
+
+    error_type = result.get("error_type")
+    if error_type == "timeout":
+        raise ExecutionTimeoutError(
+            f"Command timed out after {timeout}s: {' '.join(cmd_list)}"
+        )
+    if error_type == "not_found":
+        raise FileNotFoundError(result.get("message") or cmd_list[0])
+    if error_type == "permission":
+        raise PermissionError(result.get("message") or cmd_list[0])
+    if error_type:
+        raise OSError(result.get("message") or f"executor worker error: {error_type}")
+    return result
 
 
 def execute(
@@ -62,76 +105,32 @@ def execute(
     max_bytes = config.max_output_bytes
 
     start = time.monotonic()
-    truncated = False
     try:
-        proc = subprocess.Popen(
+        worker_result = _run_isolated_worker(
             cmd_list,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            timeout=timeout,
             cwd=cwd,
+            max_output_bytes=max_bytes,
+            memory_limit_bytes=config.execute_memory_limit_bytes,
         )
-
-        stdout_chunks: list[bytes] = []
-        stderr_chunks: list[bytes] = []
-        total = [0]  # shared mutable counter across both pipes
-
-        # Read both pipes in threads to avoid deadlock and allow
-        # proc.wait() in the main thread to enforce the timeout.
-        stdout_thread = threading.Thread(
-            target=_read_pipe,
-            args=(proc.stdout, stdout_chunks, max_bytes, total),
-        )
-        stderr_thread = threading.Thread(
-            target=_read_pipe,
-            args=(proc.stderr, stderr_chunks, max_bytes, total),
-        )
-        stdout_thread.start()
-        stderr_thread.start()
-
-        # Poll for completion, checking byte limit periodically
-        deadline = start + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                proc.kill()
-                proc.wait(timeout=5)
-                raise subprocess.TimeoutExpired(cmd_list, timeout)
-            if total[0] >= max_bytes:
-                truncated = True
-                proc.kill()
-                proc.wait(timeout=5)
-                break
-            try:
-                proc.wait(timeout=min(0.1, remaining))
-                break
-            except subprocess.TimeoutExpired:
-                continue
-
-        stdout_thread.join(timeout=5)
-        stderr_thread.join(timeout=5)
-
-        # Check truncation after threads finish (process may have
-        # exited before the polling loop detected the byte limit)
-        if total[0] >= max_bytes:
-            truncated = True
-
         elapsed = time.monotonic() - start
 
-        stdout_raw = b"".join(stdout_chunks)
-        stderr_raw = b"".join(stderr_chunks)
-        stdout = stdout_raw.decode("utf-8", errors="replace")
-        stderr = stderr_raw.decode("utf-8", errors="replace")
-        stdout_byte_count = len(stdout_raw)
+        stdout = str(worker_result.get("stdout", ""))
+        stderr = str(worker_result.get("stderr", ""))
+        stdout_byte_count = int(
+            worker_result.get("stdout_total_bytes", len(stdout.encode("utf-8")))
+        )
 
         response: dict[str, Any] = {
-            "exit_code": proc.returncode,
+            "exit_code": int(worker_result["exit_code"]),
             "stdout": stdout,
             "stderr": _truncate(stderr, config.max_output_bytes // 10),
             "elapsed_seconds": round(elapsed, 2),
             "command": cmd_list,
             "stdout_total_bytes": stdout_byte_count,
+            "executor": "isolated_worker",
         }
-        if truncated:
+        if worker_result.get("truncated"):
             response["truncated"] = True
 
         # Threshold-based save: auto-save when output exceeds response budget
@@ -143,13 +142,13 @@ def execute(
                 cmd_list,
                 stdout,
                 stderr,
-                save_dir or os.path.join(case_dir, "agent", "commands"),
+                save_dir or str(_next_run_command_output_dir(Path(case_dir))),
                 response,
             )
         elif save_output and (stdout or stderr):
             default_save_dir = None
             if case_dir:
-                default_save_dir = os.path.join(case_dir, "agent", "commands")
+                default_save_dir = str(_next_run_command_output_dir(Path(case_dir)))
             elif cwd:
                 default_save_dir = str(Path(cwd) / "extracted")
             _save_output(
@@ -179,6 +178,15 @@ def _truncate(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + f"\n... [truncated at {max_chars} chars]"
+
+
+def _next_run_command_output_dir(case_dir: Path) -> Path:
+    base = case_dir / "agent" / "run_commands"
+    for idx in range(1, 100000):
+        candidate = base / f"output{idx}"
+        if not candidate.exists():
+            return candidate
+    return base / f"output{int(time.time())}"
 
 
 def _save_output(

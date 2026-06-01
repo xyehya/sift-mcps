@@ -12,7 +12,7 @@ from sift_core.case_io import cases_root
 
 from sift_core.execute.catalog import load_security_policy
 from sift_core.execute.config import resolve_case_dir
-from sift_core.execute.security_policy import matches_denied_binary
+from sift_core.execute.security_policy import matches_allowed_binary, matches_denied_binary
 
 _DANGEROUS_PATTERNS = [";", "&&", "||", "`", "$(", "${"]
 logger = logging.getLogger(__name__)
@@ -110,6 +110,21 @@ def _get_protected_dirs() -> tuple[str, ...]:
 def is_denied(binary_name: str) -> bool:
     """Check if a binary is on the hard denylist."""
     return matches_denied_binary(binary_name, _get_policy()["denied_binaries"])
+
+
+def is_allowed_by_mode(binary_name: str) -> bool:
+    """Check whether the current policy mode permits a binary.
+
+    The denylist mode is the historical default: anything not denied can run.
+    In allowlist mode, the binary must match an operator-configured allowlist
+    pattern. The caller must still apply the denylist first.
+    """
+    policy = _get_policy()
+    if policy.get("mode") != "allowlist":
+        return True
+    return matches_allowed_binary(
+        binary_name, policy.get("allowed_binaries", frozenset())
+    )
 
 
 def validate_rm_targets(args: list[str]) -> None:

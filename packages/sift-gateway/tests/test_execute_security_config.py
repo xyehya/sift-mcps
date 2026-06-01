@@ -26,9 +26,38 @@ def test_gateway_config_exports_effective_executor_policy(tmp_path, monkeypatch)
 
     assert os.environ[SECURITY_POLICY_ENV]
     policy = load_security_policy()
+    assert policy["mode"] == "denylist"
     assert "echo" in policy["denied_binaries"]
     assert "env" in policy["denied_binaries"]
     assert Path(os.environ["SIFT_CASES_ROOT"]) == tmp_path / "cases"
+
+
+def test_gateway_config_exports_allowlist_executor_policy(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "gateway.yaml"
+    cfg_path.write_text(
+        yaml.safe_dump(
+            {
+                "case": {"root": str(tmp_path / "cases"), "dir": ""},
+                "execute": {
+                    "security": {
+                        "mode": "allowlist",
+                        "allowed_binaries": ["date"],
+                        "denied_binaries": ["echo"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(SECURITY_POLICY_ENV, raising=False)
+
+    load_config(str(cfg_path))
+
+    policy = load_security_policy()
+    assert policy["mode"] == "allowlist"
+    assert "date" in policy["allowed_binaries"]
+    assert "echo" in policy["denied_binaries"]
+    assert "env" in policy["denied_binaries"]
 
 
 def test_gateway_config_rejects_empty_executor_policy(tmp_path):

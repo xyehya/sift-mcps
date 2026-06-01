@@ -32,6 +32,8 @@ DENY_FLOOR = frozenset(
 )
 
 DEFAULT_SECURITY_POLICY: dict[str, Any] = {
+    "mode": "denylist",
+    "allowed_binaries": [],
     "dangerous_flags": [
         "-e",
         "--exec",
@@ -127,8 +129,16 @@ def build_security_policy(
 
     base = deepcopy(DEFAULT_SECURITY_POLICY)
     operator = deepcopy(operator_policy)
+    mode = str(operator.get("mode") or base["mode"]).strip().lower()
+    if mode not in {"denylist", "allowlist"}:
+        raise ValueError("execute.security.mode must be 'denylist' or 'allowlist'")
 
     policy = {
+        "mode": mode,
+        "allowed_binaries": _dedupe_lower(
+            _as_list(base.get("allowed_binaries"), name="allowed_binaries")
+            + _as_list(operator.get("allowed_binaries"), name="allowed_binaries")
+        ),
         "dangerous_flags": _dedupe_lower(
             _as_list(base.get("dangerous_flags"), name="dangerous_flags")
             + _as_list(operator.get("dangerous_flags"), name="dangerous_flags")
@@ -153,6 +163,8 @@ def build_security_policy(
     }
     if not policy["denied_binaries"]:
         raise ValueError("execute.security.denied_binaries cannot be empty")
+    if mode == "allowlist" and not policy["allowed_binaries"]:
+        raise ValueError("execute.security.allowed_binaries is required in allowlist mode")
     return policy
 
 
@@ -174,3 +186,8 @@ def load_policy_from_env() -> dict[str, Any] | None:
 def matches_denied_binary(binary_name: str, denied_binaries: set[str] | frozenset[str]) -> bool:
     binary = binary_name.lower()
     return any(fnmatch.fnmatchcase(binary, pattern.lower()) for pattern in denied_binaries)
+
+
+def matches_allowed_binary(binary_name: str, allowed_binaries: set[str] | frozenset[str]) -> bool:
+    binary = binary_name.lower()
+    return any(fnmatch.fnmatchcase(binary, pattern.lower()) for pattern in allowed_binaries)

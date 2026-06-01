@@ -230,11 +230,13 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
   - *Why:* D2 — operator can tighten, never weaken below the floor (mkfs*, shutdown/reboot/halt/init, kill*, env/printenv token-leak, raw sockets).
   - *Test:* operator config can't delete a floor entry; empty policy refuses boot; denied command blocked end-to-end.
   - *Done:* moved executor policy out of package-data `security.yaml` and into `execute.security` in operator-owned `gateway.yaml`; `sift_core.execute.security_policy` now builds the effective policy as **hardcoded deny floor ∪ default denylist ∪ operator additions**. Gateway config load/start refuses missing or empty `execute.security`, exports the merged policy to the in-process executor, and clears the policy cache on reload. Removed the old `packages/sift-core/data/catalog/security.yaml`. Added tests for non-weakenable floor entries, empty policy rejection, gateway config export, and `run_command(["env"])` being blocked through `Gateway.call_tool`.
-- [ ] **3.2 Optional allowlist mode** — config flag flips denylist→allowlist.
+- [x] **3.2 Optional allowlist mode** — config flag flips denylist→allowlist. ✅ Session 17
   - *Test:* in allowlist mode, only listed commands run; everything else blocked.
-- [ ] **3.3 Hardened isolated executor** (separate process · cgroup · AppArmor · `shell=False` · path jail).
+  - *Done:* added `execute.security.mode` (`denylist` default, optional `allowlist`) and `execute.security.allowed_binaries` to `gateway.yaml`; the effective policy is exported through the existing `SIFT_EXECUTE_SECURITY_POLICY` path. `run_command` still applies the deny floor first, so floor entries remain blocked even when listed in `allowed_binaries`. Added local policy/config/gateway tests for default denylist behaviour, allowlist permit, unlisted-command block, deny-floor precedence, and end-to-end blocked command responses.
+- [~] **3.3 Hardened isolated executor** (separate process · cgroup · AppArmor · `shell=False` · path jail). — PARTIAL (Session 18)
   - *Why:* P6 — contain blast radius distinct from other backends.
   - *Test:* executor runs unprivileged; cannot escape the case jail; resource limits enforced.
+  - *Done so far:* `run_command` now executes through a short-lived isolated Python worker process, which then launches the requested forensic binary with `shell=False`/argv-only execution. Denylist/allowlist and argument/path validation still happen before the worker is invoked. The worker starts tools in a new process session, kills the process group on timeout, enforces output capture limits, applies `RLIMIT_CPU` where available, and supports optional `SIFT_EXECUTE_MEMORY_LIMIT` address-space limiting. Large stdout over the response budget is auto-written under `case/agent/run_commands/outputN` and the MCP response carries the full output path/hash/byte count. Case cwd jail behaviour is preserved at the agent-facing wrapper. **Still pending for full 3.3:** cgroup and AppArmor confinement.
 - [ ] **3.4 Privileged path: capabilities-first → sudoers-allowlist fallback (D3)**
   - *How:* vol/dd/mount escalate via Linux caps; fallback to NOPASSWD full-path sudoers entries (no shell, no wildcard); every escalation audited.
   - *Why:* P6 — some artifacts can't be extracted today; gateway must never run as root.
@@ -304,6 +306,53 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 ## 8 · Session Log
 
 > Append newest at the top. Use the §3 template.
+
+### Session 18 — 2026-06-02 — Phase 3.3 isolated run_command worker
+- Branch/commit: `revamp/spg-v1` @ working tree (not committed)
+- Phase: 3 — tasks touched: **3.3** partial.
+- DONE (boxes ticked this session): none; **3.3 marked `[~]`** because cgroup/AppArmor confinement is still pending.
+- What:
+  - Added `sift_core.execute.worker`, a short-lived isolated executor process. Parent executor launches it with argv-only `subprocess.run(..., shell=False)`; worker launches the forensic command with `subprocess.Popen(..., shell=False)`.
+  - Kept policy enforcement order intact: deny floor, operator denylist, allowlist mode, argument sanitization, and path validation all happen before the worker is invoked.
+  - Preserved case cwd jail through the agent-facing `working_dir` resolver and added a gateway regression for inside-case cwd plus traversal rejection.
+  - Added practical resource controls: timeout kills the worker child process group, output capture limit still prevents runaway capture, worker applies POSIX `RLIMIT_CPU`, and optional `SIFT_EXECUTE_MEMORY_LIMIT` maps to `RLIMIT_AS` where available.
+  - Changed automatic large-output persistence to `case/agent/run_commands/outputN`; responses include `full_output_path`, hash, and byte count through the existing run_command envelope.
+- Tests:
+  - Local focused: `uv run python -m pytest packages/sift-core/tests/test_execute_executor.py -q` → **6 passed**.
+  - Local focused: `uv run python -m pytest packages/sift-gateway/tests/test_inprocess_core_tools.py -q` → **6 passed**.
+  - Local package: `uv run python -m pytest packages/sift-core/ -q` → **293 passed**.
+  - Local package: `uv run python -m pytest packages/sift-gateway/ -q` → **114 passed**.
+- Live test on VM: YES — synced runtime executor files to `192.168.122.81`, restarted user gateway, active case `/cases/phase2-gate`; MCP smoke passed: `date` succeeded through `isolated_worker`, `env` blocked by deny floor, cwd inside case preserved, cwd escape blocked, large output auto-wrote under `/cases/phase2-gate/agent/run_commands/outputN`, and `sleep 5` with `timeout=1` timed out. Gateway health OK after smoke.
+- Spec changed?: no.
+- BLOCKERS / open questions for next session:
+  - Finish 3.3 with cgroup/AppArmor confinement if still in MVP scope before the Phase 3 gate.
+  - Phase 3.4 privileged executor design remains untouched.
+  - `scripts/phase2_gate_test.py` remains intentionally untracked Phase 2 artifact unless already committed.
+- NEXT: continue **Phase 3.3** cgroup/AppArmor hardening, then **3.4** privileged path.
+
+### Session 17 — 2026-06-02 — Phase 3.2 run_command allowlist mode
+- Branch/commit: `revamp/spg-v1` @ working tree (not committed)
+- Phase: 3 — tasks touched: **3.2**.
+- DONE (boxes ticked this session): **3.2**.
+- What:
+  - Added `execute.security.mode` with default `denylist` and optional `allowlist`.
+  - Added `execute.security.allowed_binaries` to `configs/gateway.yaml.template`.
+  - Preserved denylist-default behaviour and kept the hard deny floor ahead of allowlist checks, so floor binaries cannot be re-enabled by allowlisting.
+  - Wired allowlist enforcement through the existing in-process executor policy cache used by gateway `run_command`.
+- Tests:
+  - Local targeted: `uv run python -m pytest packages/sift-core/tests/test_execute_security_policy.py -q` → **7 passed**.
+  - Local targeted: `uv run python -m pytest packages/sift-gateway/tests/test_execute_security_config.py packages/sift-gateway/tests/test_inprocess_core_tools.py -q` → **9 passed**.
+  - Local: `uv run python -m pytest packages/sift-core/ -q` → **287 passed**.
+  - Local: `uv run python -m pytest packages/sift-gateway/ -q` → **113 passed**.
+- Live test on VM:
+  - Synced scoped runtime files to `192.168.122.81`, temporarily changed live `~/.sift/gateway.yaml` to `execute.security.mode: allowlist` with `allowed_binaries: ["date", "env"]`, and restarted `sift-gateway.service`.
+  - Real `/mcp/` agent calls on active sealed case `/cases/phase2-gate`: `run_command(["date"])` succeeded; `run_command(["cat", "--version"])` returned `Binary 'cat' is not allowed by execute.security allowlist mode`; `run_command(["env"])` remained blocked by the deny floor.
+  - Restored the original live `~/.sift/gateway.yaml` and restarted gateway; `/health` returned OK.
+- Spec changed?: no.
+- BLOCKERS / open questions for next session:
+  - Phase 3.3 hardened isolated executor is still todo.
+  - Phase 3.4 privileged executor design is still todo; the earlier immutable capability installer cleanup does not count as 3.4.
+- NEXT: **Phase 3.3** — hardened isolated executor.
 
 ### Session 16 — 2026-06-02 — Phase 3.1 executor policy relocation + installer warning cleanup
 - Branch/commit: `revamp/spg-v1` @ working tree (not committed)

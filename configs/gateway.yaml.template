@@ -19,6 +19,10 @@ execute:
   security:
     # Denylist-default executor policy. Operators may add entries here, but
     # the gateway always unions this with a non-weakenable built-in deny floor.
+    # Set mode: "allowlist" to permit only allowed_binaries, after the deny
+    # floor is applied. Default: "denylist".
+    mode: "denylist"
+    allowed_binaries: []
     dangerous_flags:
       - "-e"
       - "--exec"
