@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 from opensearchpy import OpenSearch
 
-from opensearch_mcp.paths import agentir_dir
+from opensearch_mcp.paths import sift_dir
 
 
 def get_client(config_path: Path | None = None) -> OpenSearch:
@@ -19,7 +19,7 @@ def get_client(config_path: Path | None = None) -> OpenSearch:
     """
     env_path = os.environ.get("OPENSEARCH_CONFIG")
     path = config_path or (Path(env_path).expanduser() if env_path else None)
-    path = path or (agentir_dir() / "opensearch.yaml")
+    path = path or (sift_dir() / "opensearch.yaml")
     if not path.exists():
         raise FileNotFoundError(
             f"OpenSearch config not found: {path}\n"

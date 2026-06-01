@@ -3413,10 +3413,10 @@ def _case_config_write(case_dir: str) -> None:
 
 def _write_cli_case_pointer(case_dir: str) -> None:
     """Atomically write the legacy CLI compatibility pointer."""
-    agentir_dir = Path.home() / ".sift"
-    agentir_dir.mkdir(parents=True, exist_ok=True)
-    active_case_file = agentir_dir / "active_case"  # Legacy CLI fallback
-    fd, tmp_path = tempfile.mkstemp(dir=str(agentir_dir), suffix=".tmp")
+    sift_dir = Path.home() / ".sift"
+    sift_dir.mkdir(parents=True, exist_ok=True)
+    active_case_file = sift_dir / "active_case"  # Legacy CLI fallback
+    fd, tmp_path = tempfile.mkstemp(dir=str(sift_dir), suffix=".tmp")
     try:
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:

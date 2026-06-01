@@ -207,9 +207,9 @@ def case_init_data(
 
     # Set active case pointer — Legacy CLI fallback write (portal sets SIFT_CASE_DIR)
     try:
-        agentir_dir = Path.home() / ".sift"
-        agentir_dir.mkdir(exist_ok=True)
-        _atomic_write(agentir_dir / "active_case", str(case_dir.resolve()))  # Legacy CLI fallback
+        sift_dir = Path.home() / ".sift"
+        sift_dir.mkdir(exist_ok=True)
+        _atomic_write(sift_dir / "active_case", str(case_dir.resolve()))  # Legacy CLI fallback
     except OSError:
         pass
 
@@ -242,9 +242,9 @@ def case_activate_data(case_id: str, cases_dir=None) -> dict:
     if not case_dir.exists():
         raise ValueError(f"Case not found: {case_id}")
 
-    agentir_dir = Path.home() / ".sift"
-    agentir_dir.mkdir(exist_ok=True)
-    _atomic_write(agentir_dir / "active_case", str(case_dir.resolve()))  # Legacy CLI fallback
+    sift_dir = Path.home() / ".sift"
+    sift_dir.mkdir(exist_ok=True)
+    _atomic_write(sift_dir / "active_case", str(case_dir.resolve()))  # Legacy CLI fallback
 
     return {"case_id": case_id, "case_dir": str(case_dir)}
 

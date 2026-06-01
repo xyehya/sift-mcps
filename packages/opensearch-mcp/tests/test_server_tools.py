@@ -569,7 +569,7 @@ class TestEnrichIntelAsync:
             patch("opensearch_mcp.server._spawn_ingest", return_value=fake_proc),
             patch("opensearch_mcp.ingest_status.write_status"),
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
-            patch("opensearch_mcp.paths.agentir_dir", return_value=tmp_path),
+            patch("opensearch_mcp.paths.sift_dir", return_value=tmp_path),
         ):
             resp = idx_enrich_intel(dry_run=False)
 
@@ -600,7 +600,7 @@ class TestEnrichIntelAsync:
             patch("opensearch_mcp.server._spawn_ingest", side_effect=_capture_spawn),
             patch("opensearch_mcp.ingest_status.write_status"),
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
-            patch("opensearch_mcp.paths.agentir_dir", return_value=tmp_path),
+            patch("opensearch_mcp.paths.sift_dir", return_value=tmp_path),
         ):
             resp = idx_enrich_intel(case_id="OVERRIDE-CASE", dry_run=False)
 
@@ -627,7 +627,7 @@ class TestEnrichIntelAsync:
             patch("opensearch_mcp.server._spawn_ingest", side_effect=_capture_spawn),
             patch("opensearch_mcp.ingest_status.write_status"),
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
-            patch("opensearch_mcp.paths.agentir_dir", return_value=tmp_path),
+            patch("opensearch_mcp.paths.sift_dir", return_value=tmp_path),
         ):
             idx_enrich_intel(dry_run=False, force=True)
 
@@ -681,7 +681,7 @@ class TestGetActiveCase:
         case_dir = tmp_path / "cases" / "file-case-001"
         case_dir.mkdir(parents=True)
         (agentir_d / "active_case").write_text(str(case_dir))
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_home", lambda: fake_home)
+        monkeypatch.setattr("opensearch_mcp.paths.sift_home", lambda: fake_home)
         result = srv._get_active_case()
         assert result == "file-case-001"
 
@@ -696,7 +696,7 @@ class TestGetActiveCase:
         stale_dir = tmp_path / "stale-case"
         stale_dir.mkdir()
         (agentir_d / "active_case").write_text(str(stale_dir))
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_home", lambda: fake_home)
+        monkeypatch.setattr("opensearch_mcp.paths.sift_home", lambda: fake_home)
         result = srv._get_active_case()
         assert result == "env-case-20260525-1200"
 
@@ -705,7 +705,7 @@ class TestGetActiveCase:
         monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
         fake_home = tmp_path / "home"
         (fake_home / ".sift").mkdir(parents=True)
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_home", lambda: fake_home)
+        monkeypatch.setattr("opensearch_mcp.paths.sift_home", lambda: fake_home)
         result = srv._get_active_case()
         assert result is None
 
@@ -720,7 +720,7 @@ class TestIdxIngestActiveCase:
         """When no active case is set, returns portal_hint (not legacy CLI error)."""
         monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
         fake_home = monkeypatch.monkeypatch if False else None
-        # Point agentir_dir to empty tmp so file fallback also fails
+        # Point sift_dir to empty tmp so file fallback also fails
         monkeypatch.setattr(srv, "_get_active_case", lambda: None)
         # A valid path to satisfy path validation
         import tempfile

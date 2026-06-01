@@ -19,7 +19,7 @@ from opensearch_mcp.manifest import sha256_file
 from opensearch_mcp.parse_evtx import parse_and_index
 from opensearch_mcp.paths import build_index_name as _build_idx
 from opensearch_mcp.paths import sanitize_index_component as _sanitize_index_component
-from opensearch_mcp.paths import agentir_dir
+from opensearch_mcp.paths import sift_dir
 from opensearch_mcp.results import ArtifactResult, HostResult, IngestResult
 from opensearch_mcp.tools import TOOLS, get_active_tools, run_and_ingest
 
@@ -54,9 +54,9 @@ def _write_ingest_manifest(
             case_dir = Path(case_dir_env)
         else:
             # Legacy CLI fallback — not used in portal workflow
-            from opensearch_mcp.paths import agentir_dir
+            from opensearch_mcp.paths import sift_dir
 
-            active_case_file = agentir_dir() / "active_case"
+            active_case_file = sift_dir() / "active_case"
             if not active_case_file.exists():
                 return
             case_dir = Path(active_case_file.read_text().strip())
@@ -372,7 +372,7 @@ def run_hayabusa_batch(
     if not hayabusa:
         return {"skipped": "hayabusa not installed"}
 
-    output_dir = agentir_dir() / "hayabusa-output"
+    output_dir = sift_dir() / "hayabusa-output"
     output_dir.mkdir(parents=True, exist_ok=True)
     results = {}
 

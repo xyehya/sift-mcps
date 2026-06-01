@@ -8,7 +8,7 @@ No OpenSearch connection is required. The key mocks are:
   - _spawn_ingest → fake process (no subprocess)
   - read_active_ingests → [] (no concurrent guard hit)
   - audit.log → None (no AuditWriter needed)
-  - agentir_dir → tmp_path (no real ~/.sift writes)
+  - sift_dir → tmp_path (no real ~/.sift writes)
   - containers.subprocess → partitioned_disk TSK output
 """
 
@@ -78,10 +78,10 @@ class TestLaunchContainerIngestSidecar:
     @patch("opensearch_mcp.server.audit")
     @patch("opensearch_mcp.server._spawn_ingest")
     @patch("opensearch_mcp.ingest_status.read_active_ingests")
-    @patch("opensearch_mcp.paths.agentir_dir")
+    @patch("opensearch_mcp.paths.sift_dir")
     def test_sidecar_written_on_partitioned_disk(
         self,
-        mock_agentir_dir,
+        mock_sift_dir,
         mock_read_active,
         mock_spawn,
         mock_audit,
@@ -92,7 +92,7 @@ class TestLaunchContainerIngestSidecar:
         from opensearch_mcp.server import _launch_container_ingest
 
         # Redirect ~/.sift writes to tmp_path
-        mock_agentir_dir.return_value = tmp_path
+        mock_sift_dir.return_value = tmp_path
         mock_read_active.return_value = []
         mock_spawn.return_value = MagicMock(pid=9999)
         mock_audit.log.return_value = None
@@ -129,10 +129,10 @@ class TestLaunchContainerIngestSidecar:
     @patch("opensearch_mcp.server.audit")
     @patch("opensearch_mcp.server._spawn_ingest")
     @patch("opensearch_mcp.ingest_status.read_active_ingests")
-    @patch("opensearch_mcp.paths.agentir_dir")
+    @patch("opensearch_mcp.paths.sift_dir")
     def test_no_sidecar_when_tsk_absent(
         self,
-        mock_agentir_dir,
+        mock_sift_dir,
         mock_read_active,
         mock_spawn,
         mock_audit,
@@ -142,7 +142,7 @@ class TestLaunchContainerIngestSidecar:
     ):
         from opensearch_mcp.server import _launch_container_ingest
 
-        mock_agentir_dir.return_value = tmp_path
+        mock_sift_dir.return_value = tmp_path
         mock_read_active.return_value = []
         mock_spawn.return_value = MagicMock(pid=9999)
         mock_audit.log.return_value = None
@@ -176,10 +176,10 @@ class TestMemoryIngestSidecar:
     @patch("opensearch_mcp.server._spawn_ingest")
     @patch("opensearch_mcp.ingest_status.write_status")
     @patch("opensearch_mcp.ingest_status.read_active_ingests")
-    @patch("opensearch_mcp.paths.agentir_dir")
+    @patch("opensearch_mcp.paths.sift_dir")
     def test_memory_sidecar_written(
         self,
-        mock_agentir_dir,
+        mock_sift_dir,
         mock_read_active,
         mock_write_status,
         mock_spawn,
@@ -193,7 +193,7 @@ class TestMemoryIngestSidecar:
         """idx_ingest_memory must write a memory_image sidecar via _collect_filesystem_meta."""
         from opensearch_mcp.server import idx_ingest_memory
 
-        mock_agentir_dir.return_value = tmp_path
+        mock_sift_dir.return_value = tmp_path
         mock_read_active.return_value = []
         mock_spawn.return_value = MagicMock(pid=9998)
         mock_audit.log.return_value = None

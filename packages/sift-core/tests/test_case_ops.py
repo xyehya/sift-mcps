@@ -25,8 +25,8 @@ def cases_dir(tmp_path):
 def active_home(tmp_path, monkeypatch):
     """Redirect Path.home() to tmp_path so active_case pointer goes there."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    agentir_dir = tmp_path / ".sift"
-    agentir_dir.mkdir(exist_ok=True)
+    sift_dir = tmp_path / ".sift"
+    sift_dir.mkdir(exist_ok=True)
     return tmp_path
 
 

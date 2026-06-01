@@ -16,14 +16,14 @@ from opensearch_mcp.ingest import _write_ingest_manifest
 
 
 def _setup_active_case(tmp_path: Path, monkeypatch) -> Path:
-    """Point agentir_dir()/active_case at a freshly-created case dir."""
+    """Point sift_dir()/active_case at a freshly-created case dir."""
     fake_home = tmp_path / "home"
-    fake_agentir_dir = fake_home / ".sift"
-    fake_agentir_dir.mkdir(parents=True)
+    fake_sift_dir = fake_home / ".sift"
+    fake_sift_dir.mkdir(parents=True)
     case_dir = tmp_path / "cases" / "INC-TEST"
     case_dir.mkdir(parents=True)
-    (fake_agentir_dir / "active_case").write_text(str(case_dir))
-    monkeypatch.setattr("opensearch_mcp.paths.agentir_home", lambda: fake_home)
+    (fake_sift_dir / "active_case").write_text(str(case_dir))
+    monkeypatch.setattr("opensearch_mcp.paths.sift_home", lambda: fake_home)
     return case_dir
 
 
@@ -63,7 +63,7 @@ class TestWriteIngestManifest:
     def test_no_active_case_is_noop(self, tmp_path, monkeypatch):
         fake_home = tmp_path / "home"
         (fake_home / ".sift").mkdir(parents=True)
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_home", lambda: fake_home)
+        monkeypatch.setattr("opensearch_mcp.paths.sift_home", lambda: fake_home)
         _write_ingest_manifest("/x/y.evtx", "h", "evtx")  # must not raise
 
     def test_sha256_omitted_when_empty(self, tmp_path, monkeypatch):
@@ -138,7 +138,7 @@ class TestWriteIngestManifestEnvVar:
         stale_dir = tmp_path / "stale-case"
         stale_dir.mkdir()
         (fake_home / ".sift" / "active_case").write_text(str(stale_dir))
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_home", lambda: fake_home)
+        monkeypatch.setattr("opensearch_mcp.paths.sift_home", lambda: fake_home)
         _write_ingest_manifest("/x/y.evtx", "host1", "evtx", doc_count=1)
         manifests = list((case_dir / "audit" / "ingest-manifests").glob("*.manifest.json"))
         assert len(manifests) == 1

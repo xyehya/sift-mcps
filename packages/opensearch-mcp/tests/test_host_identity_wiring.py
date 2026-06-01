@@ -584,11 +584,11 @@ class TestPreflightToParserIntegration:
         _seed_case_v1(tmp_path, "INC-H1", dict_hosts={"admin01": {"aliases": ["admin01"]}})
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
-        fake_agentir_dir = tmp_path / "agentir"
-        fake_agentir_dir.mkdir()
-        (fake_agentir_dir / "active_case").write_text("INC-H1\n")
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_dir", lambda: fake_agentir_dir)
-        monkeypatch.setattr("opensearch_mcp.server.agentir_dir", lambda: fake_agentir_dir, raising=False)
+        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir.mkdir()
+        (fake_sift_dir / "active_case").write_text("INC-H1\n")
+        monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)
+        monkeypatch.setattr("opensearch_mcp.server.sift_dir", lambda: fake_sift_dir, raising=False)
 
         with patch("opensearch_mcp.server._get_os") as mock_get_os:
             mock_client = MagicMock()
@@ -673,11 +673,11 @@ class TestPreflightToParserIntegration:
         _seed_case_v1(tmp_path, "INC-REJ", dict_hosts={"admin01": {"aliases": ["admin01"]}})
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
-        fake_agentir_dir = tmp_path / "agentir"
-        fake_agentir_dir.mkdir()
-        (fake_agentir_dir / "active_case").write_text("INC-REJ\n")
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_dir", lambda: fake_agentir_dir)
-        monkeypatch.setattr("opensearch_mcp.server.agentir_dir", lambda: fake_agentir_dir, raising=False)
+        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir.mkdir()
+        (fake_sift_dir / "active_case").write_text("INC-REJ\n")
+        monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)
+        monkeypatch.setattr("opensearch_mcp.server.sift_dir", lambda: fake_sift_dir, raising=False)
 
         with patch("opensearch_mcp.server._get_os") as mock_get_os:
             mock_get_os.return_value = MagicMock()
@@ -725,11 +725,11 @@ class TestPreflightToParserIntegration:
         _seed_case_v1(tmp_path, "INC-AUDIT", dict_hosts={"admin01": {"aliases": ["admin01"]}})
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
-        fake_agentir_dir = tmp_path / "agentir"
-        fake_agentir_dir.mkdir()
-        (fake_agentir_dir / "active_case").write_text("INC-AUDIT\n")
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_dir", lambda: fake_agentir_dir)
-        monkeypatch.setattr("opensearch_mcp.server.agentir_dir", lambda: fake_agentir_dir, raising=False)
+        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir.mkdir()
+        (fake_sift_dir / "active_case").write_text("INC-AUDIT\n")
+        monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)
+        monkeypatch.setattr("opensearch_mcp.server.sift_dir", lambda: fake_sift_dir, raising=False)
 
         with (
             patch("opensearch_mcp.server._get_os") as mock_get_os,
@@ -943,11 +943,11 @@ class TestCaseHostFix:
         )
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
-        fake_agentir_dir = tmp_path / "agentir"
-        fake_agentir_dir.mkdir()
-        (fake_agentir_dir / "active_case").write_text("INC-EDGE\n")
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_dir", lambda: fake_agentir_dir)
-        monkeypatch.setattr("opensearch_mcp.server.agentir_dir", lambda: fake_agentir_dir, raising=False)
+        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir.mkdir()
+        (fake_sift_dir / "active_case").write_text("INC-EDGE\n")
+        monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)
+        monkeypatch.setattr("opensearch_mcp.server.sift_dir", lambda: fake_sift_dir, raising=False)
 
         with patch("opensearch_mcp.server._get_os") as mock_get_os:
             mock_client = MagicMock()
@@ -1002,12 +1002,12 @@ class TestCaseHostFix:
         _seed_case_v1(tmp_path, "INC-18", dict_hosts={"admin01": {"aliases": ["admin01"]}})
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
-        # Redirect agentir_dir() to tmp_path so active_case can be written.
-        fake_agentir_dir = tmp_path / "agentir"
-        fake_agentir_dir.mkdir()
-        (fake_agentir_dir / "active_case").write_text("INC-18\n")
-        monkeypatch.setattr("opensearch_mcp.paths.agentir_dir", lambda: fake_agentir_dir)
-        monkeypatch.setattr("opensearch_mcp.server.agentir_dir", lambda: fake_agentir_dir, raising=False)
+        # Redirect sift_dir() to tmp_path so active_case can be written.
+        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir.mkdir()
+        (fake_sift_dir / "active_case").write_text("INC-18\n")
+        monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)
+        monkeypatch.setattr("opensearch_mcp.server.sift_dir", lambda: fake_sift_dir, raising=False)
 
         call_order: list[str] = []
         original_save = HostDictionary.save

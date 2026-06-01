@@ -149,9 +149,9 @@ def _to_unc_path(case_relative_path: str) -> str:
     """
     import socket
 
-    from opensearch_mcp.paths import agentir_dir
+    from opensearch_mcp.paths import sift_dir
 
-    vdir = agentir_dir()
+    vdir = sift_dir()
     sift_host = ""
     share_name = "cases"
 

@@ -8,9 +8,9 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from opensearch_mcp.paths import agentir_dir
+from opensearch_mcp.paths import sift_dir
 
-_STATUS_DIR = agentir_dir() / "ingest-status"
+_STATUS_DIR = sift_dir() / "ingest-status"
 
 
 def write_status(

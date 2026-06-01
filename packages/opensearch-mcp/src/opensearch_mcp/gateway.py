@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.request
 
-from opensearch_mcp.paths import agentir_dir
+from opensearch_mcp.paths import sift_dir
 
 _cached_config: dict | None = None
 _config_loaded: bool = False
@@ -23,7 +23,7 @@ def load_gateway_config() -> dict | None:
     if _config_loaded:
         return _cached_config
 
-    gw_config = agentir_dir() / "gateway.yaml"
+    gw_config = sift_dir() / "gateway.yaml"
     if not gw_config.exists():
         _config_loaded = True
         return None

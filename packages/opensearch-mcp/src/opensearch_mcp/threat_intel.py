@@ -82,15 +82,15 @@ def _is_rate_limit(msg: str) -> bool:
 
 def _coverage_path_for_run(run_id: str) -> Path:
     """Resolve the on-disk coverage-map path for this enrichment run."""
-    from opensearch_mcp.paths import agentir_dir
+    from opensearch_mcp.paths import sift_dir
 
-    active_case_file = agentir_dir() / "active_case"
+    active_case_file = sift_dir() / "active_case"
     case_dir: Path
     if active_case_file.exists():
         raw = active_case_file.read_text().strip()
-        case_dir = Path(raw) if raw else agentir_dir() / "cases" / "unknown"
+        case_dir = Path(raw) if raw else sift_dir() / "cases" / "unknown"
     else:
-        case_dir = agentir_dir() / "cases" / "unknown"
+        case_dir = sift_dir() / "cases" / "unknown"
     enrichment_dir = case_dir / "enrichment"
     enrichment_dir.mkdir(parents=True, exist_ok=True)
     safe_run = re.sub(r"[^A-Za-z0-9._-]", "_", run_id or "unknown")

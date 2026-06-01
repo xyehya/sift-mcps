@@ -21,10 +21,10 @@ from opensearch_mcp.ingest import discover, ingest
 from opensearch_mcp.ingest_status import write_status
 from opensearch_mcp.manifest import sha256_file
 from opensearch_mcp.parse_csv import ingest_csv
-from opensearch_mcp.paths import agentir_dir, sanitize_index_component
+from opensearch_mcp.paths import sift_dir, sanitize_index_component
 from opensearch_mcp.tools import TOOLS
 
-_ACTIVE_CASE_FILE = agentir_dir() / "active_case"
+_ACTIVE_CASE_FILE = sift_dir() / "active_case"
 
 
 def _case_dir_for(case_id: str) -> Path | None:
@@ -462,7 +462,7 @@ def _write_bg_status(
     )
 
 
-_SIFT_CONFIG = agentir_dir() / "config.yaml"
+_SIFT_CONFIG = sift_dir() / "config.yaml"
 
 
 def _resolve_case_id(args_case: str | None) -> str:
@@ -502,7 +502,7 @@ def _ensure_case_active(case_id: str) -> None:
     Tries gateway case_activate first (handles SMB + wintools).
     Falls back to setting active_case_file + inline SMB repoint.
     """
-    active_case_file = agentir_dir() / "active_case"  # Legacy CLI fallback
+    active_case_file = sift_dir() / "active_case"  # Legacy CLI fallback
     if active_case_file.exists():
         current = Path(active_case_file.read_text().strip()).name
         if current == case_id:
@@ -518,7 +518,7 @@ def _ensure_case_active(case_id: str) -> None:
         pass
 
     # Fallback: set active_case_file + try inline SMB repoint
-    case_path = agentir_dir() / "cases" / case_id
+    case_path = sift_dir() / "cases" / case_id
     if case_path.is_dir():
         active_case_file.parent.mkdir(parents=True, exist_ok=True)
         active_case_file.write_text(str(case_path))
@@ -530,10 +530,10 @@ def _repoint_samba_if_configured(case_id: str) -> None:
     import os
     import subprocess
 
-    samba_yaml = agentir_dir() / "samba.yaml"
+    samba_yaml = sift_dir() / "samba.yaml"
     if not samba_yaml.is_file():
         return
-    case_dir = agentir_dir() / "cases" / case_id
+    case_dir = sift_dir() / "cases" / case_id
     if not case_dir.is_dir():
         return
     target = str(case_dir)

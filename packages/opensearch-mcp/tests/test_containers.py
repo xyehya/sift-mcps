@@ -335,7 +335,7 @@ class TestMakeIngestTmpdir:
         assert str(result).startswith(str(case_dir / "tmp"))
         assert result.is_dir()
 
-    def test_env_var_wins_over_legacy_agentir_dir(self, tmp_path, monkeypatch):
+    def test_env_var_wins_over_legacy_sift_dir(self, tmp_path, monkeypatch):
         """SIFT_CASE_DIR beats SIFT_CASES_DIR (legacy env var)."""
         from opensearch_mcp.containers import make_ingest_tmpdir
 

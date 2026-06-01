@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 
-def agentir_home() -> Path:
+def sift_home() -> Path:
     """Get the real user's home directory, even under sudo.
 
     When running as root via sudo, Path.home() returns /root/.
@@ -24,9 +24,9 @@ def agentir_home() -> Path:
     return Path.home()
 
 
-def agentir_dir() -> Path:
+def sift_dir() -> Path:
     """Return ~/.sift/ for the real user."""
-    return agentir_home() / ".sift"
+    return sift_home() / ".sift"
 
 
 def resolve_case_insensitive(base: Path, rel_path: str) -> Path | None:

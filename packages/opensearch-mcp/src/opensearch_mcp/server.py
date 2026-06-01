@@ -673,10 +673,10 @@ def _detect_hostnames_from_filenames(path: Path) -> set[str]:
 
 def _validate_path(path: str) -> str | None:
     """Validate path is in allowed locations. Returns error string or None."""
-    from opensearch_mcp.paths import agentir_home
+    from opensearch_mcp.paths import sift_home
 
     p = Path(path).resolve()
-    home = agentir_home().resolve()
+    home = sift_home().resolve()
     allowed = [
         home,
         cases_root().resolve(),  # operator-configured cases root (canonical)
@@ -1777,7 +1777,7 @@ def _launch_container_ingest(
     import uuid as _uuid
 
     from opensearch_mcp.ingest_status import read_active_ingests as _read_active
-    from opensearch_mcp.paths import agentir_dir
+    from opensearch_mcp.paths import sift_dir
 
     _running = [i for i in _read_active() if i.get("status") == "running"]
     if len(_running) >= _MAX_CONCURRENT_INGESTS:
@@ -1825,7 +1825,7 @@ def _launch_container_ingest(
     if no_hayabusa:
         cmd.append("--no-hayabusa")
 
-    log_dir = agentir_dir() / "ingest-logs"
+    log_dir = sift_dir() / "ingest-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{run_id}.log"
     log_fh = open(log_file, "w")
@@ -3167,9 +3167,9 @@ def _launch_background(
         cmd.extend(["--auto-hosts", auto_hosts])
 
     # Log to file instead of DEVNULL so errors are visible
-    from opensearch_mcp.paths import agentir_dir
+    from opensearch_mcp.paths import sift_dir
 
-    log_dir = agentir_dir() / "ingest-logs"
+    log_dir = sift_dir() / "ingest-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{run_id}.log"
     log_fh = open(log_file, "w")
@@ -3191,7 +3191,7 @@ def _launch_background(
     log_fh.close()  # Safe: Popen dup2'd the fd, subprocess has its own copy
     # Remove orphaned PID-0 placeholder
     _safe_case = active_case_id.replace("/", "_").replace("\\", "_").replace("..", "_")
-    _pid0 = agentir_dir() / "ingest-status" / f"{_safe_case}-0.json"
+    _pid0 = sift_dir() / "ingest-status" / f"{_safe_case}-0.json"
     _pid0.unlink(missing_ok=True)
     write_status(
         case_id=active_case_id,
@@ -3288,9 +3288,9 @@ def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
     if force:
         cmd.append("--force")
 
-    from opensearch_mcp.paths import agentir_dir
+    from opensearch_mcp.paths import sift_dir
 
-    log_dir = agentir_dir() / "ingest-logs"
+    log_dir = sift_dir() / "ingest-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{run_id}.log"
     log_fh = open(log_file, "w")
@@ -3312,7 +3312,7 @@ def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
     log_fh.close()
     # Remove orphaned PID-0 placeholder.
     _safe_case = status_case.replace("/", "_").replace("\\", "_").replace("..", "_")
-    _pid0 = agentir_dir() / "ingest-status" / f"{_safe_case}-0.json"
+    _pid0 = sift_dir() / "ingest-status" / f"{_safe_case}-0.json"
     _pid0.unlink(missing_ok=True)
     write_status(
         case_id=status_case,
@@ -3489,7 +3489,7 @@ def idx_ingest_memory(
     if plugins:
         cmd.extend(["--plugins", ",".join(plugins)])
 
-    from opensearch_mcp.paths import agentir_dir as _vd
+    from opensearch_mcp.paths import sift_dir as _vd
 
     _ld = _vd() / "ingest-logs"
     _ld.mkdir(parents=True, exist_ok=True)
@@ -3574,9 +3574,9 @@ def _get_active_case() -> str | None:
         return Path(case_dir).name.lower()  # lowercase required for OpenSearch indices
 
     # Legacy CLI fallback — not used in portal workflow
-    from opensearch_mcp.paths import agentir_dir
+    from opensearch_mcp.paths import sift_dir
 
-    active_case_file = agentir_dir() / "active_case"
+    active_case_file = sift_dir() / "active_case"
     if active_case_file.exists():
         raw = active_case_file.read_text().strip()
         if raw:
@@ -3812,9 +3812,9 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
         case_id = case_dir.name.lower()  # lowercase for index naming only
     else:
         # Legacy CLI fallback — not used in portal workflow
-        from opensearch_mcp.paths import agentir_dir as _agentir_dir
+        from opensearch_mcp.paths import sift_dir as _sift_dir
 
-        _active_case_file = _agentir_dir() / "active_case"  # Legacy CLI fallback
+        _active_case_file = _sift_dir() / "active_case"  # Legacy CLI fallback
         if not _active_case_file.exists():
             return {
                 "error": "No active case.",
