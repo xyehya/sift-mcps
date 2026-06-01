@@ -1,16 +1,14 @@
-![agentir](docs/images/agentir-logo.png)
-
 # opensearch-mcp
 [![CI](https://github.com/AppliedIR/opensearch-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/AppliedIR/opensearch-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/AppliedIR/opensearch-mcp/blob/main/LICENSE)
 
-Forensic evidence indexing for [agentir](https://github.com/AppliedIR/agentir) — parse, index, and query digital forensic artifacts at scale using OpenSearch.
+Forensic evidence indexing for SIFT — parse, index, and query digital forensic artifacts at scale using OpenSearch.
 
 Built by [Applied IR](https://github.com/AppliedIR) with Claude Code.
 
 > **Important Note** — While extensively tested, this is a new platform.
 > ALWAYS verify results and guide the investigative process. If you just
-> tell agentir to "Find Evil" it will more than likely hallucinate
+> tell SIFT to "Find Evil" it will more than likely hallucinate
 > rather than provide meaningful results. The AI can accelerate, but the
 > human must guide it and review all decisions.
 
@@ -99,7 +97,7 @@ opensearch-mcp runs as:
 - **stdio MCP server** — default, connects via gateway or Claude Code
 - **HTTP server** — `python -m opensearch_mcp --http --port 4625` for remote deployment
 - **CLI** — `opensearch-ingest` for direct command-line use
-- **agentir plugin** — `agentir ingest` when installed alongside agentir
+- **SIFT plugin** — `sift ingest` when installed alongside SIFT
 
 ## Quick Start
 
@@ -190,13 +188,13 @@ verify_certs: false
 
 ### Gateway (for enrichment + wintools)
 
-`~/.sift/gateway.yaml` — configured by `agentir setup client`:
+`~/.sift/gateway.yaml` — configured by `sift setup client`:
 
 ```yaml
 gateway:
   port: 4508
 api_keys:
-  agentir_gw_<token>:
+  sift_gw_<token>:
     examiner: steve
     role: examiner
 ```
@@ -218,8 +216,8 @@ All thresholds clamp to a sane lower bound (operator typo of `0` won't disable s
 Index templates are installed by the MCP server at its first verified
 OpenSearch connection (inside `ensure_winlog_pipeline` /
 `install_all_templates`). On a freshly set-up cluster, start the
-agentir gateway (or the opensearch-mcp server) at least once before
-running `agentir idx ingest …` directly from the CLI.
+SIFT gateway (or the opensearch-mcp server) at least once before
+running `sift idx ingest ...` directly from the CLI.
 
 Direct CLI ingest on a cluster where templates have never been
 installed will create indices with OpenSearch's default dynamic
@@ -262,7 +260,7 @@ Optional:
 - Gateway + windows-triage-mcp (for triage enrichment)
 - Gateway + opencti-mcp (for threat intel enrichment)
 
-**Docker container data:** OpenSearch stores all indexed evidence in a Docker named volume (`opensearch-data`). Removing or recreating the container with `docker rm -f` destroys all indices. Use `agentir backup --all` before any Docker maintenance. The named volume persists across `docker compose down && up -d` (normal restart) but NOT across `docker volume rm` or `docker system prune --volumes`.
+**Docker container data:** OpenSearch stores all indexed evidence in a Docker named volume (`opensearch-data`). Removing or recreating the container with `docker rm -f` destroys all indices. Use `sift backup --all` before any Docker maintenance. The named volume persists across `docker compose down && up -d` (normal restart) but NOT across `docker volume rm` or `docker system prune --volumes`.
 
 ## Development
 

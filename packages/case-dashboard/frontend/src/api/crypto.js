@@ -19,13 +19,13 @@ export async function computeChallengeResponse(password, challenge) {
     keyMaterial, 256
   )
   const domainKey = await crypto.subtle.importKey('raw', derivedBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-  const authBits = await crypto.subtle.sign('HMAC', domainKey, enc.encode('agentir-auth-v1'))
+  const authBits = await crypto.subtle.sign('HMAC', domainKey, enc.encode('sift-auth-v1'))
   const hmacKey = await crypto.subtle.importKey('raw', authBits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   const sig = await crypto.subtle.sign('HMAC', hmacKey, enc.encode(challenge.nonce))
   return bytesToHex(new Uint8Array(sig))
 }
 
-// Used for case activation and commit (no 'agentir-auth-v1' domain step)
+// Used for case activation and commit (no 'sift-auth-v1' domain step)
 export async function computeSimpleChallengeResponse(password, challenge) {
   const enc = new TextEncoder()
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits'])

@@ -676,11 +676,11 @@ class TestGetActiveCase:
         """Env var absent, active_case file present → returns file basename."""
         monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
         fake_home = tmp_path / "home"
-        agentir_d = fake_home / ".sift"
-        agentir_d.mkdir(parents=True)
+        sift_d = fake_home / ".sift"
+        sift_d.mkdir(parents=True)
         case_dir = tmp_path / "cases" / "file-case-001"
         case_dir.mkdir(parents=True)
-        (agentir_d / "active_case").write_text(str(case_dir))
+        (sift_d / "active_case").write_text(str(case_dir))
         monkeypatch.setattr("opensearch_mcp.paths.sift_home", lambda: fake_home)
         result = srv._get_active_case()
         assert result == "file-case-001"
@@ -691,11 +691,11 @@ class TestGetActiveCase:
         env_case.mkdir()
         monkeypatch.setenv("SIFT_CASE_DIR", str(env_case))
         fake_home = tmp_path / "home"
-        agentir_d = fake_home / ".sift"
-        agentir_d.mkdir(parents=True)
+        sift_d = fake_home / ".sift"
+        sift_d.mkdir(parents=True)
         stale_dir = tmp_path / "stale-case"
         stale_dir.mkdir()
-        (agentir_d / "active_case").write_text(str(stale_dir))
+        (sift_d / "active_case").write_text(str(stale_dir))
         monkeypatch.setattr("opensearch_mcp.paths.sift_home", lambda: fake_home)
         result = srv._get_active_case()
         assert result == "env-case-20260525-1200"

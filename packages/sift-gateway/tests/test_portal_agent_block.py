@@ -3,8 +3,8 @@
 Drivers: SIFT-MCPS-PLAN.md §Phase 12 Security Requirements R4 / TASKS.md §12f.
 
 Verifies:
-- Agent tokens (agentir_svc_*) → 403 on any /portal/api/ endpoint
-- Examiner bearer tokens (agentir_gw_*) → pass through to portal
+- Agent tokens (sift_svc_*) → 403 on any /portal/api/ endpoint
+- Examiner bearer tokens (sift_gw_*) → pass through to portal
 - Requests without bearer token → pass through (portal handles 401)
 """
 
@@ -22,9 +22,9 @@ from starlette.testclient import TestClient
 
 from sift_gateway.auth import AuthMiddleware
 
-_EXAMINER_KEY = "agentir_gw_" + secrets.token_hex(24)
-_AGENT_KEY = "agentir_svc_" + secrets.token_hex(24)
-_READONLY_KEY = "agentir_gw_" + secrets.token_hex(24)
+_EXAMINER_KEY = "sift_gw_" + secrets.token_hex(24)
+_AGENT_KEY = "sift_svc_" + secrets.token_hex(24)
+_READONLY_KEY = "sift_gw_" + secrets.token_hex(24)
 
 _API_KEYS = {
     _EXAMINER_KEY: {"examiner": "alice", "role": "examiner"},

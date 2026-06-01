@@ -24,8 +24,8 @@ dependencies = [
 opensearch-mcp = "opensearch_mcp.server:main"
 opensearch-ingest = "opensearch_mcp.ingest_cli:main"
 
-[project.entry-points."agentir.plugins"]
-opensearch = "opensearch_mcp.agentir_plugin:register"
+[project.entry-points."sift.plugins"]
+opensearch = "opensearch_mcp.sift_plugin:register"
 
 [project.optional-dependencies]
 http = ["uvicorn>=0.20", "starlette"]

@@ -608,20 +608,20 @@ class TestAnchorManifest:
         ledger = load_ledger(initialized)
         proof = anchor_manifest(initialized, manifest, ledger)
         assert (initialized / "evidence-anchor-v1.json").exists()
-        assert proof["schema"] == "agentir.evidence-anchor.v1"
+        assert proof["schema"] == "sift.evidence-anchor.v1"
         assert proof["manifest_version"] == 1
         assert proof["solana_tx"] is None
         assert proof["confirmed"] is False
         assert proof["manifest_hash"] == manifest["manifest_hash"]
 
     def test_anchor_payload_format(self, initialized):
-        """Payload contains AGENTIR prefix with manifest and ledger tip fragments."""
+        """Payload contains SIFT prefix with manifest and ledger tip fragments."""
         f = initialized / "evidence" / "data.bin"
         f.write_bytes(b"hello")
         manifest = seal_manifest(initialized, [{"path": "evidence/data.bin"}], "alice", _KEY)
         ledger = load_ledger(initialized)
         proof = anchor_manifest(initialized, manifest, ledger)
-        assert proof["anchor_payload"].startswith("AGENTIR|")
+        assert proof["anchor_payload"].startswith("SIFT|")
         parts = proof["anchor_payload"].split("|")
         assert len(parts) == 3
         assert len(parts[1]) == 16

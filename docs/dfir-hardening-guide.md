@@ -103,11 +103,11 @@ This is recorded before any tampering occurs. Even if log files are cleared afte
 
 ### The Rules
 
-`configs/audit/99-agentir-evidence.rules`:
+`configs/audit/99-sift-evidence.rules`:
 
 ```
--a always,exit -F dir=CASES_ROOT -F perm=wa -F key=agentir_evidence_write
--a always,exit -F dir=/var/lib/sift -F perm=wa -F key=agentir_core_write
+-a always,exit -F dir=CASES_ROOT -F perm=wa -F key=sift_evidence_write
+-a always,exit -F dir=/var/lib/sift -F perm=wa -F key=sift_core_write
 ```
 
 `CASES_ROOT` is substituted with `/cases` (or the configured value) by `install.sh` at deploy time.
@@ -123,20 +123,20 @@ This is recorded before any tampering occurs. Even if log files are cleared afte
 sudo auditctl -l | grep agentir
 
 # Check rule file
-cat /etc/audit/rules.d/99-agentir-evidence.rules
+cat /etc/audit/rules.d/99-sift-evidence.rules
 
 # Query evidence write events (human-readable)
-sudo ausearch -k agentir_evidence_write --format text
+sudo ausearch -k sift_evidence_write --format text
 
 # Query state directory events
-sudo ausearch -k agentir_core_write --format text
+sudo ausearch -k sift_core_write --format text
 
 # Watch live events
-sudo ausearch -k agentir_evidence_write -ts recent --format text
+sudo ausearch -k sift_evidence_write -ts recent --format text
 
 # Test: touch an evidence file and check the record
 touch /cases/your-case/evidence/test-file
-sudo ausearch -k agentir_evidence_write --format text | tail -20
+sudo ausearch -k sift_evidence_write --format text | tail -20
 ```
 
 ### Integration with chattr
@@ -367,6 +367,6 @@ An attacker achieves code execution in the gateway process.
 
 ### Periodically
 
-- [ ] `sudo ausearch -k agentir_evidence_write --format text` — review for unexpected events
+- [ ] `sudo ausearch -k sift_evidence_write --format text` — review for unexpected events
 - [ ] Portal evidence panel — verify all ACTIVE files show `immutable: true`
 - [ ] Portal evidence panel — run HMAC verification if last run > 24h

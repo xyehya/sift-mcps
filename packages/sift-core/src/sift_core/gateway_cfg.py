@@ -1,4 +1,4 @@
-"""Shared helpers for connecting to the local agentir gateway.
+"""Shared helpers for connecting to the local SIFT gateway.
 
 Reads ~/.sift/gateway.yaml. Always uses 127.0.0.1 for local access.
 """

@@ -31,7 +31,13 @@ from sift_core.approval_auth import (
     derive_auth_key,
     derive_ledger_key,
 )
-from sift_core.case_io import _protected_write, cases_root, compute_content_hash
+from sift_core.case_io import (
+    _protected_write,
+    case_approvals_path,
+    case_audit_dir,
+    cases_root,
+    compute_content_hash,
+)
 from sift_core.evidence_chain import (
     anchor_manifest,
     chain_status,
@@ -249,7 +255,7 @@ def _verify_items(case_dir: Path, items: list[dict]) -> list[dict]:
     Reimplements content-hash comparison from case_io.py.
     Five states: confirmed, tampered, unverified, no approval record, draft.
     """
-    approvals = _load_jsonl(case_dir / "approvals.jsonl")
+    approvals = _load_jsonl(case_approvals_path(case_dir))
 
     # Build lookup: item_id -> last approval record
     last_approval: dict[str, dict] = {}
@@ -1173,7 +1179,8 @@ def _write_approval_log_entry(
     **kwargs: object,
 ) -> None:
     """Append to approvals.jsonl. Schema matches case_io.py:write_approval_log."""
-    log_path = case_dir / "approvals.jsonl"
+    log_path = case_approvals_path(case_dir)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": now,
         "item_id": item_id,
@@ -1754,7 +1761,7 @@ async def get_audit_for_finding(request: Request) -> JSONResponse:
         return JSONResponse([])
 
     # Scan audit/*.jsonl for matching audit_ids
-    audit_dir = case_dir / "audit"
+    audit_dir = case_audit_dir(case_dir)
     if not audit_dir.is_dir():
         return JSONResponse([])
 
@@ -2401,7 +2408,7 @@ async def get_commit_challenge(request: Request) -> JSONResponse:
     entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
     if not entry:
         return JSONResponse(
-            {"error": "No password configured. Run: agentir config --setup-password"},
+            {"error": "No password configured. Run: sift config --setup-password"},
             status_code=403,
         )
 
@@ -3026,7 +3033,7 @@ async def list_tokens(request: Request) -> JSONResponse:
 
 
 async def create_token(request: Request) -> JSONResponse:
-    """POST /api/tokens — create a new agentir_svc_* service token.
+    """POST /api/tokens — create a new sift_svc_* service token.
 
     Required examiner role + must_reset check.
     Raw token value is returned exactly once and never stored in plaintext.
@@ -3509,7 +3516,7 @@ async def get_case_activate_challenge(request: Request) -> JSONResponse:
     entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
     if not entry:
         return JSONResponse(
-            {"error": "No password configured. Run: agentir config --setup-password"},
+            {"error": "No password configured. Run: sift config --setup-password"},
             status_code=403,
         )
 
@@ -3773,7 +3780,6 @@ async def post_case_create(request: Request) -> JSONResponse:
             ("evidence.json", '{"files": []}'),
             ("todos.json", "[]"),
             ("iocs.json", "[]"),
-            ("approvals.jsonl", ""),
         ]:
             path = real_requested / fname
             with open(path, "w", encoding="utf-8") as f:
@@ -3783,6 +3789,7 @@ async def post_case_create(request: Request) -> JSONResponse:
 
         # Evidence chain: write evidence-manifest.json (v0) + evidence-ledger.jsonl
         init_evidence_chain(real_requested)
+        case_approvals_path(real_requested).touch(exist_ok=True)
 
         # Update gateway.yaml config atomically if configured
         if _GATEWAY_CONFIG_PATH is not None:

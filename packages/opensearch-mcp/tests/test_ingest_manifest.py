@@ -113,7 +113,7 @@ class TestWriteIngestManifest:
 
 
 class TestWriteIngestManifestEnvVar:
-    def test_uses_agentir_case_dir_env(self, tmp_path, monkeypatch):
+    def test_uses_sift_case_dir_env(self, tmp_path, monkeypatch):
         """SIFT_CASE_DIR set → manifest lands under that case dir."""
         case_dir = tmp_path / "rocba-20260525-1200"
         (case_dir / "audit" / "ingest-manifests").mkdir(parents=True)

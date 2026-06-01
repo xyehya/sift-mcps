@@ -1,6 +1,6 @@
-"""agentir case management MCP server.
+"""SIFT case management MCP server.
 
-Exposes tools wrapping agentir-core _data() functions for LLM-callable
+Exposes tools wrapping sift-core _data() functions for LLM-callable
 case management. No new logic — thin wrappers around tested code.
 """
 
@@ -17,6 +17,7 @@ from sift_common.audit import AuditWriter, resolve_examiner
 from sift_common.instructions import CASE_MCP as _INSTRUCTIONS
 from sift_common.oplog import setup_logging
 from sift_core.case_io import (
+    case_audit_dir,
     cases_root,
     export_bundle as _export_bundle,
     import_bundle as _import_bundle,
@@ -27,8 +28,8 @@ from sift_core.case_ops import (
 from sift_core.evidence_chain import (
     ChainStatus,
     chain_status,
-    load_manifest,
 )
+from sift_core.evidence_ops import list_evidence_status_data
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ def _validate_str_length(value: str | None, field: str, max_len: int) -> None:
 def _resolve_case_dir(case_id: str = "") -> Path:
     """Resolve case directory without sys.exit.
 
-    Same priority as agentir CLI get_case_dir(), but raises ValueError
+    Same priority as SIFT CLI get_case_dir(), but raises ValueError
     instead of calling sys.exit().
 
     Side effect: sets SIFT_CASE_DIR env var so AuditWriter can find
@@ -275,83 +276,7 @@ def create_server() -> FastMCP:
         """
         try:
             case_dir = _resolve_case_dir()
-
-            # Load manifest
-            manifest = load_manifest(case_dir)
-            if manifest is None:
-                active_files = []
-                manifest_version = 0
-            else:
-                active_files = [
-                    f for f in manifest.get("files", []) if f.get("status") != "IGNORED"
-                ]
-                manifest_version = manifest.get("version", 0)
-
-            # Inline chain status for tamper detection
-            try:
-                cs = chain_status(case_dir)
-                chain = {
-                    "status": cs["status"],
-                    "ok_count": cs["ok_count"],
-                    "issues": cs["issues"],
-                }
-            except Exception:
-                chain = {
-                    "status": "unknown",
-                    "ok_count": 0,
-                    "issues": ["Chain status check failed — call evidence_verify for details."],
-                }
-
-            # Recursive scan of evidence/ for all files (including subdirs)
-            evidence_dir = case_dir / "evidence"
-            registered_paths = {f.get("path", "") for f in active_files}
-            unregistered = []
-            if evidence_dir.is_dir():
-                for f in sorted(evidence_dir.rglob("*")):
-                    if not f.is_file():
-                        continue
-                    rel = str(f.relative_to(case_dir))
-                    if rel not in registered_paths and str(f) not in registered_paths:
-                        unregistered.append({
-                            "path": rel,
-                            "size_bytes": f.stat().st_size,
-                            "registered": False,
-                            "action_required": (
-                                "Notify the operator to seal this file via "
-                                "Examiner Portal → Evidence tab before analysis."
-                            ),
-                        })
-
-            has_chain_issues = bool(
-                chain.get("issues")
-                and chain.get("status") not in (ChainStatus.OK, ChainStatus.UNSEALED)
-            )
-            requires_examiner_action = bool(unregistered or has_chain_issues)
-
-            result = {
-                "evidence": active_files,
-                "unregistered": unregistered,
-                "chain": chain,
-                "requires_examiner_action": requires_examiner_action,
-                "manifest_version": manifest_version,
-                "source": "manifest_v2",
-            }
-            if requires_examiner_action:
-                hints = []
-                if unregistered:
-                    hints.append(
-                        f"{len(unregistered)} unregistered file(s) found — "
-                        "operator must seal via portal before analysis."
-                    )
-                if has_chain_issues:
-                    hints.append(
-                        "Chain integrity issues detected — call evidence_verify "
-                        "for a full check before escalating to the operator."
-                    )
-                result["examiner_action_hint"] = " ".join(hints)
-            if manifest is None:
-                result["note"] = "No evidence manifest — case not yet initialised via portal."
-            return result
+            return list_evidence_status_data(case_dir)
         except (ValueError, OSError) as e:
             return {"error": str(e)}
 
@@ -605,7 +530,7 @@ def create_server() -> FastMCP:
             case_dir = _resolve_case_dir()
             if case_dir:
                 hook_found = False
-                audit_dir = case_dir / "audit"
+                audit_dir = case_audit_dir(case_dir)
                 for hook_file in (
                     sorted(audit_dir.glob("*.jsonl")) if audit_dir.is_dir() else []
                 ):

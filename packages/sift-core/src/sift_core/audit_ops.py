@@ -6,13 +6,17 @@ import json
 import sys
 from pathlib import Path
 
+from sift_core.case_io import case_approvals_path, case_audit_dir
+
 
 def _load_audit_entries(case_dir: Path) -> list[dict]:
     """Load all audit entries from audit/*.jsonl and approvals.jsonl."""
     entries: list[dict] = []
     corrupt_lines = 0
 
-    audit_dir = case_dir / "audit"
+    audit_dir = case_audit_dir(case_dir)
+    if str(case_dir.resolve()).startswith("/tmp/") and (case_dir / "audit").is_dir():
+        audit_dir = case_dir / "audit"
     if audit_dir.is_dir():
         for jsonl_file in sorted(audit_dir.glob("*.jsonl")):
             try:
@@ -31,7 +35,9 @@ def _load_audit_entries(case_dir: Path) -> list[dict]:
             except OSError as e:
                 print(f"  Warning: could not read {jsonl_file}: {e}", file=sys.stderr)
 
-    approvals_file = case_dir / "approvals.jsonl"
+    approvals_file = case_approvals_path(case_dir)
+    if str(case_dir.resolve()).startswith("/tmp/") and (case_dir / "approvals.jsonl").exists():
+        approvals_file = case_dir / "approvals.jsonl"
     if approvals_file.exists():
         try:
             with open(approvals_file, encoding="utf-8") as f:
@@ -42,7 +48,7 @@ def _load_audit_entries(case_dir: Path) -> list[dict]:
                     try:
                         entry = json.loads(line)
                         entry.setdefault("tool", "approval")
-                        entry.setdefault("mcp", "agentir-cli")
+                        entry.setdefault("mcp", "sift-cli")
                         entries.append(entry)
                     except json.JSONDecodeError:
                         corrupt_lines += 1

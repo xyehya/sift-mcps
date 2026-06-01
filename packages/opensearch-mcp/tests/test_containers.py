@@ -311,7 +311,7 @@ Device     Boot   Start       End   Sectors  Size Id Type
 
 
 class TestMakeIngestTmpdir:
-    def test_uses_agentir_case_dir(self, tmp_path, monkeypatch):
+    def test_uses_sift_case_dir(self, tmp_path, monkeypatch):
         """SIFT_CASE_DIR set → tmpdir lands under that case dir."""
         from opensearch_mcp.containers import make_ingest_tmpdir
 

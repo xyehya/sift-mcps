@@ -1,4 +1,4 @@
-"""agentir report generation MCP server.
+"""SIFT report generation MCP server.
 
 Exposes 6 tools for generating case reports, managing case metadata,
 and persisting rendered reports. Data-driven profiles control what
@@ -40,7 +40,7 @@ _MAX_FILENAME = 200
 _MAX_FIELD = 500
 _MAX_REPORT_BYTES = 10 * 1024 * 1024  # 10 MB
 
-# Duplicated from agentir-core case_io.py — kept in sync manually.
+# Duplicated from sift-core case_io.py — kept in sync manually.
 _HASH_EXCLUDE_KEYS = {
     "status",
     "approved_at",
@@ -206,7 +206,7 @@ _FILENAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 def _resolve_case_dir(case_id: str = "") -> Path:
     """Resolve case directory without sys.exit.
 
-    Same priority as agentir CLI get_case_dir(), but raises ValueError
+    Same priority as SIFT CLI get_case_dir(), but raises ValueError
     instead of calling sys.exit().
 
     """

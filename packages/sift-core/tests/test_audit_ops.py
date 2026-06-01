@@ -128,7 +128,7 @@ class TestAuditSummaryData:
     def test_summary_includes_approvals(self, case_dir, sample_audit, sample_approvals):
         result = audit_summary_data(case_dir)
         assert result["total_entries"] == 7
-        assert "agentir-cli" in result["by_mcp"]
+        assert "sift-cli" in result["by_mcp"]
 
     def test_summary_empty(self, case_dir):
         result = audit_summary_data(case_dir)

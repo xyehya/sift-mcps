@@ -1,0 +1,15 @@
+## SIFT evidence chain — auditd rules (Phase 17b)
+##
+## Watches all write and attribute-change operations in the cases root and the
+## SIFT state directory. Attribute changes (perm=a) include chmod and chattr
+## calls — so deliberate clearing of the +i immutable flag is recorded in the
+## kernel audit log with UID, PID, binary path, and timestamp.
+##
+## Query writes:   ausearch -k sift_evidence_write --format text
+## Query core:     ausearch -k sift_core_write --format text
+##
+## CASES_ROOT is substituted by install.sh at deploy time.
+## Default: /cases
+
+-a always,exit -F dir=CASES_ROOT -F perm=wa -F key=sift_evidence_write
+-a always,exit -F dir=/var/lib/sift -F perm=wa -F key=sift_core_write

@@ -1,7 +1,7 @@
 import urllib.request
 import json
 
-token = "agentir_svc_b5152580b0cd2ce8003ee5c9a5c559537b322741f21d4f03"
+token = "sift_svc_b5152580b0cd2ce8003ee5c9a5c559537b322741f21d4f03"
 req1 = urllib.request.Request(
     "https://192.168.122.81:4508/mcp",
     data=json.dumps({

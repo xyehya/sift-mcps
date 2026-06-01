@@ -414,7 +414,6 @@ def create_mcp_server(gateway: Any) -> Server:
         # ── enrichment: add context to indexed data ──
         "idx_enrich_intel": "enrichment",
         "idx_enrich_triage": "enrichment",
-        "case_host_fix": "enrichment",
         # ── detection: forensic tool execution ──
         "list_available_tools": "detection",
         "get_tool_help": "detection",

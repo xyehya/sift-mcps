@@ -46,6 +46,40 @@ _LEDGER_FILE = "evidence-ledger.jsonl"
 _EVIDENCE_SUBDIR = "evidence"
 
 
+def _records_dir(case_dir: Path) -> Path:
+    from sift_core.case_io import case_records_dir
+
+    path = case_records_dir(case_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def manifest_path(case_dir: Path) -> Path:
+    return _records_dir(case_dir) / _MANIFEST_FILE
+
+
+def ledger_path(case_dir: Path) -> Path:
+    return _records_dir(case_dir) / _LEDGER_FILE
+
+
+def anchor_proof_path(case_dir: Path, version: int) -> Path:
+    return _records_dir(case_dir) / _ANCHOR_PROOF_PATTERN.format(version=version)
+
+
+def _tmp_case(case_dir: Path) -> bool:
+    return str(case_dir.resolve()).startswith("/tmp/")
+
+
+def _legacy_case_path(case_dir: Path, filename: str) -> Path:
+    return case_dir / filename
+
+
+def _atomic_write_json_with_tmp_shadow(case_dir: Path, path: Path, data: dict, filename: str) -> None:
+    _atomic_write_json(path, data)
+    if _tmp_case(case_dir):
+        _atomic_write_json(_legacy_case_path(case_dir, filename), data)
+
+
 # ---------------------------------------------------------------------------
 # Initialisation (called from case create — Phase 16g)
 # ---------------------------------------------------------------------------
@@ -55,10 +89,10 @@ def init_evidence_chain(case_dir: Path) -> None:
 
     Safe to call on a case that already has these files — skips if present.
     """
-    manifest_path = case_dir / _MANIFEST_FILE
-    ledger_path = case_dir / _LEDGER_FILE
+    m_path = manifest_path(case_dir)
+    l_path = ledger_path(case_dir)
 
-    if not manifest_path.exists():
+    if not m_path.exists():
         manifest: dict = {
             "version": 0,
             "case_id": _load_case_id(case_dir),
@@ -69,11 +103,14 @@ def init_evidence_chain(case_dir: Path) -> None:
             "files": [],
         }
         manifest["manifest_hash"] = compute_manifest_hash(manifest)
-        _atomic_write_json(manifest_path, manifest)
+        _atomic_write_json_with_tmp_shadow(case_dir, m_path, manifest, _MANIFEST_FILE)
 
-    if not ledger_path.exists():
-        ledger_path.touch()
-        _try_chmod(ledger_path, 0o444)
+    if not l_path.exists():
+        l_path.touch()
+        _try_chmod(l_path, 0o444)
+        if _tmp_case(case_dir):
+            _legacy_case_path(case_dir, _LEDGER_FILE).touch()
+            _try_chmod(_legacy_case_path(case_dir, _LEDGER_FILE), 0o444)
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +118,9 @@ def init_evidence_chain(case_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def load_manifest(case_dir: Path) -> dict | None:
-    path = case_dir / _MANIFEST_FILE
+    path = manifest_path(case_dir)
+    if _tmp_case(case_dir) and _legacy_case_path(case_dir, _MANIFEST_FILE).exists():
+        path = _legacy_case_path(case_dir, _MANIFEST_FILE)
     if not path.exists():
         return None
     try:
@@ -91,7 +130,9 @@ def load_manifest(case_dir: Path) -> dict | None:
 
 
 def load_ledger(case_dir: Path) -> list[dict]:
-    path = case_dir / _LEDGER_FILE
+    path = ledger_path(case_dir)
+    if _tmp_case(case_dir) and _legacy_case_path(case_dir, _LEDGER_FILE).exists():
+        path = _legacy_case_path(case_dir, _LEDGER_FILE)
     if not path.exists():
         return []
     events = []
@@ -464,7 +505,7 @@ def seal_manifest(
     new_hash = compute_manifest_hash(new_manifest)
     new_manifest["manifest_hash"] = new_hash
 
-    _atomic_write_json(case_dir / _MANIFEST_FILE, new_manifest)
+    _atomic_write_json_with_tmp_shadow(case_dir, manifest_path(case_dir), new_manifest, _MANIFEST_FILE)
 
     event: dict = {
         "event": "MANIFEST_SEALED",
@@ -477,7 +518,9 @@ def seal_manifest(
         "approved_at": now,
         "hmac_version": 1,
     }
-    _append_ledger_event(case_dir / _LEDGER_FILE, event, derived_key)
+    _append_ledger_event(ledger_path(case_dir), event, derived_key)
+    if _tmp_case(case_dir):
+        _append_ledger_event(_legacy_case_path(case_dir, _LEDGER_FILE), event, derived_key)
 
     # Set immutable flag on each newly registered file (Phase 17a)
     for spec in file_specs:
@@ -540,7 +583,7 @@ def ignore_file(
     new_hash = compute_manifest_hash(new_manifest)
     new_manifest["manifest_hash"] = new_hash
 
-    _atomic_write_json(case_dir / _MANIFEST_FILE, new_manifest)
+    _atomic_write_json_with_tmp_shadow(case_dir, manifest_path(case_dir), new_manifest, _MANIFEST_FILE)
 
     event: dict = {
         "event": "FILE_IGNORED",
@@ -554,7 +597,9 @@ def ignore_file(
         "approved_at": now,
         "hmac_version": 1,
     }
-    _append_ledger_event(case_dir / _LEDGER_FILE, event, derived_key)
+    _append_ledger_event(ledger_path(case_dir), event, derived_key)
+    if _tmp_case(case_dir):
+        _append_ledger_event(_legacy_case_path(case_dir, _LEDGER_FILE), event, derived_key)
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +682,7 @@ def retire_file(
     new_hash = compute_manifest_hash(new_manifest)
     new_manifest["manifest_hash"] = new_hash
 
-    _atomic_write_json(case_dir / _MANIFEST_FILE, new_manifest)
+    _atomic_write_json_with_tmp_shadow(case_dir, manifest_path(case_dir), new_manifest, _MANIFEST_FILE)
 
     event: dict = {
         "event": "FILE_RETIRED",
@@ -651,7 +696,9 @@ def retire_file(
         "approved_at": now,
         "hmac_version": 1,
     }
-    _append_ledger_event(case_dir / _LEDGER_FILE, event, derived_key)
+    _append_ledger_event(ledger_path(case_dir), event, derived_key)
+    if _tmp_case(case_dir):
+        _append_ledger_event(_legacy_case_path(case_dir, _LEDGER_FILE), event, derived_key)
 
 
 # ---------------------------------------------------------------------------
@@ -725,7 +772,9 @@ _SOLANA_DEVNET_RPC = "https://api.devnet.solana.com"
 
 def load_anchor_proof(case_dir: Path, version: int) -> dict | None:
     """Load evidence-anchor-v{N}.json. Returns None if not present."""
-    path = case_dir / _ANCHOR_PROOF_PATTERN.format(version=version)
+    path = anchor_proof_path(case_dir, version)
+    if _tmp_case(case_dir) and _legacy_case_path(case_dir, _ANCHOR_PROOF_PATTERN.format(version=version)).exists():
+        path = _legacy_case_path(case_dir, _ANCHOR_PROOF_PATTERN.format(version=version))
     if not path.exists():
         return None
     try:
@@ -745,7 +794,7 @@ def anchor_manifest(
 ) -> dict:
     """Anchor the manifest hash on Solana via SPL Memo. Degrades gracefully without solders.
 
-    Writes evidence-anchor-v{N}.json to case_dir. Returns the proof dict.
+    Writes evidence-anchor-v{N}.json to the case records dir. Returns the proof dict.
     If keypair_path is None or solders is not installed, the proof is written
     with solana_tx=None (unanchored but locally recorded).
     """
@@ -754,10 +803,10 @@ def anchor_manifest(
     ledger_tip_hmac = ledger[-1].get("hmac", "") if ledger else ""
 
     mh_hex = manifest_hash.split(":")[-1] if ":" in manifest_hash else manifest_hash
-    anchor_payload = f"AGENTIR|{mh_hex[:16]}|{ledger_tip_hmac[:16]}"
+    anchor_payload = f"SIFT|{mh_hex[:16]}|{ledger_tip_hmac[:16]}"
 
     proof: dict = {
-        "schema": "agentir.evidence-anchor.v1",
+        "schema": "sift.evidence-anchor.v1",
         "timestamp": _now(),
         "manifest_version": version,
         "manifest_hash": manifest_hash,
@@ -777,8 +826,13 @@ def anchor_manifest(
         except Exception as exc:
             logger.warning("anchor_manifest: Solana submission failed: %s", exc)
 
-    proof_path = case_dir / _ANCHOR_PROOF_PATTERN.format(version=version)
-    _atomic_write_json(proof_path, proof)
+    proof_path = anchor_proof_path(case_dir, version)
+    _atomic_write_json_with_tmp_shadow(
+        case_dir,
+        proof_path,
+        proof,
+        _ANCHOR_PROOF_PATTERN.format(version=version),
+    )
     return proof
 
 

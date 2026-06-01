@@ -808,7 +808,7 @@ class TestHayabusaSummaryLine:
 
 
 class TestCaseDirForEnvVar:
-    def test_uses_agentir_cases_root(self, tmp_path, monkeypatch):
+    def test_uses_sift_cases_root(self, tmp_path, monkeypatch):
         """SIFT_CASES_ROOT set → finds case under that root."""
         from opensearch_mcp.ingest_cli import _case_dir_for
 
@@ -820,7 +820,7 @@ class TestCaseDirForEnvVar:
         result = _case_dir_for("rocba-20260525-1200")
         assert result == case_dir
 
-    def test_falls_back_to_agentir_cases_dir(self, tmp_path, monkeypatch):
+    def test_falls_back_to_sift_cases_dir(self, tmp_path, monkeypatch):
         """No SIFT_CASES_ROOT → falls back to SIFT_CASES_DIR."""
         from opensearch_mcp.ingest_cli import _case_dir_for
 
@@ -858,7 +858,7 @@ class TestCaseDirForEnvVar:
 
 
 class TestResolveCaseIdEnvVar:
-    def test_uses_agentir_cases_root_for_validation(self, tmp_path, monkeypatch):
+    def test_uses_sift_cases_root_for_validation(self, tmp_path, monkeypatch):
         """--case flag + SIFT_CASES_ROOT → resolves case path correctly."""
         cases_root = tmp_path / "cases"
         (cases_root / "mycase-20260525").mkdir(parents=True)

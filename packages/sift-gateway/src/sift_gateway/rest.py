@@ -340,7 +340,7 @@ async def create_join_code(request: Request) -> JSONResponse:
         {
             "code": code,
             "expires_hours": expires_hours,
-            "instructions": f"agentir join --sift {host_port} --code {code}",
+            "instructions": f"sift join --sift {host_port} --code {code}",
         }
     )
 

@@ -29,7 +29,7 @@ This document enumerates every security control in AgentIR, the threat each addr
 
 **Implementation:**
 - Every request to `/mcp` requires a `Authorization: Bearer <token>` header
-- Two token types: `agentir_gw_*` (examiner fallback) and `agentir_svc_*` (Hermes service agent)
+- Two token types: `sift_gw_*` (examiner fallback) and `sift_svc_*` (Hermes service agent)
 - Tokens are cryptographically random, stored in `/var/lib/sift/tokens/`, and have configurable expiry
 - Invalid or expired tokens return 401; the token value is never logged (only its SHA-256 fingerprint)
 - `AuthMiddleware` extracts examiner identity, role, and token_id (first 16 hex chars of SHA-256) and adds them to request state for downstream audit use
@@ -54,8 +54,8 @@ This document enumerates every security control in AgentIR, the threat each addr
 **Threat:** Key reuse across security contexts allowing cross-domain forgeries.
 
 **Implementation:**
-- Auth key: `HKDF(stored_hash, info=b"agentir-auth-v1")` — used for login HMAC
-- Ledger signing key: `HKDF(stored_hash, info=b"agentir-signing-v1")` — used for evidence ledger HMAC events
+- Auth key: `HKDF(stored_hash, info=b"sift-auth-v1")` — used for login HMAC
+- Ledger signing key: `HKDF(stored_hash, info=b"sift-signing-v1")` — used for evidence ledger HMAC events
 - These keys are derived independently and cannot be substituted for each other
 - A compromised login challenge cannot forge a ledger event, and vice versa
 
@@ -202,14 +202,14 @@ See [dfir-hardening-guide.md](dfir-hardening-guide.md) for the complete guide.
 **Threat:** Deliberate `chattr -i` before tampering, or direct writes to case files, going unrecorded.
 
 **Implementation:**
-- `configs/audit/99-agentir-evidence.rules` installs two rules:
+- `configs/audit/99-sift-evidence.rules` installs two rules:
   - `perm=wa` on the cases root: records every write and attribute-change in `evidence/`
   - `perm=wa` on `/var/lib/sift`: records writes to the password/token/verification stores
 - `perm=a` (attribute change) specifically captures `chattr -i` — the kernel records the UID, PID, binary path, and timestamp of anyone who clears the immutable flag
 - Rules are loaded via `augenrules --load` (survives reboot via `/etc/audit/rules.d/`)
-- Query: `ausearch -k agentir_evidence_write --format text`
+- Query: `ausearch -k sift_evidence_write --format text`
 
-**Files:** `configs/audit/99-agentir-evidence.rules`, `install.sh:configure_auditd()`
+**Files:** `configs/audit/99-sift-evidence.rules`, `install.sh:configure_auditd()`
 
 ### AppArmor MAC Profile — Phase 17c
 

@@ -584,7 +584,7 @@ class TestPreflightToParserIntegration:
         _seed_case_v1(tmp_path, "INC-H1", dict_hosts={"admin01": {"aliases": ["admin01"]}})
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
-        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir = tmp_path / "sift"
         fake_sift_dir.mkdir()
         (fake_sift_dir / "active_case").write_text("INC-H1\n")
         monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)
@@ -673,7 +673,7 @@ class TestPreflightToParserIntegration:
         _seed_case_v1(tmp_path, "INC-REJ", dict_hosts={"admin01": {"aliases": ["admin01"]}})
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
-        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir = tmp_path / "sift"
         fake_sift_dir.mkdir()
         (fake_sift_dir / "active_case").write_text("INC-REJ\n")
         monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)
@@ -725,7 +725,7 @@ class TestPreflightToParserIntegration:
         _seed_case_v1(tmp_path, "INC-AUDIT", dict_hosts={"admin01": {"aliases": ["admin01"]}})
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
-        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir = tmp_path / "sift"
         fake_sift_dir.mkdir()
         (fake_sift_dir / "active_case").write_text("INC-AUDIT\n")
         monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)
@@ -943,7 +943,7 @@ class TestCaseHostFix:
         )
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
-        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir = tmp_path / "sift"
         fake_sift_dir.mkdir()
         (fake_sift_dir / "active_case").write_text("INC-EDGE\n")
         monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)
@@ -1003,7 +1003,7 @@ class TestCaseHostFix:
         monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         # Redirect sift_dir() to tmp_path so active_case can be written.
-        fake_sift_dir = tmp_path / "agentir"
+        fake_sift_dir = tmp_path / "sift"
         fake_sift_dir.mkdir()
         (fake_sift_dir / "active_case").write_text("INC-18\n")
         monkeypatch.setattr("opensearch_mcp.paths.sift_dir", lambda: fake_sift_dir)

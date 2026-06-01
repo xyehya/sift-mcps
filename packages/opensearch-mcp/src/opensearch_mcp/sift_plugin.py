@@ -1,4 +1,4 @@
-"""agentir plugin registration for opensearch-mcp commands."""
+"""SIFT plugin registration for opensearch-mcp commands."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 
 
 def register(subparsers, registered: set) -> None:
-    """Register opensearch-mcp commands with agentir CLI."""
+    """Register opensearch-mcp commands with SIFT CLI."""
     if "ingest" not in registered:
         p = subparsers.add_parser("ingest", help="Ingest evidence into OpenSearch")
         p.add_argument("path", help="Path to evidence directory or archive")

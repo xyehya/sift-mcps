@@ -1334,14 +1334,14 @@ def cmd_csv(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# cmd_ingest — entry point for agentir plugin
+# cmd_ingest — entry point for SIFT plugin
 # ---------------------------------------------------------------------------
 
 
 def cmd_ingest(args: argparse.Namespace, examiner: str = "unknown") -> None:
-    """Entry point for agentir plugin.
+    """Entry point for SIFT plugin.
 
-    Accepts pre-parsed args from agentir (unlike main() which parses its own).
+    Accepts pre-parsed args from SIFT (unlike main() which parses its own).
     Delegates to cmd_scan with the right attribute mapping.
     """
     from opensearch_mcp.bulk import reset_circuit_breaker

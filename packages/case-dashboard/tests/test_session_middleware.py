@@ -20,8 +20,8 @@ from case_dashboard.session_jwt import generate_jwt
 
 _SECRET = secrets.token_hex(32)
 
-_EXAMINER_KEY = "agentir_gw_" + secrets.token_hex(24)
-_AGENT_KEY = "agentir_svc_" + secrets.token_hex(24)
+_EXAMINER_KEY = "sift_gw_" + secrets.token_hex(24)
+_AGENT_KEY = "sift_svc_" + secrets.token_hex(24)
 
 _API_KEYS = {
     _EXAMINER_KEY: {"examiner": "alice", "role": "examiner"},
@@ -55,7 +55,7 @@ def _make_app(session_secret=_SECRET, api_keys=None) -> Starlette:
 class TestCookieAuth:
     def test_valid_cookie_sets_examiner_and_role(self):
         token = generate_jwt("alice", "examiner", _SECRET)
-        client = TestClient(_make_app(), cookies={"agentir_session": token})
+        client = TestClient(_make_app(), cookies={"sift_session": token})
         resp = client.get("/api/test")
         assert resp.status_code == 200
         data = resp.json()
@@ -64,7 +64,7 @@ class TestCookieAuth:
 
     def test_valid_cookie_readonly_role(self):
         token = generate_jwt("bob", "readonly", _SECRET)
-        client = TestClient(_make_app(), cookies={"agentir_session": token})
+        client = TestClient(_make_app(), cookies={"sift_session": token})
         resp = client.get("/api/test")
         data = resp.json()
         assert data["examiner"] == "bob"
@@ -74,14 +74,14 @@ class TestCookieAuth:
         token = generate_jwt("alice", "examiner", _SECRET)
         parts = token.split(".")
         bad = f"{parts[0]}.{parts[1]}." + ("A" * len(parts[2]))
-        client = TestClient(_make_app(), cookies={"agentir_session": bad})
+        client = TestClient(_make_app(), cookies={"sift_session": bad})
         resp = client.get("/api/test")
         data = resp.json()
         assert data["examiner"] is None
 
     def test_expired_cookie_falls_through_to_none(self):
         token = generate_jwt("alice", "examiner", _SECRET, max_age=0)
-        client = TestClient(_make_app(), cookies={"agentir_session": token})
+        client = TestClient(_make_app(), cookies={"sift_session": token})
         resp = client.get("/api/test")
         data = resp.json()
         assert data["examiner"] is None
@@ -89,7 +89,7 @@ class TestCookieAuth:
     def test_cookie_with_wrong_secret_falls_through_to_none(self):
         wrong_secret = secrets.token_hex(32)
         token = generate_jwt("alice", "examiner", wrong_secret)
-        client = TestClient(_make_app(), cookies={"agentir_session": token})
+        client = TestClient(_make_app(), cookies={"sift_session": token})
         resp = client.get("/api/test")
         data = resp.json()
         assert data["examiner"] is None
@@ -122,7 +122,7 @@ class TestBearerFallback:
         token = generate_jwt("cookie-user", "examiner", _SECRET)
         client = TestClient(
             _make_app(),
-            cookies={"agentir_session": token},
+            cookies={"sift_session": token},
         )
         resp = client.get(
             "/api/test", headers={"Authorization": f"Bearer {_EXAMINER_KEY}"}
@@ -155,7 +155,7 @@ class TestNoAuth:
     def test_empty_session_secret_cookie_auth_skipped(self):
         """Empty session_secret means cookie auth is bypassed entirely."""
         token = generate_jwt("alice", "examiner", _SECRET)
-        client = TestClient(_make_app(session_secret=""), cookies={"agentir_session": token})
+        client = TestClient(_make_app(session_secret=""), cookies={"sift_session": token})
         resp = client.get("/api/test")
         data = resp.json()
         # Cookie auth skipped (no secret), Bearer also absent → None
@@ -166,7 +166,7 @@ class TestR9StateAccess:
     def test_examiner_accessible_via_getattr(self):
         """Route handlers must use getattr(request.state, 'examiner', None) — R9."""
         token = generate_jwt("alice", "examiner", _SECRET)
-        client = TestClient(_make_app(), cookies={"agentir_session": token})
+        client = TestClient(_make_app(), cookies={"sift_session": token})
         resp = client.get("/api/test")
         # The test endpoint uses getattr — must not raise AttributeError
         assert resp.status_code == 200

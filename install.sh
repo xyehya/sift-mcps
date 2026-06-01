@@ -210,7 +210,7 @@ install_state_dirs() {
   local owner group
   owner="$(user_name)"
   group="$(group_name)"
-  log "Creating agentir state directories."
+  log "Creating SIFT state directories."
   sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_STATE_DIR"
   sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_PASSWORDS_DIR"
   sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_VERIFICATION_DIR"
@@ -509,8 +509,8 @@ write_gateway_config() {
     _migrate_gateway_config
     return
   fi
-  SIFT_GATEWAY_TOKEN="agentir_gw_$(random_hex 24)"
-  SIFT_SERVICE_TOKEN="agentir_svc_$(random_hex 24)"
+  SIFT_GATEWAY_TOKEN="sift_gw_$(random_hex 24)"
+  SIFT_SERVICE_TOKEN="sift_svc_$(random_hex 24)"
   SIFT_PORTAL_SESSION_SECRET="$(random_hex 32)"
   SIFT_TOKEN_CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   CONFIG_CREATED=1
@@ -960,9 +960,9 @@ configure_auditd() {
     warn "auditd not found — skipping audit rules."
     return 0
   fi
-  local rules_src="${REPO_DIR}/configs/audit/99-agentir-evidence.rules"
+  local rules_src="${REPO_DIR}/configs/audit/99-sift-evidence.rules"
   [[ -f "$rules_src" ]] || return 0
-  local rules_dst="/etc/audit/rules.d/99-agentir-evidence.rules"
+  local rules_dst="/etc/audit/rules.d/99-sift-evidence.rules"
   local tmp
   tmp="$(mktemp)"
   sed "s|CASES_ROOT|${SIFT_CASE_ROOT}|g" "$rules_src" > "$tmp"

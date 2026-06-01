@@ -1,6 +1,6 @@
 """Case lifecycle operations: init, activate, list, status.
 
-Pure-data functions (no CLI output). Called by case-mcp and the agentir CLI.
+Pure-data functions (no CLI output). Called by case-mcp and the SIFT CLI.
 """
 
 from __future__ import annotations
@@ -17,7 +17,9 @@ import yaml
 
 from sift_core.case_io import (
     _atomic_write,
+    case_audit_dir,
     cases_root,
+    _tmp_case,
     load_findings,
     load_timeline,
     load_todos,
@@ -30,7 +32,7 @@ def case_status_data(case_dir) -> dict:
     case_dir = Path(case_dir)
     meta_file = case_dir / "CASE.yaml"
     if not meta_file.exists():
-        raise ValueError(f"Not an agentir case directory: {case_dir}")
+        raise ValueError(f"Not a SIFT case directory: {case_dir}")
 
     with open(meta_file) as f:
         meta = yaml.safe_load(f) or {}
@@ -54,7 +56,7 @@ def case_status_data(case_dir) -> dict:
         "evidence_dir": str(case_dir / "evidence"),
         "extractions_dir": str(case_dir / "extractions"),
         "reports_dir": str(case_dir / "reports"),
-        "audit_dir": str(case_dir / "audit"),
+        "audit_dir": str((case_dir / "audit") if _tmp_case(case_dir) else case_audit_dir(case_dir)),
         "agent_dir": str(case_dir / "agent"),
         "finding_count": len(findings),
         "finding_draft": draft_f,
@@ -157,8 +159,10 @@ def case_init_data(
         raise ValueError(f"Case directory already exists: {case_dir}")
 
     case_dir.mkdir(parents=True)
-    for subdir in ("evidence", "extractions", "reports", "audit", "agent"):
+    for subdir in ("evidence", "extractions", "reports", "agent"):
         (case_dir / subdir).mkdir()
+    if _tmp_case(case_dir):
+        (case_dir / "audit").mkdir()
 
     case_meta = {
         "case_id": case_id,

@@ -11,7 +11,9 @@ license = { text = "MIT" }
 authors = [{ name = "AppliedIncidentResponse.com" }]
 keywords = ["forensics", "incident-response", "dfir", "security"]
 dependencies = [
+    "forensic-knowledge",
     "pyyaml>=6.0",
+    "sift-common",
 ]
 
 [project.optional-dependencies]

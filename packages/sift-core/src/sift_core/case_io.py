@@ -19,7 +19,8 @@ import yaml
 _EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
 
 DEFAULT_CASES_DIR = str(Path.home() / "cases")
-_CASE_SUBDIRS = frozenset({"evidence", "extractions", "reports", "audit", "tmp", "agent"})
+DEFAULT_STATE_DIR = "/var/lib/sift"
+_CASE_SUBDIRS = frozenset({"evidence", "extractions", "reports", "tmp", "agent"})
 
 
 class CaseError(Exception):
@@ -45,6 +46,45 @@ def cases_root() -> Path:
         or os.environ.get("SIFT_CASES_DIR")
         or DEFAULT_CASES_DIR
     )
+
+
+def state_root(case_dir: Path | None = None) -> Path:
+    """Resolve the SIFT state root that stores integrity records.
+
+    Production default is ``/var/lib/sift``. Tests and local dev can set
+    ``SIFT_STATE_DIR``; pytest temp cases get a temp-adjacent fallback so the
+    suite does not need write access to ``/var/lib``.
+    """
+    configured = os.environ.get("SIFT_STATE_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    if case_dir is not None:
+        resolved = Path(case_dir).resolve()
+        if str(resolved).startswith("/tmp/"):
+            return resolved.parent / ".sift-state" / resolved.name
+    return Path(DEFAULT_STATE_DIR)
+
+
+def _case_id_from_dir(case_dir: Path) -> str:
+    meta = load_case_meta(case_dir)
+    return str(meta.get("case_id") or case_dir.name)
+
+
+def case_records_dir(case_dir: Path) -> Path:
+    """Return the integrity-record directory for a case."""
+    return state_root(case_dir) / _case_id_from_dir(Path(case_dir))
+
+
+def case_audit_dir(case_dir: Path) -> Path:
+    return case_records_dir(case_dir) / "audit"
+
+
+def case_approvals_path(case_dir: Path) -> Path:
+    return case_records_dir(case_dir) / "approvals.jsonl"
+
+
+def _tmp_case(case_dir: Path) -> bool:
+    return str(Path(case_dir).resolve()).startswith("/tmp/")
 
 
 def _validate_case_id(case_id: str) -> None:
@@ -303,7 +343,8 @@ def write_approval_log(
     stale_at_approval: bool = False,
     coupled_from: str = "",
 ) -> bool:
-    log_file = case_dir / "approvals.jsonl"
+    log_file = case_approvals_path(case_dir)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "item_id": item_id,
@@ -340,11 +381,25 @@ def write_approval_log(
         os.chmod(log_file, 0o444)
     except OSError:
         pass
+    if _tmp_case(case_dir):
+        legacy = case_dir / "approvals.jsonl"
+        try:
+            if legacy.exists():
+                os.chmod(legacy, 0o644)
+            with open(legacy, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(legacy, 0o444)
+        except OSError:
+            pass
     return True
 
 
 def load_approval_log(case_dir: Path) -> list[dict]:
-    log_file = case_dir / "approvals.jsonl"
+    log_file = case_approvals_path(case_dir)
+    if _tmp_case(case_dir) and (case_dir / "approvals.jsonl").exists():
+        log_file = case_dir / "approvals.jsonl"
     if not log_file.exists():
         return []
     entries = []
@@ -447,7 +502,9 @@ def verify_approval_integrity(case_dir: Path) -> list[dict]:
 
 def load_audit_index(case_dir: Path) -> dict[str, dict]:
     """Scan audit/*.jsonl and build {audit_id: entry} index."""
-    audit_dir = case_dir / "audit"
+    audit_dir = case_audit_dir(case_dir)
+    if _tmp_case(case_dir) and (case_dir / "audit").is_dir():
+        audit_dir = case_dir / "audit"
     index: dict[str, dict] = {}
     if not audit_dir.is_dir():
         return index

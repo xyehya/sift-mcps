@@ -20,27 +20,27 @@ class _FakeSessionManager:
         self.called = True
 
 
-def test_generate_gateway_token_uses_agentir_prefix_and_192_bits():
+def test_generate_gateway_token_uses_sift_prefix_and_192_bits():
     token = generate_gateway_token()
-    assert token.startswith("agentir_gw_")
-    assert len(token.removeprefix("agentir_gw_")) == 48
-    int(token.removeprefix("agentir_gw_"), 16)
+    assert token.startswith("sift_gw_")
+    assert len(token.removeprefix("sift_gw_")) == 48
+    int(token.removeprefix("sift_gw_"), 16)
 
 
-def test_generate_service_token_uses_agentir_prefix_and_192_bits():
+def test_generate_service_token_uses_sift_prefix_and_192_bits():
     token = generate_service_token()
-    assert token.startswith("agentir_svc_")
-    assert len(token.removeprefix("agentir_svc_")) == 48
-    int(token.removeprefix("agentir_svc_"), 16)
+    assert token.startswith("sift_svc_")
+    assert len(token.removeprefix("sift_svc_")) == 48
+    int(token.removeprefix("sift_svc_"), 16)
 
 
 def test_verify_api_key_rejects_revoked_token():
-    token = "agentir_svc_" + secrets.token_hex(24)
+    token = "sift_svc_" + secrets.token_hex(24)
     assert verify_api_key(token, {token: {"role": "agent", "revoked_at": "2026-01-01T00:00:00Z"}}) is None
 
 
 async def test_mcp_rejects_readonly_role_before_session_manager():
-    token = "agentir_gw_" + secrets.token_hex(24)
+    token = "sift_gw_" + secrets.token_hex(24)
     session = _FakeSessionManager()
     app = MCPAuthASGIApp(
         session,

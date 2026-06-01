@@ -244,7 +244,7 @@ class TestCaseStatusData:
 
 
 class TestCaseListEnvVarPriority:
-    def test_reads_agentir_cases_root(self, tmp_path, monkeypatch):
+    def test_reads_sift_cases_root(self, tmp_path, monkeypatch):
         """SIFT_CASES_ROOT set → case_list_data reads from that root."""
         cases_root = tmp_path / "cases"
         case_dir = cases_root / "rocba-20260525-1200"
@@ -272,7 +272,7 @@ class TestCaseListEnvVarPriority:
         assert result["cases_root"] == str(root_cases)
         assert any(c["id"] == "rootcase-001" for c in result["cases"])
 
-    def test_falls_back_to_agentir_cases_dir(self, tmp_path, monkeypatch):
+    def test_falls_back_to_sift_cases_dir(self, tmp_path, monkeypatch):
         """No SIFT_CASES_ROOT → falls back to SIFT_CASES_DIR."""
         cases_dir = tmp_path / "mydir" / "cases"
         case_dir = cases_dir / "fallback-case-001"

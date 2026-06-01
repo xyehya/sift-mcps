@@ -146,7 +146,7 @@
     </div>
     <h4>New decisions (2026-05-31)</h4>
     <div class="grid2">
-      <div class="card"><span class="tag t-good">D1 · RENAME</span><h4>agentir → sift</h4><p>Rename the Python package <code>agentir_core</code> → <code>sift_core</code> <b>and</b> the runtime env/path surface (<code>AGENTIR_*</code> → <code>SIFT_*</code>, <code>/var/lib/agentir</code> → <code>/var/lib/sift</code>), plus the <code>agentir_svc_*</code>→<code>sift_svc_*</code> token prefix. <b>No back-compat</b> — fresh VM + case, clean cutover (no shim, no symlink). See §6.</p></div>
+      <div class="card"><span class="tag t-good">D1 · RENAME</span><h4>agentir → sift</h4><p>Rename the Python package <code>agentir_core</code> → <code>sift_core</code> <b>and</b> the runtime env/path surface (<code>AGENTIR_*</code> → <code>SIFT_*</code>, <code>/var/lib/agentir</code> → <code>/var/lib/sift</code>), plus the service-token prefix to <code>sift_svc_*</code>. <b>No back-compat</b> — fresh VM + case, clean cutover (no shim, no symlink). See §6.</p></div>
       <div class="card"><span class="tag t-good">D2 · EXECUTE POLICY</span><h4>Denylist-default</h4><p>run_command stays <b>denylist</b>-based (its current real behaviour). The denylist is <b>already externalized</b> to <code>security.yaml</code> — the work is not "extract from hardcoded" but: (a) <b>relocate</b> it from the package's <code>data/catalog/</code> to operator-editable <code>gateway.yaml</code>, (b) add a non-weakenable <b>deny floor</b>, (c) add <b>allowlist mode</b>. See §5.</p></div>
       <div class="card"><span class="tag t-good">D3 · PRIVILEGE</span><h4>Caps-first, sudoers fallback</h4><p>Executor runs unprivileged. Root-needing tools (vol, dd, mount) escalate via Linux <b>capabilities first</b>, falling back to a narrow <b>sudoers allowlist</b> (hashed paths, NOPASSWD, never a shell/wildcard). Every escalation audited. See §5.</p></div>
       <div class="card"><span class="tag t-skill">D4 · METHODOLOGY</span><h4>Remove tools → /skills</h4><p>The 14 forensic methodology <code>get_*</code> tools + 14 resources are <b>removed as MCP tools</b> and served through <code>/skills</code> packs. <b>Post-MVP — implemented last.</b> See §7.</p></div>
@@ -634,7 +634,7 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
 
     <div class="phase"><div class="pn">0</div><div class="pc">
       <h4>Rename + foundations (D1)</h4>
-      <p>Rename <code>agentir-core</code>→<code>sift-core</code> (package + env/path surface §6, plus the <code>agentir_svc_*</code>→<code>sift_svc_*</code> token prefix). <b>No back-compat</b> — fresh VM + case, clean cutover (no shim/symlink/dual-name). Publish the contract spec + JSON Schema + conformance checklist (this doc). Add <code>tier</code> + <code>spec_version</code> to <code>gateway.yaml</code>. No behaviour change.</p>
+      <p>Rename <code>agentir-core</code>→<code>sift-core</code> (package + env/path surface §6, plus the service-token prefix to <code>sift_svc_*</code>). <b>No back-compat</b> — fresh VM + case, clean cutover (no shim/symlink/dual-name). Publish the contract spec + JSON Schema + conformance checklist (this doc). Add <code>tier</code> + <code>spec_version</code> to <code>gateway.yaml</code>. No behaviour change.</p>
       <div class="verify">verify → full suite green under new names; schema validates the example manifests.</div>
       <div class="files">packages/* · configs/gateway.yaml.template · install.sh · systemd · apparmor</div>
     </div></div>

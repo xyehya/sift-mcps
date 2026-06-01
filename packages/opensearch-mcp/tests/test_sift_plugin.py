@@ -1,10 +1,10 @@
-"""Tests for agentir plugin registration."""
+"""Tests for SIFT plugin registration."""
 
 from __future__ import annotations
 
 import argparse
 
-from opensearch_mcp.agentir_plugin import register
+from opensearch_mcp.sift_plugin import register
 
 
 class TestRegister:

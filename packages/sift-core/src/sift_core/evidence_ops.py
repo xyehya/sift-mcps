@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sift_core.case_io import _atomic_write
+from sift_core.evidence_chain import ChainStatus, chain_status, load_manifest
 
 
 def register_evidence_data(
@@ -104,6 +105,97 @@ def list_evidence_data(case_dir) -> dict:
         return {"evidence": [], "registry_exists": False}
     registry = json.loads(reg_file.read_text())
     return {"evidence": registry.get("files", []), "registry_exists": True}
+
+
+def list_manifest_evidence_data(case_dir) -> dict:
+    """Return sealed evidence manifest entries as structured data."""
+    case_dir = Path(case_dir)
+    manifest = load_manifest(case_dir)
+    if manifest is None:
+        return {"evidence": [], "registry_exists": False, "manifest_version": 0}
+    active_files = [
+        f for f in manifest.get("files", []) if f.get("status") != "IGNORED"
+    ]
+    return {
+        "evidence": active_files,
+        "registry_exists": True,
+        "manifest_version": manifest.get("version", 0),
+    }
+
+
+def list_evidence_status_data(case_dir) -> dict:
+    """Return sealed and unregistered evidence with inline chain status."""
+    case_dir = Path(case_dir)
+    evidence_data = list_manifest_evidence_data(case_dir)
+    active_files = evidence_data["evidence"]
+    manifest_version = evidence_data["manifest_version"]
+    manifest_exists = evidence_data["registry_exists"]
+
+    try:
+        cs = chain_status(case_dir)
+        chain = {
+            "status": cs["status"],
+            "ok_count": cs["ok_count"],
+            "issues": cs["issues"],
+        }
+    except Exception:
+        chain = {
+            "status": "unknown",
+            "ok_count": 0,
+            "issues": ["Chain status check failed — call evidence_verify for details."],
+        }
+
+    evidence_dir = case_dir / "evidence"
+    registered_paths = {f.get("path", "") for f in active_files}
+    unregistered = []
+    if evidence_dir.is_dir():
+        for f in sorted(evidence_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            rel = str(f.relative_to(case_dir))
+            if rel not in registered_paths and str(f) not in registered_paths:
+                unregistered.append(
+                    {
+                        "path": rel,
+                        "size_bytes": f.stat().st_size,
+                        "registered": False,
+                        "action_required": (
+                            "Notify the operator to seal this file via "
+                            "Examiner Portal → Evidence tab before analysis."
+                        ),
+                    }
+                )
+
+    has_chain_issues = bool(
+        chain.get("issues")
+        and chain.get("status") not in (ChainStatus.OK, ChainStatus.UNSEALED)
+    )
+    requires_examiner_action = bool(unregistered or has_chain_issues)
+
+    result = {
+        "evidence": active_files,
+        "unregistered": unregistered,
+        "chain": chain,
+        "requires_examiner_action": requires_examiner_action,
+        "manifest_version": manifest_version,
+        "source": "manifest_v2",
+    }
+    if requires_examiner_action:
+        hints = []
+        if unregistered:
+            hints.append(
+                f"{len(unregistered)} unregistered file(s) found — "
+                "operator must seal via portal before analysis."
+            )
+        if has_chain_issues:
+            hints.append(
+                "Chain integrity issues detected — call evidence_verify "
+                "for a full check before escalating to the operator."
+            )
+        result["examiner_action_hint"] = " ".join(hints)
+    if not manifest_exists:
+        result["note"] = "No evidence manifest — case not yet initialised via portal."
+    return result
 
 
 def verify_evidence_data(case_dir) -> dict:

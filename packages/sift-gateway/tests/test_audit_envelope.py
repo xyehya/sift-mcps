@@ -29,12 +29,12 @@ from sift_gateway.mcp_endpoint import (
 
 class TestHashToken:
     def test_returns_16_hex_chars(self):
-        result = _hash_token("agentir_svc_" + secrets.token_hex(24))
+        result = _hash_token("sift_svc_" + secrets.token_hex(24))
         assert len(result) == 16
         int(result, 16)  # valid hex
 
     def test_deterministic(self):
-        token = "agentir_gw_" + secrets.token_hex(24)
+        token = "sift_gw_" + secrets.token_hex(24)
         assert _hash_token(token) == _hash_token(token)
 
     def test_matches_sha256_prefix(self):
@@ -43,12 +43,12 @@ class TestHashToken:
         assert _hash_token(token) == expected
 
     def test_different_tokens_differ(self):
-        a = _hash_token("agentir_svc_" + secrets.token_hex(24))
-        b = _hash_token("agentir_svc_" + secrets.token_hex(24))
+        a = _hash_token("sift_svc_" + secrets.token_hex(24))
+        b = _hash_token("sift_svc_" + secrets.token_hex(24))
         assert a != b
 
     def test_fingerprint_never_equals_raw_token(self):
-        raw = "agentir_svc_" + secrets.token_hex(24)
+        raw = "sift_svc_" + secrets.token_hex(24)
         assert _hash_token(raw) != raw
 
 
@@ -142,7 +142,7 @@ async def _run_asgi(app, token: str | None, client_ip: str = "10.0.0.1"):
 
 class TestScopeStatePopulation:
     async def test_authed_sets_source_ip_and_token_id(self):
-        token = "agentir_svc_" + secrets.token_hex(24)
+        token = "sift_svc_" + secrets.token_hex(24)
         session = _CapturingSessionManager()
         app = MCPAuthASGIApp(
             session, api_keys={token: {"examiner": "hermes", "role": "agent"}}
@@ -163,7 +163,7 @@ class TestScopeStatePopulation:
         assert state["token_id"] is None
 
     async def test_token_id_is_fingerprint_not_raw(self):
-        token = "agentir_gw_" + secrets.token_hex(24)
+        token = "sift_gw_" + secrets.token_hex(24)
         session = _CapturingSessionManager()
         app = MCPAuthASGIApp(
             session, api_keys={token: {"examiner": "alice", "role": "examiner"}}
@@ -174,7 +174,7 @@ class TestScopeStatePopulation:
         assert state["token_id"] == _hash_token(token)
 
     async def test_readonly_rejected_session_manager_never_reached(self):
-        token = "agentir_gw_" + secrets.token_hex(24)
+        token = "sift_gw_" + secrets.token_hex(24)
         session = _CapturingSessionManager()
         app = MCPAuthASGIApp(
             session, api_keys={token: {"examiner": "reader", "role": "readonly"}}
@@ -185,7 +185,7 @@ class TestScopeStatePopulation:
         assert session.captured_scope is None
 
     async def test_x_forwarded_for_trusted_from_loopback(self):
-        token = "agentir_svc_" + secrets.token_hex(24)
+        token = "sift_svc_" + secrets.token_hex(24)
         session = _CapturingSessionManager()
         app = MCPAuthASGIApp(
             session, api_keys={token: {"examiner": "hermes", "role": "agent"}}
@@ -213,7 +213,7 @@ class TestScopeStatePopulation:
         assert state["source_ip"] == "10.20.30.40"
 
     async def test_x_forwarded_for_ignored_from_non_loopback(self):
-        token = "agentir_svc_" + secrets.token_hex(24)
+        token = "sift_svc_" + secrets.token_hex(24)
         session = _CapturingSessionManager()
         app = MCPAuthASGIApp(
             session, api_keys={token: {"examiner": "hermes", "role": "agent"}}

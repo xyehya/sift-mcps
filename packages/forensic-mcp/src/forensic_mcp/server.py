@@ -10,7 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from sift_common.instructions import FORENSIC_MCP as _INSTRUCTIONS
 
 from forensic_mcp.audit import AuditWriter
-from forensic_mcp.case.manager import CaseManager
+from sift_core.case_manager import CaseManager, build_finding_considerations
 
 logger = logging.getLogger(__name__)
 
@@ -26,65 +26,6 @@ def _validate_str_length(value: str | None, field: str, max_len: int) -> None:
             raise ValueError(f"{field} exceeds maximum length of {max_len} characters")
         if "\x00" in value:
             raise ValueError(f"{field} contains invalid null byte")
-
-
-def _build_finding_considerations(finding: dict) -> list[str]:
-    """Assemble pre-acceptance guidance for a staged finding."""
-    from forensic_knowledge import loader
-
-    considerations: list[str] = []
-
-    # Self-check items from investigation framework (always included)
-    # New format has {question, how} dicts; old format has plain strings
-    framework = loader.get_investigation_framework()
-    if framework:
-        for item in framework.get("self_check", [])[:5]:
-            if isinstance(item, dict):
-                text = item.get("question", "")
-                how = item.get("how", "")
-                considerations.append(f"{text} → {how}" if how else text)
-            else:
-                considerations.append(item)
-
-    # Anti-patterns relevant to the finding type
-    finding_type = finding.get("type", "")
-    anti_patterns = loader.get_anti_patterns()
-    if finding_type == "attribution":
-        for ap in anti_patterns:
-            if ap["name"] == "premature_attribution":
-                how = ap.get("how_to_avoid", "")
-                msg = f"Anti-pattern: {ap['description']}"
-                if how:
-                    msg += f" How to avoid: {how}"
-                considerations.append(msg)
-    if finding_type == "exclusion":
-        for ap in anti_patterns:
-            if ap["name"] == "confirmation_bias":
-                how = ap.get("how_to_avoid", "")
-                msg = f"Anti-pattern: {ap['description']}"
-                if how:
-                    msg += f" How to avoid: {how}"
-                considerations.append(msg)
-
-    # Confidence-level requirements
-    confidence = finding.get("confidence", "").upper()
-    confidence_defs = loader.get_confidence_definitions()
-    if confidence in confidence_defs:
-        cd = confidence_defs[confidence]
-        min_ev = cd.get("min_audit_ids", 0)
-        if min_ev >= 2:
-            considerations.append(
-                f"{confidence} confidence requires {min_ev}+ independent corroborating sources "
-                f"— are yours truly independent?"
-            )
-
-    # Checkpoint requirements if finding type matches
-    if finding_type in ("attribution", "exclusion", "conclusion"):
-        checkpoint = loader.get_checkpoint(finding_type)
-        if checkpoint and isinstance(checkpoint, dict) and "guidance" in checkpoint:
-            considerations.append(checkpoint["guidance"])
-
-    return considerations
 
 
 def _build_validation_guidance(errors: list[str]) -> list[str]:
@@ -174,7 +115,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         Tip: stage findings soon after analysis — audit_ids from earlier tool
         calls may be lost to context compaction.
 
-        Requires human approval via 'agentir approve'."""
+        Requires human approval via 'sift approve'."""
         _validate_str_length(analyst_override, "analyst_override", _MAX_SHORT)
         if isinstance(finding, dict):
             _validate_str_length(finding.get("title"), "title", _MAX_TITLE)
@@ -234,7 +175,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             result["finding_status"] = (
                 "DRAFT — requires human approval via the examiner portal"
             )
-            result["considerations"] = _build_finding_considerations(finding)
+            result["considerations"] = build_finding_considerations(finding)
             grounding = manager._score_grounding(finding)
             if grounding:
                 result["grounding"] = grounding
@@ -256,7 +197,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
 
     @server.tool()
     def record_timeline_event(event: dict, analyst_override: str = "") -> dict:
-        """Stage timeline event as DRAFT. Requires human approval via 'agentir approve'.
+        """Stage timeline event as DRAFT. Requires human approval via 'sift approve'.
 
         Required fields in event dict:
         - timestamp (str): ISO 8601 datetime (e.g. "2026-03-01T14:32:00Z")
@@ -527,14 +468,14 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             }
 
         # ── Evidence detection ──────────────────────────────────────────
-        evidence_manifest_file = case_dir / "evidence-manifest.json"
         evidence_json_file = case_dir / "evidence.json"
         evidence_data: dict = {}
-        if evidence_manifest_file.exists():
-            try:
-                evidence_data = json.loads(evidence_manifest_file.read_text())
-            except (json.JSONDecodeError, OSError):
-                pass
+        try:
+            from sift_core.evidence_chain import load_manifest
+
+            evidence_data = load_manifest(case_dir) or {}
+        except Exception:
+            pass
         if not evidence_data and evidence_json_file.exists():
             try:
                 evidence_data = json.loads(evidence_json_file.read_text())

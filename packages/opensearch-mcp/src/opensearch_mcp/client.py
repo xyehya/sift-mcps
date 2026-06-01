@@ -23,7 +23,7 @@ def get_client(config_path: Path | None = None) -> OpenSearch:
     if not path.exists():
         raise FileNotFoundError(
             f"OpenSearch config not found: {path}\n"
-            "Run 'opensearch-setup' or 'agentir setup opensearch' first."
+            "Run 'opensearch-setup' or 'sift setup opensearch' first."
         )
     config = yaml.safe_load(path.read_text()) or {}
     host_url = config.get("host", "https://localhost:9200")

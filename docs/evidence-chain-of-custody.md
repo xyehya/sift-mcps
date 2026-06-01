@@ -84,7 +84,7 @@ IGNORED and RETIRED entries are carried forward in every subsequent manifest ver
 {"event":"FILE_RETIRED","case_id":"case-2026-001","version":3,"path":"evidence/host1/duplicate.E01","reason":"Duplicate image, hash confirmed identical","retired_by":"alice","retired_at":"2026-05-24T13:00:00Z","deleted_from_disk":true,"hmac":"ghi789..."}
 ```
 
-HMAC key derivation: `derive_ledger_key(stored_password_hash_hex)` — uses `HKDF(stored_hash, info=b"agentir-signing-v1")`. This key is domain-separated from the authentication key and is only available when the examiner provides their password.
+HMAC key derivation: `derive_ledger_key(stored_password_hash_hex)` — uses `HKDF(stored_hash, info=b"sift-signing-v1")`. This key is domain-separated from the authentication key and is only available when the examiner provides their password.
 
 After each ledger write:
 - `fsync()` is called — event is on disk before the function returns
@@ -167,11 +167,11 @@ Clearing the flag before tampering is the key insight: it creates an auditable a
 
 ### auditd Kernel Records
 
-`/etc/audit/rules.d/99-agentir-evidence.rules`:
+`/etc/audit/rules.d/99-sift-evidence.rules`:
 
 ```
--a always,exit -F dir=/cases -F perm=wa -F key=agentir_evidence_write
--a always,exit -F dir=/var/lib/sift -F perm=wa -F key=agentir_core_write
+-a always,exit -F dir=/cases -F perm=wa -F key=sift_evidence_write
+-a always,exit -F dir=/var/lib/sift -F perm=wa -F key=sift_core_write
 ```
 
 `perm=a` (attribute change) specifically catches `chattr -i`. If anyone deliberately clears the immutable flag, the kernel audit log records:
@@ -180,7 +180,7 @@ Clearing the flag before tampering is the key insight: it creates an auditable a
 - Executable path
 - System call (setxattr/ioctl)
 
-Query: `ausearch -k agentir_evidence_write --format text`
+Query: `ausearch -k sift_evidence_write --format text`
 
 ### AppArmor DENY write
 
@@ -213,11 +213,11 @@ For enterprise incident response involving regulatory scrutiny, litigation, or t
 
 1. Extracts `manifest_hash[:16]` (first 16 hex chars of the SHA-256 manifest hash)
 2. Extracts the HMAC of the latest ledger tip (first 16 hex chars)
-3. Builds payload: `AGENTIR|{manifest_hash[:16]}|{ledger_tip[:16]}`
+3. Builds payload: `SIFT|{manifest_hash[:16]}|{ledger_tip[:16]}`
 4. Signs and submits a Solana SPL Memo transaction containing this payload
 5. Writes `evidence-anchor-v{N}.json` with the transaction signature and explorer URL
 
-Example payload: `AGENTIR|d4e5f6a7b8c9d0e1|f2a3b4c5d6e7f8a9`
+Example payload: `SIFT|d4e5f6a7b8c9d0e1|f2a3b4c5d6e7f8a9`
 
 The SPL Memo program stores arbitrary UTF-8 memo data in the transaction, permanently recorded on-chain. The full manifest hash and ledger tip HMAC are stored in `evidence-anchor-v{N}.json` alongside the on-chain transaction signature for offline verification.
 
@@ -229,7 +229,7 @@ The SPL Memo program stores arbitrary UTF-8 memo data in the transaction, perman
   "manifest_version": 3,
   "manifest_hash": "sha256:d4e5f6...",
   "ledger_tip_hmac": "f2a3b4...",
-  "payload": "AGENTIR|d4e5f6a7b8c9d0e1|f2a3b4c5d6e7f8a9",
+  "payload": "SIFT|d4e5f6a7b8c9d0e1|f2a3b4c5d6e7f8a9",
   "solana_tx": "5J7rFxKmY9Pv8wNqR3eLfT2gHdSuVkBzCnAoWiXpM6jQ",
   "solana_cluster": "devnet",
   "confirmed": true,
@@ -273,7 +273,7 @@ The `solders` library is an optional dependency (`pip install "sift-core[solana]
 Any auditor with the `evidence-anchor-v{N}.json` proof file can independently verify:
 
 1. Look up the transaction on any Solana explorer or via RPC: `getTransaction(solana_tx)`
-2. The transaction memo field should contain `AGENTIR|{manifest_hash[:16]}|{ledger_tip[:16]}`
+2. The transaction memo field should contain `SIFT|{manifest_hash[:16]}|{ledger_tip[:16]}`
 3. The full `manifest_hash` in the proof file should match the `evidence-manifest.json` content hash
 4. The block timestamp proves the evidence was sealed before the transaction was confirmed
 

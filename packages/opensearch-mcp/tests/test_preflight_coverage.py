@@ -49,7 +49,7 @@ def test_all_ingest_entry_points_have_preflight():
 def test_cli_ingest_commands_have_preflight():
     """Every cmd_ingest* CLI function in ingest_cli.py must call
     _preflight_shard_capacity. Complements the server-side check —
-    agentir CLI bypasses the MCP tools.
+    SIFT CLI bypasses the MCP tools.
     """
     from opensearch_mcp import ingest_cli
 

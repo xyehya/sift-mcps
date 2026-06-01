@@ -1,1 +1,1 @@
-"""agentir case dashboard — web-based finding review interface."""
+"""SIFT case dashboard — web-based finding review interface."""

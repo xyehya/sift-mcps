@@ -1,6 +1,6 @@
 """Portal session middleware for the case-dashboard sub-app.
 
-Validates the agentir_session cookie (JWT) and sets request.state.examiner /
+Validates the sift_session cookie (JWT) and sets request.state.examiner /
 request.state.role. Falls back to Bearer token for backward compatibility
 (examiner-role tokens only; agent tokens are never accepted here).
 
@@ -62,7 +62,7 @@ class PortalSessionMiddleware(BaseHTTPMiddleware):
     """Resolve examiner identity for portal requests.
 
     Priority:
-      1. agentir_session cookie → verify JWT → set examiner/role
+      1. sift_session cookie → verify JWT → set examiner/role
       2. Authorization: Bearer token in api_keys, examiner role only → set examiner/role
       3. Neither → examiner=None, role=None (route handlers enforce 401)
     """

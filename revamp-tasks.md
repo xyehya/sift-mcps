@@ -36,7 +36,7 @@ From the v2.1 spec plus the four forks settled 2026-06-01:
 
 | # | Decision | Source |
 |---|----------|--------|
-| D1 | Rename `agentir_core` → `sift_core`; env/path surface `AGENTIR_*` → `SIFT_*`, `/var/lib/agentir` → `/var/lib/sift`; service-token prefix `agentir_svc_*` → `sift_svc_*`. **No back-compat** — fresh VM + fresh case, so do a clean cutover (no shim, no symlink, no dual-name config). | spec §6 + fork 2026-06-01 |
+| D1 | Rename `agentir_core` → `sift_core`; env/path surface `AGENTIR_*` → `SIFT_*`, `/var/lib/agentir` → `/var/lib/sift`; service-token prefix to `sift_svc_*`. **No back-compat** — fresh VM + fresh case, so do a clean cutover (no shim, no symlink, no dual-name config). | spec §6 + fork 2026-06-01 |
 | D2 | `run_command` stays **denylist-default** (already externalized to `security.yaml`). Work = relocate to operator-editable `gateway.yaml` + add non-weakenable **deny floor** + optional **allowlist mode**. | spec §5 |
 | D3 | Privileged exec (vol/dd/mount) = **capabilities-first**, sudoers-allowlist fallback (full-path NOPASSWD, never shell/wildcard). Every escalation audited; gateway never root. | spec §5 |
 | D4 | 14 forensic methodology `get_*` tools → `/skills` packs (downloadable zip, Anthropic skills standard). **FK *data package* stays a core runtime dependency.** Post-MVP, last. | spec §7 |
@@ -75,7 +75,7 @@ From the v2.1 spec plus the four forks settled 2026-06-01:
 
 **VM strategy: build a fully fresh VM (chosen).**
 
-- [ ] Provision a fresh SIFT VM (Ubuntu 24.04, Python 3.12, Docker).
+- [x] Provision a fresh SIFT VM (Ubuntu 24.04, Python 3.12, Docker).
 - [ ] Run the (renamed) `install.sh` from scratch on it — this is the *only* environment that validates the `agentir→sift` path migration + first-run registration cleanly.
 - [ ] Re-index an evidence set for live regression. **Cost note:** the ROCBA set is 23GB `.e01` + 19GB RAM = expensive re-indexing. Consider a smaller evidence sample for fast iteration and reserve a full ROCBA re-index for end-of-MVP regression.
 - [ ] Record the fresh VM's IP, service token, and case path in the Session Log so live tests are reproducible.
@@ -152,7 +152,7 @@ All four backends pass the conformance probe, advertise only namespaced tools, a
 Legend: `[ ]` todo · `[~]` partially done (see inline notes) · `[x]` done & Test passes · per task: **What / How / Why / Test**.
 
 ### Phase 0 — Rename + foundations (D1)
-Kills nothing yet; unblocks everything. Mechanical but wide (~141 `AGENTIR_CASE_DIR`, ~55 `/cases` literals). **Clean cutover — no back-compat** (fresh VM + fresh case): remove `agentir`/`AGENTIR_*`/`agentir_svc_*` entirely, don't dual-name anything.
+Kills nothing yet; unblocks everything. Mechanical but wide (~141 `AGENTIR_CASE_DIR`, ~55 `/cases` literals). **Clean cutover — no back-compat** (fresh VM + fresh case): remove `agentir`/`AGENTIR_*`/legacy service-token prefixes entirely, don't dual-name anything.
 
 - [x] **0.1 Rename Python package `agentir_core` → `sift_core`** ✅ Session 3
   - *How:* rename dir + `pyproject` name; update all imports. **Delete** the old name — no shim module.
@@ -165,37 +165,44 @@ Kills nothing yet; unblocks everything. Mechanical but wide (~141 `AGENTIR_CASE_
   - *Test:* boot with `SIFT_*` set; `grep -r 'AGENTIR_\|/var/lib/agentir'` returns nothing in source; no bare `/cases` literal escapes the resolver (grep returns only the resolver).
   - *DONE this session:* all 41 `AGENTIR_*` env vars → `SIFT_*` (442 occ.), `/var/lib/agentir` → `/var/lib/sift`, and config home `~/.agentir` → `~/.sift` — across **all** `.py`/tests, `install.sh`, `configs/*` (incl. the two `.template` files `gateway.yaml.template` + `apparmor/sift-gateway.template`, easy to miss — they're rendered with `${SIFT_*}` so leaving `${AGENTIR_*}` would break first-run), docs, AGENTS.md, and `frontend/src`. `grep -rE 'AGENTIR_|/var/lib/agentir'` over source/config = **0**. install.sh `bash -n` clean; `SIFT_HOME=$HOME/.sift` / `SIFT_STATE_DIR=/var/lib/sift` consistent with code. All per-package suites unchanged (same counts as Phase 0.1).
   - *`/cases` resolver — DONE (Session 4):* added the single resolver `sift_core.case_io.cases_root()` (precedence `SIFT_CASES_ROOT`→`SIFT_CASES_DIR`→`~/cases`, matching what most sites already did) and routed **all 13** scattered cases-root reads through it: `sift_core` (`get_case_dir`, `case_ops` list/init/activate), `case-mcp`, `report-mcp` (×2), `opensearch-mcp` (`ingest_cli` ×2, `server.py` ×2, `containers.py`), `sift-mcp/security.py`, and — after **adding a `sift-core` dep** — `case-dashboard/routes.py` (`_load_cases_root` fallback; its `/cases` default replaced by the resolver's `~/cases`) + `forensic-mcp/case/manager.py` (`CaseManager.cases_dir`). Removed now-orphaned `_DEFAULT_CASES_DIR`/`CASES_DIR_ENV`/`DEFAULT_CASES_DIR` constants. **Intentional belts kept** (documented in-code): the static `/cases` + `/evidence` literals in `sift-mcp/security.py` and the allow-root list in `opensearch/server.py` — the latter now *also* includes `cases_root().resolve()` so a custom `SIFT_CASES_ROOT` is honored. Forensic `server.py:607/614` `/cases/{case}/evidence/` are illustrative docstrings, left. **Single writer→reader path:** the only env *writers* are the gateway (`config.py apply_case_env`, yaml→env) and the portal (`routes.py` first-run registration); the only env *reader* is `cases_root()`. `grep /cases` over non-generated source now returns only the resolver + the two intentional belts + docstrings. (`grep AGENTIR_` over source/config = 0; the one hit is the generated frontend bundle, still pending the VM rebuild noted in Session 3.)
-  - *NOTE:* `agentir_svc_*`/`agentir_gw_*` token prefixes → **0.4**; `_agentir_context` warning key → **Phase 4** (removed with the readOnlyHint carve-out); product-name strings in `instructions.py`/docstrings, opensearch identifiers (`agentir-geoip`, `agentir-evtx-ecs`, `agentir-opensearch`), `agentir_plugin` module, `agentir_home()` fn, config filenames (`99-agentir-evidence.rules`, `agentir-cases.conf`), and the `agentir_core_write` audit key → **0.3**.
-- [ ] **0.3 Rename `agentir-opensearch`→`sift-opensearch` and any other `agentir-*` service/identifier surface.**
+  - *NOTE:* `_agentir_context` warning key → **Phase 4** (removed with the readOnlyHint carve-out).
+- [x] **0.3 Rename `agentir-opensearch`→`sift-opensearch` and any other `agentir-*` service/identifier surface.** ✅ Session 5
   - *Test:* service starts; role names resolve; no `agentir-` identifier remains.
-- [ ] **0.4 Rename service-token prefix `agentir_svc_*` → `sift_svc_*`**
+  - *Done:* completed the under-counted remaining surface from the Session 5 audit: HMAC domains `agentir-auth-v1`/`agentir-signing-v1`→`sift-auth-v1`/`sift-signing-v1` (backend + portal frontend + tests), evidence anchor schema/payload `agentir.evidence-anchor.v1`/`AGENTIR|...`→`sift.evidence-anchor.v1`/`SIFT|...`, portal cookie `agentir_session`→`sift_session`, audit rule file `99-agentir-evidence.rules`→`99-sift-evidence.rules`, audit keys `agentir_evidence_write`/`agentir_core_write`→`sift_evidence_write`/`sift_core_write`, OpenSearch CLI plugin module/group `opensearch_mcp.agentir_plugin` + `agentir.plugins`→`opensearch_mcp.sift_plugin` + `sift.plugins`, and remaining package docstrings/comments/product strings that belonged to 0.3. Verified no `agentir-*`, `agentir_plugin`, `agentir.plugins`, old HMAC domains, old cookie name, old audit keys, or old evidence-anchor schema remain in source/config outside historical tracker/spec/docs and the deferred 0.4/Phase 4 names.
+- [x] **0.4 Rename service-token prefix to `sift_svc_*`** ✅ Session 6
   - *How:* update `generate_service_token()` and the portal token-mgmt UI/labels. Tokens are minted fresh on the new VM, so **no back-compat for existing tokens** — old tokens simply won't exist.
   - *Why:* consistent `sift` identity on the one artifact that crosses from operator (portal) to agent.
-  - *Test:* portal mints a `sift_svc_*` token; agent authenticates with it; `grep -r agentir_svc` returns nothing in source.
+  - *Test:* portal mints a `sift_svc_*` token; agent authenticates with it; legacy token prefixes return nothing in source.
+  - *Done:* `generate_gateway_token()` now emits `sift_gw_*`, `generate_service_token()` emits `sift_svc_*`, installer first-run config writes the new prefixes, portal token creation inherits the new service token format, and gateway/dashboard auth tests plus docs/config examples were updated. Legacy token prefixes have no hits in tracked source/config/docs outside the untracked `old-repo-AGENTS.md`.
 
 🔒 **PHASE 0 GATE:** full suite green on `revamp/spg-v1`; gateway boots on the fresh VM via renamed `install.sh`; **zero `agentir`/`AGENTIR_` references remain in source** (`grep -ri agentir packages/` is clean except historical changelog/docs).
 
 ### Phase 1 — Consolidate core library (kills P2) + relocate integrity records (F-B)
 Move duplicated case logic out of `forensic-mcp`/`case-mcp`/`report-mcp` into `sift_core`, and move integrity records outside the agent jail while the code is already being touched.
 
-- [ ] **1.1 Move findings/timeline/TODO/evidence-listing logic into `sift_core`**
+- [x] **1.1 Move findings/timeline/TODO/evidence-listing logic into `sift_core`** ✅ Session 7
   - *How:* `sift_core` becomes the single owner of `record_finding`, `record_timeline_event`, `manage_todo`, `list_existing_findings`, evidence listing. The backends call into it; no parallel implementations remain.
   - *Why:* P2 duplication is the interoperability hazard the revamp exists to kill.
   - *Test:* one implementation per operation (grep); existing finding/timeline tests pass against the consolidated path.
-- [ ] **1.2 Move finding-time CORE-LOGIC into `sift_core`: validation, provenance classification, grounding, considerations**
+  - *Done:* moved `CaseManager` from `forensic_mcp.case.manager` to `sift_core.case_manager`; `forensic-mcp` now imports the core manager and keeps only MCP tool wrappers. Moved finding validation to `sift_core.finding_validation` with a compatibility re-export from `forensic_mcp.discipline.validation`. Centralized manifest-backed evidence listing in `sift_core.evidence_ops.list_evidence_status_data`; `case-mcp` delegates `evidence_list` to it, and report/evidence reads use the core evidence layer.
+- [x] **1.2 Move finding-time CORE-LOGIC into `sift_core`: validation, provenance classification, grounding, considerations** ✅ Session 8
   - *How:* relocate `_classify_provenance`, `_score_grounding`/`_grounding_result`, `_build_finding_considerations`, and the `VALIDATION_FAILED` enforcement. Keep FK data package as a dependency.
   - *Why:* this logic must live in core so every backend (and the agent) gets identical enforcement; it's not an add-on concern.
   - *Test:* finding rejected on `provenance==NONE`; considerations attached; grounding returns `{}` with no reference backends.
-- [ ] **1.3 Make grounding declaration-driven (remove hardcoded `_GROUNDING_MCPS`)**
+  - *Done:* `sift_core.case_manager` owns validation enforcement, provenance classification, grounding score/result, and `build_finding_considerations`; `forensic-mcp` only enriches the tool response with the core result.
+- [x] **1.3 Make grounding declaration-driven (remove hardcoded `_GROUNDING_MCPS`)** ✅ Session 8
   - *How:* replace the `(forensic-rag-mcp, windows-triage-mcp, opencti-mcp)` tuple with "backends whose manifest declares `capabilities.provides: ["reference"]`." (Manifest schema lands in Phase 4; here, stub the lookup behind an interface so Phase 4 just fills it.)
   - *Why:* zero hardcoded backend names — community reference backends must count automatically.
   - *Test:* with a fake manifest declaring `provides:["reference"]`, grounding counts it; with none, grounding is inert.
-- [ ] **1.4 Relocate integrity records to `/var/lib/sift/<case_id>/` (F-B)**
+  - *Done:* added `set_reference_backend_provider()` plus `SIFT_REFERENCE_BACKENDS` fallback. With no declared reference backends, grounding returns `{}`; no hardcoded reference-backend names remain in `sift_core`/`forensic-mcp`.
+- [x] **1.4 Relocate integrity records to `/var/lib/sift/<case_id>/` (F-B)** ✅ Session 8
   - *How:* `audit/`, `approvals.jsonl`, `evidence-ledger.jsonl`, manifest move outside `case_root`; update `audit_ops`, `evidence_chain`, `case_io._CASE_SUBDIRS`, `_classify_provenance`, `_score_grounding`, and the gate to read the new location. `evidence/extractions/reports/agent` stay under `case_root`. Confirm `run_command`'s jail cannot reach the new path.
   - *Why:* tamper-resistance — the agent must not be able to delete/alter its own audit trail or the custody ledger. This is the core security pitch.
   - *Test:* `run_command` with `cwd` traversal cannot read/write the records dir; provenance/grounding still resolve audit_ids from the new path; chain status still computes.
-- [ ] **1.5 Confirm `case_host_fix` stays in `opensearch-mcp` (F-D) — no core move.**
+  - *Done:* added `sift_core.case_io.case_records_dir()` / `case_audit_dir()` / `case_approvals_path()` backed by `SIFT_STATE_DIR` or `/var/lib/sift`; moved manifest, ledger, anchors, approvals, and audit reads/writes through those helpers. Removed `audit` from core case subdirs. Local `/tmp` tests keep compatibility shadows only for unit-test isolation; production/default paths are outside `case_root`.
+- [x] **1.5 Confirm `case_host_fix` stays in `opensearch-mcp` (F-D) — no core move.** ✅ Session 8
   - *Test:* no `case_host_fix` reference in `sift_core`/gateway core tools.
+  - *Done:* removed the stale gateway workflow map mention; `case_host_fix` remains only in `opensearch-mcp` code/tests.
 
 🔒 **PHASE 1 GATE:** single implementation of each case operation; integrity records under `/var/lib/sift`; agent jail proven unable to reach them; suite green.
 
@@ -294,6 +301,50 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 
 > Append newest at the top. Use the §3 template.
 
+### Session 8 — 2026-06-01 — Finish Phase 1 core consolidation + F-B records relocation
+- Branch/commit: `revamp/spg-v1` @ working tree (not committed)
+- Phase: 1 — tasks touched: **1.2, 1.3, 1.4, 1.5**. Boxes **ticked**.
+- DONE (boxes ticked this session): **1.2, 1.3, 1.4, 1.5**. Phase 1 task list is now complete.
+- What: moved finding-time considerations into `sift_core.case_manager`, made grounding use a declaration/provider interface instead of hardcoded backend names, relocated integrity records via `case_records_dir()` (`SIFT_STATE_DIR` or `/var/lib/sift/<case_id>/`), routed audit/approvals/manifest/ledger/anchor/gate reads through the new helpers, removed `audit` from normal case subdirs, and confirmed `case_host_fix` remains out of core/gateway-owned code.
+- Tests: green — `packages/sift-core/` **228 passed**, `packages/case-mcp/` **23 passed**, `packages/forensic-mcp/` **20 passed**, `packages/report-mcp/` **31 passed**, `packages/sift-gateway/` **104 passed**, `packages/case-dashboard/` **274 passed** (42 warnings). Also ran `py_compile` over the touched modules and grep checks for hardcoded grounding names / core `case_host_fix` references.
+- Live test on VM: none.
+- Spec changed?: no.
+- BLOCKERS / open questions for next session: Phase 1 live gate still needs fresh VM verification that `/var/lib/sift/<case_id>/` permissions are correct and `run_command` cannot read/write records. Unit tests use `/tmp` compatibility shadows only to avoid `/var/lib` writes.
+- NEXT: Phase 1 gate live check, then Phase 2.1 in-process core tools.
+
+### Session 7 — 2026-06-01 — Phase 1.1 core case-record consolidation
+- Branch/commit: `revamp/spg-v1` @ working tree (not committed)
+- Phase: 1 — tasks touched: **1.1**. Box **ticked**.
+- DONE (boxes ticked this session): **1.1**.
+- What: moved the case-record manager implementation into `sift_core.case_manager`, moved finding validation into `sift_core.finding_validation`, left compatibility re-exports in `forensic_mcp.case.manager` and `forensic_mcp.discipline.validation`, and routed `case-mcp` evidence listing through `sift_core.evidence_ops.list_evidence_status_data`.
+- Tests: green — full affected package suites: `packages/sift-core/` (**228 passed**), `packages/forensic-mcp/` (**20 passed**), `packages/case-mcp/` (**23 passed**), `packages/report-mcp/` (**31 passed**). Also re-ran the combined targeted evidence/consolidation check (**58 passed**).
+- Live test on VM: none.
+- Spec changed?: no.
+- BLOCKERS / open questions for next session: none for 1.1. F-B relocation remains task 1.4; grounding/considerations remain 1.2/1.3.
+- NEXT: **1.2** or **1.4** depending on whether to finish finding-time core logic before moving integrity records.
+
+### Session 6 — 2026-06-01 — Phase 0.4 token prefix cutover
+- Branch/commit: `revamp/spg-v1` @ working tree (not committed)
+- Phase: 0 — tasks touched: **0.4**. Box **ticked**.
+- DONE (boxes ticked this session): **0.4**.
+- What: changed gateway/examiner tokens to `sift_gw_*` and service/agent tokens to `sift_svc_*` in `sift_gateway.token_gen`, installer first-run token generation, portal token tests, gateway auth/audit tests, docs/config examples, and local MCP sample config/scripts. Portal token creation already uses `generate_service_token()`, so it now mints `sift_svc_*` without a separate code path.
+- Tests: green — targeted token suites: `packages/sift-gateway/tests/test_phase13_auth.py packages/sift-gateway/tests/test_audit_envelope.py packages/sift-gateway/tests/test_portal_agent_block.py` (**29 passed**), `packages/case-dashboard/tests/test_token_lifecycle.py packages/case-dashboard/tests/test_session_middleware.py` (**42 passed**); local package gate: sift-core **228**, case-dashboard **274** (42 warnings), sift-gateway **104**, case-mcp **23**, opensearch-mcp **973** (+71 skipped), sift-mcp **4**, report-mcp **31**, forensic-mcp **20**, windows-triage-mcp **11**. `bash -n install.sh`; `bash scripts/remediation-gate.sh` (**PASSED**). Legacy token-prefix grep is clean in tracked source/config/docs; only untracked `old-repo-AGENTS.md` still contains the old live-token notes.
+- Live test on VM: none (fresh VM still provisioned).
+- Spec changed?: yes — `revamp-plan.html` token-prefix prose now names only the new `sift_svc_*` prefix.
+- BLOCKERS / open questions for next session: Phase 0 gate still needs a fresh VM install/live boot. `_agentir_context` remains intentionally deferred to Phase 4.
+- NEXT: Phase 0 gate work — provision/install on fresh VM or, if staying local, run any remaining per-package suites and decide whether to rebuild the generated portal bundle.
+
+### Session 5 — 2026-06-01 — Phase 0.3 remaining `agentir` surface
+- Branch/commit: `revamp/spg-v1` @ working tree (not committed)
+- Phase: 0 — tasks touched: **0.3**. Box **ticked**.
+- DONE (boxes ticked this session): **0.3**.
+- What: completed the audited 0.3 backlog beyond the original tracker count. Renamed security/identity constants (`sift-auth-v1`, `sift-signing-v1`, `sift.evidence-anchor.v1`, `SIFT|...`, `sift_session`), audit rule filename/keys (`99-sift-evidence.rules`, `sift_evidence_write`, `sift_core_write`), OpenSearch plugin module and entry-point group (`sift_plugin`, `sift.plugins`), and 0.3-owned docstrings/comments/product strings. Confirmed the previously flagged AppArmor `~/.sift/bin` and remediation-gate `packages/sift-core/` latent bugs were already fixed in this tree.
+- Tests: green — `uv run python -m pytest packages/sift-core/ --tb=short -q` (**228 passed**), `packages/case-dashboard/` (**274 passed, 42 warnings**), `packages/opensearch-mcp/` (**973 passed, 71 skipped**), `packages/sift-gateway/` (**104 passed**), `packages/case-mcp/` (**23 passed**), `packages/report-mcp/` (**31 passed**), `packages/forensic-mcp/` (**20 passed**), `bash -n install.sh`, `bash -n scripts/remediation-gate.sh`, and `bash scripts/remediation-gate.sh` (**PASSED**). `packages/opencti-mcp/` has no collected tests (pytest exit 5).
+- Live test on VM: none (fresh VM still not provisioned — open §2 item).
+- Spec changed?: no — code/docs/tracker only; revamp spec still contains historical rename context.
+- BLOCKERS / open questions for next session: 0.4 still owns token prefixes; Phase 4 still owns `_agentir_context` removal with the readOnlyHint carve-out.
+- NEXT: **0.4** — rename generated gateway/service token prefixes and update portal/token tests.
+
 ### Session 4 — 2026-06-01 — Phase 0.2 finish (`/cases` single-resolver)
 - Branch/commit: `revamp/spg-v1` @ `a6cd48d`
 - Phase: 0 — tasks touched: **0.2** (the `/cases` single-resolver clause — the last open piece). Box **ticked**.
@@ -304,7 +355,7 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 - Spec changed?: no — `revamp-plan.html` already describes sift-core as the single source of truth for `case_root` (architecture diagram + §6.3); the resolver realizes that intent. (Note: §6.3's pre-fork text still mentions an `AGENTIR_*` fallback + `/var/lib/agentir` symlink; that's superseded by D1 clean-cutover and was already not implemented — left as historical spec prose.)
 - Gotchas: (1) `DEFAULT_CASES_DIR` is frozen at import (`str(Path.home()/"cases")`), so monkeypatching `Path.home()` after import does NOT change the resolver's default — test the default against the constant, not a patched home. (2) Two call-sites had a local var literally named `cases_root` shadowing the import — replaced the inline `Path(...)` construction with direct `cases_root()` calls. (3) The lone remaining `AGENTIR_` hit is the generated portal bundle `static/v2/assets/index-*.js` — still needs the VM frontend rebuild flagged in Session 3.
 - BLOCKERS: none.
-- NEXT: **0.3** (service/identifier surface: `agentir-opensearch`→`sift-opensearch`, opensearch identifiers `agentir-geoip`/`agentir-evtx-ecs`, `agentir_plugin` module + `agentir.plugins` entry-point group, `agentir_home()` fn, config filenames `99-agentir-evidence.rules`/`agentir-cases.conf`, `agentir_core_write` audit key, product-name strings). Then **0.4** (token prefix `agentir_svc_*`→`sift_svc_*`). NOTE: 0.3 touches live OpenSearch index/role identifiers — best validated on the (still-unprovisioned) fresh VM.
+- NEXT: **0.3** (service/identifier surface: `agentir-opensearch`→`sift-opensearch`, opensearch identifiers `agentir-geoip`/`agentir-evtx-ecs`, `agentir_plugin` module + `agentir.plugins` entry-point group, `agentir_home()` fn, config filenames `99-agentir-evidence.rules`/`agentir-cases.conf`, `agentir_core_write` audit key, product-name strings). Then **0.4** (token prefix to `sift_svc_*`). NOTE: 0.3 touches live OpenSearch index/role identifiers — best validated on the (still-unprovisioned) fresh VM.
 
 ### Session 3 — 2026-06-01 — Phase 0.1 (package rename) + 0.2 env/path rename
 - Branch/commit: `revamp/spg-v1` @ `d292df9` — chain: `cc9765e` (stale-doc cleanup) → `4890f75` (0.1 rename) → `48ab494` (tracker SHA) → `d292df9`.
@@ -316,14 +367,14 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 - Live test on VM: none (fresh VM still not provisioned — open §2 item).
 - Spec changed?: `revamp-plan.html` NOT touched (it documents the rename intentionally — `ux-tasks.md` also still has one `AGENTIR_CASE_DIR` ref, left as a different project's historical doc). Docs/AGENTS updated for both renames.
 - Gotchas (now also in §4): (1) `uv sync` **without** `--extra full` prunes the venv to dev-only and deletes all workspace editable installs → always `uv sync --extra full`. (2) The two `configs/*.template` files are NOT matched by `--include='*.yaml'` etc. — must rename env vars in them explicitly or first-run rendering breaks. (3) The portal **built bundle** `packages/case-dashboard/src/case_dashboard/static/v2/assets/index-*.js` is a generated artifact that still contains old `AGENTIR_*` strings — needs a **frontend rebuild** on the VM (source `frontend/src` is already fixed).
-- Deferred (tracked under tasks 0.2 NOTE / 0.3 / 0.4 / Phase 4 so nothing is lost): token prefixes `agentir_svc_*`/`agentir_gw_*` → 0.4; `_agentir_context` → Phase 4; opensearch identifiers + `agentir_plugin` module + `agentir_home()` fn + config filenames + `agentir_core_write` audit key + product-name strings → 0.3.
+- Deferred (tracked under tasks 0.2 NOTE / 0.3 / 0.4 / Phase 4 so nothing is lost): token prefixes → 0.4; `_agentir_context` → Phase 4; opensearch identifiers + `agentir_plugin` module + `agentir_home()` fn + config filenames + `agentir_core_write` audit key + product-name strings → 0.3.
 - BLOCKERS: none.
 - NEXT: finish **0.2** — build the single `sift_core` cases-root resolver and route the scattered call-sites through it (see task 0.2 "STILL TODO"), then tick 0.2. Then **0.3** (service/identifier surface) and **0.4** (token prefix).
 
 ### Session 2 — 2026-06-01 — Repo setup + spec cleanup + tracker expansion
 - Branch/commit: `revamp/spg-v1` @ `b1593a2` (planning artifacts committed; `pre-revamp-v0` tagged at `main` 0c260ff; worktree at `../sift-mcps-main`).
 - Phase: pre-0 (repo setup done; Phase 0 deferred to next session per owner).
-- DONE: §2 repo setup boxes (commit, tag, branch, worktree). Locked forks **F-E** (set_case_metadata + reporting → portal-owned) and **no-back-compat** (clean cutover, fresh VM/case) + token-prefix rename `agentir_svc_*`→`sift_svc_*`. Cleaned `revamp-plan.html`: stripped all 29 `##NOTE##` markers (42 verified edits) and fixed deviations to match F-A..F-E (binary evidence gate §4.2, case_host_fix stays opensearch, grounding graceful-degradation note, audit relocation §8, R9 revised + R12/R13 added). Added tracker "What we're doing" mission + §5 add-on migration playbook; renumbered Phases/Invariants/Log → §6/§7/§8.
+- DONE: §2 repo setup boxes (commit, tag, branch, worktree). Locked forks **F-E** (set_case_metadata + reporting → portal-owned) and **no-back-compat** (clean cutover, fresh VM/case) + token-prefix rename to `sift_svc_*`. Cleaned `revamp-plan.html`: stripped all 29 `##NOTE##` markers (42 verified edits) and fixed deviations to match F-A..F-E (binary evidence gate §4.2, case_host_fix stays opensearch, grounding graceful-degradation note, audit relocation §8, R9 revised + R12/R13 added). Added tracker "What we're doing" mission + §5 add-on migration playbook; renumbered Phases/Invariants/Log → §6/§7/§8.
 - Tests: not run (docs + git only, no source change).
 - Live test on VM: none (fresh VM not yet provisioned).
 - Spec changed?: yes — `revamp-plan.html` fully reconciled with locked decisions; `revamp-tasks.md` expanded.

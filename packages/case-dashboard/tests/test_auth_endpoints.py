@@ -42,7 +42,7 @@ def _hash_password(password: str, salt_hex: str) -> str:
 def _derive_auth_key(stored_hash_hex: str) -> bytes:
     """Derive auth key exactly as the server does (R8)."""
     return hmac_mod.new(
-        bytes.fromhex(stored_hash_hex), b"agentir-auth-v1", hashlib.sha256
+        bytes.fromhex(stored_hash_hex), b"sift-auth-v1", hashlib.sha256
     ).digest()
 
 

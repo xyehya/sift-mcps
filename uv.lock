@@ -4348,7 +4348,9 @@ name = "sift-core"
 version = "0.1.0"
 source = { editable = "packages/sift-core" }
 dependencies = [
+    { name = "forensic-knowledge" },
     { name = "pyyaml" },
+    { name = "sift-common" },
 ]
 
 [package.optional-dependencies]
@@ -4362,9 +4364,11 @@ solana = [
 
 [package.metadata]
 requires-dist = [
+    { name = "forensic-knowledge", editable = "packages/forensic-knowledge" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "sift-common", editable = "packages/sift-common" },
     { name = "solders", marker = "extra == 'solana'", specifier = ">=0.21" },
 ]
 provides-extras = ["dev", "solana"]

@@ -167,7 +167,7 @@ def _to_unc_path(case_relative_path: str) -> str:
         except Exception:
             pass
 
-    # Try network.yaml for static IP (set by agentir join)
+    # Try network.yaml for static IP (set by sift join)
     if not sift_host:
         network_yaml = vdir / "network.yaml"
         if network_yaml.is_file():

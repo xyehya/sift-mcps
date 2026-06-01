@@ -20,13 +20,12 @@ import os
 import time
 from pathlib import Path
 
-from sift_core.evidence_chain import ChainStatus, chain_status
+from sift_core.evidence_chain import ChainStatus, chain_status, manifest_path as _manifest_path
 
 logger = logging.getLogger(__name__)
 
 _CACHE: dict[str, dict] = {}
 _TTL = 30.0  # seconds
-_MANIFEST_FILE = "evidence-manifest.json"
 
 PORTAL_REMEDIATION = (
     "Open the Examiner Portal and use the Evidence tab to review and seal "
@@ -58,7 +57,7 @@ def check_evidence_gate(case_dir_str: str | None) -> dict:
         }
 
     case_dir = Path(case_dir_str)
-    manifest_path = case_dir / _MANIFEST_FILE
+    manifest_path = _manifest_path(case_dir)
     now = time.monotonic()
     cached = _CACHE.get(case_dir_str)
 

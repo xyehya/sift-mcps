@@ -57,8 +57,8 @@ def _make_api_keys(examiner_token: str, agent_token: str) -> dict:
 @pytest.fixture()
 def tmp_gateway_config(tmp_path):
     """Write a minimal gateway.yaml to tmp_path and return its path."""
-    examiner_token = "agentir_gw_" + secrets.token_hex(24)
-    agent_token = "agentir_svc_" + secrets.token_hex(24)
+    examiner_token = "sift_gw_" + secrets.token_hex(24)
+    agent_token = "sift_svc_" + secrets.token_hex(24)
     api_keys = _make_api_keys(examiner_token, agent_token)
     config = {"api_keys": api_keys}
     cfg_path = tmp_path / "gateway.yaml"
@@ -141,8 +141,8 @@ class TestCreateToken:
         assert resp.status_code == 201
         data = resp.json()
         assert data["ok"] is True
-        assert data["token"].startswith("agentir_svc_")
-        assert len(data["token"].removeprefix("agentir_svc_")) == 48
+        assert data["token"].startswith("sift_svc_")
+        assert len(data["token"].removeprefix("sift_svc_")) == 48
 
     def test_create_persists_to_config(self, app_and_tokens):
         client, examiner_token, _, api_keys, cfg_path = app_and_tokens
@@ -164,7 +164,7 @@ class TestCreateToken:
     def test_create_requires_examiner_role(self, app_and_tokens):
         client, examiner_token, agent_token, api_keys, _ = app_and_tokens
         # Add a readonly token to api_keys
-        ro_token = "agentir_gw_" + secrets.token_hex(24)
+        ro_token = "sift_gw_" + secrets.token_hex(24)
         api_keys[ro_token] = {
             "token_id": "ro-test",
             "examiner": "reader",
@@ -225,7 +225,7 @@ class TestCreateToken:
 
     def test_create_no_config_path_returns_503(self, tmp_path):
         """When gateway_config_path is not set, create returns 503."""
-        examiner_token = "agentir_gw_" + secrets.token_hex(24)
+        examiner_token = "sift_gw_" + secrets.token_hex(24)
         api_keys = {
             examiner_token: {
                 "token_id": "e1",
@@ -320,7 +320,7 @@ class TestRevokeToken:
 
     def test_revoke_requires_examiner_role(self, app_and_tokens):
         client, examiner_token, _, api_keys, _ = app_and_tokens
-        ro_token = "agentir_gw_" + secrets.token_hex(24)
+        ro_token = "sift_gw_" + secrets.token_hex(24)
         api_keys[ro_token] = {
             "token_id": "ro-rev",
             "examiner": "reader",
@@ -365,7 +365,7 @@ class TestRotateToken:
         assert resp.status_code == 201
         data = resp.json()
         assert data["ok"] is True
-        assert data["token"].startswith("agentir_svc_")
+        assert data["token"].startswith("sift_svc_")
         assert data["token"] != old_raw
         assert data["revoked_token_id"] == token_id
 
@@ -431,7 +431,7 @@ class TestRotateToken:
 
     def test_rotate_requires_examiner_role(self, app_and_tokens):
         client, examiner_token, _, api_keys, _ = app_and_tokens
-        ro_token = "agentir_gw_" + secrets.token_hex(24)
+        ro_token = "sift_gw_" + secrets.token_hex(24)
         api_keys[ro_token] = {
             "token_id": "ro-rot",
             "examiner": "reader",

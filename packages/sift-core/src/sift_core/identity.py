@@ -85,6 +85,6 @@ def warn_if_unconfigured(identity: dict) -> None:
     if identity["examiner_source"] == "os_user":
         print(
             f"No examiner identity configured. Using OS user '{identity['os_user']}'.\n"
-            f"Run 'agentir config --examiner <name>' to set your identity.\n",
+            f"Run 'sift config --examiner <name>' to set your identity.\n",
             file=sys.stderr,
         )

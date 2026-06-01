@@ -76,7 +76,7 @@ fi
 if [ ! -f "$OVERRIDE_FILE" ]; then
     echo "Creating docker-compose.override.yml for snapshot volume..."
     cat > "$OVERRIDE_FILE" <<OVERRIDE
-# Snapshot volume mount for agentir backup/restore
+# Snapshot volume mount for SIFT backup/restore
 # Added by setup-opensearch.sh — do not modify the main docker-compose.yml
 services:
   opensearch:

@@ -19,6 +19,35 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
+_DEFAULT_STATE_DIR = "/var/lib/sift"
+
+
+def _state_root_for_case(case_dir: Path) -> Path:
+    configured = os.environ.get("SIFT_STATE_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    resolved = case_dir.resolve()
+    if str(resolved).startswith("/tmp/"):
+        return resolved.parent / ".sift-state" / resolved.name
+    return Path(_DEFAULT_STATE_DIR)
+
+
+def _case_id(case_dir: Path) -> str:
+    meta_path = case_dir / "CASE.yaml"
+    if meta_path.exists():
+        try:
+            import yaml
+
+            meta = yaml.safe_load(meta_path.read_text()) or {}
+            if meta.get("case_id"):
+                return str(meta["case_id"])
+        except Exception:
+            pass
+    return case_dir.name
+
+
+def _case_audit_dir(case_dir: Path) -> Path:
+    return _state_root_for_case(case_dir) / _case_id(case_dir) / "audit"
 
 
 def _sanitize_slug(raw: str) -> str:
@@ -74,7 +103,7 @@ class AuditWriter:
     def _get_audit_dir(self) -> Path | None:
         """Get the audit directory.
 
-        Priority: explicit audit_dir > SIFT_AUDIT_DIR > SIFT_CASE_DIR/audit/.
+        Priority: explicit audit_dir > SIFT_AUDIT_DIR > SIFT_STATE_DIR/<case>/audit.
         """
         if self._explicit_audit_dir:
             audit_dir = Path(self._explicit_audit_dir)
@@ -86,7 +115,7 @@ class AuditWriter:
             if case_dir:
                 path = Path(case_dir)
                 if path.is_dir() and (path / "CASE.yaml").exists():
-                    audit_dir = path / "audit"
+                    audit_dir = _case_audit_dir(path)
                 else:
                     case_dir = ""  # set-but-wrong, try legacy fallback
             if not case_dir:
@@ -106,7 +135,7 @@ class AuditWriter:
                         case_dir,
                     )
                     return None
-                audit_dir = path / "audit"
+                audit_dir = _case_audit_dir(path)
         try:
             audit_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:

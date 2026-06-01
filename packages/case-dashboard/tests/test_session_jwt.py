@@ -25,7 +25,7 @@ class TestCookieConstants:
     """Cookie attribute constants must match the plan spec exactly."""
 
     def test_cookie_name(self):
-        assert COOKIE_NAME == "agentir_session"
+        assert COOKIE_NAME == "sift_session"
 
     def test_cookie_path(self):
         assert COOKIE_PATH == "/portal"

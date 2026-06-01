@@ -53,12 +53,12 @@ _EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
 
 def derive_auth_key(stored_hash_hex: str) -> bytes:
     """Sub-key for login HMAC verification. Domain-separated from ledger signing."""
-    return hmac.new(bytes.fromhex(stored_hash_hex), b"agentir-auth-v1", hashlib.sha256).digest()
+    return hmac.new(bytes.fromhex(stored_hash_hex), b"sift-auth-v1", hashlib.sha256).digest()
 
 
 def derive_ledger_key(stored_hash_hex: str) -> bytes:
     """Sub-key for approval HMAC ledger. Domain-separated from login auth."""
-    return hmac.new(bytes.fromhex(stored_hash_hex), b"agentir-signing-v1", hashlib.sha256).digest()
+    return hmac.new(bytes.fromhex(stored_hash_hex), b"sift-signing-v1", hashlib.sha256).digest()
 
 
 def _validate_examiner_name(analyst: str) -> None:
@@ -120,7 +120,7 @@ def require_confirmation(config_path: Path, analyst: str) -> tuple[str, str | No
     """Require password. Returns ('password', raw_password) on success."""
     if not has_password(config_path, analyst):
         raise AuthError(
-            "No approval password configured. Run: agentir config --setup-password"
+            "No approval password configured. Run: sift config --setup-password"
         )
     _check_lockout(analyst)
     password = getpass_prompt("Enter password to confirm: ")

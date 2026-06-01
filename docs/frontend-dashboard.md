@@ -295,7 +295,7 @@ All requests go through three wrappers:
 - `apiPost(path, body)` — POST with JSON body
 - `apiDelete(path)` — DELETE
 
-**Auth:** `credentials: 'include'` sends the `agentir_session` cookie automatically. No manual token management in the frontend.
+**Auth:** `credentials: 'include'` sends the `sift_session` cookie automatically. No manual token management in the frontend.
 
 **Error handling:** 401 → fires `sift:unauthorized` event → `App.jsx` listens and redirects to login. Other errors throw with the response body text.
 

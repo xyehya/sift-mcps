@@ -1,1 +1,1 @@
-"""agentir report generation MCP server."""
+"""SIFT report generation MCP server."""

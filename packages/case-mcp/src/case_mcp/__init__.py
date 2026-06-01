@@ -1,1 +1,1 @@
-"""agentir case management MCP server."""
+"""SIFT case management MCP server."""

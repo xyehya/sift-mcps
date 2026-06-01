@@ -206,7 +206,7 @@ class TestEvtxIntegration:
         assert src["vhir.source_file"] == "/evidence/Security.evtx"
         assert src["vhir.ingest_audit_id"] == "audit-001"
 
-    def test_agentir_source_file_searchable(self, os_client, test_index):
+    def test_sift_source_file_searchable(self, os_client, test_index):
         """vhir.source_file is searchable via term query."""
         from opensearch_mcp.bulk import flush_bulk
 

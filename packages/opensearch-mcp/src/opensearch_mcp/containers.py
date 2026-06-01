@@ -147,7 +147,7 @@ def check_sudo() -> None:
     if result.returncode != 0:
         raise PermissionError(
             "Disk image mounting requires sudo.\n"
-            "Run with: sudo agentir ingest <path>\n"
+            "Run with: sudo sift ingest <path>\n"
             "Or configure passwordless sudo for mount/umount."
         )
 

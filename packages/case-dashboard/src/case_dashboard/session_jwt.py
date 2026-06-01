@@ -14,7 +14,7 @@ import json
 import secrets
 import time
 
-COOKIE_NAME = "agentir_session"
+COOKIE_NAME = "sift_session"
 COOKIE_PATH = "/portal"
 COOKIE_SAME_SITE = "strict"
 
@@ -109,4 +109,3 @@ def verify_jwt(token: str, secret: str) -> dict | None:
         return payload
     except Exception:
         return None
-
