@@ -209,10 +209,11 @@ Move duplicated case logic out of `forensic-mcp`/`case-mcp`/`report-mcp` into `s
 ### Phase 2 — In-process core tools (kills P1)
 Register the ~25 core tools *in-process* in the gateway instead of as stdio subprocesses.
 
-- [ ] **2.1 Register core tools in-process** (execute, case mgmt, evidence/CoC, findings/timeline/TODO, audit/reasoning/external-action).
+- [~] **2.1 Register core tools in-process** (execute, case mgmt, evidence/CoC, findings/timeline/TODO, audit/reasoning/external-action).
   - *How:* gateway exposes `sift_core` operations directly; retire `forensic-mcp`/`case-mcp`/`report-mcp` as separate subprocesses for the core slice.
   - *Why:* P1 — a core capability must not silently vanish because a subprocess failed to boot.
   - *Test:* with **all** add-on backends disabled, `tools/list` still shows the full core tool set; killing any add-on doesn't remove a core tool.
+  - *Partial:* added a direct `sift_core.agent_tools` registry (not a backend adapter) and wired the gateway to expose 18 in-process core tools: `case_status`, `case_file_structure`, `evidence_list`, `evidence_verify`, `record_action`, `log_reasoning`, `log_external_action`, `record_finding`, `record_timeline_event`, `list_existing_findings`, `query_case`, `workflow_status`, `manage_todo`, `run_command`, `list_available_tools`, `get_tool_help`, `check_tools`, `suggest_tools`. Execute support now lives under `sift_core.execute` with catalog/security policy, subprocess runner, discovery helpers, and FK enrichment/decay copied out of `sift-mcp` and import-rewritten to core. The gateway skips retired core backend config entries (`forensic-mcp`, `case-mcp`, `sift-mcp`, `report-mcp`) and the default `gateway.yaml.template` no longer starts them. Regression test proves missing core subprocess commands do not remove these tools and `run_command(["date"])` executes through `sift-core`. **Not done yet:** reporting still needs real migration into `sift_core`/portal ownership; no adapter/import shortcut is acceptable.
 - [ ] **2.2 Remove `export_bundle`/`import_bundle` from the agent surface (F-C); keep `sift_core` functions.**
   - *Test:* tools not in `tools/list`; `sift_core.export_bundle` still unit-tested.
 - [ ] **2.3 Make `set_case_metadata` + report generation portal-owned (F-E); remove from agent surface.**
@@ -300,6 +301,28 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 ## 8 · Session Log
 
 > Append newest at the top. Use the §3 template.
+
+### Session 10 — 2026-06-01 — Phase 2.1 execute + discovery/FK enrichment into core
+- Branch/commit: `revamp/spg-v1` @ working tree (not committed)
+- Phase: 2 — tasks touched: **2.1**. Box remains **partial** (`[~]`), not ticked.
+- DONE (boxes ticked this session): none.
+- What: migrated the execute slice out of `sift-mcp` into `sift_core.execute`: catalog/security policy, config/env helpers, executor, exceptions, discovery helpers, generic command runner, and FK response enrichment/decay. Registered `run_command`, `list_available_tools`, `get_tool_help`, `check_tools`, and `suggest_tools` as direct `sift-core` tools in `sift_core.agent_tools`; updated the in-process-core regression to prove `run_command(["date"])` works with missing retired core subprocesses. Added `sift-core` package-data inclusion for the execute catalog.
+- Tests: green — `packages/sift-core/` **228 passed**, `packages/sift-gateway/` **105 passed**, `packages/sift-mcp/` **4 passed**, focused in-process core regression **1 passed**, and `py_compile` over core execute/gateway modules. The `py_compile` command needed escalated execution because the sandbox could not create files in the `uv` cache.
+- Live test on VM: none.
+- Spec changed?: no.
+- BLOCKERS / open questions for next session: 2.1 still needs reporting ownership finished (`generate_report`/`set_case_metadata` portal-owned per F-E, agent surface adjusted; keep core functions where appropriate). Need decide whether to fully remove or leave legacy `sift-mcp` package after Phase 2/3 once sandbox executor lands.
+- NEXT: continue **2.1/2.3** with reporting and metadata portal ownership; keep `export_bundle`/`import_bundle` absent from agent surface for **2.2**.
+
+### Session 9 — 2026-06-01 — Phase 2.1 direct in-process core tools (partial)
+- Branch/commit: `revamp/spg-v1` @ working tree (not committed)
+- Phase: 2 — tasks touched: **2.1**. Box marked **partial** (`[~]`), not ticked.
+- DONE (boxes ticked this session): none.
+- What: read `revamp-plan.html` and corrected course away from a backend-adapter approach. Added direct `sift_core.agent_tools` registration/dispatch for 13 gateway-owned core tools (case/evidence/audit/findings/timeline/TODO/workflow), wired `sift_gateway.server.Gateway` to expose/call them in-process, skipped retired core backend config entries (`forensic-mcp`, `case-mcp`, `sift-mcp`, `report-mcp`), removed those four subprocess entries from `configs/gateway.yaml.template`, and added a regression proving core tools remain available when the old subprocess commands are missing.
+- Tests: green — `packages/sift-gateway/` **105 passed**, `packages/sift-core/` **228 passed**, `bash -n install.sh`, plus focused `py_compile`. A combined `pytest packages/sift-gateway/ packages/sift-core/` hit the repo's known duplicate `tests.*` collection issue; per-package runs are the valid gate.
+- Live test on VM: none.
+- Spec changed?: no.
+- BLOCKERS / open questions for next session: 2.1 is not complete until execute (`run_command`, discovery helpers, FK enrichment/decay) is migrated into `sift_core` properly and reporting is moved to its intended portal/core ownership. Do not shortcut through old MCP package imports or adapters.
+- NEXT: continue **2.1** by migrating execute support into `sift_core` and registering `run_command`, `list_available_tools`, `get_tool_help`, `check_tools`, `suggest_tools` directly from core.
 
 ### Session 8 — 2026-06-01 — Finish Phase 1 core consolidation + F-B records relocation
 - Branch/commit: `revamp/spg-v1` @ working tree (not committed)

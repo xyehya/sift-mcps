@@ -4383,6 +4383,7 @@ dependencies = [
     { name = "mcp" },
     { name = "pyyaml" },
     { name = "sift-common" },
+    { name = "sift-core" },
     { name = "starlette" },
     { name = "uvicorn" },
 ]
@@ -4404,6 +4405,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sift-common", editable = "packages/sift-common" },
+    { name = "sift-core", editable = "packages/sift-core" },
     { name = "starlette", specifier = ">=0.49.1" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]

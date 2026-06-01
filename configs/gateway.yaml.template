@@ -61,30 +61,6 @@ enrichment:
   root: "/var/lib/sift/enrichment"
 
 backends:
-  forensic-mcp:
-    enabled: true
-    type: stdio
-    command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "forensic-mcp"]
-
-  case-mcp:
-    enabled: true
-    type: stdio
-    command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "case-mcp"]
-
-  sift-mcp:
-    enabled: true
-    type: stdio
-    command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "sift-mcp"]
-
-  report-mcp:
-    enabled: true
-    type: stdio
-    command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "report-mcp"]
-
   forensic-rag-mcp:
     enabled: ${SIFT_RAG_ENABLED}
     type: stdio

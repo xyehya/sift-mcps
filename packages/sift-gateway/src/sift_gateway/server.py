@@ -7,8 +7,14 @@ import time
 from pathlib import Path
 
 import anyio
-from mcp.types import Tool
+from mcp.types import TextContent, Tool
 from sift_common.audit import AuditWriter
+from sift_core.agent_tools import (
+    accepts_analyst_override as core_accepts_analyst_override,
+    call_core_tool,
+    core_tool_names,
+    core_tool_specs,
+)
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
@@ -107,6 +113,11 @@ from sift_gateway.rest import rest_routes
 logger = logging.getLogger(__name__)
 
 
+_RETIRED_CORE_BACKENDS = frozenset(
+    {"forensic-mcp", "case-mcp", "sift-mcp", "report-mcp"}
+)
+
+
 class Gateway:
     """Aggregates multiple MCP backends behind a single HTTP service.
 
@@ -128,6 +139,12 @@ class Gateway:
         # Create backend instances from config
         backends_config = config.get("backends", {})
         for name, backend_conf in backends_config.items():
+            if name in _RETIRED_CORE_BACKENDS:
+                logger.info(
+                    "Core backend %s is retired; exposing its core tools in-process",
+                    name,
+                )
+                continue
             if not backend_conf.get("enabled", True):
                 logger.info("Backend %s is disabled, skipping", name)
                 continue
@@ -280,9 +297,10 @@ class Gateway:
         self._tool_cache = new_cache
 
         logger.info(
-            "Tool map built: %d tools across %d backends",
+            "Tool map built: %d add-on tools across %d add-on backends; %d core tools in-process",
             len(self._tool_map),
             len(self.backends),
+            len(core_tool_names()),
         )
 
     async def ensure_backend_started(self, backend_name: str) -> None:
@@ -430,7 +448,9 @@ class Gateway:
 
     async def list_tools(self) -> dict[str, str]:
         """Return the current tool map (tool_name -> backend_name)."""
-        return dict(self._tool_map)
+        result = {name: "sift-core" for name in core_tool_names()}
+        result.update(self._tool_map)
+        return result
 
     async def get_tools_list(self) -> list[Tool]:
         """Return MCP ``Tool`` objects for all aggregated tools.
@@ -450,6 +470,15 @@ class Gateway:
                 logger.error("get_tools_list: backend error: %s", exc)
 
         tools: list[Tool] = []
+        for spec in core_tool_specs():
+            tools.append(
+                Tool(
+                    name=spec.name,
+                    description=spec.description,
+                    inputSchema=spec.input_schema,
+                    annotations={"readOnlyHint": True} if spec.read_only else None,
+                )
+            )
         for mapped_name in self._tool_map:
             # Strip prefix to find the original tool object
             if "__" in mapped_name:
@@ -504,6 +533,24 @@ class Gateway:
             KeyError: If the tool name is not in the tool map.
             RuntimeError: If the backend is not started.
         """
+        if name in core_tool_names():
+            arguments = dict(arguments or {})
+            if examiner and core_accepts_analyst_override(name):
+                arguments["analyst_override"] = examiner
+            logger.info(
+                "Routing tool %s -> in-process sift-core (examiner=%s)",
+                name,
+                examiner,
+            )
+            text = await asyncio.to_thread(
+                call_core_tool,
+                name,
+                arguments,
+                examiner=examiner,
+                audit=self._audit,
+            )
+            return [TextContent(type="text", text=text)]
+
         if name not in self._tool_map:
             raise KeyError(f"Unknown tool: {name}")
 
