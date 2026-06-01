@@ -2,16 +2,16 @@
 #   ./install.sh --enable-opencti-feeds
 #
 # These containers fetch public CTI sources into the local OpenCTI platform.
-# They share the existing agentir-net network and authenticate with the
+# They share the existing sift-net network and authenticate with the
 # installer-generated OpenCTI admin token.
 
 services:
   connector-mitre:
     image: opencti/connector-mitre:latest
-    container_name: agentir-opencti-connector-mitre
+    container_name: sift-opencti-connector-mitre
     restart: unless-stopped
     networks:
-      - agentir-net
+      - sift-net
     environment:
       - OPENCTI_URL=http://opencti:8080
       - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
@@ -23,10 +23,10 @@ services:
 
   connector-cisa-known-exploited-vulnerabilities:
     image: opencti/connector-cisa-known-exploited-vulnerabilities:latest
-    container_name: agentir-opencti-connector-cisa-kev
+    container_name: sift-opencti-connector-cisa-kev
     restart: unless-stopped
     networks:
-      - agentir-net
+      - sift-net
     environment:
       - OPENCTI_URL=http://opencti:8080
       - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
@@ -41,6 +41,6 @@ services:
       - CISA_TLP=TLP:CLEAR
 
 networks:
-  agentir-net:
+  sift-net:
     external: true
-    name: agentir-net
+    name: sift-net

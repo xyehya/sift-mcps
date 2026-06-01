@@ -1,7 +1,7 @@
 services:
   opensearch:
     image: opensearchproject/opensearch:3.5.0
-    container_name: agentir-opensearch
+    container_name: sift-opensearch
     environment:
       - discovery.type=single-node
       - OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g

@@ -234,7 +234,7 @@ def run_and_ingest(
         f"-{cfg.index_suffix}"
         f"-{_sanitize_index_component(hostname)}"
     )
-    tmpdir = tempfile.mkdtemp(prefix=f"agentir-{tool_name}-")
+    tmpdir = tempfile.mkdtemp(prefix=f"sift-{tool_name}-")
     natural_key = natural_key_override if natural_key_override is not None else cfg.natural_key
 
     try:

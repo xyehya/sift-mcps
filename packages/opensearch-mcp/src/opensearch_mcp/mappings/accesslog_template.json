@@ -2,7 +2,7 @@
   "index_patterns": ["case-*-accesslog-*"],
   "template": {
     "aliases": {
-      "agentir-sigma-web": {}
+      "sift-sigma-web": {}
     },
     "settings": {
       "index.number_of_replicas": 0

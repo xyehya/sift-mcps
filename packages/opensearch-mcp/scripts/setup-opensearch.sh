@@ -120,7 +120,7 @@ done
 if [ "$STATUS" != "green" ] && [ "$STATUS" != "yellow" ]; then
     echo ""
     echo "Error: OpenSearch not ready after 180 seconds (status: $STATUS)."
-    echo "Check: docker logs agentir-opensearch"
+    echo "Check: docker logs sift-opensearch"
     exit 1
 fi
 echo "Cluster status: $STATUS"
@@ -141,7 +141,7 @@ echo "  max_shards_per_node: 3000"
 
 # --- 5. Index templates ---
 #
-# Removed 2026-04-22: template + agentir-single-node catch-all installs
+# Removed 2026-04-22: template + sift-single-node catch-all installs
 # previously done here are now handled by
 # src/opensearch_mcp/mappings/__init__.py (ensure_winlog_pipeline +
 # install_all_templates) at every MCP startup and ingest pre-flight.
@@ -151,7 +151,7 @@ echo "  max_shards_per_node: 3000"
 # vice versa) left one installer in the wrong state.
 #
 # Every case-* template now declares index.number_of_replicas: 0
-# explicitly, so the priority-1 agentir-single-node catch-all that used
+# explicitly, so the priority-1 sift-single-node catch-all that used
 # to live here is obsolete.
 echo "Index templates: installed by opensearch-mcp at MCP startup (see ensure_winlog_pipeline)."
 
@@ -195,7 +195,7 @@ fi
 # Create GeoIP ingest pipeline with on_failure handler
 echo "Creating GeoIP ingest pipeline..."
 curl -sk -u "admin:$OS_PASSWORD" \
-    -X PUT "$OS_URL/_ingest/pipeline/agentir-geoip" \
+    -X PUT "$OS_URL/_ingest/pipeline/sift-geoip" \
     -H "Content-Type: application/json" \
     -d '{
   "description": "GeoIP enrichment for source.ip",
@@ -220,7 +220,7 @@ for PATTERN in "case-*-evtx-*" "case-*-iis-*" "case-*-httperr-*" "case-*-firewal
     curl -sk -u "admin:$OS_PASSWORD" \
         -X PUT "$OS_URL/$PATTERN/_settings" \
         -H "Content-Type: application/json" \
-        -d '{"index.default_pipeline":"agentir-geoip"}' >/dev/null 2>&1 || true
+        -d '{"index.default_pipeline":"sift-geoip"}' >/dev/null 2>&1 || true
 done
 echo "  Applied GeoIP pipeline to IP-bearing indices"
 
@@ -297,10 +297,10 @@ except Exception:
 # Detectors on 3.x require aliases to exist (backed by at least one index).
 # Templates auto-attach aliases when matching indices are created.
 _SEEDS = {
-    'case-seed-evtx-init': 'agentir-sigma-windows',
-    'case-seed-ssh-init': 'agentir-sigma-linux',
-    'case-seed-accesslog-init': 'agentir-sigma-web',
-    'case-seed-json-init': 'agentir-sigma-network',
+    'case-seed-evtx-init': 'sift-sigma-windows',
+    'case-seed-ssh-init': 'sift-sigma-linux',
+    'case-seed-accesslog-init': 'sift-sigma-web',
+    'case-seed-json-init': 'sift-sigma-network',
 }
 for seed_idx, alias in _SEEDS.items():
     try:
@@ -321,7 +321,7 @@ print(f'  Detection via Hayabusa during evtx ingest (if installed)')
 
 # Delete any existing detectors (produce 0 findings, waste CPU)
 for det_name in list(existing_detectors):
-    if det_name.startswith('agentir-'):
+    if det_name.startswith('sift-'):
         try:
             for hit in existing.get('hits', {}).get('hits', []):
                 if hit.get('_source', {}).get('name') == det_name:
@@ -338,7 +338,7 @@ try:
                     body=json.dumps({"query": {"match_all": {}}, "size": 50}))
     for hit in monitors.get('hits', {}).get('hits', []):
         name = hit.get('_source', {}).get('name', '')
-        if name.startswith('agentir-') or name.startswith('sigma_'):
+        if name.startswith('sift-') or name.startswith('sigma_'):
             mon_id = hit['_id']
             api('DELETE', f'/_plugins/_alerting/monitors/{mon_id}')
             print(f'  Removed orphaned monitor: {name}')
@@ -347,10 +347,10 @@ except Exception:
 
 # Add aliases to existing indices (upgrade from pre-alias versions)
 _ALIAS_PATTERNS = {
-    'agentir-sigma-windows': 'case-*-evtx-*',
-    'agentir-sigma-linux': 'case-*-ssh-*',
-    'agentir-sigma-web': 'case-*-accesslog-*',
-    'agentir-sigma-network': 'case-*-json-*',
+    'sift-sigma-windows': 'case-*-evtx-*',
+    'sift-sigma-linux': 'case-*-ssh-*',
+    'sift-sigma-web': 'case-*-accesslog-*',
+    'sift-sigma-network': 'case-*-json-*',
 }
 for alias, pattern in _ALIAS_PATTERNS.items():
     try:
@@ -404,9 +404,9 @@ else
 fi
 
 # --- 10. Restart gateway if running ---
-if systemctl --user is-active --quiet agentir-gateway 2>/dev/null; then
+if systemctl --user is-active --quiet sift-gateway 2>/dev/null; then
     echo "Restarting gateway to pick up opensearch-mcp..."
-    systemctl --user restart agentir-gateway
+    systemctl --user restart sift-gateway
     echo "  Gateway restarted."
 elif pgrep -f "sift.gateway" >/dev/null 2>&1; then
     echo "Note: Gateway is running but not via systemd."

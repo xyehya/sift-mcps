@@ -74,7 +74,7 @@ class TestSetupScript:
         assert "ip2geo/datasource/maxmind-city" in script
 
     def test_geoip_pipeline_created(self, script):
-        assert "_ingest/pipeline/agentir-geoip" in script
+        assert "_ingest/pipeline/sift-geoip" in script
 
     def test_geoip_pipeline_has_on_failure(self, script):
         assert "on_failure" in script
@@ -108,7 +108,7 @@ class TestSetupScript:
         from opensearch_mcp.mappings import _TEMPLATES_REGISTRY
 
         names = {n for n, _ in _TEMPLATES_REGISTRY}
-        assert "agentir-hayabusa" in names
+        assert "sift-hayabusa" in names
 
     def test_no_hardcoded_password(self, script):
         """Password comes from $OS_PASSWORD variable, never hardcoded."""
@@ -121,13 +121,13 @@ class TestSetupScript:
 
     def test_template_registration_before_geoip(self, script):
         """Template must be registered before GeoIP pipeline."""
-        template_pos = script.find("index_template/agentir-evtx-ecs")
-        geoip_pos = script.find("_ingest/pipeline/agentir-geoip")
+        template_pos = script.find("index_template/sift-evtx-ecs")
+        geoip_pos = script.find("_ingest/pipeline/sift-geoip")
         assert template_pos < geoip_pos, "Template must be registered before GeoIP pipeline"
 
     def test_geoip_before_detector(self, script):
         """GeoIP pipeline setup before SA detector (ordering)."""
-        geoip_pos = script.find("_ingest/pipeline/agentir-geoip")
+        geoip_pos = script.find("_ingest/pipeline/sift-geoip")
         detector_pos = script.find("_security_analytics/detectors")
         assert geoip_pos < detector_pos
 
@@ -146,7 +146,7 @@ class TestTemplateCoherence:
             "default_pipeline decoupled from template — applied in setup script"
         )
         script = _SETUP_SCRIPT.read_text()
-        assert "agentir-geoip" in script
+        assert "sift-geoip" in script
 
     def test_geo_fields_in_template(self):
         """All GeoIP output fields must have explicit mappings to avoid

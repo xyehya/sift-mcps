@@ -1,7 +1,7 @@
 services:
   opensearch:
     image: opensearchproject/opensearch:2.18.0
-    container_name: agentir-opensearch
+    container_name: sift-opensearch
     environment:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
@@ -11,11 +11,11 @@ services:
       - thread_pool.search.queue_size=5000
     volumes:
       - opensearch-data:/usr/share/opensearch/data
-      - /var/lib/agentir/snapshots:/usr/share/opensearch/snapshots
+      - /var/lib/sift/snapshots:/usr/share/opensearch/snapshots
     ports:
       - "127.0.0.1:9200:9200"
     networks:
-      - agentir-net
+      - sift-net
     ulimits:
       memlock:
         soft: -1
@@ -38,5 +38,5 @@ volumes:
   opensearch-data:
 
 networks:
-  agentir-net:
-    name: agentir-net
+  sift-net:
+    name: sift-net

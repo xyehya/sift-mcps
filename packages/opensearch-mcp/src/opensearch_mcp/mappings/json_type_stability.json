@@ -68,7 +68,7 @@
     }
   },
   "_meta": {
-    "description": "Type-unstable JSON column floor (mode 2 of velociraptor-parser-research 2026-04-24). Composed into agentir-json + agentir-delimited. See specs/opensearch-dynamic-template-type-stability-2026-04-24.md Rev 2.",
+    "description": "Type-unstable JSON column floor (mode 2 of velociraptor-parser-research 2026-04-24). Composed into sift-json + sift-delimited. See specs/opensearch-dynamic-template-type-stability-2026-04-24.md Rev 2.",
     "version": 1
   }
 }

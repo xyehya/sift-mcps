@@ -4,7 +4,7 @@
   ],
   "template": {
     "aliases": {
-      "agentir-sigma-windows": {}
+      "sift-sigma-windows": {}
     },
     "settings": {
       "index.mapping.total_fields.limit": 5000,

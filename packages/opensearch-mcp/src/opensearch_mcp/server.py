@@ -463,7 +463,7 @@ def _os_call(fn, *args, **kwargs):
         raise RuntimeError(
             "OpenSearch connection temporarily lost — client reset. "
             "Retry your query. If it persists: "
-            "docker ps | grep agentir-opensearch"
+            "docker ps | grep sift-opensearch"
         ) from e
     except AuthorizationException as e:
         _client = None
@@ -3023,7 +3023,7 @@ def _spawn_ingest(cmd, env, stdout, run_id):
         "--scope",
         "--property=MemoryMax=8G",
         "--property=MemoryHigh=6G",
-        f"--unit=agentir-ingest-{run_id[:12]}",
+        f"--unit=sift-ingest-{run_id[:12]}",
     ] + cmd
 
     try:
@@ -3039,7 +3039,7 @@ def _spawn_ingest(cmd, env, stdout, run_id):
         if proc.poll() is not None and proc.returncode != 0:
             # Clean up failed scope unit
             _sp.run(
-                ["systemctl", "--user", "reset-failed", f"agentir-ingest-{run_id[:12]}"],
+                ["systemctl", "--user", "reset-failed", f"sift-ingest-{run_id[:12]}"],
                 capture_output=True,
             )
             proc = _sp.Popen(

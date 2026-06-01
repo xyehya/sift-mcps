@@ -1,6 +1,6 @@
 {
   "index_patterns": ["case-*-delim-*", "case-*-zeek-*", "case-*-bodyfile-*"],
-  "composed_of": ["agentir-json-type-stability"],
+  "composed_of": ["sift-json-type-stability"],
   "template": {
     "settings": {
       "index.mapping.total_fields.limit": 1000,

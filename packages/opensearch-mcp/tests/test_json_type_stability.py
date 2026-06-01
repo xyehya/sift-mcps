@@ -1,4 +1,4 @@
-"""Tests for agentir-json-type-stability component template.
+"""Tests for sift-json-type-stability component template.
 
 Spec: `specs/opensearch-dynamic-template-type-stability-2026-04-24.md` Rev 2.
 
@@ -8,7 +8,7 @@ install-install helper against a fake client). This file pins:
 
 - Template JSON is well-formed, has the expected dynamic_templates shape.
 - Install helper PUTs component templates BEFORE composable templates.
-- `agentir-json` and `agentir-delimited` composables reference the component
+- `sift-json` and `sift-delimited` composables reference the component
   via `composed_of`.
 - Catchall keyword has NO `.text` subfield (CR's `.text` drop).
 - Priority + total_fields.limit match spec (10000, no per-doc priority
@@ -133,11 +133,11 @@ class TestKeywordPaths:
 class TestComposedOfReferences:
     def test_json_template_composes_in_type_stability(self):
         tpl = json.loads(_JSON_TEMPLATE.read_text())
-        assert "agentir-json-type-stability" in tpl.get("composed_of", [])
+        assert "sift-json-type-stability" in tpl.get("composed_of", [])
 
     def test_delimited_template_composes_in_type_stability(self):
         tpl = json.loads(_DELIMITED_TEMPLATE.read_text())
-        assert "agentir-json-type-stability" in tpl.get("composed_of", [])
+        assert "sift-json-type-stability" in tpl.get("composed_of", [])
 
 
 # ---------------------------------------------------------------------------
@@ -155,24 +155,24 @@ class TestInstallComponentTemplate:
 
         result = install_component_templates(client)
 
-        assert "agentir-json-type-stability" in result["installed"]
+        assert "sift-json-type-stability" in result["installed"]
         assert result["failed"] == []
         # The PUT call landed with the right name and a valid body.
         call = client.cluster.put_component_template.call_args
-        assert call.kwargs["name"] == "agentir-json-type-stability"
+        assert call.kwargs["name"] == "sift-json-type-stability"
         body = call.kwargs["body"]
         assert "template" in body
         assert body["template"]["settings"]["index.mapping.total_fields.limit"] == 10000
 
     @pytest.mark.parametrize(
         "composable_name",
-        ["agentir-json", "agentir-delimited"],
+        ["sift-json", "sift-delimited"],
         ids=["json", "delimited"],
     )
     def test_components_installed_before_composables(self, composable_name):
         """Component template PUT must happen BEFORE any composable that
         references it via composed_of. Parametrized over every composable
-        that wires agentir-json-type-stability in, so adding a new one
+        that wires sift-json-type-stability in, so adding a new one
         automatically extends the ordering guard.
         """
         from opensearch_mcp.mappings import install_all_templates
@@ -205,7 +205,7 @@ class TestInstallComponentTemplate:
 
         # Result surface includes the component sub-dict
         assert "components" in result
-        assert "agentir-json-type-stability" in result["components"]["installed"]
+        assert "sift-json-type-stability" in result["components"]["installed"]
 
     def test_install_failure_is_collected_not_raised(self):
         """A failing component install must not crash the whole batch."""
@@ -219,7 +219,7 @@ class TestInstallComponentTemplate:
 
         assert result["installed"] == []
         assert len(result["failed"]) == 1
-        assert result["failed"][0]["template"] == "agentir-json-type-stability"
+        assert result["failed"][0]["template"] == "sift-json-type-stability"
         assert "cluster 503" in result["failed"][0]["error"]
 
 
@@ -271,7 +271,7 @@ class TestTypeStabilityClusterRoundtrip:
 
     @pytest.fixture
     def test_json_index(self, os_client):
-        """Create a case-*-json-* index (picks up agentir-json + composed
+        """Create a case-*-json-* index (picks up sift-json + composed
         type-stability) and clean up after."""
         name = f"case-pytest-{uuid.uuid4().hex[:8]}-json-typestab"
         os_client.indices.create(index=name)

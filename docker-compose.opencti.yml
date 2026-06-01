@@ -1,7 +1,7 @@
 # OpenCTI stack — optional, enabled via: ./install.sh --enable-opencti
 #
-# Uses the shared agentir-net network so it can reach agentir-opensearch
-# by service name. OpenCTI's own data store IS our agentir-opensearch
+# Uses the shared sift-net network so it can reach sift-opensearch
+# by service name. OpenCTI's own data store IS our sift-opensearch
 # instance (index prefix "opencti" — no collision with "case-*" forensic
 # indices). See SIFT-MCPS-PLAN.md §OpenCTI Integration for analysis.
 #
@@ -14,10 +14,10 @@
 services:
   redis:
     image: redis:7.4
-    container_name: agentir-opencti-redis
+    container_name: sift-opencti-redis
     restart: unless-stopped
     networks:
-      - agentir-net
+      - sift-net
     volumes:
       - opencti-redis:/data
     healthcheck:
@@ -28,10 +28,10 @@ services:
 
   rabbitmq:
     image: rabbitmq:4.0-management
-    container_name: agentir-opencti-rabbitmq
+    container_name: sift-opencti-rabbitmq
     restart: unless-stopped
     networks:
-      - agentir-net
+      - sift-net
     volumes:
       - opencti-rabbitmq:/var/lib/rabbitmq
     environment:
@@ -45,10 +45,10 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: agentir-opencti-minio
+    container_name: sift-opencti-minio
     restart: unless-stopped
     networks:
-      - agentir-net
+      - sift-net
     volumes:
       - opencti-minio:/data
     environment:
@@ -63,23 +63,23 @@ services:
 
   opencti:
     image: opencti/platform:latest
-    container_name: agentir-opencti
+    container_name: sift-opencti
     restart: unless-stopped
     networks:
-      - agentir-net
+      - sift-net
     ports:
       - "127.0.0.1:8080:8080"
     environment:
       - NODE_OPTIONS=--max-old-space-size=4096
       - APP__PORT=8080
       - APP__BASE_URL=http://localhost:8080
-      - APP__ADMIN__EMAIL=admin@agentir.local
+      - APP__ADMIN__EMAIL=admin@sift.local
       - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_TOKEN}
       - APP__ADMIN__TOKEN=${OPENCTI_ADMIN_TOKEN}
       - APP__ENCRYPTION_KEY=${OPENCTI_ENCRYPTION_KEY}
       - APP__HEALTH_ACCESS_KEY=${OPENCTI_HEALTH_ACCESS_KEY}
       - APP__APP_LOGS__LOGS_LEVEL=error
-      # Search backend — our shared agentir-opensearch instance
+      # Search backend — our shared sift-opensearch instance
       - ELASTICSEARCH__URL=http://opensearch:9200
       - ELASTICSEARCH__ENGINE_SELECTOR=opensearch
       - ELASTICSEARCH__INDEX_PREFIX=opencti
@@ -121,7 +121,7 @@ services:
     image: opencti/worker:latest
     restart: unless-stopped
     networks:
-      - agentir-net
+      - sift-net
     environment:
       - OPENCTI_URL=http://opencti:8080
       - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
@@ -138,6 +138,6 @@ volumes:
   opencti-minio:
 
 networks:
-  agentir-net:
+  sift-net:
     external: true
-    name: agentir-net
+    name: sift-net

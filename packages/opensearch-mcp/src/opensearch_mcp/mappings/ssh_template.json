@@ -2,7 +2,7 @@
   "index_patterns": ["case-*-ssh-*"],
   "template": {
     "aliases": {
-      "agentir-sigma-linux": {}
+      "sift-sigma-linux": {}
     },
     "settings": {
       "index.number_of_replicas": 0

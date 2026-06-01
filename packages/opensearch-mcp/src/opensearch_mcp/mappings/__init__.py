@@ -25,17 +25,17 @@ _EVTX_TEMPLATE_FILE = _MAPPINGS_DIR / "evtx_ecs_template.json"
 # OpenSearch rejects composable PUT if referenced components don't yet
 # exist. See install_component_templates() below.
 _COMPONENT_TEMPLATES_REGISTRY: list[tuple[str, str]] = [
-    ("agentir-json-type-stability", "json_type_stability.json"),
+    ("sift-json-type-stability", "json_type_stability.json"),
 ]
 
 _PIPELINE_ID = "winlog_data_normalize_v1"
 # Canonical evtx template name. scripts/setup-opensearch.sh uses the
-# same name. Earlier versions installed under "agentir-evtx"; that legacy
+# same name. Earlier versions installed under "sift-evtx"; that legacy
 # name is DELETEd in ensure_winlog_pipeline so upgraded clusters don't
 # retain two templates matching case-*-evtx-* at identical priority
 # (undefined-winner bug).
-_TEMPLATE_NAME = "agentir-evtx-ecs"
-_LEGACY_TEMPLATE_NAME = "agentir-evtx"
+_TEMPLATE_NAME = "sift-evtx-ecs"
+_LEGACY_TEMPLATE_NAME = "sift-evtx"
 _TEMPLATE_PATTERN = "case-*-evtx-*"
 _TEMPLATE_PRIORITY = 100
 
@@ -50,20 +50,20 @@ _TEMPLATE_PRIORITY = 100
 # upgraded deployments (confirmed by Test agent 2026-04-21: delimited/json/
 # vol3 template edits were dead code without this installer).
 _TEMPLATES_REGISTRY: list[tuple[str, str]] = [
-    ("agentir-csv", "csv_template.json"),
-    ("agentir-prefetch", "prefetch_template.json"),
-    ("agentir-srum", "srum_template.json"),
-    ("agentir-transcripts", "transcripts_template.json"),
-    ("agentir-w3c", "w3c_template.json"),
-    ("agentir-defender", "defender_template.json"),
-    ("agentir-tasks", "tasks_template.json"),
-    ("agentir-wer", "wer_template.json"),
-    ("agentir-ssh", "ssh_template.json"),
-    ("agentir-vol3", "vol3_template.json"),
-    ("agentir-json", "json_template.json"),
-    ("agentir-delimited", "delimited_template.json"),
-    ("agentir-accesslog", "accesslog_template.json"),
-    ("agentir-hayabusa", "hayabusa_template.json"),
+    ("sift-csv", "csv_template.json"),
+    ("sift-prefetch", "prefetch_template.json"),
+    ("sift-srum", "srum_template.json"),
+    ("sift-transcripts", "transcripts_template.json"),
+    ("sift-w3c", "w3c_template.json"),
+    ("sift-defender", "defender_template.json"),
+    ("sift-tasks", "tasks_template.json"),
+    ("sift-wer", "wer_template.json"),
+    ("sift-ssh", "ssh_template.json"),
+    ("sift-vol3", "vol3_template.json"),
+    ("sift-json", "json_template.json"),
+    ("sift-delimited", "delimited_template.json"),
+    ("sift-accesslog", "accesslog_template.json"),
+    ("sift-hayabusa", "hayabusa_template.json"),
 ]
 
 
@@ -74,7 +74,7 @@ def _load_json(path: Path) -> dict:
 def install_component_templates(client) -> dict[str, Any]:
     """Idempotent install of shared component templates.
 
-    Component templates (agentir-json-type-stability today) are composed
+    Component templates (sift-json-type-stability today) are composed
     into composable index templates via `composed_of`. They must exist
     on the cluster BEFORE any composable template PUT that references
     them — OpenSearch rejects the composable otherwise. This function

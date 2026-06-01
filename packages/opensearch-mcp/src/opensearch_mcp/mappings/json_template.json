@@ -1,9 +1,9 @@
 {
   "index_patterns": ["case-*-json-*"],
-  "composed_of": ["agentir-json-type-stability"],
+  "composed_of": ["sift-json-type-stability"],
   "template": {
     "aliases": {
-      "agentir-sigma-network": {}
+      "sift-sigma-network": {}
     },
     "settings": {
       "index.mapping.total_fields.limit": 1000,

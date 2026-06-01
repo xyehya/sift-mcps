@@ -154,7 +154,7 @@ def parse_prefetch(
 
     Returns (count_indexed, count_bulk_failed).
     """
-    tmpdir = Path(tempfile.mkdtemp(prefix="agentir-plaso-prefetch-"))
+    tmpdir = Path(tempfile.mkdtemp(prefix="sift-plaso-prefetch-"))
     try:
         jsonl_file = _run_plaso("prefetch", prefetch_dir, tmpdir)
         return _ingest_jsonl(
@@ -190,7 +190,7 @@ def parse_srum(
 
     Returns (count_indexed, count_bulk_failed).
     """
-    tmpdir = Path(tempfile.mkdtemp(prefix="agentir-plaso-srum-"))
+    tmpdir = Path(tempfile.mkdtemp(prefix="sift-plaso-srum-"))
     try:
         jsonl_file = _run_plaso("esedb/srum", srum_path, tmpdir)
         return _ingest_jsonl(

@@ -61,15 +61,15 @@ class TestDocId:
 
     def test_volatile_keys_excluded_from_hash(self):
         """Rows differing only in volatile keys produce the same doc ID."""
-        row1 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/agentir-abc/out.csv"}
-        row2 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/agentir-xyz/out.csv"}
+        row1 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/sift-abc/out.csv"}
+        row2 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/sift-xyz/out.csv"}
         vk = {"PluginDetailFile"}
         assert _doc_id("idx", row1, volatile_keys=vk) == _doc_id("idx", row2, volatile_keys=vk)
 
     def test_without_volatile_keys_different_hash(self):
         """Without volatile_keys param, differing PluginDetailFile produces different IDs."""
-        row1 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/agentir-abc/out.csv"}
-        row2 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/agentir-xyz/out.csv"}
+        row1 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/sift-abc/out.csv"}
+        row2 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/sift-xyz/out.csv"}
         assert _doc_id("idx", row1) != _doc_id("idx", row2)
 
     def test_volatile_keys_multiple_fields(self):
@@ -194,8 +194,8 @@ class TestVolatileKeysIngest:
         when volatile_keys is applied (as ingest_csv does)."""
         from opensearch_mcp.parse_csv import _VOLATILE_KEYS
 
-        row1 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/agentir-aaa/out.csv"}
-        row2 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/agentir-bbb/out.csv"}
+        row1 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/sift-aaa/out.csv"}
+        row2 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/sift-bbb/out.csv"}
         id1 = _doc_id("idx", row1, volatile_keys=_VOLATILE_KEYS)
         id2 = _doc_id("idx", row2, volatile_keys=_VOLATILE_KEYS)
         assert id1 == id2
@@ -204,8 +204,8 @@ class TestVolatileKeysIngest:
         """Rows with different actual content produce different _doc_id."""
         from opensearch_mcp.parse_csv import _VOLATILE_KEYS
 
-        row1 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/agentir-aaa/out.csv"}
-        row2 = {"Path": "C:\\good.exe", "PluginDetailFile": "/tmp/agentir-aaa/out.csv"}
+        row1 = {"Path": "C:\\evil.exe", "PluginDetailFile": "/tmp/sift-aaa/out.csv"}
+        row2 = {"Path": "C:\\good.exe", "PluginDetailFile": "/tmp/sift-aaa/out.csv"}
         id1 = _doc_id("idx", row1, volatile_keys=_VOLATILE_KEYS)
         id2 = _doc_id("idx", row2, volatile_keys=_VOLATILE_KEYS)
         assert id1 != id2

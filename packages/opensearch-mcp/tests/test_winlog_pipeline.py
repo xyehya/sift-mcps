@@ -405,20 +405,20 @@ class TestInstallAllTemplates:
         names = [n for n, _ in _TEMPLATES_REGISTRY]
         # All 14 non-evtx templates that setup-opensearch.sh registers.
         expected = {
-            "agentir-csv",
-            "agentir-prefetch",
-            "agentir-srum",
-            "agentir-transcripts",
-            "agentir-w3c",
-            "agentir-defender",
-            "agentir-tasks",
-            "agentir-wer",
-            "agentir-ssh",
-            "agentir-vol3",
-            "agentir-json",
-            "agentir-delimited",
-            "agentir-accesslog",
-            "agentir-hayabusa",
+            "sift-csv",
+            "sift-prefetch",
+            "sift-srum",
+            "sift-transcripts",
+            "sift-w3c",
+            "sift-defender",
+            "sift-tasks",
+            "sift-wer",
+            "sift-ssh",
+            "sift-vol3",
+            "sift-json",
+            "sift-delimited",
+            "sift-accesslog",
+            "sift-hayabusa",
         }
         assert set(names) == expected
 
@@ -449,12 +449,12 @@ class TestInstallAllTemplates:
         import opensearch_mcp.mappings as m
 
         # Inject a registry entry pointing at a file that doesn't exist.
-        bogus = ("agentir-bogus", "definitely_missing_template.json")
+        bogus = ("sift-bogus", "definitely_missing_template.json")
         monkeypatch.setattr(m, "_TEMPLATES_REGISTRY", [*m._TEMPLATES_REGISTRY, bogus])
 
         client = MagicMock()
         result = install_all_templates(client)
-        assert "agentir-bogus" in result["skipped"]
+        assert "sift-bogus" in result["skipped"]
         # The real 14 still install.
         assert len(result["installed"]) == 14
 
@@ -464,7 +464,7 @@ class TestInstallAllTemplates:
         client = MagicMock()
 
         def _selective_reject(name, body):
-            if name == "agentir-delimited":
+            if name == "sift-delimited":
                 raise RuntimeError("synthetic: bad mapping")
             return {"acknowledged": True}
 
@@ -472,7 +472,7 @@ class TestInstallAllTemplates:
         result = install_all_templates(client)
         assert len(result["installed"]) == 13
         assert len(result["failed"]) == 1
-        assert result["failed"][0]["template"] == "agentir-delimited"
+        assert result["failed"][0]["template"] == "sift-delimited"
         assert "synthetic" in result["failed"][0]["error"]
 
     def test_setup_script_does_not_install_templates(self):
@@ -483,7 +483,7 @@ class TestInstallAllTemplates:
         in the setup script, which would re-create the drift trap
         (registry + setup script listing different templates).
 
-        Catch-all agentir-single-node template is also obsolete now that
+        Catch-all sift-single-node template is also obsolete now that
         every template declares replicas=0 explicitly.
         """
         import re
@@ -497,7 +497,7 @@ class TestInstallAllTemplates:
         # script (DELETE of legacy names is tolerated, but the current
         # script has none).
         put_matches = re.findall(
-            r"-X\s+PUT\s+[^\n]*_index_template/(agentir-[a-z0-9-]+)",
+            r"-X\s+PUT\s+[^\n]*_index_template/(sift-[a-z0-9-]+)",
             script_text,
         )
         assert not put_matches, (
@@ -531,7 +531,7 @@ class TestInstallAllTemplates:
 
         # Reject one non-evtx template; evtx passes.
         def put_template(name, body):
-            if name == "agentir-delimited":
+            if name == "sift-delimited":
                 raise RuntimeError("synthetic mapping error")
             return {"acknowledged": True}
 
@@ -539,7 +539,7 @@ class TestInstallAllTemplates:
         result = ensure_winlog_pipeline(client)
         assert result["status"] == "partial"
         assert len(result["other_templates"]["failed"]) == 1
-        assert result["other_templates"]["failed"][0]["template"] == "agentir-delimited"
+        assert result["other_templates"]["failed"][0]["template"] == "sift-delimited"
 
     def test_ensure_winlog_pipeline_priority_collision_still_installs_non_evtx(self):
         """Early-return on evtx priority collision must still leave

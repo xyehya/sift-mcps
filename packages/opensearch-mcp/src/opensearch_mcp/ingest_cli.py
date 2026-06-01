@@ -540,10 +540,10 @@ def _repoint_samba_if_configured(case_id: str) -> None:
     doc = yaml.safe_load(samba_yaml.read_text()) or {}
     if doc.get("active_share_target") == target:
         return
-    conf_path = "/etc/samba/smb.conf.d/agentir-cases.conf"
+    conf_path = "/etc/samba/smb.conf.d/sift-cases.conf"
     username = doc.get("force_user", os.environ.get("USER", "sansforensics"))
     conf = (
-        f"[cases]\n    path = {target}\n    valid users = agentir-smb\n"
+        f"[cases]\n    path = {target}\n    valid users = sift-smb\n"
         f"    read only = no\n    force user = {username}\n"
         f"    create mask = 0644\n    directory mask = 0755\n    browseable = yes\n"
     )
@@ -2164,7 +2164,7 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
         import subprocess
         import tempfile
 
-        _mem_extract_dir = Path(tempfile.mkdtemp(prefix="agentir-mem-"))
+        _mem_extract_dir = Path(tempfile.mkdtemp(prefix="sift-mem-"))
         try:
             password = os.environ.get("SIFT_ARCHIVE_PASSWORD", "")
             cmd = ["7z", "x", f"-o{_mem_extract_dir}", str(image_path)]

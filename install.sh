@@ -713,7 +713,7 @@ configure_geoip_pipeline() {
     -d '{"endpoint":"https://geoip.maps.opensearch.org/v1/geolite2-city/manifest.json","update_interval_in_days":3}' \
     >/dev/null 2>&1 || warn "GeoIP datasource skipped."
 
-  _opensearch_api PUT "/_ingest/pipeline/agentir-geoip" '{
+  _opensearch_api PUT "/_ingest/pipeline/sift-geoip" '{
     "description": "GeoIP enrichment for source.ip",
     "processors": [{
       "ip2geo": {
@@ -733,7 +733,7 @@ configure_geoip_pipeline() {
 
   local pattern
   for pattern in "case-*-evtx-*" "case-*-iis-*" "case-*-httperr-*" "case-*-firewall-*" "case-*-ssh-*" "case-*-accesslog-*"; do
-    _opensearch_api PUT "/$pattern/_settings" '{"index.default_pipeline":"agentir-geoip"}' 2>/dev/null || true
+    _opensearch_api PUT "/$pattern/_settings" '{"index.default_pipeline":"sift-geoip"}' 2>/dev/null || true
   done
 }
 
