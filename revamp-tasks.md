@@ -295,7 +295,7 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 > Append newest at the top. Use the §3 template.
 
 ### Session 4 — 2026-06-01 — Phase 0.2 finish (`/cases` single-resolver)
-- Branch/commit: `revamp/spg-v1` @ `e37657e`
+- Branch/commit: `revamp/spg-v1` @ `a6cd48d`
 - Phase: 0 — tasks touched: **0.2** (the `/cases` single-resolver clause — the last open piece). Box **ticked**.
 - DONE (boxes ticked this session): **0.2** (now fully `[x]`).
 - What: added `sift_core.case_io.cases_root()` — the one cases-root resolver (precedence `SIFT_CASES_ROOT`→`SIFT_CASES_DIR`→`~/cases`) — and routed all 13 scattered cases-root env reads through it across `sift-core`, `case-mcp`, `report-mcp`, `opensearch-mcp` (server/ingest_cli/containers), `sift-mcp/security.py`, plus `case-dashboard` + `forensic-mcp` (both gained an explicit `sift-core` dep; no dep cycle — sift-core only needs pyyaml). Removed orphaned `_DEFAULT_CASES_DIR`/`CASES_DIR_ENV`/`DEFAULT_CASES_DIR` constants. Intentional defense-in-depth belts (`sift-mcp/security.py` static `/cases`+`/evidence`; `opensearch/server.py` allow-root list) kept + documented in-code; the opensearch allow-list now also includes `cases_root().resolve()` so a custom root is honored. Net effect: env *writers* = gateway `config.py` (yaml→env) + portal `routes.py` (registration); env *reader* = `cases_root()` only.
