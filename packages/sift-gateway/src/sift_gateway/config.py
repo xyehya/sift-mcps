@@ -6,6 +6,12 @@ import re
 from pathlib import Path
 
 import yaml
+from sift_core.execute.catalog import clear_catalog_cache
+from sift_core.execute.security_policy import (
+    SECURITY_POLICY_ENV,
+    build_security_policy,
+    policy_to_env_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +72,17 @@ def apply_case_env(config: dict) -> None:
         os.environ.pop("SIFT_CASE_DIR", None)
 
 
+def apply_execute_security_env(config: dict) -> None:
+    """Apply gateway executor policy to process env for in-process core tools."""
+    execute_config = config.get("execute", {})
+    if not isinstance(execute_config, dict):
+        raise ValueError("execute must be a mapping")
+    policy_config = execute_config.get("security")
+    policy = build_security_policy(policy_config, require_operator_policy=True)
+    os.environ[SECURITY_POLICY_ENV] = policy_to_env_json(policy)
+    clear_catalog_cache()
+
+
 def load_config(path: str) -> dict:
     """Load a YAML config file with env var interpolation.
 
@@ -104,6 +121,7 @@ def load_config(path: str) -> dict:
     config = _walk_and_interpolate(raw)
 
     apply_case_env(config)
+    apply_execute_security_env(config)
 
     # Warn early if portal session secret is absent — portal auth will fail at runtime.
     portal_secret = config.get("portal", {}).get("session_secret", "")

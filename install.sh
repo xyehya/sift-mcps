@@ -959,8 +959,17 @@ configure_immutable_capability() {
     warn "setcap not found — skipping CAP_LINUX_IMMUTABLE."
     return 0
   fi
-  sudo_if_needed setcap cap_linux_immutable+ep "$VENV_PYTHON" 2>/dev/null || true
-  log "setcap cap_linux_immutable+ep applied to $VENV_PYTHON."
+  local cap_target
+  cap_target="$(readlink -f "$VENV_PYTHON" 2>/dev/null || printf '%s' "$VENV_PYTHON")"
+  if sudo_if_needed setcap cap_linux_immutable+ep "$cap_target" 2>/dev/null; then
+    if command -v getcap &>/dev/null && getcap "$cap_target" 2>/dev/null | grep -q 'cap_linux_immutable'; then
+      log "setcap cap_linux_immutable+ep verified on $cap_target."
+    else
+      warn "setcap returned success but CAP_LINUX_IMMUTABLE is not visible on $cap_target."
+    fi
+  else
+    warn "Could not apply CAP_LINUX_IMMUTABLE to $cap_target; evidence immutable flags will remain best-effort until Phase 3.4."
+  fi
 }
 
 configure_auditd() {

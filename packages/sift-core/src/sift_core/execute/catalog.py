@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml
 
+from sift_core.execute.security_policy import load_policy_from_env
+
 logger = logging.getLogger(__name__)
 
 _CATALOG_DIR: Path | None = None
@@ -173,7 +175,7 @@ _security_cache: dict | None = None
 
 
 def load_security_policy() -> dict:
-    """Load security policy from security.yaml in the catalog directory.
+    """Load the executor security policy from gateway configuration.
 
     Returns dict with keys: dangerous_flags (set), tool_allowed_flags (dict of sets),
     tool_blocked_flags (dict of sets), denied_binaries (frozenset),
@@ -182,16 +184,17 @@ def load_security_policy() -> dict:
     global _security_cache
     if _security_cache is not None:
         return _security_cache
-    catalog_dir = _find_catalog_dir()
-    security_file = catalog_dir / "security.yaml"
     try:
-        with open(security_file, encoding="utf-8") as f:
-            doc = yaml.safe_load(f)
-    except (OSError, yaml.YAMLError) as e:
+        doc = load_policy_from_env()
+    except (ValueError, RuntimeError) as e:
         raise RuntimeError(
-            f"Failed to load security policy from {security_file}: {e}. "
+            f"Failed to load executor security policy from gateway config: {e}. "
             "Security policy is required — cannot start with empty denylists."
         ) from e
+    if doc is None:
+        from sift_core.execute.security_policy import build_security_policy
+
+        doc = build_security_policy()
     _security_cache = {
         "dangerous_flags": set(doc.get("dangerous_flags", [])),
         "tool_allowed_flags": {

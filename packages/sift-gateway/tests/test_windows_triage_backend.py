@@ -30,7 +30,7 @@ class _FakeBackend:
 
 
 async def test_gateway_lists_windows_triage_tools_when_backend_enabled():
-    gateway = Gateway({"backends": {}})
+    gateway = Gateway({"backends": {}, "execute": {"security": {"denied_binaries": ["env"]}}})
     gateway.backends["windows-triage-mcp"] = _FakeBackend()
     await gateway._build_tool_map()
 
@@ -50,4 +50,3 @@ async def test_gateway_lists_windows_triage_tools_when_backend_enabled():
         "get_db_stats",
         "get_health",
     }.issubset(tool_names)
-

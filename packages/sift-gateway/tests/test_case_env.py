@@ -9,11 +9,15 @@ from sift_gateway.config import load_config
 from sift_gateway.server import Gateway
 
 
+def _execute_security():
+    return {"execute": {"security": {"denied_binaries": ["env"]}}}
+
+
 def test_load_config_sets_case_dir_and_cases_root(tmp_path, monkeypatch):
     case_dir = tmp_path / "cases" / "case-one"
     cfg_path = tmp_path / "gateway.yaml"
     cfg_path.write_text(
-        yaml.safe_dump({"case": {"root": str(case_dir.parent), "dir": str(case_dir)}}),
+        yaml.safe_dump({"case": {"root": str(case_dir.parent), "dir": str(case_dir)}, **_execute_security()}),
         encoding="utf-8",
     )
 
@@ -29,7 +33,7 @@ def test_load_config_sets_case_dir_and_cases_root(tmp_path, monkeypatch):
 def test_load_config_clears_stale_case_dir_when_no_active_case(tmp_path, monkeypatch):
     cfg_path = tmp_path / "gateway.yaml"
     cfg_path.write_text(
-        yaml.safe_dump({"case": {"root": str(tmp_path / "cases"), "dir": ""}}),
+        yaml.safe_dump({"case": {"root": str(tmp_path / "cases"), "dir": ""}, **_execute_security()}),
         encoding="utf-8",
     )
 
@@ -46,7 +50,7 @@ def test_gateway_constructor_applies_case_env(tmp_path, monkeypatch):
     monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
     monkeypatch.delenv("SIFT_CASES_ROOT", raising=False)
 
-    Gateway({"case": {"root": str(case_dir.parent), "dir": str(case_dir)}, "backends": {}})
+    Gateway({"case": {"root": str(case_dir.parent), "dir": str(case_dir)}, "backends": {}, **_execute_security()})
 
     assert Path(os.environ["SIFT_CASE_DIR"]) == case_dir
     assert Path(os.environ["SIFT_CASES_ROOT"]) == case_dir.parent

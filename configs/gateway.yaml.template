@@ -15,6 +15,80 @@ case:
   root: "${SIFT_CASES_ROOT}"
   dir: ""
 
+execute:
+  security:
+    # Denylist-default executor policy. Operators may add entries here, but
+    # the gateway always unions this with a non-weakenable built-in deny floor.
+    dangerous_flags:
+      - "-e"
+      - "--exec"
+      - "--command"
+      - "-enc"
+      - "-encodedcommand"
+      - "--script"
+      - "--invoke"
+    tool_allowed_flags:
+      run_bulk_extractor:
+        - "-e"
+        - "-x"
+    tool_blocked_flags:
+      find:
+        - "-exec"
+        - "-execdir"
+        - "-delete"
+        - "-fls"
+        - "-fprint"
+        - "-fprint0"
+        - "-fprintf"
+      sed:
+        - "-i"
+        - "--in-place"
+      tar:
+        - "-x"
+        - "--extract"
+        - "--get"
+        - "-c"
+        - "--create"
+        - "--delete"
+        - "--append"
+        - "--checkpoint-action"
+        - "--use-compress-program"
+        - "--to-command"
+      unzip:
+        - "-o"
+        - "-n"
+    output_flags:
+      - "--csv"
+      - "--csvf"
+      - "-o"
+      - "--output"
+      - "--json"
+      - "--jsonl"
+    denied_binaries:
+      # Filesystem destruction; the built-in floor also covers mkfs.*.
+      - "mkfs"
+      - "mkfs.ext4"
+      - "mkfs.xfs"
+      - "mkfs.btrfs"
+      - "mkfs.ntfs"
+      # System state.
+      - "shutdown"
+      - "reboot"
+      - "poweroff"
+      - "halt"
+      - "init"
+      # Process termination.
+      - "kill"
+      - "killall"
+      - "pkill"
+      # Environment/token leakage.
+      - "env"
+      - "printenv"
+      # Raw sockets.
+      - "nc"
+      - "ncat"
+      - "socat"
+
 api_keys:
   ${SIFT_GATEWAY_TOKEN}:
     token_id: "examiner-default"

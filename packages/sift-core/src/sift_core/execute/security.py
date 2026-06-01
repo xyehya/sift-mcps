@@ -12,6 +12,7 @@ from sift_core.case_io import cases_root
 
 from sift_core.execute.catalog import load_security_policy
 from sift_core.execute.config import resolve_case_dir
+from sift_core.execute.security_policy import matches_denied_binary
 
 _DANGEROUS_PATTERNS = [";", "&&", "||", "`", "$(", "${"]
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ def _get_protected_dirs() -> tuple[str, ...]:
 
 def is_denied(binary_name: str) -> bool:
     """Check if a binary is on the hard denylist."""
-    return binary_name.lower() in _get_policy()["denied_binaries"]
+    return matches_denied_binary(binary_name, _get_policy()["denied_binaries"])
 
 
 def validate_rm_targets(args: list[str]) -> None:

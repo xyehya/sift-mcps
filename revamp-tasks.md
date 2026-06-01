@@ -225,10 +225,11 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 🔒 **PHASE 2 GATE:** ✅ **GREEN (Session 13)** — 19 core tools present (18 sift_core + gateway-native `environment_summary`), zero add-on tools; F-A gate blocks on no-case and on corrupted evidence, passes on sealed case; `run_command` executes via in-process executor; `record_action`/`record_finding` reach the tool layer; portal correctly rejects agent token. Script: `scripts/phase2_gate_test.py` (14/14 checks on siftworkstation).
 
 ### Phase 3 — Sandbox + privilege executor (D2 + D3)
-- [ ] **3.1 Relocate denylist `security.yaml` → operator-editable `gateway.yaml` + non-weakenable deny floor**
+- [x] **3.1 Relocate denylist `security.yaml` → operator-editable `gateway.yaml` + non-weakenable deny floor** ✅ Session 16
   - *How:* load order = hardcoded deny floor ∪ operator denylist; refuse to start on empty policy (preserve current behaviour); deny floor cannot be removed by config.
   - *Why:* D2 — operator can tighten, never weaken below the floor (mkfs*, shutdown/reboot/halt/init, kill*, env/printenv token-leak, raw sockets).
   - *Test:* operator config can't delete a floor entry; empty policy refuses boot; denied command blocked end-to-end.
+  - *Done:* moved executor policy out of package-data `security.yaml` and into `execute.security` in operator-owned `gateway.yaml`; `sift_core.execute.security_policy` now builds the effective policy as **hardcoded deny floor ∪ default denylist ∪ operator additions**. Gateway config load/start refuses missing or empty `execute.security`, exports the merged policy to the in-process executor, and clears the policy cache on reload. Removed the old `packages/sift-core/data/catalog/security.yaml`. Added tests for non-weakenable floor entries, empty policy rejection, gateway config export, and `run_command(["env"])` being blocked through `Gateway.call_tool`.
 - [ ] **3.2 Optional allowlist mode** — config flag flips denylist→allowlist.
   - *Test:* in allowlist mode, only listed commands run; everything else blocked.
 - [ ] **3.3 Hardened isolated executor** (separate process · cgroup · AppArmor · `shell=False` · path jail).
@@ -303,6 +304,32 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 ## 8 · Session Log
 
 > Append newest at the top. Use the §3 template.
+
+### Session 16 — 2026-06-02 — Phase 3.1 executor policy relocation + installer warning cleanup
+- Branch/commit: `revamp/spg-v1` @ working tree (not committed)
+- Phase: 3 — tasks touched: **3.1** plus installer cleanup for finished-phase warnings.
+- DONE (boxes ticked this session): **3.1**.
+- What:
+  - Replaced package-data executor `security.yaml` with `execute.security` in operator-editable `gateway.yaml`.
+  - Added `sift_core.execute.security_policy` with a non-weakenable deny floor covering `mkfs*`, shutdown/reboot/halt/init/poweroff, kill tools, env/printenv, and raw-socket tools (`nc`, `ncat`, `socat`).
+  - Gateway startup now rejects missing/empty `execute.security`; operator config can add denied binaries but cannot remove the deny floor.
+  - Root cause of the old gateway health warning: service startup used `uv run`, which made restarts/package resolution slow enough for health polling to false-alarm. Confirmed VM service now uses `.venv/bin/sift-gateway` directly and health comes up in ~2 seconds.
+  - Root cause of immutable warnings: installer ran `setcap` against `.venv/bin/python`, which is a symlink on the VM, and did not verify the capability. Installer now resolves the real executable and verifies `getcap`; VM capability applied to `/usr/bin/python3.12`.
+  - Synced scoped source/config/test changes to the VM, added `execute.security` to live `~/.sift/gateway.yaml` (backup: `~/.sift/gateway.yaml.bak-20260601T215947Z`), removed the old remote `security.yaml`, and restarted gateway.
+- Tests:
+  - Local: `uv run python -m pytest packages/sift-core/ -q` → **283 passed**.
+  - Local: `uv run python -m pytest packages/sift-gateway/ -q` → **109 passed**.
+  - Local: targeted Phase 3.1 tests included in the above (`test_execute_security_policy.py`, `test_execute_security_config.py`, `test_inprocess_core_tools.py`).
+  - Local: `bash -n install.sh` and `py_compile` for touched policy/config modules → OK.
+- Live test on VM:
+  - `systemctl --user restart sift-gateway.service`; `/health` OK on poll 2.
+  - Real `/mcp/` agent call `run_command(["env"])` on active sealed case `/cases/phase2-gate` returned `success:false` with `Binary 'env' is blocked by security policy`.
+  - Immutable capability smoke test on `/tmp/sift-immutable-smoke.txt`: set `+i`, observed flag, cleared `+i` → all true.
+- Spec changed?: no.
+- BLOCKERS / open questions for next session:
+  - Phase 3.2 allowlist mode is still todo.
+  - Phase 3.3/3.4 executor isolation and privileged-path design are still todo; this session only fixed the installer/runtime root cause of the existing immutable warning.
+- NEXT: **Phase 3.2** — optional allowlist mode.
 
 ### Session 15 — 2026-06-02 — Reset test ledger, isolate Phase 2 gate, fix slow gateway restarts
 - Branch/commit: `revamp/spg-v1` @ working tree (not committed)

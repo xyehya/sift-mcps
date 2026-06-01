@@ -7,6 +7,10 @@ from sift_core.case_ops import case_init_data
 from sift_gateway.server import Gateway
 
 
+def _execute_security():
+    return {"execute": {"security": {"denied_binaries": ["env"]}}}
+
+
 async def test_core_tools_are_in_process_when_core_backends_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     cases_root = tmp_path / "cases"
@@ -24,6 +28,7 @@ async def test_core_tools_are_in_process_when_core_backends_disabled(tmp_path, m
     gateway = Gateway(
         {
             "case": {"root": str(cases_root), "dir": case["case_dir"]},
+            **_execute_security(),
             "backends": {
                 "case-mcp": {"enabled": True, "type": "stdio", "command": "missing-case-mcp"},
                 "forensic-mcp": {"enabled": True, "type": "stdio", "command": "missing-forensic-mcp"},
@@ -72,3 +77,37 @@ async def test_core_tools_are_in_process_when_core_backends_disabled(tmp_path, m
     assert payload["success"] is True
     assert payload["metadata"]["exit_code"] == 0
     assert payload["audit_id"]
+
+
+async def test_run_command_denied_binary_blocked_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cases_root = tmp_path / "cases"
+    case = case_init_data(
+        name="Deny Case",
+        examiner="alice",
+        cases_dir=cases_root,
+        case_id="DENY-001",
+    )
+    monkeypatch.setenv("SIFT_CASES_ROOT", str(cases_root))
+    monkeypatch.setenv("SIFT_CASE_DIR", case["case_dir"])
+    monkeypatch.setenv("SIFT_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("SIFT_EXAMINER", "alice")
+
+    gateway = Gateway(
+        {
+            "case": {"root": str(cases_root), "dir": case["case_dir"]},
+            "backends": {},
+            "execute": {"security": {"denied_binaries": ["echo"]}},
+        }
+    )
+
+    result = await gateway.call_tool(
+        "run_command",
+        {"command": ["env"], "purpose": "verify deny floor"},
+        examiner="alice",
+    )
+    payload = json.loads(result[0].text)
+
+    assert payload["tool"] == "run_command"
+    assert payload["success"] is False
+    assert "blocked by security policy" in payload["error"]
