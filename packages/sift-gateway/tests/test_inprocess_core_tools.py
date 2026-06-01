@@ -285,3 +285,82 @@ async def test_run_command_preserves_case_cwd_jail(tmp_path, monkeypatch):
 
     assert payload["success"] is False
     assert payload["error"] == "Path must be within the case directory"
+
+
+async def test_run_command_privileged_escalation_integration(tmp_path, monkeypatch):
+    import shutil
+    import os
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cases_root = tmp_path / "cases"
+    case = case_init_data(
+        name="Priv Case",
+        examiner="alice",
+        cases_dir=cases_root,
+        case_id="PRIV-001",
+    )
+    monkeypatch.setenv("SIFT_CASES_ROOT", str(cases_root))
+    monkeypatch.setenv("SIFT_CASE_DIR", case["case_dir"])
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("SIFT_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("SIFT_EXAMINER", "alice")
+
+    gateway = Gateway(
+        {
+            "case": {"root": str(cases_root), "dir": case["case_dir"]},
+            "backends": {},
+            **_execute_security(),
+        }
+    )
+
+    # Mock finding mount and sudo binaries
+    monkeypatch.setattr(shutil, "which", lambda cmd: f"/usr/bin/{cmd}" if cmd in ("mount", "sudo") else None)
+    monkeypatch.setattr(os.path, "exists", lambda path: path == "/usr/bin/sudo" or os.path.exists(path))
+
+    # Mock isolated execution inside generic to fail directly first, then succeed via sudo
+    from sift_core.execute.tools import generic
+    calls = []
+    def fake_execute(cmd_list, **kwargs):
+        calls.append(cmd_list)
+        if cmd_list[0] == "/usr/bin/mount":
+            return {"exit_code": 1, "stdout": "", "stderr": "mount: requires root\n", "stdout_total_bytes": 0}
+        else:
+            return {"exit_code": 0, "stdout": "ok\n", "stderr": "", "stdout_total_bytes": 3}
+    monkeypatch.setattr(generic, "execute", fake_execute)
+
+    result = await gateway.call_tool(
+        "run_command",
+        {
+            "command": ["mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")],
+            "purpose": "test mount integration",
+        },
+        examiner="alice",
+    )
+    payload = json.loads(result[0].text)
+
+    # 1. Verify the response metadata privilege details are returned
+    assert payload["success"] is True
+    assert payload["privilege_escalation"]["mechanism"] == "sudo_fallback"
+    assert payload["privilege_escalation"]["status"] == "success"
+
+    # 2. Verify that calls were made directly then with sudo
+    assert len(calls) == 2
+    assert calls[0] == ["/usr/bin/mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")]
+    assert calls[1] == ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")]
+
+    # 3. Verify audit entries are written under SIFT_STATE_DIR / PRIV-001 / audit / sift-gateway.jsonl
+    audit_file = state_dir / "PRIV-001" / "audit" / "sift-gateway.jsonl"
+    assert audit_file.is_file()
+    lines = audit_file.read_text().splitlines()
+    entries = [json.loads(line) for line in lines]
+
+    # There should be entries for:
+    # - fallback_attempt privilege event
+    # - success outcome privilege event
+    # - main run_command audit entry (which should contain privilege_escalation and privilege_events)
+    pe_events = [e for e in entries if e.get("tool") == "privilege_escalation"]
+    assert len(pe_events) == 2
+    assert pe_events[0]["result_summary"]["status"] == "fallback_attempt"
+    assert pe_events[1]["result_summary"]["status"] == "success"
+
+    main_entry = [e for e in entries if e.get("tool") == "run_command"][0]
+    assert main_entry["privilege_escalation"]["mechanism"] == "sudo_fallback"

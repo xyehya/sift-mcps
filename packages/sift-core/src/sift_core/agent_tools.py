@@ -506,10 +506,28 @@ def _run_command(args: dict, audit: AuditWriter) -> dict:
             skip_enrichment=bool(args.get("skip_enrichment", False)),
             artifact_context=artifact_hint,
         )
+        if "privilege_escalation" in exec_result:
+            response["privilege_escalation"] = exec_result["privilege_escalation"]
         if exec_result.get("output_file"):
             response["full_output_path"] = exec_result["output_file"]
             response["full_output_sha256"] = exec_result.get("output_sha256")
             response["full_output_bytes"] = exec_result.get("stdout_total_bytes")
+
+        # Log privilege events using the same audit writer
+        priv_events = exec_result.get("privilege_events", [])
+        for evt in priv_events:
+            audit.log(
+                tool="privilege_escalation",
+                params={"command": evt.get("command"), "reason": evt.get("reason", "")},
+                result_summary={"status": evt.get("status"), "exit_code": evt.get("exit_code", 0)}
+            )
+
+        extra_audit = {}
+        if "privilege_escalation" in exec_result:
+            extra_audit["privilege_escalation"] = exec_result["privilege_escalation"]
+        if "privilege_events" in exec_result:
+            extra_audit["privilege_events"] = exec_result["privilege_events"]
+
         if audit.log(
             tool="run_command",
             params={"command": command, "purpose": purpose},
@@ -525,6 +543,7 @@ def _run_command(args: dict, audit: AuditWriter) -> dict:
             input_files=list(input_hashes.keys()) if input_hashes else None,
             input_sha256s=list(input_hashes.values()) if input_hashes else None,
             input_detection_method=detection_method,
+            extra=extra_audit if extra_audit else None,
         ) is None:
             response["warning"] = "Audit write failed — action not recorded"
         if detection_method == "none" and binary not in _NO_INPUT_CMDS:

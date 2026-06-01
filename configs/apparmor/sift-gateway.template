@@ -81,6 +81,8 @@
   /home/*/.local/share/uv/python/**/bin/**   rix,
   /home/*/.local/bin/uv                      rix,
   /usr/bin/python3*                          rix,
+  /usr/bin/systemd-run                       rix,
+  /usr/bin/systemctl                         rix,
 
   # Forensic tooling (Zimmerman tools, mount helpers, FUSE tools)
   /usr/local/bin/*                           rix,

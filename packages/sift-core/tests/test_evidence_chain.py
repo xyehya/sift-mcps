@@ -242,9 +242,11 @@ class TestChainStatus:
         assert result["status"] == ChainStatus.LEDGER_ERROR
 
     def test_missing_after_file_removed(self, initialized):
+        from sift_core.evidence_chain import _set_immutable
         ev = initialized / "evidence" / "del.bin"
         ev.write_bytes(b"data")
         seal_manifest(initialized, [{"path": "evidence/del.bin"}], "alice", _KEY)
+        _set_immutable(ev, False)
         ev.unlink()
         result = chain_status(initialized)
         assert result["status"] == ChainStatus.MISSING

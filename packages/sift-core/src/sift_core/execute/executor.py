@@ -38,20 +38,87 @@ def _run_isolated_worker(
         "memory_limit_bytes": memory_limit_bytes,
     }
     worker_cmd = [sys.executable, "-m", "sift_core.execute.worker"]
-    try:
-        proc = subprocess.run(
-            worker_cmd,
-            input=json.dumps(payload),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout + 10,
-            shell=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise ExecutionTimeoutError(
-            f"Executor worker timed out after {timeout + 10}s: {' '.join(cmd_list)}"
-        ) from exc
+
+    import shutil
+    import uuid
+    systemd_run_path = shutil.which("systemd-run")
+
+    proc = None
+    run_id = str(uuid.uuid4())
+
+    if systemd_run_path:
+        env = os.environ.copy()
+        if "DBUS_SESSION_BUS_ADDRESS" not in env:
+            uid = os.getuid()
+            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
+        if "XDG_RUNTIME_DIR" not in env:
+            env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
+
+        scope_cmd = [
+            systemd_run_path,
+            "--user",
+            "--scope",
+            f"--unit=sift-execute-{run_id[:12]}",
+        ]
+        if memory_limit_bytes > 0:
+            scope_cmd.append(f"--property=MemoryMax={memory_limit_bytes}")
+            memory_high = int(memory_limit_bytes * 0.8)
+            scope_cmd.append(f"--property=MemoryHigh={memory_high}")
+
+        full_cmd = scope_cmd + worker_cmd
+        try:
+            logger.debug("Attempting cgroup execution: %s", " ".join(full_cmd))
+            proc = subprocess.run(
+                full_cmd,
+                input=json.dumps(payload),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout + 10,
+                shell=False,
+                env=env,
+            )
+            if proc.returncode != 0:
+                try:
+                    result = json.loads(proc.stdout or "{}")
+                    if "exit_code" in result or "error_type" in result:
+                        return result
+                except json.JSONDecodeError:
+                    pass
+
+                logger.warning(
+                    "systemd-run failed to boot worker (exit %s), falling back. Stderr: %s",
+                    proc.returncode,
+                    proc.stderr,
+                )
+                systemctl_path = shutil.which("systemctl")
+                if systemctl_path:
+                    subprocess.run(
+                        [systemctl_path, "--user", "reset-failed", f"sift-execute-{run_id[:12]}"],
+                        capture_output=True,
+                        shell=False,
+                        env=env,
+                    )
+                proc = None
+        except Exception as exc:
+            logger.warning("Error during systemd-run boot: %s. Falling back.", exc)
+            proc = None
+
+    if proc is None:
+        try:
+            proc = subprocess.run(
+                worker_cmd,
+                input=json.dumps(payload),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout + 10,
+                shell=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ExecutionTimeoutError(
+                f"Executor worker timed out after {timeout + 10}s: {' '.join(cmd_list)}"
+            ) from exc
 
     if proc.returncode != 0:
         stderr = _truncate(proc.stderr or "", 2000)

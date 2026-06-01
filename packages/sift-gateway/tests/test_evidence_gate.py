@@ -189,7 +189,9 @@ class TestManualInvalidation:
 
 class TestViolations:
     def test_missing_file_blocks(self, sealed_case):
+        from sift_core.evidence_chain import _set_immutable
         key = str(sealed_case)
+        _set_immutable(sealed_case / "evidence" / "disk.E01", False)
         (sealed_case / "evidence" / "disk.E01").unlink()
         result = check_evidence_gate(key)
         assert result["blocked"] is True
@@ -205,7 +207,9 @@ class TestViolations:
         assert result["status"] == ChainStatus.UNREGISTERED
 
     def test_issues_list_present_on_block(self, sealed_case):
+        from sift_core.evidence_chain import _set_immutable
         key = str(sealed_case)
+        _set_immutable(sealed_case / "evidence" / "disk.E01", False)
         (sealed_case / "evidence" / "disk.E01").unlink()
         result = check_evidence_gate(key)
         assert isinstance(result["issues"], list)
