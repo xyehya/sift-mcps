@@ -146,7 +146,7 @@
     </div>
     <h4>New decisions (2026-05-31)</h4>
     <div class="grid2">
-      <div class="card"><span class="tag t-good">D1 · RENAME</span><h4>agentir → sift</h4><p>Rename the Python package <code>agentir_core</code> → <code>sift_core</code> <b>and</b> the runtime env/path surface (<code>AGENTIR_*</code> → <code>SIFT_*</code>, <code>/var/lib/agentir</code> → <code>/var/lib/sift</code>). Ship a one-release back-compat shim. See §6.</p></div>
+      <div class="card"><span class="tag t-good">D1 · RENAME</span><h4>agentir → sift</h4><p>Rename the Python package <code>agentir_core</code> → <code>sift_core</code> <b>and</b> the runtime env/path surface (<code>AGENTIR_*</code> → <code>SIFT_*</code>, <code>/var/lib/agentir</code> → <code>/var/lib/sift</code>), plus the <code>agentir_svc_*</code>→<code>sift_svc_*</code> token prefix. <b>No back-compat</b> — fresh VM + case, clean cutover (no shim, no symlink). See §6.</p></div>
       <div class="card"><span class="tag t-good">D2 · EXECUTE POLICY</span><h4>Denylist-default</h4><p>run_command stays <b>denylist</b>-based (its current real behaviour). The denylist is <b>already externalized</b> to <code>security.yaml</code> — the work is not "extract from hardcoded" but: (a) <b>relocate</b> it from the package's <code>data/catalog/</code> to operator-editable <code>gateway.yaml</code>, (b) add a non-weakenable <b>deny floor</b>, (c) add <b>allowlist mode</b>. See §5.</p></div>
       <div class="card"><span class="tag t-good">D3 · PRIVILEGE</span><h4>Caps-first, sudoers fallback</h4><p>Executor runs unprivileged. Root-needing tools (vol, dd, mount) escalate via Linux <b>capabilities first</b>, falling back to a narrow <b>sudoers allowlist</b> (hashed paths, NOPASSWD, never a shell/wildcard). Every escalation audited. See §5.</p></div>
       <div class="card"><span class="tag t-skill">D4 · METHODOLOGY</span><h4>Remove tools → /skills</h4><p>The 14 forensic methodology <code>get_*</code> tools + 14 resources are <b>removed as MCP tools</b> and served through <code>/skills</code> packs. <b>Post-MVP — implemented last.</b> See §7.</p></div>
@@ -160,15 +160,15 @@
     <table>
       <tbody><tr><th>v1 claim</th><th>Reality in code</th><th>Source</th></tr>
       <tr><td><code>run_command</code> is <b>allow-list</b> + shell=False</td><td><b>Deny-list</b> + path-jail + shell=False. <b>Already externalized to YAML</b>, not hardcoded: <code>generic.py</code> calls <code>is_denied()</code> → <code>security.py</code> → <code>load_security_policy()</code> which reads <code>sift-mcp/data/catalog/security.yaml</code> (loader refuses to start with an empty policy). The denylist is <b>far broader than 5</b>: all <code>mkfs.*</code> variants, <code>shutdown/reboot/poweroff/halt/init</code>, <code>kill/killall/pkill</code>, <code>env/printenv</code> (gateway-token leak), raw sockets. <b>The <code>server.py</code> docstring ("Only mkfs, shutdown, kill, raw socket") is STALE</b> — do not cite it as the policy. Path jail via <code>resolve_case_path</code>.</td><td><code>sift-mcp/data/catalog/security.yaml</code>, <code>security.py</code>, <code>catalog.py</code> (load_security_policy), <code>tools/generic.py</code></td></tr>
-      <tr><td>(unstated)</td><td><b>Grounding Score</b> exists and is finding-time logic: <code>manager._score_grounding()</code> runs inside <code>record_finding</code>, scanning the case <code>audit/</code> dir for usage of three reference backends — but it <b>hardcodes</b> <code>_GROUNDING_MCPS = (forensic-rag-mcp, windows-triage-mcp, opencti-mcp)</code>. These three become renamed connectors (§3.3), so grounding must move to core <em>and</em> become declaration-driven (§3.4).&nbsp; ##NOTE TBD##</td><td><code>forensic-mcp/.../case/manager.py</code> (_score_grounding, _GROUNDING_MCPS)</td></tr>
+      <tr><td>(unstated)</td><td><b>Grounding Score</b> exists and is finding-time logic: <code>manager._score_grounding()</code> runs inside <code>record_finding</code>, scanning the case <code>audit/</code> dir for usage of three reference backends — but it <b>hardcodes</b> <code>_GROUNDING_MCPS = (forensic-rag-mcp, windows-triage-mcp, opencti-mcp)</code>. These three become renamed connectors (§3.3), so grounding must move to core <em>and</em> become declaration-driven (§3.4). <b>Verified:</b> grounding degrades gracefully with no reference backends (returns empty), so core-only does not break.</td><td><code>forensic-mcp/.../case/manager.py</code> (_score_grounding, _GROUNDING_MCPS)</td></tr>
       <tr><td>(unstated)</td><td><b>FK response-enrichment with decay</b> lives in <b>sift-mcp</b> (<code>response.py</code>): a per-tool counter (<code>_fk_delivery_counts</code>) delivers accuracy content (caveats/field_meanings) always, discovery content (advisories/corroboration/cross_mcp_checks) on calls 1–3 then every 10th. Since <code>run_command</code> folds into core, <b>this enrichment moves into core with it</b> — it is not an add-on capability for execute (§3.4).</td><td><code>sift-mcp/.../response.py</code> (_fk_delivery_counts, _build_knowledge_context)</td></tr>
-      <tr><td>Evidence gate uses 3 classes (read_only/analysis/mutating) × SEALED/UNSEALED/VIOLATION</td><td>Gate is <b>case-level</b>: <code>blocked = chain_status != OK</code>. UNSEALED is explicitly <em>not</em> a violation. The read-only carve-out lives in the endpoint via <code>readOnlyHint</code>, not per-tool classes. The 3-class model is the <em>target</em> (opt O2), not current.&nbsp;&nbsp;##NOTE TBD##</td><td><code>sift_gateway/evidence_gate.py</code>, <code>mcp_endpoint.py</code></td></tr>
-      <tr><td>forensic-mcp = "6 tools + 14 resources"</td><td><b>20 tools</b> + 14 resources. 14 of those 20 are methodology <code>get_*</code> tools (framework, rules, anti-patterns, playbooks…). Many are not in the live aggregated list → tool drift.<br><span style="background-color: rgb(12, 17, 22);">&nbsp;##NOTE TBD##&nbsp;</span></td><td><code>forensic-mcp/src/forensic_mcp/server.py</code></td></tr>
+      <tr><td>Evidence gate uses 3 classes (read_only/analysis/mutating) × SEALED/UNSEALED/VIOLATION</td><td>Gate is <b>case-level</b>: <code>blocked = chain_status != OK</code>. UNSEALED is explicitly <em>not</em> a violation. The read-only carve-out lives in the endpoint via <code>readOnlyHint</code>, not per-tool classes. The 3-class model was the former opt O2 target. <b>Superseded by decision F-A:</b> the v2.1 target is a strict binary gate — see §4.2.</td><td><code>sift_gateway/evidence_gate.py</code>, <code>mcp_endpoint.py</code></td></tr>
+      <tr><td>forensic-mcp = "6 tools + 14 resources"</td><td><b>20 tools</b> + 14 resources. 14 of those 20 are methodology <code>get_*</code> tools (framework, rules, anti-patterns, playbooks…). Many are not in the live aggregated list → tool drift.</td><td><code>forensic-mcp/src/forensic_mcp/server.py</code></td></tr>
       <tr><td>Response guard = 25 patterns</td><td>30 patterns.</td><td><code>sift_gateway/response_guard.py</code></td></tr>
-      <tr><td>(unstated)</td><td><code>case_host_fix</code> is implemented inside <b>opensearch-mcp</b> but mutates <em>case</em> state — a layering violation (add-on writing core data). Must move to core or be removed.<br><span style="background-color: rgb(12, 17, 22);">&nbsp;##NOTE TBD, This only applies to opensearch indexes not global case so unrequired for CORE##</span></td><td><code>opensearch-mcp/src/opensearch_mcp/server.py</code></td></tr>
+      <tr><td>(unstated)</td><td><code>case_host_fix</code> is implemented inside <b>opensearch-mcp</b> but its effect is scoped to <em>OpenSearch index/alias state</em>, not global case state. <b>Decision F-D:</b> it stays in opensearch-mcp (renamed <code>opensearch_host_fix</code>) — not a core concern.</td><td><code>opensearch-mcp/src/opensearch_mcp/server.py</code></td></tr>
       <tr><td>(unstated)</td><td><code>get_health</code> (opencti + others) and <code>server_status</code> (windows) collide across backends; today resolved reactively. The namespace rule (§4) fixes this structurally.</td><td>multiple <code>server.py</code></td></tr>
     </tbody></table>
-    <div class="callout"><b>ANALYST_TOOLS (verified):</b> identity is injected for exactly <code>record_action, record_finding, record_timeline_event, manage_todo, log_reasoning, log_external_action</code> (<code>mcp_endpoint.py</code>). Under the contract this list is replaced by the manifest's <code>identity.accepts_analyst_override</code> per tool.<span style="font-size: 13.5px; background-color: rgb(12, 17, 22);"> </span><span style="font-size: 13.5px; background-color: rgb(12, 17, 22);">##NOTE TBD##</span></div>
+    <div class="callout"><b>ANALYST_TOOLS (verified):</b> identity is injected for exactly <code>record_action, record_finding, record_timeline_event, manage_todo, log_reasoning, log_external_action</code> (<code>mcp_endpoint.py</code>). Under the contract this list is replaced by the manifest's <code>identity.accepts_analyst_override</code> per tool, and the gateway <b>strips</b> the injected-identity param from the agent-facing schema (the agent must never see a field it cannot set). Identity for an agent token = its <code>agent_id</code> (machine attribution); the authorizing human is the token's <code>created_by</code>, and human accountability attaches at portal DRAFT→approval.</div>
   </section>
 
   <!-- ============ CURRENT STATE ============ -->
@@ -183,7 +183,7 @@
       <tr><td>Backend abstraction</td><td><code>MCPBackend</code> base + <code>create_backend</code> factory, stdio &amp; HTTP transports, tool-map aggregation, lazy-start / idle-reaper / late-start retry / dynamic loader, per-backend <code>/mcp/{name}</code> diagnostic mounts. <b>This is the seam the standard formalizes.</b></td></tr>
       <tr><td>Examiner Portal</td><td>Case creation, HMAC challenge-response evidence seal, findings review queue, timline view, ToDo management,chain-of-custody, verify evidence, token management, must-reset password guard.</td></tr>
       <tr><td>Evidence chain</td><td>Versioned manifest, HMAC-signed append-only ledger, <code>chattr +i</code>, atomic writes + <code>chmod 444</code>, optional Solana anchor, <code>ChainStatus</code> enum (OK/UNSEALED/MODIFIED/MISSING/UNREGISTERED/LEDGER_ERROR).</td></tr>
-      <tr><td>Identity trust boundary</td><td>Gateway overwrites <code>analyst_override</code> for ANALYST_TOOLS — backends cannot spoof examiner identity.&nbsp;<br>##NOTE TBD Check what analyst_override and related components actually do in code and workflow##</td></tr>
+      <tr><td>Identity trust boundary</td><td>Gateway overwrites <code>analyst_override</code> for ANALYST_TOOLS with the authenticated principal (<code>mcp_endpoint.py:846</code>) — backends/agent cannot spoof examiner identity. For an agent token that principal is the <code>agent_id</code>; findings are DRAFT until the examiner approves them in the portal.</td></tr>
     </tbody></table>
 
     <h3 id="current-problems">1.2 — Problems (the "all over the place")</h3>
@@ -274,14 +274,14 @@
       <tr><td><code>evidence_list</code></td><td>read_only</td><td>Core evidence</td></tr>
       <tr><td><code>evidence_verify</code></td><td>read_only</td><td>Core evidence</td></tr>
       <tr><td><code>evidence_register</code></td><td>mutating</td><td><b>Portal-managed</b> — stays hidden from agent</td></tr>
-      <tr><td><code>export_bundle</code> / <code>import_bundle</code></td><td>mutating</td><td>Core case ##NOTE TBD, WHAT DOES IT DO? REMOVE IT?##</td></tr>
-      <tr><td><code>record_action</code></td><td>mutating (audit)</td><td>Core audit · analyst_override&nbsp;<span style="background-color: rgb(14, 21, 28);">&nbsp;##NOTE TBD, WHAT DOES IT DO? Not Surfaced in portal##</span></td></tr>
-      <tr><td><code>log_reasoning</code></td><td>mutating (audit)</td><td>Core audit · analyst_override&nbsp; ##NOTE TBD, WHAT DOES IT DO?Not Surfaced in portal##<br></td></tr>
-      <tr><td><code>log_external_action</code></td><td>mutating (audit)</td><td>Core audit · analyst_override&nbsp;<span style="background-color: rgb(14, 21, 28);">&nbsp;</span><span style="background-color: rgb(14, 21, 28);">##NOTE TBD, WHAT DOES IT DO?</span><span style="background-color: rgb(14, 21, 28);">Not Surfaced in portal</span>##<span style="background-color: rgb(14, 21, 28);"><br></span></td></tr>
-      <tr><td rowspan="6"><code>forensic-mcp</code></td><td><code>record_finding</code></td><td>mutating</td><td>Core findings (DRAFT→approval) · analyst_override ##NOTE TBD,Not Surfaced in portal, only MCP##</td></tr>
-      <tr><td><code>record_timeline_event</code></td><td>mutating</td><td>Core findings · analyst_override&nbsp;<span style="background-color: rgb(14, 21, 28);">&nbsp;##NOTE TBD,Not Surfaced in portal, only MCP##</span></td></tr>
-      <tr><td><code>manage_todo</code></td><td>mutating</td><td>Core findings/todo · analyst_override&nbsp;&nbsp;##NOTE TBD, Surfaced in portal and MC##</td></tr>
-      <tr><td><code>list_existing_findings</code></td><td>read_only</td><td>Core findings&nbsp;<span style="background-color: rgb(14, 21, 28);">&nbsp;##NOTE TBD, Surfaced in portal but not sure if through MCP or direct access##</span></td></tr>
+      <tr><td><code>export_bundle</code> / <code>import_bundle</code></td><td>mutating</td><td><b>F-C: dropped from agent surface</b> — cross-examiner collaboration (export = findings/timeline JSON dump; import = last-write-wins merge). sift-core functions kept for a future portal export.</td></tr>
+      <tr><td><code>record_action</code></td><td>mutating (audit)</td><td>Core audit · analyst_override — logs an action+reasoning to <code>actions.jsonl</code>. Agent-write, examiner-read (not a portal action).</td></tr>
+      <tr><td><code>log_reasoning</code></td><td>mutating (audit)</td><td>Core audit · analyst_override — writes analytical reasoning to the audit trail; never touches case data. Agent-write, examiner-read.</td></tr>
+      <tr><td><code>log_external_action</code></td><td>mutating (audit)</td><td>Core audit · analyst_override — records a command run outside MCP (e.g. Bash) and returns an <code>audit_id</code> for finding provenance; <code>hook_audit_id</code> upgrades voluntary→verified. Agent-write, examiner-read.</td></tr>
+      <tr><td rowspan="6"><code>forensic-mcp</code></td><td><code>record_finding</code></td><td>mutating</td><td>Core findings (DRAFT→approval) · analyst_override — agent records DRAFT findings via MCP; examiner approves in the portal.</td></tr>
+      <tr><td><code>record_timeline_event</code></td><td>mutating</td><td>Core findings · analyst_override — agent-write via MCP; surfaced in the portal timeline view.</td></tr>
+      <tr><td><code>manage_todo</code></td><td>mutating</td><td>Core findings/todo · analyst_override — managed by both agent (MCP) and examiner (portal).</td></tr>
+      <tr><td><code>list_existing_findings</code></td><td>read_only</td><td>Core findings — read path; agent reads via MCP, examiner via portal.</td></tr>
       <tr><td><code>query_case</code></td><td>read_only</td><td>Core case</td></tr>
       <tr><td><code>workflow_status</code></td><td>read_only</td><td>Core case</td></tr>
       <tr><td rowspan="6"><code>report-mcp</code></td><td><code>generate_report</code></td><td>mutating</td><td>Core reporting&nbsp;</td></tr>
@@ -289,13 +289,13 @@
       <tr><td><code>list_reports</code></td><td>read_only</td><td>Core reporting</td></tr>
       <tr><td><code>list_profiles</code></td><td>read_only</td><td>Core reporting</td></tr>
       <tr><td><code>get_case_metadata</code></td><td>read_only</td><td>Core case metadata</td></tr>
-      <tr><td><code>set_case_metadata</code></td><td>mutating</td><td>Core case metadata&nbsp;<span style="background-color: rgb(14, 21, 28);">&nbsp;</span><span style="background-color: rgb(14, 21, 28);">##NOTE TBD, should only be surfaced in portal but not MCP tools##</span></td></tr>
+      <tr><td><code>set_case_metadata</code></td><td>mutating</td><td><b>F-E: portal-owned</b> — removed from agent surface; metadata-set + report generation are examiner-triggered in the portal.</td></tr>
     </tbody></table>
     <p style="color:var(--muted);font-size:12.5px">≈ 25 in-process core tools across execute / case / evidence / audit / findings / reporting.</p>
 
     <h3>3.2 — METHODOLOGY → /skills (D4, post-MVP, remove as tools)</h3>
     <p>From <code>forensic-mcp</code>: 14 methodology tools + 14 mirrored <code>forensic-mcp://</code> resources.</p>
-    <div class="callout warn"><b>Verified — do not move all 14 into core, and do not move all to /skills.</b> The 14 getter <em>tools</em> are thin wrappers over <code>forensic_knowledge.loader.*</code>, so the <em>tools</em> can become /skills. But two pieces of <b>finding-time logic in core already consume the FK data</b> and must stay: (1) <code>record_finding</code> → <code>_build_finding_considerations()</code> calls <code>loader.get_investigation_framework()</code>; (2) the Grounding Score (<code>_score_grounding</code>) calls <code>loader.get_corroboration()</code>. <code>validate_finding</code> the <em>tool</em> is just a pre-check — the real validation runs <b>inside</b> <code>manager.record_finding</code> (returns <code>VALIDATION_FAILED</code>) and stays core. <b>Net rule: FK <em>data package</em> stays a core dependency; the 14 getter <em>tools</em> → /skills; validation + grounding + considerations stay core logic (no agent tool).</b> See §3.4.&nbsp;&nbsp;<span style="background-color: rgb(14, 21, 28); font-size: 13.5px;">##NOTE TBD, Need more insights on what exactly is the workflow, is it operational or just there, what to remove vs keep core##</span></div>
+    <div class="callout warn"><b>Verified — do not move all 14 into core, and do not move all to /skills.</b> The 14 getter <em>tools</em> are thin wrappers over <code>forensic_knowledge.loader.*</code>, so the <em>tools</em> can become /skills. But two pieces of <b>finding-time logic in core already consume the FK data</b> and must stay: (1) <code>record_finding</code> → <code>_build_finding_considerations()</code> calls <code>loader.get_investigation_framework()</code>; (2) the Grounding Score (<code>_score_grounding</code>) calls <code>loader.get_corroboration()</code>. <code>validate_finding</code> the <em>tool</em> is just a pre-check — the real validation runs <b>inside</b> <code>manager.record_finding</code> (returns <code>VALIDATION_FAILED</code>) and stays core. <b>Net rule: FK <em>data package</em> stays a core dependency; the 14 getter <em>tools</em> → /skills; validation + grounding + considerations stay core logic (no agent tool).</b> See §3.4. <b>Workflow confirmed:</b> the 14 getter tools are reference lookups (the agent pulls methodology text), <em>not</em> control flow — considerations, grounding suggestions, and validation all run server-side regardless of whether the agent ever calls them. Removing the tools loses nothing operational; methodology moves to a /skills pack loaded once into context.</div>
 
     <h3>3.3 — ADD-ON (stay external · contract-governed · renamed namespaces)</h3>
     <table>
@@ -318,14 +318,14 @@
     <table>
       <tbody><tr><th>Element</th><th>Today (verified location)</th><th>Destination</th><th>Why / what the spec must do</th></tr>
       <tr><td>case / evidence-list / findings / timeline / todo / report tools (~25, §3.1)</td><td><code>sift-mcp · case-mcp · forensic-mcp · report-mcp</code> server.py</td><td><span class="tag t-core">CORE-TOOL</span></td><td>Register in-process from sift-core (Ph 1–2). The thin backends retire.</td></tr>
-      <tr><td><b>Finding validation</b> (required fields, audit_id present + exists, evidence-registry check, provenance tier MCP&gt;HOOK&gt;SHELL&gt;NONE) ##Note Double check##</td><td><code>forensic-mcp/case/manager.py</code> <code>record_finding()</code> (returns <code>VALIDATION_FAILED</code>)</td><td><span class="tag t-skill" style="background:#3a2a52;color:#f1ecff;border-color:#9a6cff">CORE-LOGIC</span></td><td>Already internal to <code>record_finding</code>. Moves to sift-core <em>as logic</em>. The <code>validate_finding</code> <em>tool</em> (manual pre-check) is dropped/→skills; the enforcement is not.</td></tr>
-      <tr><td><b>Grounding Score</b> (WEAK/PARTIAL/STRONG; scans <code>audit/</code> for reference-backend usage)<br><br>##Note TDB, without add on backend mcps this would break as core only provides run_command tool to assess and analyze, brainstorm##</td><td><code>forensic-mcp/case/manager.py</code> <code>_score_grounding()</code>, <code>_GROUNDING_MCPS</code> hardcoded</td><td><span class="tag t-skill" style="background:#3a2a52;color:#f1ecff;border-color:#9a6cff">CORE-LOGIC</span></td><td>Moves to core with <code>record_finding</code>. <b>Must be made declaration-driven</b>: replace the hardcoded <code>(forensic-rag-mcp, windows-triage-mcp, opencti-mcp)</code> with backends whose manifest declares <code>capabilities.provides: ["reference"]</code> — same "zero hardcoded backend names" rule as the evidence gate. <b>This mechanism is absent from v1/v2 and must be added.</b></td></tr>
+      <tr><td><b>Finding validation</b> (required fields, audit_id present + exists, evidence-registry check, provenance tier MCP&gt;HOOK&gt;SHELL&gt;NONE) — <b>verified accurate</b></td><td><code>forensic-mcp/case/manager.py</code> <code>record_finding()</code> (returns <code>VALIDATION_FAILED</code>)</td><td><span class="tag t-skill" style="background:#3a2a52;color:#f1ecff;border-color:#9a6cff">CORE-LOGIC</span></td><td>Already internal to <code>record_finding</code>. Moves to sift-core <em>as logic</em>. The <code>validate_finding</code> <em>tool</em> (manual pre-check) is dropped/→skills; the enforcement is not.</td></tr>
+      <tr><td><b>Grounding Score</b> (WEAK/PARTIAL/STRONG; scans <code>audit/</code> for reference-backend usage)<br><br><b>Verified:</b> grounding does <em>not</em> break core-only — <code>_grounding_result</code> returns empty when no reference backend is deployed (it only flags <em>deployed</em> ones), so findings still record with just run_command. The real defect is the hardcoded tuple, fixed by the declaration-driven rule at right.</td><td><code>forensic-mcp/case/manager.py</code> <code>_score_grounding()</code>, <code>_GROUNDING_MCPS</code> hardcoded</td><td><span class="tag t-skill" style="background:#3a2a52;color:#f1ecff;border-color:#9a6cff">CORE-LOGIC</span></td><td>Moves to core with <code>record_finding</code>. <b>Must be made declaration-driven</b>: replace the hardcoded <code>(forensic-rag-mcp, windows-triage-mcp, opencti-mcp)</code> with backends whose manifest declares <code>capabilities.provides: ["reference"]</code> — same "zero hardcoded backend names" rule as the evidence gate. <b>This mechanism is absent from v1/v2 and must be added.</b></td></tr>
       <tr><td><b>FK response enrichment</b> + decay (caveats/field_meanings always; advisories/corroboration/cross_mcp_checks on calls 1–3 then every 10th; rotating discipline reminder)</td><td><code>sift-mcp/response.py</code> (<code>_fk_delivery_counts</code>, <code>_build_knowledge_context</code>)</td><td><span class="tag t-skill" style="background:#3a2a52;color:#f1ecff;border-color:#9a6cff">CORE-LOGIC</span></td><td>Wraps <code>run_command</code> output. Since execute becomes core, this enrichment becomes <b>core's own</b> response enrichment — it is NOT the add-on <code>enriches_responses</code> capability. Core declares itself enriching; the per-tool decay counters move with it.</td></tr>
       <tr><td>FK <b>data package</b> (<code>data/tools</code>, <code>data/artifacts</code>, <code>data/discipline</code>)</td><td><code>forensic-knowledge/</code> (loader API: get_tool, get_artifact, get_corroboration, get_investigation_framework…)</td><td><span class="tag t-good">SKILLS</span> <b>+</b> <span class="tag t-skill" style="background:#3a2a52;color:#f1ecff;border-color:#9a6cff">CORE-LOGIC dep</span></td><td><b>Dual role.</b> Static reference text → /skills packs (Ph 7). But the <em>package stays a core runtime dependency</em>: grounding (<code>get_corroboration</code>), considerations (<code>get_investigation_framework</code>), and execute enrichment (<code>get_tool/get_artifact</code>) all read it. Do <b>not</b> delete the package when the tools become skills.</td></tr>
       <tr><td>14 methodology getter tools (<code>get_investigation_framework, get_rules, get_anti_patterns, list_playbooks, get_playbook, get_collection_checklist…</code>) + 14 <code>forensic-mcp://</code> resources</td><td><code>forensic-mcp/server.py</code> (thin wrappers over <code>loader.*</code>)</td><td><span class="tag t-good">SKILLS</span></td><td>Pure pass-throughs → static packs (Ph 7). Removed as tools. <b>Only the data they expose stays</b> (row above).</td></tr>
       <tr><td><code>run_command</code> spawning</td><td><code>sift-mcp/tools/generic.py</code></td><td><span class="tag t-core">CORE-TOOL</span> + sandbox</td><td>Contract + policy + audit + enrichment in core; spawn delegated to the isolated executor (§5).</td></tr>
       <tr><td>execute security policy (denied_binaries, dangerous_flags, per-tool flag allow/block, output_flags)</td><td><code>sift-mcp/data/catalog/security.yaml</code> (already externalized)</td><td><span class="tag t-core">CORE-TOOL</span> config</td><td>Relocate YAML to operator-editable <code>gateway.yaml</code>; add a non-weakenable deny floor in code (§5.1).</td></tr>
-      <tr><td><code>case_host_fix&nbsp;<br>##NOTE TBD NEED TO REMOVE, its only opensearch indices specific tool##</code></td><td><code>opensearch-mcp/server.py</code></td><td><span class="tag t-core">CORE-TOOL</span></td><td>Mutates case state from an add-on (layering violation) → core case mgmt (Ph 1).</td></tr>
+      <tr><td><code>case_host_fix</code> → <code>opensearch_host_fix</code></td><td><code>opensearch-mcp/server.py</code></td><td><span class="tag t-addon">CONNECTOR</span></td><td><b>F-D:</b> scoped to OpenSearch index/alias state, not global case state. Stays in opensearch-mcp under the <code>opensearch_*</code> namespace — not a core concern.</td></tr>
       <tr><td>idx_* (15) · cti_* (8) · wintriage_* (6) · kb_* (3)</td><td>opensearch / opencti / windows-triage / rag <code>server.py</code></td><td><span class="tag t-addon">CONNECTOR</span></td><td>Stay external; join via Contract v1 with declared namespace + <code>evidence_class</code> + <code>requires[]</code>. The three reference backends additionally declare <code>provides: ["reference"]</code> so the relocated Grounding Score can find them generically.</td></tr>
     </tbody></table>
     <div class="callout"><b>The split in one line:</b> a thing becomes a <b>CORE-TOOL</b> only if the agent calls it directly to read/mutate case state; <b>CORE-LOGIC</b> if core runs it <em>for</em> the agent at finding/exec time (validation, grounding, enrichment); <b>SKILLS</b> if it's static reference an operator loads once; <b>CONNECTOR</b> if it's situational capability behind the contract. The FK data package is the one element that is simultaneously a SKILLS source <em>and</em> a CORE-LOGIC dependency — keep it installed.<br></div>
@@ -335,7 +335,7 @@
 
   <!-- ============ CONTRACT ============ -->
   <section id="contract">
-    <h2><span class="n">4</span>SIFT MCP Backend Contract v1 ##Note TDB, too complicated and not clear##</h2>
+    <h2><span class="n">4</span>SIFT MCP Backend Contract v1</h2>
     <p class="lead">The standard others build on. A backend satisfying this contract can be dropped on a SIFT VM and aggregated with no compatibility negotiation.</p>
 
     <h3 id="manifest">4.1 — Backend manifest (<code>sift-backend.json</code>)</h3>
@@ -470,7 +470,7 @@ escalates via caps-first then sudoers-allowlist; escalation is audited (§5)." }
       </div>
     </details>
 
-    <h3 id="evclass">4.2 — Evidence-Gate spec (current → target) ##Note TBD, need simpler approach, no tool calls should be allowed before Operator adds the evidence in the folder and seal it, after that, any modified, missing, unregistered, ledger error should return blocked until operator fix from portal##</h3>
+    <h3 id="evclass">4.2 — Evidence-Gate spec (current → target · decision F-A)</h3>
     <h4>What it is (the forensic-soundness interlock)</h4>
     <p>The gate runs on <em>every</em> <code>/mcp</code> call before the tool executes. It asks one question about the case's evidence chain — "is the chain in a trustworthy state?" — by calling <code>chain_status(case_dir)</code> from sift-core, cached 30 s (invalidated on manifest mtime change or explicit portal seal via <code>invalidate_evidence_cache</code>). Its purpose: make "you cannot analyze evidence that has not been cryptographically sealed and verified" a <b>structural guarantee</b>, so downstream findings are court-defensible.</p>
     <h4>Current behaviour (verified)</h4>
@@ -481,17 +481,17 @@ escalates via caps-first then sudoers-allowlist; escalation is audited (§5)." }
       <tr><td><span class="tag t-bad">MODIFIED / MISSING / UNREGISTERED / LEDGER_ERROR</span></td><td>Chain integrity violation</td><td><b>Everything blocked</b>, incl. read-only</td></tr>
     </tbody></table>
     <p>So current model = <em>case integrity status</em> × <em>tool <code>readOnlyHint</code> boolean</em>. The boolean is too coarse and the endpoint must know tool names → community tools aren't gated automatically.</p>
-    <h4>Target behaviour (declaration-driven — kills the tool-name coupling)</h4>
-    <p>Replace <code>readOnlyHint</code> with each tool's declared <code>evidence_class</code> and enforce a class × status matrix generically:</p>
+    <h4>Target behaviour (decision F-A — strict binary, block everything)</h4>
+    <p>Drop the <code>readOnlyHint</code> carve-out and the former 3-class model. The gate becomes one rule on the agent <code>/mcp</code> surface: <b>if <code>chain_status == OK</code> (evidence registered <em>and</em> sealed) allow the tool; otherwise block <em>every</em> agent tool</b> — including read-only — and return a portal-remediation response. Any non-OK status blocks until the operator fixes it in the portal and re-seals.</p>
     <table>
-      <tbody><tr><th><code>evidence_class</code></th><th>UNSEALED</th><th>SEALED (OK)</th><th>VIOLATION</th></tr>
-      <tr><td><span class="tag t-good">read_only</span> — reads, derives nothing</td><td>allow (warn)</td><td>allow</td><td>block</td></tr>
-      <tr><td><span class="tag t-warn">analysis</span> — derives data <em>from</em> sealed evidence (index, parse, enrich)</td><td><b>block</b></td><td>allow</td><td>block</td></tr>
-      <tr><td><span class="tag t-bad">mutating</span> — writes case state (findings, registration)</td><td>block</td><td>allow (+ approval rules)</td><td>block</td></tr>
+      <tbody><tr><th><code>chain_status</code></th><th>Every agent <code>/mcp</code> tool</th></tr>
+      <tr><td><span class="tag t-good">OK (sealed)</span></td><td>allow</td></tr>
+      <tr><td><span class="tag t-warn">UNSEALED</span></td><td><b>block</b> — nothing runs before the operator seals</td></tr>
+      <tr><td><span class="tag t-bad">MODIFIED / MISSING / UNREGISTERED / LEDGER_ERROR</span></td><td><b>block</b> until fixed + re-sealed in the portal</td></tr>
     </tbody></table>
-    <div class="callout"><b>Two invariants to preserve in the refactor:</b> (1) UNSEALED must remain distinct from the four violation statuses — blocking read-only on UNSEALED would make a fresh case unusable. (2) The gateway must end up with <b>zero hardcoded tool names</b>; a community <code>opensearch_*</code> tool declaring <code>analysis</code> is then gated correctly with no gateway code change.</div>
+    <div class="callout fix"><b>Why simpler beats the 3-class target:</b> "nothing runs against unsealed or compromised evidence" is the cleanest court-defensible custody invariant and the easiest to specify — a backend still declares <code>readOnlyHint</code>/<code>mutating</code> for audit/approval, but the gate itself needs <b>zero per-tool classes and zero hardcoded tool names</b>. Scope: the gate sits on the agent <code>/mcp</code> surface only; health/lifecycle/portal endpoints are not agent tools and stay ungated by design. This <b>supersedes the former opt O2 3-class model</b> and the <code>readOnlyHint</code> carve-out — the old "UNSEALED ≠ blocked for read-only" invariant no longer applies.</div>
 
-    <h3 id="conformance">4.3 — Conformance checklist ##Note TBD discuss and update based on previous points clarifications and agreement##</h3>
+    <h3 id="conformance">4.3 — Conformance checklist</h3>
     <div class="grid2">
       <div class="card">
         <h4>Structural</h4>
@@ -592,10 +592,11 @@ service: agentir-opensearch     literal: /cases (55) — review case_root defaul
   <section id="skills">
     <h2><span class="n">7</span>/skills Distribution Endpoint (D4 · post-MVP)</h2>
     <p class="lead">Turns "14 methodology tools the agent must call" into "one SKILLS pack the operator loads once" — a net context win and the P7 fix. <b>Last thing implemented.</b></p>
-    <h3>7.1 — API ##NOTE TBD downloadable as a zip folder containing all the skills following the standard skills standard by anthropic##</h3>
+    <h3>7.1 — API (packs downloadable as a zip following Anthropic's skills standard)</h3>
     <pre><code>GET /skills            → list packs  [{name, version, discipline, description, sha256}]
 GET /skills/{name}     → versioned markdown pack (latest)
 GET /skills/{name}@{v} → pinned version
+GET /skills/{name}.zip → pack as a zip folder (Anthropic skills-standard layout)
 Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance.</code></pre>
     <h3>7.2 — Corpus sources</h3>
     <ul>
@@ -614,12 +615,12 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
 
   <!-- ============ INSTALL ============ -->
   <section id="install">
-    <h2><span class="n">8</span>install.sh Flow (registration-driven) ##Note TBD after clearing previous notes##</h2>
+    <h2><span class="n">8</span>install.sh Flow (registration-driven)</h2>
     <p class="lead">Stops hardcoding the 8-backend list; installs core unconditionally, then offers add-ons that self-register via manifest. Current template: <code>configs/gateway.yaml.template</code> (118 lines, flat <code>backends:</code> map with <code>enabled</code> flags).</p>
     <ol>
       <li><b>Core + gateway (always):</b> create <code>sift-core</code>, gateway on :4508 HTTPS, generate TLS cert, harden (apparmor/audit/systemd in <code>configs/</code>).</li>
       <li><b>Privilege setup (new, §5.3):</b> <code>setcap</code> on the executor + write <code>/etc/sudoers.d/sift-exec</code> full-path allowlist.</li>
-      <li><b>Portal first-run registration:</b> username, password (must-reset guard exists), <b>case_root</b> + <b>evidence_dir</b> — defaults pre-filled, editable. Customization must write <b>one</b> config source that path-resolution, the evidence gate, run_command cwd, and the portal all read (today: <code>AGENTIR_CASE_DIR</code>/<code>AGENTIR_CASES_ROOT</code>). Audit for stray <code>/cases</code> literals (55 occurrences) before shipping customizable paths. ##Note TBD audit, ledgers, access logs should be in the sift-core directory not in the case to protect from accidental tampering or deletion by AGENT##</li>
+      <li><b>Portal first-run registration:</b> username, password (must-reset guard exists), <b>case_root</b> + <b>evidence_dir</b> — defaults pre-filled, editable. Customization must write <b>one</b> config source that path-resolution, the evidence gate, run_command cwd, and the portal all read (today: <code>AGENTIR_CASE_DIR</code>/<code>AGENTIR_CASES_ROOT</code>). Audit for stray <code>/cases</code> literals (55 occurrences) before shipping customizable paths. <b>Decision F-B:</b> the integrity records (<code>audit/</code>, <code>evidence-ledger.jsonl</code>, <code>approvals.jsonl</code>, manifest) live <em>outside</em> the agent's reachable <code>case_root</code> at <code>/var/lib/sift/&lt;case_id&gt;/</code>, so the agent (whose <code>run_command</code> jail is the case dir) can never tamper with or delete its own audit trail. Evidence/extractions/reports/agent stay under <code>case_root</code>.</li>
       <li><b>Token + cert handoff:</b> generate agent Bearer token (<code>token_gen.py</code>), bundle with cert for the remote agent. Examiner gets the gateway token for the portal.</li>
       <li><b>Add-on menu:</b> present contract-conformant backends; selected ones install, drop <code>sift-backend.json</code>, and auto-register (manifest-validate → conformance probe → advertise). "Stripping conflicts with core" = add-ons install <em>thin</em> after core owns case/evidence/findings (e.g. opensearch ships without <code>case_host_fix</code>).</li>
     </ol>
@@ -628,19 +629,19 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
 
   <!-- ============ ROADMAP ============ -->
   <section id="roadmap">
-    <h2><span class="n">9</span>Roadmap ##Note TBD after clearing previous notes##</h2>
-    <p class="lead">Each phase ends with a verifiable gate. The full test suite is the safety net throughout. <b>MVP = Phases 0–6.</b> Phase 7 (methodology→/skills, D4) is post-MVP.</p>
+    <h2><span class="n">9</span>Roadmap</h2>
+    <p class="lead">Each phase ends with a verifiable gate. The full test suite is the safety net throughout. <b>MVP = Phases 0–6.</b> Phase 7 (methodology→/skills, D4) is post-MVP. The authoritative, checkbox-tracked version of this roadmap is <code>revamp-tasks.md</code> (updated every session); this section is the design-level summary.</p>
 
     <div class="phase"><div class="pn">0</div><div class="pc">
       <h4>Rename + foundations (D1)</h4>
-      <p>Rename <code>agentir-core</code>→<code>sift-core</code> (package + env/path surface §6) with back-compat shim. Publish the contract spec + JSON Schema + conformance checklist (this doc). Add <code>tier</code> + <code>spec_version</code> to <code>gateway.yaml</code>. No behaviour change.</p>
+      <p>Rename <code>agentir-core</code>→<code>sift-core</code> (package + env/path surface §6, plus the <code>agentir_svc_*</code>→<code>sift_svc_*</code> token prefix). <b>No back-compat</b> — fresh VM + case, clean cutover (no shim/symlink/dual-name). Publish the contract spec + JSON Schema + conformance checklist (this doc). Add <code>tier</code> + <code>spec_version</code> to <code>gateway.yaml</code>. No behaviour change.</p>
       <div class="verify">verify → full suite green under new names; schema validates the example manifests.</div>
       <div class="files">packages/* · configs/gateway.yaml.template · install.sh · systemd · apparmor</div>
     </div></div>
 
     <div class="phase"><div class="pn">1</div><div class="pc">
       <h4>Consolidate the core library (kills P2)</h4>
-      <p>Migrate findings / timeline / TODO / evidence-listing / case-metadata out of <code>forensic-mcp</code>, <code>case-mcp</code>, <code>report-mcp</code> into <code>sift-core</code>. <b>Move the finding-time CORE-LOGIC with it (§3.4):</b> validation (already internal to <code>record_finding</code>), the Grounding Score (<code>_score_grounding</code>), and considerations — these become sift-core logic, not agent tools. Keep the <code>forensic-knowledge</code> package as a core runtime dependency (grounding + considerations read it). Move <code>case_host_fix</code> out of opensearch-mcp into core. Backends become thin facades. Add parity tests proving identical I/O before/after (incl. grounding WEAK/PARTIAL/STRONG output).</p>
+      <p>Migrate findings / timeline / TODO / evidence-listing / case-metadata out of <code>forensic-mcp</code>, <code>case-mcp</code>, <code>report-mcp</code> into <code>sift-core</code>. <b>Move the finding-time CORE-LOGIC with it (§3.4):</b> validation (already internal to <code>record_finding</code>), the Grounding Score (<code>_score_grounding</code>), and considerations — these become sift-core logic, not agent tools. Keep the <code>forensic-knowledge</code> package as a core runtime dependency (grounding + considerations read it). (<code>case_host_fix</code> stays in opensearch-mcp per F-D — not moved.) <b>Relocate the integrity records</b> (audit/ledger/approvals/manifest) out of <code>case_root</code> to <code>/var/lib/sift/&lt;case_id&gt;/</code> per F-B. Backends become thin facades. Add parity tests proving identical I/O before/after (incl. grounding WEAK/PARTIAL/STRONG output).</p>
       <div class="verify">verify → parity tests pass; sift-core test count rises; backend tests still green.</div>
       <div class="files">packages/sift-core/* · forensic-mcp · case-mcp · report-mcp · opensearch-mcp</div>
     </div></div>
@@ -690,7 +691,7 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
 
   <!-- ============ RISKS ============ -->
   <section id="risks">
-    <h2><span class="n">10</span>Invariants to Preserve &amp; Risks ##Note TBD after clearing previous notes##</h2>
+    <h2><span class="n">10</span>Invariants to Preserve &amp; Risks</h2>
     <div class="grid2">
       <div class="card">
         <h4>Non-negotiable invariants (every phase)</h4>
@@ -702,15 +703,17 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
           <li>R5/R6 — TLS everywhere; timing-safe Bearer auth, two roles</li>
           <li>R7 — aggregate <code>/mcp</code> is the only agent endpoint</li>
           <li>R8 — gateway never root; privilege only via caps/sudoers-allowlist, audited</li>
-          <li>R9 — UNSEALED ≠ violation&nbsp;</li>
+          <li>R9 — <b>(F-A)</b> strict binary evidence gate: no agent <code>/mcp</code> tool runs unless <code>chain_status == OK</code>; UNSEALED blocks everything until the operator seals (supersedes the old "UNSEALED ≠ violation" carve-out)</li>
           <li>R10 — finding-time logic stays core, not a tool: validation (enforced in <code>record_finding</code>), Grounding Score, FK enrichment. None may be deleted when the 14 methodology tools become /skills.</li>
           <li>R11 — zero hardcoded backend names in core logic: the Grounding Score must resolve reference backends from manifest <code>provides:["reference"]</code>, mirroring the evidence gate's zero-tool-name rule.</li>
+          <li>R12 — operator drives the portal only: agent tokens are portal-minted (audit identity = <code>agent_id</code>, authorizer = <code>created_by</code>); the portal rejects agent tokens and <code>/mcp</code> is agent-only; human accountability attaches at DRAFT→approval.</li>
+          <li>R13 — <b>(F-B)</b> the agent (run_command jail = case dir) can never read or write the integrity records; they live at <code>/var/lib/sift/&lt;case_id&gt;/</code>.</li>
         </ul>
       </div>
       <div class="card">
         <h4>Migration risks &amp; mitigations</h4>
         <ul>
-          <li><b>Rename breakage (D1)</b> → central env helper + shim + symlink; full suite per phase; re-run discovery grep.</li>
+          <li><b>Rename breakage (D1)</b> → central env helper; fresh VM means a clean cutover (no shim/symlink); full suite per phase; re-run discovery grep until <code>grep -ri agentir packages/</code> is clean.</li>
           <li><b>Behaviour drift in P1</b> → parity tests on case I/O before cut-over.</li>
           <li><b>In-process core widens blast radius (P2)</b> → only pure-library logic moves in; execution stays sandboxed.</li>
           <li><b>Host vs SIFT VM</b> (two OSes) → validate every phase on the VM, not just locally; caps/sudoers/apparmor are VM-specific.</li>
@@ -723,7 +726,7 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
 
   <!-- ============ PICKUP ============ -->
   <section id="pickup">
-    <h2><span class="n">11</span>Next-Session Pickup ##Note TBD after clearing previous notes##</h2>
+    <h2><span class="n">11</span>Next-Session Pickup</h2>
     <p class="lead">Start here without re-reading code. Key files and the immediate first task.</p>
     <h4>Key files (verified locations)</h4>
     <pre><code>Gateway:   packages/sift-gateway/src/sift_gateway/
@@ -745,25 +748,25 @@ Diagram:   docs/revamp/target-architecture.mmd (this spec's diagram, editable)</
     <ul>
       <li>D1 rename agentir→sift (package + env/path) · D2 denylist-default execute · D3 caps-first then sudoers-allowlist · D4 methodology→/skills (last)</li>
       <li>Context injection: static guidance → manifest <code>instructions</code>; runtime enrichment → per-backend (<code>enriches_responses</code>)</li>
-      <li>Evidence gate → declaration-driven <code>evidence_class</code>, zero hardcoded tool names; UNSEALED ≠ violation</li>
+      <li><b>F-A</b> evidence gate → strict binary, block everything unless sealed+OK (supersedes the 3-class O2 model and the UNSEALED read-only carve-out); zero hardcoded tool names. <b>F-B</b> integrity records → <code>/var/lib/sift</code>. <b>F-C</b> drop export/import_bundle from agent. <b>F-D</b> case_host_fix stays in opensearch. <b>F-E</b> set_case_metadata + reporting → portal-owned. <b>No back-compat</b> (fresh VM + case).</li>
     </ul>
-    <h4>First task (Phase 0)</h4>
+    <h4>First task — next session (repo setup already done: branch <code>revamp/spg-v1</code>, tag <code>pre-revamp-v0</code>, worktree <code>../sift-mcps-main</code>; tracker = <code>revamp-tasks.md</code>)</h4>
     <ol>
       <li>Re-run the rename discovery grep (§6.2) to get the current exhaustive list.</li>
       <li>Rename the package dir + imports; add the central env-fallback helper in <code>gateway_cfg.py</code>.</li>
       <li>Run the full test suite under the new names; fix fallout.</li>
       <li>Add <code>tier</code> + <code>spec_version</code> fields to <code>gateway.yaml.template</code> (no behaviour change yet).</li>
     </ol>
-    <div class="callout"><b>Open items to confirm with the owner before/while coding:</b> (1) exact set of <code>requires_privilege</code> tools + their caps vs sudoers split; (2) <code>validate_finding</code> — the <em>tool</em> becomes a skill, but confirm the enforcement stays inside <code>record_finding</code> (it does today); (3) final <code>case_root</code> default (replacing the <code>/cases</code> literal); (4) namespace for opencti — <code>cti_*</code> vs <code>opencti_*</code>; (5) the manifest token for reference backends that feed the Grounding Score (<code>provides:["reference"]</code>) — confirm wording, since it replaces the hardcoded <code>_GROUNDING_MCPS</code>.</div>
+    <div class="callout"><b>Open items still to confirm while coding:</b> (1) exact set of <code>requires_privilege</code> tools + their caps vs sudoers split; (2) final <code>case_root</code> default (replacing the <code>/cases</code> literal); (3) exact manifest wording for <code>provides:["reference"]</code> that replaces the hardcoded <code>_GROUNDING_MCPS</code>. <b>Resolved:</b> opencti namespace = <code>cti_*</code>; <code>validate_finding</code> enforcement stays inside <code>record_finding</code>.</div>
   </section>
 
   <!-- ============ APPENDIX ============ -->
   <section id="appendix">
-    <h2><span class="n">A</span>Appendix — Backend Inventory &amp; Disposition (corrected) ##Note TBD##</h2>
+    <h2><span class="n">A</span>Appendix — Backend Inventory &amp; Disposition (corrected)</h2>
     <table>
       <tbody><tr><th>Package</th><th>Tools (verified)</th><th>Tier</th><th>Disposition</th></tr>
       <tr><td><code>sift-mcp</code></td><td>5 (run_command, list_available_tools, get_tool_help, check_tools, suggest_tools)</td><td><span class="tag t-core">CORE</span></td><td>Execute folds into core; spawning → sandboxed executor (Ph 3).</td></tr>
-      <tr><td><code>case-mcp</code></td><td>10 (case_status, case_file_structure, evidence_register*, evidence_list, evidence_verify, export/import_bundle, record_action, log_reasoning, log_external_action)</td><td><span class="tag t-core">CORE</span></td><td>In-process from sift-core (Ph 2). *evidence_register stays portal-managed/hidden.</td></tr>
+      <tr><td><code>case-mcp</code></td><td>10 (case_status, case_file_structure, evidence_register*, evidence_list, evidence_verify, export/import_bundle, record_action, log_reasoning, log_external_action)</td><td><span class="tag t-core">CORE</span></td><td>In-process from sift-core (Ph 2). *evidence_register stays portal-managed/hidden; export/import_bundle dropped from agent surface (F-C); set_case_metadata → portal-owned (F-E).</td></tr>
       <tr><td><code>forensic-mcp</code></td><td>20 tools + 14 resources — 6 case/findings tools + 14 methodology tools</td><td><span class="tag t-core">CORE</span> + <span class="tag t-skill">SKILLS</span></td><td>6 case/findings → core (Ph 1). 14 methodology → /skills (Ph 7). Package likely retired.</td></tr>
       <tr><td><code>report-mcp</code></td><td>6 (generate_report, save_report, list_reports, list_profiles, get/set_case_metadata)</td><td><span class="tag t-core">CORE</span></td><td>In-process from sift-core (Ph 2).</td></tr>
       <tr><td><code>opensearch-mcp</code></td><td>15 idx_* + case_host_fix</td><td><span class="tag t-addon">ADD-ON</span></td><td>Namespace → <code>opensearch_*</code> (Ph 6). <code>case_host_fix</code> → core (Ph 1).</td></tr>
