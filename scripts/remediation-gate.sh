@@ -25,9 +25,9 @@ if grep -rn "agentir case activate\|agentir case init\|~/.sift/active_case" \
 fi
 
 echo
-echo "=== sys.exit in agentir-core ==="
-if grep -rn "sys\.exit" packages/agentir-core/ --include="*.py"; then
-    echo "FAIL: sys.exit in agentir-core (raise exceptions instead)"
+echo "=== sys.exit in sift-core ==="
+if grep -rn "sys\.exit" packages/sift-core/ --include="*.py"; then
+    echo "FAIL: sys.exit in sift-core (raise exceptions instead)"
     FAIL=1
 fi
 

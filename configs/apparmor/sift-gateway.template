@@ -24,10 +24,10 @@
   /home/*/.local/bin/uv                      rix,
 
   # TLS material (read-only)
-  /home/*/.agentir/                          r,
-  /home/*/.agentir/**                        r,
+  /home/*/.sift/                          r,
+  /home/*/.sift/**                        r,
 
-  # agentir state directory (read + write for passwords, tokens, verification)
+  # sift state directory (read + write for passwords, tokens, verification)
   /var/lib/sift/                          rw,
   /var/lib/sift/**                        rw,
 
@@ -94,7 +94,7 @@
   /bin/fusermount                            rix,
   /bin/fuser                                 rix,
   /usr/bin/python3*                          rix,
-  /home/*/.agentir/bin/*                     rix,
+  /home/*/.sift/bin/*                     rix,
   /usr/sbin/partprobe                        rix,
   /usr/sbin/modprobe                         rix,
   /usr/bin/qemu-nbd                          rix,
