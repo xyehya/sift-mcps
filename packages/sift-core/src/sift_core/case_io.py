@@ -26,6 +26,27 @@ class CaseError(Exception):
     """Raised when case directory cannot be resolved or validation fails."""
 
 
+def cases_root() -> Path:
+    """Resolve the cases-root directory — the parent that holds all case dirs.
+
+    Single source of truth for cases-root resolution across the gateway,
+    portal, ingest CLI, and every backend. Precedence:
+
+      ``SIFT_CASES_ROOT``  — set by the gateway from ``gateway.yaml`` ``case.root``
+      → ``SIFT_CASES_DIR`` — legacy alias
+      → ``~/cases``        — :data:`DEFAULT_CASES_DIR`
+
+    Every cases-root lookup must route through here so the env precedence is
+    defined exactly once (no scattered, drifting ``os.environ.get`` calls).
+    For the *active* case directory (singular) use :func:`get_case_dir`.
+    """
+    return Path(
+        os.environ.get("SIFT_CASES_ROOT")
+        or os.environ.get("SIFT_CASES_DIR")
+        or DEFAULT_CASES_DIR
+    )
+
+
 def _validate_case_id(case_id: str) -> None:
     if not case_id:
         raise CaseError("Case ID cannot be empty")
@@ -76,8 +97,7 @@ def get_case_dir(case_id: str | None = None) -> Path:
     """Resolve the active case directory."""
     if case_id:
         _validate_case_id(case_id)
-        cases_dir = Path(os.environ.get("SIFT_CASES_DIR", DEFAULT_CASES_DIR))
-        case_dir = cases_dir / case_id
+        case_dir = cases_root() / case_id
         if not case_dir.exists():
             raise CaseError(f"Case not found: {case_id}")
         return case_dir

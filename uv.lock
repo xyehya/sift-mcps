@@ -406,6 +406,7 @@ version = "0.6.1"
 source = { editable = "packages/case-dashboard" }
 dependencies = [
     { name = "sift-common" },
+    { name = "sift-core" },
     { name = "starlette" },
 ]
 
@@ -422,6 +423,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "sift-common", editable = "packages/sift-common" },
+    { name = "sift-core", editable = "packages/sift-core" },
     { name = "starlette", specifier = ">=0.49.1" },
 ]
 provides-extras = ["dev"]
@@ -1081,6 +1083,7 @@ dependencies = [
     { name = "mcp" },
     { name = "pyyaml" },
     { name = "sift-common" },
+    { name = "sift-core" },
 ]
 
 [package.optional-dependencies]
@@ -1099,6 +1102,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sift-common", editable = "packages/sift-common" },
+    { name = "sift-core", editable = "packages/sift-core" },
 ]
 provides-extras = ["dev"]
 

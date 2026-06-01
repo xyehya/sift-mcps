@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 from sift_common.audit import AuditWriter
+from sift_core.case_io import cases_root
 
 from opensearch_mcp.client import get_client
 from opensearch_mcp.ingest import discover, ingest
@@ -29,8 +30,8 @@ _ACTIVE_CASE_FILE = agentir_dir() / "active_case"
 def _case_dir_for(case_id: str) -> Path | None:
     """Resolve the on-disk case directory for `case_id`.
 
-    Prefers `SIFT_CASES_DIR` env, falls back to `~/cases/`. Returns None
-    if the directory doesn't exist — callers (batch-discovery) treat
+    Resolves the cases root via :func:`sift_core.case_io.cases_root`. Returns
+    None if the directory doesn't exist — callers (batch-discovery) treat
     that as "no dict available, proceed with current behavior" rather
     than aborting.
 
@@ -40,12 +41,7 @@ def _case_dir_for(case_id: str) -> Path | None:
     """
     if not case_id or Path(case_id).name != case_id:
         return None
-    cases_root = Path(
-        os.environ.get("SIFT_CASES_ROOT")
-        or os.environ.get("SIFT_CASES_DIR")
-        or str(Path.home() / "cases")
-    )
-    case_dir = cases_root / case_id
+    case_dir = cases_root() / case_id
     return case_dir if case_dir.is_dir() else None
 
 
@@ -482,14 +478,8 @@ def _resolve_case_id(args_case: str | None) -> str:
                 file=sys.stderr,
             )
             sys.exit(2)
-        # Canonical case directory resolution: SIFT_CASES_ROOT (set by gateway)
-        # then SIFT_CASES_DIR (legacy), then ~/cases fallback.
-        cases_root = Path(
-            os.environ.get("SIFT_CASES_ROOT")
-            or os.environ.get("SIFT_CASES_DIR")
-            or str(Path.home() / "cases")
-        )
-        case_dir = cases_root / args_case
+        # Canonical case directory resolution via sift_core.cases_root().
+        case_dir = cases_root() / args_case
         # Suppress warning in background mode (parent already validated)
         if not case_dir.is_dir() and not os.environ.get("SIFT_INGEST_RUN_ID"):
             print(

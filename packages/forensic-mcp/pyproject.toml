@@ -27,6 +27,7 @@ dependencies = [
     "pyyaml>=6.0",
     "forensic-knowledge",
     "sift-common",
+    "sift-core",
 ]
 
 [project.scripts]

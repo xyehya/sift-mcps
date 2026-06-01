@@ -8,6 +8,8 @@ import re
 import unicodedata
 from pathlib import Path
 
+from sift_core.case_io import cases_root
+
 from sift_mcp.catalog import load_security_policy
 from sift_mcp.config import resolve_case_dir
 
@@ -91,10 +93,14 @@ def sanitize_extra_args(extra_args: list[str], tool_name: str = "") -> list[str]
 
 # Directories where rm is blocked (evidence storage, case data)
 def _get_protected_dirs() -> tuple[str, ...]:
-    """Resolve protected directories at runtime from env/defaults."""
-    cases_dir = os.environ.get("SIFT_CASES_DIR", str(Path.home() / "cases"))
+    """Resolve protected directories at runtime.
+
+    The operator-configured cases root comes from the canonical
+    :func:`sift_core.case_io.cases_root` resolver; ``/cases`` and ``/evidence``
+    are kept as static defense-in-depth belts (well-known default mounts).
+    """
     return (
-        str(Path(cases_dir).resolve()),
+        str(cases_root().resolve()),
         "/cases",
         "/evidence",
     )

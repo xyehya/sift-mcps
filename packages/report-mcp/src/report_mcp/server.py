@@ -21,6 +21,7 @@ from sift_common.audit import AuditWriter
 from sift_common.instructions import REPORT_MCP as _INSTRUCTIONS
 from sift_common.oplog import setup_logging
 from sift_core.case_io import (
+    cases_root,
     load_case_meta,
     load_findings,
     load_timeline,
@@ -34,7 +35,6 @@ from report_mcp.profiles import PROFILES, STRIPPED_FINDING_FIELDS
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_CASES_DIR = str(Path.home() / "cases")
 _ACTIVE_CASE_FILE = Path.home() / ".sift" / "active_case"
 _MAX_FILENAME = 200
 _MAX_FIELD = 500
@@ -213,8 +213,7 @@ def _resolve_case_dir(case_id: str = "") -> Path:
     if case_id:
         if ".." in case_id or "/" in case_id or "\\" in case_id:
             raise ValueError(f"Invalid case ID: {case_id}")
-        cases_dir = Path(os.environ.get("SIFT_CASES_DIR", _DEFAULT_CASES_DIR))
-        case_dir = cases_dir / case_id
+        case_dir = cases_root() / case_id
         if not case_dir.exists():
             raise ValueError(f"Case not found: {case_id}")
         return case_dir
@@ -243,8 +242,7 @@ def _resolve_case_dir(case_id: str = "") -> Path:
             else:
                 if ".." in content or "/" in content or "\\" in content:
                     raise ValueError(f"Invalid case ID in active_case_file: {content}")
-                cases_dir = Path(os.environ.get("SIFT_CASES_DIR", _DEFAULT_CASES_DIR))
-                case_dir = cases_dir / content
+                case_dir = cases_root() / content
             if case_dir.is_dir():
                 return case_dir
 

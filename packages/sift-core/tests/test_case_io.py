@@ -7,7 +7,9 @@ import pytest
 import yaml
 
 from sift_core.case_io import (
+    DEFAULT_CASES_DIR,
     CaseError,
+    cases_root,
     compute_content_hash,
     export_bundle,
     get_case_dir,
@@ -20,6 +22,25 @@ from sift_core.case_io import (
     verify_approval_integrity,
     write_approval_log,
 )
+
+
+class TestCasesRoot:
+    """The single cases-root resolver: SIFT_CASES_ROOT → SIFT_CASES_DIR → ~/cases."""
+
+    def test_cases_root_env_wins(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SIFT_CASES_ROOT", str(tmp_path / "root"))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path / "legacy"))
+        assert cases_root() == tmp_path / "root"
+
+    def test_falls_back_to_cases_dir(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SIFT_CASES_ROOT", raising=False)
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path / "legacy"))
+        assert cases_root() == tmp_path / "legacy"
+
+    def test_falls_back_to_default(self, monkeypatch):
+        monkeypatch.delenv("SIFT_CASES_ROOT", raising=False)
+        monkeypatch.delenv("SIFT_CASES_DIR", raising=False)
+        assert cases_root() == Path(DEFAULT_CASES_DIR)
 
 
 @pytest.fixture

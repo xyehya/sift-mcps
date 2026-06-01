@@ -17,6 +17,7 @@ from sift_common.audit import AuditWriter, resolve_examiner
 from sift_common.instructions import CASE_MCP as _INSTRUCTIONS
 from sift_common.oplog import setup_logging
 from sift_core.case_io import (
+    cases_root,
     export_bundle as _export_bundle,
     import_bundle as _import_bundle,
 )
@@ -31,7 +32,6 @@ from sift_core.evidence_chain import (
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_CASES_DIR = str(Path.home() / "cases")
 _MAX_NAME = 200
 _MAX_TEXT = 10_000
 _MAX_SHORT = 200
@@ -130,8 +130,7 @@ def _resolve_case_dir(case_id: str = "") -> Path:
     if case_id:
         if ".." in case_id or "/" in case_id or "\\" in case_id:
             raise ValueError(f"Invalid case ID: {case_id}")
-        cases_dir = Path(os.environ.get("SIFT_CASES_DIR", _DEFAULT_CASES_DIR))
-        case_dir = cases_dir / case_id
+        case_dir = cases_root() / case_id
         if not case_dir.exists():
             raise ValueError(f"Case not found: {case_id}")
         return case_dir

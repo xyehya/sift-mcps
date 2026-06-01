@@ -13,6 +13,8 @@ import time
 import urllib.parse
 from pathlib import Path
 
+from sift_core.case_io import cases_root
+
 from opensearch_mcp.discover import safe_rglob
 
 logger = logging.getLogger(__name__)
@@ -887,12 +889,7 @@ def make_ingest_tmpdir(case_id: str) -> Path:
         case_dir = Path(case_dir_env)
     else:
         # Legacy CLI fallback — not used in portal workflow
-        cases_root = Path(
-            os.environ.get("SIFT_CASES_ROOT")
-            or os.environ.get("SIFT_CASES_DIR")
-            or str(Path.home() / "cases")
-        )
-        case_dir = cases_root / case_id
+        case_dir = cases_root() / case_id
 
     tmp = case_dir / "tmp" / f"ingest-{ts}-{os.getpid()}"
     tmp.mkdir(parents=True, exist_ok=True)

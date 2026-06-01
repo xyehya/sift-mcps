@@ -16,8 +16,8 @@ from pathlib import Path
 import yaml
 
 from sift_core.case_io import (
-    DEFAULT_CASES_DIR,
     _atomic_write,
+    cases_root,
     load_findings,
     load_timeline,
     load_todos,
@@ -74,14 +74,7 @@ _case_status_data = case_status_data
 def case_list_data(cases_dir=None) -> dict:
     """Return list of cases as structured data."""
     if cases_dir is None:
-        # Try SIFT_CASES_ROOT first (set by gateway from case_dir parent),
-        # then SIFT_CASES_DIR (legacy), then default ~/cases
-        root = (
-            os.environ.get("SIFT_CASES_ROOT")
-            or os.environ.get("SIFT_CASES_DIR")
-            or DEFAULT_CASES_DIR
-        )
-        cases_dir = Path(root)
+        cases_dir = cases_root()
     else:
         cases_dir = Path(cases_dir)
 
@@ -142,7 +135,7 @@ def case_init_data(
 ) -> dict:
     """Create a new case and return structured data."""
     if cases_dir is None:
-        cases_dir = Path(os.environ.get("SIFT_CASES_DIR", DEFAULT_CASES_DIR))
+        cases_dir = cases_root()
     else:
         cases_dir = Path(cases_dir)
 
@@ -238,7 +231,7 @@ _case_init_data = case_init_data
 def case_activate_data(case_id: str, cases_dir=None) -> dict:
     """Activate a case and return structured data."""
     if cases_dir is None:
-        cases_dir = Path(os.environ.get("SIFT_CASES_DIR", DEFAULT_CASES_DIR))
+        cases_dir = cases_root()
     else:
         cases_dir = Path(cases_dir)
 

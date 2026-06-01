@@ -12,7 +12,7 @@ import logging
 import os
 from pathlib import Path
 
-from sift_core.case_io import resolve_case_path
+from sift_core.case_io import cases_root, resolve_case_path
 from mcp.server.fastmcp import FastMCP
 from opensearchpy.exceptions import (
     AuthorizationException,
@@ -679,11 +679,12 @@ def _validate_path(path: str) -> str | None:
     home = agentir_home().resolve()
     allowed = [
         home,
+        cases_root().resolve(),  # operator-configured cases root (canonical)
         Path("/mnt").resolve(),
         Path("/media").resolve(),
         Path("/run/media").resolve(),
         Path("/evidence").resolve(),
-        Path("/cases").resolve(),
+        Path("/cases").resolve(),  # static belt: well-known default mount
         Path("/tmp").resolve(),
     ]
     if not any(p.is_relative_to(a) for a in allowed):
@@ -2611,11 +2612,9 @@ def idx_ingest_status(case_id: str = "") -> dict:
         _hd_run_id = ing.get("run_id", "")
         if _hd_case and _hd_case != "*" and _hd_run_id:
             import json as _json
-            import os as _os
 
-            _cases_root = _os.environ.get("SIFT_CASES_DIR", str(Path.home() / "cases"))
             _hd_path = (
-                Path(_cases_root) / _hd_case / "host-discovery-reports" / f"{_hd_run_id}.json"
+                cases_root() / _hd_case / "host-discovery-reports" / f"{_hd_run_id}.json"
             )
             if _hd_path.exists():
                 try:
@@ -3828,15 +3827,10 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
                 "error": "No active case.",
                 "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
             }
-        _cases_root = Path(
-            _os.environ.get("SIFT_CASES_ROOT")
-            or _os.environ.get("SIFT_CASES_DIR")
-            or str(Path.home() / "cases")
-        )
         case_id = Path(_raw).name
         # Try absolute path first, then cases_root/<case_id>
         _raw_path = Path(_raw)
-        case_dir = _raw_path if _raw_path.is_absolute() and _raw_path.is_dir() else _cases_root / case_id
+        case_dir = _raw_path if _raw_path.is_absolute() and _raw_path.is_dir() else cases_root() / case_id
     if not case_dir.is_dir():
         return {"error": f"Case directory not found: {case_dir}"}
     dict_path = case_dir / "host-dictionary.yaml"

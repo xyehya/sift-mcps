@@ -31,7 +31,7 @@ from sift_core.approval_auth import (
     derive_auth_key,
     derive_ledger_key,
 )
-from sift_core.case_io import _protected_write, compute_content_hash
+from sift_core.case_io import _protected_write, cases_root, compute_content_hash
 from sift_core.evidence_chain import (
     anchor_manifest,
     chain_status,
@@ -3457,7 +3457,9 @@ def _load_cases_root() -> Path:
             pass
 
     if not case_root:
-        case_root = os.environ.get("SIFT_CASES_ROOT") or "/cases"
+        # No gateway.yaml case.root → fall back to the canonical resolver
+        # (SIFT_CASES_ROOT → SIFT_CASES_DIR → ~/cases).
+        case_root = str(cases_root())
 
     expanded = re.sub(
         r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",

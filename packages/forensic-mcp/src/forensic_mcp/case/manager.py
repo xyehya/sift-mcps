@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from sift_core.case_io import cases_root
 
 from forensic_mcp.audit import resolve_examiner
 from forensic_mcp.discipline.validation import validate as validate_finding_data
@@ -65,8 +66,6 @@ def _protected_write(path: Path, content: str) -> None:
             pass  # Non-POSIX filesystem
 
 
-CASES_DIR_ENV = "SIFT_CASES_DIR"
-DEFAULT_CASES_DIR = str(Path.home() / "cases")
 _ACTIVE_CASE_FILE = Path.home() / ".sift" / "active_case"
 
 # Audit ID format: prefix-examiner-YYYYMMDD-NNN (all lowercase alphanumeric + hyphens)
@@ -454,7 +453,7 @@ class CaseManager:
 
     @property
     def cases_dir(self) -> Path:
-        return Path(os.environ.get(CASES_DIR_ENV, DEFAULT_CASES_DIR))
+        return cases_root()
 
     @property
     def active_case_dir(self) -> Path | None:
