@@ -45,11 +45,12 @@ From the v2.1 spec plus the four forks settled 2026-06-01:
 | **F-C** | **Drop `export_bundle` / `import_bundle` from the agent MCP surface** for MVP. Keep the `sift_core` functions for a future portal export feature. | fork @277 |
 | **F-D** | `case_host_fix` **stays in `opensearch-mcp`** (mutates OpenSearch index/alias state, not global case state). Rename to `opensearch_*` namespace. **Not** pulled into core. | fork @168/@328 |
 | **F-E** | `set_case_metadata` + report generation become **portal-owned** (examiner-triggered), removed from the agent MCP surface. | fork @292 |
+| **F-F** | **Universal identity is core-native and transparent.** Identity (`principal`/`principal_type`/`agent_id`/`created_by`/`token_id`/`source_ip`/`auth_surface`) is resolved **once** at the auth boundary and stamped into every audit entry. It is **invisible** to the agent's tool schemas *and* to add-on backends — it never travels as a tool argument. **Retires `analyst_override` / `analyst_identity` / `ANALYST_TOOLS` / `accepts_analyst_override` entirely** (does **not** move them into the manifest — this reverses the earlier "manifest `identity.accepts_analyst_override`" plan). Done in Phase 4.1–4.2. | session 2026-06-02 |
 
 ### Grounded facts the build starts from (verified in code 2026-06-01)
 - **Evidence gate today** = `blocked = chain_status != OK` (`sift_gateway/evidence_gate.py:117`) + a read-only carve-out in `mcp_endpoint.py`. F-A removes the carve-out.
 - **Integrity records today live inside `case_dir`**: `audit/` (`audit_ops.py:15`), `approvals.jsonl` (`case_io.py:286`), `evidence-ledger.jsonl` (`evidence_chain.py:45`). `run_command` cwd/jail defaults to `AGENTIR_CASE_DIR` (`sift-mcp/tools/generic.py:71`) → records are inside the agent's reach. F-B fixes this.
-- **`analyst_override`** = identity trust boundary: gateway overwrites it with the authenticated examiner for the 6 `ANALYST_TOOLS` (`mcp_endpoint.py:846`); backends can't spoof identity. → becomes manifest `identity.accepts_analyst_override` per tool.
+- **`analyst_override`** = today's identity trust boundary: gateway injects the authenticated examiner into `arguments` for the 6 `ANALYST_TOOLS` at **three** sites (`server.py:539-540,575-577`; `mcp_endpoint.py:827-828`); core schemas don't expose it, and `call_core_tool` already takes `examiner=` as a kwarg (`agent_tools.py:918-932`, passed at `server.py:550`). → **F-F retires it entirely**: identity flows only as the out-of-band kwarg/contextvar, never as an arg, and is stamped into audit (`principal`/`agent_id`/`created_by`). *(Supersedes the earlier "becomes manifest `identity.accepts_analyst_override`" note.)*
 - **Grounding does NOT break core-only.** `_grounding_result` returns `{}` when no reference backends are deployed (`manager.py:1648`); it only flags *deployed* ones. The real defect is the hardcoded `_GROUNDING_MCPS` tuple (`manager.py:1604`) → make declaration-driven via manifest `capabilities.provides: ["reference"]`.
 - **Provenance enforced** (not advisory): `_classify_provenance` MCP>HOOK>SHELL>NONE (`manager.py:1691`); finding with `NONE` + no validated commands is rejected (`manager.py:1217`).
 - **14 methodology tools are reference lookups, not control flow.** `considerations` (`server.py:31,237`), grounding suggestions (`manager.py:1661`), and `validate_finding` enforcement (inside `record_finding`) all run server-side regardless. Removing the *tools* loses nothing operational.
@@ -252,27 +253,86 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 
 🔒 **PHASE 3 GATE:** executor isolation verified; privilege escalation audited and narrow; suite + live `run_command` tests green.
 
-### Phase 4 — Contract enforcement + declaration-driven gate (kills P3/P4)
-- [ ] **4.1 Backend manifest schema (`sift-backend.json`) + JSON Schema**
-  - *How:* fields: identity (name, namespace prefix), `capabilities.provides` (e.g. `["reference"]`), per-tool `evidence_class` + `readOnlyHint` + `identity.accepts_analyst_override`, `enriches_responses` flag, `requires[]`, health/identity endpoints. **Keep it simple** (your note @338) — one flat schema a dev can fill in 10 minutes.
-  - *Test:* schema validates the four existing add-ons after they're given manifests; an invalid manifest is rejected with a clear error.
-- [ ] **4.2 Tier in config: core (mandatory, can't disable) vs add-on (optional)**
-  - *Why:* P4 — an operator must not be able to disable a core capability.
-  - *Test:* attempting to disable a core capability is refused; add-ons toggle freely.
-- [ ] **4.3 Namespace rule (structural collision fix)** — every add-on tool is `prefix_tool`; fixes `get_health`/`server_status` collisions.
-  - *Test:* no two backends advertise the same tool name; reactive prefixing path removed.
-- [ ] **4.4 Declaration-driven evidence gate — F-A binary block-all**
-  - *How:* gate = `chain_status == OK` ? allow : block **all** agent `/mcp` tools (no `readOnlyHint` carve-out). UNSEALED is a block (not a warning). Block response points the agent to the portal. Health/lifecycle/portal endpoints are **not** agent tools and stay ungated — document this invariant.
-  - *Why:* F-A — nothing runs against unsealed or compromised evidence; simplest defensible custody invariant.
-  - *Test:* the §4 regression guard — unsealed → all blocked; sealed+OK → all allowed; corrupt → all blocked until re-seal.
-- [ ] **4.5 Wire declaration-driven grounding (fill the 1.3 interface)** — count backends with `provides:["reference"]`.
-  - *Test:* add-on manifest toggles whether it counts as a grounding source.
-- [ ] **4.6 Replace hardcoded `ANALYST_TOOLS` with manifest `identity.accepts_analyst_override`**
-  - *Test:* identity injection driven by manifest; a backend not declaring it gets no injection.
-- [ ] **4.7 Conformance checklist + probe script** (uses per-backend `/mcp/{name}` mounts — P8 surface).
-  - *Test:* probe passes for conformant add-on, fails with actionable output for a broken one.
+### Phase 4 — Universal identity + contract enforcement + declaration-driven gate (kills P3/P4)
 
-🔒 **PHASE 4 GATE:** a third party could implement an add-on from the spec + schema alone; gate is declaration-driven and binary; conformance probe green for all four add-ons.
+This phase does two coupled things. **(a)** It makes **identity a core-native, transparent property (F-F)**: resolved **once** at the auth boundary, threaded out-of-band to core tools, stamped into every audit entry — and **fully invisible** to the agent's tool schemas *and* to add-on backends. `analyst_override` / `analyst_identity` / `ANALYST_TOOLS` / `accepts_analyst_override` are **retired entirely** — not relocated into the manifest. **(b)** It lands the versioned **Backend Contract v1** (manifest + JSON Schema + probe), the binary F-A gate, declaration-driven grounding, and the namespace rule.
+
+**Ordering is load-bearing.** Do the identity spine (4.1 → 4.2) first, then the F-A gate (4.3, isolated deletion), then the contract (4.4–4.9), then the probe (4.10) which exercises code 4.2 deletes. Don't reorder.
+
+**Grounded starting state (verified in code 2026-06-02):**
+- Identity is resolved in **two** places: `MCPAuthASGIApp` for the agent `/mcp` surface (`mcp_endpoint.py:156-206`) and `AuthMiddleware` for everything else (`auth.py:83-161`). `/mcp` is **deliberately exempt** from `AuthMiddleware` because `BaseHTTPMiddleware` buffers responses and breaks SSE (`auth.py:14-15,124-130`). **Do not merge them** — share a resolver, keep the two ASGI layers.
+- Today only `examiner`+`role`+`token_id`+`source_ip` reach `scope["state"]` (`mcp_endpoint.py:195-198`); `created_by`/`agent_id` exist in the token store (`routes.py:3047-3162`, `"examiner": agent_id` for agent tokens) but are **dropped** by the gateway.
+- Core tool input-schemas **already do not expose** `analyst_override` — it's injected into the `arguments` dict server-side at **three** sites: `server.py:539-540` (in-process core), `server.py:575-577` (add-on path), `mcp_endpoint.py:827-828` (per-backend `/mcp/{name}` path). `call_core_tool` already takes `examiner=` as a kwarg (`agent_tools.py:918-932`) and `Gateway.call_tool` already passes it (`server.py:550`) — the out-of-band path **exists** and is merely shadowed by the redundant arg injection.
+- The evidence-gate function is **already binary** (`blocked = status != OK`, `evidence_gate.py:113-120`); the read-only carve-out lives only in the *enforcement branch* (`mcp_endpoint.py:582-633`) + helpers `VIOLATION_STATUSES`/`is_violation`/`build_unsealed_warning` (`evidence_gate.py:37-42,123-145`).
+- `create_backend` (`backends/__init__.py:14-62`) does **zero** manifest loading today. `_build_tool_map` (`server.py:242-298`) does **reactive** `backend__tool` collision-prefixing.
+
+---
+
+- [ ] **4.1 Universal identity context (F-F) — resolve once, stamp everywhere**
+  - *How:*
+    - Add a single `resolve_identity(token, api_keys) -> Identity | None` helper (new `sift_gateway/identity.py`) that both auth layers call, returning a frozen dataclass: `principal`, `principal_type` (`"user"`/`"agent"`/`"service"`, derived from `role`), `token_id` (existing `_hash_token`, `mcp_endpoint.py:209-211`), `agent_id`, `created_by`, `role`, `source_ip`, `auth_surface` (`"mcp"`/`"portal"`/`"rest"`). For agent tokens `principal = agent_id`; dev/no-keys mode → `principal="anonymous"`, `principal_type="user"`.
+    - Plumb the new fields through `verify_api_key`'s `key_info` consumers so `created_by`/`agent_id` survive into `scope["state"]`/`request.state` (they're in the token store already — stop dropping them). Store the whole object at `request.state.identity` and keep the flat `examiner`/`role`/`token_id`/`source_ip` attrs as thin reads off it for back-compat with existing call sites.
+    - Extend `_extract_request_context` (`mcp_endpoint.py:214-228`) to surface the full identity.
+    - **Audit envelope:** pass `principal`, `principal_type`, `agent_id`, `created_by`, `auth_surface` via the existing `extra=` dict (`sift_common/audit.py:248,278-279`) on the gateway envelope (`mcp_endpoint.py:765-787`) **and** the per-backend HTTP path (`mcp_endpoint.py:877-888`). Stamp them on **success, error, blocked, and rate-limited** outcomes.
+    - **Rate-limited audit (new):** today 429s `return` before any audit (`mcp_endpoint.py:121-126,162-165,201-204`). Emit one audit line on rejection, **throttled/sampled** (don't write one per 429 — that's an audit-flood vector).
+  - *Why:* F-F — one trust boundary owns identity; human accountability (`created_by`) and machine attribution (`agent_id`/`principal`) are always linkable in audit, per **R-roles**. Backends and the LLM never see it.
+  - *Test:* agent-token call → audit entry carries `principal=agent_id`, `principal_type="agent"`, `created_by=<examiner>`, `token_id`, `source_ip`, `auth_surface="mcp"`; no-keys mode → `principal="anonymous"`; a 429 emits exactly one (throttled) audit line; SSE streaming on `/mcp` still works (no `BaseHTTPMiddleware` regression).
+
+- [ ] **4.2 Retire `analyst_override` end-to-end — identity becomes invisible & out-of-band**
+  - *How:*
+    - **Gateway:** delete the three arg-injection sites — `server.py:538-540`, `server.py:571-577`, `mcp_endpoint.py:826-828` — and the `ANALYST_TOOLS` frozenset (`mcp_endpoint.py:62-72`) + the `core_accepts_analyst_override`/`ANALYST_TOOLS` imports (`server.py:13,105`). Identity flows **only** as the existing `examiner=` kwarg on `Gateway.call_tool` / `call_core_tool`.
+    - **Core:** drop `accepts_analyst_override` from `CoreToolSpec` (`agent_tools.py:42,127,133,149,162,168,223,286-288`). In `call_core_tool` (`agent_tools.py:929-932`) compute `effective_examiner = (examiner or resolve_examiner())` — **remove** the `args.get("analyst_override")` fallback. Make the handlers read the threaded principal, not `args["analyst_override"]`: `_log_reasoning` (`:636,642`), `_log_external_action` (`:658,663,698`). For `record_action`/`record_finding`/`record_timeline_event`/`manage_todo`, pass the principal to `audit.log(...)`/`examiner_override=` so the **audit entry is stamped per-call** (today `AuditWriter.examiner` is process-level from env — the per-call principal must override it; use an explicit arg or a contextvar set by `call_core_tool`).
+    - **Backends stay identity-transparent:** add-on `/mcp` calls receive **no** identity argument at all. Attribution for add-on calls comes solely from the 4.1 audit envelope (`principal`/`agent_id`/`token_id`), never from a tool arg.
+    - **Legacy backend cleanup:** remove the now-dead `analyst_override` params from `forensic-mcp/server.py:71,199,659,699,724,748` (forensic core was retired in-process in Phase 2 — confirm the path is dead before deleting, then delete).
+    - Grep-gate: `grep -rn "analyst_override\|analyst_identity\|ANALYST_TOOLS\|accepts_analyst_override" packages --include="*.py"` returns **only** test files asserting absence (or nothing).
+  - *Why:* F-F + **R-identity** — the gateway is the *only* authority that sets examiner identity; making it a Python param (not a tool arg) means it can't appear in a schema, can't be spoofed by a backend, and can't be hallucinated by the agent.
+  - *Test:* `tools/list` for every core write tool shows **no** `analyst_override` property (already true — assert it stays); a `record_finding` call with `analyst_override` in `arguments` **ignores** it and stamps the authenticated principal; an add-on tool call passes through with the identity arg **absent**; full per-package suites green.
+
+- [ ] **4.3 Strict binary evidence gate — F-A block-all (isolated deletion)**
+  - *How:* in the enforcement branch (`mcp_endpoint.py:556-633`) delete the `is_violation`/read-only `else` split and **always** return `build_block_response(name, gate)` whenever `gate["blocked"]`. Remove the now-dead helpers `VIOLATION_STATUSES`, `is_violation()`, `build_unsealed_warning()` (`evidence_gate.py:37-42,123-145`) and the `_is_read_only`/`readOnlyHint` inspection. `check_evidence_gate` is already binary — don't touch it. UNSEALED and every non-OK status block **all** agent tools (including `environment_summary`). Block response points to the portal. **Rename** the lingering `_agentir_context` payload key → `_sift_context` at the normal-response injection (`mcp_endpoint.py:746-749`) — closes the Phase 0.2 deferral and the last `agentir` runtime string.
+  - *Why:* F-A — nothing runs against unsealed or compromised evidence; simplest defensible custody invariant. Health/lifecycle/portal/rest are **not** agent tools and stay ungated (**R-A**).
+  - *Test:* the §4 regression guard — unsealed → **all** blocked (incl. read-only + `environment_summary`); sealed+OK → all allowed; corrupt → all blocked until re-seal. `grep -rn "_agentir_context\|build_unsealed_warning\|VIOLATION_STATUSES" packages` is clean.
+
+- [ ] **4.4 Backend manifest schema (`sift-backend.json`) + JSON Schema (Contract v1)**
+  - *How:* author `packages/sift-gateway/src/sift_gateway/sift-backend.schema.json`. One flat schema (your note @338) — fillable in 10 min. Fields:
+    - `spec_version` (string) — **major-version compat**: gateway accepts `1.x`, rejects `2.x`. (Do **not** require exact `"1.0"` — it breaks on the first minor bump.)
+    - `name`, `version`, `tier` (`"addon"` only in real files; `"core"` is implicit/in-process and ships no manifest), `transport` (`"stdio"`/`"http"`), `namespace` (the tool prefix).
+    - `capabilities`: `provides` (e.g. `["reference"]`), `requires` (services/RAM/docker/offline-DB prereqs), `enriches_responses` (bool — **must** have a consumer wired in 4.x or be dropped; ties to the `_sift_context` response injection).
+    - `tools[]`: `name`, `description`, `read_only`/`readOnlyHint`, `evidence_class` (`read_only`/`analysis`/`mutating`). **No `identity.*` / `accepts_analyst_override` field** — identity is core-native (F-F), backends are transparent.
+    - `health`: endpoint path or sub-command.
+    - **`output_cap` is NOT a per-tool manifest field** — the single cap lives in the trust layer (Phase 5). If a per-tool hint is ever wanted it may only *tighten*, never loosen, the central cap; for v1, omit it to avoid the Phase 5 conflict (resolves review C1).
+  - *Dependency:* add `jsonschema` as a direct dep in `packages/sift-gateway/pyproject.toml`.
+  - *Test:* schema self-validates; a hand-written minimal addon manifest validates; an invalid one (bad `spec_version`, missing `namespace`) is rejected with a field-level error.
+
+- [ ] **4.5 Manifest discovery + validation in `create_backend` (warn-now, enforce-in-P6)**
+  - *How:* resolve the manifest per transport — **stdio:** `sift-backend.json` at the backend package's well-known path (config may override with `manifest_path`); **http:** a configured `manifest_path` or a `/manifest` fetch. Validate in `create_backend` (`backends/__init__.py:14`). **Phase 4 = warn + degrade** (log a clear warning, still start) so the four un-migrated add-ons don't break the gateway during the 4→6 window; **Phase 6 flips to hard-reject** (resolves review C3). A failing manifest must produce an actionable reason, never a silent partial.
+  - *Test:* a backend with a valid manifest loads; a missing/invalid manifest in P4 logs a warning and still boots core; the same in P6 mode rejects with reason.
+
+- [ ] **4.6 Tier enforcement: core mandatory, add-ons optional**
+  - *How:* core tools are in-process (no backend entry). Reject a `gateway.yaml` that **lists** any retired/core name as a backend — `sift-core`, `forensic-mcp`, `case-mcp`, `sift-mcp`, `report-mcp` — with a `ValueError` on startup (they're core/in-process now, not subprocesses). Add-ons toggle freely.
+  - *Why:* P4 — an operator must never be able to disable a core capability.
+  - *Test:* config listing `forensic-mcp` as a backend refuses boot with an actionable error; disabling/enabling an add-on works.
+
+- [ ] **4.7 Declared-namespace rule (structural collision fix)**
+  - *How:* in `_build_tool_map` (`server.py:242-298`): assert every add-on tool starts with `<namespace>_` (from its manifest) and is **declared** in the manifest `tools[]`; reject undeclared or mis-prefixed tools with a **fatal startup error**. Reject an add-on tool whose name **collides with a core tool name** (the dangerous shadowing case) and add-on↔add-on duplicates. **Exempt** in-process core tools and the gateway-native `environment_summary` (both legitimately unprefixed). **Remove** the reactive `backend__tool` prefixing (`server.py:264-277`) and its strip logic (`server.py:282-285,566-569`).
+  - *Why:* P3 — kills `get_health`/`server_status` collisions structurally instead of reactively.
+  - *Test:* two backends declaring the same tool name → fatal startup error; an add-on declaring `record_finding` → rejected (core shadow); core tools + `environment_summary` still advertised unprefixed; no `__` prefixing path remains.
+
+- [ ] **4.8 `requires[]` availability gating (R-core-survives)**
+  - *How:* before advertising an add-on's tools, evaluate its manifest `capabilities.requires` (service reachable, RAM, docker, offline DB present). If unmet, mark the backend **unavailable** and **omit its tools** from `tools/list` — the gateway and all core tools stay up. Never crash core on an add-on prereq.
+  - *Why:* declaring `requires[]` (4.4) without enforcing it is a no-op; **R-core-survives** demands graceful degradation.
+  - *Test:* with a reference backend's service down, the gateway boots, core tools present, that add-on's tools absent and reported unavailable; bringing the service up re-advertises on rebuild.
+
+- [ ] **4.9 Declaration-driven grounding (fill the 1.3 provider interface)**
+  - *How:* register a provider with `sift_core.case_manager.set_reference_backend_provider(...)` (stub already exists, `case_manager.py:31-46`) that queries the gateway registry and returns the names of **started + available** (4.8) backends whose manifest declares `capabilities.provides: ["reference"]`. Remove the `SIFT_REFERENCE_BACKENDS` env fallback once the provider is wired (or keep only for tests). Zero hardcoded backend names anywhere.
+  - *Why:* **R-no-hardcoded-names** — community reference backends count automatically by declaration.
+  - *Test:* an add-on manifest with `provides:["reference"]` makes grounding count it; toggling the declaration (or downing the backend per 4.8) makes grounding go inert without breaking.
+
+- [ ] **4.10 Conformance checklist + probe script (`scripts/probe_backends.py`)**
+  - *How:* the probe (service identity, `sift_svc_*` token from Phase 0.4): (a) schema-validates each `sift-backend.json`; (b) hits the per-backend `/mcp/{name}` mount (`create_backend_mcp_server`, `mcp_endpoint.py:794`) — `initialize` → `tools/list`; (c) asserts every advertised tool is `<namespace>_`-prefixed and declared; (d) checks `health`; (e) confirms **no identity argument** is required by any tool schema (F-F conformance). Must run **after** 4.2 (the per-backend path still injects `ANALYST_TOOLS` at `mcp_endpoint.py:824-828` until 4.2 deletes it).
+  - *Test:* probe passes for a conformant add-on; fails with actionable output for a broken one (bad prefix, undeclared tool, identity arg present, schema-invalid manifest).
+
+🔒 **PHASE 4 GATE:** identity is core-native and invisible — no `analyst_override`/`ANALYST_TOOLS` in source, no identity field in any tool schema, audit stamps `principal`/`agent_id`/`created_by` on every outcome; gate is declaration-driven and binary (F-A: unsealed → all blocked); namespace + tier + `requires[]` enforced; declaration-driven grounding live; conformance probe green; a third party could implement an add-on from the spec + schema alone.
 
 ### Phase 5 — Central output cap
 - [ ] **5.1 Single output-cap + redaction point in the trust layer** (response guard already = 30 patterns; centralize the size cap).
@@ -298,7 +358,7 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 ## 7 · Cross-cutting invariants to preserve (check at every gate)
 - **R-A (F-A):** no agent `/mcp` tool executes unless `chain_status == OK`. Health/lifecycle/portal are not agent tools and are exempt — by design.
 - **R-B (F-B):** the agent (via `run_command` jail) can never read or write `audit/`, the ledger, approvals, or the manifest.
-- **R-identity:** the gateway is the only authority that sets examiner identity for write tools.
+- **R-identity (F-F):** the gateway is the only authority that sets identity, and it does so **out-of-band** — identity is resolved once at the auth boundary and never appears as a tool argument or in any tool schema. Add-on backends are identity-transparent (attribution rides the audit envelope, not a tool arg). No `analyst_override`/`ANALYST_TOOLS` anywhere.
 - **R-roles (operator-drives-portal-only):** strict two-way role separation, enforced in code and required of the standard:
   - Agent tokens are minted **only** by a logged-in examiner in the portal (`routes.py:3029`). The token's audit identity = its **`agent_id`** (machine attribution); the authorizing human is recorded as **`created_by`**.
   - Audit entries the agent writes are stamped with the `agent_id`; **human accountability attaches at portal approval/commit** (DRAFT → examiner HMAC commit), not at agent-write time.
