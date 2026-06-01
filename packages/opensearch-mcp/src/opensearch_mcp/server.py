@@ -745,7 +745,7 @@ def idx_search(
             Quote values with special chars: source.ip:"::1" (IPv6 needs quotes).
         index: Index pattern. Overrides case_id if provided.
         case_id: Case ID from case_status. If omitted, defaults to the active
-            portal case from AGENTIR_CASE_DIR.
+            portal case from SIFT_CASE_DIR.
         limit: Max results (default 50, max 200).
         offset: Skip first N results for pagination (default 0).
         sort: Sort field:order (default @timestamp:desc).
@@ -849,7 +849,7 @@ def idx_count(
         query: OpenSearch query_string (default: all).
         index: Index pattern. Overrides case_id if provided.
         case_id: Case ID from case_status. If omitted, defaults to the active
-            portal case from AGENTIR_CASE_DIR.
+            portal case from SIFT_CASE_DIR.
     """
     index = _resolve_index(index, case_id)
     err = _validate_index(index)
@@ -905,7 +905,7 @@ def idx_aggregate(
         query: OpenSearch query_string filter (default: all).
         index: Index pattern. Overrides case_id if provided.
         case_id: Case ID from case_status. If omitted, defaults to the active
-            portal case from AGENTIR_CASE_DIR.
+            portal case from SIFT_CASE_DIR.
         limit: Max buckets (default 50, max 500).
     """
     index = _resolve_index(index, case_id)
@@ -1020,7 +1020,7 @@ def idx_timeline(
         query: OpenSearch query_string filter.
         index: Index pattern. Overrides case_id if provided.
         case_id: Case ID from case_status. If omitted, defaults to the active
-            portal case from AGENTIR_CASE_DIR.
+            portal case from SIFT_CASE_DIR.
         interval: Histogram bucket size (e.g., '1m', '1h', '1d').
         time_field: Timestamp field (default @timestamp).
         time_from: Start time (ISO 8601, e.g., '2023-01-25T14:00:00Z').
@@ -1120,7 +1120,7 @@ def idx_field_values(
         query: OpenSearch query_string filter.
         index: Index pattern. Overrides case_id if provided.
         case_id: Case ID from case_status. If omitted, defaults to the active
-            portal case from AGENTIR_CASE_DIR.
+            portal case from SIFT_CASE_DIR.
         limit: Max values (default 50, max 500).
     """
     index = _resolve_index(index, case_id)
@@ -1378,7 +1378,7 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
 
     Args:
         case_id: Case ID from case_status. If omitted, defaults to the active
-            portal case from AGENTIR_CASE_DIR.
+            portal case from SIFT_CASE_DIR.
         include_fields: Include field mappings per artifact type (large output).
             Default False to keep response compact.
     """
@@ -1586,7 +1586,7 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
     if fields_per_type:
         resp["fields_per_type"] = fields_per_type
     _add_investigation_hints(resp, artifacts)
-    _case_dir_env = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    _case_dir_env = os.environ.get("SIFT_CASE_DIR", "").strip()
     _summary_case_dir = Path(_case_dir_env) if _case_dir_env else None
     resp["coverage_state"] = _build_coverage_state(artifacts, enrichment, case_dir=_summary_case_dir)
     aid = audit.log(
@@ -1619,7 +1619,7 @@ def idx_inspect_container(path: str) -> dict:
 
     Args:
         path: Container path under the active case. Bare filenames resolve
-            to AGENTIR_CASE_DIR/evidence/.
+            to SIFT_CASE_DIR/evidence/.
     """
     import subprocess
 
@@ -1789,7 +1789,7 @@ def _launch_container_ingest(
 
     run_id = str(_uuid.uuid4())
     env = os.environ.copy()
-    env["AGENTIR_INGEST_RUN_ID"] = run_id
+    env["SIFT_INGEST_RUN_ID"] = run_id
 
     cmd = [
         sys.executable,
@@ -1820,7 +1820,7 @@ def _launch_container_ingest(
     if vss:
         cmd.append("--vss")
     if password:
-        env["AGENTIR_ARCHIVE_PASSWORD"] = password
+        env["SIFT_ARCHIVE_PASSWORD"] = password
     if no_hayabusa:
         cmd.append("--no-hayabusa")
 
@@ -1837,7 +1837,7 @@ def _launch_container_ingest(
 
     _fs_meta = _collect_filesystem_meta(resolved_path, "disk")
     _fs_meta_rel: str | None = None
-    _case_dir_env_ci = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    _case_dir_env_ci = os.environ.get("SIFT_CASE_DIR", "").strip()
     if _case_dir_env_ci and _fs_meta.get("image_type") != "unknown":
         import json as _json_ci
 
@@ -1934,8 +1934,8 @@ def idx_ingest(
 
     Args:
         path: Evidence path under the active case. Bare filenames resolve to
-            AGENTIR_CASE_DIR/evidence/. Known relative subdirs like evidence/
-            resolve from AGENTIR_CASE_DIR.
+            SIFT_CASE_DIR/evidence/. Known relative subdirs like evidence/
+            resolve from SIFT_CASE_DIR.
         format: One of auto, json, delimited, accesslog, memory.
         hostname: Source hostname. Auto-detected from directory structure
             for some auto-format evidence. Required for json, accesslog,
@@ -2118,7 +2118,7 @@ def idx_ingest(
                     ctype = detect_container(f)
                     if ctype in ("ewf", "raw", "nbd", "archive"):
                         try:
-                            rel = str(f.relative_to(Path(os.environ.get("AGENTIR_CASE_DIR", "")).resolve()))
+                            rel = str(f.relative_to(Path(os.environ.get("SIFT_CASE_DIR", "")).resolve()))
                         except ValueError:
                             rel = str(f)
                         containers_found.append({
@@ -2613,7 +2613,7 @@ def idx_ingest_status(case_id: str = "") -> dict:
             import json as _json
             import os as _os
 
-            _cases_root = _os.environ.get("AGENTIR_CASES_DIR", str(Path.home() / "cases"))
+            _cases_root = _os.environ.get("SIFT_CASES_DIR", str(Path.home() / "cases"))
             _hd_path = (
                 Path(_cases_root) / _hd_case / "host-discovery-reports" / f"{_hd_run_id}.json"
             )
@@ -2639,7 +2639,7 @@ def idx_ingest_json(
 
     Args:
         path: JSON/JSONL path under the active case. Bare filenames resolve
-            to AGENTIR_CASE_DIR/evidence/.
+            to SIFT_CASE_DIR/evidence/.
         hostname: Source hostname.
         index_suffix: Index suffix (default: json-{filename}).
         time_field: Timestamp field name (default: auto-detect).
@@ -2678,7 +2678,7 @@ def idx_ingest_delimited(
 
     Args:
         path: Delimited file or directory under the active case. Bare filenames
-            resolve to AGENTIR_CASE_DIR/evidence/.
+            resolve to SIFT_CASE_DIR/evidence/.
         hostname: Source hostname. Required unless recursive=True.
             Use hostname="auto" to auto-detect hostnames from filenames
             in a flat directory (e.g., Hayabusa per-host CSVs).
@@ -2815,7 +2815,7 @@ def idx_ingest_accesslog(
 
     Args:
         path: Access log path under the active case. Bare filenames resolve
-            to AGENTIR_CASE_DIR/evidence/.
+            to SIFT_CASE_DIR/evidence/.
         hostname: Source hostname.
         index_suffix: Index suffix (default: accesslog).
         dry_run: Preview (default True). Set False to execute immediately.
@@ -3143,7 +3143,7 @@ def _launch_background(
 
     run_id = str(_uuid.uuid4())
     env = _os.environ.copy()
-    env["AGENTIR_INGEST_RUN_ID"] = run_id
+    env["SIFT_INGEST_RUN_ID"] = run_id
 
     cmd = [
         _sys.executable,
@@ -3276,7 +3276,7 @@ def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
 
     run_id = str(_uuid.uuid4())
     env = _os.environ.copy()
-    env["AGENTIR_INGEST_RUN_ID"] = run_id
+    env["SIFT_INGEST_RUN_ID"] = run_id
 
     cmd = [
         _sys.executable,
@@ -3358,7 +3358,7 @@ def idx_ingest_memory(
 
     Args:
         path: Memory image path under the active case. Bare filenames resolve
-            to AGENTIR_CASE_DIR/evidence/.
+            to SIFT_CASE_DIR/evidence/.
         hostname: Source hostname for the memory image.
         tier: Analysis depth (1=fast/essential, 2=moderate, 3=deep).
         plugins: Override tier — run only these specific plugins.
@@ -3471,7 +3471,7 @@ def idx_ingest_memory(
 
     run_id = str(_uuid.uuid4())
     env = _os.environ.copy()
-    env["AGENTIR_INGEST_RUN_ID"] = run_id
+    env["SIFT_INGEST_RUN_ID"] = run_id
 
     cmd = [
         _sys.executable,
@@ -3528,7 +3528,7 @@ def idx_ingest_memory(
 
     _fs_meta_m = _cfm_mem(resolved_path, "memory")
     _fs_meta_rel_m: str | None = None
-    _case_dir_env_m = _os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    _case_dir_env_m = _os.environ.get("SIFT_CASE_DIR", "").strip()
     if _case_dir_env_m and _fs_meta_m.get("image_type") != "unknown":
         _sidecar_dir_m = Path(_case_dir_env_m) / "agent" / "ingest"
         _sidecar_dir_m.mkdir(parents=True, exist_ok=True)
@@ -3562,15 +3562,15 @@ def idx_ingest_memory(
 def _get_active_case() -> str | None:
     """Return active case ID for index construction.
 
-    Portal workflow: reads AGENTIR_CASE_DIR set by gateway in every
+    Portal workflow: reads SIFT_CASE_DIR set by gateway in every
     stdio subprocess environment. CLI fallback: reads the legacy pointer file.
     Returns None when neither source is set — callers must handle this.
     """
     import os
     from pathlib import Path
 
-    # Primary: AGENTIR_CASE_DIR set by gateway in every stdio subprocess env
-    case_dir = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    # Primary: SIFT_CASE_DIR set by gateway in every stdio subprocess env
+    case_dir = os.environ.get("SIFT_CASE_DIR", "").strip()
     if case_dir:
         return Path(case_dir).name.lower()  # lowercase required for OpenSearch indices
 
@@ -3803,11 +3803,11 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
     from opensearch_mcp.host_dictionary import HostDictionary
 
     # Resolve active case → case dir → dict path.
-    # Use AGENTIR_CASE_DIR directly if set (preserves actual dir name including case).
+    # Use SIFT_CASE_DIR directly if set (preserves actual dir name including case).
     # Fall back to legacy pointer file without lowercasing (filesystem names may be uppercase).
     import os as _os
 
-    _case_dir_env = _os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    _case_dir_env = _os.environ.get("SIFT_CASE_DIR", "").strip()
     if _case_dir_env:
         case_dir = Path(_case_dir_env)
         case_id = case_dir.name.lower()  # lowercase for index naming only
@@ -3829,8 +3829,8 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
                 "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
             }
         _cases_root = Path(
-            _os.environ.get("AGENTIR_CASES_ROOT")
-            or _os.environ.get("AGENTIR_CASES_DIR")
+            _os.environ.get("SIFT_CASES_ROOT")
+            or _os.environ.get("SIFT_CASES_DIR")
             or str(Path.home() / "cases")
         )
         case_id = Path(_raw).name

@@ -25,8 +25,8 @@ def agentir_home() -> Path:
 
 
 def agentir_dir() -> Path:
-    """Return ~/.agentir/ for the real user."""
-    return agentir_home() / ".agentir"
+    """Return ~/.sift/ for the real user."""
+    return agentir_home() / ".sift"
 
 
 def resolve_case_insensitive(base: Path, rel_path: str) -> Path | None:

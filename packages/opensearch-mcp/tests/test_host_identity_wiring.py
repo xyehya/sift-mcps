@@ -246,7 +246,7 @@ class TestPreflightAutoApply:
             "INC-7",
             dict_hosts={"admin01": {"aliases": ["admin01"]}},
         )
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         host_dir = tmp_path / "evidence" / "admin01.shieldbase.com"
         host_dir.mkdir(parents=True)
@@ -275,7 +275,7 @@ class TestPreflightAutoApply:
             "INC-8",
             dict_hosts={"admin01": {"aliases": ["admin01"]}},
         )
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         host_dir = tmp_path / "evidence"
         host_dir.mkdir()
@@ -302,7 +302,7 @@ class TestPreflightAutoApply:
             "INC-9",
             dict_hosts={"admin01": {"aliases": ["admin01", "admin01.shieldbase.com"]}},
         )
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         host_dir = tmp_path / "evidence"
         host_dir.mkdir()
@@ -322,7 +322,7 @@ class TestPreflightAutoApply:
         case_dir = tmp_path / "INC-NEW"
         case_dir.mkdir()
         (case_dir / "CASE.yaml").write_text("case_id: INC-NEW\n")
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         host_dir = tmp_path / "evidence"
         host_dir.mkdir()
@@ -582,7 +582,7 @@ class TestPreflightToParserIntegration:
         from unittest.mock import patch
 
         _seed_case_v1(tmp_path, "INC-H1", dict_hosts={"admin01": {"aliases": ["admin01"]}})
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         fake_agentir_dir = tmp_path / "agentir"
         fake_agentir_dir.mkdir()
@@ -671,7 +671,7 @@ class TestPreflightToParserIntegration:
         from unittest.mock import patch
 
         _seed_case_v1(tmp_path, "INC-REJ", dict_hosts={"admin01": {"aliases": ["admin01"]}})
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         fake_agentir_dir = tmp_path / "agentir"
         fake_agentir_dir.mkdir()
@@ -723,7 +723,7 @@ class TestPreflightToParserIntegration:
         from unittest.mock import patch
 
         _seed_case_v1(tmp_path, "INC-AUDIT", dict_hosts={"admin01": {"aliases": ["admin01"]}})
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         fake_agentir_dir = tmp_path / "agentir"
         fake_agentir_dir.mkdir()
@@ -838,7 +838,7 @@ class TestPreflightToParserIntegration:
             "INC-INT",
             dict_hosts={"admin01": {"aliases": ["admin01"]}},
         )
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         host_dir = tmp_path / "evidence"
         host_dir.mkdir()
@@ -941,7 +941,7 @@ class TestCaseHostFix:
                 "wkstn01": {"aliases": ["wkstn01"]},  # collapsed-from
             },
         )
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         fake_agentir_dir = tmp_path / "agentir"
         fake_agentir_dir.mkdir()
@@ -1000,7 +1000,7 @@ class TestCaseHostFix:
         from opensearch_mcp.host_dictionary import HostDictionary
 
         _seed_case_v1(tmp_path, "INC-18", dict_hosts={"admin01": {"aliases": ["admin01"]}})
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
 
         # Redirect agentir_dir() to tmp_path so active_case can be written.
         fake_agentir_dir = tmp_path / "agentir"

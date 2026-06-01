@@ -12,4 +12,4 @@
 ## Default: /cases
 
 -a always,exit -F dir=CASES_ROOT -F perm=wa -F key=agentir_evidence_write
--a always,exit -F dir=/var/lib/agentir -F perm=wa -F key=agentir_core_write
+-a always,exit -F dir=/var/lib/sift -F perm=wa -F key=agentir_core_write

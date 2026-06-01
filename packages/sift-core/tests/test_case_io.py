@@ -25,25 +25,25 @@ from sift_core.case_io import (
 @pytest.fixture
 def case_dir(tmp_path, monkeypatch):
     """Create a minimal flat case directory."""
-    monkeypatch.setenv("AGENTIR_EXAMINER", "tester")
+    monkeypatch.setenv("SIFT_EXAMINER", "tester")
     return tmp_path
 
 
 class TestGetCaseDir:
     def test_from_env(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(tmp_path))
         assert get_case_dir() == tmp_path
 
     def test_from_explicit_id(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
         case = tmp_path / "INC-TEST"
         case.mkdir()
         result = get_case_dir("INC-TEST")
         assert result == case
 
     def test_no_case_exits(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
-        monkeypatch.delenv("AGENTIR_CASES_DIR", raising=False)
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+        monkeypatch.delenv("SIFT_CASES_DIR", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         with pytest.raises(CaseError):
             get_case_dir()
@@ -92,7 +92,7 @@ class TestResolveCasePath:
             resolve_case_path(str(outside), case_dir=case_dir)
 
     def test_missing_active_case_rejected(self, monkeypatch):
-        monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
         with pytest.raises(ValueError, match="Examiner Portal"):
             resolve_case_path("disk.e01")
 
@@ -181,23 +181,23 @@ class TestPathTraversal:
     """Verify path traversal is rejected in case_id."""
 
     def test_case_id_dotdot_rejected(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
         with pytest.raises(CaseError):
             get_case_dir("../../etc")
 
     def test_case_id_slash_rejected(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
         with pytest.raises(CaseError):
             get_case_dir("foo/bar")
 
     def test_case_id_backslash_rejected(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(tmp_path))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
         with pytest.raises(CaseError):
             get_case_dir("foo\\bar")
 
     def test_import_bundle_merges(self, case_dir, monkeypatch):
         """import_bundle merges incoming items using last-write-wins."""
-        monkeypatch.setenv("AGENTIR_EXAMINER", "tester")
+        monkeypatch.setenv("SIFT_EXAMINER", "tester")
         meta_file = case_dir / "CASE.yaml"
         meta_file.write_text(yaml.dump({"case_id": "INC-001"}))
         bundle = {
@@ -219,7 +219,7 @@ class TestPathTraversal:
 
     def test_import_bundle_bare_array(self, case_dir, monkeypatch):
         """import_bundle accepts bare array (forensic-mcp export format)."""
-        monkeypatch.setenv("AGENTIR_EXAMINER", "tester")
+        monkeypatch.setenv("SIFT_EXAMINER", "tester")
         meta_file = case_dir / "CASE.yaml"
         meta_file.write_text(yaml.dump({"case_id": "INC-001"}))
         bare_array = [
@@ -330,7 +330,7 @@ class TestContentHashIntegrity:
 
 class TestExportBundle:
     def test_export_includes_data(self, case_dir, monkeypatch):
-        monkeypatch.setenv("AGENTIR_EXAMINER", "tester")
+        monkeypatch.setenv("SIFT_EXAMINER", "tester")
         (case_dir / "CASE.yaml").write_text(yaml.dump({"case_id": "INC-001"}))
         save_findings(
             case_dir,
@@ -352,7 +352,7 @@ class TestExportBundle:
         assert len(bundle["timeline"]) == 1
 
     def test_export_since_filter(self, case_dir, monkeypatch):
-        monkeypatch.setenv("AGENTIR_EXAMINER", "tester")
+        monkeypatch.setenv("SIFT_EXAMINER", "tester")
         (case_dir / "CASE.yaml").write_text(yaml.dump({"case_id": "INC-001"}))
         save_findings(
             case_dir,

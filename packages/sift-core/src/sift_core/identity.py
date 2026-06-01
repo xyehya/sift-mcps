@@ -1,7 +1,7 @@
 """Examiner identity resolution.
 
-Priority: --examiner flag > AGENTIR_EXAMINER env > AGENTIR_ANALYST env (deprecated) >
-~/.agentir/config.yaml > OS username.
+Priority: --examiner flag > SIFT_EXAMINER env > SIFT_ANALYST env (deprecated) >
+~/.sift/config.yaml > OS username.
 """
 
 from __future__ import annotations
@@ -53,15 +53,15 @@ def get_examiner_identity(flag_override: str | None = None) -> dict:
     if flag_override:
         return _result(flag_override, "flag")
 
-    env_examiner = os.environ.get("AGENTIR_EXAMINER")
+    env_examiner = os.environ.get("SIFT_EXAMINER")
     if env_examiner:
         return _result(env_examiner, "env")
 
-    env_analyst = os.environ.get("AGENTIR_ANALYST")
+    env_analyst = os.environ.get("SIFT_ANALYST")
     if env_analyst:
         return _result(env_analyst, "env")
 
-    config_path = Path.home() / ".agentir" / "config.yaml"
+    config_path = Path.home() / ".sift" / "config.yaml"
     if config_path.exists():
         try:
             with open(config_path) as f:

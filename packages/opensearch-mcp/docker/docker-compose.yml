@@ -5,7 +5,7 @@ services:
     environment:
       - discovery.type=single-node
       - OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g
-      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${AGENTIR_OS_PASSWORD}
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${SIFT_OS_PASSWORD}
     ports:
       - "127.0.0.1:9200:9200"
     volumes:

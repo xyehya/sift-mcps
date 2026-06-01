@@ -49,7 +49,7 @@ def _write_ingest_manifest(
 
         import os as _os
 
-        case_dir_env = _os.environ.get("AGENTIR_CASE_DIR", "").strip()
+        case_dir_env = _os.environ.get("SIFT_CASE_DIR", "").strip()
         if case_dir_env:
             case_dir = Path(case_dir_env)
         else:
@@ -310,8 +310,8 @@ _HAYABUSA_RULES_CANDIDATES = (
     "/usr/share/hayabusa-rules",  # Debian / Ubuntu packaging
     "/opt/hayabusa/rules",
     "/opt/hayabusa-rules",
-    # installer-managed location (install.sh → ~/.agentir/hayabusa-rules)
-    str(Path.home() / ".agentir" / "hayabusa-rules"),
+    # installer-managed location (install.sh → ~/.sift/hayabusa-rules)
+    str(Path.home() / ".sift" / "hayabusa-rules"),
 )
 
 
@@ -493,7 +493,7 @@ def run_hayabusa_batch(
         write_status(
             case_id=case_id,
             pid=os.getpid(),
-            run_id=os.environ.get("AGENTIR_INGEST_RUN_ID", ""),
+            run_id=os.environ.get("SIFT_INGEST_RUN_ID", ""),
             status="failed",
             hosts=[{"hostname": h.hostname} for h in hosts_with_results],
             totals={},

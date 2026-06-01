@@ -24,7 +24,7 @@
 set -euo pipefail
 
 OPENSEARCH_URL="http://localhost:9200"
-GATEWAY_YAML="${HOME}/.agentir/gateway.yaml"
+GATEWAY_YAML="${HOME}/.sift/gateway.yaml"
 CASE_ID=""
 WIPE_CASE=false
 CASE_DIR_DELETED=false
@@ -158,10 +158,10 @@ nohup "$UV" run \
     --no-managed-python \
     --no-python-downloads \
     sift-gateway --config "$GATEWAY_YAML" \
-    >>"${HOME}/.agentir/gateway.log" 2>&1 &
+    >>"${HOME}/.sift/gateway.log" 2>&1 &
 
 GW_PID=$!
-info "Gateway launched (PID $GW_PID). Log: ~/.agentir/gateway.log"
+info "Gateway launched (PID $GW_PID). Log: ~/.sift/gateway.log"
 
 # -------------------------------------------------------------------------
 # Step 4: Wait for health
@@ -185,7 +185,7 @@ for i in {1..15}; do
     info "Waiting... ($i/15)"
 done
 
-$HEALTHY || info "WARNING: Gateway did not respond after 30s. Check ~/.agentir/gateway.log"
+$HEALTHY || info "WARNING: Gateway did not respond after 30s. Check ~/.sift/gateway.log"
 
 # -------------------------------------------------------------------------
 # Summary

@@ -881,15 +881,15 @@ def make_ingest_tmpdir(case_id: str) -> Path:
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
 
-    # Use AGENTIR_CASE_DIR if set (portal workflow); else fall back to AGENTIR_CASES_ROOT/case_id
-    case_dir_env = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    # Use SIFT_CASE_DIR if set (portal workflow); else fall back to SIFT_CASES_ROOT/case_id
+    case_dir_env = os.environ.get("SIFT_CASE_DIR", "").strip()
     if case_dir_env:
         case_dir = Path(case_dir_env)
     else:
         # Legacy CLI fallback — not used in portal workflow
         cases_root = Path(
-            os.environ.get("AGENTIR_CASES_ROOT")
-            or os.environ.get("AGENTIR_CASES_DIR")
+            os.environ.get("SIFT_CASES_ROOT")
+            or os.environ.get("SIFT_CASES_DIR")
             or str(Path.home() / "cases")
         )
         case_dir = cases_root / case_id

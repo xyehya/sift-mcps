@@ -57,7 +57,7 @@ else
 fi
 # Check rules in both possible locations
 RULES_OK=0
-for d in "$HOME/.agentir/hayabusa-rules" "/usr/local/share/hayabusa-rules"; do
+for d in "$HOME/.sift/hayabusa-rules" "/usr/local/share/hayabusa-rules"; do
     if [[ -d "$d" ]] && [[ $(find "$d" -name '*.yml' 2>/dev/null | wc -l) -gt 100 ]]; then
         echo "  OK  hayabusa-rules ($d: $(find "$d" -name '*.yml' | wc -l) YAML files)"
         PASS=$(( PASS + 1 ))

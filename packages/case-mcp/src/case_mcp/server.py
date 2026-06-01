@@ -53,7 +53,7 @@ def _build_platform_capabilities() -> dict:
     try:
         import yaml
 
-        gw_path = Path.home() / ".agentir" / "gateway.yaml"
+        gw_path = Path.home() / ".sift" / "gateway.yaml"
         if gw_path.exists():
             gw_config = yaml.safe_load(gw_path.read_text()) or {}
             backends = gw_config.get("backends", {})
@@ -124,25 +124,25 @@ def _resolve_case_dir(case_id: str = "") -> Path:
     Same priority as agentir CLI get_case_dir(), but raises ValueError
     instead of calling sys.exit().
 
-    Side effect: sets AGENTIR_CASE_DIR env var so AuditWriter can find
+    Side effect: sets SIFT_CASE_DIR env var so AuditWriter can find
     the audit directory.
     """
     if case_id:
         if ".." in case_id or "/" in case_id or "\\" in case_id:
             raise ValueError(f"Invalid case ID: {case_id}")
-        cases_dir = Path(os.environ.get("AGENTIR_CASES_DIR", _DEFAULT_CASES_DIR))
+        cases_dir = Path(os.environ.get("SIFT_CASES_DIR", _DEFAULT_CASES_DIR))
         case_dir = cases_dir / case_id
         if not case_dir.exists():
             raise ValueError(f"Case not found: {case_id}")
         return case_dir
 
     # Portal-created case activation is the runtime contract. Do not read the
-    # legacy ~/.agentir/active_case pointer here; it can drift from gateway.yaml.
-    env_dir = os.environ.get("AGENTIR_CASE_DIR")
+    # legacy ~/.sift/active_case pointer here; it can drift from gateway.yaml.
+    env_dir = os.environ.get("SIFT_CASE_DIR")
     if env_dir:
         p = Path(env_dir)
         if not p.is_dir():
-            raise ValueError(f"AGENTIR_CASE_DIR does not exist: {env_dir}")
+            raise ValueError(f"SIFT_CASE_DIR does not exist: {env_dir}")
         return p
 
     raise ValueError("No active case. Use the Examiner Portal to create or select a case first.")

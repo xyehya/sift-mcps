@@ -164,7 +164,7 @@ class TestQueryInjection:
 class TestStatusFileSecurity:
     def test_path_traversal_prevented(self, tmp_path, monkeypatch):
         """case_id with ../ cannot escape the status directory."""
-        status_dir = tmp_path / ".agentir" / "ingest-status"
+        status_dir = tmp_path / ".sift" / "ingest-status"
         monkeypatch.setattr("opensearch_mcp.ingest_status._STATUS_DIR", status_dir)
 
         from opensearch_mcp.ingest_status import write_status

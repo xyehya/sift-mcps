@@ -25,7 +25,7 @@ def cases_dir(tmp_path):
 def active_home(tmp_path, monkeypatch):
     """Redirect Path.home() to tmp_path so active_case pointer goes there."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    agentir_dir = tmp_path / ".agentir"
+    agentir_dir = tmp_path / ".sift"
     agentir_dir.mkdir(exist_ok=True)
     return tmp_path
 
@@ -64,7 +64,7 @@ class TestCaseListData:
         with open(case1 / "CASE.yaml", "w") as f:
             yaml.dump({"case_id": "INC-2026-001", "name": "Active Case", "status": "open"}, f)
 
-        (active_home / ".agentir" / "active_case").write_text(str(case1))
+        (active_home / ".sift" / "active_case").write_text(str(case1))
 
         result = case_list_data(cases_dir)
         assert result["cases"][0]["active"] is True
@@ -89,7 +89,7 @@ class TestCaseListData:
         assert result["cases"][0]["id"] == "INC-2026-001"
 
     def test_list_from_env(self, cases_dir, monkeypatch):
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(cases_dir))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(cases_dir))
         case1 = cases_dir / "INC-TEST"
         case1.mkdir()
         with open(case1 / "CASE.yaml", "w") as f:
@@ -143,7 +143,7 @@ class TestCaseInitData:
             cases_dir=cases_dir,
             case_id="INC-TEST-001",
         )
-        active_file = active_home / ".agentir" / "active_case"
+        active_file = active_home / ".sift" / "active_case"
         assert active_file.exists()
         content = active_file.read_text().strip()
         assert "INC-TEST-001" in content
@@ -202,7 +202,7 @@ class TestCaseActivateData:
         result = case_activate_data("INC-TEST-001", cases_dir=cases_dir)
         assert result["case_id"] == "INC-TEST-001"
 
-        active_file = active_home / ".agentir" / "active_case"
+        active_file = active_home / ".sift" / "active_case"
         assert active_file.exists()
         content = active_file.read_text().strip()
         assert "INC-TEST-001" in content
@@ -239,26 +239,26 @@ class TestCaseStatusData:
 
 
 # ---------------------------------------------------------------------------
-# R0-4: case_list_data — reads AGENTIR_CASES_ROOT first
+# R0-4: case_list_data — reads SIFT_CASES_ROOT first
 # ---------------------------------------------------------------------------
 
 
 class TestCaseListEnvVarPriority:
     def test_reads_agentir_cases_root(self, tmp_path, monkeypatch):
-        """AGENTIR_CASES_ROOT set → case_list_data reads from that root."""
+        """SIFT_CASES_ROOT set → case_list_data reads from that root."""
         cases_root = tmp_path / "cases"
         case_dir = cases_root / "rocba-20260525-1200"
         case_dir.mkdir(parents=True)
         with open(case_dir / "CASE.yaml", "w") as f:
             yaml.dump({"case_id": "rocba-20260525-1200", "name": "ROCBA Test", "status": "open"}, f)
-        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(cases_root))
-        monkeypatch.delenv("AGENTIR_CASES_DIR", raising=False)
+        monkeypatch.setenv("SIFT_CASES_ROOT", str(cases_root))
+        monkeypatch.delenv("SIFT_CASES_DIR", raising=False)
         result = case_list_data()
         ids = [c["id"] for c in result["cases"]]
         assert "rocba-20260525-1200" in ids
 
     def test_cases_root_beats_cases_dir(self, tmp_path, monkeypatch):
-        """AGENTIR_CASES_ROOT takes priority over AGENTIR_CASES_DIR."""
+        """SIFT_CASES_ROOT takes priority over SIFT_CASES_DIR."""
         root_cases = tmp_path / "root" / "cases"
         legacy_cases = tmp_path / "legacy" / "cases"
         case_in_root = root_cases / "rootcase-001"
@@ -266,34 +266,34 @@ class TestCaseListEnvVarPriority:
         with open(case_in_root / "CASE.yaml", "w") as f:
             yaml.dump({"case_id": "rootcase-001", "status": "open"}, f)
         legacy_cases.mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(root_cases))
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(legacy_cases))
+        monkeypatch.setenv("SIFT_CASES_ROOT", str(root_cases))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(legacy_cases))
         result = case_list_data()
         assert result["cases_root"] == str(root_cases)
         assert any(c["id"] == "rootcase-001" for c in result["cases"])
 
     def test_falls_back_to_agentir_cases_dir(self, tmp_path, monkeypatch):
-        """No AGENTIR_CASES_ROOT → falls back to AGENTIR_CASES_DIR."""
+        """No SIFT_CASES_ROOT → falls back to SIFT_CASES_DIR."""
         cases_dir = tmp_path / "mydir" / "cases"
         case_dir = cases_dir / "fallback-case-001"
         case_dir.mkdir(parents=True)
         with open(case_dir / "CASE.yaml", "w") as f:
             yaml.dump({"case_id": "fallback-case-001", "status": "open"}, f)
-        monkeypatch.delenv("AGENTIR_CASES_ROOT", raising=False)
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(cases_dir))
+        monkeypatch.delenv("SIFT_CASES_ROOT", raising=False)
+        monkeypatch.setenv("SIFT_CASES_DIR", str(cases_dir))
         result = case_list_data()
         ids = [c["id"] for c in result["cases"]]
         assert "fallback-case-001" in ids
 
     def test_marks_active_case_from_env(self, tmp_path, monkeypatch):
-        """AGENTIR_CASE_DIR → active case identified without reading legacy file."""
+        """SIFT_CASE_DIR → active case identified without reading legacy file."""
         cases_root = tmp_path / "cases"
         case_dir = cases_root / "active-case-20260525-1200"
         case_dir.mkdir(parents=True)
         with open(case_dir / "CASE.yaml", "w") as f:
             yaml.dump({"case_id": "active-case-20260525-1200", "status": "open"}, f)
-        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(cases_root))
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASES_ROOT", str(cases_root))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         result = case_list_data()
         active = [c for c in result["cases"] if c["active"]]
         assert len(active) == 1

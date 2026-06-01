@@ -171,7 +171,7 @@ Clearing the flag before tampering is the key insight: it creates an auditable a
 
 ```
 -a always,exit -F dir=/cases -F perm=wa -F key=agentir_evidence_write
--a always,exit -F dir=/var/lib/agentir -F perm=wa -F key=agentir_core_write
+-a always,exit -F dir=/var/lib/sift -F perm=wa -F key=agentir_core_write
 ```
 
 `perm=a` (attribute change) specifically catches `chattr -i`. If anyone deliberately clears the immutable flag, the kernel audit log records:
@@ -246,7 +246,7 @@ The SPL Memo program stores arbitrary UTF-8 memo data in the transaction, perman
 from solders.keypair import Keypair
 import json, pathlib
 kp = Keypair()
-pathlib.Path('/var/lib/agentir/solana-keypair.json').write_text(
+pathlib.Path('/var/lib/sift/solana-keypair.json').write_text(
     json.dumps(list(bytes(kp)))
 )
 print('pubkey:', kp.pubkey())
@@ -258,9 +258,9 @@ curl -s -X POST https://api.devnet.solana.com \
   -d '{"jsonrpc":"2.0","id":1,"method":"requestAirdrop","params":["YOUR_PUBKEY",1000000000]}'
 
 # Configure the gateway
-# In ~/.agentir/gateway.yaml or via environment:
-export AGENTIR_SOLANA_KEYPAIR=/var/lib/agentir/solana-keypair.json
-export AGENTIR_SOLANA_CLUSTER=devnet   # or mainnet
+# In ~/.sift/gateway.yaml or via environment:
+export SIFT_SOLANA_KEYPAIR=/var/lib/sift/solana-keypair.json
+export SIFT_SOLANA_CLUSTER=devnet   # or mainnet
 
 # Auto-anchoring: triggered automatically after every seal
 # Manual re-anchor: POST /portal/api/evidence/chain/anchor

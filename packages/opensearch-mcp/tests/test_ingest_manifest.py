@@ -18,7 +18,7 @@ from opensearch_mcp.ingest import _write_ingest_manifest
 def _setup_active_case(tmp_path: Path, monkeypatch) -> Path:
     """Point agentir_dir()/active_case at a freshly-created case dir."""
     fake_home = tmp_path / "home"
-    fake_agentir_dir = fake_home / ".agentir"
+    fake_agentir_dir = fake_home / ".sift"
     fake_agentir_dir.mkdir(parents=True)
     case_dir = tmp_path / "cases" / "INC-TEST"
     case_dir.mkdir(parents=True)
@@ -62,7 +62,7 @@ class TestWriteIngestManifest:
 
     def test_no_active_case_is_noop(self, tmp_path, monkeypatch):
         fake_home = tmp_path / "home"
-        (fake_home / ".agentir").mkdir(parents=True)
+        (fake_home / ".sift").mkdir(parents=True)
         monkeypatch.setattr("opensearch_mcp.paths.agentir_home", lambda: fake_home)
         _write_ingest_manifest("/x/y.evtx", "h", "evtx")  # must not raise
 
@@ -108,16 +108,16 @@ class TestWriteIngestManifest:
 
 
 # ---------------------------------------------------------------------------
-# R0-8: _write_ingest_manifest — uses AGENTIR_CASE_DIR not active_case file
+# R0-8: _write_ingest_manifest — uses SIFT_CASE_DIR not active_case file
 # ---------------------------------------------------------------------------
 
 
 class TestWriteIngestManifestEnvVar:
     def test_uses_agentir_case_dir_env(self, tmp_path, monkeypatch):
-        """AGENTIR_CASE_DIR set → manifest lands under that case dir."""
+        """SIFT_CASE_DIR set → manifest lands under that case dir."""
         case_dir = tmp_path / "rocba-20260525-1200"
         (case_dir / "audit" / "ingest-manifests").mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         # Do NOT create active_case file
         _write_ingest_manifest("/evidence/host1/evtx/Security.evtx", "host1", "evtx", doc_count=5)
         manifests = list((case_dir / "audit" / "ingest-manifests").glob("*.manifest.json"))
@@ -128,16 +128,16 @@ class TestWriteIngestManifestEnvVar:
         assert m["doc_count"] == 5
 
     def test_env_var_beats_stale_active_case_file(self, tmp_path, monkeypatch):
-        """AGENTIR_CASE_DIR wins even if active_case file points elsewhere."""
+        """SIFT_CASE_DIR wins even if active_case file points elsewhere."""
         case_dir = tmp_path / "env-case-001"
         (case_dir / "audit" / "ingest-manifests").mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         # Stale active_case pointing to a different dir
         fake_home = tmp_path / "home"
-        (fake_home / ".agentir").mkdir(parents=True)
+        (fake_home / ".sift").mkdir(parents=True)
         stale_dir = tmp_path / "stale-case"
         stale_dir.mkdir()
-        (fake_home / ".agentir" / "active_case").write_text(str(stale_dir))
+        (fake_home / ".sift" / "active_case").write_text(str(stale_dir))
         monkeypatch.setattr("opensearch_mcp.paths.agentir_home", lambda: fake_home)
         _write_ingest_manifest("/x/y.evtx", "host1", "evtx", doc_count=1)
         manifests = list((case_dir / "audit" / "ingest-manifests").glob("*.manifest.json"))

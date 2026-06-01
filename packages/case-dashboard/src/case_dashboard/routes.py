@@ -59,7 +59,7 @@ from case_dashboard.session_jwt import (
 logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
-_PASSWORDS_DIR = Path("/var/lib/agentir/passwords")
+_PASSWORDS_DIR = Path("/var/lib/sift/passwords")
 
 # Set by create_dashboard_v2_app() at startup from gateway.yaml config.
 _SESSION_SECRET: str = ""
@@ -177,7 +177,7 @@ _ON_CASE_ACTIVATED: Callable[[str], object] | None = None
 def _resolve_case_dir() -> Path | None:
     """Resolve case directory per-request.
 
-    Priority: AGENTIR_CASE_DIR env var (set via gateway.yaml case.dir).
+    Priority: SIFT_CASE_DIR env var (set via gateway.yaml case.dir).
     Returns None if no case is active or directory lacks CASE.yaml.
     """
     from sift_common import resolve_case_dir
@@ -191,7 +191,7 @@ def _resolve_case_dir() -> Path | None:
 
 def _no_case_response() -> JSONResponse:
     return JSONResponse(
-        {"error": "No active case. Set AGENTIR_CASE_DIR in gateway.yaml case.dir."},
+        {"error": "No active case. Set SIFT_CASE_DIR in gateway.yaml case.dir."},
         status_code=404,
     )
 
@@ -327,7 +327,7 @@ def _require_portal_role(request: Request) -> JSONResponse | None:
 
 def _check_commit_lockout(examiner: str) -> str | None:
     """Returns error message if locked out, None if OK."""
-    lockout_file = Path.home() / ".agentir" / ".password_lockout"
+    lockout_file = Path.home() / ".sift" / ".password_lockout"
     try:
         data = json.loads(lockout_file.read_text())
     except (OSError, json.JSONDecodeError):
@@ -344,7 +344,7 @@ def _check_commit_lockout(examiner: str) -> str | None:
 
 def _record_commit_failure(examiner: str) -> None:
     """Record a failed commit attempt to shared lockout file."""
-    lockout_file = Path.home() / ".agentir" / ".password_lockout"
+    lockout_file = Path.home() / ".sift" / ".password_lockout"
     lockout_file.parent.mkdir(parents=True, exist_ok=True)
     try:
         data = json.loads(lockout_file.read_text())
@@ -369,7 +369,7 @@ def _record_commit_failure(examiner: str) -> None:
 
 def _clear_commit_failures(examiner: str) -> None:
     """Clear failure count on successful commit."""
-    lockout_file = Path.home() / ".agentir" / ".password_lockout"
+    lockout_file = Path.home() / ".sift" / ".password_lockout"
     try:
         data = json.loads(lockout_file.read_text())
     except (OSError, json.JSONDecodeError):
@@ -394,7 +394,7 @@ def _clear_commit_failures(examiner: str) -> None:
 
 def _commit_failure_count(examiner: str) -> int:
     """Count recent failures for examiner."""
-    lockout_file = Path.home() / ".agentir" / ".password_lockout"
+    lockout_file = Path.home() / ".sift" / ".password_lockout"
     try:
         data = json.loads(lockout_file.read_text())
     except (OSError, json.JSONDecodeError):
@@ -407,7 +407,7 @@ def _commit_failure_count(examiner: str) -> int:
 
 def _check_login_lockout(examiner: str) -> str | None:
     """Returns error message if login is locked out; None if OK. R2: login: namespace."""
-    lockout_file = Path.home() / ".agentir" / ".password_lockout"
+    lockout_file = Path.home() / ".sift" / ".password_lockout"
     try:
         data = json.loads(lockout_file.read_text())
     except (OSError, json.JSONDecodeError):
@@ -546,7 +546,7 @@ def _build_evidence_chain_status(case_dir: Path) -> dict:
     manifest_version = status["manifest_version"]
 
     # Anchor status (Phase 16e)
-    keypair_configured = bool(os.environ.get("AGENTIR_SOLANA_KEYPAIR", "").strip())
+    keypair_configured = bool(os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip())
     anchor_proof = load_anchor_proof(case_dir, manifest_version) if manifest_version > 0 else None
     anchor_info: dict = {"anchoring_enabled": keypair_configured, "manifest_version": manifest_version}
     if anchor_proof:
@@ -649,7 +649,7 @@ async def post_evidence_chain_rescan(request: Request) -> JSONResponse:
     if not case_dir:
         return _no_case_response()
 
-    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
     if _ON_CHAIN_MUTATION and case_dir_str:
         try:
             _ON_CHAIN_MUTATION(case_dir_str)
@@ -762,7 +762,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         logger.exception("Evidence seal failed")
         return JSONResponse({"error": "Seal failed — check gateway logs"}, status_code=500)
 
-    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
     if _ON_CHAIN_MUTATION and case_dir_str:
         try:
             _ON_CHAIN_MUTATION(case_dir_str)
@@ -771,10 +771,10 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
 
     # Auto-anchor on Solana if keypair is configured (non-blocking — never fails the seal)
     anchor_info: dict | None = None
-    keypair_path = os.environ.get("AGENTIR_SOLANA_KEYPAIR", "").strip() or None
+    keypair_path = os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip() or None
     if keypair_path:
         try:
-            cluster = os.environ.get("AGENTIR_SOLANA_CLUSTER", "mainnet")
+            cluster = os.environ.get("SIFT_SOLANA_CLUSTER", "mainnet")
             ledger = load_ledger(case_dir)
             proof = anchor_manifest(case_dir, new_manifest, ledger, keypair_path=keypair_path, cluster=cluster)
             anchor_info = {
@@ -848,7 +848,7 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
         logger.exception("Evidence ignore failed")
         return JSONResponse({"error": "Ignore failed — check gateway logs"}, status_code=500)
 
-    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
     if _ON_CHAIN_MUTATION and case_dir_str:
         try:
             _ON_CHAIN_MUTATION(case_dir_str)
@@ -930,7 +930,7 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
         except OSError as e:
             logger.warning("retire: file unlink failed for %s: %s", abs_path, e)
 
-    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
     if _ON_CHAIN_MUTATION and case_dir_str:
         try:
             _ON_CHAIN_MUTATION(case_dir_str)
@@ -1029,7 +1029,7 @@ async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
     """Anchor current manifest on Solana. Session auth, no HMAC required.
 
     Writes evidence-anchor-v{N}.json and returns anchor status.
-    Returns 503 if AGENTIR_SOLANA_KEYPAIR is not configured.
+    Returns 503 if SIFT_SOLANA_KEYPAIR is not configured.
     """
     role_err = _require_examiner_role(request)
     if role_err:
@@ -1039,10 +1039,10 @@ async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
     if not case_dir:
         return _no_case_response()
 
-    keypair_path = os.environ.get("AGENTIR_SOLANA_KEYPAIR", "").strip() or None
+    keypair_path = os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip() or None
     if not keypair_path:
         return JSONResponse(
-            {"error": "Solana anchoring not configured — set AGENTIR_SOLANA_KEYPAIR"},
+            {"error": "Solana anchoring not configured — set SIFT_SOLANA_KEYPAIR"},
             status_code=503,
         )
 
@@ -1051,7 +1051,7 @@ async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
         return JSONResponse({"error": "No sealed manifest to anchor"}, status_code=400)
 
     try:
-        cluster = os.environ.get("AGENTIR_SOLANA_CLUSTER", "mainnet")
+        cluster = os.environ.get("SIFT_SOLANA_CLUSTER", "mainnet")
         ledger = load_ledger(case_dir)
         proof = anchor_manifest(case_dir, manifest, ledger, keypair_path=keypair_path, cluster=cluster)
     except Exception:
@@ -1079,7 +1079,7 @@ async def get_response_guard_status(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
     if _OVERRIDE_GET_STATUS is None:
         return JSONResponse({"active": False, "seconds_remaining": 0, "enabled_by": None,
                              "warning": "Response guard not wired (non-gateway context)"})
@@ -1095,7 +1095,7 @@ async def post_response_guard_override(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
     if not case_dir_str:
         return _no_case_response()
 
@@ -1142,7 +1142,7 @@ async def post_response_guard_override_cancel(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
     examiner = _resolve_examiner(request)
 
     if _OVERRIDE_CANCEL is None:
@@ -3413,7 +3413,7 @@ def _case_config_write(case_dir: str) -> None:
 
 def _write_cli_case_pointer(case_dir: str) -> None:
     """Atomically write the legacy CLI compatibility pointer."""
-    agentir_dir = Path.home() / ".agentir"
+    agentir_dir = Path.home() / ".sift"
     agentir_dir.mkdir(parents=True, exist_ok=True)
     active_case_file = agentir_dir / "active_case"  # Legacy CLI fallback
     fd, tmp_path = tempfile.mkstemp(dir=str(agentir_dir), suffix=".tmp")
@@ -3445,7 +3445,7 @@ def _valid_case_id(case_id: str) -> bool:
 
 
 def _load_cases_root() -> Path:
-    """Resolve cases root from gateway.yaml case.root or AGENTIR_CASES_ROOT."""
+    """Resolve cases root from gateway.yaml case.root or SIFT_CASES_ROOT."""
     case_root = None
     if _GATEWAY_CONFIG_PATH is not None:
         try:
@@ -3457,7 +3457,7 @@ def _load_cases_root() -> Path:
             pass
 
     if not case_root:
-        case_root = os.environ.get("AGENTIR_CASES_ROOT") or "/cases"
+        case_root = os.environ.get("SIFT_CASES_ROOT") or "/cases"
 
     expanded = re.sub(
         r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
@@ -3630,8 +3630,8 @@ async def post_case_activate(request: Request) -> JSONResponse:
                 return JSONResponse({"error": "Failed to update gateway config"}, status_code=500)
 
         # Update environment variable in-process
-        os.environ["AGENTIR_CASE_DIR"] = str(real_requested)
-        os.environ["AGENTIR_CASES_ROOT"] = str(real_root)
+        os.environ["SIFT_CASE_DIR"] = str(real_requested)
+        os.environ["SIFT_CASES_ROOT"] = str(real_root)
         try:
             _write_cli_case_pointer(str(real_requested))
         except OSError as e:
@@ -3792,8 +3792,8 @@ async def post_case_create(request: Request) -> JSONResponse:
                 return JSONResponse({"error": "Failed to update gateway config"}, status_code=500)
 
         # Update environment variable in-process
-        os.environ["AGENTIR_CASE_DIR"] = str(real_requested)
-        os.environ["AGENTIR_CASES_ROOT"] = str(real_root)
+        os.environ["SIFT_CASE_DIR"] = str(real_requested)
+        os.environ["SIFT_CASES_ROOT"] = str(real_root)
         try:
             _write_cli_case_pointer(str(real_requested))
         except OSError as e:
@@ -4397,7 +4397,7 @@ def create_dashboard_v2_app(
             seal or ignore. The gateway passes invalidate_evidence_cache so the
             30s TTL cache is dropped immediately on portal seal.
         on_case_activated: Called with case_dir_str after portal case creation
-            updates AGENTIR_CASE_DIR. The gateway passes an async callback that
+            updates SIFT_CASE_DIR. The gateway passes an async callback that
             restarts stdio backends so they inherit the new case directory.
         on_override_get_status / on_override_enable / on_override_cancel:
             Bound to response_guard.get_override_status / enable_override /

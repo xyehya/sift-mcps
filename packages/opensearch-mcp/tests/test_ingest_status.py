@@ -22,7 +22,7 @@ from opensearch_mcp.ingest_status import (
 @pytest.fixture
 def status_dir(tmp_path, monkeypatch):
     """Redirect _STATUS_DIR to a temp directory."""
-    sd = tmp_path / ".agentir" / "ingest-status"
+    sd = tmp_path / ".sift" / "ingest-status"
     monkeypatch.setattr("opensearch_mcp.ingest_status._STATUS_DIR", sd)
     return sd
 
@@ -502,14 +502,14 @@ class TestIsProcessAlive:
         """Alive PID with matching run_id returns True."""
         with patch("os.kill"):  # no exception = PID exists
             # Mock /proc reading to return matching environ
-            environ_bytes = b"AGENTIR_INGEST_RUN_ID=test-run\x00OTHER=val\x00"
+            environ_bytes = b"SIFT_INGEST_RUN_ID=test-run\x00OTHER=val\x00"
             with patch.object(Path, "read_bytes", return_value=environ_bytes):
                 assert _is_process_alive(1234, "test-run") is True
 
     def test_returns_false_for_alive_pid_with_wrong_run_id(self):
         """Alive PID but different run_id (PID reuse) returns False."""
         with patch("os.kill"):  # no exception = PID exists
-            environ_bytes = b"AGENTIR_INGEST_RUN_ID=different-run\x00"
+            environ_bytes = b"SIFT_INGEST_RUN_ID=different-run\x00"
             with patch.object(Path, "read_bytes", return_value=environ_bytes):
                 assert _is_process_alive(1234, "test-run") is False
 

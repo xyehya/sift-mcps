@@ -124,7 +124,7 @@ class TestEnrichmentRateLimitFlow:
         from opensearch_mcp import threat_intel
 
         monkeypatch, _ = _patched
-        monkeypatch.setenv("AGENTIR_INTEL_BREAKER_THRESHOLD", "3")
+        monkeypatch.setenv("SIFT_INTEL_BREAKER_THRESHOLD", "3")
 
         def fake_call_tool(tool, params, timeout=15):
             return {"error": "QueryError", "message": "OpenCTI down"}
@@ -141,7 +141,7 @@ class TestEnrichmentRateLimitFlow:
         from opensearch_mcp import threat_intel
 
         monkeypatch, _ = _patched
-        monkeypatch.delenv("AGENTIR_INTEL_BREAKER_THRESHOLD", raising=False)
+        monkeypatch.delenv("SIFT_INTEL_BREAKER_THRESHOLD", raising=False)
 
         call_seq = iter(
             [
@@ -168,7 +168,7 @@ class TestEnrichmentRateLimitFlow:
         from opensearch_mcp import threat_intel
 
         monkeypatch, _ = _patched
-        monkeypatch.setenv("AGENTIR_INTEL_BREAKER_THRESHOLD", "2")
+        monkeypatch.setenv("SIFT_INTEL_BREAKER_THRESHOLD", "2")
 
         def fake_call_tool(tool, params, timeout=15):
             return {"error": "QueryError", "message": "down"}
@@ -203,7 +203,7 @@ class TestEnrichmentRateLimitFlow:
 
         monkeypatch, _ = _patched
         # Low retry cap keeps the test fast; real default is 5.
-        monkeypatch.setenv("AGENTIR_INTEL_RATE_LIMIT_RETRIES", "3")
+        monkeypatch.setenv("SIFT_INTEL_RATE_LIMIT_RETRIES", "3")
 
         def fake_call_tool(tool, params, timeout=15):
             if params.get("ioc") == "exhaust.me":
@@ -237,8 +237,8 @@ class TestEnrichmentRateLimitFlow:
         from opensearch_mcp import threat_intel
 
         monkeypatch, _ = _patched
-        monkeypatch.setenv("AGENTIR_INTEL_RATE_LIMIT_RETRIES", "2")
-        monkeypatch.setenv("AGENTIR_INTEL_BREAKER_THRESHOLD", "3")
+        monkeypatch.setenv("SIFT_INTEL_RATE_LIMIT_RETRIES", "2")
+        monkeypatch.setenv("SIFT_INTEL_BREAKER_THRESHOLD", "3")
 
         def fake_call_tool(tool, params, timeout=15):
             # Every IOC rate-limited, retries exhausted. Message must
@@ -363,7 +363,7 @@ class TestEnrichWorkerResilience:
         monkeypatch.setattr(ingest_cli, "get_client", lambda: object())
 
         args = argparse.Namespace(case="TEST-CASE", force=False, dry_run=False)
-        # Without AGENTIR_INGEST_RUN_ID set, the _write_bg_status path
+        # Without SIFT_INGEST_RUN_ID set, the _write_bg_status path
         # short-circuits (no-op). That's fine for this test — we only
         # need to prove the worker doesn't raise during a rate-limit
         # cascade.

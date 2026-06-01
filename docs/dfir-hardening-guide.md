@@ -107,7 +107,7 @@ This is recorded before any tampering occurs. Even if log files are cleared afte
 
 ```
 -a always,exit -F dir=CASES_ROOT -F perm=wa -F key=agentir_evidence_write
--a always,exit -F dir=/var/lib/agentir -F perm=wa -F key=agentir_core_write
+-a always,exit -F dir=/var/lib/sift -F perm=wa -F key=agentir_core_write
 ```
 
 `CASES_ROOT` is substituted with `/cases` (or the configured value) by `install.sh` at deploy time.

@@ -75,7 +75,7 @@ def passwords_dir(tmp_path, monkeypatch):
 def app(passwords_dir, tmp_path, monkeypatch):
     routes_mod._login_challenges.clear()
     routes_mod._challenges.clear()
-    # Redirect Path.home() so lockout files land in tmp, not ~/.agentir
+    # Redirect Path.home() so lockout files land in tmp, not ~/.sift
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     return create_dashboard_v2_app(session_secret=_SECRET, session_max_age=28800)
 
@@ -434,11 +434,11 @@ class TestR2LockoutNamespaceSeparation:
 
 @pytest.fixture()
 def active_case_dir(tmp_path, monkeypatch):
-    """Create a minimal active case dir and set AGENTIR_CASE_DIR for the test."""
+    """Create a minimal active case dir and set SIFT_CASE_DIR for the test."""
     case_dir = tmp_path / "cases" / "test-case"
     case_dir.mkdir(parents=True)
     (case_dir / "CASE.yaml").write_text("case_id: test-case\n")
-    monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
     return case_dir
 
 

@@ -492,7 +492,7 @@ class TestIdxIngest:
         evidence_dir = case_dir / "evidence"
         evidence_dir.mkdir()
         make_windows_tree(evidence_dir)
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
 
         mock_client.count.side_effect = Exception("no index")
 
@@ -505,7 +505,7 @@ class TestIdxIngest:
         case_dir = tmp_path / "test-case-20260525-1200"
         evidence_dir = case_dir / "evidence"
         evidence_dir.mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         f = evidence_dir / "not_a_dir.txt"
         f.write_text("test")
         resp = idx_ingest(path="not_a_dir.txt")
@@ -657,26 +657,26 @@ class TestEnrichIntelAsync:
 
 class TestGetActiveCase:
     def test_env_var_wins(self, tmp_path, monkeypatch):
-        """AGENTIR_CASE_DIR set → returns its basename, lowercased."""
+        """SIFT_CASE_DIR set → returns its basename, lowercased."""
         case_dir = tmp_path / "test-case-20260525-1200"
         case_dir.mkdir()
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         result = srv._get_active_case()
         assert result == "test-case-20260525-1200"
 
     def test_env_var_lowercases(self, tmp_path, monkeypatch):
-        """AGENTIR_CASE_DIR with uppercase → lowercased for OpenSearch indices."""
+        """SIFT_CASE_DIR with uppercase → lowercased for OpenSearch indices."""
         case_dir = tmp_path / "MYCASE-20260525"
         case_dir.mkdir()
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         result = srv._get_active_case()
         assert result == "mycase-20260525"
 
     def test_fallback_to_file(self, tmp_path, monkeypatch):
         """Env var absent, active_case file present → returns file basename."""
-        monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
         fake_home = tmp_path / "home"
-        agentir_d = fake_home / ".agentir"
+        agentir_d = fake_home / ".sift"
         agentir_d.mkdir(parents=True)
         case_dir = tmp_path / "cases" / "file-case-001"
         case_dir.mkdir(parents=True)
@@ -689,9 +689,9 @@ class TestGetActiveCase:
         """Env var set + stale active_case file → env var wins."""
         env_case = tmp_path / "env-case-20260525-1200"
         env_case.mkdir()
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(env_case))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(env_case))
         fake_home = tmp_path / "home"
-        agentir_d = fake_home / ".agentir"
+        agentir_d = fake_home / ".sift"
         agentir_d.mkdir(parents=True)
         stale_dir = tmp_path / "stale-case"
         stale_dir.mkdir()
@@ -702,9 +702,9 @@ class TestGetActiveCase:
 
     def test_returns_none_when_neither_set(self, tmp_path, monkeypatch):
         """Both env var absent and no file → None."""
-        monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
         fake_home = tmp_path / "home"
-        (fake_home / ".agentir").mkdir(parents=True)
+        (fake_home / ".sift").mkdir(parents=True)
         monkeypatch.setattr("opensearch_mcp.paths.agentir_home", lambda: fake_home)
         result = srv._get_active_case()
         assert result is None
@@ -718,7 +718,7 @@ class TestGetActiveCase:
 class TestIdxIngestActiveCase:
     def test_no_active_case_returns_portal_hint(self, mock_client, monkeypatch):
         """When no active case is set, returns portal_hint (not legacy CLI error)."""
-        monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
         fake_home = monkeypatch.monkeypatch if False else None
         # Point agentir_dir to empty tmp so file fallback also fails
         monkeypatch.setattr(srv, "_get_active_case", lambda: None)
@@ -731,13 +731,13 @@ class TestIdxIngestActiveCase:
         assert "portal" in resp["portal_hint"].lower()
 
     def test_active_case_from_env_var(self, mock_client, tmp_path, monkeypatch):
-        """AGENTIR_CASE_DIR env var provides case_id without active_case file."""
+        """SIFT_CASE_DIR env var provides case_id without active_case file."""
         from _helpers import make_windows_tree
 
         case_dir = tmp_path / "rocba-20260525-1200"
         case_dir.mkdir()
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
-        # Do NOT create ~/.agentir/active_case
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+        # Do NOT create ~/.sift/active_case
         evidence_dir = case_dir / "evidence"
         evidence_dir.mkdir()
         make_windows_tree(evidence_dir)
@@ -758,7 +758,7 @@ class TestIdxIngestContainerDetection:
         case_dir = tmp_path / "test-case-001"
         evidence_dir = case_dir / "evidence"
         evidence_dir.mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         e01 = evidence_dir / "rocba-cdrive.e01"
         e01.write_bytes(b"EVF" + b"\x00" * 100)  # minimal EWF magic
         resp = idx_ingest(path="evidence", dry_run=True)
@@ -772,7 +772,7 @@ class TestIdxIngestContainerDetection:
         """Empty directory → no containers, falls through to original error."""
         case_dir = tmp_path / "test-case-001"
         (case_dir / "evidence").mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         resp = idx_ingest(path="evidence", dry_run=True)
         assert "error" in resp
         assert "containers_detected" != resp.get("status")
@@ -782,7 +782,7 @@ class TestIdxIngestContainerDetection:
         case_dir = tmp_path / "test-case-001"
         evidence_dir = case_dir / "evidence"
         evidence_dir.mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         (evidence_dir / "notes.txt").write_text("not a container")
         resp = idx_ingest(path="evidence", dry_run=True)
         assert "error" in resp
@@ -795,7 +795,7 @@ class TestIdxIngestContainerDetection:
         case_dir = tmp_path / "test-case-001"
         evidence_dir = case_dir / "evidence"
         evidence_dir.mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         (evidence_dir / "rocba-cdrive.e01").write_bytes(b"EVF" + b"\x00" * 100)
         (evidence_dir / "memdump.raw").write_bytes(b"\x00" * 100)
 

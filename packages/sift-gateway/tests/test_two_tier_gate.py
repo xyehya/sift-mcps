@@ -106,7 +106,7 @@ async def _invoke_call_tool(gateway, tool_name: str, gate_status: ChainStatus):
         ),
         patch(
             "sift_gateway.mcp_endpoint.os.environ.get",
-            side_effect=lambda k, d="": "/tmp/case" if k == "AGENTIR_CASE_DIR" else d,
+            side_effect=lambda k, d="": "/tmp/case" if k == "SIFT_CASE_DIR" else d,
         ),
         patch(
             "sift_gateway.mcp_endpoint._extract_request_context",
@@ -157,7 +157,7 @@ class TestTwoTierGateIntegration:
             ),
             patch(
                 "sift_gateway.mcp_endpoint.os.environ.get",
-                side_effect=lambda k, d="": "/tmp/case" if k == "AGENTIR_CASE_DIR" else d,
+                side_effect=lambda k, d="": "/tmp/case" if k == "SIFT_CASE_DIR" else d,
             ),
             patch(
                 "sift_gateway.mcp_endpoint._extract_request_context",

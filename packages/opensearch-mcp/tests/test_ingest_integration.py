@@ -41,7 +41,7 @@ def os_client():
         if health.get("status") not in ("green", "yellow"):
             pytest.skip("OpenSearch cluster not healthy")
     except FileNotFoundError:
-        pytest.skip("OpenSearch config not found (~/.agentir/opensearch.yaml)")
+        pytest.skip("OpenSearch config not found (~/.sift/opensearch.yaml)")
     except Exception:
         pytest.skip("OpenSearch not available")
     # Idempotent template install — guarantees templates are present

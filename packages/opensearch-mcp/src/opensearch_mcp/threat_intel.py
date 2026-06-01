@@ -32,15 +32,15 @@ _WAIT_RE = re.compile(r"[Ww]ait\s+([\d.]+)", re.IGNORECASE)
 
 
 def _min_interval_sec() -> float:
-    return max(10, int(os.environ.get("AGENTIR_INTEL_MIN_INTERVAL_MS", "100"))) / 1000.0
+    return max(10, int(os.environ.get("SIFT_INTEL_MIN_INTERVAL_MS", "100"))) / 1000.0
 
 
 def _circuit_threshold() -> int:
-    return max(1, int(os.environ.get("AGENTIR_INTEL_BREAKER_THRESHOLD", "10")))
+    return max(1, int(os.environ.get("SIFT_INTEL_BREAKER_THRESHOLD", "10")))
 
 
 def _rate_limit_max_retries() -> int:
-    return max(1, int(os.environ.get("AGENTIR_INTEL_RATE_LIMIT_RETRIES", "5")))
+    return max(1, int(os.environ.get("SIFT_INTEL_RATE_LIMIT_RETRIES", "5")))
 
 
 class IntelEnrichmentHalted(RuntimeError):
@@ -405,7 +405,7 @@ def batch_lookup(
         )
         return {}
 
-    run_id = os.environ.get("AGENTIR_INGEST_RUN_ID", "") or f"enrich-{os.getpid()}"
+    run_id = os.environ.get("SIFT_INGEST_RUN_ID", "") or f"enrich-{os.getpid()}"
     coverage_path = _coverage_path_for_run(run_id)
     coverage = _load_coverage(coverage_path)  # resume-aware
     already_done = set(coverage["enriched"]) | set(coverage["skipped"].keys())

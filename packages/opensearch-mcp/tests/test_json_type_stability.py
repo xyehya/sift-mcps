@@ -265,7 +265,7 @@ class TestTypeStabilityClusterRoundtrip:
             install_all_templates(client)  # idempotent
             return client
         except FileNotFoundError:
-            pytest.skip("OpenSearch config not found (~/.agentir/opensearch.yaml)")
+            pytest.skip("OpenSearch config not found (~/.sift/opensearch.yaml)")
         except Exception as e:
             pytest.skip(f"OpenSearch not available: {e}")
 

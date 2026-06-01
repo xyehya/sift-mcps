@@ -11,7 +11,7 @@ def register(subparsers, registered: set) -> None:
         p = subparsers.add_parser("ingest", help="Ingest evidence into OpenSearch")
         p.add_argument("path", help="Path to evidence directory or archive")
         p.add_argument("--hostname", help="Override hostname (required for flat directories)")
-        p.add_argument("--case", help="Case ID (reads AGENTIR_CASE_DIR if omitted)")
+        p.add_argument("--case", help="Case ID (reads SIFT_CASE_DIR if omitted)")
         p.add_argument("--password", help="Archive password")
         p.add_argument("--from", dest="time_from", help="Start date (ISO)")
         p.add_argument("--to", dest="time_to", help="End date (ISO)")

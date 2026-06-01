@@ -89,21 +89,21 @@ class StdioMCPBackend(MCPBackend):
         env.update(configured_env)
         # Remove empty values from unset ${VAR} interpolation.
         env = {k: v for k, v in env.items() if v}
-        if "AGENTIR_CASE_DIR" not in env:
+        if "SIFT_CASE_DIR" not in env:
             # No active case yet (portal reset or fresh install).
             # Backends start in no-case mode; individual tools return
             # "No active case" errors when called. Portal remains accessible
             # so the examiner can create and activate a case.
             import logging as _log
             _log.getLogger(__name__).warning(
-                "Backend %s starting without AGENTIR_CASE_DIR — "
+                "Backend %s starting without SIFT_CASE_DIR — "
                 "no active case set. Use the portal to create a case.",
                 self.name,
             )
-        if "AGENTIR_CASES_ROOT" not in env:
+        if "SIFT_CASES_ROOT" not in env:
             import logging as _log
             _log.getLogger(__name__).warning(
-                "Backend %s starting without AGENTIR_CASES_ROOT.",
+                "Backend %s starting without SIFT_CASES_ROOT.",
                 self.name,
             )
 

@@ -68,7 +68,7 @@ def run_command(
         raise ValueError("Empty command")
 
     if cwd is None:
-        cwd = os.environ.get("AGENTIR_CASE_DIR") or None
+        cwd = os.environ.get("SIFT_CASE_DIR") or None
 
     binary = command[0].split("/")[-1]  # Strip path prefix
 

@@ -140,7 +140,7 @@ def create_server() -> FastMCP:
                 referenced in the command. Server auto-detects as backup
                 for cataloged tools.
             working_dir: Optional working directory under the active case.
-                Defaults to AGENTIR_CASE_DIR. Relative command paths are
+                Defaults to SIFT_CASE_DIR. Relative command paths are
                 evaluated from this directory.
             preview_lines: Max lines in inline preview for large outputs
                 (0 = default ~10KB budget, max 200). Useful when you need
@@ -161,7 +161,7 @@ def create_server() -> FastMCP:
             if working_dir:
                 cwd = str(resolve_case_path(working_dir, default_subdir=""))
             else:
-                cwd = os.environ.get("AGENTIR_CASE_DIR", "") or None
+                cwd = os.environ.get("SIFT_CASE_DIR", "") or None
         except ValueError as e:
             return build_response(
                 tool_name="run_command",

@@ -50,20 +50,20 @@ def apply_case_env(config: dict) -> None:
         cases_root = str(Path(case_dir).parent)
     if not cases_root:
         cases_root = (
-            os.environ.get("AGENTIR_CASES_ROOT")
-            or os.environ.get("AGENTIR_CASE_ROOT")
+            os.environ.get("SIFT_CASES_ROOT")
+            or os.environ.get("SIFT_CASE_ROOT")
             or ""
         )
 
     if cases_root:
-        os.environ["AGENTIR_CASES_ROOT"] = cases_root
-        logger.debug("AGENTIR_CASES_ROOT set to %s from gateway config", cases_root)
+        os.environ["SIFT_CASES_ROOT"] = cases_root
+        logger.debug("SIFT_CASES_ROOT set to %s from gateway config", cases_root)
 
     if case_dir:
-        os.environ["AGENTIR_CASE_DIR"] = case_dir
-        logger.debug("AGENTIR_CASE_DIR set to %s from gateway config", case_dir)
+        os.environ["SIFT_CASE_DIR"] = case_dir
+        logger.debug("SIFT_CASE_DIR set to %s from gateway config", case_dir)
     else:
-        os.environ.pop("AGENTIR_CASE_DIR", None)
+        os.environ.pop("SIFT_CASE_DIR", None)
 
 
 def load_config(path: str) -> dict:

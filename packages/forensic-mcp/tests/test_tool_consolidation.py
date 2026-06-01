@@ -13,8 +13,8 @@ def tools(tmp_path, monkeypatch):
     (tmp_path / "CASE.yaml").write_text(
         yaml.dump({"case_id": "case-tool-001", "title": "Tool Consolidation"})
     )
-    monkeypatch.setenv("AGENTIR_CASE_DIR", str(tmp_path))
-    monkeypatch.setenv("AGENTIR_EXAMINER", "alice")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIFT_EXAMINER", "alice")
     server = create_server()
     return {tool.name: tool for tool in server._tool_manager.list_tools()}
 
@@ -53,7 +53,7 @@ def test_findings_reader_is_renamed_and_old_readers_are_hidden(tools):
 
 def test_list_existing_findings_returns_paginated_findings(tools, tmp_path, monkeypatch):
     case_dir = tmp_path
-    monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
     (case_dir / "findings.json").write_text(
         json.dumps(
             [
@@ -71,7 +71,7 @@ def test_list_existing_findings_returns_paginated_findings(tools, tmp_path, monk
 
 def test_query_case_routes_timeline_and_actions(tools, tmp_path, monkeypatch):
     case_dir = tmp_path
-    monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
     (case_dir / "timeline.json").write_text(
         json.dumps(
             [

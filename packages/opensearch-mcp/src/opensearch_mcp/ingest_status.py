@@ -189,7 +189,7 @@ def _is_process_alive(pid: int, run_id: str) -> bool:
     if run_id:
         try:
             environ = Path(f"/proc/{pid}/environ").read_bytes()
-            expected = f"AGENTIR_INGEST_RUN_ID={run_id}".encode()
+            expected = f"SIFT_INGEST_RUN_ID={run_id}".encode()
             return expected in environ
         except OSError:
             # /proc not readable — fall back to PID-only check

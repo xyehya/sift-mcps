@@ -385,7 +385,7 @@ class TestDelimitedWrapperTerminalStatus:
         from opensearch_mcp import ingest_cli
 
         # tmp_path has no subdirs matching the walker's ext filter.
-        monkeypatch.setenv("AGENTIR_INGEST_RUN_ID", "TEST-RUN-123")
+        monkeypatch.setenv("SIFT_INGEST_RUN_ID", "TEST-RUN-123")
         monkeypatch.setattr(ingest_cli, "_resolve_case_id", lambda _c: "TEST-CASE")
         monkeypatch.setattr(ingest_cli, "_ensure_case_active", lambda _c: None)
         monkeypatch.setattr(ingest_cli, "reset_circuit_breaker", lambda: None, raising=False)
@@ -425,7 +425,7 @@ class TestDelimitedWrapperTerminalStatus:
         hosts list must also write terminal 'complete'."""
         from opensearch_mcp import ingest_cli
 
-        monkeypatch.setenv("AGENTIR_INGEST_RUN_ID", "TEST-RUN-456")
+        monkeypatch.setenv("SIFT_INGEST_RUN_ID", "TEST-RUN-456")
         monkeypatch.setattr(ingest_cli, "_resolve_case_id", lambda _c: "TEST-CASE")
         monkeypatch.setattr(ingest_cli, "_ensure_case_active", lambda _c: None)
         monkeypatch.setattr(ingest_cli, "reset_circuit_breaker", lambda: None, raising=False)
@@ -803,37 +803,37 @@ class TestHayabusaSummaryLine:
 
 
 # ---------------------------------------------------------------------------
-# R0-9: _case_dir_for and _resolve_case_id — AGENTIR_CASES_ROOT first
+# R0-9: _case_dir_for and _resolve_case_id — SIFT_CASES_ROOT first
 # ---------------------------------------------------------------------------
 
 
 class TestCaseDirForEnvVar:
     def test_uses_agentir_cases_root(self, tmp_path, monkeypatch):
-        """AGENTIR_CASES_ROOT set → finds case under that root."""
+        """SIFT_CASES_ROOT set → finds case under that root."""
         from opensearch_mcp.ingest_cli import _case_dir_for
 
         cases_root = tmp_path / "cases"
         case_dir = cases_root / "rocba-20260525-1200"
         case_dir.mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(cases_root))
-        monkeypatch.delenv("AGENTIR_CASES_DIR", raising=False)
+        monkeypatch.setenv("SIFT_CASES_ROOT", str(cases_root))
+        monkeypatch.delenv("SIFT_CASES_DIR", raising=False)
         result = _case_dir_for("rocba-20260525-1200")
         assert result == case_dir
 
     def test_falls_back_to_agentir_cases_dir(self, tmp_path, monkeypatch):
-        """No AGENTIR_CASES_ROOT → falls back to AGENTIR_CASES_DIR."""
+        """No SIFT_CASES_ROOT → falls back to SIFT_CASES_DIR."""
         from opensearch_mcp.ingest_cli import _case_dir_for
 
         cases_root = tmp_path / "cases"
         case_dir = cases_root / "fallback-case-001"
         case_dir.mkdir(parents=True)
-        monkeypatch.delenv("AGENTIR_CASES_ROOT", raising=False)
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(cases_root))
+        monkeypatch.delenv("SIFT_CASES_ROOT", raising=False)
+        monkeypatch.setenv("SIFT_CASES_DIR", str(cases_root))
         result = _case_dir_for("fallback-case-001")
         assert result == case_dir
 
     def test_cases_root_beats_cases_dir(self, tmp_path, monkeypatch):
-        """AGENTIR_CASES_ROOT takes precedence over AGENTIR_CASES_DIR."""
+        """SIFT_CASES_ROOT takes precedence over SIFT_CASES_DIR."""
         from opensearch_mcp.ingest_cli import _case_dir_for
 
         root_cases = tmp_path / "root" / "cases"
@@ -841,8 +841,8 @@ class TestCaseDirForEnvVar:
         case_in_root = root_cases / "mycase-001"
         case_in_root.mkdir(parents=True)
         (legacy_cases / "mycase-001").mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(root_cases))
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(legacy_cases))
+        monkeypatch.setenv("SIFT_CASES_ROOT", str(root_cases))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(legacy_cases))
         result = _case_dir_for("mycase-001")
         assert result == case_in_root
 
@@ -852,18 +852,18 @@ class TestCaseDirForEnvVar:
 
         cases_root = tmp_path / "cases"
         cases_root.mkdir()
-        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(cases_root))
+        monkeypatch.setenv("SIFT_CASES_ROOT", str(cases_root))
         result = _case_dir_for("nonexistent-case")
         assert result is None
 
 
 class TestResolveCaseIdEnvVar:
     def test_uses_agentir_cases_root_for_validation(self, tmp_path, monkeypatch):
-        """--case flag + AGENTIR_CASES_ROOT → resolves case path correctly."""
+        """--case flag + SIFT_CASES_ROOT → resolves case path correctly."""
         cases_root = tmp_path / "cases"
         (cases_root / "mycase-20260525").mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(cases_root))
-        monkeypatch.delenv("AGENTIR_CASES_DIR", raising=False)
+        monkeypatch.setenv("SIFT_CASES_ROOT", str(cases_root))
+        monkeypatch.delenv("SIFT_CASES_DIR", raising=False)
         import io
         import sys
         captured = io.StringIO()

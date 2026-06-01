@@ -28,7 +28,7 @@ _SYSTEMIC_ERROR_PATTERNS = (
     "blocked by",
     "illegal_argument_exception",
 )
-_CIRCUIT_BREAKER_THRESHOLD = max(1, int(os.environ.get("AGENTIR_SHARD_BREAKER_THRESHOLD", "3")))
+_CIRCUIT_BREAKER_THRESHOLD = max(1, int(os.environ.get("SIFT_SHARD_BREAKER_THRESHOLD", "3")))
 
 # Rev 6: thread-local state. Concurrent in-process MCP tools used to
 # share a module-global counter and could cross-halt each other.

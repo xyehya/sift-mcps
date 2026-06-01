@@ -545,7 +545,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         sealed_count = len(evidence_files)
 
         # ── Ingest status detection ─────────────────────────────────────
-        ingest_status_dir = Path.home() / ".agentir" / "ingest-status"
+        ingest_status_dir = Path.home() / ".sift" / "ingest-status"
         ingest_complete = False
         ingest_running = False
         ingest_failed = False
@@ -641,7 +641,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             phase = "SEALED"
             next_steps = [
                 f"Ingestion failed: {ingest_error or 'unknown error'}",
-                "Check ingest logs in ~/.agentir/ingest-logs/ for details.",
+                "Check ingest logs in ~/.sift/ingest-logs/ for details.",
                 "Fix the issue and re-run idx_ingest().",
             ]
         elif ingest_complete and draft_count == 0 and approved_count == 0:

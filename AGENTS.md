@@ -119,7 +119,7 @@ Browser      ──HTTPS──▶     │
 | Streamable HTTP via `StreamableHTTPSessionManager` | Correct MCP spec |
 | Gateway subprocess aggregation | Clean separation of concerns |
 | Challenge-response HMAC-SHA256 portal auth | No plaintext password over wire |
-| HMAC verification ledger at `/var/lib/agentir/verification/` | Non-forgeable integrity |
+| HMAC verification ledger at `/var/lib/sift/verification/` | Non-forgeable integrity |
 | Atomic writes + `chmod 444` on case files | Crash-safe, tamper-resistant |
 | Portal case creation | Normal examiner workflow |
 | Append-only `approvals.jsonl` | Immutable approval audit trail |
@@ -299,8 +299,8 @@ scripts/remediation-gate.sh                       # Pre-commit gate: namespace s
 | R2 | Chain of custody | Atomic writes, SHA-256 hashes, append-only approvals, HMAC verification ledger |
 | R3 | Human-in-the-loop | Findings are DRAFT until examiner approves via HMAC challenge-response |
 | R3b | Evidence intake | Portal-controlled, append-only, versioned manifest + ledger |
-| R4 | Portal case creation | Examiner creates cases in portal; `AGENTIR_CASE_DIR` propagates to all backends |
-| R4b | Path resolution | All path args resolve under `AGENTIR_CASE_DIR`; traversal rejected |
+| R4 | Portal case creation | Examiner creates cases in portal; `SIFT_CASE_DIR` propagates to all backends |
+| R4b | Path resolution | All path args resolve under `SIFT_CASE_DIR`; traversal rejected |
 | R5 | TLS everywhere | Self-signed CA at install; HTTPS only for remote access; SAN includes localhost |
 | R6 | Bearer token auth | Timing-safe, expiry-checked; two roles (examiner, agent) |
 | R7 | windows-triage and RAG retained | SQLite-backed baseline validation; wintools-mcp out of scope |

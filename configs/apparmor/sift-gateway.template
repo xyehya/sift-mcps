@@ -28,8 +28,8 @@
   /home/*/.agentir/**                        r,
 
   # agentir state directory (read + write for passwords, tokens, verification)
-  /var/lib/agentir/                          rw,
-  /var/lib/agentir/**                        rw,
+  /var/lib/sift/                          rw,
+  /var/lib/sift/**                        rw,
 
   # Cases root — HARD DENY writes to evidence files; allow reads for hashing
   /cases/                                    r,

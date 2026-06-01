@@ -61,7 +61,7 @@ def _wintools_available() -> bool:
 
         import yaml
 
-        gw = yaml.safe_load((Path.home() / ".agentir" / "gateway.yaml").read_text()) or {}
+        gw = yaml.safe_load((Path.home() / ".sift" / "gateway.yaml").read_text()) or {}
         return "wintools-mcp" in gw.get("backends", {})
     except Exception:
         return False

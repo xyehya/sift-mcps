@@ -1,6 +1,6 @@
 """Shared helpers for connecting to the local agentir gateway.
 
-Reads ~/.agentir/gateway.yaml. Always uses 127.0.0.1 for local access.
+Reads ~/.sift/gateway.yaml. Always uses 127.0.0.1 for local access.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 def _read_gateway_config() -> dict:
     import yaml
 
-    gateway_config = Path.home() / ".agentir" / "gateway.yaml"
+    gateway_config = Path.home() / ".sift" / "gateway.yaml"
     if not gateway_config.exists():
         return {}
     try:
@@ -61,7 +61,7 @@ def get_local_ssl_context() -> ssl.SSLContext | None:
 
 
 def find_ca_cert() -> str | None:
-    ca_path = Path.home() / ".agentir" / "tls" / "ca-cert.pem"
+    ca_path = Path.home() / ".sift" / "tls" / "ca-cert.pem"
     if ca_path.exists():
         return str(ca_path)
     return None

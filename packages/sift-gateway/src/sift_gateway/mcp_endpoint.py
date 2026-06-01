@@ -570,7 +570,7 @@ def create_mcp_server(gateway: Any) -> Server:
             # Evidence chain gate — two-tier:
             #   Violations (MODIFIED/MISSING/UNREGISTERED/LEDGER_ERROR) block ALL tools.
             #   UNSEALED blocks non-read-only tools; read-only tools pass through with warning.
-            case_dir_str = os.environ.get("AGENTIR_CASE_DIR", "")
+            case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
             gate = check_evidence_gate(case_dir_str)
             if gate["blocked"]:
                 gate_status = gate["status"]

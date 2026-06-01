@@ -1,6 +1,6 @@
 """HMAC verification ledger for approved findings and timeline events.
 
-Ledger lives at /var/lib/agentir/verification/{case-id}.jsonl.
+Ledger lives at /var/lib/sift/verification/{case-id}.jsonl.
 This path is outside any user's home directory and is unreachable by the
 Claude Code sandbox from any CWD.
 """
@@ -15,7 +15,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-VERIFICATION_DIR = Path(os.environ.get("AGENTIR_VERIFICATION_DIR", "/var/lib/agentir/verification"))
+VERIFICATION_DIR = Path(os.environ.get("SIFT_VERIFICATION_DIR", "/var/lib/sift/verification"))
 PBKDF2_ITERATIONS = 600_000
 
 

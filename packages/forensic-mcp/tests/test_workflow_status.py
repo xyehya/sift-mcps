@@ -32,14 +32,14 @@ def case_dir(tmp_path):
 
 @pytest.fixture
 def server_with_case(case_dir, monkeypatch):
-    """Return (server, tools_dict) with AGENTIR_CASE_DIR set.
+    """Return (server, tools_dict) with SIFT_CASE_DIR set.
 
     Mock chain_status to OK for normal phase-detection tests.
     monkeypatch.setattr stays active for the full test duration
     (unlike with patch(...) which exits after create_server).
     """
-    monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
-    monkeypatch.setenv("AGENTIR_EXAMINER", "alice")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_EXAMINER", "alice")
 
     import sift_core.evidence_chain as _ec
 
@@ -132,7 +132,7 @@ def test_workflow_status_post_ingest_triage(server_with_case):
     (case_dir / "evidence-manifest.json").write_text(json.dumps({
         "files": [{"name": "image.e01", "path": "evidence/image.e01"}]
     }))
-    ingest_dir = Path.home() / ".agentir" / "ingest-status"
+    ingest_dir = Path.home() / ".sift" / "ingest-status"
     ingest_dir.mkdir(parents=True, exist_ok=True)
     status_file = ingest_dir / "test-wf-001-100.json"
     status_file.write_text(json.dumps({
@@ -154,7 +154,7 @@ def test_workflow_status_with_draft_findings(server_with_case):
     (case_dir / "evidence-manifest.json").write_text(json.dumps({
         "files": [{"name": "image.e01", "path": "evidence/image.e01"}]
     }))
-    ingest_dir = Path.home() / ".agentir" / "ingest-status"
+    ingest_dir = Path.home() / ".sift" / "ingest-status"
     ingest_dir.mkdir(parents=True, exist_ok=True)
     sf = ingest_dir / "test-wf-001-101.json"
     sf.write_text(json.dumps({
@@ -179,7 +179,7 @@ def test_workflow_status_with_approved_findings(server_with_case):
     (case_dir / "evidence-manifest.json").write_text(json.dumps({
         "files": [{"name": "image.e01", "path": "evidence/image.e01"}]
     }))
-    ingest_dir = Path.home() / ".agentir" / "ingest-status"
+    ingest_dir = Path.home() / ".sift" / "ingest-status"
     ingest_dir.mkdir(parents=True, exist_ok=True)
     sf = ingest_dir / "test-wf-001-102.json"
     sf.write_text(json.dumps({
@@ -200,9 +200,9 @@ def test_workflow_status_with_approved_findings(server_with_case):
 
 def test_workflow_status_no_case(monkeypatch):
     """No active case → NO_CASE phase."""
-    monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
-    monkeypatch.setenv("AGENTIR_CASE_DIR", "/tmp/nonexistent-case-xyz")
-    monkeypatch.setenv("AGENTIR_EXAMINER", "alice")
+    monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+    monkeypatch.setenv("SIFT_CASE_DIR", "/tmp/nonexistent-case-xyz")
+    monkeypatch.setenv("SIFT_EXAMINER", "alice")
     s = create_server()
     tools = {t.name: t for t in s._tool_manager.list_tools()}
     result = _call(tools["workflow_status"])
@@ -215,7 +215,7 @@ def test_workflow_status_ingesting_phase(server_with_case):
     (case_dir / "evidence-manifest.json").write_text(json.dumps({
         "files": [{"name": "image.e01", "path": "evidence/image.e01"}]
     }))
-    ingest_dir = Path.home() / ".agentir" / "ingest-status"
+    ingest_dir = Path.home() / ".sift" / "ingest-status"
     ingest_dir.mkdir(parents=True, exist_ok=True)
     sf = ingest_dir / "test-wf-001-103.json"
     sf.write_text(json.dumps({
@@ -235,7 +235,7 @@ def test_workflow_status_ingest_failed(server_with_case):
     (case_dir / "evidence-manifest.json").write_text(json.dumps({
         "files": [{"name": "image.e01", "path": "evidence/image.e01"}]
     }))
-    ingest_dir = Path.home() / ".agentir" / "ingest-status"
+    ingest_dir = Path.home() / ".sift" / "ingest-status"
     ingest_dir.mkdir(parents=True, exist_ok=True)
     sf = ingest_dir / "test-wf-001-104.json"
     sf.write_text(json.dumps({
@@ -269,9 +269,9 @@ def test_workflow_status_evidence_json_fallback(server_with_case):
 
 @pytest.fixture
 def svr(case_dir, monkeypatch):
-    """Server with AGENTIR_CASE_DIR set — no chain_status mock by default."""
-    monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
-    monkeypatch.setenv("AGENTIR_EXAMINER", "alice")
+    """Server with SIFT_CASE_DIR set — no chain_status mock by default."""
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_EXAMINER", "alice")
     s = create_server()
     tools = {t.name: t for t in s._tool_manager.list_tools()}
     return s, tools, case_dir

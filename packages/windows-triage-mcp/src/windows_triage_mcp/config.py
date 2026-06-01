@@ -67,7 +67,7 @@ class Config:
         """Set defaults and validate configuration after creation."""
         # Set default paths if not provided
         if self.data_dir is None:
-            self.data_dir = Path("/var/lib/agentir/windows-triage")
+            self.data_dir = Path("/var/lib/sift/windows-triage")
         if self.known_good_db is None:
             self.known_good_db = self.data_dir / "known_good.db"
         if self.context_db is None:
@@ -137,7 +137,7 @@ def _load_config_from_env() -> Config:
     project_root = Path(__file__).parent.parent.parent
 
     # Load paths from environment
-    data_dir_str = os.environ.get("AGENTIR_WINDOWS_TRIAGE_DB_DIR") or os.environ.get("WT_DATA_DIR")
+    data_dir_str = os.environ.get("SIFT_WINDOWS_TRIAGE_DB_DIR") or os.environ.get("WT_DATA_DIR")
     known_good_db_str = os.environ.get("WT_KNOWN_GOOD_DB")
     context_db_str = os.environ.get("WT_CONTEXT_DB")
     registry_db_str = os.environ.get("WT_REGISTRY_DB")

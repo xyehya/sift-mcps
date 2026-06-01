@@ -3,4 +3,4 @@
 services:
   opensearch:
     volumes:
-      - /var/lib/agentir/snapshots:/usr/share/opensearch/snapshots
+      - /var/lib/sift/snapshots:/usr/share/opensearch/snapshots

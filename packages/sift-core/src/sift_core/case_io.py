@@ -76,13 +76,13 @@ def get_case_dir(case_id: str | None = None) -> Path:
     """Resolve the active case directory."""
     if case_id:
         _validate_case_id(case_id)
-        cases_dir = Path(os.environ.get("AGENTIR_CASES_DIR", DEFAULT_CASES_DIR))
+        cases_dir = Path(os.environ.get("SIFT_CASES_DIR", DEFAULT_CASES_DIR))
         case_dir = cases_dir / case_id
         if not case_dir.exists():
             raise CaseError(f"Case not found: {case_id}")
         return case_dir
 
-    env_dir = os.environ.get("AGENTIR_CASE_DIR")
+    env_dir = os.environ.get("SIFT_CASE_DIR")
     if env_dir:
         case_dir = Path(env_dir)
         if not case_dir.is_dir():
@@ -90,7 +90,7 @@ def get_case_dir(case_id: str | None = None) -> Path:
         return case_dir
 
     raise CaseError(
-        "No active case: set AGENTIR_CASE_DIR in ~/.agentir/gateway.yaml case.dir"
+        "No active case: set SIFT_CASE_DIR in ~/.sift/gateway.yaml case.dir"
     )
 
 
@@ -107,7 +107,7 @@ def resolve_case_path(
     root. Bare filenames default to ``case_dir/default_subdir``.
     """
     if case_dir is None:
-        env = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+        env = os.environ.get("SIFT_CASE_DIR", "").strip()
         if not env:
             raise ValueError("No active case. Use the Examiner Portal to create a case first.")
         case_dir = Path(env)
@@ -136,13 +136,13 @@ def resolve_case_path(
 def get_examiner(case_dir: Path | None = None) -> str:
     """Get the current examiner identity.
 
-    Resolution: AGENTIR_EXAMINER > AGENTIR_ANALYST (deprecated) > CASE.yaml > OS user.
+    Resolution: SIFT_EXAMINER > SIFT_ANALYST (deprecated) > CASE.yaml > OS user.
     """
-    env_exam = os.environ.get("AGENTIR_EXAMINER", "").strip().lower()
+    env_exam = os.environ.get("SIFT_EXAMINER", "").strip().lower()
     if env_exam:
         _validate_examiner(env_exam)
         return env_exam
-    env_analyst = os.environ.get("AGENTIR_ANALYST", "").strip().lower()
+    env_analyst = os.environ.get("SIFT_ANALYST", "").strip().lower()
     if env_analyst:
         _validate_examiner(env_analyst)
         return env_analyst

@@ -1,6 +1,6 @@
 """Approval authentication: mandatory password for approve/reject.
 
-Password hashes stored in /var/lib/agentir/passwords/{examiner}.json (0o600).
+Password hashes stored in /var/lib/sift/passwords/{examiner}.json (0o600).
 Password prompts use /dev/tty raw mode to block both LLM-via-Bash and
 expect-style automation.
 """
@@ -33,12 +33,12 @@ _MAX_PASSWORD_ATTEMPTS = 3
 _LOCKOUT_SECONDS = 900
 _LOCKOUT_FILE = Path(
     os.environ.get(
-        "AGENTIR_LOCKOUT_FILE",
-        str(Path.home() / ".agentir" / ".password_lockout"),
+        "SIFT_LOCKOUT_FILE",
+        str(Path.home() / ".sift" / ".password_lockout"),
     )
 )
 _MIN_PASSWORD_LENGTH = 8
-_PASSWORDS_DIR = Path(os.environ.get("AGENTIR_PASSWORDS_DIR", "/var/lib/agentir/passwords"))
+_PASSWORDS_DIR = Path(os.environ.get("SIFT_PASSWORDS_DIR", "/var/lib/sift/passwords"))
 
 
 class AuthError(Exception):

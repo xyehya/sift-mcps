@@ -92,7 +92,7 @@ def app(passwords_dir, case_dir, tmp_path, monkeypatch):
     routes_mod._evidence_challenges.clear()
     routes_mod._challenges.clear()
     routes_mod._login_challenges.clear()
-    monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     return create_dashboard_v2_app(session_secret=_SECRET, session_max_age=28800)
 
@@ -183,7 +183,7 @@ class TestEvidenceChainStatus:
     def test_no_active_case_returns_404(self, client, passwords_dir, monkeypatch):
         _setup_examiner(passwords_dir, "alice", "password123")
         client.cookies[COOKIE_NAME] = _session_cookie()
-        monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
         resp = client.get("/api/evidence/chain/status")
         assert resp.status_code == 404
 
@@ -208,7 +208,7 @@ class TestEvidenceChainRescan:
     def test_rescan_invokes_on_chain_mutation(self, passwords_dir, case_dir, tmp_path, monkeypatch):
         """on_chain_mutation callback is called with case_dir_str."""
         called_with: list[str] = []
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         routes_mod._evidence_challenges.clear()
         _setup_examiner(passwords_dir, "alice", "password123")
@@ -373,7 +373,7 @@ class TestEvidenceChainSeal:
 
     def test_seal_invokes_on_chain_mutation(self, passwords_dir, case_dir, tmp_path, monkeypatch):
         called_with: list[str] = []
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         routes_mod._evidence_challenges.clear()
         entry = _setup_examiner(passwords_dir, "alice", "password123")
@@ -396,7 +396,7 @@ class TestEvidenceChainSeal:
         assert str(case_dir) in called_with
 
     def test_must_reset_password_blocked(self, client, passwords_dir, case_dir, monkeypatch):
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         _setup_examiner(passwords_dir, "alice", "password123", must_reset=True)
         client.cookies[COOKIE_NAME] = _session_cookie()
         resp = client.post(
@@ -628,7 +628,7 @@ class TestEvidenceChainRetire:
         routes_mod._evidence_challenges.clear()
         routes_mod._challenges.clear()
         routes_mod._login_challenges.clear()
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
 
         called_with = []

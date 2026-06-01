@@ -15,7 +15,7 @@ def get_client(config_path: Path | None = None) -> OpenSearch:
     Resolution order:
     1. Explicit ``config_path`` argument.
     2. ``OPENSEARCH_CONFIG`` environment variable.
-    3. ``~/.agentir/opensearch.yaml`` for interactive CLI use.
+    3. ``~/.sift/opensearch.yaml`` for interactive CLI use.
     """
     env_path = os.environ.get("OPENSEARCH_CONFIG")
     path = config_path or (Path(env_path).expanduser() if env_path else None)

@@ -8,8 +8,8 @@ Environment Variables:
     OPENCTI_TOKEN: API token for authentication
     OPENCTI_TIMEOUT: Request timeout in seconds (default: 60)
     OPENCTI_MAX_RESULTS: Maximum results per query (default: 100)
-    AGENTIR_LOG_FORMAT: Log format - "json" (default) or "text"
-    AGENTIR_LOG_FILE: Write to ~/.agentir/logs/ - "true" (default) or "false"
+    SIFT_LOG_FORMAT: Log format - "json" (default) or "text"
+    SIFT_LOG_FILE: Write to ~/.sift/logs/ - "true" (default) or "false"
 
 Feature Flags (FF_ prefix):
     FF_STARTUP_VALIDATION: Enable startup connectivity test (default: true)

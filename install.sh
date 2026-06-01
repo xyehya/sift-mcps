@@ -45,21 +45,21 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Hard-code the SIFT-native Python.  Must be ≥ 3.10.
 SYSTEM_PYTHON="/usr/bin/python3.12"
 
-AGENTIR_HOME="${AGENTIR_HOME:-$HOME/.agentir}"
-AGENTIR_TLS_DIR="${AGENTIR_TLS_DIR:-$AGENTIR_HOME/tls}"
-AGENTIR_BACKUP_DIR="${AGENTIR_BACKUP_DIR:-$AGENTIR_HOME/backups}"
-AGENTIR_CONFIG="${AGENTIR_CONFIG:-$AGENTIR_HOME/gateway.yaml}"
-AGENTIR_CASES_ROOT="${AGENTIR_CASES_ROOT:-${AGENTIR_CASE_ROOT:-/cases}}"
-AGENTIR_CASE_ROOT="${AGENTIR_CASE_ROOT:-$AGENTIR_CASES_ROOT}"
-AGENTIR_STATE_DIR="${AGENTIR_STATE_DIR:-/var/lib/agentir}"
-AGENTIR_PASSWORDS_DIR="${AGENTIR_PASSWORDS_DIR:-$AGENTIR_STATE_DIR/passwords}"
-AGENTIR_VERIFICATION_DIR="${AGENTIR_VERIFICATION_DIR:-$AGENTIR_STATE_DIR/verification}"
-AGENTIR_TOKENS_DIR="${AGENTIR_TOKENS_DIR:-$AGENTIR_STATE_DIR/tokens}"
-AGENTIR_SNAPSHOTS_DIR="${AGENTIR_SNAPSHOTS_DIR:-$AGENTIR_STATE_DIR/snapshots}"
-AGENTIR_ENRICHMENT_DIR="${AGENTIR_ENRICHMENT_DIR:-$AGENTIR_STATE_DIR/enrichment}"
-AGENTIR_WINDOWS_TRIAGE_DB_DIR="${AGENTIR_WINDOWS_TRIAGE_DB_DIR:-$AGENTIR_STATE_DIR/windows-triage}"
-AGENTIR_EXAMINER="${AGENTIR_EXAMINER:-examiner}"
-MATERIALS_FILE="${MATERIALS_FILE:-$AGENTIR_TOKENS_DIR/installer-handoff.txt}"
+SIFT_HOME="${SIFT_HOME:-$HOME/.sift}"
+SIFT_TLS_DIR="${SIFT_TLS_DIR:-$SIFT_HOME/tls}"
+SIFT_BACKUP_DIR="${SIFT_BACKUP_DIR:-$SIFT_HOME/backups}"
+SIFT_CONFIG="${SIFT_CONFIG:-$SIFT_HOME/gateway.yaml}"
+SIFT_CASES_ROOT="${SIFT_CASES_ROOT:-${SIFT_CASE_ROOT:-/cases}}"
+SIFT_CASE_ROOT="${SIFT_CASE_ROOT:-$SIFT_CASES_ROOT}"
+SIFT_STATE_DIR="${SIFT_STATE_DIR:-/var/lib/sift}"
+SIFT_PASSWORDS_DIR="${SIFT_PASSWORDS_DIR:-$SIFT_STATE_DIR/passwords}"
+SIFT_VERIFICATION_DIR="${SIFT_VERIFICATION_DIR:-$SIFT_STATE_DIR/verification}"
+SIFT_TOKENS_DIR="${SIFT_TOKENS_DIR:-$SIFT_STATE_DIR/tokens}"
+SIFT_SNAPSHOTS_DIR="${SIFT_SNAPSHOTS_DIR:-$SIFT_STATE_DIR/snapshots}"
+SIFT_ENRICHMENT_DIR="${SIFT_ENRICHMENT_DIR:-$SIFT_STATE_DIR/enrichment}"
+SIFT_WINDOWS_TRIAGE_DB_DIR="${SIFT_WINDOWS_TRIAGE_DB_DIR:-$SIFT_STATE_DIR/windows-triage}"
+SIFT_EXAMINER="${SIFT_EXAMINER:-examiner}"
+MATERIALS_FILE="${MATERIALS_FILE:-$SIFT_TOKENS_DIR/installer-handoff.txt}"
 SYSTEMD_USER_DIR="${SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 GATEWAY_SERVICE_FILE="$SYSTEMD_USER_DIR/sift-gateway.service"
 
@@ -211,15 +211,15 @@ install_state_dirs() {
   owner="$(user_name)"
   group="$(group_name)"
   log "Creating agentir state directories."
-  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$AGENTIR_STATE_DIR"
-  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$AGENTIR_PASSWORDS_DIR"
-  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$AGENTIR_VERIFICATION_DIR"
-  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$AGENTIR_TOKENS_DIR"
-  sudo_if_needed install -d -m 755 -o 1000 -g 1000 "$AGENTIR_SNAPSHOTS_DIR"
-  sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$AGENTIR_ENRICHMENT_DIR"
-  sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$AGENTIR_WINDOWS_TRIAGE_DB_DIR"
-  sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$AGENTIR_CASE_ROOT"
-  install -d -m 700 "$AGENTIR_HOME" "$AGENTIR_TLS_DIR" "$AGENTIR_BACKUP_DIR"
+  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_STATE_DIR"
+  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_PASSWORDS_DIR"
+  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_VERIFICATION_DIR"
+  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_TOKENS_DIR"
+  sudo_if_needed install -d -m 755 -o 1000 -g 1000 "$SIFT_SNAPSHOTS_DIR"
+  sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_ENRICHMENT_DIR"
+  sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_WINDOWS_TRIAGE_DB_DIR"
+  sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_CASE_ROOT"
+  install -d -m 700 "$SIFT_HOME" "$SIFT_TLS_DIR" "$SIFT_BACKUP_DIR"
 }
 
 # =============================================================================
@@ -245,12 +245,12 @@ configure_fuse() {
 
 download_triage_databases() {
   log "Downloading triage baseline databases."
-  if [[ -f "$AGENTIR_WINDOWS_TRIAGE_DB_DIR/known_good.db" && -f "$AGENTIR_WINDOWS_TRIAGE_DB_DIR/context.db" ]]; then
+  if [[ -f "$SIFT_WINDOWS_TRIAGE_DB_DIR/known_good.db" && -f "$SIFT_WINDOWS_TRIAGE_DB_DIR/context.db" ]]; then
     log "Triage databases already present — skipping."
     return
   fi
   if "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads \
-    python -m windows_triage_mcp.scripts.download_databases --dest "$AGENTIR_WINDOWS_TRIAGE_DB_DIR"; then
+    python -m windows_triage_mcp.scripts.download_databases --dest "$SIFT_WINDOWS_TRIAGE_DB_DIR"; then
     log "Triage databases downloaded."
   else
     warn "Triage database download FAILED.  windows-triage-mcp will run in degraded mode."
@@ -260,11 +260,11 @@ download_triage_databases() {
 prepare_enrichment_assets() {
   log "Preparing enrichment asset pointers."
   if [[ -d "$REPO_DIR/packages/forensic-knowledge/data" ]]; then
-    ln -sfn "$REPO_DIR/packages/forensic-knowledge/data" "$AGENTIR_ENRICHMENT_DIR/forensic-knowledge"
+    ln -sfn "$REPO_DIR/packages/forensic-knowledge/data" "$SIFT_ENRICHMENT_DIR/forensic-knowledge"
   else
     warn "forensic-knowledge data directory not found."
   fi
-  install -d -m 755 "$AGENTIR_ENRICHMENT_DIR/forensic-rag"
+  install -d -m 755 "$SIFT_ENRICHMENT_DIR/forensic-rag"
 }
 
 download_rag_index() {
@@ -289,8 +289,8 @@ download_rag_index() {
 
 install_hayabusa() {
   log "Installing hayabusa detection engine."
-  local binary_dir="$AGENTIR_HOME/bin"
-  local rules_dir="$AGENTIR_HOME/hayabusa-rules"
+  local binary_dir="$SIFT_HOME/bin"
+  local rules_dir="$SIFT_HOME/hayabusa-rules"
 
   if [[ -x "$binary_dir/hayabusa" ]]; then
     local ver
@@ -352,7 +352,7 @@ install_hayabusa() {
 }
 
 install_hayabusa_system_links() {
-  local binary="$AGENTIR_HOME/bin/hayabusa"
+  local binary="$SIFT_HOME/bin/hayabusa"
   [[ -x "$binary" ]] || return 0
   sudo_if_needed ln -sf "$binary" /usr/local/bin/hayabusa 2>/dev/null || true
 }
@@ -378,8 +378,8 @@ fix_volatility_permissions() {
 
 generate_tls() {
   require_cmd openssl
-  install -d -m 700 "$AGENTIR_TLS_DIR"
-  if [[ -f "$AGENTIR_TLS_DIR/ca-cert.pem" && -f "$AGENTIR_TLS_DIR/gateway-cert.pem" && -f "$AGENTIR_TLS_DIR/gateway-key.pem" ]]; then
+  install -d -m 700 "$SIFT_TLS_DIR"
+  if [[ -f "$SIFT_TLS_DIR/ca-cert.pem" && -f "$SIFT_TLS_DIR/gateway-cert.pem" && -f "$SIFT_TLS_DIR/gateway-key.pem" ]]; then
     log "TLS material already exists — preserving."
     return
   fi
@@ -392,19 +392,19 @@ generate_tls() {
   printf 'subjectAltName=IP:%s,IP:127.0.0.1,DNS:%s,DNS:localhost\n' \
     "$first_ip" "$(hostname)" > "$san_file"
 
-  openssl genrsa -out "$AGENTIR_TLS_DIR/ca-key.pem" 4096 >/dev/null 2>&1
-  openssl req -new -x509 -days 3650 -key "$AGENTIR_TLS_DIR/ca-key.pem" \
-    -out "$AGENTIR_TLS_DIR/ca-cert.pem" -subj "/CN=sift-mcps-CA" >/dev/null 2>&1
-  openssl genrsa -out "$AGENTIR_TLS_DIR/gateway-key.pem" 4096 >/dev/null 2>&1
-  openssl req -new -key "$AGENTIR_TLS_DIR/gateway-key.pem" \
-    -out "$AGENTIR_TLS_DIR/gateway-csr.pem" -subj "/CN=$(hostname)" >/dev/null 2>&1
-  openssl x509 -req -days 730 -in "$AGENTIR_TLS_DIR/gateway-csr.pem" \
-    -CA "$AGENTIR_TLS_DIR/ca-cert.pem" -CAkey "$AGENTIR_TLS_DIR/ca-key.pem" \
-    -CAcreateserial -out "$AGENTIR_TLS_DIR/gateway-cert.pem" \
+  openssl genrsa -out "$SIFT_TLS_DIR/ca-key.pem" 4096 >/dev/null 2>&1
+  openssl req -new -x509 -days 3650 -key "$SIFT_TLS_DIR/ca-key.pem" \
+    -out "$SIFT_TLS_DIR/ca-cert.pem" -subj "/CN=sift-mcps-CA" >/dev/null 2>&1
+  openssl genrsa -out "$SIFT_TLS_DIR/gateway-key.pem" 4096 >/dev/null 2>&1
+  openssl req -new -key "$SIFT_TLS_DIR/gateway-key.pem" \
+    -out "$SIFT_TLS_DIR/gateway-csr.pem" -subj "/CN=$(hostname)" >/dev/null 2>&1
+  openssl x509 -req -days 730 -in "$SIFT_TLS_DIR/gateway-csr.pem" \
+    -CA "$SIFT_TLS_DIR/ca-cert.pem" -CAkey "$SIFT_TLS_DIR/ca-key.pem" \
+    -CAcreateserial -out "$SIFT_TLS_DIR/gateway-cert.pem" \
     -extfile "$san_file" >/dev/null 2>&1
   rm -f "$san_file"
-  chmod 600 "$AGENTIR_TLS_DIR/"*-key.pem
-  chmod 644 "$AGENTIR_TLS_DIR/"*-cert.pem
+  chmod 600 "$SIFT_TLS_DIR/"*-key.pem
+  chmod 644 "$SIFT_TLS_DIR/"*-cert.pem
 }
 
 # =============================================================================
@@ -412,7 +412,7 @@ generate_tls() {
 # =============================================================================
 
 write_default_examiner() {
-  local password_file="$AGENTIR_PASSWORDS_DIR/$AGENTIR_EXAMINER.json"
+  local password_file="$SIFT_PASSWORDS_DIR/$SIFT_EXAMINER.json"
   if [[ -f "$password_file" ]]; then
     log "Default examiner password already exists — preserving."
     TEMP_PASSWORD_CREATED=0
@@ -421,13 +421,13 @@ write_default_examiner() {
   fi
   TEMP_PASSWORD="Agentir-$(random_hex 12)"
   TEMP_PASSWORD_CREATED=1
-  export AGENTIR_PASSWORDS_DIR AGENTIR_EXAMINER TEMP_PASSWORD
+  export SIFT_PASSWORDS_DIR SIFT_EXAMINER TEMP_PASSWORD
   "$SYSTEM_PYTHON" - <<'PY'
 import hashlib, json, os, secrets, tempfile
 from pathlib import Path
 
-passwords_dir = Path(os.environ["AGENTIR_PASSWORDS_DIR"])
-examiner = os.environ["AGENTIR_EXAMINER"]
+passwords_dir = Path(os.environ["SIFT_PASSWORDS_DIR"])
+examiner = os.environ["SIFT_EXAMINER"]
 password = os.environ["TEMP_PASSWORD"]
 salt = secrets.token_bytes(32)
 entry = {
@@ -458,19 +458,19 @@ PY
 
 _render_file() {
   local src="$1" dst="$2" mode="$3"
-  export AGENTIR_HOME AGENTIR_TLS_DIR AGENTIR_CONFIG AGENTIR_CASES_ROOT AGENTIR_CASE_ROOT
-  export AGENTIR_WINDOWS_TRIAGE_DB_DIR
-  export AGENTIR_GATEWAY_TOKEN AGENTIR_SERVICE_TOKEN AGENTIR_PORTAL_SESSION_SECRET
-  export AGENTIR_EXAMINER SIFT_MCPS_ROOT UV_BIN PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
-  export AGENTIR_RAG_ENABLED AGENTIR_OPENCTI_ENABLED AGENTIR_WINDOWS_TRIAGE_ENABLED
+  export SIFT_HOME SIFT_TLS_DIR SIFT_CONFIG SIFT_CASES_ROOT SIFT_CASE_ROOT
+  export SIFT_WINDOWS_TRIAGE_DB_DIR
+  export SIFT_GATEWAY_TOKEN SIFT_SERVICE_TOKEN SIFT_PORTAL_SESSION_SECRET
+  export SIFT_EXAMINER SIFT_MCPS_ROOT UV_BIN PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
+  export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED
 
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
   OPENCTI_URL="${OPENCTI_URL:-http://127.0.0.1:8080}"
   OPENCTI_TOKEN="${OPENCTI_TOKEN:-}"
-  AGENTIR_RAG_ENABLED="true"
-  AGENTIR_WINDOWS_TRIAGE_ENABLED="true"
-  AGENTIR_OPENCTI_ENABLED="${AGENTIR_OPENCTI_ENABLED:-false}"
+  SIFT_RAG_ENABLED="true"
+  SIFT_WINDOWS_TRIAGE_ENABLED="true"
+  SIFT_OPENCTI_ENABLED="${SIFT_OPENCTI_ENABLED:-false}"
 
   "$SYSTEM_PYTHON" - "$src" "$dst" "$mode" <<'PY'
 import os, stat, sys, tempfile
@@ -500,33 +500,33 @@ PY
 }
 
 write_gateway_config() {
-  if [[ -f "$AGENTIR_CONFIG" ]]; then
-    log "Gateway config exists — preserving $AGENTIR_CONFIG."
+  if [[ -f "$SIFT_CONFIG" ]]; then
+    log "Gateway config exists — preserving $SIFT_CONFIG."
     CONFIG_CREATED=0
-    AGENTIR_GATEWAY_TOKEN=""
-    AGENTIR_SERVICE_TOKEN=""
-    AGENTIR_PORTAL_SESSION_SECRET=""
+    SIFT_GATEWAY_TOKEN=""
+    SIFT_SERVICE_TOKEN=""
+    SIFT_PORTAL_SESSION_SECRET=""
     _migrate_gateway_config
     return
   fi
-  AGENTIR_GATEWAY_TOKEN="agentir_gw_$(random_hex 24)"
-  AGENTIR_SERVICE_TOKEN="agentir_svc_$(random_hex 24)"
-  AGENTIR_PORTAL_SESSION_SECRET="$(random_hex 32)"
-  AGENTIR_TOKEN_CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  SIFT_GATEWAY_TOKEN="agentir_gw_$(random_hex 24)"
+  SIFT_SERVICE_TOKEN="agentir_svc_$(random_hex 24)"
+  SIFT_PORTAL_SESSION_SECRET="$(random_hex 32)"
+  SIFT_TOKEN_CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   CONFIG_CREATED=1
-  export AGENTIR_GATEWAY_TOKEN AGENTIR_SERVICE_TOKEN AGENTIR_PORTAL_SESSION_SECRET AGENTIR_TOKEN_CREATED_AT
-  _render_file "$REPO_DIR/configs/gateway.yaml.template" "$AGENTIR_CONFIG" 0600
+  export SIFT_GATEWAY_TOKEN SIFT_SERVICE_TOKEN SIFT_PORTAL_SESSION_SECRET SIFT_TOKEN_CREATED_AT
+  _render_file "$REPO_DIR/configs/gateway.yaml.template" "$SIFT_CONFIG" 0600
 }
 
 _migrate_gateway_config() {
   log "Checking gateway config compatibility."
-  export AGENTIR_CONFIG SIFT_MCPS_ROOT PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
-  export AGENTIR_RAG_ENABLED AGENTIR_OPENCTI_ENABLED AGENTIR_WINDOWS_TRIAGE_ENABLED
+  export SIFT_CONFIG SIFT_MCPS_ROOT PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
+  export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
-  AGENTIR_RAG_ENABLED="true"
-  AGENTIR_WINDOWS_TRIAGE_ENABLED="true"
-  AGENTIR_OPENCTI_ENABLED="${AGENTIR_OPENCTI_ENABLED:-false}"
+  SIFT_RAG_ENABLED="true"
+  SIFT_WINDOWS_TRIAGE_ENABLED="true"
+  SIFT_OPENCTI_ENABLED="${SIFT_OPENCTI_ENABLED:-false}"
   OPENCTI_URL="${OPENCTI_URL:-http://127.0.0.1:8080}"
   OPENCTI_TOKEN="${OPENCTI_TOKEN:-}"
 
@@ -535,7 +535,7 @@ import os, tempfile
 from pathlib import Path
 import yaml
 
-path = Path(os.environ["AGENTIR_CONFIG"])
+path = Path(os.environ["SIFT_CONFIG"])
 cfg = yaml.safe_load(path.read_text()) or {}
 changed = False
 
@@ -552,12 +552,12 @@ if isinstance(tls, dict):
 
 # RAG / triage / opencti enabled flags
 enrichment = cfg.setdefault("enrichment", {})
-if enrichment.get("forensic_rag") is not True and os.environ.get("AGENTIR_RAG_ENABLED") == "true":
+if enrichment.get("forensic_rag") is not True and os.environ.get("SIFT_RAG_ENABLED") == "true":
     enrichment["forensic_rag"] = True
     changed = True
 
 rag_backend = cfg.setdefault("backends", {}).get("forensic-rag-mcp")
-if isinstance(rag_backend, dict) and rag_backend.get("enabled") is not True and os.environ.get("AGENTIR_RAG_ENABLED") == "true":
+if isinstance(rag_backend, dict) and rag_backend.get("enabled") is not True and os.environ.get("SIFT_RAG_ENABLED") == "true":
     rag_backend["enabled"] = True
     changed = True
 
@@ -566,7 +566,7 @@ if isinstance(wt_backend, dict) and wt_backend.get("enabled") is not True:
     wt_backend["enabled"] = True
     changed = True
 
-if os.environ.get("AGENTIR_OPENCTI_ENABLED") == "true":
+if os.environ.get("SIFT_OPENCTI_ENABLED") == "true":
     octi = cfg.setdefault("backends", {}).setdefault("opencti-mcp", {})
     if octi.get("enabled") is not True:
         octi["enabled"] = True
@@ -623,7 +623,7 @@ PY
 }
 
 write_opensearch_config() {
-  local os_config="$AGENTIR_HOME/opensearch.yaml"
+  local os_config="$SIFT_HOME/opensearch.yaml"
   if [[ -f "$os_config" ]]; then
     log "OpenSearch client config exists — preserving $os_config."
     return
@@ -768,34 +768,34 @@ _detect_opencti() {
 }
 
 prepare_opencti_secrets() {
-  [[ "${AGENTIR_OPENCTI_ENABLED:-false}" == "true" ]] || return 0
+  [[ "${SIFT_OPENCTI_ENABLED:-false}" == "true" ]] || return 0
 
   if [[ -z "${OPENCTI_TOKEN:-}" ]]; then
-    if [[ -f "$AGENTIR_HOME/opencti-token" ]]; then
-      OPENCTI_TOKEN="$(< "$AGENTIR_HOME/opencti-token")"
+    if [[ -f "$SIFT_HOME/opencti-token" ]]; then
+      OPENCTI_TOKEN="$(< "$SIFT_HOME/opencti-token")"
       log "OpenCTI admin token already exists."
     else
       OPENCTI_TOKEN=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-      printf '%s\n' "$OPENCTI_TOKEN" > "$AGENTIR_HOME/opencti-token"
-      chmod 600 "$AGENTIR_HOME/opencti-token"
+      printf '%s\n' "$OPENCTI_TOKEN" > "$SIFT_HOME/opencti-token"
+      chmod 600 "$SIFT_HOME/opencti-token"
       log "OpenCTI admin token saved."
     fi
   fi
 
-  if [[ -f "$AGENTIR_HOME/opencti-encryption-key" ]]; then
-    OPENCTI_ENCRYPTION_KEY="$(< "$AGENTIR_HOME/opencti-encryption-key")"
+  if [[ -f "$SIFT_HOME/opencti-encryption-key" ]]; then
+    OPENCTI_ENCRYPTION_KEY="$(< "$SIFT_HOME/opencti-encryption-key")"
   else
     OPENCTI_ENCRYPTION_KEY="$(openssl rand -base64 32)"
-    printf '%s\n' "$OPENCTI_ENCRYPTION_KEY" > "$AGENTIR_HOME/opencti-encryption-key"
-    chmod 600 "$AGENTIR_HOME/opencti-encryption-key"
+    printf '%s\n' "$OPENCTI_ENCRYPTION_KEY" > "$SIFT_HOME/opencti-encryption-key"
+    chmod 600 "$SIFT_HOME/opencti-encryption-key"
   fi
 
-  if [[ -f "$AGENTIR_HOME/opencti-health-key" ]]; then
-    OPENCTI_HEALTH_ACCESS_KEY="$(< "$AGENTIR_HOME/opencti-health-key")"
+  if [[ -f "$SIFT_HOME/opencti-health-key" ]]; then
+    OPENCTI_HEALTH_ACCESS_KEY="$(< "$SIFT_HOME/opencti-health-key")"
   else
     OPENCTI_HEALTH_ACCESS_KEY=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-    printf '%s\n' "$OPENCTI_HEALTH_ACCESS_KEY" > "$AGENTIR_HOME/opencti-health-key"
-    chmod 600 "$AGENTIR_HOME/opencti-health-key"
+    printf '%s\n' "$OPENCTI_HEALTH_ACCESS_KEY" > "$SIFT_HOME/opencti-health-key"
+    chmod 600 "$SIFT_HOME/opencti-health-key"
   fi
 
   export OPENCTI_TOKEN OPENCTI_ENCRYPTION_KEY OPENCTI_HEALTH_ACCESS_KEY
@@ -803,7 +803,7 @@ prepare_opencti_secrets() {
 }
 
 install_opencti() {
-  [[ "${AGENTIR_OPENCTI_ENABLED:-false}" == "true" ]] || return 0
+  [[ "${SIFT_OPENCTI_ENABLED:-false}" == "true" ]] || return 0
 
   prepare_opencti_secrets
   log "Deploying OpenCTI stack."
@@ -822,10 +822,10 @@ install_opencti() {
 }
 
 install_opencti_feeds() {
-  [[ "${AGENTIR_OPENCTI_ENABLED:-false}" == "true" ]] || return 0
+  [[ "${SIFT_OPENCTI_ENABLED:-false}" == "true" ]] || return 0
 
   local id_file
-  id_file="$AGENTIR_HOME/opencti-connector-mitre-id"
+  id_file="$SIFT_HOME/opencti-connector-mitre-id"
   if [[ -f "$id_file" ]]; then
     OPENCTI_CONNECTOR_MITRE_ID="$(< "$id_file")"
   else
@@ -834,7 +834,7 @@ install_opencti_feeds() {
     chmod 600 "$id_file"
   fi
 
-  id_file="$AGENTIR_HOME/opencti-connector-cisa-kev-id"
+  id_file="$SIFT_HOME/opencti-connector-cisa-kev-id"
   if [[ -f "$id_file" ]]; then
     OPENCTI_CONNECTOR_CISA_KEV_ID="$(< "$id_file")"
   else
@@ -857,14 +857,14 @@ install_opencti_feeds() {
 
 install_systemd_service() {
   install -d -m 700 "$SYSTEMD_USER_DIR"
-  AGENTIR_GATEWAY_TOKEN=""
-  AGENTIR_SERVICE_TOKEN=""
-  AGENTIR_PORTAL_SESSION_SECRET=""
+  SIFT_GATEWAY_TOKEN=""
+  SIFT_SERVICE_TOKEN=""
+  SIFT_PORTAL_SESSION_SECRET=""
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
-  AGENTIR_CONFIG="$AGENTIR_CONFIG"
-  AGENTIR_EXAMINER="$AGENTIR_EXAMINER"
-  export SIFT_MCPS_ROOT UV_BIN PYTHON_BIN AGENTIR_CONFIG AGENTIR_EXAMINER
+  SIFT_CONFIG="$SIFT_CONFIG"
+  SIFT_EXAMINER="$SIFT_EXAMINER"
+  export SIFT_MCPS_ROOT UV_BIN PYTHON_BIN SIFT_CONFIG SIFT_EXAMINER
 
   if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
     log "Updating systemd user service $GATEWAY_SERVICE_FILE."
@@ -918,9 +918,9 @@ write_handoff() {
     printf 'generated_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'portal_url=https://%s:4508/portal/\n' "$(hostname -I 2>/dev/null | awk '{print $1}')"
     printf 'gateway_mcp_url=https://%s:4508/mcp\n' "$(hostname -I 2>/dev/null | awk '{print $1}')"
-    printf 'ca_cert=%s/ca-cert.pem\n' "$AGENTIR_TLS_DIR"
-    printf 'gateway_config=%s\n' "$AGENTIR_CONFIG"
-    printf 'examiner=%s\n' "$AGENTIR_EXAMINER"
+    printf 'ca_cert=%s/ca-cert.pem\n' "$SIFT_TLS_DIR"
+    printf 'gateway_config=%s\n' "$SIFT_CONFIG"
+    printf 'examiner=%s\n' "$SIFT_EXAMINER"
     if [[ "${TEMP_PASSWORD_CREATED:-0}" -eq 1 ]]; then
       printf 'temporary_examiner_password=%s\n' "$TEMP_PASSWORD"
     elif [[ -n "$existing_temp_password" && "$existing_temp_password" != "existing-password-preserved" ]]; then
@@ -929,8 +929,8 @@ write_handoff() {
       printf 'temporary_examiner_password=existing-password-preserved\n'
     fi
     if [[ "${CONFIG_CREATED:-0}" -eq 1 ]]; then
-      printf 'examiner_fallback_token=%s\n' "$AGENTIR_GATEWAY_TOKEN"
-      printf 'hermes_service_token=%s\n' "$AGENTIR_SERVICE_TOKEN"
+      printf 'examiner_fallback_token=%s\n' "$SIFT_GATEWAY_TOKEN"
+      printf 'hermes_service_token=%s\n' "$SIFT_SERVICE_TOKEN"
     elif [[ -n "$existing_gateway_token" || -n "$existing_service_token" ]]; then
       [[ -n "$existing_gateway_token" ]] && printf 'examiner_fallback_token=%s\n' "$existing_gateway_token"
       [[ -n "$existing_service_token" ]] && printf 'hermes_service_token=%s\n' "$existing_service_token"
@@ -965,7 +965,7 @@ configure_auditd() {
   local rules_dst="/etc/audit/rules.d/99-agentir-evidence.rules"
   local tmp
   tmp="$(mktemp)"
-  sed "s|CASES_ROOT|${AGENTIR_CASE_ROOT}|g" "$rules_src" > "$tmp"
+  sed "s|CASES_ROOT|${SIFT_CASE_ROOT}|g" "$rules_src" > "$tmp"
   sudo_if_needed cp "$tmp" "$rules_dst"
   rm -f "$tmp"
   sudo_if_needed chmod 640 "$rules_dst"
@@ -1007,14 +1007,14 @@ print_summary() {
   printf '\n'
   printf 'Portal:       https://%s:4508/portal/\n' "$ip"
   printf 'MCP endpoint: https://%s:4508/mcp\n' "$ip"
-  printf 'CA cert:      %s/ca-cert.pem\n' "$AGENTIR_TLS_DIR"
-  printf 'Config:       %s\n' "$AGENTIR_CONFIG"
+  printf 'CA cert:      %s/ca-cert.pem\n' "$SIFT_TLS_DIR"
+  printf 'Config:       %s\n' "$SIFT_CONFIG"
   printf 'Secrets:      %s\n' "$MATERIALS_FILE"
   printf '\n'
   printf 'Next steps:\n'
   printf '  1. On the analyst machine, trust the CA cert or set REQUESTS_CA_BUNDLE.\n'
   printf '  2. Configure Hermes with configs/hermes-forensics-profile.yaml and the service token.\n'
-  printf '  3. Sign into the portal as %s and reset the temporary password.\n' "$AGENTIR_EXAMINER"
+  printf '  3. Sign into the portal as %s and reset the temporary password.\n' "$SIFT_EXAMINER"
 }
 
 # =============================================================================
@@ -1048,13 +1048,13 @@ main() {
 
   # --- auto-detect OpenCTI ---
   if _detect_opencti; then
-    AGENTIR_OPENCTI_ENABLED="true"
+    SIFT_OPENCTI_ENABLED="true"
     log "OpenCTI auto-detected: Docker available, sufficient RAM."
   else
-    AGENTIR_OPENCTI_ENABLED="false"
+    SIFT_OPENCTI_ENABLED="false"
     log "OpenCTI not enabled (requires Docker + ≥14 GB RAM)."
   fi
-  export AGENTIR_OPENCTI_ENABLED
+  export SIFT_OPENCTI_ENABLED
 
   # --- install ---
   install_uv_if_needed

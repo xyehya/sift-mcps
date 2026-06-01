@@ -188,7 +188,7 @@ class Gateway:
     async def _notify_backend_case(self, backend) -> None:
         """Best-effort active-case notification for backends that support it.
 
-        Stdio backends inherit AGENTIR_CASE_DIR from the gateway process, and
+        Stdio backends inherit SIFT_CASE_DIR from the gateway process, and
         backends are restarted on portal case changes. HTTP backends may grow a
         dedicated case notification API later; until then startup must not fail
         just because there is nothing to notify.
@@ -651,7 +651,7 @@ class Gateway:
 
             # Phase 17d: inotify watcher for real-time evidence cache invalidation
             watcher_task = None
-            _case_dir_str = _os.environ.get("AGENTIR_CASE_DIR", "")
+            _case_dir_str = _os.environ.get("SIFT_CASE_DIR", "")
             if _case_dir_str:
                 try:
                     from sift_gateway.evidence_gate import invalidate_evidence_cache
@@ -709,12 +709,12 @@ class Gateway:
             portal_secret: str = portal_cfg.get("session_secret", "")
             portal_max_age: int = int(portal_cfg.get("session_max_age", 28800))
             # Resolve the gateway config path for token lifecycle endpoints.
-            # Use AGENTIR_GATEWAY_CONFIG env var if set, otherwise the
-            # conventional ~/.agentir/gateway.yaml that rest.py uses.
+            # Use SIFT_GATEWAY_CONFIG env var if set, otherwise the
+            # conventional ~/.sift/gateway.yaml that rest.py uses.
             import os as _os
             from pathlib import Path as _Path
-            _gw_config_path: str | None = _os.environ.get("AGENTIR_GATEWAY_CONFIG") or str(
-                _Path.home() / ".agentir" / "gateway.yaml"
+            _gw_config_path: str | None = _os.environ.get("SIFT_GATEWAY_CONFIG") or str(
+                _Path.home() / ".sift" / "gateway.yaml"
             )
             from sift_gateway.evidence_gate import invalidate_evidence_cache
             from sift_gateway.response_guard import (

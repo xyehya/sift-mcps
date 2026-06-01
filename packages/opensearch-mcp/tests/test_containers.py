@@ -306,37 +306,37 @@ Device     Boot   Start       End   Sectors  Size Id Type
 
 
 # ---------------------------------------------------------------------------
-# R0-7: make_ingest_tmpdir — uses AGENTIR_CASE_DIR not ~/.agentir/cases/
+# R0-7: make_ingest_tmpdir — uses SIFT_CASE_DIR not ~/.sift/cases/
 # ---------------------------------------------------------------------------
 
 
 class TestMakeIngestTmpdir:
     def test_uses_agentir_case_dir(self, tmp_path, monkeypatch):
-        """AGENTIR_CASE_DIR set → tmpdir lands under that case dir."""
+        """SIFT_CASE_DIR set → tmpdir lands under that case dir."""
         from opensearch_mcp.containers import make_ingest_tmpdir
 
         case_dir = tmp_path / "rocba-20260525-1200"
         case_dir.mkdir()
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         result = make_ingest_tmpdir("rocba-20260525-1200")
         assert str(result).startswith(str(case_dir / "tmp"))
         assert result.is_dir()
 
     def test_falls_back_to_cases_root(self, tmp_path, monkeypatch):
-        """No AGENTIR_CASE_DIR → uses AGENTIR_CASES_ROOT/case_id/tmp/."""
+        """No SIFT_CASE_DIR → uses SIFT_CASES_ROOT/case_id/tmp/."""
         from opensearch_mcp.containers import make_ingest_tmpdir
 
         cases_root = tmp_path / "cases"
         case_dir = cases_root / "fallback-case-001"
         case_dir.mkdir(parents=True)
-        monkeypatch.delenv("AGENTIR_CASE_DIR", raising=False)
-        monkeypatch.setenv("AGENTIR_CASES_ROOT", str(cases_root))
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+        monkeypatch.setenv("SIFT_CASES_ROOT", str(cases_root))
         result = make_ingest_tmpdir("fallback-case-001")
         assert str(result).startswith(str(case_dir / "tmp"))
         assert result.is_dir()
 
     def test_env_var_wins_over_legacy_agentir_dir(self, tmp_path, monkeypatch):
-        """AGENTIR_CASE_DIR beats AGENTIR_CASES_DIR (legacy env var)."""
+        """SIFT_CASE_DIR beats SIFT_CASES_DIR (legacy env var)."""
         from opensearch_mcp.containers import make_ingest_tmpdir
 
         case_dir = tmp_path / "portal-case-20260525-1000"
@@ -344,8 +344,8 @@ class TestMakeIngestTmpdir:
         legacy_cases = tmp_path / "legacy" / "cases"
         legacy_case = legacy_cases / "portal-case-20260525-1000"
         legacy_case.mkdir(parents=True)
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
-        monkeypatch.setenv("AGENTIR_CASES_DIR", str(legacy_cases))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASES_DIR", str(legacy_cases))
         result = make_ingest_tmpdir("portal-case-20260525-1000")
         assert str(result).startswith(str(case_dir / "tmp"))
 

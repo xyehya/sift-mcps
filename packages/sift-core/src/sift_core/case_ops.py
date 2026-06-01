@@ -74,11 +74,11 @@ _case_status_data = case_status_data
 def case_list_data(cases_dir=None) -> dict:
     """Return list of cases as structured data."""
     if cases_dir is None:
-        # Try AGENTIR_CASES_ROOT first (set by gateway from case_dir parent),
-        # then AGENTIR_CASES_DIR (legacy), then default ~/cases
+        # Try SIFT_CASES_ROOT first (set by gateway from case_dir parent),
+        # then SIFT_CASES_DIR (legacy), then default ~/cases
         root = (
-            os.environ.get("AGENTIR_CASES_ROOT")
-            or os.environ.get("AGENTIR_CASES_DIR")
+            os.environ.get("SIFT_CASES_ROOT")
+            or os.environ.get("SIFT_CASES_DIR")
             or DEFAULT_CASES_DIR
         )
         cases_dir = Path(root)
@@ -90,12 +90,12 @@ def case_list_data(cases_dir=None) -> dict:
 
     # Determine active case from env var first, then legacy file
     active_case_dir_name = None
-    active_case_dir = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+    active_case_dir = os.environ.get("SIFT_CASE_DIR", "").strip()
     if active_case_dir:
         active_case_dir_name = Path(active_case_dir).name
     else:
         # Legacy CLI fallback — not used in portal workflow
-        active_case_file = Path.home() / ".agentir" / "active_case"
+        active_case_file = Path.home() / ".sift" / "active_case"
         if active_case_file.exists():
             try:
                 content = active_case_file.read_text().strip()
@@ -142,7 +142,7 @@ def case_init_data(
 ) -> dict:
     """Create a new case and return structured data."""
     if cases_dir is None:
-        cases_dir = Path(os.environ.get("AGENTIR_CASES_DIR", DEFAULT_CASES_DIR))
+        cases_dir = Path(os.environ.get("SIFT_CASES_DIR", DEFAULT_CASES_DIR))
     else:
         cases_dir = Path(cases_dir)
 
@@ -212,9 +212,9 @@ def case_init_data(
             except OSError:
                 pass
 
-    # Set active case pointer — Legacy CLI fallback write (portal sets AGENTIR_CASE_DIR)
+    # Set active case pointer — Legacy CLI fallback write (portal sets SIFT_CASE_DIR)
     try:
-        agentir_dir = Path.home() / ".agentir"
+        agentir_dir = Path.home() / ".sift"
         agentir_dir.mkdir(exist_ok=True)
         _atomic_write(agentir_dir / "active_case", str(case_dir.resolve()))  # Legacy CLI fallback
     except OSError:
@@ -238,7 +238,7 @@ _case_init_data = case_init_data
 def case_activate_data(case_id: str, cases_dir=None) -> dict:
     """Activate a case and return structured data."""
     if cases_dir is None:
-        cases_dir = Path(os.environ.get("AGENTIR_CASES_DIR", DEFAULT_CASES_DIR))
+        cases_dir = Path(os.environ.get("SIFT_CASES_DIR", DEFAULT_CASES_DIR))
     else:
         cases_dir = Path(cases_dir)
 
@@ -249,7 +249,7 @@ def case_activate_data(case_id: str, cases_dir=None) -> dict:
     if not case_dir.exists():
         raise ValueError(f"Case not found: {case_id}")
 
-    agentir_dir = Path.home() / ".agentir"
+    agentir_dir = Path.home() / ".sift"
     agentir_dir.mkdir(exist_ok=True)
     _atomic_write(agentir_dir / "active_case", str(case_dir.resolve()))  # Legacy CLI fallback
 

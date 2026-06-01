@@ -61,7 +61,7 @@ def active_case_dir(tmp_path, monkeypatch):
     case_dir = tmp_path / "cases" / "test-case"
     case_dir.mkdir(parents=True)
     (case_dir / "CASE.yaml").write_text("case_id: test-case\n")
-    monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
     return case_dir
 
 

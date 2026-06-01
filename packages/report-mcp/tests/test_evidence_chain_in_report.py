@@ -217,7 +217,7 @@ class TestGenerateReportTool:
     def test_generate_report_includes_evidence_chain(self, case_dir, monkeypatch):
         from report_mcp.server import create_server
 
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
 
         server = create_server()
         tool_fn = None

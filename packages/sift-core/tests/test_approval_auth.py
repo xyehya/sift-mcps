@@ -35,12 +35,12 @@ from sift_core.approval_auth import (
 @pytest.fixture
 def config_path(tmp_path):
     """Config file path in a temp directory."""
-    return tmp_path / ".agentir" / "config.yaml"
+    return tmp_path / ".sift" / "config.yaml"
 
 
 @pytest.fixture
 def passwords_dir(tmp_path, monkeypatch):
-    """Temp passwords directory (replaces /var/lib/agentir/passwords)."""
+    """Temp passwords directory (replaces /var/lib/sift/passwords)."""
     d = tmp_path / "passwords"
     d.mkdir()
     monkeypatch.setattr("sift_core.approval_auth._PASSWORDS_DIR", d)

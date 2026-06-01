@@ -29,7 +29,7 @@ _ACTIVE_CASE_FILE = agentir_dir() / "active_case"
 def _case_dir_for(case_id: str) -> Path | None:
     """Resolve the on-disk case directory for `case_id`.
 
-    Prefers `AGENTIR_CASES_DIR` env, falls back to `~/cases/`. Returns None
+    Prefers `SIFT_CASES_DIR` env, falls back to `~/cases/`. Returns None
     if the directory doesn't exist — callers (batch-discovery) treat
     that as "no dict available, proceed with current behavior" rather
     than aborting.
@@ -41,8 +41,8 @@ def _case_dir_for(case_id: str) -> Path | None:
     if not case_id or Path(case_id).name != case_id:
         return None
     cases_root = Path(
-        os.environ.get("AGENTIR_CASES_ROOT")
-        or os.environ.get("AGENTIR_CASES_DIR")
+        os.environ.get("SIFT_CASES_ROOT")
+        or os.environ.get("SIFT_CASES_DIR")
         or str(Path.home() / "cases")
     )
     case_dir = cases_root / case_id
@@ -305,7 +305,7 @@ def _preflight_host_discovery(
     # host.id would be dynamic-mapped as text on first v1 write.
     mapping_status = _ensure_host_id_keyword_mapping(case_id)
 
-    run_id = os.environ.get("AGENTIR_INGEST_RUN_ID", "")
+    run_id = os.environ.get("SIFT_INGEST_RUN_ID", "")
     report = {
         "status": "ok",
         "run_id": run_id,
@@ -466,7 +466,7 @@ def _write_bg_status(
     )
 
 
-_AGENTIR_CONFIG = agentir_dir() / "config.yaml"
+_SIFT_CONFIG = agentir_dir() / "config.yaml"
 
 
 def _resolve_case_id(args_case: str | None) -> str:
@@ -482,16 +482,16 @@ def _resolve_case_id(args_case: str | None) -> str:
                 file=sys.stderr,
             )
             sys.exit(2)
-        # Canonical case directory resolution: AGENTIR_CASES_ROOT (set by gateway)
-        # then AGENTIR_CASES_DIR (legacy), then ~/cases fallback.
+        # Canonical case directory resolution: SIFT_CASES_ROOT (set by gateway)
+        # then SIFT_CASES_DIR (legacy), then ~/cases fallback.
         cases_root = Path(
-            os.environ.get("AGENTIR_CASES_ROOT")
-            or os.environ.get("AGENTIR_CASES_DIR")
+            os.environ.get("SIFT_CASES_ROOT")
+            or os.environ.get("SIFT_CASES_DIR")
             or str(Path.home() / "cases")
         )
         case_dir = cases_root / args_case
         # Suppress warning in background mode (parent already validated)
-        if not case_dir.is_dir() and not os.environ.get("AGENTIR_INGEST_RUN_ID"):
+        if not case_dir.is_dir() and not os.environ.get("SIFT_INGEST_RUN_ID"):
             print(
                 f"Warning: Case '{args_case}' not found in case system. "
                 f"Ingesting with '{args_case}' as index prefix.",
@@ -638,7 +638,7 @@ def _merge_config(args: argparse.Namespace, config: dict) -> None:
 
     if not getattr(args, "password", None):
         # Prefer env var (set by server.py to avoid process list exposure)
-        env_pw = os.environ.get("AGENTIR_ARCHIVE_PASSWORD", "")
+        env_pw = os.environ.get("SIFT_ARCHIVE_PASSWORD", "")
         if env_pw:
             args.password = env_pw
         elif config.get("password"):
@@ -992,7 +992,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
         import os
         import uuid
 
-        run_id = os.environ.get("AGENTIR_INGEST_RUN_ID", "") or str(uuid.uuid4())
+        run_id = os.environ.get("SIFT_INGEST_RUN_ID", "") or str(uuid.uuid4())
 
         client = get_client()
         _preflight_shard_capacity(
@@ -1396,7 +1396,7 @@ def cmd_ingest_json(args: argparse.Namespace, examiner: str = "unknown") -> None
         print(f"Dry run: {input_path}")
         return
 
-    run_id = os.environ.get("AGENTIR_INGEST_RUN_ID", "") or None
+    run_id = os.environ.get("SIFT_INGEST_RUN_ID", "") or None
     start_mono = time.monotonic()
     started_ts = datetime.now(timezone.utc).isoformat()
 
@@ -1594,7 +1594,7 @@ def cmd_ingest_delimited(args: argparse.Namespace, examiner: str = "unknown") ->
     # process_died_unexpectedly` on clean no-op walks (empty subdirs
     # list or auto_hosts list) because no inner call ever wrote a
     # terminal status.
-    run_id = os.environ.get("AGENTIR_INGEST_RUN_ID", "") or None
+    run_id = os.environ.get("SIFT_INGEST_RUN_ID", "") or None
     started_ts = datetime.now(timezone.utc).isoformat()
 
     # Auto-hosts mode: flat directory, iterate detected hostnames sequentially
@@ -1890,7 +1890,7 @@ def cmd_ingest_accesslog(args: argparse.Namespace, examiner: str = "unknown") ->
         print(f"Dry run: {input_path}")
         return
 
-    run_id = os.environ.get("AGENTIR_INGEST_RUN_ID", "") or None
+    run_id = os.environ.get("SIFT_INGEST_RUN_ID", "") or None
     start_mono = time.monotonic()
     started_ts = datetime.now(timezone.utc).isoformat()
 
@@ -2059,7 +2059,7 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
             print("  (excluding already-enriched documents; use --force to include)")
         return
 
-    run_id = os.environ.get("AGENTIR_INGEST_RUN_ID", "") or None
+    run_id = os.environ.get("SIFT_INGEST_RUN_ID", "") or None
     start_mono = time.monotonic()
     started_ts = datetime.now(timezone.utc).isoformat()
 
@@ -2176,7 +2176,7 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
 
         _mem_extract_dir = Path(tempfile.mkdtemp(prefix="agentir-mem-"))
         try:
-            password = os.environ.get("AGENTIR_ARCHIVE_PASSWORD", "")
+            password = os.environ.get("SIFT_ARCHIVE_PASSWORD", "")
             cmd = ["7z", "x", f"-o{_mem_extract_dir}", str(image_path)]
             if password:
                 cmd.insert(2, f"-p{password}")
@@ -2230,7 +2230,7 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
             sys.exit(1)
 
     # Derive run_id BEFORE pre-flight so halt-status has correlation.
-    run_id = os.environ.get("AGENTIR_INGEST_RUN_ID", "") or str(uuid.uuid4())
+    run_id = os.environ.get("SIFT_INGEST_RUN_ID", "") or str(uuid.uuid4())
     started_ts = datetime.now(timezone.utc).isoformat()
     start_mono = time.monotonic()
 
@@ -2463,7 +2463,7 @@ def _install_terminal_status_guards() -> None:
 
 def main() -> None:
     # Install terminal-status guards before any subcommand runs so
-    # that crashes after AGENTIR_INGEST_RUN_ID is set are captured.
+    # that crashes after SIFT_INGEST_RUN_ID is set are captured.
     _install_terminal_status_guards()
 
     parser = argparse.ArgumentParser(

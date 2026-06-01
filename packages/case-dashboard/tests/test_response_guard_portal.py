@@ -103,7 +103,7 @@ def passwords_dir(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def app(passwords_dir, tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTIR_CASE_DIR", _CASE_DIR)
+    monkeypatch.setenv("SIFT_CASE_DIR", _CASE_DIR)
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     return create_dashboard_v2_app(
         session_secret=_SECRET,
@@ -169,7 +169,7 @@ class TestResponseGuardStatus:
         assert data["seconds_remaining"] > 0
 
     def test_no_callbacks_returns_warning(self, passwords_dir, tmp_path, monkeypatch):
-        monkeypatch.setenv("AGENTIR_CASE_DIR", _CASE_DIR)
+        monkeypatch.setenv("SIFT_CASE_DIR", _CASE_DIR)
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         _setup_examiner(passwords_dir)
         app = create_dashboard_v2_app(session_secret=_SECRET)  # no override callbacks
@@ -233,7 +233,7 @@ class TestResponseGuardOverride:
         assert resp2.status_code == 401
 
     def test_must_reset_password_blocked(self, client, passwords_dir, monkeypatch):
-        monkeypatch.setenv("AGENTIR_CASE_DIR", _CASE_DIR)
+        monkeypatch.setenv("SIFT_CASE_DIR", _CASE_DIR)
         _setup_examiner(passwords_dir)
         (passwords_dir / "alice.json").write_text(
             json.dumps({"hash": "aa" * 32, "salt": "bb" * 32, "must_reset_password": True})

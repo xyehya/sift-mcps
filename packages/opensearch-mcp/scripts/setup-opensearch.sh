@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DOCKER_DIR="$SCRIPT_DIR/../docker"
-AGENTIR_DIR="$HOME/.agentir"
-CONFIG_FILE="$AGENTIR_DIR/opensearch.yaml"
+SIFT_DIR="$HOME/.sift"
+CONFIG_FILE="$SIFT_DIR/opensearch.yaml"
 OS_URL="https://localhost:9200"
 
 # --- 1. Check Docker ---
@@ -43,7 +43,7 @@ fi
 echo "Docker $(docker --version | grep -oP '\d+\.\d+\.\d+')"
 
 # --- 2. Generate password ---
-mkdir -p "$AGENTIR_DIR"
+mkdir -p "$SIFT_DIR"
 if [ -f "$CONFIG_FILE" ]; then
     echo "OpenSearch config exists: $CONFIG_FILE"
     OS_PASSWORD=$(python3 -c "import yaml; print(yaml.safe_load(open('$CONFIG_FILE'))['password'])")
@@ -62,7 +62,7 @@ EOF
 fi
 
 # --- 2b. Configure snapshot support for backup/restore ---
-SNAPSHOTS_DIR="/var/lib/agentir/snapshots"
+SNAPSHOTS_DIR="/var/lib/sift/snapshots"
 OVERRIDE_FILE="$DOCKER_DIR/docker-compose.override.yml"
 
 if [ ! -d "$SNAPSHOTS_DIR" ]; then
@@ -81,12 +81,12 @@ if [ ! -f "$OVERRIDE_FILE" ]; then
 services:
   opensearch:
     volumes:
-      - /var/lib/agentir/snapshots:/usr/share/opensearch/snapshots
+      - /var/lib/sift/snapshots:/usr/share/opensearch/snapshots
 OVERRIDE
     echo "  Override file: OK"
 else
     echo "docker-compose.override.yml exists — checking snapshot volume..."
-    if grep -q "/var/lib/agentir/snapshots" "$OVERRIDE_FILE"; then
+    if grep -q "/var/lib/sift/snapshots" "$OVERRIDE_FILE"; then
         echo "  Snapshot volume: already configured"
     else
         echo "  WARNING: Override file exists but snapshot volume not configured."
@@ -94,12 +94,12 @@ else
         echo "    services:"
         echo "      opensearch:"
         echo "        volumes:"
-        echo "          - /var/lib/agentir/snapshots:/usr/share/opensearch/snapshots"
+        echo "          - /var/lib/sift/snapshots:/usr/share/opensearch/snapshots"
     fi
 fi
 
 # --- 3. Start OpenSearch ---
-export AGENTIR_OS_PASSWORD="$OS_PASSWORD"
+export SIFT_OS_PASSWORD="$OS_PASSWORD"
 echo "Starting OpenSearch..."
 docker compose -f "$DOCKER_DIR/docker-compose.yml" up -d
 
@@ -362,7 +362,7 @@ for alias, pattern in _ALIAS_PATTERNS.items():
 " || echo "  Security Analytics setup: skipped (may require manual configuration)"
 
 # --- 9. Register opensearch-mcp with gateway ---
-GW_CONFIG="$AGENTIR_DIR/gateway.yaml"
+GW_CONFIG="$SIFT_DIR/gateway.yaml"
 if [ -f "$GW_CONFIG" ]; then
     if grep -q "opensearch-mcp" "$GW_CONFIG"; then
         echo "opensearch-mcp already registered in gateway config."
@@ -371,10 +371,10 @@ if [ -f "$GW_CONFIG" ]; then
         # Append opensearch-mcp backend entry
         # Insert under backends: key using Python for safe YAML manipulation
         # Use venv python (matches setup-sift.sh), not system python
-        VENV_PYTHON="$AGENTIR_DIR/venv/bin/python"
+        VENV_PYTHON="$SIFT_DIR/venv/bin/python"
         if [ ! -f "$VENV_PYTHON" ]; then
             VENV_PYTHON="$(which python3)"
-            echo "  Warning: venv not found at $AGENTIR_DIR/venv — using system python3"
+            echo "  Warning: venv not found at $SIFT_DIR/venv — using system python3"
         fi
         "$VENV_PYTHON" -c "
 import yaml
@@ -386,7 +386,7 @@ backends['opensearch-mcp'] = {
     'type': 'stdio',
     'command': '$VENV_PYTHON',
     'args': ['-m', 'opensearch_mcp'],
-    'env': {'OPENSEARCH_CONFIG': '$AGENTIR_DIR/opensearch.yaml'},
+    'env': {'OPENSEARCH_CONFIG': '$SIFT_DIR/opensearch.yaml'},
 }
 p.write_text(yaml.dump(config, default_flow_style=False))
 "
@@ -398,9 +398,9 @@ else
     echo "  Add to gateway.yaml under 'backends:':"
     echo "    opensearch-mcp:"
     echo "      type: stdio"
-    echo "      command: $HOME/.agentir/venv/bin/python"
+    echo "      command: $HOME/.sift/venv/bin/python"
     echo '      args: ["-m", "opensearch_mcp"]'
-    echo '      env: {OPENSEARCH_CONFIG: ~/.agentir/opensearch.yaml}'
+    echo '      env: {OPENSEARCH_CONFIG: ~/.sift/opensearch.yaml}'
 fi
 
 # --- 10. Restart gateway if running ---

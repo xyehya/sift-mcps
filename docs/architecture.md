@@ -29,10 +29,10 @@ AgentIR is a two-machine architecture: a SIFT Workstation VM running the forensi
 │  │  opensearch-mcp forensic-rag-mcp  windows-triage-mcp              │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
 │                                                                          │
-│  sift-core library ──▶ /var/lib/agentir/                             │
+│  sift-core library ──▶ /var/lib/sift/                             │
 │                            passwords/  verification/  tokens/           │
 │                                                                          │
-│  Case directory (AGENTIR_CASE_DIR)                                       │
+│  Case directory (SIFT_CASE_DIR)                                       │
 │  /cases/{case-id}/                                                       │
 │    evidence/          ← acquired artifacts (read-only after seal)        │
 │    evidence-manifest.json   evidence-ledger.jsonl                        │
@@ -92,7 +92,7 @@ No other package duplicates this logic. `sift-gateway`, `case-dashboard`, and `c
 
 ### FastMCP stdio backends
 
-All eight backends run as stdio subprocesses. The gateway spawns them on startup and routes tool calls via stdin/stdout JSON. They inherit `AGENTIR_*` environment variables (including `AGENTIR_CASE_DIR`) from the gateway process.
+All eight backends run as stdio subprocesses. The gateway spawns them on startup and routes tool calls via stdin/stdout JSON. They inherit `SIFT_*` environment variables (including `SIFT_CASE_DIR`) from the gateway process.
 
 | Backend | Primary capability |
 |---------|-------------------|
@@ -165,7 +165,7 @@ All eight backends run as stdio subprocesses. The gateway spawns them on startup
    └── Set +i flag on each file (requires CAP_LINUX_IMMUTABLE)
    └── Chmod ledger 0444
 
-6. Auto-anchor (if AGENTIR_SOLANA_KEYPAIR set)
+6. Auto-anchor (if SIFT_SOLANA_KEYPAIR set)
    └── anchor_manifest() → SPL Memo tx payload: AGENTIR|{manifest_hash[:16]}|{ledger_tip[:16]}
    └── POST to Solana JSON-RPC (devnet/mainnet)
    └── Write evidence-anchor-v{N}.json with tx signature + explorer URL
@@ -186,9 +186,9 @@ All eight backends run as stdio subprocesses. The gateway spawns them on startup
 | Evidence ledger | `/cases/{id}/evidence-ledger.jsonl` | HMAC-signed events, chmod 0444 |
 | Anchor proof | `/cases/{id}/evidence-anchor-v{N}.json` | Solana tx signature |
 | Approvals | `/cases/{id}/approvals.jsonl` | Append-only, HMAC-signed |
-| Examiner passwords | `/var/lib/agentir/passwords/` | PBKDF2-HMAC-SHA256, 600k iterations |
-| Service tokens | `/var/lib/agentir/tokens/` | chmod 600, owner-readable only |
-| TLS private key | `~/.agentir/` | chmod 600 |
+| Examiner passwords | `/var/lib/sift/passwords/` | PBKDF2-HMAC-SHA256, 600k iterations |
+| Service tokens | `/var/lib/sift/tokens/` | chmod 600, owner-readable only |
+| TLS private key | `~/.sift/` | chmod 600 |
 | Audit logs | `/cases/{id}/audit/*.jsonl` | Written by gateway at tool-call time |
 | Kernel audit | `/var/log/audit/audit.log` | auditd daemon, root-only write |
 
@@ -200,10 +200,10 @@ The entire SIFT VM side is deployed by a single `install.sh` script that:
 
 1. Validates OS and Python runtime prerequisites
 2. Installs uv and syncs all Python packages
-3. Creates state directories (`/var/lib/agentir/`, `/cases/`)
+3. Creates state directories (`/var/lib/sift/`, `/cases/`)
 4. Downloads forensic triage databases (optional)
 5. Generates TLS certificate authority and keypair
-6. Writes `~/.agentir/gateway.yaml` from template
+6. Writes `~/.sift/gateway.yaml` from template
 7. Creates the default examiner account with PBKDF2-hashed temporary password
 8. Configures OpenSearch Docker (optional)
 9. Installs and enables the systemd user service

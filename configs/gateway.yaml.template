@@ -2,8 +2,8 @@ gateway:
   host: "0.0.0.0"
   port: 4508
   tls:
-    certfile: "${AGENTIR_TLS_DIR}/gateway-cert.pem"
-    keyfile: "${AGENTIR_TLS_DIR}/gateway-key.pem"
+    certfile: "${SIFT_TLS_DIR}/gateway-cert.pem"
+    keyfile: "${SIFT_TLS_DIR}/gateway-key.pem"
   rate_limit:
     ip_calls_per_minute: 120
     examiner_calls_per_minute: 120
@@ -12,53 +12,53 @@ gateway:
   idle_timeout_seconds: 0
 
 case:
-  root: "${AGENTIR_CASES_ROOT}"
+  root: "${SIFT_CASES_ROOT}"
   dir: ""
 
 api_keys:
-  ${AGENTIR_GATEWAY_TOKEN}:
+  ${SIFT_GATEWAY_TOKEN}:
     token_id: "examiner-default"
-    examiner: "${AGENTIR_EXAMINER}"
+    examiner: "${SIFT_EXAMINER}"
     agent_id: null
     role: examiner
     label: "Installer-created examiner fallback token"
     created_by: "installer"
-    created_at: "${AGENTIR_TOKEN_CREATED_AT}"
+    created_at: "${SIFT_TOKEN_CREATED_AT}"
     expires_at: null
     revoked_at: null
     last_used_at: null
     last_used_ip: null
 
-  ${AGENTIR_SERVICE_TOKEN}:
+  ${SIFT_SERVICE_TOKEN}:
     token_id: "hermes-default"
     examiner: "hermes-agent"
     agent_id: "hermes-default"
     role: agent
     label: "Installer-created Hermes service token"
     created_by: "installer"
-    created_at: "${AGENTIR_TOKEN_CREATED_AT}"
+    created_at: "${SIFT_TOKEN_CREATED_AT}"
     expires_at: null
     revoked_at: null
     last_used_at: null
     last_used_ip: null
 
 portal:
-  session_secret: "${AGENTIR_PORTAL_SESSION_SECRET}"
+  session_secret: "${SIFT_PORTAL_SESSION_SECRET}"
   session_max_age: 28800
-  default_examiner: "${AGENTIR_EXAMINER}"
+  default_examiner: "${SIFT_EXAMINER}"
   require_password_reset: true
 
 opensearch:
   url: "http://127.0.0.1:9200"
   verify_certs: true
-  ca_cert_path: "${AGENTIR_TLS_DIR}/ca-cert.pem"
+  ca_cert_path: "${SIFT_TLS_DIR}/ca-cert.pem"
 
 enrichment:
   enabled: true
   forensic_knowledge: true
-  forensic_rag: ${AGENTIR_RAG_ENABLED}
+  forensic_rag: ${SIFT_RAG_ENABLED}
   opensearch_context: true
-  root: "/var/lib/agentir/enrichment"
+  root: "/var/lib/sift/enrichment"
 
 backends:
   forensic-mcp:
@@ -86,18 +86,18 @@ backends:
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "report-mcp"]
 
   forensic-rag-mcp:
-    enabled: ${AGENTIR_RAG_ENABLED}
+    enabled: ${SIFT_RAG_ENABLED}
     type: stdio
     command: "${UV_BIN}"
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "rag-mcp"]
 
   windows-triage-mcp:
-    enabled: ${AGENTIR_WINDOWS_TRIAGE_ENABLED}
+    enabled: ${SIFT_WINDOWS_TRIAGE_ENABLED}
     type: stdio
     command: "${UV_BIN}"
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "windows-triage-mcp"]
     env:
-      AGENTIR_WINDOWS_TRIAGE_DB_DIR: "${AGENTIR_WINDOWS_TRIAGE_DB_DIR}"
+      SIFT_WINDOWS_TRIAGE_DB_DIR: "${SIFT_WINDOWS_TRIAGE_DB_DIR}"
 
   opensearch-mcp:
     enabled: true
@@ -105,11 +105,11 @@ backends:
     command: "${UV_BIN}"
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "opensearch-mcp"]
     env:
-      OPENSEARCH_CONFIG: "${AGENTIR_HOME}/opensearch.yaml"
+      OPENSEARCH_CONFIG: "${SIFT_HOME}/opensearch.yaml"
       OPENSEARCH_HOST: "http://127.0.0.1:9200"
 
   opencti-mcp:
-    enabled: ${AGENTIR_OPENCTI_ENABLED}
+    enabled: ${SIFT_OPENCTI_ENABLED}
     type: stdio
     command: "${UV_BIN}"
     args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "opencti-mcp"]

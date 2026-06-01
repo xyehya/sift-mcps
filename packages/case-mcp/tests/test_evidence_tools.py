@@ -36,9 +36,9 @@ def case_dir(tmp_path):
 
 @pytest.fixture
 def server_with_case(case_dir, monkeypatch):
-    """Return (server, tools_dict) with AGENTIR_CASE_DIR pointing at case_dir."""
-    monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
-    monkeypatch.setenv("AGENTIR_EXAMINER", "alice")
+    """Return (server, tools_dict) with SIFT_CASE_DIR pointing at case_dir."""
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_EXAMINER", "alice")
     s = create_server()
     tools = {t.name: t for t in s._tool_manager.list_tools()}
     return s, tools, case_dir
@@ -103,7 +103,7 @@ class TestEvidenceListSystemB:
         _, tools, case_dir = server_with_case
         stale_case = tmp_path / "stale-case"
         stale_case.mkdir()
-        legacy_pointer = tmp_path / ".agentir" / "active_case"
+        legacy_pointer = tmp_path / ".sift" / "active_case"
         legacy_pointer.parent.mkdir()
         legacy_pointer.write_text(str(stale_case))
         monkeypatch.setattr("case_mcp.server.Path.home", lambda: tmp_path)

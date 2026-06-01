@@ -65,9 +65,9 @@ def _protected_write(path: Path, content: str) -> None:
             pass  # Non-POSIX filesystem
 
 
-CASES_DIR_ENV = "AGENTIR_CASES_DIR"
+CASES_DIR_ENV = "SIFT_CASES_DIR"
 DEFAULT_CASES_DIR = str(Path.home() / "cases")
-_ACTIVE_CASE_FILE = Path.home() / ".agentir" / "active_case"
+_ACTIVE_CASE_FILE = Path.home() / ".sift" / "active_case"
 
 # Audit ID format: prefix-examiner-YYYYMMDD-NNN (all lowercase alphanumeric + hyphens)
 _AUDIT_ID_PATTERN = re.compile(
@@ -469,7 +469,7 @@ class CaseManager:
         return resolve_examiner()
 
     def _require_active_case(self) -> Path:
-        # Check AGENTIR_CASE_DIR env var first
+        # Check SIFT_CASE_DIR env var first
         from sift_common import resolve_case_dir as _resolve_case_dir_env
         try:
             env_dir_str = _resolve_case_dir_env()
@@ -574,7 +574,7 @@ class CaseManager:
             "sift_tools": True,
         }
         try:
-            gw_path = Path.home() / ".agentir" / "gateway.yaml"
+            gw_path = Path.home() / ".sift" / "gateway.yaml"
             if gw_path.exists():
                 gw_config = yaml.safe_load(gw_path.read_text()) or {}
                 backends = gw_config.get("backends", {})

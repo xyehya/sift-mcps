@@ -40,11 +40,11 @@ def _sanitize_slug(raw: str) -> str:
 
 
 def resolve_examiner() -> str:
-    """Resolve examiner identity: AGENTIR_EXAMINER > AGENTIR_ANALYST > OS username.
+    """Resolve examiner identity: SIFT_EXAMINER > SIFT_ANALYST > OS username.
 
     The result is validated against the slug pattern ^[a-z0-9][a-z0-9-]{0,19}$.
     """
-    examiner = os.environ.get("AGENTIR_EXAMINER") or os.environ.get("AGENTIR_ANALYST")
+    examiner = os.environ.get("SIFT_EXAMINER") or os.environ.get("SIFT_ANALYST")
     if not examiner:
         try:
             examiner = getpass.getuser()
@@ -74,14 +74,14 @@ class AuditWriter:
     def _get_audit_dir(self) -> Path | None:
         """Get the audit directory.
 
-        Priority: explicit audit_dir > AGENTIR_AUDIT_DIR > AGENTIR_CASE_DIR/audit/.
+        Priority: explicit audit_dir > SIFT_AUDIT_DIR > SIFT_CASE_DIR/audit/.
         """
         if self._explicit_audit_dir:
             audit_dir = Path(self._explicit_audit_dir)
-        elif os.environ.get("AGENTIR_AUDIT_DIR"):
-            audit_dir = Path(os.environ["AGENTIR_AUDIT_DIR"])
+        elif os.environ.get("SIFT_AUDIT_DIR"):
+            audit_dir = Path(os.environ["SIFT_AUDIT_DIR"])
         else:
-            case_dir = os.environ.get("AGENTIR_CASE_DIR", "").strip()
+            case_dir = os.environ.get("SIFT_CASE_DIR", "").strip()
             # Validate: must be a directory with CASE.yaml
             if case_dir:
                 path = Path(case_dir)
@@ -93,7 +93,7 @@ class AuditWriter:
                 # Legacy CLI fallback — reads active_case_file pointer
                 try:
                     case_dir = (
-                        (Path.home() / ".agentir" / "active_case").read_text().strip()  # Legacy CLI fallback
+                        (Path.home() / ".sift" / "active_case").read_text().strip()  # Legacy CLI fallback
                     )
                 except OSError:
                     return None
@@ -102,7 +102,7 @@ class AuditWriter:
                 path = Path(case_dir)
                 if not path.is_dir() or not (path / "CASE.yaml").exists():
                     logger.warning(
-                        "AGENTIR_CASE_DIR=%s is not a case directory, skipping audit",
+                        "SIFT_CASE_DIR=%s is not a case directory, skipping audit",
                         case_dir,
                     )
                     return None
@@ -196,7 +196,7 @@ class AuditWriter:
         The file is ~50 bytes and OS page-cached, so effectively free.
         """
         try:
-            raw = (Path.home() / ".agentir" / "active_case").read_text().strip()  # Legacy CLI fallback
+            raw = (Path.home() / ".sift" / "active_case").read_text().strip()  # Legacy CLI fallback
             if raw:
                 return Path(raw).name
         except OSError:
@@ -231,7 +231,7 @@ class AuditWriter:
             "audit_id": audit_id,
             "examiner": self.examiner,
             "case_id": case_id
-            or os.environ.get("AGENTIR_ACTIVE_CASE", "")
+            or os.environ.get("SIFT_ACTIVE_CASE", "")
             or self._read_active_case_id(),
             "source": source,
             "params": params,

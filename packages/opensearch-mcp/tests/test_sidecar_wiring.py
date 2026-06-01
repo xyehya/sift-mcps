@@ -8,7 +8,7 @@ No OpenSearch connection is required. The key mocks are:
   - _spawn_ingest → fake process (no subprocess)
   - read_active_ingests → [] (no concurrent guard hit)
   - audit.log → None (no AuditWriter needed)
-  - agentir_dir → tmp_path (no real ~/.agentir writes)
+  - agentir_dir → tmp_path (no real ~/.sift writes)
   - containers.subprocess → partitioned_disk TSK output
 """
 
@@ -91,17 +91,17 @@ class TestLaunchContainerIngestSidecar:
     ):
         from opensearch_mcp.server import _launch_container_ingest
 
-        # Redirect ~/.agentir writes to tmp_path
+        # Redirect ~/.sift writes to tmp_path
         mock_agentir_dir.return_value = tmp_path
         mock_read_active.return_value = []
         mock_spawn.return_value = MagicMock(pid=9999)
         mock_audit.log.return_value = None
         mock_subprocess.run.side_effect = _tsk_side_effect
 
-        # Set AGENTIR_CASE_DIR so the sidecar write path is active
+        # Set SIFT_CASE_DIR so the sidecar write path is active
         case_dir = tmp_path / "mycase-001"
         case_dir.mkdir()
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
 
         # Create a fake image file (needed for log_file open)
         fake_image = tmp_path / "disk.img"
@@ -150,7 +150,7 @@ class TestLaunchContainerIngestSidecar:
 
         case_dir = tmp_path / "mycase-002"
         case_dir.mkdir()
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
 
         fake_image = tmp_path / "disk.img"
         fake_image.touch()
@@ -202,7 +202,7 @@ class TestMemoryIngestSidecar:
 
         case_dir = tmp_path / "mycase-mem"
         case_dir.mkdir()
-        monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
 
         # Create a LiME memory image inside evidence/ (path guard requires this)
         evidence_dir = case_dir / "evidence"

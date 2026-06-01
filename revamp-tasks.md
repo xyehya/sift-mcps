@@ -149,7 +149,7 @@ All four backends pass the conformance probe, advertise only namespaced tools, a
 
 ## 6 · Phases (MVP = 0–6)
 
-Legend: ☐ todo · per task: **What / How / Why / Test**.
+Legend: `[ ]` todo · `[~]` partially done (see inline notes) · `[x]` done & Test passes · per task: **What / How / Why / Test**.
 
 ### Phase 0 — Rename + foundations (D1)
 Kills nothing yet; unblocks everything. Mechanical but wide (~141 `AGENTIR_CASE_DIR`, ~55 `/cases` literals). **Clean cutover — no back-compat** (fresh VM + fresh case): remove `agentir`/`AGENTIR_*`/`agentir_svc_*` entirely, don't dual-name anything.
@@ -159,10 +159,13 @@ Kills nothing yet; unblocks everything. Mechanical but wide (~141 `AGENTIR_CASE_
   - *Why:* single core identity; the package is already the de-facto core.
   - *Test:* full suite imports clean under `sift_core`; `grep -r agentir_core` returns nothing in source.
   - *Done:* `git mv packages/agentir-core → packages/sift-core`, `src/agentir_core → src/sift_core`; dist name `agentir-core`→`sift-core` (own pyproject + 4 dependents + root workspace source/extra); all `.py` + `install.sh` swept (0 `agentir_core` in source); `uv sync --extra full` regenerated editable installs; per-package suites match baseline exactly (sift-core 225, case-dashboard 274, sift-gateway 104, case-mcp 23, opensearch 973+71skip, sift-mcp 4, report 31, forensic 20, win-triage 11). AGENTS.md code refs updated; docs module refs updated (paths `/var/lib/agentir` + `agentir_core_write` audit key + `configs/audit/99-agentir-evidence.rules` left for 0.2/0.3). `agentir.plugins` entry-point group + `opensearch_mcp.agentir_plugin` left for 0.3 (not `agentir_core`).
-- [ ] **0.2 Rename env/path surface `AGENTIR_*`→`SIFT_*`, `/var/lib/agentir`→`/var/lib/sift`**
+- [~] **0.2 Rename env/path surface `AGENTIR_*`→`SIFT_*`, `/var/lib/agentir`→`/var/lib/sift`** — RENAME DONE (Session 3); `/cases` single-resolver consolidation **deferred** (see below)
   - *How:* central config reader uses **only** the `SIFT_*` names (no fallback, no symlink). Audit the ~55 bare `/cases` literals — route them all through one path-resolution function.
   - *Why:* one config source that path-resolution, the gate, `run_command` cwd, and the portal all read (prereq for F-B and customizable paths).
   - *Test:* boot with `SIFT_*` set; `grep -r 'AGENTIR_\|/var/lib/agentir'` returns nothing in source; no bare `/cases` literal escapes the resolver (grep returns only the resolver).
+  - *DONE this session:* all 41 `AGENTIR_*` env vars → `SIFT_*` (442 occ.), `/var/lib/agentir` → `/var/lib/sift`, and config home `~/.agentir` → `~/.sift` — across **all** `.py`/tests, `install.sh`, `configs/*` (incl. the two `.template` files `gateway.yaml.template` + `apparmor/sift-gateway.template`, easy to miss — they're rendered with `${SIFT_*}` so leaving `${AGENTIR_*}` would break first-run), docs, AGENTS.md, and `frontend/src`. `grep -rE 'AGENTIR_|/var/lib/agentir'` over source/config = **0**. install.sh `bash -n` clean; `SIFT_HOME=$HOME/.sift` / `SIFT_STATE_DIR=/var/lib/sift` consistent with code. All per-package suites unchanged (same counts as Phase 0.1).
+  - *STILL TODO (the `/cases` resolver — the box's 3rd test clause):* cases-root resolution is **scattered & inconsistent** — `sift_core/case_io.get_case_dir` uses `SIFT_CASES_DIR`→`~/cases`; `sift_core/case_ops.case_list_data` uses `SIFT_CASES_ROOT`→`SIFT_CASES_DIR`→`~/cases`; `opensearch_mcp/ingest_cli` uses `SIFT_CASES_DIR`→`~/cases`; `case_dashboard/routes.py:3460` uses `SIFT_CASES_ROOT`→`"/cases"`. Need **one** `sift_core` resolver (e.g. `cases_root()`) with a single env precedence that all of these call. Separately, hardcoded `/cases` allow-roots in `sift-mcp/security.py:98` + `opensearch_mcp/server.py:686` are **defense-in-depth allow-lists** (alongside `/mnt`,`/media`,`/evidence`,`/tmp`,`~/`) — decide whether to source their cases-root from the resolver or leave them as intentional per-package belts. Docstring `/cases/{case}/evidence/` examples (forensic server.py:607/614) are illustrative text, not paths. **Not ticked** until the resolver lands and `grep /cases` over source returns only the resolver + intentional allow-lists.
+  - *NOTE:* `agentir_svc_*`/`agentir_gw_*` token prefixes → **0.4**; `_agentir_context` warning key → **Phase 4** (removed with the readOnlyHint carve-out); product-name strings in `instructions.py`/docstrings, opensearch identifiers (`agentir-geoip`, `agentir-evtx-ecs`, `agentir-opensearch`), `agentir_plugin` module, `agentir_home()` fn, config filenames (`99-agentir-evidence.rules`, `agentir-cases.conf`), and the `agentir_core_write` audit key → **0.3**.
 - [ ] **0.3 Rename `agentir-opensearch`→`sift-opensearch` and any other `agentir-*` service/identifier surface.**
   - *Test:* service starts; role names resolve; no `agentir-` identifier remains.
 - [ ] **0.4 Rename service-token prefix `agentir_svc_*` → `sift_svc_*`**
@@ -291,17 +294,19 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 
 > Append newest at the top. Use the §3 template.
 
-### Session 3 — 2026-06-01 — Phase 0.1 (package rename `agentir_core` → `sift_core`)
-- Branch/commit: `revamp/spg-v1` @ `4890f75` (0.1 rename) — preceded by `cc9765e` (stale planning-doc cleanup).
-- Phase: 0 — tasks touched: **0.1** (done). 0.2/0.3/0.4 still todo.
-- DONE (boxes ticked): **0.1**.
-- Tests: per-package baseline captured first, then re-run after rename — **identical counts, all green**: sift-core 225 · case-dashboard 274 · sift-gateway 104 · case-mcp 23 · opensearch 973 (+71 skip) · sift-mcp 4 · report 31 · forensic 20 · win-triage 11. Command: `uv run python -m pytest packages/<pkg>/ -q` (whole-suite `pytest` from root fails on duplicate test basenames across packages — pre-existing, run per-package).
-- Live test on VM: none (fresh VM not yet provisioned; that's still an open §2 item).
-- Spec changed?: docs only — AGENTS.md + docs/*.md module/dist refs `agentir_core`→`sift_core`, `agentir-core`→`sift-core` (kept `/var/lib/agentir` + `agentir_core_write` audit key for 0.2). `revamp-plan.html` not touched (it documents the rename intentionally).
-- Gotcha for next session: `uv sync` **without** `--extra full` prunes the venv down to dev deps only and removes all workspace editable installs (workspace pkgs live in the `full` extra). Always use `uv sync --extra full` (matches install.sh:176). Recovered cleanly.
-- Deferred (in scope for later 0.x, noted so not lost): `configs/audit/99-agentir-evidence.rules` (filename + `/var/lib/agentir` + `agentir_core_write` key) → 0.2/0.3; `agentir.plugins` entry-point group + `opensearch_mcp.agentir_plugin` module → 0.3.
+### Session 3 — 2026-06-01 — Phase 0.1 (package rename) + 0.2 env/path rename
+- Branch/commit: `revamp/spg-v1` @ `cf69e97` — chain: `cc9765e` (stale-doc cleanup) → `4890f75` (0.1 rename) → `48ab494` (tracker SHA) → `cf69e97`.
+- Phase: 0 — tasks touched: **0.1** (done, ticked), **0.2** (env/path rename done; `/cases` resolver deferred — box marked `[~]`).
+- DONE (boxes ticked): **0.1**. **0.2 rename portion** complete but box left `[~]` (not fully ticked — `/cases` single-resolver clause outstanding).
+- 0.1: `git mv` package `agentir-core`→`sift-core`, `agentir_core`→`sift_core`; dist name + 4 dependents + root workspace; swept all `.py` + install.sh; docs/AGENTS module refs.
+- 0.2: `AGENTIR_*`→`SIFT_*` (41 vars/442 occ), `/var/lib/agentir`→`/var/lib/sift`, `~/.agentir`→`~/.sift` across all py/tests/install.sh/configs (incl. 2 `.template` files)/docs/frontend src. `grep -rE 'AGENTIR_|/var/lib/agentir'` over source/config = 0. **`/cases` single-resolver consolidation deferred** (scattered cases-root logic — details under task 0.2 "STILL TODO").
+- Tests: per-package, re-run after each rename — **identical counts, all green** every time: sift-core 225 · case-dashboard 274 · sift-gateway 104 · case-mcp 23 · opensearch 973 (+71 skip) · sift-mcp 4 · report 31 · forensic 20 · win-triage 11. Command: `uv run python -m pytest packages/<pkg>/ -q` (whole-suite from root fails on duplicate test basenames — pre-existing; run per-package).
+- Live test on VM: none (fresh VM still not provisioned — open §2 item).
+- Spec changed?: `revamp-plan.html` NOT touched (it documents the rename intentionally — `ux-tasks.md` also still has one `AGENTIR_CASE_DIR` ref, left as a different project's historical doc). Docs/AGENTS updated for both renames.
+- Gotchas (now also in §4): (1) `uv sync` **without** `--extra full` prunes the venv to dev-only and deletes all workspace editable installs → always `uv sync --extra full`. (2) The two `configs/*.template` files are NOT matched by `--include='*.yaml'` etc. — must rename env vars in them explicitly or first-run rendering breaks. (3) The portal **built bundle** `packages/case-dashboard/src/case_dashboard/static/v2/assets/index-*.js` is a generated artifact that still contains old `AGENTIR_*` strings — needs a **frontend rebuild** on the VM (source `frontend/src` is already fixed).
+- Deferred (tracked under tasks 0.2 NOTE / 0.3 / 0.4 / Phase 4 so nothing is lost): token prefixes `agentir_svc_*`/`agentir_gw_*` → 0.4; `_agentir_context` → Phase 4; opensearch identifiers + `agentir_plugin` module + `agentir_home()` fn + config filenames + `agentir_core_write` audit key + product-name strings → 0.3.
 - BLOCKERS: none.
-- NEXT: **0.2** — env/path surface `AGENTIR_*`→`SIFT_*`, `/var/lib/agentir`→`/var/lib/sift`, route the ~55 bare `/cases` literals through one resolver; then sweep the deferred audit config/docs in the same pass.
+- NEXT: finish **0.2** — build the single `sift_core` cases-root resolver and route the scattered call-sites through it (see task 0.2 "STILL TODO"), then tick 0.2. Then **0.3** (service/identifier surface) and **0.4** (token prefix).
 
 ### Session 2 — 2026-06-01 — Repo setup + spec cleanup + tracker expansion
 - Branch/commit: `revamp/spg-v1` @ `b1593a2` (planning artifacts committed; `pre-revamp-v0` tagged at `main` 0c260ff; worktree at `../sift-mcps-main`).

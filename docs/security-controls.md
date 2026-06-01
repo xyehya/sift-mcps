@@ -15,7 +15,7 @@ This document enumerates every security control in AgentIR, the threat each addr
 - Server certificate is bound to the SIFT VM's IP/hostname
 - Clients (Hermes, browser) trust the CA cert; it is provided in the operator handoff material
 - TLS termination is at the Starlette/uvicorn layer; private key is `chmod 600` and owned by the service account
-- Key material is stored in `~/.agentir/` (AppArmor profile restricts read access to the gateway process)
+- Key material is stored in `~/.sift/` (AppArmor profile restricts read access to the gateway process)
 
 **Files:** `install.sh:generate_tls()`, `configs/gateway.yaml.template`
 
@@ -30,7 +30,7 @@ This document enumerates every security control in AgentIR, the threat each addr
 **Implementation:**
 - Every request to `/mcp` requires a `Authorization: Bearer <token>` header
 - Two token types: `agentir_gw_*` (examiner fallback) and `agentir_svc_*` (Hermes service agent)
-- Tokens are cryptographically random, stored in `/var/lib/agentir/tokens/`, and have configurable expiry
+- Tokens are cryptographically random, stored in `/var/lib/sift/tokens/`, and have configurable expiry
 - Invalid or expired tokens return 401; the token value is never logged (only its SHA-256 fingerprint)
 - `AuthMiddleware` extracts examiner identity, role, and token_id (first 16 hex chars of SHA-256) and adds them to request state for downstream audit use
 
@@ -204,7 +204,7 @@ See [dfir-hardening-guide.md](dfir-hardening-guide.md) for the complete guide.
 **Implementation:**
 - `configs/audit/99-agentir-evidence.rules` installs two rules:
   - `perm=wa` on the cases root: records every write and attribute-change in `evidence/`
-  - `perm=wa` on `/var/lib/agentir`: records writes to the password/token/verification stores
+  - `perm=wa` on `/var/lib/sift`: records writes to the password/token/verification stores
 - `perm=a` (attribute change) specifically captures `chattr -i` — the kernel records the UID, PID, binary path, and timestamp of anyone who clears the immutable flag
 - Rules are loaded via `augenrules --load` (survives reboot via `/etc/audit/rules.d/`)
 - Query: `ausearch -k agentir_evidence_write --format text`
@@ -264,7 +264,7 @@ See [dfir-hardening-guide.md](dfir-hardening-guide.md) for the complete guide.
 
 **Implementation:**
 - Each backend writes its own `audit/{backend-name}.jsonl` with operation-specific fields
-- `case-mcp` logs every case operation including examiner identity from `AGENTIR_EXAMINER`
+- `case-mcp` logs every case operation including examiner identity from `SIFT_EXAMINER`
 - `sift-mcp` logs every command: binary, arguments, exit code, output length, duration
 - Gateway `backend_audit_id` links gateway envelope to the specific backend log entry
 

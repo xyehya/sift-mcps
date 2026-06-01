@@ -13,7 +13,7 @@ from sift_core.case_io import load_case_meta
 from sift_core.verification import VERIFICATION_DIR
 
 _SKIP_NAMES = {"__pycache__", ".DS_Store", "examiners.bak"}
-_PASSWORDS_DIR = Path(os.environ.get("AGENTIR_PASSWORDS_DIR", "/var/lib/agentir/passwords"))
+_PASSWORDS_DIR = Path(os.environ.get("SIFT_PASSWORDS_DIR", "/var/lib/sift/passwords"))
 
 
 def sha256_file(path: Path) -> str:
