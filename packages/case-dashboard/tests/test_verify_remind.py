@@ -73,7 +73,7 @@ def passwords_dir(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def case_dir(tmp_path):
-    from agentir_core.evidence_chain import init_evidence_chain
+    from sift_core.evidence_chain import init_evidence_chain
 
     cd = tmp_path / "case-16vr"
     cd.mkdir()

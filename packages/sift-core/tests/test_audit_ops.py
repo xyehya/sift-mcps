@@ -1,11 +1,11 @@
-"""Tests for agentir_core.audit_ops data functions."""
+"""Tests for sift_core.audit_ops data functions."""
 
 import json
 
 import pytest
 import yaml
 
-from agentir_core.audit_ops import audit_summary_data
+from sift_core.audit_ops import audit_summary_data
 
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-"""Tests for agentir_core.evidence_chain."""
+"""Tests for sift_core.evidence_chain."""
 
 import hashlib
 import json
@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from agentir_core.evidence_chain import (
+from sift_core.evidence_chain import (
     ChainStatus,
     anchor_manifest,
     chain_status,
@@ -459,12 +459,12 @@ class TestVerifyChainHmac:
 
 class TestPathSafety:
     def test_path_traversal_blocked(self, initialized):
-        from agentir_core.evidence_chain import _resolve_evidence_path
+        from sift_core.evidence_chain import _resolve_evidence_path
         with pytest.raises(ValueError):
             _resolve_evidence_path(initialized, "../../etc/passwd")
 
     def test_valid_nested_path_ok(self, initialized):
-        from agentir_core.evidence_chain import _resolve_evidence_path
+        from sift_core.evidence_chain import _resolve_evidence_path
         (initialized / "evidence" / "sub").mkdir()
         (initialized / "evidence" / "sub" / "file.bin").write_bytes(b"x")
         resolved = _resolve_evidence_path(initialized, "evidence/sub/file.bin")

@@ -37,7 +37,7 @@ With `+i`, clearing the flag before tampering is a separate, explicitly auditabl
 
 ### How It Is Implemented
 
-`agentir-core` uses Linux `fcntl` ioctl:
+`sift-core` uses Linux `fcntl` ioctl:
 
 ```python
 _FS_IOC_GETFLAGS = 0x80086601

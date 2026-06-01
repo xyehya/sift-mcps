@@ -5,7 +5,7 @@ members = ["packages/*"]
 package = false
 
 [tool.uv.sources]
-agentir-core = { workspace = true }
+sift-core = { workspace = true }
 forensic-knowledge = { workspace = true }
 sift-common = { workspace = true }
 sift-gateway = { workspace = true }
@@ -34,7 +34,7 @@ keywords = ["mcp", "forensics", "incident-response", "dfir", "security"]
 
 [project.optional-dependencies]
 core = [
-    "agentir-core",
+    "sift-core",
     "case-dashboard",
     "forensic-knowledge",
     "sift-common",

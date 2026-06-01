@@ -209,7 +209,7 @@ For enterprise incident response involving regulatory scrutiny, litigation, or t
 
 ### Implementation
 
-`anchor_manifest()` in `agentir_core/evidence_chain.py`:
+`anchor_manifest()` in `sift_core/evidence_chain.py`:
 
 1. Extracts `manifest_hash[:16]` (first 16 hex chars of the SHA-256 manifest hash)
 2. Extracts the HMAC of the latest ledger tip (first 16 hex chars)
@@ -266,7 +266,7 @@ export AGENTIR_SOLANA_CLUSTER=devnet   # or mainnet
 # Manual re-anchor: POST /portal/api/evidence/chain/anchor
 ```
 
-The `solders` library is an optional dependency (`pip install "agentir-core[solana]"`). Without it, the anchoring step is silently skipped and the ledger/manifest remain the sole chain-of-custody proof. The gateway does not require Solana to function.
+The `solders` library is an optional dependency (`pip install "sift-core[solana]"`). Without it, the anchoring step is silently skipped and the ledger/manifest remain the sole chain-of-custody proof. The gateway does not require Solana to function.
 
 ### Verifying an Anchor On-Chain
 

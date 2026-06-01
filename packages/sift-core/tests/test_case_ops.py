@@ -1,11 +1,11 @@
-"""Tests for agentir_core.case_ops case lifecycle functions."""
+"""Tests for sift_core.case_ops case lifecycle functions."""
 
 from pathlib import Path
 
 import pytest
 import yaml
 
-from agentir_core.case_ops import (
+from sift_core.case_ops import (
     case_activate_data,
     case_init_data,
     case_list_data,

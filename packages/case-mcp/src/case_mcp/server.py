@@ -16,14 +16,14 @@ from mcp.server.fastmcp import FastMCP
 from sift_common.audit import AuditWriter, resolve_examiner
 from sift_common.instructions import CASE_MCP as _INSTRUCTIONS
 from sift_common.oplog import setup_logging
-from agentir_core.case_io import (
+from sift_core.case_io import (
     export_bundle as _export_bundle,
     import_bundle as _import_bundle,
 )
-from agentir_core.case_ops import (
+from sift_core.case_ops import (
     _case_status_data,
 )
-from agentir_core.evidence_chain import (
+from sift_core.evidence_chain import (
     ChainStatus,
     chain_status,
     load_manifest,

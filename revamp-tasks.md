@@ -55,6 +55,10 @@ From the v2.1 spec plus the four forks settled 2026-06-01:
 - **14 methodology tools are reference lookups, not control flow.** `considerations` (`server.py:31,237`), grounding suggestions (`manager.py:1661`), and `validate_finding` enforcement (inside `record_finding`) all run server-side regardless. Removing the *tools* loses nothing operational.
 - Counts to respect: `AGENTIR_CASE_DIR` appears ~141×; bare `/cases` literals ~55×; response guard = 30 patterns; forensic-mcp = 20 tools + 14 resources.
 
+**SIFT VM:** 192.168.122.81
+- User/pass: `sansforensics` / `forensics`
+- Python: `/usr/bin/python3.12` (SIFT native, 3.12.3)
+- Ubuntu 24.04.4 LTS (Noble Numbat)
 ---
 
 ## 2 · Repo & environment setup (do this once, before Phase 0)
@@ -105,6 +109,8 @@ Rules:
 Three layers, fastest → slowest. Run the cheap ones constantly; the expensive one at phase gates.
 
 1. **Unit/integration (per-package `pytest`)** — run on every task. Fast, no VM. This is the 1146-test baseline.
+   - ⚠️ **Run tests PER-PACKAGE** (`uv run python -m pytest packages/<pkg>/ -q`). A whole-suite `pytest` from the repo root fails collection on duplicate test basenames across packages — that's pre-existing, not a regression.
+   - 🛑 **NEVER run bare `uv sync`.** It prunes the venv to dev-only deps and **deletes every workspace editable install** (the workspace packages live in the `full` extra, not the default deps). **Always `uv sync --extra full`** (matches `install.sh:176`). Symptom of having done the wrong one: `ModuleNotFoundError: No module named 'sift_core'` / `'sift_gateway'`. Fix = re-run `uv sync --extra full`. (Hit & recovered in Session 3.)
 2. **Gateway contract probe (no evidence needed)** — hit the live gateway over HTTPS and assert tool inventory + gate behaviour:
    - `initialize` → capture `Mcp-Session-Id` → `notifications/initialized` → `tools/list` (note: `/mcp/` **with trailing slash**; bearer token required).
    - Assert: every advertised tool is namespaced; core tools present even with all add-ons disabled; calling any agent tool on an **unsealed** case returns the F-A block response.
@@ -148,10 +154,11 @@ Legend: ☐ todo · per task: **What / How / Why / Test**.
 ### Phase 0 — Rename + foundations (D1)
 Kills nothing yet; unblocks everything. Mechanical but wide (~141 `AGENTIR_CASE_DIR`, ~55 `/cases` literals). **Clean cutover — no back-compat** (fresh VM + fresh case): remove `agentir`/`AGENTIR_*`/`agentir_svc_*` entirely, don't dual-name anything.
 
-- [ ] **0.1 Rename Python package `agentir_core` → `sift_core`**
+- [x] **0.1 Rename Python package `agentir_core` → `sift_core`** ✅ Session 3
   - *How:* rename dir + `pyproject` name; update all imports. **Delete** the old name — no shim module.
   - *Why:* single core identity; the package is already the de-facto core.
   - *Test:* full suite imports clean under `sift_core`; `grep -r agentir_core` returns nothing in source.
+  - *Done:* `git mv packages/agentir-core → packages/sift-core`, `src/agentir_core → src/sift_core`; dist name `agentir-core`→`sift-core` (own pyproject + 4 dependents + root workspace source/extra); all `.py` + `install.sh` swept (0 `agentir_core` in source); `uv sync --extra full` regenerated editable installs; per-package suites match baseline exactly (sift-core 225, case-dashboard 274, sift-gateway 104, case-mcp 23, opensearch 973+71skip, sift-mcp 4, report 31, forensic 20, win-triage 11). AGENTS.md code refs updated; docs module refs updated (paths `/var/lib/agentir` + `agentir_core_write` audit key + `configs/audit/99-agentir-evidence.rules` left for 0.2/0.3). `agentir.plugins` entry-point group + `opensearch_mcp.agentir_plugin` left for 0.3 (not `agentir_core`).
 - [ ] **0.2 Rename env/path surface `AGENTIR_*`→`SIFT_*`, `/var/lib/agentir`→`/var/lib/sift`**
   - *How:* central config reader uses **only** the `SIFT_*` names (no fallback, no symlink). Audit the ~55 bare `/cases` literals — route them all through one path-resolution function.
   - *Why:* one config source that path-resolution, the gate, `run_command` cwd, and the portal all read (prereq for F-B and customizable paths).
@@ -284,6 +291,18 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 
 > Append newest at the top. Use the §3 template.
 
+### Session 3 — 2026-06-01 — Phase 0.1 (package rename `agentir_core` → `sift_core`)
+- Branch/commit: `revamp/spg-v1` @ `43ff32f` (uncommitted working tree — rename not yet committed).
+- Phase: 0 — tasks touched: **0.1** (done). 0.2/0.3/0.4 still todo.
+- DONE (boxes ticked): **0.1**.
+- Tests: per-package baseline captured first, then re-run after rename — **identical counts, all green**: sift-core 225 · case-dashboard 274 · sift-gateway 104 · case-mcp 23 · opensearch 973 (+71 skip) · sift-mcp 4 · report 31 · forensic 20 · win-triage 11. Command: `uv run python -m pytest packages/<pkg>/ -q` (whole-suite `pytest` from root fails on duplicate test basenames across packages — pre-existing, run per-package).
+- Live test on VM: none (fresh VM not yet provisioned; that's still an open §2 item).
+- Spec changed?: docs only — AGENTS.md + docs/*.md module/dist refs `agentir_core`→`sift_core`, `agentir-core`→`sift-core` (kept `/var/lib/agentir` + `agentir_core_write` audit key for 0.2). `revamp-plan.html` not touched (it documents the rename intentionally).
+- Gotcha for next session: `uv sync` **without** `--extra full` prunes the venv down to dev deps only and removes all workspace editable installs (workspace pkgs live in the `full` extra). Always use `uv sync --extra full` (matches install.sh:176). Recovered cleanly.
+- Deferred (in scope for later 0.x, noted so not lost): `configs/audit/99-agentir-evidence.rules` (filename + `/var/lib/agentir` + `agentir_core_write` key) → 0.2/0.3; `agentir.plugins` entry-point group + `opensearch_mcp.agentir_plugin` module → 0.3.
+- BLOCKERS: none.
+- NEXT: **0.2** — env/path surface `AGENTIR_*`→`SIFT_*`, `/var/lib/agentir`→`/var/lib/sift`, route the ~55 bare `/cases` literals through one resolver; then sweep the deferred audit config/docs in the same pass.
+
 ### Session 2 — 2026-06-01 — Repo setup + spec cleanup + tracker expansion
 - Branch/commit: `revamp/spg-v1` @ `b1593a2` (planning artifacts committed; `pre-revamp-v0` tagged at `main` 0c260ff; worktree at `../sift-mcps-main`).
 - Phase: pre-0 (repo setup done; Phase 0 deferred to next session per owner).
@@ -292,7 +311,7 @@ Register the ~25 core tools *in-process* in the gateway instead of as stdio subp
 - Live test on VM: none (fresh VM not yet provisioned).
 - Spec changed?: yes — `revamp-plan.html` fully reconciled with locked decisions; `revamp-tasks.md` expanded.
 - BLOCKERS: none.
-- NEXT: provision the fresh SIFT VM (§2), then **Phase 0** (rename, clean cutover) — owner said Phase 0 starts next session.
+- NEXT: provision the fresh SIFT VM (§2) - done - test access, then **Phase 0** (rename, clean cutover) — owner said Phase 0 starts next session.
 
 ### Session 1 — 2026-06-01 — Spec grounding + tracker creation
 - Branch/commit: `main` (revamp branch not yet created — see §2)

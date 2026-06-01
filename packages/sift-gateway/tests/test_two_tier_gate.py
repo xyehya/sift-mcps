@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agentir_core.evidence_chain import ChainStatus
+from sift_core.evidence_chain import ChainStatus
 
 
 # ---------------------------------------------------------------------------

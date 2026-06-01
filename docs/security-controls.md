@@ -34,7 +34,7 @@ This document enumerates every security control in AgentIR, the threat each addr
 - Invalid or expired tokens return 401; the token value is never logged (only its SHA-256 fingerprint)
 - `AuthMiddleware` extracts examiner identity, role, and token_id (first 16 hex chars of SHA-256) and adds them to request state for downstream audit use
 
-**Files:** `sift_gateway/auth.py`, `agentir_core/token_ops.py`
+**Files:** `sift_gateway/auth.py`, `sift_core/token_ops.py`
 
 ### PBKDF2 Portal Password (HMAC Challenge-Response)
 
@@ -47,7 +47,7 @@ This document enumerates every security control in AgentIR, the threat each addr
 - Challenge nonces are single-use, IP-bound, and expire after 5 minutes
 - Challenge domains are separated: login challenges, evidence-seal challenges, and response-guard override challenges each use independent stores
 
-**Files:** `agentir_core/approval_auth.py`, `case_dashboard/routes.py`
+**Files:** `sift_core/approval_auth.py`, `case_dashboard/routes.py`
 
 ### Domain-Separated Key Derivation
 
@@ -59,7 +59,7 @@ This document enumerates every security control in AgentIR, the threat each addr
 - These keys are derived independently and cannot be substituted for each other
 - A compromised login challenge cannot forge a ledger event, and vice versa
 
-**Files:** `agentir_core/verification.py:derive_auth_key`, `agentir_core/verification.py:derive_ledger_key`
+**Files:** `sift_core/verification.py:derive_auth_key`, `sift_core/verification.py:derive_ledger_key`
 
 ---
 
@@ -171,7 +171,7 @@ See [evidence-chain-of-custody.md](evidence-chain-of-custody.md) for the complet
 
 | Control | Implementation |
 |---------|---------------|
-| SHA-256 per evidence file | `agentir_core/evidence_chain.py:hash_file` |
+| SHA-256 per evidence file | `sift_core/evidence_chain.py:hash_file` |
 | Forward-linked HMAC chain | Each ledger event includes HMAC of event content + `derive_ledger_key` |
 | Append-only ledger | `evidence-ledger.jsonl`: `chmod 0444`, `fsync` after each event |
 | Versioned manifest | `previous_manifest_hash` links each version to its predecessor |
@@ -195,7 +195,7 @@ See [dfir-hardening-guide.md](dfir-hardening-guide.md) for the complete guide.
 - `get_immutable_flag(path)` is exposed via the portal evidence status API — the portal shows per-file immutable status
 - If `setcap` was not run (EPERM), the code logs a warning and degrades gracefully — the cryptographic ledger remains authoritative
 
-**Files:** `agentir_core/evidence_chain.py:_set_immutable`, `agentir_core/evidence_chain.py:get_immutable_flag`
+**Files:** `sift_core/evidence_chain.py:_set_immutable`, `sift_core/evidence_chain.py:get_immutable_flag`
 
 ### Kernel Audit (auditd) — Phase 17b
 
@@ -277,7 +277,7 @@ See [dfir-hardening-guide.md](dfir-hardening-guide.md) for the complete guide.
 - The challenge_id links the approval to the original HMAC challenge (proving a password was verified)
 - File is `chmod 0444` — no application path silently overwrites it
 
-**Files:** `agentir_core/approval_auth.py`, `case_dashboard/routes.py`
+**Files:** `sift_core/approval_auth.py`, `case_dashboard/routes.py`
 
 ---
 

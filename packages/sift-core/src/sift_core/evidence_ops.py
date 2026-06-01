@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agentir_core.case_io import _atomic_write
+from sift_core.case_io import _atomic_write
 
 
 def register_evidence_data(

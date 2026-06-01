@@ -6,7 +6,7 @@ import logging
 import os
 from pathlib import Path
 
-from agentir_core.case_io import resolve_case_path
+from sift_core.case_io import resolve_case_path
 from mcp.server.fastmcp import FastMCP
 from sift_common.instructions import SIFT_MCP as _INSTRUCTIONS
 

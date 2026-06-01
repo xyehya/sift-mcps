@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agentir-core"
+name = "sift-core"
 version = "0.1.0"
-description = "Shared core library for agentir: case I/O, identity, approval auth, HMAC verification"
+description = "Shared core library for the SIFT Protocol Gateway: case I/O, identity, approval auth, HMAC verification"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "AppliedIncidentResponse.com" }]
@@ -24,7 +24,7 @@ solana = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agentir_core"]
+packages = ["src/sift_core"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

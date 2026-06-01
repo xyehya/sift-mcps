@@ -1,4 +1,4 @@
-"""Tests for agentir_core.case_io shared case I/O module."""
+"""Tests for sift_core.case_io shared case I/O module."""
 
 import json
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agentir_core.case_io import (
+from sift_core.case_io import (
     CaseError,
     compute_content_hash,
     export_bundle,

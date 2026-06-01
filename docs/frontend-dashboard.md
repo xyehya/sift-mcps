@@ -24,7 +24,7 @@
                          │ Python imports
                          ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  agentir_core (case_io, evidence_chain, identity)            │
+│  sift_core (case_io, evidence_chain, identity)            │
 │  Filesystem: /cases/<case_id>/                               │
 │    findings.jsonl, timeline.jsonl, CASE.yaml,                │
 │    evidence/, evidence-manifest.json, ledger.jsonl           │
@@ -491,7 +491,7 @@ When navigating from Tab X to Findings:
 | What endpoints are wired? | `frontend/src/api/endpoints.js` |
 | How does polling work? | `frontend/src/hooks/useDataPolling.js` |
 | How does the HTTP client work? | `frontend/src/api/client.js` |
-| What evidence chain states exist? | `packages/agentir-core/src/agentir_core/evidence_chain.py` |
+| What evidence chain states exist? | `packages/sift-core/src/sift_core/evidence_chain.py` |
 | Where are the design tokens? | `frontend/src/index.css` |
 | Stable spec (what the portal IS) | `ux-spec.md` |
 | Task queue (what's LEFT to build) | `ux-tasks.md` |

@@ -20,7 +20,7 @@ import os
 import time
 from pathlib import Path
 
-from agentir_core.evidence_chain import ChainStatus, chain_status
+from sift_core.evidence_chain import ChainStatus, chain_status
 
 logger = logging.getLogger(__name__)
 

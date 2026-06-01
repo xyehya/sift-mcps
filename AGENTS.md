@@ -163,7 +163,7 @@ ssh sansforensics@192.168.122.81 'cd ~/sift-mcps-test && bash install.sh'
 - OpenCTI auto-detected: Docker available + ≥14 GB RAM → enabled automatically
 - Every step is idempotent — checks "already done" before acting
 - Venv integrity check: Python version mismatch → rebuild; broken imports → repair via sync
-- Post-sync import verification: smokes `yaml`, `mcp`, `agentir_core`, `sift_gateway`
+- Post-sync import verification: smokes `yaml`, `mcp`, `sift_core`, `sift_gateway`
 
 **The old way (DON'T DO THIS):**
 ```bash
@@ -274,9 +274,9 @@ packages/windows-triage-mcp/src/windows_triage_mcp/server.py  # 13 tools: check_
 
 ### Core library
 ```
-packages/agentir-core/src/agentir_core/evidence_chain.py  # chain_status(), seal_manifest(), HMAC verification, ChainStatus enum
-packages/agentir-core/src/agentir_core/case_io.py         # Case I/O: resolve_case_path, evidence manifest read/write
-packages/agentir-core/src/agentir_core/case_ops.py        # Case operations: case_init_data, case_activate_data, case_list_data
+packages/sift-core/src/sift_core/evidence_chain.py  # chain_status(), seal_manifest(), HMAC verification, ChainStatus enum
+packages/sift-core/src/sift_core/case_io.py         # Case I/O: resolve_case_path, evidence manifest read/write
+packages/sift-core/src/sift_core/case_ops.py        # Case operations: case_init_data, case_activate_data, case_list_data
 ```
 
 ### Config & install
@@ -313,7 +313,7 @@ scripts/remediation-gate.sh                       # Pre-commit gate: namespace s
 
 | Package | Purpose | Status |
 |---------|---------|--------|
-| `agentir-core` | Shared library: case I/O, auth, HMAC, identity, evidence chain | 225 tests |
+| `sift-core` | Shared library: case I/O, auth, HMAC, identity, evidence chain | 225 tests |
 | `sift-gateway` | HTTP gateway, auth, routing, evidence gate, response guard, tool categories | 104 tests, Phase B |
 | `case-dashboard` | Examiner Portal (Starlette sub-app) | 243 tests |
 | `forensic-mcp` | Findings, timeline, TODOs, workflow_status entry point | 16 tests, Phase B |
@@ -332,8 +332,8 @@ scripts/remediation-gate.sh                       # Pre-commit gate: namespace s
 ## Key File Locations
 
 ```
-agentir-core case_io:         packages/agentir-core/src/agentir_core/case_io.py
-agentir-core evidence_chain:  packages/agentir-core/src/agentir_core/evidence_chain.py
+sift-core case_io:         packages/sift-core/src/sift_core/case_io.py
+sift-core evidence_chain:  packages/sift-core/src/sift_core/evidence_chain.py
 sift-gateway server:          packages/sift-gateway/src/sift_gateway/server.py
 sift-gateway mcp_endpoint:    packages/sift-gateway/src/sift_gateway/mcp_endpoint.py
 sift-gateway evidence_gate:   packages/sift-gateway/src/sift_gateway/evidence_gate.py
@@ -366,7 +366,7 @@ cd /home/yk/AI/SIFTHACK/sift-mcps
 uv sync --all-packages
 
 # Run all tests (primary gate)
-uv run python -m pytest packages/agentir-core/ --tb=short -q       # 225
+uv run python -m pytest packages/sift-core/ --tb=short -q       # 225
 uv run python -m pytest packages/case-dashboard/ --tb=short -q     # 240
 uv run python -m pytest packages/sift-gateway/ --tb=short -q       # 104
 uv run python -m pytest packages/case-mcp/ --tb=short -q           # 23
@@ -382,7 +382,7 @@ bash scripts/remediation-gate.sh
 grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."
 
 # Import smoke tests
-uv run python -c "from agentir_core.case_io import get_case_dir; print('OK')"
+uv run python -c "from sift_core.case_io import get_case_dir; print('OK')"
 uv run python -c "from case_mcp.server import create_server; print('OK')"
 uv run python -c "from sift_gateway.server import Gateway; print('OK')"
 

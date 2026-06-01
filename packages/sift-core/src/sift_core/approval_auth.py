@@ -350,7 +350,7 @@ def reset_password(
     new_salt = get_analyst_salt(config_path, analyst, passwords_dir=passwords_dir)
 
     try:
-        from agentir_core.verification import VERIFICATION_DIR, derive_hmac_key, rehmac_entries
+        from sift_core.verification import VERIFICATION_DIR, derive_hmac_key, rehmac_entries
 
         if VERIFICATION_DIR.is_dir():
             old_key = derive_hmac_key(current, old_salt)

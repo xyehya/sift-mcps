@@ -25,14 +25,14 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from agentir_core.approval_auth import (
+from sift_core.approval_auth import (
     _load_password_entry as _load_pw_entry,
     _save_password_entry as _save_pw_entry,
     derive_auth_key,
     derive_ledger_key,
 )
-from agentir_core.case_io import _protected_write, compute_content_hash
-from agentir_core.evidence_chain import (
+from sift_core.case_io import _protected_write, compute_content_hash
+from sift_core.evidence_chain import (
     anchor_manifest,
     chain_status,
     retire_file,
@@ -46,7 +46,7 @@ from agentir_core.evidence_chain import (
     seal_manifest,
     verify_chain_hmac,
 )
-from agentir_core.verification import compute_hmac, write_ledger_entry
+from sift_core.verification import compute_hmac, write_ledger_entry
 from case_dashboard.session_jwt import (
     COOKIE_NAME,
     COOKIE_PATH,
@@ -3477,7 +3477,7 @@ async def get_cases(request: Request) -> JSONResponse:
         return role_err
 
     try:
-        from agentir_core.case_ops import case_list_data
+        from sift_core.case_ops import case_list_data
         cases_root = _load_cases_root()
         data = case_list_data(cases_root)
         return JSONResponse(data)
@@ -4178,7 +4178,7 @@ async def save_report_route(request: Request) -> JSONResponse:
     reports_dir = case_dir / "reports"
     reports_dir.mkdir(exist_ok=True)
 
-    from agentir_core.case_io import _protected_write
+    from sift_core.case_io import _protected_write
     try:
         report_path = reports_dir / f"{report_id}.json"
         _protected_write(report_path, json.dumps(report_draft, indent=2, default=str))

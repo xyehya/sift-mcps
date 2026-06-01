@@ -41,7 +41,7 @@ def server_with_case(case_dir, monkeypatch):
     monkeypatch.setenv("AGENTIR_CASE_DIR", str(case_dir))
     monkeypatch.setenv("AGENTIR_EXAMINER", "alice")
 
-    import agentir_core.evidence_chain as _ec
+    import sift_core.evidence_chain as _ec
 
     def _mock_ok(case_dir):
         return {"status": "ok", "issues": [], "manifest_version": 0, "ok_count": 0}
@@ -55,7 +55,7 @@ def server_with_case(case_dir, monkeypatch):
 @pytest.fixture
 def _clear_chain_mock(monkeypatch):
     """Undo any chain_status mock so per-test mocks can take over."""
-    import agentir_core.evidence_chain as _ec
+    import sift_core.evidence_chain as _ec
 
     monkeypatch.undo()
 
@@ -73,7 +73,7 @@ def _call(tool, **kwargs):
 
 def _mock_chain(monkeypatch, status, issues=None, manifest_version=0, ok_count=0):
     """Install a chain_status mock that returns the given state."""
-    import agentir_core.evidence_chain as _ec
+    import sift_core.evidence_chain as _ec
 
     def _fn(case_dir):
         return {
@@ -87,11 +87,11 @@ def _mock_chain(monkeypatch, status, issues=None, manifest_version=0, ok_count=0
 
 
 def _mock_chain_import_error(monkeypatch):
-    """Simulate agentir_core not being importable."""
-    import agentir_core.evidence_chain as _ec
+    """Simulate sift_core not being importable."""
+    import sift_core.evidence_chain as _ec
 
     def _fn(case_dir):
-        raise ImportError("No agentir_core")
+        raise ImportError("No sift_core")
 
     monkeypatch.setattr(_ec, "chain_status", _fn)
 
@@ -343,7 +343,7 @@ def test_workflow_status_chain_ok_with_sealed(svr, monkeypatch):
 
 
 def test_workflow_status_chain_import_error_graceful(svr, monkeypatch):
-    """When agentir_core is not importable, defaults to 'unsealed'."""
+    """When sift_core is not importable, defaults to 'unsealed'."""
     _s, tools, case_dir = svr
     (case_dir / "evidence-manifest.json").write_text(json.dumps({
         "files": [{"name": "image.e01", "path": "evidence/image.e01"}]

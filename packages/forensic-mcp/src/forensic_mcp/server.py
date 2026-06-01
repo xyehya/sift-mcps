@@ -484,7 +484,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         evidence_chain_issues: list[str] = []
         evidence_chain_version = 0
         try:
-            from agentir_core.evidence_chain import chain_status
+            from sift_core.evidence_chain import chain_status
 
             chain = chain_status(case_dir)
             evidence_chain_status = chain.get("status", "unsealed")

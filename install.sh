@@ -183,7 +183,7 @@ sync_workspace() {
   # Post-sync: verify the venv can import critical packages
   log "Verifying venv baseline imports."
   local ok=1
-  for pkg in yaml mcp agentir_core sift_gateway; do
+  for pkg in yaml mcp sift_core sift_gateway; do
     if ! "$VENV_PYTHON" -c "import $pkg" 2>/dev/null; then
       warn "Post-sync import of '$pkg' failed — workspace may be incomplete."
       ok=0

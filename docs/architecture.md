@@ -29,7 +29,7 @@ AgentIR is a two-machine architecture: a SIFT Workstation VM running the forensi
 │  │  opensearch-mcp forensic-rag-mcp  windows-triage-mcp              │  │
 │  └────────────────────────────────────────────────────────────────────┘  │
 │                                                                          │
-│  agentir-core library ──▶ /var/lib/agentir/                             │
+│  sift-core library ──▶ /var/lib/agentir/                             │
 │                            passwords/  verification/  tokens/           │
 │                                                                          │
 │  Case directory (AGENTIR_CASE_DIR)                                       │
@@ -77,7 +77,7 @@ A Starlette sub-app mounted at `/portal/` providing:
 - **Findings/timeline review queue** — agent-proposed items enter here; examiner confirms or rejects
 - **Chain-of-custody views** — ledger events, anchor status, immutable flag status, HMAC verify
 
-### agentir-core
+### sift-core
 
 The shared library that owns all forensic logic:
 
@@ -88,7 +88,7 @@ The shared library that owns all forensic logic:
 - Solana SPL Memo anchoring (`anchor_manifest`, `load_anchor_proof`)
 - OS-level immutability (`_set_immutable`, `get_immutable_flag`)
 
-No other package duplicates this logic. `sift-gateway`, `case-dashboard`, and `case-mcp` all import from `agentir-core`.
+No other package duplicates this logic. `sift-gateway`, `case-dashboard`, and `case-mcp` all import from `sift-core`.
 
 ### FastMCP stdio backends
 

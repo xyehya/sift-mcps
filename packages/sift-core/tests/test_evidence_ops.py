@@ -1,8 +1,8 @@
-"""Tests for agentir_core.evidence_ops data functions."""
+"""Tests for sift_core.evidence_ops data functions."""
 
 import pytest
 
-from agentir_core.evidence_ops import (
+from sift_core.evidence_ops import (
     list_evidence_data,
     register_evidence_data,
     verify_evidence_data,

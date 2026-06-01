@@ -1,9 +1,9 @@
-"""Tests for agentir_core.identity examiner identity resolution."""
+"""Tests for sift_core.identity examiner identity resolution."""
 
 import os
 from unittest.mock import patch
 
-from agentir_core.identity import get_analyst_identity, get_examiner_identity
+from sift_core.identity import get_analyst_identity, get_examiner_identity
 
 
 def test_flag_override_takes_priority():

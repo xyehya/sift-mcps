@@ -77,7 +77,7 @@ def passwords_dir(tmp_path, monkeypatch):
 @pytest.fixture()
 def case_dir(tmp_path):
     """Create a minimal case directory with init_evidence_chain applied."""
-    from agentir_core.evidence_chain import init_evidence_chain
+    from sift_core.evidence_chain import init_evidence_chain
 
     cd = tmp_path / "case-test-001"
     cd.mkdir()
@@ -165,8 +165,8 @@ class TestEvidenceChainStatus:
 
     def test_unregistered_file_shows_in_status(self, authed_client, case_dir, passwords_dir):
         """After sealing an empty manifest then dropping a file, status shows unregistered."""
-        from agentir_core.evidence_chain import seal_manifest
-        from agentir_core.approval_auth import derive_ledger_key
+        from sift_core.evidence_chain import seal_manifest
+        from sift_core.approval_auth import derive_ledger_key
 
         entry = json.loads((passwords_dir / "alice.json").read_text())
         key = derive_ledger_key(entry["hash"])
@@ -422,7 +422,7 @@ class TestEvidenceChainIgnore:
 
     def test_ignore_unregistered_file(self, authed_client, passwords_dir, case_dir):
         """Ignoring an unregistered file creates a new manifest version with FILE_IGNORED."""
-        from agentir_core.evidence_chain import load_ledger, load_manifest
+        from sift_core.evidence_chain import load_ledger, load_manifest
 
         stray = case_dir / "evidence" / "stray.txt"
         stray.write_text("unintended")
@@ -496,7 +496,7 @@ class TestEvidenceChainIgnore:
 class TestEvidenceChainRetire:
     def _seal_evidence_file(self, client, passwords_dir, case_dir, filename="evidence/sample.E01"):
         """Helper: write evidence file and seal it via the portal."""
-        from agentir_core.evidence_chain import seal_manifest
+        from sift_core.evidence_chain import seal_manifest
         import hashlib, json
 
         (case_dir / filename).write_bytes(b"DISK_IMAGE_CONTENT")
@@ -576,7 +576,7 @@ class TestEvidenceChainRetire:
         assert not (case_dir / filename).exists()
 
     def test_retire_writes_file_retired_ledger_event(self, authed_client, passwords_dir, case_dir):
-        from agentir_core.evidence_chain import load_ledger
+        from sift_core.evidence_chain import load_ledger
         filename = self._seal_evidence_file(authed_client, passwords_dir, case_dir)
         challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
         authed_client.post(
@@ -590,7 +590,7 @@ class TestEvidenceChainRetire:
         assert ledger[-1]["reason"] == "bad acquisition"
 
     def test_retire_chain_status_ok_after_retire(self, authed_client, passwords_dir, case_dir):
-        from agentir_core.evidence_chain import chain_status
+        from sift_core.evidence_chain import chain_status
         filename = self._seal_evidence_file(authed_client, passwords_dir, case_dir)
         challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
         authed_client.post(
@@ -622,7 +622,7 @@ class TestEvidenceChainRetire:
         assert resp2.status_code == 401
 
     def test_retire_invokes_on_chain_mutation(self, passwords_dir, case_dir, tmp_path, monkeypatch):
-        from agentir_core.evidence_chain import seal_manifest
+        from sift_core.evidence_chain import seal_manifest
         import json as json_mod
 
         routes_mod._evidence_challenges.clear()

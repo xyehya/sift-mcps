@@ -197,7 +197,7 @@ class TestEvidenceVerifySystemB:
         assert result["source"] == "manifest_v2"
 
     def test_ok_when_manifest_matches_disk(self, server_with_case):
-        from agentir_core.evidence_chain import init_evidence_chain, seal_manifest
+        from sift_core.evidence_chain import init_evidence_chain, seal_manifest
 
         _, tools, case_dir = server_with_case
         init_evidence_chain(case_dir)
@@ -215,7 +215,7 @@ class TestEvidenceVerifySystemB:
         assert result["source"] == "manifest_v2"
 
     def test_modified_when_file_size_changes(self, server_with_case):
-        from agentir_core.evidence_chain import init_evidence_chain, seal_manifest
+        from sift_core.evidence_chain import init_evidence_chain, seal_manifest
 
         _, tools, case_dir = server_with_case
         init_evidence_chain(case_dir)
@@ -233,7 +233,7 @@ class TestEvidenceVerifySystemB:
         assert "operator_action_required" in result
 
     def test_missing_when_file_deleted(self, server_with_case):
-        from agentir_core.evidence_chain import init_evidence_chain, seal_manifest
+        from sift_core.evidence_chain import init_evidence_chain, seal_manifest
 
         _, tools, case_dir = server_with_case
         init_evidence_chain(case_dir)
@@ -251,7 +251,7 @@ class TestEvidenceVerifySystemB:
         assert "operator_action_required" in result
 
     def test_no_operator_action_on_ok(self, server_with_case):
-        from agentir_core.evidence_chain import init_evidence_chain, seal_manifest
+        from sift_core.evidence_chain import init_evidence_chain, seal_manifest
 
         _, tools, case_dir = server_with_case
         init_evidence_chain(case_dir)

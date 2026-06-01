@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from agentir_core.evidence_chain import ChainStatus
+from sift_core.evidence_chain import ChainStatus
 
 
 # ---------------------------------------------------------------------------

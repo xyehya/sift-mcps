@@ -11,7 +11,6 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "agentir-core",
     "case-dashboard",
     "case-mcp",
     "forensic-knowledge",
@@ -21,37 +20,12 @@ members = [
     "rag-mcp",
     "report-mcp",
     "sift-common",
+    "sift-core",
     "sift-gateway",
     "sift-mcp",
     "sift-mcps",
     "windows-triage-mcp",
 ]
-
-[[package]]
-name = "agentir-core"
-version = "0.1.0"
-source = { editable = "packages/agentir-core" }
-dependencies = [
-    { name = "pyyaml" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-]
-solana = [
-    { name = "solders" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "solders", marker = "extra == 'solana'", specifier = ">=0.21" },
-]
-provides-extras = ["dev", "solana"]
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -457,18 +431,18 @@ name = "case-mcp"
 version = "0.6.1"
 source = { editable = "packages/case-mcp" }
 dependencies = [
-    { name = "agentir-core" },
     { name = "mcp" },
     { name = "pyyaml" },
     { name = "sift-common" },
+    { name = "sift-core" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "agentir-core", editable = "packages/agentir-core" },
     { name = "mcp", specifier = ">=1.26" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sift-common", editable = "packages/sift-common" },
+    { name = "sift-core", editable = "packages/sift-core" },
 ]
 
 [[package]]
@@ -2591,7 +2565,6 @@ name = "opensearch-mcp"
 version = "0.6.1"
 source = { editable = "packages/opensearch-mcp" }
 dependencies = [
-    { name = "agentir-core" },
     { name = "defusedxml" },
     { name = "evtx" },
     { name = "mcp" },
@@ -2600,6 +2573,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "regipy" },
     { name = "sift-common" },
+    { name = "sift-core" },
 ]
 
 [package.optional-dependencies]
@@ -2614,7 +2588,6 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentir-core", editable = "packages/agentir-core" },
     { name = "defusedxml", specifier = ">=0.7" },
     { name = "evtx", specifier = ">=0.8" },
     { name = "mcp", specifier = ">=1.26" },
@@ -2625,6 +2598,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "regipy", specifier = ">=4.0" },
     { name = "sift-common", editable = "packages/sift-common" },
+    { name = "sift-core", editable = "packages/sift-core" },
     { name = "starlette", marker = "extra == 'http'" },
     { name = "uvicorn", marker = "extra == 'http'", specifier = ">=0.20" },
 ]
@@ -3835,18 +3809,18 @@ name = "report-mcp"
 version = "0.6.1"
 source = { editable = "packages/report-mcp" }
 dependencies = [
-    { name = "agentir-core" },
     { name = "mcp" },
     { name = "pyyaml" },
     { name = "sift-common" },
+    { name = "sift-core" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "agentir-core", editable = "packages/agentir-core" },
     { name = "mcp", specifier = ">=1.26" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sift-common", editable = "packages/sift-common" },
+    { name = "sift-core", editable = "packages/sift-core" },
 ]
 
 [[package]]
@@ -4366,6 +4340,32 @@ dependencies = [
 requires-dist = [{ name = "pyyaml", specifier = ">=6.0" }]
 
 [[package]]
+name = "sift-core"
+version = "0.1.0"
+source = { editable = "packages/sift-core" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
+solana = [
+    { name = "solders" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "solders", marker = "extra == 'solana'", specifier = ">=0.21" },
+]
+provides-extras = ["dev", "solana"]
+
+[[package]]
 name = "sift-gateway"
 version = "0.6.1"
 source = { editable = "packages/sift-gateway" }
@@ -4406,11 +4406,11 @@ name = "sift-mcp"
 version = "0.6.1"
 source = { editable = "packages/sift-mcp" }
 dependencies = [
-    { name = "agentir-core" },
     { name = "forensic-knowledge" },
     { name = "mcp" },
     { name = "pyyaml" },
     { name = "sift-common" },
+    { name = "sift-core" },
 ]
 
 [package.optional-dependencies]
@@ -4422,7 +4422,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentir-core", editable = "packages/agentir-core" },
     { name = "forensic-knowledge", editable = "packages/forensic-knowledge" },
     { name = "mcp", specifier = ">=1.26" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
@@ -4430,6 +4429,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sift-common", editable = "packages/sift-common" },
+    { name = "sift-core", editable = "packages/sift-core" },
 ]
 provides-extras = ["dev"]
 
@@ -4440,13 +4440,13 @@ source = { virtual = "." }
 
 [package.optional-dependencies]
 core = [
-    { name = "agentir-core" },
     { name = "case-dashboard" },
     { name = "case-mcp" },
     { name = "forensic-knowledge" },
     { name = "forensic-mcp" },
     { name = "report-mcp" },
     { name = "sift-common" },
+    { name = "sift-core" },
     { name = "sift-gateway" },
     { name = "sift-mcp" },
 ]
@@ -4457,7 +4457,6 @@ dev = [
     { name = "ruff" },
 ]
 full = [
-    { name = "agentir-core" },
     { name = "case-dashboard" },
     { name = "case-mcp" },
     { name = "forensic-knowledge" },
@@ -4467,12 +4466,12 @@ full = [
     { name = "rag-mcp" },
     { name = "report-mcp" },
     { name = "sift-common" },
+    { name = "sift-core" },
     { name = "sift-gateway" },
     { name = "sift-mcp" },
     { name = "windows-triage-mcp" },
 ]
 standard = [
-    { name = "agentir-core" },
     { name = "case-dashboard" },
     { name = "case-mcp" },
     { name = "forensic-knowledge" },
@@ -4481,6 +4480,7 @@ standard = [
     { name = "opensearch-mcp" },
     { name = "report-mcp" },
     { name = "sift-common" },
+    { name = "sift-core" },
     { name = "sift-gateway" },
     { name = "sift-mcp" },
     { name = "windows-triage-mcp" },
@@ -4494,7 +4494,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentir-core", marker = "extra == 'core'", editable = "packages/agentir-core" },
     { name = "case-dashboard", marker = "extra == 'core'", editable = "packages/case-dashboard" },
     { name = "case-mcp", marker = "extra == 'core'", editable = "packages/case-mcp" },
     { name = "forensic-knowledge", marker = "extra == 'core'", editable = "packages/forensic-knowledge" },
@@ -4508,6 +4507,7 @@ requires-dist = [
     { name = "report-mcp", marker = "extra == 'core'", editable = "packages/report-mcp" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },
     { name = "sift-common", marker = "extra == 'core'", editable = "packages/sift-common" },
+    { name = "sift-core", marker = "extra == 'core'", editable = "packages/sift-core" },
     { name = "sift-gateway", marker = "extra == 'core'", editable = "packages/sift-gateway" },
     { name = "sift-mcp", marker = "extra == 'core'", editable = "packages/sift-mcp" },
     { name = "sift-mcps", extras = ["core"], marker = "extra == 'standard'" },

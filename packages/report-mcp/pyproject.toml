@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Security",
 ]
 dependencies = [
-    "agentir-core",
+    "sift-core",
     "sift-common",
     "mcp>=1.26",
     "pyyaml>=6.0",

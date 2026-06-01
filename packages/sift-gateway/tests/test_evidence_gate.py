@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from agentir_core.evidence_chain import ChainStatus, init_evidence_chain, seal_manifest
+from sift_core.evidence_chain import ChainStatus, init_evidence_chain, seal_manifest
 from sift_gateway.evidence_gate import (
     VIOLATION_STATUSES,
     _CACHE,
@@ -107,7 +107,7 @@ class TestTTLCache:
     def test_second_call_uses_cache(self, sealed_case):
         key = str(sealed_case)
         call_count = 0
-        original = __import__("agentir_core.evidence_chain", fromlist=["chain_status"]).chain_status
+        original = __import__("sift_core.evidence_chain", fromlist=["chain_status"]).chain_status
 
         def counting_chain_status(cd):
             nonlocal call_count
@@ -127,7 +127,7 @@ class TestTTLCache:
         _CACHE[key]["manifest_mtime"] = 0  # force mtime mismatch too
 
         call_count = 0
-        original = __import__("agentir_core.evidence_chain", fromlist=["chain_status"]).chain_status
+        original = __import__("sift_core.evidence_chain", fromlist=["chain_status"]).chain_status
 
         def counting_chain_status(cd):
             nonlocal call_count
@@ -154,7 +154,7 @@ class TestMtimeInvalidation:
         seal_manifest(sealed_case, [{"path": "evidence/mem.raw"}], "alice", _KEY)
 
         call_count = 0
-        original = __import__("agentir_core.evidence_chain", fromlist=["chain_status"]).chain_status
+        original = __import__("sift_core.evidence_chain", fromlist=["chain_status"]).chain_status
 
         def counting_chain_status(cd):
             nonlocal call_count

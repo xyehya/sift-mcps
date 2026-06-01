@@ -1,4 +1,4 @@
-"""Tests for agentir_core.approval_auth module."""
+"""Tests for sift_core.approval_auth module."""
 
 import json
 from unittest.mock import MagicMock, patch
@@ -8,7 +8,7 @@ import yaml
 
 import hashlib
 
-from agentir_core.approval_auth import (
+from sift_core.approval_auth import (
     _LOCKOUT_SECONDS,
     _MAX_PASSWORD_ATTEMPTS,
     _MIN_PASSWORD_LENGTH,
@@ -43,14 +43,14 @@ def passwords_dir(tmp_path, monkeypatch):
     """Temp passwords directory (replaces /var/lib/agentir/passwords)."""
     d = tmp_path / "passwords"
     d.mkdir()
-    monkeypatch.setattr("agentir_core.approval_auth._PASSWORDS_DIR", d)
+    monkeypatch.setattr("sift_core.approval_auth._PASSWORDS_DIR", d)
     return d
 
 
 class TestPasswordSetup:
     def test_setup_password_writes_to_passwords_dir(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "steve", passwords_dir=passwords_dir)
@@ -70,7 +70,7 @@ class TestPasswordSetup:
         bad_passwords = blocker / "passwords"
         with (
             patch(
-                "agentir_core.approval_auth.getpass_prompt",
+                "sift_core.approval_auth.getpass_prompt",
                 side_effect=["mypasswd1", "mypasswd1"],
             ),
         ):
@@ -82,7 +82,7 @@ class TestPasswordSetup:
 
     def test_setup_password_verify_roundtrip(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
@@ -92,7 +92,7 @@ class TestPasswordSetup:
 
     def test_wrong_password_fails(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["correctpw", "correctpw"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
@@ -105,7 +105,7 @@ class TestPasswordSetup:
 
     def test_has_password_true_after_setup(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
@@ -113,26 +113,26 @@ class TestPasswordSetup:
 
     def test_setup_password_mismatch_exits(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["password1", "password2"],
         ):
             with pytest.raises(AuthError):
                 setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
 
     def test_setup_password_empty_exits(self, config_path, passwords_dir):
-        with patch("agentir_core.approval_auth.getpass_prompt", side_effect=["", ""]):
+        with patch("sift_core.approval_auth.getpass_prompt", side_effect=["", ""]):
             with pytest.raises(AuthError):
                 setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
 
     def test_setup_password_too_short_exits(self, config_path, passwords_dir):
         short = "x" * (_MIN_PASSWORD_LENGTH - 1)
-        with patch("agentir_core.approval_auth.getpass_prompt", side_effect=[short, short]):
+        with patch("sift_core.approval_auth.getpass_prompt", side_effect=[short, short]):
             with pytest.raises(AuthError):
                 setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
 
     def test_setup_password_exact_min_length_ok(self, config_path, passwords_dir):
         pw = "x" * _MIN_PASSWORD_LENGTH
-        with patch("agentir_core.approval_auth.getpass_prompt", side_effect=[pw, pw]):
+        with patch("sift_core.approval_auth.getpass_prompt", side_effect=[pw, pw]):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
         assert has_password(config_path, "analyst1", passwords_dir=passwords_dir)
 
@@ -141,7 +141,7 @@ class TestPasswordSetup:
         with open(config_path, "w") as f:
             yaml.dump({"examiner": "steve"}, f)
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "steve", passwords_dir=passwords_dir)
@@ -152,7 +152,7 @@ class TestPasswordSetup:
     def test_password_file_permissions(self, config_path, passwords_dir):
         """Password file has 0o600 permissions."""
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "steve", passwords_dir=passwords_dir)
@@ -182,22 +182,22 @@ class TestExaminerNameValidation:
 class TestPasswordReset:
     def test_reset_password_requires_current(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["oldpasswd", "oldpasswd"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
-        with patch("agentir_core.approval_auth.getpass_prompt", side_effect=["wrong"]):
+        with patch("sift_core.approval_auth.getpass_prompt", side_effect=["wrong"]):
             with pytest.raises(AuthError):
                 reset_password(config_path, "analyst1", passwords_dir=passwords_dir)
 
     def test_reset_password_success(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["oldpasswd", "oldpasswd"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["oldpasswd", "newpasswd", "newpasswd"],
         ):
             reset_password(config_path, "analyst1", passwords_dir=passwords_dir)
@@ -216,7 +216,7 @@ class TestPasswordReset:
 class TestGetAnalystSalt:
     def test_salt_from_passwords_dir(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
@@ -232,22 +232,22 @@ class TestGetAnalystSalt:
 class TestRequireConfirmation:
     def test_password_mode_correct(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
-        with patch("agentir_core.approval_auth.getpass_prompt", return_value="mypasswd1"):
+        with patch("sift_core.approval_auth.getpass_prompt", return_value="mypasswd1"):
             mode, password = require_confirmation(config_path, "analyst1")
         assert mode == "password"
         assert password == "mypasswd1"
 
     def test_password_mode_wrong_exits(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
-        with patch("agentir_core.approval_auth.getpass_prompt", return_value="wrong"):
+        with patch("sift_core.approval_auth.getpass_prompt", return_value="wrong"):
             with pytest.raises(AuthError):
                 require_confirmation(config_path, "analyst1")
 
@@ -286,7 +286,7 @@ class TestTtyConfirmation:
 def isolate_lockout_file(tmp_path, monkeypatch):
     """Point lockout file to temp dir and clean between tests."""
     lockout = tmp_path / ".password_lockout"
-    monkeypatch.setattr("agentir_core.approval_auth._LOCKOUT_FILE", lockout)
+    monkeypatch.setattr("sift_core.approval_auth._LOCKOUT_FILE", lockout)
     yield lockout
     if lockout.exists():
         lockout.unlink()
@@ -338,24 +338,24 @@ class TestPasswordLockout:
         self, config_path, passwords_dir
     ):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
-        with patch("agentir_core.approval_auth.getpass_prompt", return_value="wrong"):
+        with patch("sift_core.approval_auth.getpass_prompt", return_value="wrong"):
             with pytest.raises(AuthError):
                 require_confirmation(config_path, "analyst1")
         assert _recent_failure_count("analyst1") == 1
 
     def test_require_confirmation_clears_on_success(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)
         _record_failure("analyst1")
         assert _recent_failure_count("analyst1") == 1
-        with patch("agentir_core.approval_auth.getpass_prompt", return_value="mypasswd1"):
+        with patch("sift_core.approval_auth.getpass_prompt", return_value="mypasswd1"):
             mode, password = require_confirmation(config_path, "analyst1")
         assert mode == "password"
         assert password == "mypasswd1"
@@ -363,7 +363,7 @@ class TestPasswordLockout:
 
     def test_lockout_blocks_require_confirmation(self, config_path, passwords_dir):
         with patch(
-            "agentir_core.approval_auth.getpass_prompt",
+            "sift_core.approval_auth.getpass_prompt",
             side_effect=["mypasswd1", "mypasswd1"],
         ):
             setup_password(config_path, "analyst1", passwords_dir=passwords_dir)

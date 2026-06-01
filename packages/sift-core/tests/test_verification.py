@@ -1,4 +1,4 @@
-"""Tests for agentir_core.verification HMAC ledger module."""
+"""Tests for sift_core.verification HMAC ledger module."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import hashlib
 
 import pytest
 
-from agentir_core.verification import (
+from sift_core.verification import (
     PBKDF2_ITERATIONS,
     compute_hmac,
     copy_ledger_to_case,
@@ -21,7 +21,7 @@ from agentir_core.verification import (
 @pytest.fixture(autouse=True)
 def _patch_verification_dir(tmp_path, monkeypatch):
     """Redirect VERIFICATION_DIR to tmp_path for all tests."""
-    monkeypatch.setattr("agentir_core.verification.VERIFICATION_DIR", tmp_path)
+    monkeypatch.setattr("sift_core.verification.VERIFICATION_DIR", tmp_path)
 
 
 class TestDeriveHmacKey:

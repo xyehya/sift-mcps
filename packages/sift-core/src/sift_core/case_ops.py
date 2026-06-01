@@ -15,14 +15,14 @@ from pathlib import Path
 
 import yaml
 
-from agentir_core.case_io import (
+from sift_core.case_io import (
     DEFAULT_CASES_DIR,
     _atomic_write,
     load_findings,
     load_timeline,
     load_todos,
 )
-from agentir_core.evidence_chain import init_evidence_chain
+from sift_core.evidence_chain import init_evidence_chain
 
 
 def case_status_data(case_dir) -> dict:

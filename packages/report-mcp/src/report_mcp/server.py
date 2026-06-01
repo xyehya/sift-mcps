@@ -20,15 +20,15 @@ from mcp.server.fastmcp import FastMCP
 from sift_common.audit import AuditWriter
 from sift_common.instructions import REPORT_MCP as _INSTRUCTIONS
 from sift_common.oplog import setup_logging
-from agentir_core.case_io import (
+from sift_core.case_io import (
     load_case_meta,
     load_findings,
     load_timeline,
     load_todos,
     resolve_case_path,
 )
-from agentir_core.evidence_chain import ChainStatus, chain_status as _ev_chain_status, load_manifest
-from agentir_core.evidence_ops import list_evidence_data
+from sift_core.evidence_chain import ChainStatus, chain_status as _ev_chain_status, load_manifest
+from sift_core.evidence_ops import list_evidence_data
 
 from report_mcp.profiles import PROFILES, STRIPPED_FINDING_FIELDS
 
