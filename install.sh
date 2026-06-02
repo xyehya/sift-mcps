@@ -1035,24 +1035,172 @@ print_summary() {
 }
 
 # =============================================================================
+# Uninstall — reverse what install.sh provisioned
+# =============================================================================
+#
+#   ./install.sh --uninstall                # remove the software install only
+#   ./install.sh --uninstall --purge-data   # ALSO wipe forensic/state data
+#
+# Two tiers, on purpose:
+#   * Base uninstall removes install *artifacts* — the systemd service, the venv,
+#     ~/.sift (config, TLS, secrets, hayabusa), the system-hardening configs
+#     (auditd rules, AppArmor profile), the hayabusa symlink, and any docker
+#     containers (without touching their volumes). This is safe and reversible
+#     by re-running install.sh.
+#   * --purge-data additionally destroys DATA that install.sh seeded but that the
+#     investigation owns: /var/lib/sift (integrity records, tokens, passwords,
+#     snapshots) + /cases (EVIDENCE) + docker volumes (indexed evidence). This is
+#     irreversible, so it requires a typed "yes" unless -y/--yes is given.
+
+_confirm_destructive() {
+  # $1 = prompt. Honors ASSUME_YES. Dies on anything but a typed "yes".
+  if [[ "${ASSUME_YES:-0}" == "1" ]]; then
+    log "Assuming yes (-y): $1"
+    return 0
+  fi
+  local reply=""
+  printf '[sift-mcps] %s\n' "$1" >&2
+  printf '[sift-mcps] Type "yes" to proceed: ' >&2
+  read -r reply 2>/dev/null || reply=""
+  [[ "$reply" == "yes" ]] || die "Aborted — nothing was purged."
+}
+
+uninstall_systemd() {
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user stop sift-gateway.service 2>/dev/null || true
+    systemctl --user disable sift-gateway.service 2>/dev/null || true
+  fi
+  if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
+    rm -f "$GATEWAY_SERVICE_FILE"
+    command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload 2>/dev/null || true
+    log "Removed systemd user service ($GATEWAY_SERVICE_FILE)."
+  else
+    log "No systemd user service to remove."
+  fi
+}
+
+uninstall_docker_stacks() {
+  command -v docker >/dev/null 2>&1 || return 0
+  docker compose version >/dev/null 2>&1 || return 0
+  local down_args=(down)
+  if [[ "${PURGE_DATA:-0}" == "1" ]]; then
+    down_args=(down -v)   # -v removes named volumes (indexed evidence)
+  fi
+  local compose
+  for compose in docker-compose.yml docker-compose.opencti.yml docker-compose.opencti-connectors.yml; do
+    [[ -f "$REPO_DIR/$compose" ]] || continue
+    docker compose -f "$REPO_DIR/$compose" "${down_args[@]}" 2>/dev/null || true
+  done
+  if [[ "${PURGE_DATA:-0}" == "1" ]]; then
+    log "Stopped docker stacks and removed their volumes."
+  else
+    log "Stopped docker stacks (volumes preserved)."
+  fi
+}
+
+uninstall_system_hardening() {
+  # auditd evidence rules
+  local rules_dst="/etc/audit/rules.d/99-sift-evidence.rules"
+  if [[ -f "$rules_dst" ]]; then
+    sudo_if_needed rm -f "$rules_dst"
+    if command -v augenrules >/dev/null 2>&1; then
+      sudo_if_needed augenrules --load 2>/dev/null || true
+    fi
+    log "Removed auditd evidence rules."
+  fi
+  # AppArmor profile
+  local profile_dst="/etc/apparmor.d/sift-gateway"
+  if [[ -f "$profile_dst" ]]; then
+    sudo_if_needed apparmor_parser -R "$profile_dst" 2>/dev/null || true
+    sudo_if_needed rm -f "$profile_dst"
+    log "Removed AppArmor profile."
+  fi
+  # hayabusa system-wide symlink
+  if [[ -L /usr/local/bin/hayabusa ]]; then
+    sudo_if_needed rm -f /usr/local/bin/hayabusa
+    log "Removed /usr/local/bin/hayabusa symlink."
+  fi
+}
+
+uninstall_runtime() {
+  # CAP_LINUX_IMMUTABLE lived on the venv python — removing the venv drops it.
+  if [[ -d "$VENV_DIR" ]]; then
+    rm -rf "$VENV_DIR"
+    log "Removed venv ($VENV_DIR)."
+  fi
+  if [[ -d "$SIFT_HOME" ]]; then
+    rm -rf "$SIFT_HOME"
+    log "Removed $SIFT_HOME (config, TLS, secrets, backups, hayabusa)."
+  fi
+}
+
+purge_data() {
+  [[ "${PURGE_DATA:-0}" == "1" ]] || return 0
+  _confirm_destructive "ABOUT TO PERMANENTLY DELETE: $SIFT_STATE_DIR (integrity records, tokens, passwords, snapshots) and $SIFT_CASE_ROOT (EVIDENCE). This cannot be undone."
+  if [[ -d "$SIFT_STATE_DIR" ]]; then
+    sudo_if_needed rm -rf "$SIFT_STATE_DIR"
+    log "Purged state dir ($SIFT_STATE_DIR)."
+  fi
+  if [[ -d "$SIFT_CASE_ROOT" ]]; then
+    sudo_if_needed rm -rf "$SIFT_CASE_ROOT"
+    log "Purged case root ($SIFT_CASE_ROOT) — EVIDENCE deleted."
+  fi
+}
+
+do_uninstall() {
+  log "Uninstalling sift-mcps."
+  if [[ "${PURGE_DATA:-0}" == "1" ]]; then
+    log "Mode: FULL WIPE (--purge-data) — software + state + evidence."
+  else
+    log "Mode: software only — /var/lib/sift and /cases are preserved (use --purge-data to wipe them)."
+  fi
+  uninstall_systemd
+  uninstall_docker_stacks
+  uninstall_system_hardening
+  uninstall_runtime
+  purge_data
+
+  log "Uninstall complete."
+  if [[ "${PURGE_DATA:-0}" != "1" ]]; then
+    printf '\n'
+    printf 'Preserved (data — not touched):\n'
+    printf '  State:    %s   (integrity records, tokens, passwords, snapshots)\n' "$SIFT_STATE_DIR"
+    printf '  Evidence: %s\n' "$SIFT_CASE_ROOT"
+    printf '  Docker volumes (if any) left intact.\n'
+    printf 'To wipe those too:  ./install.sh --uninstall --purge-data\n'
+  fi
+  printf 'The repo checkout itself was left in place. Reinstall with: ./install.sh [--core-only]\n'
+}
+
+# =============================================================================
 # main
 # =============================================================================
 
 main() {
   SIFT_CORE_ONLY="${SIFT_CORE_ONLY:-0}"
-  # Parse no-arg flags only (-y, --yes for non-interactive)
+  local uninstall_mode=0
+  # Parse flags
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -y|--yes) shift ;;   # accepted but ignored — we are always non-interactive
+      -y|--yes) ASSUME_YES=1; shift ;;
       --core-only) SIFT_CORE_ONLY=1; shift ;;
+      --uninstall|--remove) uninstall_mode=1; shift ;;
+      --purge-data) PURGE_DATA=1; shift ;;
       -h|--help)
-        printf 'Usage: ./install.sh [--core-only]\n\n'
-        printf 'Provisions a sift-mcps stack on SIFT Workstation.\n'
-        printf 'No arguments required — everything is auto-detected.\n'
-        printf 'Re-run safe: every step is idempotent.\n\n'
-        printf '  --core-only   Install gateway + portal + in-process core tools only.\n'
-        printf '                Skips all add-on backends (opensearch, rag, windows-triage,\n'
-        printf '                opencti), OpenSearch/Docker, and forensic-tool downloads.\n'
+        printf 'Usage: ./install.sh [--core-only] [--uninstall [--purge-data]] [-y]\n\n'
+        printf 'Provisions (or removes) a sift-mcps stack on SIFT Workstation.\n'
+        printf 'No arguments required for install — everything is auto-detected.\n'
+        printf 'Re-run safe: every install step is idempotent.\n\n'
+        printf '  --core-only     Install gateway + portal + in-process core tools only.\n'
+        printf '                  Skips all add-on backends (opensearch, rag, windows-triage,\n'
+        printf '                  opencti), OpenSearch/Docker, and forensic-tool downloads.\n'
+        printf '  --uninstall     Reverse the install: stop/remove the systemd service, venv,\n'
+        printf '                  ~/.sift (config/TLS/secrets), auditd + AppArmor configs, the\n'
+        printf '                  hayabusa symlink, and docker containers. Preserves data\n'
+        printf '                  (/var/lib/sift, /cases, docker volumes).\n'
+        printf '  --purge-data    With --uninstall, ALSO delete /var/lib/sift and /cases\n'
+        printf '                  (EVIDENCE) and docker volumes. Irreversible — prompts unless -y.\n'
+        printf '  -y, --yes       Assume yes to destructive prompts (non-interactive purge).\n'
         exit 0
         ;;
       *)
@@ -1061,6 +1209,11 @@ main() {
         ;;
     esac
   done
+
+  if [[ "$uninstall_mode" == "1" ]]; then
+    do_uninstall
+    exit 0
+  fi
 
   # --- pre-flight ---
   check_os
