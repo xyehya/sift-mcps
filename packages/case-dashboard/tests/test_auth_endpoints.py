@@ -94,13 +94,13 @@ class TestSetupRequired:
     def test_required_when_no_passwords(self, client):
         resp = client.get("/api/auth/setup-required")
         assert resp.status_code == 200
-        assert resp.json() == {"required": True}
+        assert resp.json() == {"required": True, "setup_required": True}
 
     def test_not_required_when_password_exists(self, client, passwords_dir):
         _setup_examiner(passwords_dir, "alice", "password123")
         resp = client.get("/api/auth/setup-required")
         assert resp.status_code == 200
-        assert resp.json() == {"required": False}
+        assert resp.json() == {"required": False, "setup_required": False}
 
     def test_no_auth_required_for_this_endpoint(self, client):
         resp = client.get("/api/auth/setup-required")
