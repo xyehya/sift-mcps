@@ -28,6 +28,29 @@ DENY_FLOOR = frozenset(
         "nc",
         "ncat",
         "socat",
+        # Added — media/device destruction (P2.1)
+        "wipefs",
+        "shred",
+        "blkdiscard",
+        "sgdisk",
+        "parted",
+        "mkswap",
+        "cryptsetup",
+        "dmsetup",
+        "hdparm",
+        # Added — nested interpreters (P0.3)
+        "sh",
+        "bash",
+        "dash",
+        "zsh",
+        "python",
+        "python3",
+        "perl",
+        "ruby",
+        "xargs",
+        "nohup",
+        "timeout",
+        "stdbuf",
     }
 )
 

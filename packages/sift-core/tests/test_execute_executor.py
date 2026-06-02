@@ -32,8 +32,7 @@ def test_run_command_executes_allowed_command_through_isolated_worker(
 
     assert result["exit_code"] == 0
     assert result["executor"] == "isolated_worker"
-    assert result["command"][0] == "/bin/bash"
-    assert result["command"][2] == "date"
+    assert result["command"][0]["argv"] == ["date"]
 
 
 
@@ -92,6 +91,9 @@ def test_worker_invokes_requested_process_with_shell_false(monkeypatch):
 
         def kill(self):
             self.returncode = -9
+
+        def poll(self):
+            return self.returncode
 
     def fake_popen(cmd, **kwargs):
         calls.append((cmd, kwargs))
@@ -217,6 +219,7 @@ def test_run_command_falls_back_when_systemd_run_fails(monkeypatch):
     import shutil
     import subprocess
     import json
+    from sift_core.execute.exceptions import ExecutionError
 
     called_cmds = []
 
@@ -237,22 +240,20 @@ def test_run_command_falls_back_when_systemd_run_fails(monkeypatch):
         called_cmds.append(cmd)
         if cmd[0] == "/usr/bin/systemd-run":
             return FakeFailProcess()
-        # Direct run or systemctl reset-failed
+        # systemctl reset-failed
         return FakeSuccessProcess()
 
     monkeypatch.setattr(shutil, "which", fake_which)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     from sift_core.execute.executor import _run_isolated_worker
-    res = _run_isolated_worker(["/usr/bin/date"], timeout=5, cwd=None, max_output_bytes=1024, memory_limit_bytes=0)
+    with pytest.raises(ExecutionError, match="Sandbox execution failed"):
+        _run_isolated_worker(["/usr/bin/date"], timeout=5, cwd=None, max_output_bytes=1024, memory_limit_bytes=0)
 
-    assert res["stdout"] == "fallback-ok"
-    assert len(called_cmds) >= 3  # systemd-run, systemctl reset-failed, then direct run
+    assert len(called_cmds) == 2  # systemd-run, systemctl reset-failed
     assert called_cmds[0][0] == "/usr/bin/systemd-run"
     assert called_cmds[1][0] == "/usr/bin/systemctl"
     assert called_cmds[1][1:] == ["--user", "reset-failed", called_cmds[0][3].split("=")[1]]
-    assert called_cmds[2][1] == "-m"
-    assert called_cmds[2][2] == "sift_core.execute.worker"
 
 
 def test_sudo_validation_rules(tmp_path, monkeypatch):
@@ -312,7 +313,7 @@ def test_privileged_path_direct_success(tmp_path, monkeypatch):
     assert res["privilege_escalation"]["mechanism"] == "direct_unprivileged"
     assert res["privilege_escalation"]["status"] == "success"
     assert len(calls) == 1
-    assert calls[0] == ["/bin/bash", "-c", "mount /dev/sdb1 " + str(case_dir / "tmp")]
+    assert calls[0] == [{"argv": ["mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
 
 
 
@@ -347,7 +348,8 @@ def test_privileged_path_sudo_fallback(tmp_path, monkeypatch):
     calls = []
     def fake_execute(cmd_list, **kwargs):
         calls.append(cmd_list)
-        if cmd_list[0] == "/bin/bash":
+        first_argv = cmd_list[0]["argv"]
+        if first_argv[0] != "/usr/bin/sudo":
             # Direct run fails with permission denied
             return {"exit_code": 1, "stdout": "", "stderr": "mount: only root can do that\n", "stdout_total_bytes": 0}
         else:
@@ -361,8 +363,8 @@ def test_privileged_path_sudo_fallback(tmp_path, monkeypatch):
     assert res["privilege_escalation"]["mechanism"] == "sudo_fallback"
     assert res["privilege_escalation"]["status"] == "success"
     assert len(calls) == 2
-    assert calls[0] == ["/bin/bash", "-c", "mount /dev/sdb1 " + str(case_dir / "tmp")]
-    assert calls[1] == ["/usr/bin/sudo", "-n", "--", "/bin/bash", "-c", "mount /dev/sdb1 " + str(case_dir / "tmp")]
+    assert calls[0] == [{"argv": ["mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
+    assert calls[1] == [{"argv": ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
     assert len(res["privilege_events"]) == 2
     assert res["privilege_events"][0]["status"] == "fallback_attempt"
     assert res["privilege_events"][1]["status"] == "success"
@@ -404,7 +406,7 @@ def test_privileged_path_non_permission_failure(tmp_path, monkeypatch):
     # Exit code is 1, and no sudo was called (only 1 execute call)
     assert res["exit_code"] == 1
     assert len(calls) == 1
-    assert calls[0] == ["/bin/bash", "-c", "mount /dev/sdb1 " + str(case_dir / "tmp")]
+    assert calls[0] == [{"argv": ["mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
     # No escalation metadata because it failed and didn't fall back
     assert "privilege_escalation" not in res
 
@@ -523,7 +525,10 @@ def test_validate_shell_command_safety_checks(tmp_path, monkeypatch):
 
     res = generic.run_command("ls -la | grep txt", purpose="test pipeline")
     assert res["exit_code"] == 0
-    assert calls[0] == ["/bin/bash", "-c", "ls -la | grep txt"]
+    assert calls[0] == [
+        {"argv": ["ls", "-la"], "redirects": []},
+        {"argv": ["grep", "txt"], "redirects": []}
+    ]
 
     # 2. Control characters rejection
     with pytest.raises(ValueError, match="Command contains non-printable control characters"):
@@ -543,9 +548,9 @@ def test_validate_shell_command_safety_checks(tmp_path, monkeypatch):
 
     # 6. Destructive commands rejection
     with pytest.raises(ValueError, match="Command matches a blocked destructive pattern"):
-        generic.run_command("git reset --hard HEAD", purpose="destructive git")
+        generic.run_command("DROP TABLE users;", purpose="destructive db")
     with pytest.raises(ValueError, match="Command matches a blocked destructive pattern"):
-        generic.run_command("kubectl delete pods --all", purpose="destructive k8s")
+        generic.run_command("DELETE FROM events", purpose="destructive db delete")
 
     # 7. Denied binary anywhere in pipeline
     from sift_core.execute.exceptions import DeniedBinaryError
@@ -560,5 +565,110 @@ def test_validate_shell_command_safety_checks(tmp_path, monkeypatch):
     # Output to invalid location (should fail)
     with pytest.raises(ValueError, match="Output path.*must be inside the case"):
         generic.run_command("echo 'hi' > /etc/passwd", purpose="invalid output redirection")
+
+
+def test_newline_cr_ampersand_splitting(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-010\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    import shutil
+    def fake_which(cmd):
+        if cmd in ("echo", "ls", "grep"):
+            return f"/usr/bin/{cmd}"
+        return None
+    monkeypatch.setattr(shutil, "which", fake_which)
+
+    from sift_core.execute.security import split_command_by_operators
+    res = split_command_by_operators("echo a\necho b\recho c & echo d")
+    assert len(res) == 4
+    assert res[0] == ("echo a", ";")
+    assert res[1] == ("echo b", ";")
+    assert res[2] == ("echo c", "&")
+    assert res[3] == ("echo d", "")
+
+
+def test_nested_interpreter_rejection(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-011\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    import shutil
+    def fake_which(cmd):
+        return f"/usr/bin/{cmd}"
+    monkeypatch.setattr(shutil, "which", fake_which)
+
+    from sift_core.execute.exceptions import DeniedBinaryError
+
+    for interp in ("sh", "python", "python3", "bash", "xargs", "timeout"):
+        with pytest.raises(DeniedBinaryError, match=f"Binary '{interp}' is blocked"):
+            generic.run_command(f"{interp} -c 'echo'", purpose="test nested interpreter rejection")
+
+
+def test_basename_evasion_prevention(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-012\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    import shutil
+    def fake_which(cmd):
+        if cmd == "evil_bin":
+            return str(case_dir / "agent" / "evil_bin")
+        return None
+    monkeypatch.setattr(shutil, "which", fake_which)
+
+    evil_bin = case_dir / "agent" / "evil_bin"
+    evil_bin.parent.mkdir(parents=True, exist_ok=True)
+    evil_bin.touch()
+    evil_bin.chmod(0o755)
+
+    with pytest.raises(ValueError, match="resolves to.*which is inside the case directory"):
+        generic.run_command("evil_bin", purpose="test basename evasion")
+
+
+def test_sandbox_fail_closed_if_unavailable(monkeypatch):
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda cmd: None)
+
+    from sift_core.execute.exceptions import ExecutionError
+    with pytest.raises(ExecutionError, match="Sandbox execution failed: systemd-run is unavailable"):
+        generic.execute(["date"])
+
+
+def test_stages_auditing(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-013\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    import shutil
+    def fake_which(cmd):
+        if cmd in ("ls", "grep"):
+            return f"/usr/bin/{cmd}"
+        return None
+    monkeypatch.setattr(shutil, "which", fake_which)
+
+    calls = []
+    def fake_execute(cmd_list, **kwargs):
+        calls.append(cmd_list)
+        return {
+            "exit_code": 0,
+            "stdout": "res\n",
+            "stderr": "",
+            "stages": [
+                {"binary": "ls", "argv": ["ls"], "exit_code": 0},
+                {"binary": "grep", "argv": ["grep"], "exit_code": 0}
+            ]
+        }
+    monkeypatch.setattr(generic, "execute", fake_execute)
+
+    res = generic.run_command("ls | grep pattern", purpose="test stages audit")
+    assert "stages" in res
+    assert len(res["stages"]) == 2
+    assert res["stages"][0]["binary"] == "ls"
+    assert res["stages"][1]["binary"] == "grep"
 
 

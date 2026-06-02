@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def _run_isolated_worker(
-    cmd_list: list[str],
+    cmd_list: list[str] | list[dict[str, Any]],
     *,
     timeout: int,
     cwd: str | None,
@@ -31,12 +31,18 @@ def _run_isolated_worker(
     memory_limit_bytes: int,
 ) -> dict[str, Any]:
     payload = {
-        "cmd": cmd_list,
         "timeout": timeout,
         "cwd": cwd,
         "max_output_bytes": max_output_bytes,
         "memory_limit_bytes": memory_limit_bytes,
     }
+    if cmd_list and isinstance(cmd_list[0], dict):
+        payload["stages"] = cmd_list
+        cmd_str = " | ".join(" ".join(stage["argv"]) for stage in cmd_list)
+    else:
+        payload["cmd"] = cmd_list
+        cmd_str = " ".join(cmd_list)
+
     worker_cmd = [sys.executable, "-m", "sift_core.execute.worker"]
 
     import shutil
@@ -87,7 +93,7 @@ def _run_isolated_worker(
                     pass
 
                 logger.warning(
-                    "systemd-run failed to boot worker (exit %s), falling back. Stderr: %s",
+                    "systemd-run failed to boot worker (exit %s). Stderr: %s",
                     proc.returncode,
                     proc.stderr,
                 )
@@ -101,24 +107,11 @@ def _run_isolated_worker(
                     )
                 proc = None
         except Exception as exc:
-            logger.warning("Error during systemd-run boot: %s. Falling back.", exc)
+            logger.warning("Error during systemd-run boot: %s", exc)
             proc = None
 
     if proc is None:
-        try:
-            proc = subprocess.run(
-                worker_cmd,
-                input=json.dumps(payload),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout + 10,
-                shell=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ExecutionTimeoutError(
-                f"Executor worker timed out after {timeout + 10}s: {' '.join(cmd_list)}"
-            ) from exc
+        raise ExecutionError(f"Sandbox execution failed: systemd-run is unavailable or failed to boot the worker for command: {cmd_str}")
 
     if proc.returncode != 0:
         stderr = _truncate(proc.stderr or "", 2000)
@@ -133,12 +126,14 @@ def _run_isolated_worker(
     error_type = result.get("error_type")
     if error_type == "timeout":
         raise ExecutionTimeoutError(
-            f"Command timed out after {timeout}s: {' '.join(cmd_list)}"
+            f"Command timed out after {timeout}s: {cmd_str}"
         )
     if error_type == "not_found":
-        raise FileNotFoundError(result.get("message") or cmd_list[0])
+        first_binary = cmd_list[0]["argv"][0] if cmd_list and isinstance(cmd_list[0], dict) else cmd_list[0]
+        raise FileNotFoundError(result.get("message") or first_binary)
     if error_type == "permission":
-        raise PermissionError(result.get("message") or cmd_list[0])
+        first_binary = cmd_list[0]["argv"][0] if cmd_list and isinstance(cmd_list[0], dict) else cmd_list[0]
+        raise PermissionError(result.get("message") or first_binary)
     if error_type:
         raise OSError(result.get("message") or f"executor worker error: {error_type}")
     return result

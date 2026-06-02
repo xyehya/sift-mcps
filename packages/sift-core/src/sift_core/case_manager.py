@@ -22,6 +22,7 @@ from sift_common.audit import resolve_examiner
 from sift_core.case_io import case_audit_dir, cases_root
 from sift_core.case_ops import build_case_brief
 from sift_core.evidence_ops import list_manifest_evidence_data
+from sift_core.evidence_chain import load_manifest
 from sift_core.finding_validation import validate as validate_finding_data
 
 logger = logging.getLogger(__name__)
@@ -680,7 +681,8 @@ class CaseManager:
         meta = self._load_case_meta(case_dir)
         findings = self._load_findings(case_dir)
         timeline = self._load_timeline(case_dir)
-        evidence = self._load_evidence_registry(case_dir)
+        manifest = load_manifest(case_dir) or {}
+        active_evidence = [f for f in manifest.get("files", []) if f.get("status") != "IGNORED"]
         todos = self._load_todos(case_dir)
 
         resp = {
@@ -696,7 +698,7 @@ class CaseManager:
                 "rejected": sum(1 for f in findings if f.get("status") == "REJECTED"),
             },
             "timeline_events": len(timeline),
-            "evidence_files": len(evidence.get("files", [])),
+            "evidence_files": len(active_evidence),
             "todos": {
                 "total": len(todos),
                 "open": sum(1 for t in todos if t.get("status") == "open"),
@@ -836,13 +838,20 @@ class CaseManager:
                 # Truncate output_excerpt
                 if len(output_excerpt) > 2000:
                     output_excerpt = output_excerpt[:2000]
-                shell_seq = self._next_shell_seq(case_dir, exam, today)
-                shell_eid = f"shell-{exam}-{today}-{shell_seq:03d}"
+                
+                cmd_audit_id = cmd.get("audit_id", "").strip()
+                if cmd_audit_id:
+                    shell_eid = cmd_audit_id
+                else:
+                    shell_seq = self._next_shell_seq(case_dir, exam, today)
+                    shell_eid = f"shell-{exam}-{today}-{shell_seq:03d}"
+                
                 shell_audit_ids.append(shell_eid)
                 validated_cmd = {
                     "command": command,
                     "output_excerpt": output_excerpt,
                     "purpose": purpose,
+                    "audit_id": shell_eid,
                 }
                 validated_commands.append(validated_cmd)
                 # Write audit entry for this shell command
@@ -987,13 +996,13 @@ class CaseManager:
         # Per-artifact provenance resolution
         finding_prov_grade = "PARTIAL"
         if all_audit_entries and validated_artifacts:
-            raw_ev = self._load_evidence_registry(case_dir)
-            evidence = (
-                raw_ev.get("files", []) if isinstance(raw_ev, dict) else (raw_ev or [])
-            )
+            manifest = load_manifest(case_dir) or {}
+            evidence = manifest.get("files", [])
             registered = set()
             ev_by_hash = {}
             for e in evidence:
+                if e.get("status") in ("IGNORED", "RETIRED"):
+                    continue
                 p = e.get("path", "")
                 if p:
                     resolved_p = str(Path(p).resolve()) if str(p).startswith("/") else str((case_dir / p).resolve())

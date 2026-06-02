@@ -508,6 +508,8 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                 response["agent_action"] = exec_result["agent_action"]
         if "privilege_escalation" in exec_result:
             response["privilege_escalation"] = exec_result["privilege_escalation"]
+        if "stages" in exec_result:
+            response["stages"] = exec_result["stages"]
         if exec_result.get("output_file"):
             response["full_output_path"] = exec_result["output_file"]
             response["full_output_sha256"] = exec_result.get("output_sha256")
@@ -528,6 +530,8 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             extra_audit["privilege_escalation"] = exec_result["privilege_escalation"]
         if "privilege_events" in exec_result:
             extra_audit["privilege_events"] = exec_result["privilege_events"]
+        if "stages" in exec_result:
+            extra_audit["stages"] = exec_result["stages"]
 
         if audit.log(
             tool="run_command",

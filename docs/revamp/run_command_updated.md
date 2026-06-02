@@ -4,7 +4,7 @@ This document describes the design, implementation, and verification of the reva
 
 ## 1. Overall Functionality & Usability
 
-The `run_command` tool has been upgraded from a restricted, list-only argument executor to a **hardened, direct shell execution tool**. It allows DFIR agents to run full shell commands directly on the SIFT VM (via `/bin/bash -c`), providing the flexibility necessary for automated forensic analysis.
+The `run_command` tool has been upgraded from a restricted, list-only argument executor to a **hardened, pipeline-based direct execution tool**. It executes commands directly without a shell wrapper (`/bin/bash -c`), using structured AST/parsing validation and a secure OS pipe-chain, with OS-level containment (cgroups/systemd-run) acting as the main security boundary.
 
 ### Enhanced Usability Features
 - **String-Only Schema**: Commands are supplied as a single Unix-style string (e.g., `find /case/extractions -type f | grep -E '\.(db|sqlite)$'`).
@@ -35,8 +35,8 @@ graph TD
    - Implements `parse_subcommand_argv_and_redirects` which handles input/output redirects and parses POSIX command tokens using `shlex.split`.
    - Implements `validate_shell_command` containing guards against control character obfuscations, environment hijacking, process substitution, and destructive commands.
 3. **[generic.py](file:///home/yk/AI/SIFTHACK/sift-mcps/packages/sift-core/src/sift_core/execute/tools/generic.py)**:
-   - Formulates the `CommandPlan` and executes the command via `["/bin/bash", "-c", command_str]`.
-   - Manages non-interactive `sudo` fallback (`sudo_fallback`) if the unprivileged bash call encounters a permission error.
+   - Formulates the `CommandPlan` and executes the command directly stage-by-stage without `bash -c`.
+   - Manages non-interactive `sudo` fallback (`sudo_fallback`) targeting specific resolved binaries directly if the unprivileged call encounters a permission error.
 4. **[executor.py](file:///home/yk/AI/SIFTHACK/sift-mcps/packages/sift-core/src/sift_core/execute/executor.py)**:
    - Configures the output capture directory to case-specific outputs: `<case_dir>/agent/outputs/`.
    - Enforces the response byte budget (10 KB / ~2048 tokens).
@@ -100,7 +100,7 @@ To avoid exhausting the LLM's context window with large file outputs (e.g., list
 | **Redirection Support** | Unsupported (blocked redirect operators). | Fully supported with strict target path-jail checks. |
 | **Safety Logic** | Weak command sanitization. | Exhaustive guards (control characters, IFS, process substitution, destructive actions). |
 | **Output Saving** | Saved in unstructured, nested temp folders. | Standardized under `<case_dir>/agent/outputs/` directory. |
-| **Privilege Escalation** | Mocked or hardcoded direct system calls. | Integrated sudo fallback mechanism wrapping bash execution. |
+| **Privilege Escalation** | Mocked or hardcoded direct system calls. | Integrated sudo fallback mechanism wrapping the resolved binary directly. |
 
 ---
 

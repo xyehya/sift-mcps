@@ -17,16 +17,20 @@ import time
 from typing import Any
 
 
+_pipe_lock = threading.Lock()
+
 def _read_pipe(pipe, chunks: list[bytes], limit: int, total: list[int]) -> None:
     while True:
-        remaining = limit - total[0]
+        with _pipe_lock:
+            remaining = limit - total[0]
         if remaining <= 0:
             break
         data = pipe.read(min(65536, remaining))
         if not data:
             break
-        chunks.append(data)
-        total[0] += len(data)
+        with _pipe_lock:
+            chunks.append(data)
+            total[0] += len(data)
 
 
 def _resource_preexec(timeout: int, memory_limit_bytes: int) -> None:
@@ -57,7 +61,14 @@ def _kill_process_tree(proc: subprocess.Popen[bytes]) -> None:
 
 
 def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    cmd_list = payload["cmd"]
+    stages = payload.get("stages")
+    if not stages:
+        cmd_list = payload.get("cmd")
+        if cmd_list:
+            stages = [{"argv": cmd_list, "redirects": []}]
+        else:
+            raise ValueError("No command or stages specified in payload")
+
     timeout = int(payload["timeout"])
     max_bytes = int(payload["max_output_bytes"])
     cwd = payload.get("cwd") or None
@@ -69,38 +80,100 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if os.name == "posix":
         preexec_fn = lambda: _resource_preexec(timeout, memory_limit_bytes)
 
-    proc = subprocess.Popen(
-        cmd_list,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        cwd=cwd,
-        shell=False,
-        start_new_session=(os.name == "posix"),
-        preexec_fn=preexec_fn,
-    )
+    processes = []
+    prev_stdout = None
+    
+    try:
+        for i, stage in enumerate(stages):
+            argv = stage["argv"]
+            redirects = stage["redirects"]
+            
+            stage_stdin = prev_stdout if prev_stdout is not None else subprocess.PIPE
+            stage_stdout = subprocess.PIPE
+            
+            opened_files = []
+            for op, target in redirects:
+                if op == ">":
+                    f = open(target, "wb")
+                    stage_stdout = f
+                    opened_files.append(f)
+                elif op == ">>":
+                    f = open(target, "ab")
+                    stage_stdout = f
+                    opened_files.append(f)
+                elif op == "<":
+                    f = open(target, "rb")
+                    stage_stdin = f
+                    opened_files.append(f)
+                    if prev_stdout is not None:
+                        prev_stdout.close()
+                        prev_stdout = None
+            
+            proc = subprocess.Popen(
+                argv,
+                stdin=stage_stdin,
+                stdout=stage_stdout,
+                stderr=subprocess.PIPE,
+                cwd=cwd,
+                shell=False,
+                start_new_session=(os.name == "posix"),
+                preexec_fn=preexec_fn,
+            )
+            processes.append((proc, opened_files))
+            
+            if prev_stdout is not None:
+                prev_stdout.close()
+                
+            if stage_stdout == subprocess.PIPE:
+                prev_stdout = proc.stdout
+            else:
+                prev_stdout = None
+                
+    except Exception as exc:
+        for proc, opened_files in processes:
+            try:
+                _kill_process_tree(proc)
+            except Exception:
+                pass
+            for f in opened_files:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+        raise exc
 
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
     total = [0]
+    threads = []
 
-    stdout_thread = threading.Thread(
-        target=_read_pipe,
-        args=(proc.stdout, stdout_chunks, max_bytes, total),
-    )
-    stderr_thread = threading.Thread(
-        target=_read_pipe,
-        args=(proc.stderr, stderr_chunks, max_bytes, total),
-    )
-    stdout_thread.start()
-    stderr_thread.start()
+    # Read final stage stdout
+    if prev_stdout is not None:
+        t = threading.Thread(
+            target=_read_pipe,
+            args=(prev_stdout, stdout_chunks, max_bytes, total),
+        )
+        t.start()
+        threads.append(t)
+
+    # Read stderr from all stages
+    for proc, _ in processes:
+        t = threading.Thread(
+            target=_read_pipe,
+            args=(proc.stderr, stderr_chunks, max_bytes, total),
+        )
+        t.start()
+        threads.append(t)
 
     deadline = start + timeout
     try:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                _kill_process_tree(proc)
-                proc.wait(timeout=5)
+                for proc, _ in processes:
+                    _kill_process_tree(proc)
+                for proc, _ in processes:
+                    proc.wait(timeout=5)
                 return {
                     "error_type": "timeout",
                     "message": f"Command timed out after {timeout}s",
@@ -108,25 +181,42 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 }
             if total[0] >= max_bytes:
                 truncated = True
-                _kill_process_tree(proc)
-                proc.wait(timeout=5)
+                for proc, _ in processes:
+                    _kill_process_tree(proc)
+                for proc, _ in processes:
+                    proc.wait(timeout=5)
                 break
-            try:
-                proc.wait(timeout=min(0.1, remaining))
+                
+            # Check if all processes have finished
+            all_done = True
+            for proc, _ in processes:
+                if proc.poll() is None:
+                    all_done = False
+                    break
+            if all_done:
                 break
-            except subprocess.TimeoutExpired:
-                continue
+                
+            time.sleep(0.05)
     finally:
-        stdout_thread.join(timeout=5)
-        stderr_thread.join(timeout=5)
+        for t in threads:
+            t.join(timeout=2)
+        for _, opened_files in processes:
+            for f in opened_files:
+                try:
+                    f.close()
+                except Exception:
+                    pass
 
+    # exit code of last command in pipeline
+    last_proc = processes[-1][0]
+    
     if total[0] >= max_bytes:
         truncated = True
 
     stdout_raw = b"".join(stdout_chunks)
     stderr_raw = b"".join(stderr_chunks)
     result: dict[str, Any] = {
-        "exit_code": proc.returncode,
+        "exit_code": last_proc.returncode,
         "stdout": stdout_raw.decode("utf-8", errors="replace"),
         "stderr": stderr_raw.decode("utf-8", errors="replace"),
         "elapsed_seconds": round(time.monotonic() - start, 2),

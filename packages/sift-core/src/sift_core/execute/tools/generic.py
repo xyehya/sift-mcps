@@ -113,116 +113,167 @@ def run_command(
     if cwd is None:
         cwd = os.environ.get("SIFT_CASE_DIR") or None
 
-    # Run the comprehensive shell validation
-    validate_shell_command(command)
+    # Run the comprehensive shell validation and get validated stages
+    validated_stages = validate_shell_command(command)
 
-    # Extract subcommands to identify first binary and check for privileged candidates
-    subcmds = split_command_by_operators(command)
     first_binary = ""
     privileged_candidate = False
-    
-    for subcmd_str, _ in subcmds:
-        if not subcmd_str.strip():
-            continue
-        try:
-            argv, _ = parse_subcommand_argv_and_redirects(subcmd_str)
-            if argv:
-                binary = argv[0].split('/')[-1]
-                if not first_binary:
-                    first_binary = binary
-                if binary in _PRIVILEGED_TARGETS:
-                    privileged_candidate = True
-        except Exception:
-            pass
+    for stage in validated_stages:
+        if not first_binary:
+            first_binary = stage["binary"]
+        if stage["privileged"]:
+            privileged_candidate = True
+
+    binary = first_binary or "bash"
 
     # CommandPlan creation
+    primary_stage = validated_stages[0]
     plan = CommandPlan(
         original_argv=[command],
-        direct_argv=["/bin/bash", "-c", command],
-        binary=first_binary or "bash",
+        direct_argv=primary_stage["argv"],
+        binary=binary,
         privileged_candidate=privileged_candidate,
         output_paths=[],
         input_paths=[]
     )
 
+    # Group validated_stages by pipeline operator '|'
+    pipelines = []
+    current_pipeline = []
+    for stage in validated_stages:
+        current_pipeline.append(stage)
+        if stage["operator"] != "|":
+            pipelines.append((current_pipeline, stage["operator"]))
+            current_pipeline = []
+    if current_pipeline:
+        pipelines.append((current_pipeline, ""))
 
     exec_result = None
     privilege_events = []
     escalation_info = None
+    last_exit_code = 0
+    next_cond = None
+    executed_stages_info = []
 
-    try:
-        exec_result = execute(
-            plan.direct_argv,
-            timeout=timeout,
-            cwd=cwd,
-            save_output=save_output,
-            save_dir=save_dir,
-        )
-        if exec_result["exit_code"] != 0 and _is_permission_error(exec_result["exit_code"], exec_result.get("stderr", "")):
-            raise PermissionError(f"Direct execution failed with permission error: {exec_result.get('stderr')}")
-    except (PermissionError, ExecutionError) as exc:
-        is_perm = isinstance(exc, PermissionError) or "Permission denied" in str(exc)
-        if not is_perm or not plan.privileged_candidate:
-            raise
+    for current_pipeline, operator in pipelines:
+        # Check sequencing condition
+        if next_cond == "&&" and last_exit_code != 0:
+            next_cond = operator
+            continue
+        if next_cond == "||" and last_exit_code == 0:
+            next_cond = operator
+            continue
 
-        if not os.path.exists("/usr/bin/sudo"):
-            logger.error("Privilege escalation required but /usr/bin/sudo is missing.")
-            raise PermissionError("Privilege escalation via sudo is unavailable: /usr/bin/sudo not found.")
+        pipeline_stages = []
+        pipeline_privileged = False
+        for stage in current_pipeline:
+            pipeline_stages.append({
+                "argv": stage["argv"],
+                "redirects": stage["redirects"],
+            })
+            if stage["privileged"]:
+                pipeline_privileged = True
 
-        # Log fallback attempt
-        redacted_args = [plan.direct_argv[0]] + [_redact_arg(arg) for arg in plan.direct_argv[1:]]
-        fallback_event = {
-            "status": "fallback_attempt",
-            "command": redacted_args,
-            "reason": "Permission denied during direct execution"
-        }
-        privilege_events.append(fallback_event)
+        pipeline_result = None
+        try:
+            pipeline_result = execute(
+                pipeline_stages,
+                timeout=timeout,
+                cwd=cwd,
+                save_output=save_output,
+                save_dir=save_dir,
+            )
+            if pipeline_result["exit_code"] != 0 and _is_permission_error(pipeline_result["exit_code"], pipeline_result.get("stderr", "")):
+                raise PermissionError(f"Direct execution failed with permission error: {pipeline_result.get('stderr')}")
+        except (PermissionError, ExecutionError) as exc:
+            is_perm = isinstance(exc, PermissionError) or "Permission denied" in str(exc) or "only root can do that" in str(exc)
+            if not is_perm or not pipeline_privileged:
+                raise
 
-        # Synthesize non-interactive sudo command
-        sudo_cmd = ["/usr/bin/sudo", "-n", "--", plan.direct_argv[0]] + plan.direct_argv[1:]
+            if not os.path.exists("/usr/bin/sudo"):
+                logger.error("Privilege escalation required but /usr/bin/sudo is missing.")
+                raise PermissionError("Privilege escalation via sudo is unavailable: /usr/bin/sudo not found.")
 
-        # Execute via isolated worker
-        exec_result = execute(
-            sudo_cmd,
-            timeout=timeout,
-            cwd=cwd,
-            save_output=save_output,
-            save_dir=save_dir,
-        )
+            # Log fallback attempt
+            fallback_event = {
+                "status": "fallback_attempt",
+                "command": [stage["argv"] for stage in current_pipeline],
+                "reason": "Permission denied during direct execution"
+            }
+            privilege_events.append(fallback_event)
 
-        success = (exec_result["exit_code"] == 0)
-        redacted_sudo_cmd = ["/usr/bin/sudo", "-n", "--", plan.direct_argv[0]] + [_redact_arg(arg) for arg in plan.direct_argv[1:]]
-        outcome_event = {
-            "status": "success" if success else "failed",
-            "command": redacted_sudo_cmd,
-            "exit_code": exec_result["exit_code"]
-        }
-        privilege_events.append(outcome_event)
+            # Construct escalated stages
+            escalated_stages = []
+            for stage in current_pipeline:
+                if stage["privileged"]:
+                    escalated_argv = ["/usr/bin/sudo", "-n", "--", stage["resolved"]] + stage["argv"][1:]
+                else:
+                    escalated_argv = stage["argv"]
+                escalated_stages.append({
+                    "argv": escalated_argv,
+                    "redirects": stage["redirects"],
+                })
 
-        escalation_info = {
-            "eligible": True,
-            "mechanism": "sudo_fallback",
-            "status": "success" if success else "failed",
-            "exit_code": exec_result["exit_code"]
-        }
+            # Execute escalated stages
+            pipeline_result = execute(
+                escalated_stages,
+                timeout=timeout,
+                cwd=cwd,
+                save_output=save_output,
+                save_dir=save_dir,
+            )
 
-    if plan.privileged_candidate and escalation_info is None and exec_result["exit_code"] == 0:
-        success_event = {
-            "status": "success",
-            "command": plan.direct_argv,
-            "mechanism": "direct_unprivileged"
-        }
-        privilege_events.append(success_event)
-        escalation_info = {
-            "eligible": True,
-            "mechanism": "direct_unprivileged",
-            "status": "success"
-        }
+            success = (pipeline_result["exit_code"] == 0)
+            outcome_event = {
+                "status": "success" if success else "failed",
+                "command": [stage["argv"] for stage in escalated_stages],
+                "exit_code": pipeline_result["exit_code"]
+            }
+            privilege_events.append(outcome_event)
 
-    if escalation_info:
-        exec_result["privilege_escalation"] = escalation_info
-    if privilege_events:
-        exec_result["privilege_events"] = privilege_events
+            escalation_info = {
+                "eligible": True,
+                "mechanism": "sudo_fallback",
+                "status": "success" if success else "failed",
+                "exit_code": pipeline_result["exit_code"]
+            }
+
+        if pipeline_privileged and escalation_info is None and pipeline_result and pipeline_result["exit_code"] == 0:
+            success_event = {
+                "status": "success",
+                "command": [stage["argv"] for stage in current_pipeline],
+                "mechanism": "direct_unprivileged"
+            }
+            privilege_events.append(success_event)
+            escalation_info = {
+                "eligible": True,
+                "mechanism": "direct_unprivileged",
+                "status": "success"
+            }
+
+        # Track exit code for each stage in the current pipeline
+        for idx, stage in enumerate(current_pipeline):
+            exit_code = 0
+            if pipeline_result and "stages" in pipeline_result and idx < len(pipeline_result["stages"]):
+                exit_code = pipeline_result["stages"][idx]["exit_code"]
+            elif pipeline_result:
+                exit_code = pipeline_result["exit_code"]
+            executed_stages_info.append({
+                "binary": stage["binary"],
+                "argv": stage["argv"],
+                "exit_code": exit_code
+            })
+
+        exec_result = pipeline_result
+        last_exit_code = pipeline_result["exit_code"] if pipeline_result else 1
+        next_cond = operator
+
+    if exec_result:
+        exec_result["stages"] = executed_stages_info
+        if escalation_info:
+            exec_result["privilege_escalation"] = escalation_info
+        if privilege_events:
+            exec_result["privilege_events"] = privilege_events
 
     # Parse output based on catalog format when output exceeds byte budget
     cfg = get_config()

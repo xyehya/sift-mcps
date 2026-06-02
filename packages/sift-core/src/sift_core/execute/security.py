@@ -299,22 +299,9 @@ _PRIVILEGED_TARGETS = {
 }
 
 _DESTRUCTIVE_PATTERNS = [
-    # Git destructive commands
-    re.compile(r"\bgit\s+reset\s+--hard\b", re.IGNORECASE),
-    re.compile(r"\bgit\s+push\b[^;&|\n]*(?:\s|^)(--force|--force-with-lease|-f)\b", re.IGNORECASE),
-    re.compile(r"\bgit\s+clean\b(?![^;&|\n]*(?:-[a-zA-Z]*n|--dry-run))[^;&|\n]*-[a-zA-Z]*f", re.IGNORECASE),
-    re.compile(r"\bgit\s+checkout\s+(--\s+)?\.[ \t]*($|[;&|\n])", re.IGNORECASE),
-    re.compile(r"\bgit\s+restore\s+(--\s+)?\.[ \t]*($|[;&|\n])", re.IGNORECASE),
-    re.compile(r"\bgit\s+stash[ \t]+(drop|clear)\b", re.IGNORECASE),
-    re.compile(r"\bgit\s+branch\s+(-D\s|--delete\s+--force|--force\s+--delete)\b", re.IGNORECASE),
-    re.compile(r"\bgit\s+(commit|push|merge)\b[^;&|\n]*--no-verify\b", re.IGNORECASE),
-    re.compile(r"\bgit\s+commit\b[^;&|\n]*--amend\b", re.IGNORECASE),
     # Database destructive commands
     re.compile(r"\b(drop|truncate)\s+(table|database|schema)\b", re.IGNORECASE),
     re.compile(r"\bdelete\s+from\s+\w+[ \t]*(?:;|\"|'|\n|$)", re.IGNORECASE),
-    # Infrastructure destructive commands
-    re.compile(r"\bkubectl\s+delete\b", re.IGNORECASE),
-    re.compile(r"\bterraform\s+destroy\b", re.IGNORECASE),
 ]
 
 def _is_in_directory(path_str: str, parent: Path) -> bool:
@@ -388,6 +375,16 @@ def split_command_by_operators(cmd_str: str) -> list[tuple[str, str]]:
             subcommands.append(("".join(current).strip(), "||"))
             current = []
             i += 2
+            continue
+        elif char == "&":
+            subcommands.append(("".join(current).strip(), "&"))
+            current = []
+            i += 1
+            continue
+        elif char in ("\n", "\r"):
+            subcommands.append(("".join(current).strip(), ";"))
+            current = []
+            i += 1
             continue
         elif char == "|":
             subcommands.append(("".join(current).strip(), "|"))
@@ -500,9 +497,10 @@ def parse_subcommand_argv_and_redirects(subcmd_str: str) -> tuple[list[str], lis
     return argv, redirects
 
 
-def validate_shell_command(command_str: str) -> None:
+def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
     """Validate a shell command string for safety across all subcommands.
     
+    Returns a list of parsed and validated subcommand dictionaries.
     Raises ValueError or DeniedBinaryError if validation fails.
     """
     if not command_str.strip():
@@ -530,8 +528,9 @@ def validate_shell_command(command_str: str) -> None:
             raise ValueError("Command matches a blocked destructive pattern")
 
     # 6. Parse and check subcommands
+    validated_stages = []
     subcmds = split_command_by_operators(command_str)
-    for subcmd_str, _ in subcmds:
+    for subcmd_str, operator in subcmds:
         if not subcmd_str.strip():
             continue
             
@@ -560,6 +559,17 @@ def validate_shell_command(command_str: str) -> None:
         resolved = find_binary(binary)
         if not resolved:
             raise ValueError(f"Binary '{binary}' not found on this system.")
+
+        # P2.3 (Basename-Evasion Prevention): Verify resolved binary is not in the case directory
+        case_dir_str = resolve_case_dir()
+        if case_dir_str:
+            case_resolved = Path(case_dir_str).resolve()
+            resolved_path = Path(resolved).resolve()
+            if resolved_path == case_resolved or case_resolved in resolved_path.parents:
+                raise ValueError(
+                    f"Binary '{binary}' resolves to '{resolved_path}' "
+                    f"which is inside the case directory '{case_resolved}'"
+                )
             
         # Validate redirection targets
         for op, target in redirects:
@@ -595,7 +605,7 @@ def validate_shell_command(command_str: str) -> None:
                 elif prev_was_output_flag:
                     validate_output_path(arg)
                 else:
-                    validate_input_path(arg)
+                     validate_input_path(arg)
             prev_was_output_flag = False
             
         # Sanitize extra args
@@ -609,9 +619,9 @@ def validate_shell_command(command_str: str) -> None:
         if binary in _PRIVILEGED_TARGETS:
             for arg in argv:
                 for char in ["*", "?", "[", "]"]:
-                    if char in arg:
-                        raise ValueError(f"Wildcard/glob characters ('{char}') are not permitted in command arguments.")
-                        
+                     if char in arg:
+                         raise ValueError(f"Wildcard/glob characters ('{char}') are not permitted in command arguments.")
+                         
             case_dir_str = resolve_case_dir()
             case_dir = Path(case_dir_str) if case_dir_str else None
             cases_root_dir = cases_root()
@@ -705,4 +715,16 @@ def validate_shell_command(command_str: str) -> None:
                 has_ro_flag = any(f in fdisk_flags for f in {"-l", "--list", "-s"})
                 if not has_ro_flag:
                     raise ValueError("fdisk command is restricted to read-only inspection flags (-l, --list, -s).")
+                    
+        validated_stages.append({
+            "subcmd_str": subcmd_str,
+            "operator": operator,
+            "argv": argv,
+            "redirects": redirects,
+            "binary": binary,
+            "resolved": resolved,
+            "privileged": binary in _PRIVILEGED_TARGETS,
+        })
+        
+    return validated_stages
 
