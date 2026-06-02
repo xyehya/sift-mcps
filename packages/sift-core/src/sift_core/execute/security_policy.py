@@ -114,6 +114,21 @@ DEFAULT_SECURITY_POLICY: dict[str, Any] = {
             "--to-command",
         ],
         "unzip": ["-o", "-n"],
+        # curl: block all upload/post flags — prevents exfiltration of evidence or
+        # case files to external hosts. Read-only fetches (threat intel lookups) remain
+        # allowed. -o/--output is already in output_flags and path-validated.
+        "curl": [
+            "-d", "--data", "--data-raw", "--data-binary",
+            "--data-ascii", "--data-urlencode", "--data-urlencode",
+            "-F", "--form", "--form-string",
+            "-T", "--upload-file",
+            "--json",
+        ],
+        # wget: block post/upload equivalents
+        "wget": [
+            "--post-data", "--post-file",
+            "--method",
+        ],
     },
     "output_flags": ["--csv", "--csvf", "-o", "--output", "--json", "--jsonl"],
     "denied_binaries": sorted(DENY_FLOOR),

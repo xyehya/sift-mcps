@@ -80,8 +80,8 @@ def _run_isolated_worker(
         first_binary = cmd_list[0]["argv"][0] if cmd_list and isinstance(cmd_list[0], dict) else cmd_list[0]
         raise FileNotFoundError(result.get("message") or first_binary)
     if error_type == "permission":
-        first_binary = cmd_list[0]["argv"][0] if cmd_list and isinstance(cmd_list[0], dict) else cmd_list[0]
-        raise PermissionError(result.get("message") or first_binary)
+        msg = result.get("message") or "Permission denied (check redirect target path and binary permissions)"
+        raise PermissionError(msg)
     if error_type:
         raise OSError(result.get("message") or f"executor worker error: {error_type}")
     return result
@@ -250,7 +250,22 @@ def _truncate(text: str, max_chars: int) -> str:
 
 
 def _next_run_command_output_dir(case_dir: Path) -> Path:
-    return case_dir / "agent" / "outputs"
+    base = case_dir / "agent" / "run_commands"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        nums = []
+        for d in base.iterdir():
+            if d.is_dir() and d.name.startswith("output"):
+                try:
+                    nums.append(int(d.name[6:]))
+                except ValueError:
+                    pass
+        n = max(nums, default=0) + 1
+        out = base / f"output{n}"
+        out.mkdir(exist_ok=True)
+        return out
+    except OSError:
+        return base / "output1"
 
 
 
@@ -325,8 +340,8 @@ def _save_output(
     prefix = f"{ts}_{safe_cmd}"
 
     if stdout:
+        stdout_path = out_dir / f"{prefix}_stdout.txt"
         try:
-            stdout_path = out_dir / f"{prefix}_stdout.txt"
             stdout_bytes = stdout.encode("utf-8", errors="replace")
             with open(stdout_path, "wb") as f:
                 f.write(stdout_bytes)
@@ -336,10 +351,14 @@ def _save_output(
             response["output_sha256"] = hashlib.sha256(stdout_bytes).hexdigest()
         except OSError as e:
             logger.warning("Failed to save stdout to %s: %s", stdout_path, e)
+            response.setdefault("warnings", []).append(
+                f"save_output failed — could not write to {stdout_path}: {e}. "
+                "Full output not persisted; use redirect '>' to a writable path instead."
+            )
 
     if stderr:
+        stderr_path = out_dir / f"{prefix}_stderr.txt"
         try:
-            stderr_path = out_dir / f"{prefix}_stderr.txt"
             stderr_bytes = stderr.encode("utf-8", errors="replace")
             with open(stderr_path, "wb") as f:
                 f.write(stderr_bytes)
