@@ -20,6 +20,15 @@ from sift_core.execute.security_policy import matches_allowed_binary, matches_de
 _DANGEROUS_PATTERNS = ["`", "$("]
 logger = logging.getLogger(__name__)
 
+# Internal marker wrapped around redirection operators during parsing so that a
+# real (unquoted) operator can be told apart from a quoted literal that happens
+# to look like one (e.g. ``grep ">" file``). The marker is the control byte
+# ``\x01``, which user input can never contain: validate_shell_command rejects
+# the whole \x00-\x08 range, and parse_subcommand_argv_and_redirects guards
+# against it directly. shlex.split keeps a \x01-wrapped token intact while a
+# quoted literal stays as its bare text, making the two unambiguous.
+_REDIR_MARK = "\x01"
+
 
 def _get_policy() -> dict:
     """Lazy-load security policy from YAML catalog."""
@@ -202,6 +211,11 @@ def validate_output_path(path: str) -> str:
     """
     resolved = str(Path(path).resolve())
 
+    # The null device is always an allowed sink: '> /dev/null' and
+    # '2> /dev/null' are ubiquitous, benign idioms for discarding output.
+    if resolved == "/dev/null":
+        return resolved
+
     # Case-dir containment: must resolve only under agent/, extractions/, or tmp/.
     case_dir = resolve_case_dir()
     if case_dir:
@@ -377,6 +391,15 @@ def split_command_by_operators(cmd_str: str) -> list[tuple[str, str]]:
             i += 2
             continue
         elif char == "&":
+            # Do not split when '&' is part of a redirection (2>&1, >&, &>).
+            # Stderr handling is dealt with by the redirect parser, not as a
+            # statement separator.
+            nxt = cmd_str[i + 1] if i + 1 < n else ""
+            prev = next((c for c in reversed(current) if not c.isspace()), "")
+            if nxt == ">" or prev == ">":
+                current.append(char)
+                i += 1
+                continue
             subcommands.append(("".join(current).strip(), "&"))
             current = []
             i += 1
@@ -411,11 +434,14 @@ def parse_subcommand_argv_and_redirects(subcmd_str: str) -> tuple[list[str], lis
     
     E.g. "ls -la > out.txt" -> (["ls", "-la"], [(">", "out.txt")])
     """
+    if "\x00" in subcmd_str or _REDIR_MARK in subcmd_str:
+        raise ValueError("Command contains non-printable control characters")
+
     processed_chars = []
     state = "NORMAL"
     i = 0
     n = len(subcmd_str)
-    
+
     while i < n:
         char = subcmd_str[i]
         if state == "ESCAPE":
@@ -452,21 +478,56 @@ def parse_subcommand_argv_and_redirects(subcmd_str: str) -> tuple[list[str], lis
             i += 1
             continue
             
-        # Redirection operators
+        # Stderr / combined redirections. Supported forms: '2>&1' (merge stderr
+        # into stdout/pipe), '2>'/'2>>' (stderr to file), and '&>'/'&>>' (both
+        # streams to file). Exotic fd duplication (e.g. '>&2', '1>&2', '3>')
+        # has no forensic use and is rejected with a clear message. Each
+        # supported operator is wrapped in _REDIR_MARK so a quoted literal that
+        # looks the same stays an argument.
+        if subcmd_str[i:i+4] == "2>&1":
+            processed_chars.append(f" {_REDIR_MARK}2>&1{_REDIR_MARK} ")
+            i += 4
+            continue
+        if subcmd_str[i:i+3] == "2>>":
+            processed_chars.append(f" {_REDIR_MARK}2>>{_REDIR_MARK} ")
+            i += 3
+            continue
+        if subcmd_str[i:i+2] == "2>":
+            processed_chars.append(f" {_REDIR_MARK}2>{_REDIR_MARK} ")
+            i += 2
+            continue
+        if subcmd_str[i:i+3] == "&>>":
+            processed_chars.append(f" {_REDIR_MARK}&>>{_REDIR_MARK} ")
+            i += 3
+            continue
+        if subcmd_str[i:i+2] == "&>":
+            processed_chars.append(f" {_REDIR_MARK}&>{_REDIR_MARK} ")
+            i += 2
+            continue
+        if subcmd_str[i:i+2] == ">&" or (char.isdigit() and subcmd_str[i+1:i+2] == ">"):
+            raise ValueError(
+                "Unsupported redirection: only '2>&1', '2>'/'2>>' (stderr to file), "
+                "and '&>'/'&>>' (both streams to file) are allowed; "
+                "file-descriptor duplication like '>&N' or '1>&2' is not."
+            )
+
+        # Redirection operators. Each is wrapped in the _REDIR_MARK sentinel so a
+        # genuine unquoted operator stays distinguishable from a quoted literal
+        # (e.g. ``grep ">" file`` must keep ">" as an argument, not a redirect).
         if subcmd_str[i:i+2] == ">>":
-            processed_chars.append(" >> ")
+            processed_chars.append(f" {_REDIR_MARK}>>{_REDIR_MARK} ")
             i += 2
             continue
         elif char == ">":
-            processed_chars.append(" > ")
+            processed_chars.append(f" {_REDIR_MARK}>{_REDIR_MARK} ")
             i += 1
             continue
         elif subcmd_str[i:i+2] == "<<":
-            processed_chars.append(" << ")
+            processed_chars.append(f" {_REDIR_MARK}<<{_REDIR_MARK} ")
             i += 2
             continue
         elif char == "<":
-            processed_chars.append(" < ")
+            processed_chars.append(f" {_REDIR_MARK}<{_REDIR_MARK} ")
             i += 1
             continue
             
@@ -483,17 +544,29 @@ def parse_subcommand_argv_and_redirects(subcmd_str: str) -> tuple[list[str], lis
     num_tokens = len(tokens)
     while j < num_tokens:
         tok = tokens[j]
-        if tok in (">", ">>", "<", "<<"):
+        # A redirect operator is only the sentinel-wrapped form emitted above;
+        # a bare ">"/"<"/"2>&1" token here came from quoted input and is a
+        # literal argument.
+        op = (
+            tok[len(_REDIR_MARK):-len(_REDIR_MARK)]
+            if tok.startswith(_REDIR_MARK) and tok.endswith(_REDIR_MARK) and len(tok) > 2 * len(_REDIR_MARK)
+            else None
+        )
+        if op == "2>&1":
+            redirects.append(("2>&1", ""))
+            j += 1
+            continue
+        if op in (">", ">>", "<", "<<", "2>", "2>>", "&>", "&>>"):
             if j + 1 < num_tokens:
                 target = tokens[j + 1]
-                redirects.append((tok, target))
+                redirects.append((op, target))
                 j += 2
             else:
-                raise ValueError(f"Redirection operator '{tok}' lacks a target path")
+                raise ValueError(f"Redirection operator '{op}' lacks a target path")
         else:
             argv.append(tok)
             j += 1
-            
+
     return argv, redirects
 
 
@@ -570,14 +643,32 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
                     f"Binary '{binary}' resolves to '{resolved_path}' "
                     f"which is inside the case directory '{case_resolved}'"
                 )
-            
+
+        # Path-shadow prevention: when the caller supplies a path (not a bare
+        # name), execute the validated *resolved* binary rather than the literal
+        # argv[0]. Otherwise a file named after an allowed tool (e.g. a copy of
+        # python3 at <case>/tmp/ls, referenced as ./ls) would pass basename
+        # validation yet execute the attacker-controlled file. find_binary()
+        # resolves by basename via PATH / forensic dirs, so `resolved` is the
+        # exact binary that was validated above.
+        if "/" in argv[0]:
+            argv[0] = resolved
+
         # Validate redirection targets
         for op, target in redirects:
+            if op == "2>&1":
+                # stderr-into-stdout merge: no path to validate.
+                continue
+            if op == "<<":
+                raise ValueError(
+                    "Heredocs ('<<') are not supported by run_command. "
+                    "Use an input file with '<' instead."
+                )
             if "$" in target or "%" in target:
                 raise ValueError("Shell expansion syntax in paths is blocked by security policy")
-            if op in (">", ">>"):
+            if op in (">", ">>", "2>", "2>>", "&>", "&>>"):
                 validate_output_path(target)
-            elif op in ("<", "<<"):
+            elif op == "<":
                 validate_input_path(target)
                 
         # Validate argv paths

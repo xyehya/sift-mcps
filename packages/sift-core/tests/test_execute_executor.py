@@ -672,3 +672,172 @@ def test_stages_auditing(tmp_path, monkeypatch):
     assert res["stages"][1]["binary"] == "grep"
 
 
+def test_path_shadow_executes_resolved_binary(tmp_path, monkeypatch):
+    """A binary referenced by a path whose basename shadows an allowed tool
+    must execute the PATH-resolved real tool, never the literal path. This
+    closes the "validate one binary, execute another" RCE: an attacker who
+    drops a copy of python3 at <case>/tmp/ls and runs './ls -c ...' would
+    otherwise pass basename validation but execute their file."""
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-014\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/ls" if cmd == "ls" else None)
+
+    # Stage an attacker-controlled file named after an allowed tool.
+    shadow = case_dir / "tmp" / "ls"
+    shadow.parent.mkdir(parents=True, exist_ok=True)
+    shadow.write_text("#!/bin/sh\necho pwned\n", encoding="utf-8")
+    shadow.chmod(0o755)
+
+    calls = []
+    def fake_execute(cmd_list, **kwargs):
+        calls.append(cmd_list)
+        return {"exit_code": 0, "stdout": "", "stderr": ""}
+    monkeypatch.setattr(generic, "execute", fake_execute)
+
+    generic.run_command(str(shadow) + " -la", purpose="test path shadow")
+
+    # The executed argv[0] must be the resolved real binary, not the shadow.
+    executed_argv = calls[0][0]["argv"]
+    assert executed_argv[0] == "/usr/bin/ls"
+    assert str(shadow) not in executed_argv
+
+
+def test_stderr_merge_2to1_supported(tmp_path, monkeypatch):
+    """'2>&1' must survive splitting/parsing and become a redirect directive
+    rather than being treated as a statement separator ('&') or a file open."""
+    from sift_core.execute.security import (
+        split_command_by_operators,
+        parse_subcommand_argv_and_redirects,
+    )
+
+    # '&' inside 2>&1 must not split the command.
+    parts = split_command_by_operators("tool 2>&1 | grep err")
+    assert parts == [("tool 2>&1", "|"), ("grep err", "")]
+
+    argv, redirects = parse_subcommand_argv_and_redirects("tool 2>&1")
+    assert argv == ["tool"]
+    assert ("2>&1", "") in redirects
+
+
+def test_quoted_redirect_literals_are_arguments_not_operators():
+    """A quoted operator must remain a literal argument, not be interpreted as
+    a redirect (the quote info is lost after shlex, so detection happens via an
+    unforgeable sentinel during the char walk)."""
+    from sift_core.execute.security import parse_subcommand_argv_and_redirects as p
+
+    # Quoted forms -> literal arguments, no redirects.
+    assert p('grep ">" log.txt') == (["grep", ">", "log.txt"], [])
+    assert p('grep "2>&1" log.txt') == (["grep", "2>&1", "log.txt"], [])
+    assert p("grep '<' log.txt") == (["grep", "<", "log.txt"], [])
+
+    # Unquoted forms -> real redirects.
+    assert p("cmd > out.txt") == (["cmd"], [(">", "out.txt")])
+    assert p("cmd >> out.txt") == (["cmd"], [(">>", "out.txt")])
+    assert p("cmd < in.txt") == (["cmd"], [("<", "in.txt")])
+
+
+def test_heredoc_rejected(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-015\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+    with pytest.raises(ValueError, match="Heredocs"):
+        generic.run_command("cat << EOF", purpose="test heredoc reject")
+
+
+def test_exotic_fd_redirect_rejected(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-016\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+    # File-descriptor duplication forms have no forensic use and are rejected.
+    for cmd in ("tool >&2", "tool 1>&2", "tool 3>out"):
+        with pytest.raises(ValueError, match="Unsupported redirection"):
+            generic.run_command(cmd, purpose="test exotic fd reject")
+
+    # Valid op but target outside the case is rejected by output-path validation.
+    with pytest.raises(ValueError, match="must be inside the case"):
+        generic.run_command("tool 2>/etc/x", purpose="test stderr file outside case")
+
+
+def test_stderr_file_redirects_supported(tmp_path, monkeypatch):
+    """'2>'/'2>>'/'&>' and /dev/null sinks parse cleanly and validate."""
+    from sift_core.execute.security import parse_subcommand_argv_and_redirects as p
+
+    assert p("tool 2> err.log") == (["tool"], [("2>", "err.log")])
+    assert p("tool 2>> err.log") == (["tool"], [("2>>", "err.log")])
+    assert p("tool &> all.log") == (["tool"], [("&>", "all.log")])
+    assert p("tool 2>/dev/null") == (["tool"], [("2>", "/dev/null")])
+
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-017\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+
+    calls = []
+    def fake_execute(cmd_list, **kwargs):
+        calls.append(cmd_list)
+        return {"exit_code": 0, "stdout": "", "stderr": ""}
+    monkeypatch.setattr(generic, "execute", fake_execute)
+
+    # /dev/null and an in-case stderr file are both accepted.
+    generic.run_command("grep x 2>/dev/null", purpose="discard stderr")
+    generic.run_command(
+        "grep x 2>" + str(case_dir / "tmp" / "e.log"), purpose="stderr to case file"
+    )
+    assert calls[0][0]["redirects"] == [("2>", "/dev/null")]
+
+
+def test_worker_stderr_to_file(tmp_path):
+    """The worker routes stderr to a separate file for the '2>' op, keeping it
+    out of the captured stdout/stderr streams."""
+    err_file = tmp_path / "err.log"
+    stages = [{
+        "argv": [sys.executable, "-c", "import sys; sys.stderr.write('BOOM'); print('OK')"],
+        "redirects": [("2>", str(err_file))],
+    }]
+    result = worker._execute_payload({
+        "stages": stages,
+        "timeout": 10,
+        "max_output_bytes": 100000,
+        "memory_limit_bytes": 0,
+    })
+    assert result["exit_code"] == 0
+    assert "OK" in result["stdout"]
+    assert result["stderr"] == ""
+    assert err_file.read_text() == "BOOM"
+
+
+def test_worker_merges_stderr_into_stdout(tmp_path):
+    """End-to-end (no systemd): the worker routes stderr into stdout when the
+    2>&1 directive is present on a stage."""
+    stages = [{
+        "argv": [sys.executable, "-c", "import sys; sys.stderr.write('E'); print('O')"],
+        "redirects": [("2>&1", "")],
+    }]
+    result = worker._execute_payload({
+        "stages": stages,
+        "timeout": 10,
+        "max_output_bytes": 100000,
+        "memory_limit_bytes": 0,
+    })
+    assert result["exit_code"] == 0
+    assert "O" in result["stdout"] and "E" in result["stdout"]
+    assert result["stderr"] == ""
+
+

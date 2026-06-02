@@ -434,6 +434,32 @@ This phase does two coupled things. **(a)** It makes **identity a core-native, t
 
 🔒 **PHASE 6 GATE = MVP COMPLETE:** core is **provably add-on-agnostic** (zero add-on tool names in `mcp_endpoint.py`; the only one-time core change is the hard-reject flip); contract enforced; four add-ons conformant and namespaced; **an operator can integrate a compliant backend from the portal** (validate → register → hot-reload, core survives disable); F-A/F-B verified live. **Live VM** (192.168.122.81, wiped → re-run `install.sh`): this is the **full-addon** install + e2e (discharges the deferred Phase 4 probe + Phase 5 output-cap live caveats); full ROCBA workflow reproduced end-to-end.
 
+---
+
+### Post-Phase-6 refactor — `run_command` hardening + flexibility (code-complete, Session 30)
+
+Not a numbered MVP phase — a **refactor of the `run_command` exec path** in `packages/sift-core/src/sift_core/execute/`, captured here so it can be reflected back into the architecture spec (HTML/mmd) under R-B / Phase 3 (sandbox + privilege executor). Motivation: the previous `run_command` was slow, context-bloating, and incoherent for the autonomous DFIR agent; this makes it **one hardened, flexible, low-bloat tool**. Replaces the older "run command assessment/hardening" commits with a sound model.
+
+**Invariants now enforced in code (do not regress — see `[[project-run-command-security]]`):**
+- **No shell, one parser.** `worker.py` executes parsed `argv` via `subprocess.Popen(shell=False)`; there is **no `/bin/bash -c` anywhere** in the exec path. `validate_shell_command` (`security.py`) is the single parser and its output is exactly what runs — the validate-then-`bash -c` **parser differential is eliminated** (the earlier critical finding). Remediation gate enforces `shell=False`.
+- **Execute the *resolved* binary, never the literal path.** When `argv[0]` contains `/`, it is rewritten to the `find_binary`-resolved path. Closes a **path-shadow RCE**: a file named after an allowed tool (e.g. a copy of `python3` at `<case>/tmp/ls`, run as `./ls -c …`) would otherwise pass basename validation yet execute the attacker file. Also fixes the latent "tool in `/opt/zimmerman` not on `PATH`" exec failure.
+- **Redirect operators use the unforgeable `\x01` sentinel.** Operators are tagged during the char-walk so a **quoted literal** (`grep ">" f`, `grep "2>&1" log`) stays an argument instead of being mis-read as a redirect (pre-existing bug for `>`/`<`/`>>`, fixed at root). `\x01` can't appear in user input (banned by the control-char check + a direct guard in the parser).
+- **stderr ergonomics (kills retry friction for the agent).** Supported: `2>&1` (merge into the pipe), `2>`/`2>>` (stderr→file), `&>`/`&>>` (both→file), and **`/dev/null` allowed as a sink** (`>/dev/null`, `2>/dev/null` just work). stderr is always captured/returned regardless. Exotic fd-dup (`>&N`, `1>&2`, `3>`) and heredocs (`<<`) are **rejected with clear, actionable messages**, not cryptic `FileNotFound`.
+- **DENY_FLOOR right-sized for DFIR** (`security_policy.py`): nested interpreters + shell-escape/pager/editor binaries (`sh/bash/python*/perl/ruby/node/php/lua/gdb/vi/vim/less/man/watch/script/screen/tmux/…`) and media destroyers (`shred/wipefs/blkdiscard/…`); dev-centric git/k8s/terraform patterns dropped in favour of DB-destruction rules. Per-tool privileged jails (mount/dd/losetup/fdisk read-only) and narrow, logged sudo wrapping of the **resolved binary only** (never `bash -c`).
+- **Context-bloat control retained:** output byte-budget + auto-save to `<case>/agent/outputs/` with SHA-256, parsed/summarized large output, per-stage audit provenance.
+
+**Containment caveat (unchanged, deployment-level / out of code scope):** the worker still runs as the **same user** under a fail-closed `systemd-run --user --scope` **memory cgroup + rlimits** — this is *not* a namespace/seccomp sandbox, and escalation still relies on passwordless `sudo -n`. The OS-level **P1** items remain a live-VM responsibility: dedicated low-privilege gateway user, read-only evidence mounts, no passwordless sudo, append-only/WORM audit log + tokens unreadable by the exec user, and a real sandbox (bwrap/nsjail or `PrivateTmp`+`ReadOnlyPaths`+`SystemCallFilter`, fail-closed). Fold these into the Phase 6 live-VM gate hardening rather than presenting the cgroup as a "container".
+
+**Tests:** `packages/sift-core/tests/test_execute_executor.py` red-team + feature cases (path-shadow→resolved, quoted-redirect-literal, nested-interpreter reject, `2>&1` merge, `2>`/`&>`/`/dev/null`, exotic-fd reject, heredoc reject, worker stderr routing, fail-closed). **sift-core 321 ✓, sift-gateway 134 ✓, remediation gate PASSED.** Live-VM exercise folds into the Phase 6 full-addon e2e.
+
+**Spec follow-up (R-spec-truth):** reflect the "no `bash -c`, execute-resolved-binary, redirect-sentinel, stderr-to-file/`/dev/null`, fail-closed cgroup (not a sandbox)" model into `revamp-plan.html` / mmd at the Phase 3 executor + R-B sections in the commit that lands this.
+
+### Pre-Phase 7 — Tool-registration ergonomics pass (agent-facing) (POST-MVP, before /skills)
+- [ ] **Optimize everything the AI agent sees when it loads each tool**: descriptions, **input and output formats**, worked **examples**, and **common use cases**, across the agent-facing tool registrations (core in-process tools + the four namespaced add-ons via their manifests). Goal: make the tool surface self-explanatory and low-friction for an autonomous agent (fewer malformed calls / retries, less wasted context), building on the manifest guidance fields shipped in 6.4c (`instructions`, `when_to_use`, `avoid_when`, `output_notes`).
+  - *Scope:* every `@tool` schema/docstring the agent loads (e.g. `run_command` now supports pipes/`&&`/`||`/`;`, redirects incl. `2>&1`/`2>file`/`/dev/null`, save-to-file, partial-failure warnings — its description/examples should advertise exactly that and the supported-vs-rejected redirect set); and each add-on manifest's per-tool `description`/examples/`output_notes`.
+  - *Why pre-Phase-7:* this is the registration-quality counterpart to moving methodology into `/skills`; do it while the tool surface is stable and before the SDK/scaffold (7.3) so third-party authors copy a good example.
+  - *Done-condition:* descriptions/examples/IO/use-cases reviewed and tightened for all agent-visible tools; a short "tool authoring style" note added to the §5 add-on playbook so new backends inherit the standard; no behavioural code change required (registration metadata only).
+
 ### Phase 7 — Methodology → /skills + SDK (POST-MVP, last)
 - [ ] **7.1 Build `/skills` endpoint** serving versioned, signed markdown packs as a **downloadable zip following Anthropic's skills standard** (your note @595).
 - [ ] **7.2 Move the 14 methodology `get_*` tools' content into skills packs; remove the tools.** Keep the FK **data package** as a core runtime dependency (considerations + grounding still read it). `validate_finding` tool dropped; enforcement stays in `record_finding`.
@@ -461,6 +487,17 @@ This phase does two coupled things. **(a)** It makes **identity a core-native, t
 ## 8 · Session Log
 
 > Append newest at the top. Use the §3 template.
+
+### Session 30 — 2026-06-02 — Post-Phase-6 refactor: `run_command` hardening + flexibility
+- Branch/commit: `revamp/spg-v1` @ working tree (committed this session)
+- Phase: post-Phase-6 refactor (not a numbered MVP task) — tasks touched: **`run_command` exec path** in `packages/sift-core/src/sift_core/execute/`; added the **Pre-Phase-7 tool-registration ergonomics** task.
+- DONE: code-complete + unit-green refactor of `run_command`; doc captured under "Post-Phase-6 refactor"; new Pre-Phase-7 task box added.
+- What: closed the validate-then-`bash -c` **parser differential** (worker now runs parsed `argv`, `shell=False`, no `/bin/bash -c`); **execute-resolved-binary** fix closes a path-shadow RCE; **`\x01` redirect sentinel** so quoted operator literals stay arguments (also fixed pre-existing `>`/`<` misparse); **stderr ergonomics** — `2>&1`/`2>`/`2>>`/`&>`/`&>>` + `/dev/null` sink supported, exotic fd-dup + heredocs rejected with clear messages; **DENY_FLOOR** expanded (interpreters/shell-escape/media-destroyers) and DFIR-right-sized; narrow logged sudo of the resolved binary only. Reviewed via `/code-review` (high) — the 3 real findings it surfaced (path-shadow, quoted-redirect misparse, `2>/dev/null` friction) were all fixed in-pass + tested.
+- Tests: green — `sift-core` **321 passed**, `sift-gateway` **134 passed**, `./scripts/remediation-gate.sh` **PASSED** (shell=False, no legacy strings, no untagged reads). New/updated red-team + feature cases in `tests/test_execute_executor.py`.
+- Live test on VM: pending — commit + rsync to 192.168.122.81 + gateway restart this session so the operator can wire their own MCP in Claude Code config and test the tools; folds into the Phase 6 full-addon live e2e.
+- Spec changed?: tracker only this session. **R-spec-truth follow-up:** reflect "no `bash -c` / execute-resolved-binary / redirect-sentinel / stderr-to-file+`/dev/null` / fail-closed cgroup (not a sandbox)" into `revamp-plan.html` + mmd at the Phase 3 executor + R-B sections.
+- BLOCKERS / open questions: containment is still same-user cgroup + rlimits + passwordless `sudo -n` — OS-level P1 (low-priv user, RO evidence mounts, no passwordless sudo, append-only audit log, real bwrap/nsjail sandbox fail-closed) remains a live-VM deployment task; do it at the Phase 6 gate hardening.
+- NEXT: Phase 6 gate live e2e on the VM (now also exercises the new `run_command`); then the Pre-Phase-7 tool-registration ergonomics pass.
 
 ### Session 29 — 2026-06-02 — Phase 6.3 portal Backends tab UI + frontend tests
 - Branch/commit: `revamp/spg-v1` @ working tree (not committed)

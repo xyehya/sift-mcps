@@ -92,7 +92,12 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
             stage_stdout = subprocess.PIPE
             
             opened_files = []
+            merge_stderr = False
+            stage_stderr = subprocess.PIPE
             for op, target in redirects:
+                if op == "2>&1":
+                    merge_stderr = True
+                    continue
                 if op == ">":
                     f = open(target, "wb")
                     stage_stdout = f
@@ -108,12 +113,26 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                     if prev_stdout is not None:
                         prev_stdout.close()
                         prev_stdout = None
-            
+                elif op in ("2>", "2>>"):
+                    f = open(target, "ab" if op == "2>>" else "wb")
+                    stage_stderr = f
+                    opened_files.append(f)
+                elif op in ("&>", "&>>"):
+                    f = open(target, "ab" if op == "&>>" else "wb")
+                    stage_stdout = f
+                    stage_stderr = f
+                    opened_files.append(f)
+
+            # '2>&1' wins if combined with an explicit stderr file: merge means
+            # stderr follows stdout's destination.
+            if merge_stderr:
+                stage_stderr = subprocess.STDOUT
+
             proc = subprocess.Popen(
                 argv,
                 stdin=stage_stdin,
                 stdout=stage_stdout,
-                stderr=subprocess.PIPE,
+                stderr=stage_stderr,
                 cwd=cwd,
                 shell=False,
                 start_new_session=(os.name == "posix"),
@@ -156,8 +175,11 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
         t.start()
         threads.append(t)
 
-    # Read stderr from all stages
+    # Read stderr from all stages (skipped for stages that merged stderr into
+    # stdout via 2>&1, where proc.stderr is None).
     for proc, _ in processes:
+        if proc.stderr is None:
+            continue
         t = threading.Thread(
             target=_read_pipe,
             args=(proc.stderr, stderr_chunks, max_bytes, total),

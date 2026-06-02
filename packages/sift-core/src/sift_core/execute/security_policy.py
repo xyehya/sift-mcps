@@ -51,6 +51,35 @@ DENY_FLOOR = frozenset(
         "nohup",
         "timeout",
         "stdbuf",
+        # Added — additional interpreters / shell-escape vectors. These have no
+        # legitimate non-interactive forensic use and each can spawn a shell or
+        # execute arbitrary code (interpreters), or shell out via '!' (pagers /
+        # editors, which also hang without a TTY).
+        "node",
+        "nodejs",
+        "php",
+        "lua",
+        "luajit",
+        "tclsh",
+        "wish",
+        "expect",
+        "gdb",
+        "lldb",
+        "vi",
+        "vim",
+        "view",
+        "nano",
+        "ed",
+        "ex",
+        "emacs",
+        "less",
+        "more",
+        "pg",
+        "man",
+        "watch",
+        "script",
+        "screen",
+        "tmux",
     }
 )
 
