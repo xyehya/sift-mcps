@@ -164,3 +164,67 @@ Area ∈ { install · core · add-on · portal · agent-tool · security }.
 - [ ] **Stage 5** — ROCBA: create case → copy evidence → seal → full agent loop → examiner commit → signed report.
 - [ ] **Stage 6** — invariants: F-A corrupt-evidence; R-B jail; executor deny-floor/traversal/output-cap; R-core-survives (disable add-on); R-roles (portal rejects agent token).
 - [ ] **Stage 7** — all blocker/major fixed + retested; gate ticked in `revamp-tasks.md`; Session Log appended.
+
+## Stage 6 — `run_command` black-box robustness pass (MCP surface only — 2026-06-02)
+
+**Method:** every action via the SIFT `/mcp` tools on the live gateway (`192.168.122.81:4508`), no Bash/curl/ssh. Active case `rocba-exfiltration-20260602-1245`, chain `ok`, 2 sealed files (`Rocba-Memory.raw`, `rocba-cdrive.e01`). Probing the Session-30 hardened `run_command`. Audit IDs `siftgateway-hermes-default-20260602-266 … -338`.
+
+### Headline: the "flex" half of "harden+flex" is NOT reachable on the MCP surface
+`run_command(command=[...])` is executed as **literal argv** (element[0] = binary, rest = args). The worker does **no shell parsing of any kind** on the array. Every Session-30 "flexibility" claim (redirect `\x01` sentinel, `2>&1`/`2>`/`2>>`/`&>` + `/dev/null`, exotic-fd/heredoc *rejection*) is **inert** here, and pipes/sequencing are silently mis-handled.
+
+| Case | Command (array) | Expected | Actual | Verdict | audit |
+|---|---|---|---|---|---|
+| simple | `ls -la` | run | ran, abs-path `/usr/bin/ls` | PASS | 266 |
+| seq AND | `true && echo ok` | print `ok` | ran `true` w/ literal args `&& echo ok`; **no `ok`** | FAIL(flex) | 268 |
+| seq OR | `false || echo recovered` | print `recovered` | ran `false`; `success:false`; **no `recovered`** | FAIL(flex) | 270 |
+| seq `;` | `echo a ; echo b` | `a`\n`b` | printed `a ; echo b` | FAIL(flex) | 272 |
+| pipe | `cat f \| head -5` | first 5 lines | `cat: invalid option -- '5'` (`\|`,`head`,`-5` literal) | FAIL(flex) | 274 |
+| redirect | `echo hi > tmp/t.txt` | write file | printed `hi > tmp/t.txt`; **no file** (`find tmp` empty) | FAIL(flex) | 278/296 |
+| redirect glued | `echo hi2 >tmp/t2.txt` | write file | printed `hi2 >tmp/t2.txt` literal | FAIL(flex) | 284 |
+| stderr merge | `ls /nonexistent 2>&1` | merge→stdout | `2>&1` literal arg (`ls: cannot access '2>&1'`); stderr field separate | FAIL(flex) | 294 |
+| single-string | `["ls -la tmp"]` | run? | `Binary 'ls -la tmp' not found` (whole string = argv0) | FAIL(UX) | 290 |
+| single-string `/` | `["echo hi > tmp/t.txt"]` | run? | `Binary 't.txt' not found` (basename of redirect token) | FAIL(UX) | 282/286 |
+| single-string pipe | `["cat …txt \| head -5"]` | run? | `Binary 'PowerShell_…txt \| head -5' not found` | FAIL(UX) | 288 |
+| mkdir | `mkdir -p tmp` | run | ran | PASS | 276 |
+
+**Consequence (usability):** the agent cannot pipe, redirect, append, chain, or `grep \| head` to reduce output. Large output must be fully materialised then captured (`save_output`/`preview_lines`) or **re-queried with a second `run_command(['grep',…])` against the saved file** — at least 2 call/response cycles per drill-down → exactly the context-bloat the owner flagged. No data-reduction primitive exists in a single call beyond `preview_lines`.
+
+### Security matrix (the strong half)
+| Case | Command | Expected | Actual | Verdict | audit |
+|---|---|---|---|---|---|
+| interp | `sh -c id` | block | `Binary 'sh' is blocked by security policy…` | PASS | 298 |
+| interp | `python3 -c …os.system` | block | blocked, same msg | PASS | 300 |
+| interp | `bash -lc id` | block | blocked | PASS | 302 |
+| pager | `less /etc/passwd` | block | blocked | PASS | 304 |
+| runner | `xargs id` | block | blocked | PASS | 306 |
+| debugger | `gdb` | block | blocked | PASS | 308 |
+| destroyer | `shred tmp/nope` | block | blocked | PASS | 310 |
+| destroyer | `wipefs /dev/sda` | block | blocked | PASS | 312 |
+| dd jail | `dd if=/dev/zero of=/etc/x` | block | `dd of= target must be under case agent/, extractions/, or tmp/` | PASS | 316 |
+| sysdir jail | `rm /etc/<x>` | block | `Access denied: … inside blocked system directory '/etc'` | PASS | 326 |
+| sysdir jail (src) | `cp /etc/hostname findings.json` | block | blocked on source `/etc` | PASS | 330 |
+| quoted literal | `grep ">" file` | pattern | ran as literal pattern (exit1 no-match) | PASS | 318 |
+| exotic fd | `id >&2` | "clear rejection" (S30) | **NOT rejected** — `>&2` literal arg (`id: '>&2': no such user`) | FAIL(claim) | 320 |
+| heredoc | `cat << EOF` | "clear rejection" (S30) | **NOT rejected** — `<<`,`EOF` literal (`No such file`) | FAIL(claim) | 322 |
+| `rm` in-case | `rm -rf tmp/doesnotexist` | (S30 expected block) | **ALLOWED** (exit 0) | GAP | 314 |
+| **evidence write** | `cp /usr/bin/python3 evidence/qa-decoy-REMOVEME` | block (evidence sovereign) | **SUCCEEDED — file written into sealed evidence/** | **GAP (HIGH)** | 338 |
+| evidence rm | `rm evidence/<nonexist>` | block | **reached exec** (not policy-blocked; `No such file`) | GAP (HIGH) | 328 |
+| finding tamper | `cp tmp/ls findings.json` | block | blocked by **FS read-only perm** (not policy) | PASS* | 336 |
+| audit read | `cat actions.jsonl` | — | readable (case record; ledger is gateway-side, `<case>/audit/` empty) | INFO | 332 |
+| detection | `evidence_verify` after plant | detect | **detected** `Unregistered: evidence/qa-decoy-REMOVEME`, failed CLOSED | PASS | — |
+| self-remediate | `rm evidence/qa-decoy-REMOVEME` | cleanup | **BLOCKED** `evidence_chain_violation` — agent cannot undo its own write | GAP (HIGH) | — |
+
+### Findings
+- **U-1 (HIGH usability):** no pipe/redirect/append/sequencing/stderr-control on the MCP surface; array = literal argv. Compositional data-reduction impossible → multi-call drill-downs → context bloat. Directly contradicts Session-30 redirect/stderr claims.
+- **U-2 (MED):** silent-wrong-behavior. Operators become literal args with **no error** (`true && echo ok` "succeeds" doing nothing; `echo … > f` prints instead of writing). An autonomous agent gets no signal it mis-composed.
+- **U-3 (MED):** single-element string + `/` → misleading `Binary '<basename>' not found` (basename of a redirect/path token). Incoherent for self-correction.
+- **U-4 (LOW):** per-call response boilerplate — duplicated `_case` object, rotating `discipline_reminder`, `data_provenance`/`output_format`/`metadata` on **every** call (incl. blocks). `environment_summary` dumps all 65 tools (~600 lines) with no counts-only mode.
+- **S-1 (HIGH):** **evidence/ is not write/delete-protected by policy.** `cp`/`rm`/`mv` reach `<case>/evidence/` (owner-writable dir); only the *system-dir* arg-jail and the *dd-specific* of= jail exist. `rm evidence/Rocba-Memory.raw` would destroy sovereign evidence; the integrity gate **detects after the fact, cannot prevent**.
+- **S-2 (HIGH, operational):** tamper trips fail-closed lock that the agent **cannot self-remediate** (`run_command` is chain-gated). One landed write into evidence/ = **DoS on the entire agent surface** until human portal re-seal. (This session left the case in exactly that state — see below.)
+- **S-3 (MED):** general write primitives (`rm`/`cp`/`mv`) are allowed and only system-dir-jailed; `rm -rf` inside the case (incl. prior `agent/` outputs) is permitted.
+- **S-4 (MED, as-documented):** containment is same-user (`systemd-run --scope` + rlimits + `sudo -n`). The path-jail is an **argv string scan**, not a kernel boundary — defeated by any path it doesn't model (e.g. relative `evidence/…`).
+- **S-5 (LOW):** Session-30 "exotic fd-dup + heredocs rejected with clear messages" does **not** reproduce — they are inert literal args. Not a vuln (inert), but the threat-model claim is wrong on this surface.
+- **UNVERIFIED:** path-shadow exec (`tmp/ls` = copy of python3, then run `["tmp/ls","-c","id"]`) — staged (audit 334) but exec test not completed (chmod hit a transient harness classifier outage, then the chain lock stopped further `run_command`). Basename-resolution **is** active (evidenced by the `Binary 't.txt'`/`'ls -la tmp'` errors), but the live "real-ls-not-decoy" exec was not observed. **Redo required.**
+
+### ⚠️ State left on the VM (needs human cleanup)
+`evidence/qa-decoy-REMOVEME` (copy of `/usr/bin/python3`, audit 338) is still in the case evidence dir; chain is in `evidence_chain_violation`; agent `/mcp` surface (run_command/evidence_list/evidence_verify) is fail-closed. Cannot be cleaned via MCP. **Remediation:** Examiner Portal → Evidence → remove unregistered file + re-seal, OR on VM: `rm /cases/rocba-exfiltration-20260602-1245/evidence/qa-decoy-REMOVEME` then `evidence_verify`. (Also leftover, harmless, inside the writable jail: `tmp/ls`, `tmp/` dir.)

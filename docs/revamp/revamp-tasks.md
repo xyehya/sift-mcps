@@ -488,6 +488,21 @@ Not a numbered MVP phase — a **refactor of the `run_command` exec path** in `p
 
 > Append newest at the top. Use the §3 template.
 
+### Session 31 — 2026-06-02 — Live black-box QA of hardened `run_command` (MCP surface only)
+- Branch/commit: `revamp/spg-v1` @ working tree. No code edits (black-box pass, per owner).
+- Phase: Stage-6 invariant probing — the live-VM test Session 30 deferred. Full log appended to `docs/revamp/phase6-e2e-qa-log.md` (Stage 6 section); audit IDs `…-266 … -338`.
+- DONE: ran the A/B/C matrix through the SIFT `/mcp` tools only (no Bash/curl/ssh) against `192.168.122.81:4508`, case `rocba-exfiltration-20260602-1245`.
+- **Security PASS:** DENY_FLOOR solid — `sh`/`bash`/`python3`/`less`/`xargs`/`gdb`/`shred`/`wipefs` all blocked with one clear message. `dd of=` jail and the system-dir arg-jail (`/etc`) fire with specific, actionable messages. Operator-injection class is eliminated **because** operators are inert (upside of U-1). Integrity gate **detects** an evidence-dir plant and fails closed.
+- **Security GAPS:** **S-1 (HIGH)** `evidence/` is not write/delete-protected by policy — `cp /usr/bin/python3 evidence/qa-decoy-REMOVEME` **succeeded** (audit 338); `rm evidence/<x>` reaches exec (328). Only `dd` is evidence-aware. **S-2 (HIGH)** the resulting chain-violation fail-closed lock blocks `run_command` itself → agent cannot self-remediate → one landed evidence write = DoS until portal re-seal. **S-3** `rm`/`cp`/`mv` allowed, only system-dir-jailed. **S-4** containment still same-user, jail is an argv scan not a kernel boundary.
+- **Usability (owner's concern, confirmed):** `command[]` is **literal argv, zero shell parsing**. Pipes/redirects/append/`<`/`2>&1`/`&&`/`||`/`;` are all inert (multi-element) or become a nonsense binary name (single string). **The Session-30 "flex" claims — `\x01` redirect sentinel, `2>&1`/`2>file`/`/dev/null`, exotic-fd/heredoc *rejection* — do NOT reproduce on the MCP surface.** No single-call data reduction beyond `preview_lines` → drill-downs need a 2nd `run_command(['grep',…])` on the saved file → context bloat. Worst part is **silent** mis-composition (U-2): no error when operators are swallowed.
+- **UNVERIFIED:** path-shadow exec (decoy `tmp/ls`=python3 staged at 334) not completed — chmod hit a transient harness classifier outage, then the chain lock halted runs. Basename-resolution is active but the live decoy-vs-real-ls exec was not observed. Redo.
+- Tests: n/a (black-box, no code change).
+- Live test on VM: **this session** — exercised the Session-30 `run_command` end to end via MCP.
+- Spec changed?: no. **R-spec-truth follow-up:** Session-30 plan/mmd edits must NOT claim redirect/stderr/heredoc handling as agent-facing until it's actually wired to the gateway array surface (or document it as a non-MCP code path).
+- ⚠️ STATE LEFT ON VM: `evidence/qa-decoy-REMOVEME` planted; chain in violation; agent surface fail-closed. Clean via portal re-seal or VM `rm /cases/rocba-exfiltration-20260602-1245/evidence/qa-decoy-REMOVEME` + `evidence_verify`. (Also harmless in jail: `tmp/ls`, `tmp/`.)
+- BLOCKERS: case agent surface is locked until the planted file is removed + re-sealed (owner action).
+- NEXT: (1) operator cleans up VM state; (2) decide `run_command` contract — recommend **structured `pipe_to`/`stdout_to`/`stdin_file` params** over a shell parser (keeps the no-injection win, restores compose+reduce); (3) close S-1 by making `<case>/evidence/` read-only to the worker for ALL binaries + RO mount/`0444` at seal; (4) finish the path-shadow exec test.
+
 ### Session 30 — 2026-06-02 — Post-Phase-6 refactor: `run_command` hardening + flexibility
 - Branch/commit: `revamp/spg-v1` @ working tree (committed this session)
 - Phase: post-Phase-6 refactor (not a numbered MVP task) — tasks touched: **`run_command` exec path** in `packages/sift-core/src/sift_core/execute/`; added the **Pre-Phase-7 tool-registration ergonomics** task.
