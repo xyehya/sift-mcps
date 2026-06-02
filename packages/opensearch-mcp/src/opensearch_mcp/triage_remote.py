@@ -1,6 +1,6 @@
 """Post-ingest triage enrichment — batch gateway calls + registry persistence rules.
 
-Gateway-dependent: check_artifact/check_system via windows-triage-mcp.
+Gateway-dependent: wintriage_check_artifact/wintriage_check_system via windows-triage-mcp.
 Gateway-independent: registry persistence R1-R17 via update_by_query.
 """
 
@@ -46,14 +46,14 @@ def _triage_degraded(verdict: dict) -> str | None:
 
 
 def _check_file(path: str) -> dict:
-    return call_tool("check_artifact", {"type": "file", "value": path}, timeout=15)
+    return call_tool("wintriage_check_artifact", {"type": "file", "value": path}, timeout=15)
 
 
 def _check_service(service_name: str, binary_path: str | None = None) -> dict:
     args = {"type": "service", "name": service_name}
     if binary_path:
         args["binary_path"] = binary_path
-    return call_tool("check_system", args, timeout=15)
+    return call_tool("wintriage_check_system", args, timeout=15)
 
 
 def enrich_remote(

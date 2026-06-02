@@ -2,14 +2,14 @@
 
 TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
     # === Search / lookup tools ===
-    "search_threat_intel": {
+    "cti_search_threat_intel": {
         "caveats": [
             "Results depend on OpenCTI instance data completeness",
             "Absence of results does not mean absence of threat",
         ],
         "interpretation_constraint": "Threat intel is point-in-time and instance-specific",
     },
-    "lookup_ioc": {
+    "cti_lookup_ioc": {
         "caveats": [
             "Threat intel is point-in-time, may be stale",
             "IOC context depends on feeds ingested into this instance",
@@ -43,13 +43,13 @@ TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
         ],
         "interpretation_constraint": "Vulnerability presence does not confirm exploitation",
     },
-    "get_recent_indicators": {
+    "cti_get_recent_indicators": {
         "caveats": [
             "Recency depends on feed ingestion schedule",
         ],
         "interpretation_constraint": "Recent indicators may not yet be fully contextualized",
     },
-    "search_reports": {
+    "cti_search_reports": {
         "caveats": [
             "Report availability depends on ingested feeds and sharing agreements",
         ],
@@ -128,27 +128,27 @@ TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
         ],
         "interpretation_constraint": "Notes reflect individual analyst perspective",
     },
-    "get_entity": {
+    "cti_get_entity": {
         "caveats": [
             "Entity details reflect current OpenCTI state",
         ],
         "interpretation_constraint": "Entity data may be updated as new intelligence arrives",
     },
-    "get_relationships": {
+    "cti_get_relationships": {
         "caveats": [
             "Relationships reflect CTI modeling, not ground truth",
         ],
         "interpretation_constraint": "Relationship strength varies — check confidence scores",
     },
     # === Operational tools ===
-    "get_health": {
+    "cti_get_health": {
         "caveats": [
             "Health check reflects current connectivity state",
         ],
         "interpretation_constraint": "Health status is point-in-time",
     },
     # search_entity resolves metadata by looking up the per-type key above
-    "search_entity": {
+    "cti_search_entity": {
         "caveats": [
             "Results depend on OpenCTI instance data completeness",
         ],

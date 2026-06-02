@@ -543,7 +543,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 next_steps = [
                     "Copy evidence to the case directory (e.g., /cases/{case}/evidence/)",
                     "Seal evidence via the Examiner Portal (Evidence tab → Seal Manifest)",
-                    "NOTE: Write tools are BLOCKED until evidence is sealed. Read-only tools (case_status, evidence_list, evidence_verify, search_knowledge) still work.",
+                    "NOTE: Write tools are BLOCKED until evidence is sealed. Read-only tools (case_status, evidence_list, evidence_verify, kb_search_knowledge) still work.",
                     "Then run idx_ingest() to index evidence into OpenSearch for structured analysis",
                 ]
             else:
@@ -589,7 +589,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 "2. Search for IOCs with idx_search() across all artifact types",
                 "3. Use idx_aggregate() to spot patterns (top commands, accounts, etc.)",
                 "4. Query specific hosts with idx_artifact_browse()",
-                "5. Check the RAG knowledge base with search_knowledge() for relevant detection guidance",
+                "5. Check the RAG knowledge base with kb_search_knowledge() for relevant detection guidance",
                 "6. Run timeline analysis on EVTX files if available",
                 "Stage findings as you go with record_finding() — they'll be DRAFT until examiner approval",
             ]

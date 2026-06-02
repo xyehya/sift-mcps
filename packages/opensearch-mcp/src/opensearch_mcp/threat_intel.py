@@ -451,7 +451,7 @@ def batch_lookup(
             ioc_handled = False
             while attempt < rate_limit_max_retries and not ioc_handled:
                 try:
-                    resp = call_tool("lookup_ioc", {"ioc": value}, timeout=15)
+                    resp = call_tool("cti_lookup_ioc", {"ioc": value}, timeout=15)
                 except Exception as e:
                     consecutive_failures += 1
                     coverage["skipped"][value] = f"exception: {str(e)[:120]}"

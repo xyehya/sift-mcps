@@ -1,7 +1,7 @@
 """Per-tool caveats and interpretation constraints for structured responses."""
 
 TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
-    "check_artifact": {
+    "wintriage_check_artifact": {
         "caveats": [
             "Baseline covers default Windows installations and selected context databases only",
             "Third-party software and unknown hashes will often return UNKNOWN",
@@ -15,7 +15,7 @@ TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
         ],
         "interpretation_constraint": "UNKNOWN means not-in-database, NOT suspicious",
     },
-    "check_process_tree": {
+    "wintriage_check_process_tree": {
         "caveats": [
             "Expected parent-child relationships vary by Windows version",
             "Custom enterprise software may create unusual process trees",
@@ -43,14 +43,14 @@ TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
         ],
         "interpretation_constraint": "Unknown autorun requires context — may be legitimate software",
     },
-    "check_system": {
+    "wintriage_check_system": {
         "caveats": [
             "Service, scheduled task, and autorun baselines vary by Windows version",
             "Enterprise management tools commonly create legitimate system entries",
         ],
         "interpretation_constraint": "UNKNOWN requires context and does not confirm malicious persistence",
     },
-    "check_registry": {
+    "wintriage_check_registry": {
         "caveats": [
             "Requires optional known_good_registry.db (12GB)",
             "Registry baselines are OS-version specific",
@@ -84,7 +84,7 @@ TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
         ],
         "interpretation_constraint": "Hijackable DLL requires analysis of loading application context",
     },
-    "check_pipe": {
+    "wintriage_check_pipe": {
         "caveats": [
             "Named pipe database covers known C2 and Windows default pipes",
             "Custom enterprise applications may use unlisted pipes",
@@ -103,7 +103,7 @@ TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
         ],
         "interpretation_constraint": "Health status is point-in-time",
     },
-    "server_status": {
+    "wintriage_server_status": {
         "caveats": [
             "Health and statistics reflect local backend state",
         ],

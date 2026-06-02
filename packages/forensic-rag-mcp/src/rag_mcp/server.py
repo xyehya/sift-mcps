@@ -6,9 +6,9 @@ Exposes the RAG knowledge base (23K+ records from 23 authoritative security
 sources) as MCP tools for Claude Code integration.
 
 Tools:
-    search_knowledge: Semantic search with optional filters (source, technique, platform)
-    list_knowledge_sources: Get available knowledge sources
-    get_knowledge_stats: Get index statistics
+    kb_search_knowledge: Semantic search with optional filters (source, technique, platform)
+    kb_list_knowledge_sources: Get available knowledge sources
+    kb_get_knowledge_stats: Get index statistics
 
 Usage:
     # Run directly
@@ -77,7 +77,7 @@ class RAGServer:
         if not chroma_path.exists():
             logger.warning(
                 "RAG knowledge index not found at %s. "
-                "The server will start in degraded mode — search_knowledge "
+                "The server will start in degraded mode — kb_search_knowledge "
                 "will return an error until the index is built. "
                 "Run: python -m rag_mcp.scripts.download_index",
                 chroma_path,
@@ -123,7 +123,7 @@ class RAGServer:
         """Register MCP tools."""
 
         @self.mcp.tool(annotations={"readOnlyHint": True})
-        async def search_knowledge(
+        async def kb_search_knowledge(
             query: str,
             top_k: int = 5,
             source: str | None = None,
@@ -146,20 +146,20 @@ class RAGServer:
                 "technique": technique,
                 "platform": platform,
             }
-            return await self._call_tool("search_knowledge", arguments, self._search)
+            return await self._call_tool("kb_search_knowledge", arguments, self._search)
 
         @self.mcp.tool(annotations={"readOnlyHint": True})
-        async def list_knowledge_sources() -> dict:
+        async def kb_list_knowledge_sources() -> dict:
             """List all available knowledge sources in the RAG index."""
             return await self._call_tool(
-                "list_knowledge_sources", {}, lambda _: self._list_sources()
+                "kb_list_knowledge_sources", {}, lambda _: self._list_sources()
             )
 
         @self.mcp.tool(annotations={"readOnlyHint": True})
-        async def get_knowledge_stats() -> dict:
+        async def kb_get_knowledge_stats() -> dict:
             """Get RAG index statistics: document count, sources, and model info."""
             return await self._call_tool(
-                "get_knowledge_stats", {}, lambda _: self._get_stats()
+                "kb_get_knowledge_stats", {}, lambda _: self._get_stats()
             )
 
     async def _call_tool(
@@ -283,7 +283,7 @@ class RAGServer:
             else:
                 response["warning"] = (
                     f"No sources match filter '{source}'. "
-                    "Use list_knowledge_sources tool to see available sources."
+                    "Use kb_list_knowledge_sources tool to see available sources."
                 )
 
         return response
@@ -313,7 +313,7 @@ class RAGServer:
         else:
             logger.warning(
                 "Starting MCP server in DEGRADED mode — index not found. "
-                "search_knowledge will return errors until the index is built."
+                "kb_search_knowledge will return errors until the index is built."
             )
         self.mcp.run()
 

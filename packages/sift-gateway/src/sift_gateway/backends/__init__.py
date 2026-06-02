@@ -87,11 +87,12 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
                     logger.warning("Failed to fetch manifest for HTTP backend %s from /manifest: %s", name, e)
 
     if manifest_data is None:
-        logger.warning("Backend %s: no manifest discovered.", name)
-        # Phase 6 flips to hard-reject. Raise in Phase 6 if manifest missing/invalid.
-        if os.environ.get("SIFT_PHASE") == "6":
-            raise ValueError(f"Backend manifest is missing/invalid for {name}")
-        return None
+        # Contract graduation (Phase 6.4): a missing manifest is always a hard
+        # reject — every add-on must ship a conformant sift-backend.json.
+        raise ValueError(
+            f"Backend manifest is missing/invalid for {name} (looked in {manifest_source}). "
+            "Every add-on backend must ship a conformant sift-backend.json."
+        )
 
     # Validate against JSON schema
     try:
@@ -111,10 +112,9 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
         logger.info("Successfully validated manifest for backend %s from %s", name, manifest_source)
         return manifest_data
     except Exception as e:
+        # Contract graduation (Phase 6.4): an invalid manifest is always a hard reject.
         logger.warning("Manifest validation failed for backend %s from %s: %s", name, manifest_source, e)
-        if os.environ.get("SIFT_PHASE") == "6":
-            raise ValueError(f"Backend manifest validation failed for {name}: {e}") from e
-        return None
+        raise ValueError(f"Backend manifest validation failed for {name}: {e}") from e
 
 
 def create_backend(name: str, config: dict) -> MCPBackend:

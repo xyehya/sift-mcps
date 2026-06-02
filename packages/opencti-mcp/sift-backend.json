@@ -1,0 +1,87 @@
+{
+  "spec_version": "1.0",
+  "name": "opencti-mcp",
+  "version": "1.0.0",
+  "tier": "addon",
+  "transport": "stdio",
+  "namespace": "cti",
+  "capabilities": {
+    "provides": ["reference"],
+    "requires": [],
+    "enriches_responses": false
+  },
+  "tools": [
+    {
+      "name": "cti_get_health",
+      "description": "Check OpenCTI server connectivity and API health.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "threat-intel",
+      "health": true
+    },
+    {
+      "name": "cti_search_threat_intel",
+      "description": "Broad search across all OpenCTI entity types: indicators, threat actors, malware, techniques, CVEs, and reports.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "threat-intel",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "cti_search_entity",
+      "description": "Search OpenCTI entities filtered by a single type (more precise than cti_search_threat_intel).",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "threat-intel",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "cti_lookup_ioc",
+      "description": "Look up a specific IOC (IP, hash, domain, or URL) and return full context.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "threat-intel",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "cti_get_recent_indicators",
+      "description": "Get recently added IOCs from the last N days.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "threat-intel",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "cti_get_entity",
+      "description": "Get full details for a specific entity by its OpenCTI UUID.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "threat-intel"
+    },
+    {
+      "name": "cti_get_relationships",
+      "description": "Get relationships for an entity (who uses it, what it indicates, what it targets, etc.).",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "threat-intel",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "cti_search_reports",
+      "description": "Search threat intelligence reports by keyword (campaign name, threat actor, malware family, CVE).",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "threat-intel",
+      "recommended_phase": "TRIAGE"
+    }
+  ],
+  "health": "cti_get_health"
+}

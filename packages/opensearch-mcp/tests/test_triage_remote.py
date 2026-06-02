@@ -90,12 +90,12 @@ class TestResponseFieldMapping:
             _check_service("EventLog")
 
         call.assert_any_call(
-            "check_artifact",
+            "wintriage_check_artifact",
             {"type": "file", "value": "C:\\Windows\\System32\\cmd.exe"},
             timeout=15,
         )
         call.assert_any_call(
-            "check_system",
+            "wintriage_check_system",
             {"type": "service", "name": "EventLog"},
             timeout=15,
         )

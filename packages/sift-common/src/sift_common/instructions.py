@@ -34,7 +34,7 @@ INVESTIGATION STARTUP: When beginning a new investigation (after the operator ac
 2. SURVEY EVIDENCE — Call case_status to confirm the active case and platform capabilities. Then call evidence_list to see all files in evidence/ with their registration and integrity status. If requires_examiner_action is true, notify the operator before proceeding. Identify artifact types: KAPE triage packages, disk images, memory dumps, logs, packet captures. Report to examiner: "I see X hosts of KAPE triage, Y memory images, Z log files."
 3. INGEST — If OpenSearch indexing tools are available (idx_case_summary, idx_search), offer to index evidence for fast searching. If approved, run ingest then idx_case_summary for overview. If not available, proceed with file-based analysis.
 4. SCOPE — Before detailed analysis: idx_case_summary for hosts/artifacts/fields, idx_aggregate on host.name/event.code/user.name for statistical overview, idx_timeline for activity spikes, idx_enrich_triage for baseline anomalies, idx_list_detections for Sigma hits. Present scoping summary to examiner for direction.
-4b. TOOL INVENTORY — Before deep analysis, call suggest_tools for each artifact type in the case. Memory dumps: idx_ingest(format="memory", ...). Suspicious binaries: analyze with SIFT tools — run_command(['file', ...]) for type detection, check_artifact(type='hash', ...) for baseline, then run_command(['strings', ...]) or run_command(['readelf', ...]) as needed. Text evidence (CSV, TSV, Zeek, logs): idx_ingest(format="delimited", hostname="auto", ...) for flat directories with per-host filenames. Do NOT default to OpenSearch queries only — use structured search plus SIFT deep-dive tools when the indexed output is not enough.
+4b. TOOL INVENTORY — Before deep analysis, call suggest_tools for each artifact type in the case. Memory dumps: idx_ingest(format="memory", ...). Suspicious binaries: analyze with SIFT tools — run_command(['file', ...]) for type detection, wintriage_check_artifact(type='hash', ...) for baseline, then run_command(['strings', ...]) or run_command(['readelf', ...]) as needed. Text evidence (CSV, TSV, Zeek, logs): idx_ingest(format="delimited", hostname="auto", ...) for flat directories with per-host filenames. Do NOT default to OpenSearch queries only — use structured search plus SIFT deep-dive tools when the indexed output is not enough.
 5. TRIAGE PRIORITIES — Standard DFIR sequence: authentication anomalies (4624/4625/4648), lateral movement (type 3/10 logons across hosts), persistence mechanisms (services, scheduled tasks, Run keys), execution artifacts (process creation, script blocks), data staging/exfiltration indicators. Use list_playbooks for investigation procedures.
 6. RECORD AS YOU GO — Present evidence at each discovery, get examiner approval, call record_finding immediately, record_timeline_event for key timestamps, log_reasoning at decision points. Do not batch findings at the end.
 
@@ -70,8 +70,8 @@ GATEWAY = (
     "the gateway resolves them against the active case directory. "
     "Do not call case_init, case_activate, or evidence_register — these are portal-managed. "
     "Evidence indexing and search — use idx_* tools (opensearch-mcp); start every indexed session with idx_case_summary for scope. "
-    "Windows artifacts — check_artifact, check_system, check_process_tree (via windows-triage). "
-    "Threat intel — lookup_ioc, search_threat_intel (via opencti). "
+    "Windows artifacts — wintriage_check_artifact, wintriage_check_system, wintriage_check_process_tree (via windows-triage). "
+    "Threat intel — cti_lookup_ioc, cti_search_threat_intel (via opencti). "
     "After receiving FK enrichment for a tool, set skip_enrichment: true "
     "on subsequent calls to the same tool in the same session. "
     "\n\n"

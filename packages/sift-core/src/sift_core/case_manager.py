@@ -673,11 +673,11 @@ class CaseManager:
             )
         if capabilities["forensic_rag"]:
             guidance.append(
-                "- Knowledge search: search_knowledge (Sigma, MITRE ATT&CK, KAPE)"
+                "- Knowledge search: kb_search_knowledge (Sigma, MITRE ATT&CK, KAPE)"
             )
         if capabilities["opencti"]:
             guidance.append(
-                "- Threat intel: lookup_ioc, search_threat_intel on OpenCTI"
+                "- Threat intel: cti_lookup_ioc, cti_search_threat_intel on OpenCTI"
             )
         guidance.append("")
         guidance.append(

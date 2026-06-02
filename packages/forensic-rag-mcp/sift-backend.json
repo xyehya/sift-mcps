@@ -1,0 +1,44 @@
+{
+  "spec_version": "1.0",
+  "name": "forensic-rag-mcp",
+  "version": "1.0.0",
+  "tier": "addon",
+  "transport": "stdio",
+  "namespace": "kb",
+  "capabilities": {
+    "provides": ["reference"],
+    "requires": [],
+    "enriches_responses": false
+  },
+  "tools": [
+    {
+      "name": "kb_search_knowledge",
+      "description": "Semantic search across 23K+ incident response knowledge records (Sigma, MITRE ATT&CK, Atomic Red Team, KAPE, Velociraptor, LOLBAS, GTFOBins, and more).",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "kb_list_knowledge_sources",
+      "description": "List all available knowledge sources in the RAG index.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "ORIENT"
+    },
+    {
+      "name": "kb_get_knowledge_stats",
+      "description": "Get RAG index statistics: document count, sources, and model info.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "ORIENT",
+      "health": true
+    }
+  ],
+  "health": "kb_get_knowledge_stats"
+}

@@ -139,12 +139,12 @@ async def test_consolidated_tools_are_registered(server):
     res = await handler(ListToolsRequest())
     tools = {tool.name for tool in res.root.tools}
     assert tools == {
-        "check_artifact",
-        "check_process_tree",
-        "check_system",
-        "check_registry",
-        "check_pipe",
-        "server_status",
+        "wintriage_check_artifact",
+        "wintriage_check_process_tree",
+        "wintriage_check_system",
+        "wintriage_check_registry",
+        "wintriage_check_pipe",
+        "wintriage_server_status",
     }
 
 
@@ -158,7 +158,7 @@ async def _call_tool(server, name: str, arguments: dict) -> dict:
 async def test_check_artifact_routes_file_hash_lolbin_and_dll(server):
     file_result = await _call_tool(
         server,
-        "check_artifact",
+        "wintriage_check_artifact",
         {
             "type": "file",
             "value": r"C:\Windows\System32\cmd.exe",
@@ -170,15 +170,15 @@ async def test_check_artifact_routes_file_hash_lolbin_and_dll(server):
     assert file_result["artifact_type"] == "file"
     assert file_result["interpretation_constraint"] == "UNKNOWN means not-in-database, NOT suspicious"
 
-    hash_result = await _call_tool(server, "check_artifact", {"type": "hash", "value": "b" * 64})
+    hash_result = await _call_tool(server, "wintriage_check_artifact", {"type": "hash", "value": "b" * 64})
     assert hash_result["verdict"] == "SUSPICIOUS"
     assert hash_result["artifact_type"] == "hash"
 
-    lolbin_result = await _call_tool(server, "check_artifact", {"type": "lolbin", "value": "mshta.exe"})
+    lolbin_result = await _call_tool(server, "wintriage_check_artifact", {"type": "lolbin", "value": "mshta.exe"})
     assert lolbin_result["is_lolbin"] is True
     assert lolbin_result["artifact_type"] == "lolbin"
 
-    dll_result = await _call_tool(server, "check_artifact", {"type": "dll", "value": "version.dll"})
+    dll_result = await _call_tool(server, "wintriage_check_artifact", {"type": "dll", "value": "version.dll"})
     assert dll_result["is_hijackable"] is True
     assert dll_result["artifact_type"] == "dll"
 
@@ -187,7 +187,7 @@ async def test_check_artifact_routes_file_hash_lolbin_and_dll(server):
 async def test_check_system_routes_service_task_and_autorun(server):
     service_result = await _call_tool(
         server,
-        "check_system",
+        "wintriage_check_system",
         {
             "type": "service",
             "name": "EventLog",
@@ -200,7 +200,7 @@ async def test_check_system_routes_service_task_and_autorun(server):
 
     task_result = await _call_tool(
         server,
-        "check_system",
+        "wintriage_check_system",
         {
             "type": "scheduled_task",
             "name": r"\Microsoft\Windows\Defrag\ScheduledDefrag",
@@ -212,7 +212,7 @@ async def test_check_system_routes_service_task_and_autorun(server):
 
     autorun_result = await _call_tool(
         server,
-        "check_system",
+        "wintriage_check_system",
         {
             "type": "autorun",
             "name": r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -226,15 +226,15 @@ async def test_check_system_routes_service_task_and_autorun(server):
 
 @pytest.mark.asyncio
 async def test_server_status_routes_health_db_stats_and_all(server):
-    health = await _call_tool(server, "server_status", {"resource": "health"})
+    health = await _call_tool(server, "wintriage_server_status", {"resource": "health"})
     assert "status" in health
     assert health["resource"] == "health"
 
-    stats = await _call_tool(server, "server_status", {"resource": "db_stats"})
+    stats = await _call_tool(server, "wintriage_server_status", {"resource": "db_stats"})
     assert "known_good_db" in stats
     assert stats["resource"] == "db_stats"
 
-    all_status = await _call_tool(server, "server_status", {"resource": "all"})
+    all_status = await _call_tool(server, "wintriage_server_status", {"resource": "all"})
     assert "health" in all_status
     assert "db_stats" in all_status
     assert all_status["resource"] == "all"

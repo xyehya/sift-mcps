@@ -152,13 +152,13 @@ class OpenCTIMCPServer:
         async def list_tools() -> list[Tool]:
             tools = [
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="get_health",
+                    name="cti_get_health",
                     description="Check OpenCTI server connectivity and API health. Use before investigation to verify the threat intel source is available. Does not count against rate limits.",
                     inputSchema={"type": "object", "properties": {}},
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="search_threat_intel",
-                    description="Broad search across all OpenCTI entity types: indicators, threat actors, malware, techniques, CVEs, and reports. Returns up to limit results per entity type (default 5, max 20). Use confidence_min (0-100) to filter low-quality matches. For type-specific searches with more results, use search_entity instead. Supports offset pagination (max 500).",
+                    name="cti_search_threat_intel",
+                    description="Broad search across all OpenCTI entity types: indicators, threat actors, malware, techniques, CVEs, and reports. Returns up to limit results per entity type (default 5, max 20). Use confidence_min (0-100) to filter low-quality matches. For type-specific searches with more results, use cti_search_entity instead. Supports offset pagination (max 500).",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -205,8 +205,8 @@ class OpenCTIMCPServer:
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="search_entity",
-                    description="Search OpenCTI entities filtered by a single type. More precise than search_threat_intel — returns up to 50 results for one entity type instead of 20 across all types. Use for focused queries like 'all malware associated with APT28' or 'all vulnerabilities matching CVE-2024'. Supports confidence_min, label filtering, date range, and offset pagination (max 500). Valid types: threat_actor, malware, attack_pattern, vulnerability, campaign, tool, infrastructure, incident, observable, sighting, organization, sector, location, course_of_action, grouping, note.",
+                    name="cti_search_entity",
+                    description="Search OpenCTI entities filtered by a single type. More precise than cti_search_threat_intel — returns up to 50 results for one entity type instead of 20 across all types. Use for focused queries like 'all malware associated with APT28' or 'all vulnerabilities matching CVE-2024'. Supports confidence_min, label filtering, date range, and offset pagination (max 500). Valid types: threat_actor, malware, attack_pattern, vulnerability, campaign, tool, infrastructure, incident, observable, sighting, organization, sector, location, course_of_action, grouping, note.",
                     inputSchema={
                         "type": "object",
                         "properties": {
@@ -253,7 +253,7 @@ class OpenCTIMCPServer:
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="lookup_ioc",
+                    name="cti_lookup_ioc",
                     description="Look up a specific IOC (IP, hash, domain, or URL) and return full context: related threat actors, malware families, MITRE techniques, and campaigns. Use for known IOCs you want to contextualize, not for broad searching. Handles all IOC types including MD5, SHA1, and SHA256 hashes.",
                     inputSchema={
                         "type": "object",
@@ -268,7 +268,7 @@ class OpenCTIMCPServer:
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="get_recent_indicators",
+                    name="cti_get_recent_indicators",
                     description="Get recently added IOCs from the last N days (default 7, max 90). Returns up to 100 indicators sorted by creation date. Use for situational awareness or to check if new intel has been ingested relevant to an ongoing investigation.",
                     inputSchema={
                         "type": "object",
@@ -290,7 +290,7 @@ class OpenCTIMCPServer:
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="get_entity",
+                    name="cti_get_entity",
                     description="Get full details for a specific entity by its OpenCTI UUID. Returns all fields including description, labels, confidence, external references, and creation/modification dates. Use after finding an entity via search to get complete context. The entity ID comes from search result fields.",
                     inputSchema={
                         "type": "object",
@@ -304,7 +304,7 @@ class OpenCTIMCPServer:
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="get_relationships",
+                    name="cti_get_relationships",
                     description="Get relationships for an entity: who uses it, what it indicates, what it targets, etc. Filter by direction ('from' = outgoing, 'to' = incoming, 'both' = default) and relationship_types (e.g., 'indicates', 'uses', 'targets'). Returns up to 50 related entities. Use to map threat actor toolkits, malware capabilities, or indicator context.",
                     inputSchema={
                         "type": "object",
@@ -335,7 +335,7 @@ class OpenCTIMCPServer:
                     },
                 ),
                 Tool(annotations=ToolAnnotations(readOnlyHint=True),
-                    name="search_reports",
+                    name="cti_search_reports",
                     description="Search threat intelligence reports by keyword (campaign name, threat actor, malware family, CVE). Returns report metadata, publication date, and associated entities. Reports often contain the analytical narrative that individual IOCs lack. Supports offset pagination, label filtering, confidence threshold, and date range.",
                     inputSchema={
                         "type": "object",
@@ -584,7 +584,7 @@ class OpenCTIMCPServer:
             result["warning"] = "Audit write failed — action not recorded"
         # For search_entity, resolve metadata by the underlying entity type
         meta_key = tool_name
-        if tool_name == "search_entity":
+        if tool_name == "cti_search_entity":
             entity_type = arguments.get("type", "")
             # Map to the old per-type tool name for metadata lookup
             _type_to_meta_key = {
@@ -683,14 +683,14 @@ class OpenCTIMCPServer:
     async def _dispatch_tool(self, name: str, arguments: dict) -> dict[str, Any]:
         """Dispatch tool call to appropriate handler."""
 
-        if name == "get_health":
+        if name == "cti_get_health":
             available = await asyncio.to_thread(self.client.is_available)
             return {
                 "status": "healthy" if available else "unavailable",
                 "opencti_available": available,
             }
 
-        elif name == "search_threat_intel":
+        elif name == "cti_search_threat_intel":
             query = arguments.get("query", "")
             confidence_min = arguments.get("confidence_min")
             validate_length(query, MAX_QUERY_LENGTH, "query")
@@ -714,10 +714,10 @@ class OpenCTIMCPServer:
                 created_before,
             )
 
-        elif name == "search_entity":
+        elif name == "cti_search_entity":
             return await self._dispatch_search_entity(arguments)
 
-        elif name == "lookup_ioc":
+        elif name == "cti_lookup_ioc":
             ioc = arguments.get("ioc", "")
             validate_length(ioc, MAX_IOC_LENGTH, "ioc")
             is_valid, ioc_type = validate_ioc(ioc)
@@ -725,7 +725,7 @@ class OpenCTIMCPServer:
             result["ioc_type"] = ioc_type
             return result
 
-        elif name == "get_recent_indicators":
+        elif name == "cti_get_recent_indicators":
             days = arguments.get("days", 7)
             limit = arguments.get("limit", 20)
             days = validate_days(days, max_value=90)
@@ -736,7 +736,7 @@ class OpenCTIMCPServer:
             results = self._safe_results(results)
             return {"days": days, "results": results, "total": len(results)}
 
-        elif name == "get_entity":
+        elif name == "cti_get_entity":
             entity_id = arguments.get("entity_id", "")
             # Security: Validate UUID format to prevent injection
             entity_id = validate_uuid(entity_id, "entity_id")
@@ -745,7 +745,7 @@ class OpenCTIMCPServer:
                 return {"found": False, "entity_id": entity_id}
             return {"found": True, "entity": result}
 
-        elif name == "get_relationships":
+        elif name == "cti_get_relationships":
             entity_id = arguments.get("entity_id", "")
             direction = arguments.get("direction", "both")
             relationship_types = arguments.get("relationship_types")
@@ -771,7 +771,7 @@ class OpenCTIMCPServer:
                 "total": len(results),
             }
 
-        elif name == "search_reports":
+        elif name == "cti_search_reports":
             query = arguments.get("query", "")
             confidence_min = arguments.get("confidence_min")
             validate_length(query, MAX_QUERY_LENGTH, "query")

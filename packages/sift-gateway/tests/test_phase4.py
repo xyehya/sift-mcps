@@ -85,9 +85,7 @@ def test_strict_binary_evidence_gate():
 
 
 # Test manifest validation compatibility checks
-def test_manifest_validation(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_PHASE", "6")
-    
+def test_manifest_validation(tmp_path):
     # 1. Invalid spec version (v2.x)
     invalid_manifest = {
         "spec_version": "2.0",

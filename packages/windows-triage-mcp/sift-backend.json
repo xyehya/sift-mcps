@@ -1,0 +1,72 @@
+{
+  "spec_version": "1.0",
+  "name": "windows-triage-mcp",
+  "version": "1.0.0",
+  "tier": "addon",
+  "transport": "stdio",
+  "namespace": "wintriage",
+  "capabilities": {
+    "provides": ["reference"],
+    "requires": [],
+    "enriches_responses": false
+  },
+  "tools": [
+    {
+      "name": "wintriage_check_artifact",
+      "description": "Validate one Windows artifact (file/hash/filename/LOLBin/DLL) against local offline baselines.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "baseline-check",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "wintriage_check_process_tree",
+      "description": "Validate a process parent-child relationship against the Windows process tree baseline.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "baseline-check",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "wintriage_check_system",
+      "description": "Validate Windows persistence/system configuration (service/scheduled_task/autorun) against OS-version baselines.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "baseline-check",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "wintriage_check_registry",
+      "description": "Check a registry key or value against the full registry baseline (requires the optional 12GB known_good_registry.db).",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "baseline-check",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "wintriage_check_pipe",
+      "description": "Check a named pipe against known Windows pipes and known C2 framework pipes.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "baseline-check",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "wintriage_server_status",
+      "description": "Report Windows triage backend readiness (health, db_stats, or all).",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "baseline-check",
+      "recommended_phase": "TRIAGE",
+      "health": true,
+      "health_args": {"resource": "health"}
+    }
+  ],
+  "health": "wintriage_server_status"
+}
