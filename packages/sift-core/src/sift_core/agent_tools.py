@@ -182,7 +182,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "Read case timeline or action records without mutating evidence or findings.",
         _schema(
             {
-                "record_type": {"type": "string", "enum": ["timeline", "action"]},
+                "record_type": {"type": "string", "enum": ["timeline", "actions"]},
                 "status": {"type": "string"},
                 "source": {"type": "string"},
                 "examiner": {"type": "string"},
@@ -402,16 +402,28 @@ def _evidence_verify() -> dict:
 
 
 def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
+    start = time.monotonic()
+    audit_id = audit._next_audit_id(examiner=examiner)
+
     command, command_error = _coerce_run_command(args.get("command") or "")
     if command_error:
-        return {"error": command_error}
+        return build_response(
+            tool_name="run_command",
+            success=False,
+            data=None,
+            audit_id=audit_id,
+            error=command_error,
+        )
     assert command is not None
     purpose = str(args.get("purpose", ""))
     if not purpose:
-        return {"error": "purpose is required"}
-
-    start = time.monotonic()
-    audit_id = audit._next_audit_id(examiner=examiner)
+        return build_response(
+            tool_name="run_command",
+            success=False,
+            data=None,
+            audit_id=audit_id,
+            error="purpose is required",
+        )
     try:
         working_dir = str(args.get("working_dir", ""))
         if working_dir:
@@ -819,6 +831,9 @@ def _record_finding(args: dict, examiner: str, manager: CaseManager, audit: Audi
 
 def _query_case(args: dict, manager: CaseManager) -> dict:
     record_type = str(args.get("record_type", "")).strip().lower()
+    # Backward compat: normalize singular "action" to "actions"
+    if record_type == "action":
+        record_type = "actions"
     limit = int(args.get("limit", 50))
     offset = int(args.get("offset", 0))
     if record_type == "timeline":

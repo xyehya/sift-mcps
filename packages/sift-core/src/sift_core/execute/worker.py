@@ -103,6 +103,14 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 if op == "2>&1":
                     merge_stderr = True
                     continue
+                # Verify parent directory exists for write redirects
+                if op in (">", ">>", "2>", "2>>", "&>", "&>>"):
+                    parent = os.path.dirname(target)
+                    if parent and not os.path.isdir(parent):
+                        raise FileNotFoundError(
+                            f"Redirection target directory not found: '{parent}'. "
+                            f"Create the directory first before redirecting to '{target}'."
+                        )
                 try:
                     if op == ">":
                         f = open(target, "wb")
@@ -205,7 +213,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 for proc, _, _ in processes:
                     _kill_process_tree(proc)
                 for proc, _, _ in processes:
-                    proc.wait(timeout=5)
+                    proc.wait(timeout=1)
                 return {
                     "error_type": "timeout",
                     "message": f"Command timed out after {timeout}s",
@@ -216,7 +224,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 for proc, _, _ in processes:
                     _kill_process_tree(proc)
                 for proc, _, _ in processes:
-                    proc.wait(timeout=5)
+                    proc.wait(timeout=1)
                 break
                 
             # Check if all processes have finished

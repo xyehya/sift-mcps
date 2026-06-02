@@ -57,7 +57,7 @@ def _run_isolated_worker(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout + 10,
+        timeout=timeout + 3,
         shell=False,
     )
 
@@ -182,31 +182,23 @@ def execute(
         if worker_result.get("stages"):
             response["stages"] = worker_result["stages"]
 
-        # Threshold-based save: auto-save when output exceeds response budget
+        # Threshold-based save: auto-save when output exceeds response budget,
+        # or when save_output is explicitly requested.
         case_dir = resolve_case_dir()
         exceeds_budget = stdout_byte_count > config.response_byte_budget
 
-        if exceeds_budget and case_dir:
-            _save_output(
-                cmd_list,
-                stdout,
-                stderr,
-                save_dir or str(_next_run_command_output_dir(Path(case_dir))),
-                response,
-            )
-        elif save_output and (stdout or stderr):
-            default_save_dir = None
-            if case_dir:
-                default_save_dir = str(_next_run_command_output_dir(Path(case_dir)))
-            elif cwd:
-                default_save_dir = str(Path(cwd) / "extracted")
-            _save_output(
-                cmd_list,
-                stdout,
-                stderr,
-                save_dir or default_save_dir,
-                response,
-            )
+        # Resolve save directory once
+        if save_dir:
+            out_dir = save_dir
+        elif case_dir:
+            out_dir = str(_next_run_command_output_dir(Path(case_dir)))
+        elif cwd:
+            out_dir = str(Path(cwd) / "extracted")
+        else:
+            out_dir = None
+
+        if (exceeds_budget and case_dir) or save_output:
+            _save_output(cmd_list, stdout, stderr, out_dir, response)
 
         return response
 
@@ -218,12 +210,18 @@ def execute(
         msg = str(exc)
         if msg.startswith("Redirection target not found:"):
             raise ExecutionError(msg) from exc
-        raise ExecutionError(f"Binary not found: {_first_command_name(cmd_list)}") from exc
+        if msg.startswith("Redirection target directory not found:"):
+            raise ExecutionError(msg) from exc
+        raise ExecutionError(
+            f"File not found: {msg}. Command: {_format_command(cmd_list)}"
+        ) from exc
     except PermissionError as exc:
         msg = str(exc)
         if msg.startswith("Permission denied on redirection target:"):
             raise ExecutionError(msg) from exc
-        raise ExecutionError(f"Permission denied: {_first_command_name(cmd_list)}") from exc
+        raise ExecutionError(
+            f"Permission denied: {msg}. Command: {_format_command(cmd_list)}"
+        ) from exc
     except OSError as e:
         raise ExecutionError(f"OS error executing {_first_command_name(cmd_list)}: {e}") from e
 
