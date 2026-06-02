@@ -1134,16 +1134,32 @@ uninstall_runtime() {
   fi
 }
 
+_purge_tree() {
+  # Remove a directory tree that may contain evidence files marked immutable
+  # (chattr +i) or append-only (chattr +a) by the forensic write-protection
+  # (CAP_LINUX_IMMUTABLE). A plain `rm -rf` returns "Operation not permitted" on
+  # those, so the attributes MUST be cleared first. No-op on filesystems without
+  # chattr support.
+  local target="$1"
+  [[ -d "$target" ]] || return 0
+  if command -v chattr >/dev/null 2>&1; then
+    # -R recurses; ignore errors on fs/files that don't carry the attrs.
+    sudo_if_needed chattr -R -f -i "$target" 2>/dev/null || true
+    sudo_if_needed chattr -R -f -a "$target" 2>/dev/null || true
+  fi
+  sudo_if_needed rm -rf "$target"
+}
+
 purge_data() {
   [[ "${PURGE_DATA:-0}" == "1" ]] || return 0
-  _confirm_destructive "ABOUT TO PERMANENTLY DELETE: $SIFT_STATE_DIR (integrity records, tokens, passwords, snapshots) and $SIFT_CASE_ROOT (EVIDENCE). This cannot be undone."
+  _confirm_destructive "ABOUT TO PERMANENTLY DELETE: $SIFT_STATE_DIR (integrity records, tokens, passwords, snapshots) and $SIFT_CASE_ROOT (EVIDENCE, incl. immutable-flagged files). This cannot be undone."
   if [[ -d "$SIFT_STATE_DIR" ]]; then
-    sudo_if_needed rm -rf "$SIFT_STATE_DIR"
+    _purge_tree "$SIFT_STATE_DIR"
     log "Purged state dir ($SIFT_STATE_DIR)."
   fi
   if [[ -d "$SIFT_CASE_ROOT" ]]; then
-    sudo_if_needed rm -rf "$SIFT_CASE_ROOT"
-    log "Purged case root ($SIFT_CASE_ROOT) — EVIDENCE deleted."
+    _purge_tree "$SIFT_CASE_ROOT"
+    log "Purged case root ($SIFT_CASE_ROOT) — EVIDENCE deleted (immutable flags cleared first)."
   fi
 }
 
