@@ -339,9 +339,9 @@
     <p class="lead">The standard others build on. A backend satisfying this contract can be dropped on a SIFT VM and aggregated with no compatibility negotiation.</p>
 
     <h3 id="manifest">4.1 — Backend manifest (<code>sift-backend.json</code>)</h3>
-    <p>Every backend ships a manifest at a well-known path. The gateway loads it at registration, validates against the schema, runs the conformance probe (reusing the <code>/mcp/{name}</code> endpoint, P8), and only then merges the backend's tools into <code>/mcp</code>. This replaces today's reactive discovery and collision-prefixing.</p>
+    <p>Every backend ships a manifest at a well-known path. The gateway loads it at registration, validates against the schema, runs the conformance probe (reusing the <code>/mcp/{name}</code> endpoint, P8), and only then merges the backend's tools into <code>/mcp</code>. Operators can preflight a backend with <code>POST /api/v1/backends/validate</code>, then register it with <code>POST /api/v1/backends</code>; non-conformant manifests return field-level reasons and are not written or exposed. This replaces today's reactive discovery and collision-prefixing.</p>
     <h4>JSON Schema (Draft 2020-12) — v4 (identity <b>retired</b> → core-native/out-of-band per F-F; <code>output_cap</code> removed → centralized in the trust layer, §Phase 5; hardens add-on metadata so plug-and-play registration is contract-enforced)</h4>
-    <div class="callout fix"><b>Contract hardening:</b> add-on manifests now use schema/probe-enforced metadata, not per-backend conventions. <code>capabilities.provides</code> is restricted to <code>reference</code>, <code>search</code>, <code>ingest</code>, <code>enrichment</code>, <code>baseline</code>, and <code>threat-intel</code>. <code>reference</code> is the backend-level grounding switch and means independent corroboration/reference context; OpenSearch search/ingest does not count as grounding. Add-on <code>recommended_phase</code> is standardized as <code>SURVEY</code>, <code>INGEST</code>, <code>ANALYZE</code>, <code>CORRELATE</code>, <code>FINDING</code>. <code>SEALED</code> is a custody state, not a phase. Every add-on tool declares <code>read_only</code>, <code>readOnlyHint</code>, <code>evidence_class</code>, <code>category</code>, and <code>recommended_phase</code>; top-level <code>health</code> must point at exactly one declared <code>health:true</code> tool.</div>
+    <div class="callout fix"><b>Contract hardening:</b> add-on manifests now use schema/probe-enforced metadata, not per-backend conventions. <code>capabilities.provides</code> is restricted to <code>reference</code>, <code>search</code>, <code>ingest</code>, <code>enrichment</code>, <code>baseline</code>, and <code>threat-intel</code>. <code>reference</code> is the backend-level grounding switch and means independent corroboration/reference context; OpenSearch search/ingest does not count as grounding. Add-on <code>recommended_phase</code> is standardized as <code>SURVEY</code>, <code>INGEST</code>, <code>ANALYZE</code>, <code>CORRELATE</code>, <code>FINDING</code>. <code>SEALED</code> is a custody state, not a phase. Every add-on tool declares <code>read_only</code>, <code>readOnlyHint</code>, <code>evidence_class</code>, <code>category</code>, and <code>recommended_phase</code>; top-level <code>health</code> must point at exactly one declared <code>health:true</code> tool. Optional backend <code>instructions</code>/<code>instructions_path</code> and per-tool <code>when_to_use</code>/<code>avoid_when</code>/<code>output_notes</code> feed the live <code>capability_guide</code> without bloating initialize text.</div>
     <pre><code>{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "SiftBackendManifest",
@@ -356,6 +356,8 @@
     "tier": { "enum":["addon"] },
     "transport": { "enum":["stdio","http"] },
     "namespace": { "type":"string" },
+    "instructions": { "type":"string" },
+    "instructions_path": { "type":"string" },
     "capabilities": {
       "type":"object",
       "required":["provides","requires","enriches_responses"],
@@ -383,7 +385,10 @@
           "recommended_phase": { "enum":["SURVEY","INGEST","ANALYZE","CORRELATE","FINDING"] },
           "health": { "type":"boolean" },
           "health_args": { "type":"object" },
-          "hidden_from_agent": { "type":"boolean" }
+          "hidden_from_agent": { "type":"boolean" },
+          "when_to_use": { "type":"string" },
+          "avoid_when": { "type":"string" },
+          "output_notes": { "type":"string" }
         }
       }
     },
@@ -401,16 +406,17 @@
   "tier": "addon",
   "transport": "stdio",
   "namespace": "opensearch",
+  "instructions": "Use OpenSearch for indexed case-evidence search, ingest, enrichment, and operational index health. It is not independent reference grounding.",
   "capabilities": { "provides":["search","ingest","enrichment"],
                     "requires":["https://localhost:9200"],
                     "enriches_responses": false },
-  "resource_requirements": { "min_ram_gb":8, "needs_docker":true,
-                             "services":["sift-opensearch"] },
-  "instructions": "Indexing &amp; search. Call opensearch_case_summary first for scope.",
   "tools": [
     { "name":"opensearch_search", "description":"Search indexed evidence.",
       "read_only":true, "readOnlyHint":true, "evidence_class":"read_only",
-      "category":"search-analysis", "recommended_phase":"ANALYZE" },
+      "category":"search-analysis", "recommended_phase":"ANALYZE",
+      "when_to_use":"Use for targeted searches across already indexed case evidence.",
+      "avoid_when":"Avoid before evidence has been ingested or when independent reference grounding is needed.",
+      "output_notes":"Returns indexed case records; use tools/list for query syntax." },
     { "name":"opensearch_status", "description":"Check OpenSearch readiness.",
       "read_only":true, "readOnlyHint":true, "evidence_class":"read_only",
       "category":"ingest", "recommended_phase":"INGEST", "health":true },

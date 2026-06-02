@@ -1,14 +1,17 @@
 """REST API routes for /api/v1/."""
 
 import asyncio
+import copy
 import json
 import logging
 import os
 import socket
 import tempfile
 import threading
+from pathlib import Path
 from urllib.parse import urlparse
 
+import jsonschema
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -24,11 +27,140 @@ from sift_gateway.join import (
 )
 from sift_gateway.rate_limit import check_rate_limit
 from sift_gateway.token_gen import generate_gateway_token
+from sift_gateway.backends import (
+    SCHEMA_PATH,
+    create_backend,
+    load_and_validate_manifest,
+    validate_manifest_contract,
+)
 
 logger = logging.getLogger(__name__)
 
 # Maximum request body size (10 MB)
 _MAX_REQUEST_BYTES = 10 * 1024 * 1024
+
+
+async def _read_json_body(request: Request) -> tuple[dict | None, JSONResponse | None]:
+    raw_body = await request.body()
+    if len(raw_body) > _MAX_REQUEST_BYTES:
+        return None, JSONResponse(
+            {"error": f"Request body too large (max {_MAX_REQUEST_BYTES} bytes)"},
+            status_code=413,
+        )
+    try:
+        body = json.loads(raw_body or b"{}")
+    except json.JSONDecodeError:
+        return None, JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return None, JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+    return body, None
+
+
+def _gateway_config_path() -> Path:
+    configured = os.environ.get("SIFT_GATEWAY_CONFIG")
+    return Path(configured) if configured else Path.home() / ".sift" / "gateway.yaml"
+
+
+def _normalize_backend_payload(body: dict) -> tuple[str, dict, dict | None, list[dict]]:
+    reasons: list[dict] = []
+    name = body.get("name") or body.get("backend")
+    if not isinstance(name, str) or not name.strip():
+        reasons.append({"field": "name", "reason": "Backend name is required."})
+        name = ""
+    else:
+        name = name.strip()
+
+    config = body.get("config")
+    if config is None:
+        config = {
+            key: body[key]
+            for key in (
+                "type",
+                "command",
+                "args",
+                "env",
+                "url",
+                "bearer_token",
+                "tls_cert",
+                "manifest_path",
+                "enabled",
+            )
+            if key in body
+        }
+    if not isinstance(config, dict):
+        reasons.append({"field": "config", "reason": "Backend config must be an object."})
+        config = {}
+    config = dict(config)
+    config.setdefault("type", "stdio")
+
+    inline_manifest = body.get("manifest")
+    if inline_manifest is not None and not isinstance(inline_manifest, dict):
+        reasons.append({"field": "manifest", "reason": "Manifest must be an object."})
+        inline_manifest = None
+
+    return name, config, inline_manifest, reasons
+
+
+def _manifest_reasons(manifest: dict, manifest_path: Path | None = None) -> list[dict]:
+    reasons: list[dict] = []
+    try:
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return [{"field": "schema", "reason": f"Backend schema is unreadable: {exc}"}]
+
+    spec_version = manifest.get("spec_version")
+    if not isinstance(spec_version, str) or not spec_version.startswith("1."):
+        reasons.append(
+            {
+                "field": "spec_version",
+                "reason": f"Unsupported spec_version: {spec_version!r}. Gateway only supports version 1.x.",
+            }
+        )
+
+    validator = jsonschema.Draft7Validator(schema)
+    for error in sorted(validator.iter_errors(manifest), key=lambda e: list(e.path)):
+        path = ".".join(str(part) for part in error.path) or "manifest"
+        reasons.append({"field": path, "reason": error.message})
+
+    try:
+        validate_manifest_contract(copy.deepcopy(manifest), manifest_path)
+    except ValueError as exc:
+        reasons.append({"field": "manifest", "reason": str(exc)})
+
+    return reasons
+
+
+def _load_manifest_for_rest(
+    name: str, config: dict, inline_manifest: dict | None
+) -> tuple[dict | None, list[dict]]:
+    if inline_manifest is not None:
+        reasons = _manifest_reasons(inline_manifest)
+        return (copy.deepcopy(inline_manifest) if not reasons else None), reasons
+    explicit_path = config.get("manifest_path")
+    if isinstance(explicit_path, str) and not explicit_path.startswith(("http://", "https://")):
+        manifest_path = Path(explicit_path)
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                return None, [{"field": "manifest", "reason": str(exc)}]
+            if not isinstance(manifest, dict):
+                return None, [{"field": "manifest", "reason": "Manifest must be an object."}]
+            reasons = _manifest_reasons(manifest, manifest_path)
+            return (manifest if not reasons else None), reasons
+    try:
+        manifest = load_and_validate_manifest(name, config)
+        return manifest, []
+    except ValueError as exc:
+        return None, [{"field": "manifest", "reason": str(exc)}]
+
+
+def _requirement_status(gateway, manifest: dict | None) -> tuple[list[str], list[str]]:
+    if not manifest:
+        return [], []
+    requires = list(manifest.get("capabilities", {}).get("requires", []))
+    unmet = [req for req in requires if not gateway.evaluate_requirement(req)]
+    return requires, unmet
 
 
 async def list_tools(request: Request) -> JSONResponse:
@@ -690,12 +822,149 @@ async def reload_backends(request: Request) -> JSONResponse:
     return JSONResponse({"status": "reload_scheduled", "pending": pending})
 
 
+async def validate_backend(request: Request) -> JSONResponse:
+    """POST /api/v1/backends/validate — validate a backend manifest/config."""
+    gateway = request.app.state.gateway
+    body, error = await _read_json_body(request)
+    if error:
+        return error
+    assert body is not None
+
+    name, config, inline_manifest, reasons = _normalize_backend_payload(body)
+    manifest = None
+    if not reasons:
+        manifest, reasons = _load_manifest_for_rest(name, config, inline_manifest)
+
+    requires, unmet = _requirement_status(gateway, manifest)
+    status_code = 200 if not reasons else 422
+    response = {
+        "valid": not reasons,
+        "name": name,
+        "transport": (manifest or {}).get("transport", config.get("type", "stdio")),
+        "namespace": (manifest or {}).get("namespace", ""),
+        "provides": (manifest or {}).get("capabilities", {}).get("provides", []),
+        "requires": requires,
+        "unmet_requires": unmet,
+        "tools": [
+            {
+                "name": tool.get("name", ""),
+                "category": tool.get("category", ""),
+                "recommended_phase": tool.get("recommended_phase", ""),
+                "health": bool(tool.get("health")),
+                "hidden_from_agent": bool(tool.get("hidden_from_agent", False)),
+            }
+            for tool in (manifest or {}).get("tools", [])
+        ],
+        "reasons": reasons,
+    }
+    if manifest:
+        response["instructions"] = (
+            manifest.get("_resolved_instructions") or manifest.get("instructions") or ""
+        )
+        response["available"] = not unmet and config.get("enabled", True)
+    return JSONResponse(response, status_code=status_code)
+
+
+async def register_backend(request: Request) -> JSONResponse:
+    """POST /api/v1/backends — validate, persist, and hot-register a backend."""
+    gateway = request.app.state.gateway
+    body, error = await _read_json_body(request)
+    if error:
+        return error
+    assert body is not None
+
+    name, config, inline_manifest, reasons = _normalize_backend_payload(body)
+    if inline_manifest is not None and "manifest_path" not in config:
+        reasons.append(
+            {
+                "field": "manifest_path",
+                "reason": "Registration requires a manifest_path or URL; inline manifests are validate-only.",
+            }
+        )
+
+    manifest = None
+    if not reasons:
+        manifest, reasons = _load_manifest_for_rest(name, config, None)
+
+    if reasons:
+        return JSONResponse(
+            {"registered": False, "name": name, "reasons": reasons},
+            status_code=422,
+        )
+
+    assert manifest is not None
+    enabled = bool(config.get("enabled", True))
+    requires, unmet = _requirement_status(gateway, manifest)
+    try:
+        backend = create_backend(name, config)
+    except ValueError as exc:
+        return JSONResponse(
+            {
+                "registered": False,
+                "name": name,
+                "reasons": [{"field": "config", "reason": str(exc)}],
+            },
+            status_code=422,
+        )
+
+    with _CONFIG_LOCK:
+        config_path = _gateway_config_path()
+        if config_path.exists():
+            import yaml
+
+            try:
+                config_doc = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            except (yaml.YAMLError, OSError):
+                return JSONResponse(
+                    {"registered": False, "error": "failed to read gateway.yaml"},
+                    status_code=500,
+                )
+        else:
+            config_doc = {}
+
+        config_doc.setdefault("backends", {})[name] = config
+        try:
+            _atomic_yaml_write(config_path, config_doc)
+        except OSError:
+            logger.exception("Failed to write gateway config")
+            return JSONResponse(
+                {"registered": False, "error": "failed to write gateway.yaml"},
+                status_code=500,
+            )
+
+    gateway.config.setdefault("backends", {})[name] = config
+    if enabled:
+        gateway.backends[name] = backend
+        await gateway._build_tool_map()
+        if not unmet:
+            gateway._pending_backends[name] = config
+            gateway._reload_event.set()
+    else:
+        gateway.backends.pop(name, None)
+        await gateway._build_tool_map()
+
+    return JSONResponse(
+        {
+            "registered": True,
+            "name": name,
+            "enabled": enabled,
+            "available": enabled and not unmet,
+            "requires": requires,
+            "unmet_requires": unmet,
+            "reload_scheduled": enabled and not unmet,
+        },
+        status_code=201,
+    )
+
+
 def rest_routes() -> list[Route]:
     """Return REST API v1 routes."""
     return [
         Route("/api/v1/tools", list_tools, methods=["GET"]),
         Route("/api/v1/tools/{tool_name}", call_tool, methods=["POST"]),
         Route("/api/v1/backends", list_backends, methods=["GET"]),
+        Route("/api/v1/backends", register_backend, methods=["POST"]),
+        Route("/api/v1/backends/validate", validate_backend, methods=["POST"]),
         Route("/api/v1/backends/reload", reload_backends, methods=["POST"]),
         Route("/api/v1/services", list_services, methods=["GET"]),
         Route("/api/v1/services/{name}/start", start_service, methods=["POST"]),
