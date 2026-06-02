@@ -248,12 +248,8 @@ def _truncate(text: str, max_chars: int) -> str:
 
 
 def _next_run_command_output_dir(case_dir: Path) -> Path:
-    base = case_dir / "agent" / "run_commands"
-    for idx in range(1, 100000):
-        candidate = base / f"output{idx}"
-        if not candidate.exists():
-            return candidate
-    return base / f"output{int(time.time())}"
+    return case_dir / "agent" / "outputs"
+
 
 
 def _save_output(

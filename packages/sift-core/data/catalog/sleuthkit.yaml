@@ -36,3 +36,39 @@ tools:
     interactive: false
     description: "Extract unallocated disk clusters"
     fk_tool_name: blkls
+
+  - name: img_stat
+    binary: img_stat
+    input_style: positional
+    output_format: text
+    timeout_seconds: 300
+    interactive: false
+    description: "Display details of a disk image file"
+    fk_tool_name: img_stat
+
+  - name: fsstat
+    binary: fsstat
+    input_style: positional
+    output_format: text
+    timeout_seconds: 300
+    interactive: false
+    description: "Display general details of a file system"
+    fk_tool_name: fsstat
+
+  - name: ewfinfo
+    binary: ewfinfo
+    input_style: positional
+    output_format: text
+    timeout_seconds: 300
+    interactive: false
+    description: "Show metadata stored in EWF files"
+    fk_tool_name: ewfinfo
+
+  - name: ewfverify
+    binary: ewfverify
+    input_style: positional
+    output_format: text
+    timeout_seconds: 7200
+    interactive: false
+    description: "Verify the integrity of EWF files"
+    fk_tool_name: ewfverify

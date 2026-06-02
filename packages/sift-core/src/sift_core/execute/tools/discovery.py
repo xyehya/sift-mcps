@@ -87,9 +87,28 @@ def list_available_tools(category: str | None = None) -> list[dict]:
 
 def get_tool_help(tool_name: str) -> dict:
     """Get usage information for a specific tool."""
+    if tool_name == "run_command":
+        return {
+            "name": "run_command",
+            "description": "Execute a forensic binary securely with policy-enforced arguments and paths.",
+            "policy": {
+                "blocked_constructs": [
+                    "multi-command sh -c with semicolons or &&",
+                    "awk regex alternation (often interpreted as a pipe operator by security guards)",
+                    "Python snippets with shell metacharacters",
+                    "awk system(), getline, and pipes"
+                ],
+                "safe_alternatives": [
+                    "Use explicit filtering tools like grep instead of complex awk matching",
+                    "Use absolute file paths for output directories",
+                    "Chain operations using subsequent agent turns rather than shell pipelines"
+                ],
+                "path_restrictions": "Outputs must be within the active case directory if set, or /tmp. Input paths outside evidence are restricted."
+            }
+        }
     td = get_tool_def(tool_name)
     if not td:
-        return {"error": f"Tool '{tool_name}' not in catalog"}
+        return {"error": f"Tool '{tool_name}' not in catalog. You can still run it, but run_command security policies apply."}
 
     result = {
         "name": td.name,

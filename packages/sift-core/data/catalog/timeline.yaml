@@ -46,3 +46,12 @@ tools:
     interactive: false
     description: "Filter and export Plaso storage to CSV"
     fk_tool_name: psort
+
+  - name: pinfo
+    binary: pinfo.py
+    input_style: positional
+    output_format: text
+    timeout_seconds: 300
+    interactive: false
+    description: "Show information about a Plaso storage file"
+    fk_tool_name: pinfo

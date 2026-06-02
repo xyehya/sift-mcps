@@ -153,9 +153,9 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "Stage a finding as DRAFT for examiner approval, with enforced validation, provenance, grounding, and considerations.",
         _schema(
             {
-                "finding": {"type": "object"},
-                "supporting_commands": {"type": "array", "items": {"type": "object"}},
-                "artifacts": {"type": "array", "items": {"type": "object"}},
+                "finding": {"type": "object", "description": "Required fields: title, type, host, observation, interpretation, confidence, confidence_justification"},
+                "supporting_commands": {"type": "array", "items": {"type": "object", "description": "Dict with: command, output_excerpt, purpose, audit_id"}},
+                "artifacts": {"type": "array", "items": {"type": "object", "description": "Dict with: source (evidence path), extraction, content, content_type, purpose, audit_id"}},
             },
             ["finding"],
         ),
@@ -163,14 +163,14 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
     CoreToolSpec(
         "record_timeline_event",
         "Stage a timeline event as DRAFT for examiner approval.",
-        _schema({"event": {"type": "object"}}, ["event"]),
+        _schema({"event": {"type": "object", "description": "Required fields: title, timestamp, description, host, source"}}, ["event"]),
     ),
     CoreToolSpec(
         "list_existing_findings",
         "List staged findings already recorded in the active case.",
         _schema(
             {
-                "status": {"type": "string"},
+                "status": {"type": "string", "enum": ["DRAFT", "COMMITTED", "REJECTED", "SUPERSEDED"]},
                 "limit": {"type": "integer", "default": 20},
                 "offset": {"type": "integer", "default": 0},
             }
@@ -182,7 +182,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "Read case timeline or action records without mutating evidence or findings.",
         _schema(
             {
-                "record_type": {"type": "string"},
+                "record_type": {"type": "string", "enum": ["timeline", "action"]},
                 "status": {"type": "string"},
                 "source": {"type": "string"},
                 "examiner": {"type": "string"},
@@ -207,12 +207,12 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "Create, list, update, or complete investigation TODOs.",
         _schema(
             {
-                "action": {"type": "string"},
+                "action": {"type": "string", "enum": ["create", "list", "update", "complete"]},
                 "todo_id": {"type": "string"},
                 "description": {"type": "string"},
                 "assignee": {"type": "string"},
-                "priority": {"type": "string", "default": "medium"},
-                "status": {"type": "string"},
+                "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                "status": {"type": "string", "enum": ["open", "in_progress", "completed", "blocked"]},
                 "note": {"type": "string"},
                 "related_findings": {"type": "array", "items": {"type": "string"}},
             },
@@ -251,10 +251,10 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
     ),
     CoreToolSpec(
         "run_command",
-        "Execute a forensic tool on this SIFT workstation through the core denylist, path jail, audit, and FK enrichment pipeline.",
+        "Execute a shell command (supporting pipes, semicolons, and redirects) securely on this SIFT VM. Security policies, denylists, path jails, audit logging, and response-capping are strictly enforced.",
         _schema(
             {
-                "command": {"type": "array", "items": {"type": "string"}},
+                "command": {"type": "string"},
                 "purpose": {"type": "string"},
                 "timeout": {"type": "integer", "default": 0},
                 "save_output": {"type": "boolean", "default": False},
@@ -266,6 +266,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
             ["command", "purpose"],
         ),
     ),
+
 )
 
 
@@ -371,9 +372,12 @@ def _evidence_verify() -> dict:
 
 
 def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
-    command = args.get("command") or []
-    if not isinstance(command, list) or not all(isinstance(item, str) for item in command):
-        return {"error": "command must be a list of strings"}
+    command = args.get("command") or ""
+    if isinstance(command, list) and all(isinstance(item, str) for item in command):
+        import shlex
+        command = shlex.join(command)
+    if not isinstance(command, str):
+        return {"error": "command must be a string"}
     purpose = str(args.get("purpose", ""))
     if not purpose:
         return {"error": "purpose is required"}
@@ -395,10 +399,13 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             error="Path must be within the case directory",
         )
 
-    binary = command[0].split("/")[-1] if command else ""
-    td = get_tool_def(binary)
-    detection_method = ""
+    # Parse command using our split/parse state machines to extract binary and detect inputs
+    from sift_core.execute.security import split_command_by_operators, parse_subcommand_argv_and_redirects
+    subcmds = split_command_by_operators(command)
+    
+    first_binary = ""
     detected_inputs: list[str] = []
+    
     input_files = args.get("input_files") or None
     if input_files:
         for fpath in input_files:
@@ -407,25 +414,42 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             except ValueError:
                 detected_inputs.append(str(fpath))
         detection_method = "llm"
-    elif td and td.input_flag:
-        try:
-            idx = command.index(td.input_flag)
-            if idx + 1 < len(command):
-                detected_inputs = [command[idx + 1]]
-                detection_method = "catalog"
-        except ValueError:
-            pass
-    if not detected_inputs and not detection_method:
-        for token in command[1:]:
-            if token.startswith("-"):
+    else:
+        for subcmd_str, _ in subcmds:
+            if not subcmd_str.strip():
                 continue
-            p = Path(token)
-            if p.is_file():
-                detected_inputs.append(str(p))
+            try:
+                argv, redirects = parse_subcommand_argv_and_redirects(subcmd_str)
+                if argv:
+                    binary = argv[0].split('/')[-1]
+                    if not first_binary:
+                        first_binary = binary
+                    td = get_tool_def(binary)
+                    
+                    # Redirections
+                    for op, target in redirects:
+                        if op in ("<", "<<"):
+                            detected_inputs.append(target)
+                            
+                    # input flag
+                    if td and td.input_flag:
+                        try:
+                            idx = argv.index(td.input_flag)
+                            if idx + 1 < len(argv):
+                                detected_inputs.append(argv[idx + 1])
+                        except ValueError:
+                            pass
+                    else:
+                        for token in argv[1:]:
+                            if token.startswith("-"):
+                                continue
+                            p = Path(token)
+                            if "/" in token or ".." in token:
+                                detected_inputs.append(token)
+            except Exception:
+                pass
         if detected_inputs:
             detection_method = "parsed"
-        elif td and not td.input_flag:
-            detection_method = ""
         else:
             detection_method = "none"
 
@@ -455,8 +479,8 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             preview_lines=min(int(args.get("preview_lines") or 0), 200),
         )
         elapsed = time.monotonic() - start
-        fk_name = td.knowledge_name if td else binary
-        artifact_hint = _detect_artifact_context(command)
+        fk_name = get_tool_def(first_binary).knowledge_name if get_tool_def(first_binary) else first_binary
+        artifact_hint = _detect_artifact_context([command])
         if exec_result.get("_parsed"):
             resp_data = exec_result["_parsed"]
             resp_format = exec_result["_output_format"]
@@ -471,13 +495,17 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             output_format=resp_format,
             elapsed_seconds=elapsed,
             exit_code=exec_result["exit_code"],
-            command=command,
+            command=[command],
             fk_tool_name=fk_name,
             output_files=[exec_result["output_file"]] if exec_result.get("output_file") else None,
             extractions=exec_result.get("extractions"),
             skip_enrichment=bool(args.get("skip_enrichment", False)),
             artifact_context=artifact_hint,
         )
+        if "warnings" in exec_result:
+            response["warnings"] = exec_result["warnings"]
+            if "agent_action" in exec_result:
+                response["agent_action"] = exec_result["agent_action"]
         if "privilege_escalation" in exec_result:
             response["privilege_escalation"] = exec_result["privilege_escalation"]
         if exec_result.get("output_file"):
@@ -520,7 +548,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             examiner_override=examiner,
         ) is None:
             response["warning"] = "Audit write failed — action not recorded"
-        if detection_method == "none" and binary not in _NO_INPUT_CMDS:
+        if detection_method == "none" and first_binary not in _NO_INPUT_CMDS:
             response["input_files_warning"] = (
                 "Could not detect input files — pass input_files parameter for provenance chain linking."
             )
@@ -529,6 +557,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                 "input_files provided but none resolved to existing files. Provenance chain will be incomplete."
             )
         return response
+
     except SiftError as exc:
         elapsed = time.monotonic() - start
         response = build_response(

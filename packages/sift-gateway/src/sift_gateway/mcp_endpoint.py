@@ -373,13 +373,17 @@ def _build_case_context(case_dir_str: str) -> dict | None:
     }
 
 
-def _append_case_context(contents: list[TextContent], case_dir_str: str) -> list[TextContent]:
+def _append_case_context(contents: list[TextContent], case_dir_str: str, tool_name: str | None = None) -> list[TextContent]:
     """Append _case metadata as gateway response middleware."""
     context = _build_case_context(case_dir_str)
     if context is None:
         return contents
+    if tool_name in ["workflow_status", "case_status", "environment_summary"]:
+        return contents + [
+            TextContent(type="text", text=json.dumps({"_case": context}, indent=2))
+        ]
     return contents + [
-        TextContent(type="text", text=json.dumps({"_case": context}, indent=2))
+        TextContent(type="text", text=json.dumps({"_case_ref": context["id"]}, indent=2))
     ]
 
 
@@ -754,6 +758,7 @@ def create_mcp_server(gateway: Any) -> Server:
                 _final_contents = _append_case_context(
                     [TextContent(type="text", text=json.dumps(build_block_response(name, gate), indent=2))],
                     case_dir_str,
+                    name,
                 )
                 return _final_contents
 
@@ -774,6 +779,7 @@ def create_mcp_server(gateway: Any) -> Server:
                 _final_contents = _append_case_context(
                     [TextContent(type="text", text=f"Error: unknown tool {name}")],
                     case_dir_str,
+                    name,
                 )
                 return _final_contents
             except (RuntimeError, ConnectionError, OSError) as e:
@@ -787,6 +793,7 @@ def create_mcp_server(gateway: Any) -> Server:
                         )
                     ],
                     case_dir_str,
+                    name,
                 )
                 return _final_contents
             except Exception as e:
@@ -809,6 +816,7 @@ def create_mcp_server(gateway: Any) -> Server:
                             )
                         ],
                         case_dir_str,
+                        name,
                     )
                     return _final_contents
                 raise  # Re-raise non-transport exceptions to fall through to generic handler
@@ -828,6 +836,7 @@ def create_mcp_server(gateway: Any) -> Server:
                         )
                     ],
                     case_dir_str,
+                    name,
                 )
                 return _final_contents
 
@@ -920,7 +929,7 @@ def create_mcp_server(gateway: Any) -> Server:
                     TextContent(type="text", text=json.dumps({"_sift_context": sift_context}))
                 )
 
-            _final_contents = _append_case_context(contents, case_dir_str)
+            _final_contents = _append_case_context(contents, case_dir_str, name)
             return _final_contents
 
         finally:

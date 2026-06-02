@@ -32,7 +32,9 @@ def test_run_command_executes_allowed_command_through_isolated_worker(
 
     assert result["exit_code"] == 0
     assert result["executor"] == "isolated_worker"
-    assert result["command"][0].endswith("/date")
+    assert result["command"][0] == "/bin/bash"
+    assert result["command"][2] == "date"
+
 
 
 def test_denied_command_rejected_before_executor_is_invoked(monkeypatch):
@@ -137,9 +139,9 @@ def test_large_output_autowrites_under_case_run_commands(tmp_path, monkeypatch):
     output_file = Path(result["output_file"])
     assert output_file.is_file()
     assert output_file.read_text().startswith("A" * 100)
-    assert output_file.parent.parent == case_dir / "agent" / "run_commands"
-    assert output_file.parent.name == "output1"
+    assert output_file.parent == case_dir / "agent" / "outputs"
     assert result["stdout_total_bytes"] > 1000
+
 
 
 def test_run_command_uses_systemd_run_when_available(monkeypatch):
@@ -310,7 +312,8 @@ def test_privileged_path_direct_success(tmp_path, monkeypatch):
     assert res["privilege_escalation"]["mechanism"] == "direct_unprivileged"
     assert res["privilege_escalation"]["status"] == "success"
     assert len(calls) == 1
-    assert calls[0] == ["/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")]
+    assert calls[0] == ["/bin/bash", "-c", "mount /dev/sdb1 " + str(case_dir / "tmp")]
+
 
 
 def test_privileged_path_sudo_fallback(tmp_path, monkeypatch):
@@ -339,12 +342,12 @@ def test_privileged_path_sudo_fallback(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, "which", fake_which)
     
     # Mock /usr/bin/sudo exists
-    monkeypatch.setattr(os.path, "exists", lambda path: path == "/usr/bin/sudo" or os.path.exists(path))
+    monkeypatch.setattr(os.path, "exists", lambda path, orig=os.path.exists: path == "/usr/bin/sudo" or orig(path))
 
     calls = []
     def fake_execute(cmd_list, **kwargs):
         calls.append(cmd_list)
-        if cmd_list[0] == "/usr/bin/mount":
+        if cmd_list[0] == "/bin/bash":
             # Direct run fails with permission denied
             return {"exit_code": 1, "stdout": "", "stderr": "mount: only root can do that\n", "stdout_total_bytes": 0}
         else:
@@ -358,11 +361,12 @@ def test_privileged_path_sudo_fallback(tmp_path, monkeypatch):
     assert res["privilege_escalation"]["mechanism"] == "sudo_fallback"
     assert res["privilege_escalation"]["status"] == "success"
     assert len(calls) == 2
-    assert calls[0] == ["/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")]
-    assert calls[1] == ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")]
+    assert calls[0] == ["/bin/bash", "-c", "mount /dev/sdb1 " + str(case_dir / "tmp")]
+    assert calls[1] == ["/usr/bin/sudo", "-n", "--", "/bin/bash", "-c", "mount /dev/sdb1 " + str(case_dir / "tmp")]
     assert len(res["privilege_events"]) == 2
     assert res["privilege_events"][0]["status"] == "fallback_attempt"
     assert res["privilege_events"][1]["status"] == "success"
+
 
 
 def test_privileged_path_non_permission_failure(tmp_path, monkeypatch):
@@ -400,9 +404,10 @@ def test_privileged_path_non_permission_failure(tmp_path, monkeypatch):
     # Exit code is 1, and no sudo was called (only 1 execute call)
     assert res["exit_code"] == 1
     assert len(calls) == 1
-    assert calls[0] == ["/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")]
+    assert calls[0] == ["/bin/bash", "-c", "mount /dev/sdb1 " + str(case_dir / "tmp")]
     # No escalation metadata because it failed and didn't fall back
     assert "privilege_escalation" not in res
+
 
 
 def test_privileged_validators_fail_before_execution(tmp_path, monkeypatch):
@@ -483,4 +488,77 @@ def test_allowlist_mode_sudo_target(tmp_path, monkeypatch):
     from sift_core.execute.exceptions import DeniedBinaryError
     with pytest.raises(DeniedBinaryError, match="blocked by security policy"):
         generic.run_command(["reboot"], purpose="test denied target")
+
+
+def test_validate_shell_command_safety_checks(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-009\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    # Mock finding commands
+    import shutil
+    def fake_which(cmd):
+        if cmd in ("ls", "grep", "echo", "git", "kubectl", "dd", "rm"):
+            return f"/usr/bin/{cmd}"
+        return None
+    monkeypatch.setattr(shutil, "which", fake_which)
+
+    _set_policy(monkeypatch, {
+        "mode": "denylist",
+        "denied_binaries": ["env"],
+        "allowed_binaries": [],
+        "dangerous_flags": [],
+        "tool_allowed_flags": {},
+        "tool_blocked_flags": {},
+        "output_flags": [">", ">>"],
+    })
+
+    # 1. Pipeline check (should pass)
+    calls = []
+    def fake_execute(cmd_list, **kwargs):
+        calls.append(cmd_list)
+        return {"exit_code": 0, "stdout": "pipeline ok\n", "stderr": ""}
+    monkeypatch.setattr(generic, "execute", fake_execute)
+
+    res = generic.run_command("ls -la | grep txt", purpose="test pipeline")
+    assert res["exit_code"] == 0
+    assert calls[0] == ["/bin/bash", "-c", "ls -la | grep txt"]
+
+    # 2. Control characters rejection
+    with pytest.raises(ValueError, match="Command contains non-printable control characters"):
+        generic.run_command("ls -la \x00 | grep txt", purpose="control char inject")
+
+    # 3. IFS injection rejection
+    with pytest.raises(ValueError, match="Modifying the IFS variable is blocked"):
+        generic.run_command("IFS=:; ls", purpose="ifs inject")
+
+    # 4. Proc/Environ access rejection
+    with pytest.raises(ValueError, match="Direct access to process environment info"):
+        generic.run_command("cat /proc/self/environ", purpose="proc inject")
+
+    # 5. Process substitution rejection
+    with pytest.raises(ValueError, match="Process substitution"):
+        generic.run_command("echo hello > >(tee file.txt)", purpose="proc sub inject")
+
+    # 6. Destructive commands rejection
+    with pytest.raises(ValueError, match="Command matches a blocked destructive pattern"):
+        generic.run_command("git reset --hard HEAD", purpose="destructive git")
+    with pytest.raises(ValueError, match="Command matches a blocked destructive pattern"):
+        generic.run_command("kubectl delete pods --all", purpose="destructive k8s")
+
+    # 7. Denied binary anywhere in pipeline
+    from sift_core.execute.exceptions import DeniedBinaryError
+    with pytest.raises(DeniedBinaryError, match="blocked by security policy"):
+        generic.run_command("ls | env", purpose="denied in pipe")
+
+    # 8. Output redirections check
+    # Output to valid location (should pass)
+    res2 = generic.run_command("echo 'hi' > " + str(case_dir / "agent/outputs/test.txt"), purpose="valid output redirection")
+    assert res2["exit_code"] == 0
+
+    # Output to invalid location (should fail)
+    with pytest.raises(ValueError, match="Output path.*must be inside the case"):
+        generic.run_command("echo 'hi' > /etc/passwd", purpose="invalid output redirection")
+
 

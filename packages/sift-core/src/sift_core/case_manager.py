@@ -991,17 +991,16 @@ class CaseManager:
             evidence = (
                 raw_ev.get("files", []) if isinstance(raw_ev, dict) else (raw_ev or [])
             )
-            registered = {
-                str(Path(e.get("path", "")).resolve())
-                for e in evidence
-                if e.get("path")
-            }
+            registered = set()
             ev_by_hash = {}
             for e in evidence:
-                h = e.get("sha256", "")
                 p = e.get("path", "")
-                if h and p:
-                    ev_by_hash[h] = str(Path(p).resolve())
+                if p:
+                    resolved_p = str(Path(p).resolve()) if str(p).startswith("/") else str((case_dir / p).resolve())
+                    registered.add(resolved_p)
+                    h = e.get("sha256", "")
+                    if h:
+                        ev_by_hash[h] = resolved_p
             audit_by_id: dict[str, dict] = {}
             for e in all_audit_entries:
                 aid_key = e.get("audit_id", "")
@@ -1237,7 +1236,7 @@ class CaseManager:
                 if not src:
                     continue
                 try:
-                    resolved = str(Path(src).resolve())
+                    resolved = str(Path(src).resolve()) if str(src).startswith("/") else str((case_dir / src).resolve())
                 except OSError:
                     continue
                 if resolved not in registered:

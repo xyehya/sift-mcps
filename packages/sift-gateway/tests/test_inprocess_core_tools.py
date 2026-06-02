@@ -328,7 +328,7 @@ async def test_run_command_privileged_escalation_integration(tmp_path, monkeypat
     calls = []
     def fake_execute(cmd_list, **kwargs):
         calls.append(cmd_list)
-        if cmd_list[0] == "/usr/bin/mount":
+        if cmd_list[0] == "/bin/bash":
             return {"exit_code": 1, "stdout": "", "stderr": "mount: requires root\n", "stdout_total_bytes": 0}
         else:
             return {"exit_code": 0, "stdout": "ok\n", "stderr": "", "stdout_total_bytes": 3}
@@ -351,8 +351,9 @@ async def test_run_command_privileged_escalation_integration(tmp_path, monkeypat
 
     # 2. Verify that calls were made directly then with sudo
     assert len(calls) == 2
-    assert calls[0] == ["/usr/bin/mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")]
-    assert calls[1] == ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")]
+    expected_cmd = "mount /dev/sdb1 " + str(Path(case["case_dir"]) / "tmp")
+    assert calls[0] == ["/bin/bash", "-c", expected_cmd]
+    assert calls[1] == ["/usr/bin/sudo", "-n", "--", "/bin/bash", "-c", expected_cmd]
 
     # 3. Verify audit entries are written under SIFT_STATE_DIR / PRIV-001 / audit / sift-gateway.jsonl
     audit_file = state_dir / "PRIV-001" / "audit" / "sift-gateway.jsonl"
