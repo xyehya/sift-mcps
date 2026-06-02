@@ -12,6 +12,7 @@ from sift_core.execute.security_policy import (
     build_security_policy,
     policy_to_env_json,
 )
+from sift_gateway.response_guard import OUTPUT_CAP_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,28 @@ def apply_execute_security_env(config: dict) -> None:
     clear_catalog_cache()
 
 
+def apply_trust_env(config: dict) -> None:
+    """Apply the trust-layer central output cap to process env.
+
+    Translates ``trust.output_cap_bytes`` in ``gateway.yaml`` into the single
+    ``SIFT_OUTPUT_CAP`` env read by ``response_guard.output_cap_bytes()``.
+    Absent ⇒ leave the env untouched (the resolver falls back to its default).
+    """
+    trust_config = config.get("trust", {})
+    if not isinstance(trust_config, dict):
+        raise ValueError("trust must be a mapping")
+    cap = trust_config.get("output_cap_bytes")
+    if cap is None:
+        return
+    try:
+        cap_int = int(cap)
+    except (TypeError, ValueError):
+        raise ValueError("trust.output_cap_bytes must be a positive integer") from None
+    if cap_int <= 0:
+        raise ValueError("trust.output_cap_bytes must be a positive integer")
+    os.environ[OUTPUT_CAP_ENV] = str(cap_int)
+
+
 def load_config(path: str) -> dict:
     """Load a YAML config file with env var interpolation.
 
@@ -122,6 +145,7 @@ def load_config(path: str) -> dict:
 
     apply_case_env(config)
     apply_execute_security_env(config)
+    apply_trust_env(config)
 
     # Warn early if portal session secret is absent — portal auth will fail at runtime.
     portal_secret = config.get("portal", {}).get("session_secret", "")

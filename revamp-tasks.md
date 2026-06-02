@@ -345,11 +345,12 @@ This phase does two coupled things. **(a)** It makes **identity a core-native, t
 🔒 **PHASE 4 GATE:** ✅ **GREEN (code-complete, unit-verified — Session 21)** — identity is core-native and invisible (no `analyst_override`/`ANALYST_TOOLS` in source, no identity field in any tool schema, audit stamps `principal`/`agent_id`/`created_by` on every outcome incl. throttled 429); gate is declaration-driven and binary (F-A: unsealed → all blocked incl. `environment_summary`); namespace + tier + `requires[]` enforced; declaration-driven grounding live; conformance probe authored + offline-green. **Live-VM caveat:** unlike Phases 2–3, Phase 4 was *not* re-run on the fresh VM this session — `scripts/probe_backends.py` against real mounts and the `phase2_gate_test.py` e2e should be replayed on the VM before the Phase 6 gate (folds naturally into the §5 add-on migration, where the first conformant manifest exists to probe). A third party could implement an add-on from the spec + schema alone.
 
 ### Phase 5 — Central output cap
-- [ ] **5.1 Single output-cap + redaction point in the trust layer** (response guard already = 30 patterns; centralize the size cap).
+- [x] **5.1 Single output-cap + redaction point in the trust layer** (response guard already = 30 patterns; centralize the size cap). ✅ Session 22
   - *Why:* consistent token/secret control regardless of backend.
   - *Test:* oversized response capped centrally; secrets redacted; per-backend ad-hoc caps removed.
+  - *Done:* added the central output cap to the trust-layer module `response_guard.py` (`output_cap_bytes()` + `cap_tool_result()`), applied at the **same gateway choke point as redaction** (`mcp_endpoint.py` aggregated `/mcp` loop) in **redact-then-cap** order — a secret can never straddle the truncation boundary and leak half. **Disk-spill-for-all (chosen model):** any backend's oversized (already-redacted) response is truncated on a UTF-8-safe boundary, the full redacted text is persisted under `<case>/agent/tool_outputs/<ts>_<tool>.txt` (parallels run_command's `agent/run_commands/`, stays under `case_root/agent`), and the response carries a `[OUTPUT CAPPED BY GATEWAY …]` marker + path + sha256 + byte counts. Cap events are audited (`source="gateway_output_cap"`) and surfaced to the agent via the unified `_sift_context` note (alongside `secret_warning`). **Single knob:** `gateway.yaml` `trust.output_cap_bytes` (default **262144 = 256 KiB**) → `SIFT_OUTPUT_CAP` env via new `apply_trust_env()` in `config.py`; `response_guard.output_cap_bytes()` is the single read path (env, safe default). This is a **backstop ceiling** — run_command keeps its own tighter 10 KB `response_byte_budget` + disk-spill as a sub-limit (a feature, not an ad-hoc cap). **Scope:** aggregated agent `/mcp` surface only (the per-backend `/mcp/{name}` mounts are the service-token conformance surface, not agent-facing). New tests: `tests/test_phase5.py` (17) — resolver default/override/invalid-fallback, under/over-cap, disk-spill path + sha, no-case-dir truncation, UTF-8 boundary, the redact-then-cap no-partial-leak invariant, and `trust.output_cap_bytes`→env plumbing through `load_config`. **NOTE on "per-backend ad-hoc caps removed":** the four add-ons aren't migrated until Phase 6, so their ad-hoc response caps get stripped per-backend during the §5 migration; the sift-common parser limits (`max_rows`/`max_entries`) are legitimate structured-parse bounds used by run_command and stay.
 
-🔒 **PHASE 5 GATE:** one cap/redaction path; guard tests green.
+🔒 **PHASE 5 GATE:** ✅ **GREEN (code-complete, unit-verified — Session 22)** — one cap+redaction path in the trust layer (redact-then-cap), single `trust.output_cap_bytes` knob, guard tests green (gateway 121 / core 301). **Live-VM caveat (same as Phase 4):** not re-run on the fresh VM (VM was wiped — needs `install.sh --core-only` fresh); the oversized-response cap + spill should be exercised live during the Phase 6 add-on migration (first real large-output add-on to probe).
 
 ### Phase 6 — Migrate add-ons to namespaces (MVP DONE)
 - [ ] **6.1 Namespace + migrate the four add-ons** following the **§5 migration playbook** (order: rag → windows-triage → opencti → opensearch): `opensearch_*`, `cti_*`, `kb_*`, `wintriage_*`. Give each a `sift-backend.json` manifest. Rename `case_host_fix`→`opensearch_host_fix` (stays in opensearch, F-D).
@@ -384,6 +385,19 @@ This phase does two coupled things. **(a)** It makes **identity a core-native, t
 ## 8 · Session Log
 
 > Append newest at the top. Use the §3 template.
+
+### Session 22 — 2026-06-02 — Phase 5.1: central output cap (trust layer)
+- Branch/commit: revamp/spg-v1 @ <commit after this session> (Phase 4 now committed `a73dbec`; tree was clean at session start)
+- Phase: 5 — tasks touched: 5.1 (all of Phase 5)
+- DONE (boxes ticked this session): 5.1 + Phase 5 gate marked GREEN (code-complete/unit-verified)
+- Tests: 121 passed / 0 failed — `uv run python -m pytest packages/sift-gateway/ -q` (104 prior + 17 new `test_phase5.py`); 301 passed / 0 failed — `packages/sift-core/` (unchanged baseline).
+- Design decisions (confirmed with user via AskUserQuestion): **(1) cap model = backstop + disk-spill-for-all** — central ceiling AND extend run_command-style disk persistence to every backend's overflow; **(2) scope = aggregated agent `/mcp` surface only** (per-backend mounts left as-is, they're the service-token conformance surface).
+- New/changed files: `response_guard.py` (+`output_cap_bytes`/`cap_tool_result`/`_spill_full_output`), `mcp_endpoint.py` (redact→cap loop, cap audit, unified `_sift_context`), `config.py` (+`apply_trust_env`, wired into `load_config`), `configs/gateway.yaml.template` (+`trust.output_cap_bytes: 262144`), `tests/test_phase5.py` (17).
+- Key invariant landed: **redact-then-cap** (secret can't straddle the cut and leak half) — proven by `test_redact_then_cap_never_leaks_partial_secret`. Full spilled output is the *redacted* text (secrets never hit disk).
+- Live test on VM: NO — VM was wiped clean last session; needs `install.sh --core-only` fresh. Phase 5 live exercise folds into the Phase 6 add-on migration (same caveat as Phase 4; first real large-output add-on to probe).
+- Spec changed?: no (HTML/mmd unchanged; tracker checkboxes + gate + this log only).
+- BLOCKERS / open questions for next session: none. Consider committing Phase 5 before starting Phase 6.
+- NEXT: Phase 6 — migrate the four add-ons to namespaces (§5 playbook, order rag → windows-triage → opencti → opensearch); this also discharges the deferred Phase 4 + Phase 5 live-VM probes.
 
 ### Session 21 — 2026-06-02 — Phase 4 (4.1–4.10): universal identity + Backend Contract v1 + binary gate
 - Branch/commit: revamp/spg-v1 @ working tree (not committed)

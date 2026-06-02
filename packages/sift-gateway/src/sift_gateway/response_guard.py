@@ -11,9 +11,16 @@ Default behaviour:
 
 from __future__ import annotations
 
+import hashlib
+import logging
+import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -142,3 +149,118 @@ def redact_tool_result(text: str, *, override_active: bool = False) -> tuple[str
         if pat.severity in _REDACT_SEVERITIES:
             redacted = pat.regex.sub(f"[REDACTED:{pat.name}]", redacted)
     return redacted, findings
+
+
+# ---------------------------------------------------------------------------
+# Central output cap (trust layer) — the single ceiling on bytes any one tool
+# response may deliver to the agent. Applied at the gateway choke point AFTER
+# redaction (redact-then-cap, so a secret can never straddle the truncation
+# boundary and leak half). Oversized responses are truncated and the full
+# (already-redacted) output is spilled to <case>/agent/tool_outputs/ with a
+# pointer + sha256. This is a backstop ceiling: run_command keeps its own
+# tighter response budget + disk-spill independently.
+# ---------------------------------------------------------------------------
+
+OUTPUT_CAP_ENV = "SIFT_OUTPUT_CAP"
+_DEFAULT_OUTPUT_CAP_BYTES = 262_144  # 256 KiB
+_TOOL_OUTPUT_SUBDIR = ("agent", "tool_outputs")
+
+
+def output_cap_bytes() -> int:
+    """Resolve the central output cap (bytes) from the env, with a safe default.
+
+    The gateway config loader translates ``trust.output_cap_bytes`` in
+    ``gateway.yaml`` into ``SIFT_OUTPUT_CAP``; this is the single read path.
+    """
+    raw = os.environ.get(OUTPUT_CAP_ENV)
+    if raw:
+        try:
+            val = int(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return _DEFAULT_OUTPUT_CAP_BYTES
+
+
+def _spill_full_output(text: str, case_dir: str, tool_name: str) -> tuple[str | None, str]:
+    """Persist the full (already-redacted) text under <case>/agent/tool_outputs/.
+
+    Returns ``(output_file_or_None, sha256)``. On any write failure the cap
+    still applies — we return ``None`` for the path and degrade to a pure
+    truncation, never an oversized response.
+    """
+    data = text.encode("utf-8", errors="replace")
+    sha = hashlib.sha256(data).hexdigest()
+    try:
+        case_resolved = Path(case_dir).resolve()
+        out_dir = case_resolved.joinpath(*_TOOL_OUTPUT_SUBDIR)
+        # Safety: the target must stay under <case>/agent (parallels run_command).
+        if not out_dir.is_relative_to(case_resolved / "agent"):
+            logger.warning("output cap: refusing to spill outside case agent dir: %s", out_dir)
+            return None, sha
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in tool_name)[:40] or "tool"
+        path = out_dir / f"{ts}_{safe}.txt"
+        with open(path, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        return str(path), sha
+    except OSError as exc:
+        logger.warning("output cap: failed to persist full output for %s: %s", tool_name, exc)
+        return None, sha
+
+
+def cap_tool_result(
+    text: str,
+    *,
+    max_bytes: int,
+    case_dir: str | None = None,
+    tool_name: str = "tool",
+) -> tuple[str, dict | None]:
+    """Cap an oversized (already-redacted) tool result at ``max_bytes``.
+
+    If ``text`` fits, returns ``(text, None)`` unchanged. Otherwise the full
+    text is spilled to disk (when a case dir is available), the text is
+    truncated on a UTF-8-safe boundary, a clear marker is appended pointing at
+    the persisted file, and a metadata dict is returned for audit + the
+    ``_sift_context`` note.
+    """
+    data = text.encode("utf-8")
+    original_bytes = len(data)
+    if original_bytes <= max_bytes:
+        return text, None
+
+    output_file: str | None = None
+    if case_dir:
+        output_file, sha = _spill_full_output(text, case_dir, tool_name)
+    else:
+        sha = hashlib.sha256(data).hexdigest()
+
+    # Truncate on a UTF-8-safe boundary (ignore a split trailing multibyte char).
+    truncated = data[:max_bytes].decode("utf-8", errors="ignore")
+    returned_bytes = len(truncated.encode("utf-8"))
+
+    pointer = (
+        f"full output persisted at {output_file}"
+        if output_file
+        else "full output NOT persisted (no active case directory)"
+    )
+    marker = (
+        f"\n\n[OUTPUT CAPPED BY GATEWAY: returned {returned_bytes} of {original_bytes} bytes "
+        f"(cap {max_bytes}). {pointer}; sha256={sha}. "
+        f"Narrow the query or read the persisted file to see the rest.]"
+    )
+
+    meta: dict = {
+        "tool": tool_name,
+        "original_bytes": original_bytes,
+        "returned_bytes": returned_bytes,
+        "cap_bytes": max_bytes,
+        "sha256": sha,
+    }
+    if output_file:
+        meta["output_file"] = output_file
+    return truncated + marker, meta

@@ -93,6 +93,16 @@ execute:
       - "ncat"
       - "socat"
 
+trust:
+  # Central output cap (trust layer). The gateway redacts secrets and then caps
+  # every tool response at this many bytes before forwarding to the agent.
+  # Oversized responses are truncated; the full (already-redacted) output is
+  # persisted under <case>/agent/tool_outputs/ and a pointer + sha256 returned.
+  # This is the single ceiling on bytes any one tool response delivers to the
+  # agent — a backstop covering all backends. run_command keeps its own tighter
+  # response budget + disk-spill independently.
+  output_cap_bytes: 262144  # 256 KiB
+
 api_keys:
   ${SIFT_GATEWAY_TOKEN}:
     token_id: "examiner-default"

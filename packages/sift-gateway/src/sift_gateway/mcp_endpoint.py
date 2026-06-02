@@ -40,7 +40,13 @@ from sift_gateway.evidence_gate import (
 )
 from sift_gateway.identity import _hash_token  # re-exported for callers/tests
 from sift_gateway.rate_limit import check_examiner_rate_limit, check_rate_limit
-from sift_gateway.response_guard import get_override_status, is_override_active, redact_tool_result
+from sift_gateway.response_guard import (
+    cap_tool_result,
+    get_override_status,
+    is_override_active,
+    output_cap_bytes,
+    redact_tool_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -729,14 +735,26 @@ def create_mcp_server(gateway: Any) -> Server:
             # Extract backend audit_id from raw response before any redaction
             _backend_audit_id = _extract_audit_id(raw_contents)
 
-            # Response guard: redact critical+high secrets before forwarding to Hermes
+            # Trust layer: redact critical+high secrets, then cap oversized
+            # output — redact-then-cap so a secret can never straddle the
+            # truncation boundary and leak half. The size cap is the single
+            # central ceiling on bytes any one tool response delivers to Hermes.
             override = is_override_active(case_dir_str)
+            cap = output_cap_bytes()
             contents: list[TextContent] = []
             all_findings: list[dict] = []
+            cap_events: list[dict] = []
             for tc in raw_contents:
                 redacted_text, findings = redact_tool_result(tc.text, override_active=override)
                 all_findings.extend(findings)
-                contents.append(TextContent(type="text", text=redacted_text))
+                capped_text, cap_meta = cap_tool_result(
+                    redacted_text, max_bytes=cap, case_dir=case_dir_str, tool_name=name
+                )
+                if cap_meta:
+                    cap_events.append(cap_meta)
+                contents.append(TextContent(type="text", text=capped_text))
+
+            sift_context: dict = {}
 
             if all_findings:
                 warning_names = sorted({f["pattern_name"] for f in all_findings})
@@ -760,15 +778,36 @@ def create_mcp_server(gateway: Any) -> Server:
                     )
                 except Exception as exc:
                     logger.warning("response_guard: audit write failed: %s", exc)
-                # Inject _sift_context metadata into the first TextContent
-                if contents:
-                    ctx_note = json.dumps({
-                        "_sift_context": {
-                            "secret_warning": warning_names,
-                            "redact_override_active": override,
-                        }
-                    })
-                    contents.append(TextContent(type="text", text=ctx_note))
+                sift_context["secret_warning"] = warning_names
+                sift_context["redact_override_active"] = override
+
+            if cap_events:
+                try:
+                    await asyncio.to_thread(
+                        gateway._audit.log,
+                        tool=name,
+                        params={},
+                        result_summary=f"output_cap: {len(cap_events)} response(s) capped at {cap} bytes",
+                        source="gateway_output_cap",
+                        extra={"examiner": examiner, "cap_events": cap_events},
+                    )
+                except Exception as exc:
+                    logger.warning("output_cap: audit write failed: %s", exc)
+                sift_context["output_capped"] = [
+                    {
+                        "original_bytes": ev["original_bytes"],
+                        "returned_bytes": ev["returned_bytes"],
+                        "cap_bytes": ev["cap_bytes"],
+                        **({"output_file": ev["output_file"]} if "output_file" in ev else {}),
+                    }
+                    for ev in cap_events
+                ]
+
+            # Inject a single _sift_context note covering redaction + cap events.
+            if sift_context and contents:
+                contents.append(
+                    TextContent(type="text", text=json.dumps({"_sift_context": sift_context}))
+                )
 
             _final_contents = _append_case_context(contents, case_dir_str)
             return _final_contents
