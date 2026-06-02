@@ -916,22 +916,19 @@ class Gateway:
                 apply_case_env(gateway.config)
                 await gateway.restart_backends()
 
-            routes.append(
-                Mount(
-                    "/portal",
-                    app=create_dashboard_v2_app(
-                        session_secret=portal_secret,
-                        session_max_age=portal_max_age,
-                        api_keys=api_keys,
-                        gateway_config_path=_gw_config_path,
-                        on_chain_mutation=invalidate_evidence_cache,
-                        on_case_activated=_on_case_activated,
-                        on_override_get_status=get_override_status,
-                        on_override_enable=enable_override,
-                        on_override_cancel=cancel_override,
-                    ),
-                )
+            dashboard_app = create_dashboard_v2_app(
+                session_secret=portal_secret,
+                session_max_age=portal_max_age,
+                api_keys=api_keys,
+                gateway_config_path=_gw_config_path,
+                on_chain_mutation=invalidate_evidence_cache,
+                on_case_activated=_on_case_activated,
+                on_override_get_status=get_override_status,
+                on_override_enable=enable_override,
+                on_override_cancel=cancel_override,
             )
+            dashboard_app.state.gateway = self
+            routes.append(Mount("/portal", app=dashboard_app))
             routes.append(Mount("/dashboard", app=create_dashboard_app()))
         except ImportError:
             pass

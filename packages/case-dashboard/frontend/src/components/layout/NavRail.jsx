@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { id: 'accounts',  label: 'Accounts',  icon: IconUser },
   { id: 'iocs',      label: 'IOCs',      icon: IconTarget },
   { id: 'todos',     label: 'TODOs',     icon: IconCheck,  badge: 'todoCount' },
+  { id: 'backends',  label: 'Backends',  icon: IconServer },
   { id: 'reports',   label: 'Reports',   icon: IconFile },
 ]
 
@@ -134,4 +135,18 @@ function IconUser() {
     </svg>
   )
 }
+
+function IconServer() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <rect x="3" y="3" width="14" height="4" rx="1" />
+      <rect x="3" y="9" width="14" height="4" rx="1" />
+      <rect x="3" y="15" width="14" height="4" rx="1" />
+      <circle cx="6" cy="5" r="0.5" fill="currentColor" />
+      <circle cx="6" cy="11" r="0.5" fill="currentColor" />
+      <circle cx="6" cy="17" r="0.5" fill="currentColor" />
+    </svg>
+  )
+}
+
 

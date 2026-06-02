@@ -17,6 +17,7 @@ import { HostsTab } from './components/hosts/HostsTab'
 import { AccountsTab } from './components/accounts/AccountsTab'
 import { IocsTab } from './components/iocs/IocsTab'
 import { TodosTab } from './components/todos/TodosTab'
+import { BackendsTab } from './components/backends/BackendsTab'
 import { Toaster } from './components/common/Toaster'
 import { CommitDrawer } from './components/layout/CommitDrawer'
 import { CommandPalette } from './components/layout/CommandPalette'
@@ -86,6 +87,7 @@ function AuthedApp({ onLogout, activeTab }) {
           {activeTab === 'accounts'  && <AccountsTab />}
           {activeTab === 'iocs'      && <IocsTab />}
           {activeTab === 'todos'     && <TodosTab />}
+          {activeTab === 'backends'  && <BackendsTab />}
           {activeTab === 'reports'   && <ReportsTab />}
           {activeTab === 'settings'  && <SettingsTab />}
         </main>

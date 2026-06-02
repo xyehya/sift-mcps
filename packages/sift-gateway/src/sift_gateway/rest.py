@@ -69,6 +69,14 @@ def _normalize_backend_payload(body: dict) -> tuple[str, dict, dict | None, list
         name = ""
     else:
         name = name.strip()
+        import re
+        if not re.match(r"^[a-z0-9][a-z0-9-]*$", name):
+            reasons.append(
+                {
+                    "field": "name",
+                    "reason": "Backend name must contain only lowercase letters, digits, and hyphens, and start with an alphanumeric character.",
+                }
+            )
 
     config = body.get("config")
     if config is None:
@@ -290,22 +298,65 @@ async def list_backends(request: Request) -> JSONResponse:
     gateway = request.app.state.gateway
 
     backends = []
-    for name, backend in gateway.backends.items():
-        try:
-            health = await backend.health_check()
-        except (RuntimeError, ConnectionError, OSError) as e:
-            logger.warning("Health check failed for backend %s: %s", name, e)
-            health = {"status": "error", "detail": str(e)}
-        except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
-            logger.warning("Health check unexpected error for backend %s: %s", name, e)
-            health = {"status": "error"}
+    for name, conf in gateway.config.get("backends", {}).items():
+        if not isinstance(conf, dict):
+            continue
+        enabled = bool(conf.get("enabled", True))
+        backend = gateway.backends.get(name)
+        started = backend.started if backend else False
+
+        # Load manifest to get requires and unmet requirements
+        manifest = None
+        manifest_err = None
+        if backend:
+            manifest = getattr(backend, "manifest", None)
+        else:
+            # For HTTP/URL manifests, list_backends relies on cached manifests if present;
+            # it does not perform blocking remote network requests during listing.
+            explicit_path = conf.get("manifest_path")
+            is_http_manifest = isinstance(explicit_path, str) and explicit_path.startswith(("http://", "https://"))
+            if not is_http_manifest:
+                try:
+                    manifest = load_and_validate_manifest(name, conf)
+                except Exception as e:
+                    manifest_err = str(e)
+
+        requires, unmet_requires = _requirement_status(gateway, manifest)
+
+        health = {"status": "disabled"}
+        if enabled:
+            if manifest_err:
+                # Redact potential secrets in manifest_err
+                if any(k in manifest_err for k in ("bearer_token", "tls_cert", "env")):
+                    manifest_err = "Secret validation failed."
+                health = {"status": "invalid_manifest", "detail": manifest_err}
+            elif not backend:
+                health = {"status": "error", "detail": "Failed to initialize backend"}
+            elif unmet_requires:
+                health = {"status": "gated", "detail": f"Unmet requirements: {', '.join(unmet_requires)}"}
+            elif not started:
+                health = {"status": "stopped"}
+            else:
+                # Only check health of started, available backends
+                try:
+                    health = await backend.health_check()
+                except (RuntimeError, ConnectionError, OSError) as e:
+                    logger.warning("Health check failed for backend %s: %s", name, e)
+                    health = {"status": "error", "detail": str(e)}
+                except Exception as e:
+                    logger.warning("Health check unexpected error for backend %s: %s", name, e)
+                    health = {"status": "error"}
 
         backends.append(
             {
                 "name": name,
-                "type": backend.config.get("type", "stdio"),
-                "enabled": backend.enabled,
+                "type": conf.get("type", "stdio"),
+                "enabled": enabled,
+                "started": started,
+                "available": enabled and not unmet_requires,
                 "health": health,
+                "requires": requires,
+                "unmet_requires": unmet_requires,
             }
         )
 
@@ -346,10 +397,40 @@ async def start_service(request: Request) -> JSONResponse:
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
-    if name not in gateway.backends:
+    backends_config = gateway.config.get("backends", {})
+    if name not in backends_config:
         return JSONResponse({"error": f"Unknown backend: {name}"}, status_code=404)
 
-    backend = gateway.backends[name]
+    conf = backends_config[name]
+    if not conf.get("enabled", True):
+        return JSONResponse({"error": f"Cannot control service for disabled backend: {name}"}, status_code=400)
+
+    # Resolve manifest and check requirements
+    backend = gateway.backends.get(name)
+    manifest = getattr(backend, "manifest", None) if backend else None
+    if not manifest:
+        try:
+            manifest = load_and_validate_manifest(name, conf)
+        except Exception as e:
+            msg = str(e)
+            if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
+                msg = "Secret validation failed."
+            return JSONResponse({"error": f"Invalid manifest: {msg}"}, status_code=400)
+
+    requires, unmet_requires = _requirement_status(gateway, manifest)
+    if unmet_requires:
+        return JSONResponse({"error": f"Cannot start backend with unmet requirements: {', '.join(unmet_requires)}"}, status_code=400)
+
+    if not backend:
+        try:
+            backend = create_backend(name, conf)
+            gateway.backends[name] = backend
+        except Exception as e:
+            msg = str(e)
+            if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
+                msg = "Secret validation failed."
+            return JSONResponse({"error": f"Failed to initialize backend: {msg}"}, status_code=500)
+
     if backend.started:
         return JSONResponse({"status": "already_running", "name": name})
 
@@ -357,7 +438,7 @@ async def start_service(request: Request) -> JSONResponse:
         await asyncio.wait_for(backend.start(), timeout=30.0)
     except asyncio.TimeoutError:
         return JSONResponse({"error": f"Start timed out for {name}"}, status_code=504)
-    except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
+    except Exception as e:
         logger.error("Failed to start service %s: %s", name, e)
         return JSONResponse(
             {"error": f"Failed to start service {name}"}, status_code=500
@@ -372,18 +453,19 @@ async def stop_service(request: Request) -> JSONResponse:
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
-    if name not in gateway.backends:
+    backends_config = gateway.config.get("backends", {})
+    if name not in backends_config:
         return JSONResponse({"error": f"Unknown backend: {name}"}, status_code=404)
 
-    backend = gateway.backends[name]
-    if not backend.started:
+    backend = gateway.backends.get(name)
+    if not backend or not backend.started:
         return JSONResponse({"status": "already_stopped", "name": name})
 
     try:
         await asyncio.wait_for(backend.stop(), timeout=10.0)
     except asyncio.TimeoutError:
         return JSONResponse({"error": f"Stop timed out for {name}"}, status_code=504)
-    except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
+    except Exception as e:
         logger.error("Failed to stop service %s: %s", name, e)
         return JSONResponse(
             {"error": f"Failed to stop service {name}"}, status_code=500
@@ -398,16 +480,45 @@ async def restart_service(request: Request) -> JSONResponse:
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
-    if name not in gateway.backends:
+    backends_config = gateway.config.get("backends", {})
+    if name not in backends_config:
         return JSONResponse({"error": f"Unknown backend: {name}"}, status_code=404)
 
-    backend = gateway.backends[name]
+    conf = backends_config[name]
+    if not conf.get("enabled", True):
+        return JSONResponse({"error": f"Cannot control service for disabled backend: {name}"}, status_code=400)
+
+    # Resolve manifest and check requirements for start
+    backend = gateway.backends.get(name)
+    manifest = getattr(backend, "manifest", None) if backend else None
+    if not manifest:
+        try:
+            manifest = load_and_validate_manifest(name, conf)
+        except Exception as e:
+            msg = str(e)
+            if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
+                msg = "Secret validation failed."
+            return JSONResponse({"error": f"Invalid manifest: {msg}"}, status_code=400)
+
+    requires, unmet_requires = _requirement_status(gateway, manifest)
+    if unmet_requires:
+        return JSONResponse({"error": f"Cannot start backend with unmet requirements: {', '.join(unmet_requires)}"}, status_code=400)
+
+    if not backend:
+        try:
+            backend = create_backend(name, conf)
+            gateway.backends[name] = backend
+        except Exception as e:
+            msg = str(e)
+            if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
+                msg = "Secret validation failed."
+            return JSONResponse({"error": f"Failed to initialize backend: {msg}"}, status_code=500)
 
     # Stop if running
     if backend.started:
         try:
             await asyncio.wait_for(backend.stop(), timeout=10.0)
-        except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
+        except Exception as e:
             logger.error("Failed to stop service %s during restart: %s", name, e)
             return JSONResponse(
                 {"error": f"Failed to stop service {name} during restart"},
@@ -420,7 +531,7 @@ async def restart_service(request: Request) -> JSONResponse:
     except asyncio.TimeoutError:
         await gateway._build_tool_map()
         return JSONResponse({"error": f"Start timed out for {name}"}, status_code=504)
-    except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
+    except Exception as e:
         logger.error("Failed to start service %s during restart: %s", name, e)
         await gateway._build_tool_map()
         return JSONResponse(
@@ -822,19 +933,26 @@ async def reload_backends(request: Request) -> JSONResponse:
     return JSONResponse({"status": "reload_scheduled", "pending": pending})
 
 
-async def validate_backend(request: Request) -> JSONResponse:
-    """POST /api/v1/backends/validate — validate a backend manifest/config."""
-    gateway = request.app.state.gateway
-    body, error = await _read_json_body(request)
-    if error:
-        return error
-    assert body is not None
+def _sanitize_reasons(reasons: list[dict]) -> list[dict]:
+    sanitized = []
+    for r in reasons:
+        field = r.get("field", "")
+        reason = r.get("reason", "")
+        if any(k in field for k in ("bearer_token", "tls_cert", "env")):
+            reason = f"Invalid value for {field}."
+        elif "bearer_token" in reason or "tls_cert" in reason or "env" in reason:
+            reason = "Secret value validation failed."
+        sanitized.append({"field": field, "reason": reason})
+    return sanitized
 
+
+def validate_backend_logic(gateway, body: dict) -> tuple[dict, int]:
     name, config, inline_manifest, reasons = _normalize_backend_payload(body)
     manifest = None
     if not reasons:
         manifest, reasons = _load_manifest_for_rest(name, config, inline_manifest)
 
+    reasons = _sanitize_reasons(reasons)
     requires, unmet = _requirement_status(gateway, manifest)
     status_code = 200 if not reasons else 422
     response = {
@@ -862,17 +980,10 @@ async def validate_backend(request: Request) -> JSONResponse:
             manifest.get("_resolved_instructions") or manifest.get("instructions") or ""
         )
         response["available"] = not unmet and config.get("enabled", True)
-    return JSONResponse(response, status_code=status_code)
+    return response, status_code
 
 
-async def register_backend(request: Request) -> JSONResponse:
-    """POST /api/v1/backends — validate, persist, and hot-register a backend."""
-    gateway = request.app.state.gateway
-    body, error = await _read_json_body(request)
-    if error:
-        return error
-    assert body is not None
-
+async def register_backend_logic(gateway, body: dict) -> tuple[dict, int]:
     name, config, inline_manifest, reasons = _normalize_backend_payload(body)
     if inline_manifest is not None and "manifest_path" not in config:
         reasons.append(
@@ -886,11 +997,9 @@ async def register_backend(request: Request) -> JSONResponse:
     if not reasons:
         manifest, reasons = _load_manifest_for_rest(name, config, None)
 
+    reasons = _sanitize_reasons(reasons)
     if reasons:
-        return JSONResponse(
-            {"registered": False, "name": name, "reasons": reasons},
-            status_code=422,
-        )
+        return {"registered": False, "name": name, "reasons": reasons}, 422
 
     assert manifest is not None
     enabled = bool(config.get("enabled", True))
@@ -898,14 +1007,14 @@ async def register_backend(request: Request) -> JSONResponse:
     try:
         backend = create_backend(name, config)
     except ValueError as exc:
-        return JSONResponse(
-            {
-                "registered": False,
-                "name": name,
-                "reasons": [{"field": "config", "reason": str(exc)}],
-            },
-            status_code=422,
-        )
+        msg = str(exc)
+        if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
+            msg = "Secret validation failed."
+        return {
+            "registered": False,
+            "name": name,
+            "reasons": [{"field": "config", "reason": msg}],
+        }, 422
 
     with _CONFIG_LOCK:
         config_path = _gateway_config_path()
@@ -915,10 +1024,7 @@ async def register_backend(request: Request) -> JSONResponse:
             try:
                 config_doc = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
             except (yaml.YAMLError, OSError):
-                return JSONResponse(
-                    {"registered": False, "error": "failed to read gateway.yaml"},
-                    status_code=500,
-                )
+                return {"registered": False, "error": "failed to read gateway.yaml"}, 500
         else:
             config_doc = {}
 
@@ -927,10 +1033,7 @@ async def register_backend(request: Request) -> JSONResponse:
             _atomic_yaml_write(config_path, config_doc)
         except OSError:
             logger.exception("Failed to write gateway config")
-            return JSONResponse(
-                {"registered": False, "error": "failed to write gateway.yaml"},
-                status_code=500,
-            )
+            return {"registered": False, "error": "failed to write gateway.yaml"}, 500
 
     gateway.config.setdefault("backends", {})[name] = config
     if enabled:
@@ -943,18 +1046,37 @@ async def register_backend(request: Request) -> JSONResponse:
         gateway.backends.pop(name, None)
         await gateway._build_tool_map()
 
-    return JSONResponse(
-        {
-            "registered": True,
-            "name": name,
-            "enabled": enabled,
-            "available": enabled and not unmet,
-            "requires": requires,
-            "unmet_requires": unmet,
-            "reload_scheduled": enabled and not unmet,
-        },
-        status_code=201,
-    )
+    return {
+        "registered": True,
+        "name": name,
+        "enabled": enabled,
+        "available": enabled and not unmet,
+        "requires": requires,
+        "unmet_requires": unmet,
+        "reload_scheduled": enabled and not unmet,
+    }, 201
+
+
+async def validate_backend(request: Request) -> JSONResponse:
+    """POST /api/v1/backends/validate — validate a backend manifest/config."""
+    gateway = request.app.state.gateway
+    body, error = await _read_json_body(request)
+    if error:
+        return error
+    assert body is not None
+    response, status_code = validate_backend_logic(gateway, body)
+    return JSONResponse(response, status_code=status_code)
+
+
+async def register_backend(request: Request) -> JSONResponse:
+    """POST /api/v1/backends — validate, persist, and hot-register a backend."""
+    gateway = request.app.state.gateway
+    body, error = await _read_json_body(request)
+    if error:
+        return error
+    assert body is not None
+    response, status_code = await register_backend_logic(gateway, body)
+    return JSONResponse(response, status_code=status_code)
 
 
 def rest_routes() -> list[Route]:

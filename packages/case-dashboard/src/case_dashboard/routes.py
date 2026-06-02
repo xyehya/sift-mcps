@@ -4391,7 +4391,272 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/cases", get_cases, methods=["GET"]),
         Route("/api/case/activate/challenge", get_case_activate_challenge, methods=["GET"]),
         Route("/api/case/activate", post_case_activate, methods=["POST"]),
+        # Phase 6.3: Portal Backends & Services Proxy Routes
+        Route("/api/backends", get_backends_route, methods=["GET"]),
+        Route("/api/backends", register_backend_route, methods=["POST"]),
+        Route("/api/backends/validate", validate_backend_route, methods=["POST"]),
+        Route("/api/backends/reload", reload_backends_route, methods=["POST"]),
+        Route("/api/services/{name}/start", start_service_route, methods=["POST"]),
+        Route("/api/services/{name}/stop", stop_service_route, methods=["POST"]),
+        Route("/api/services/{name}/restart", restart_service_route, methods=["POST"]),
     ]
+
+
+def _verify_origin(request: Request) -> JSONResponse | None:
+    origin = request.headers.get("origin")
+    if not origin:
+        return JSONResponse({"error": "Missing Origin header"}, status_code=400)
+    host = request.headers.get("host")
+    from urllib.parse import urlparse
+    parsed_origin = urlparse(origin)
+    origin_host = parsed_origin.netloc
+    if not origin_host or origin_host != host:
+        if origin_host.replace("localhost", "127.0.0.1") != host.replace("localhost", "127.0.0.1"):
+            return JSONResponse({"error": f"Origin mismatch: {origin_host} vs {host}"}, status_code=400)
+    return None
+
+
+def _verify_password_challenge_helper(body: dict, client_host: str, examiner: str) -> JSONResponse | None:
+    challenge_id = body.pop("challenge_id", None)
+    response_hmac = body.pop("response", None)
+
+    if not challenge_id or not response_hmac:
+        return JSONResponse(
+            {"error": "Missing challenge_id or response"}, status_code=400
+        )
+
+    challenge = _challenges.pop(challenge_id, None)
+    if not challenge:
+        return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
+
+    if challenge.get("bound_ip") != client_host:
+        return JSONResponse({"error": "Challenge IP mismatch"}, status_code=403)
+
+    now = time.time()
+    if now - challenge["created_at"] > _CHALLENGE_TTL:
+        return JSONResponse({"error": "Challenge expired"}, status_code=401)
+
+    if challenge["examiner"] != examiner:
+        return JSONResponse({"error": "Challenge/examiner mismatch"}, status_code=401)
+
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    if not entry:
+        return JSONResponse({"error": "No password configured"}, status_code=403)
+
+    try:
+        stored_hash = bytes.fromhex(entry["hash"])
+    except (ValueError, KeyError):
+        logger.error("Corrupt password entry for examiner %s", examiner)
+        return JSONResponse({"error": "Password data corrupted"}, status_code=500)
+
+    expected = hmac_mod.new(
+        stored_hash, challenge["nonce"].encode(), "sha256"
+    ).hexdigest()
+    if not hmac_mod.compare_digest(expected, response_hmac):
+        _record_commit_failure(examiner)
+        return JSONResponse({"error": "Incorrect password"}, status_code=401)
+
+    _clear_commit_failures(examiner)
+    return None
+
+
+async def get_backends_route(request: Request) -> JSONResponse:
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+    from sift_gateway.rest import list_backends
+    request.app.state.gateway = gateway
+    return await list_backends(request)
+
+
+async def validate_backend_route(request: Request) -> JSONResponse:
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    origin_err = _verify_origin(request)
+    if origin_err:
+        return origin_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    from sift_gateway.rest import validate_backend_logic
+    response, status_code = validate_backend_logic(gateway, body)
+    return JSONResponse(response, status_code=status_code)
+
+
+async def register_backend_route(request: Request) -> JSONResponse:
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    origin_err = _verify_origin(request)
+    if origin_err:
+        return origin_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    examiner_name = _resolve_examiner(request)
+    if not examiner_name:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    client_host = request.client.host if request.client else "unknown"
+    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    if challenge_err:
+        return challenge_err
+
+    from sift_gateway.rest import register_backend_logic
+    response, status_code = await register_backend_logic(gateway, body)
+    return JSONResponse(response, status_code=status_code)
+
+
+async def reload_backends_route(request: Request) -> JSONResponse:
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    origin_err = _verify_origin(request)
+    if origin_err:
+        return origin_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    examiner_name = _resolve_examiner(request)
+    if not examiner_name:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    client_host = request.client.host if request.client else "unknown"
+    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    if challenge_err:
+        return challenge_err
+
+    from sift_gateway.rest import reload_backends
+    request.app.state.gateway = gateway
+    return await reload_backends(request)
+
+
+async def start_service_route(request: Request) -> JSONResponse:
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    origin_err = _verify_origin(request)
+    if origin_err:
+        return origin_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    examiner_name = _resolve_examiner(request)
+    if not examiner_name:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    client_host = request.client.host if request.client else "unknown"
+    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    if challenge_err:
+        return challenge_err
+
+    from sift_gateway.rest import start_service
+    request.app.state.gateway = gateway
+    return await start_service(request)
+
+
+async def stop_service_route(request: Request) -> JSONResponse:
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    origin_err = _verify_origin(request)
+    if origin_err:
+        return origin_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    examiner_name = _resolve_examiner(request)
+    if not examiner_name:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    client_host = request.client.host if request.client else "unknown"
+    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    if challenge_err:
+        return challenge_err
+
+    from sift_gateway.rest import stop_service
+    request.app.state.gateway = gateway
+    return await stop_service(request)
+
+
+async def restart_service_route(request: Request) -> JSONResponse:
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    origin_err = _verify_origin(request)
+    if origin_err:
+        return origin_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    examiner_name = _resolve_examiner(request)
+    if not examiner_name:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    client_host = request.client.host if request.client else "unknown"
+    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    if challenge_err:
+        return challenge_err
+
+    from sift_gateway.rest import restart_service
+    request.app.state.gateway = gateway
+    return await restart_service(request)
 
 
 
