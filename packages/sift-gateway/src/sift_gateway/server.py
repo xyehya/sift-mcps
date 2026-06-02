@@ -135,6 +135,10 @@ class Gateway:
         self._pending_backends: dict[str, dict] = {}
         self._audit = AuditWriter(mcp_name="sift-gateway")
         self._available_backends: set[str] = set()
+        # tool_name -> manifest-declared UX metadata (category / recommended_phase /
+        # health / health_args / hidden_from_agent / backend). Rebuilt on every
+        # _build_tool_map so the gateway never hardcodes add-on tool names.
+        self._tool_manifest_meta: dict[str, dict] = {}
 
         # Register grounding reference provider
         from sift_core.case_manager import set_reference_backend_provider
@@ -331,6 +335,7 @@ class Gateway:
         """
         raw_map: dict[str, list[str]] = {}  # tool_name -> [backend_names]
         tool_objects: dict[str, Tool] = {}  # tool_name -> Tool
+        manifest_meta: dict[str, dict] = {}  # tool_name -> UX metadata from manifest
         self._available_backends.clear()
 
         for name, backend in self.backends.items():
@@ -351,6 +356,23 @@ class Gateway:
                 continue
 
             self._available_backends.add(name)
+
+            # Index manifest-declared UX metadata so the gateway can categorize
+            # tools, recommend phases, build environment_summary, and filter the
+            # agent view without hardcoding any add-on tool name (R-no-hardcoded-names).
+            if manifest:
+                for t_decl in manifest.get("tools", []):
+                    t_meta_name = t_decl.get("name")
+                    if not t_meta_name:
+                        continue
+                    manifest_meta[t_meta_name] = {
+                        "backend": name,
+                        "category": t_decl.get("category", ""),
+                        "recommended_phase": t_decl.get("recommended_phase", ""),
+                        "health": bool(t_decl.get("health", False)),
+                        "health_args": t_decl.get("health_args", {}) or {},
+                        "hidden_from_agent": bool(t_decl.get("hidden_from_agent", False)),
+                    }
 
             if backend.started:
                 try:
@@ -431,6 +453,10 @@ class Gateway:
                     execution=tool_objects[mapped_name].execution,
                 )
         self._tool_cache = new_cache
+        # Keep metadata only for tools that survived into the live map.
+        self._tool_manifest_meta = {
+            t: manifest_meta[t] for t in new_map if t in manifest_meta
+        }
 
         logger.info(
             "Tool map built: %d add-on tools across %d add-on backends; %d core tools in-process",

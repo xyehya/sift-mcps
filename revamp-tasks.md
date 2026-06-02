@@ -129,7 +129,7 @@ The four bundled backends (`opensearch-mcp`, `opencti-mcp`, `windows-triage-mcp`
 **Migration order:** do `forensic-rag-mcp` first (smallest, 3 tools, read-only reference) to shake out the recipe, then `windows-triage-mcp`, `opencti-mcp`, and `opensearch-mcp` last (largest, has the `case_host_fix`→`opensearch_host_fix` rename and the most tools).
 
 ### Per-backend steps (repeat for each)
-1. **Author `sift-backend.json`** at the backend's well-known path. Fill: identity (`name`, namespace `prefix`), `spec_version`, `tier: addon`, per-tool `evidence_class` (`read_only` / `analysis` / `mutating`) + `readOnlyHint`, `identity.accepts_analyst_override` (almost always false for add-ons — they don't write core audit), `capabilities.provides` (set `["reference"]` for the three grounding backends: rag, windows-triage, opencti), `enriches_responses` (true only if the backend enriches its own tool output), and `requires[]` (services, RAM, docker, offline DBs).
+1. **Author `sift-backend.json`** at the backend's well-known path. Fill: identity (`name`, namespace `prefix`), `spec_version`, `tier: addon`, per-tool `evidence_class` (`read_only` / `analysis` / `mutating`) + `readOnlyHint`, **per-tool `category` / `recommended_phase` / `health` / `hidden_from_agent`** (the UX metadata moved out of core in 6.1 — this is what feeds `tools/list` meta and `environment_summary`), `capabilities.provides` (set `["reference"]` for the three grounding backends: rag, windows-triage, opencti), `enriches_responses` (true only if the backend enriches its own tool output), and `requires[]` (services, RAM, docker, offline DBs). **No `identity.*` field** — F-F retired `accepts_analyst_override`; identity is core-native and never in a manifest or schema.
 2. **Namespace every tool** to `prefix_tool` — `opensearch_*`, `cti_*`, `wintriage_*`, `kb_*`. This is what removes the reactive collision-prefixing and the `get_health`/`server_status` clashes. Update the tool registration names in the backend's `server.py`.
 3. **Strip core-owned tools** the backend no longer provides. For `opensearch-mcp`: rename `case_host_fix` → `opensearch_host_fix` (it stays — F-D, scoped to index/alias state), and make sure it does **not** touch global case state. No add-on should ship case/findings/evidence tools (those are core now).
 4. **Drop identity-injection params from the agent-facing schema.** Add-ons don't accept `analyst_override`; if any tool has it, remove it from the signature so it never appears in the advertised schema (R-identity).
@@ -144,7 +144,7 @@ The four bundled backends (`opensearch-mcp`, `opencti-mcp`, `windows-triage-mcp`
 - Run the backend's own pre-existing test suite against the renamed namespace; fix fallout.
 
 ### Done-condition (feeds the Phase 6 gate)
-All four backends pass the conformance probe, advertise only namespaced tools, are governed by the F-A gate, and the three reference backends light up grounding purely from their manifest `provides`. A from-scratch backend built from the spec + one of these as a template should aggregate on the first try.
+All four backends pass the conformance probe, advertise only namespaced tools, are governed by the F-A gate, and the three reference backends light up grounding purely from their manifest `provides`. Their manifests also carry the category/phase/health metadata that used to be hardcoded in core (6.1), so **migrating them requires no `mcp_endpoint.py` edit**. A from-scratch backend built from the spec + one of these as a template should aggregate on the first try **with zero core changes**, and an operator can register it from the portal (6.3).
 
 ---
 
@@ -352,11 +352,48 @@ This phase does two coupled things. **(a)** It makes **identity a core-native, t
 
 🔒 **PHASE 5 GATE:** ✅ **GREEN (code-complete, unit-verified — Session 22)** — one cap+redaction path in the trust layer (redact-then-cap), single `trust.output_cap_bytes` knob, guard tests green (gateway 121 / core 301). **Live-VM caveat (same as Phase 4):** not re-run on the fresh VM (VM was wiped — needs `install.sh --core-only` fresh); the oversized-response cap + spill should be exercised live during the Phase 6 add-on migration (first real large-output add-on to probe).
 
-### Phase 6 — Migrate add-ons to namespaces (MVP DONE)
-- [ ] **6.1 Namespace + migrate the four add-ons** following the **§5 migration playbook** (order: rag → windows-triage → opencti → opensearch): `opensearch_*`, `cti_*`, `kb_*`, `wintriage_*`. Give each a `sift-backend.json` manifest. Rename `case_host_fix`→`opensearch_host_fix` (stays in opensearch, F-D).
-  - *Test:* each add-on passes the conformance probe (§5 done-condition); full e2e on fresh VM with all four add-ons enabled; full ROCBA regression case.
+### Phase 6 — Manifest-driven core + migrate add-ons + portal integration (MVP DONE)
 
-🔒 **PHASE 6 GATE = MVP COMPLETE:** core self-contained; contract enforced; four add-ons conformant; F-A/F-B verified live; full ROCBA workflow reproduced end-to-end.
+**Why this phase grew.** The original 6.1 ("namespace the four add-ons + give each a manifest") was correct but incomplete, and it hid a contradiction with **R-no-hardcoded-names**. Verified in code 2026-06-02:
+
+- The Phase 4 contract machinery is already **zero-hardcoded-names / core-change-free**: `load_and_validate_manifest`, `_build_tool_map` namespace enforcement, `requires[]` gating (`evaluate_requirement`), and grounding (`get_reference_backends` keyed on `capabilities.provides`). Adding a new backend through these needs **no** core edit. ✅
+- **But three UX maps in `mcp_endpoint.py` hardcode add-on *tool names*** — `_TOOL_CATEGORIES` (lines 445–511), `_PHASE_RECOMMENDED` (lines 514–573), `_ENV_SUMMARY_TOOLS` (lines 363–371). The manifest schema has no field for category/phase/health-tool, so the data was hardcoded in core. This is the *only* reason migrating the four backends would force gateway edits — and the reason a future community add-on would have to patch core just to be categorized. **Avoidable shortcut, not inherent coupling.**
+- **No operator self-service path exists.** A backend is added only by hand-editing `~/.sift/gateway.yaml` + `POST /api/v1/backends/reload`; conformance is checked by running `scripts/probe_backends.py` from the CLI. There is **no portal UI** and **no validate-then-register REST endpoint**. The "operator points the portal at a compliant backend → portal checks compliance → integrates it" flow is not built.
+
+**Decision (operator-confirmed 2026-06-02):** (1) make the maps **manifest-driven before** migrating backends so migration — and every future add-on — touches only its own package; (2) **build the portal self-service add-backend flow now** (plug-and-play is the MVP pitch). Order is load-bearing: **6.1 → 6.2 → 6.3 → 6.4**.
+
+- [x] **6.1 Make the core maps manifest-driven (remove all add-on tool names from core)** ✅
+  - *Done:* schema (`sift-backend.schema.json`) gained optional per-tool `category`/`recommended_phase`/`health`/`health_args`/`hidden_from_agent` (additive, `1.x`-compat; self-validates + sample exercises them). `server.py` builds a per-tool `_tool_manifest_meta` index (category/phase/health/health_args/hidden_from_agent/backend) from each **available** backend's manifest inside `_build_tool_map`, atomic-swapped alongside `_tool_map`/`_tool_cache` and pruned to surviving tools. `mcp_endpoint.py`: `_TOOL_CATEGORIES`/`_PHASE_RECOMMENDED` reduced to **core+synthetic only** (`_CORE_TOOL_CATEGORIES`/`_CORE_TOOL_PHASES`); `_list_tools` overlays add-on category/phase from the manifest and filters add-on tools flagged `hidden_from_agent`; `_AGENT_FILTERED_TOOLS` trimmed to core-only `evidence_register` (the add-on `idx_install_pipelines` now opts out via manifest). `environment_summary` rebuilt: core status tools + every available backend's manifest-declared `health` tool — no hardcoded backend/tool names. **Verify:** grep of `mcp_endpoint.py` for add-on tool names = CLEAN; gateway suite 121/121 green. (Dedicated `test_phase6.py` lands in 6.5.)
+  - *What:* `mcp_endpoint.py` must contain zero add-on tool names. Category / recommended-phase / which-tool-is-health move into each backend's manifest.
+  - *How:*
+    - Extend `packages/sift-gateway/src/sift_gateway/sift-backend.schema.json`: add optional per-tool `category` (string), `recommended_phase` (string), `health` (bool — the tool `environment_summary` calls), `hidden_from_agent` (bool), plus optional `health_args` (object, for the windows `{"resource":"health"}` case). Additive only — `1.x` major-compat permits it.
+    - `mcp_endpoint.py` `_list_tools` (575–598): build a `tool_name → {category, recommended_phase, hidden_from_agent}` index from `gateway.backends[*].manifest["tools"]` (each backend already carries `.manifest`, cf. `get_reference_backends` `server.py:316–325`); annotate from it. Keep a **core-only** hint map for in-process core tools (first-party, not "backend names").
+    - `_handle_environment_summary` (363–409): replace the hardcoded `_ENV_SUMMARY_TOOLS` list with the core status tools (`case_status`/`evidence_list`/`list_available_tools`) **plus**, for every backend in `gateway._available_backends`, the tool its manifest marks `health: true` (+ `health_args`). Down/unavailable backends are skipped — no name list.
+    - `_AGENT_FILTERED_TOOLS`: union the core-policy set (`evidence_register`) with backend tools manifest-flagged `hidden_from_agent` (replaces the hardcoded `idx_install_pipelines`).
+  - *Why:* **R-no-hardcoded-names** — extended beyond grounding/gate to tool categorization, phase hints, and env-summary. Closes the disconnect: the core never learns add-on tool names again.
+  - *Test:* `grep -nE 'idx_|check_artifact|server_status|get_health|search_knowledge|lookup_ioc' packages/sift-gateway/src/sift_gateway/mcp_endpoint.py` → zero add-on names. A fake backend whose manifest declares category/phase/health flows through to `tools/list` meta + `environment_summary` with **no** core edit.
+
+- [ ] **6.2 Namespace + migrate the four add-ons** following the **§5 migration playbook** (order: rag → windows-triage → opencti → opensearch): `kb_*`, `wintriage_*`, `cti_*`, `opensearch_*`. Give each a `sift-backend.json` manifest **now also declaring** the `category`/`recommended_phase`/`health` metadata moved out of core in 6.1. Rename `case_host_fix`→`opensearch_host_fix` (stays in opensearch, F-D).
+  - *How:* per backend — namespace every tool registration/dispatch in `server.py`, re-key `tool_metadata.py`. **Atomic cross-backend edit:** `opensearch-mcp/src/opensearch_mcp/triage_remote.py` gateway `call_tool` refs `check_artifact`/`check_system` → `wintriage_check_artifact`/`wintriage_check_system` migrated *with* the windows-triage step. Strip any residual `analyst_override`/identity params from add-on schemas (R-identity).
+  - *Test:* each add-on passes the conformance probe (§5 done-condition); `tools/list` shows only namespaced add-on tools; no `mcp_endpoint.py` edit was needed (proves 6.1).
+
+- [ ] **6.3 Portal self-service add-backend flow (plug-and-play integration)**
+  - *What:* an operator integrates a compliant backend end-to-end from the portal: point at a manifest → conformance probe → on pass, register + hot-reload.
+  - *How:*
+    - **Probe as library:** refactor `scripts/probe_backends.py` into importable `probe_manifest(manifest)->result` (schema + spec_version + namespace-prefix + declared-tools + forbidden-identity-arg) and `probe_live(gateway_url, token, name)->result` (MCP handshake + tool list + health), reusing the schema path from `backends/__init__.py`. CLI becomes a thin wrapper (existing usage unchanged).
+    - **Gateway REST** (`rest.py`, add to `rest_routes()` line 693, examiner-guarded): `POST /api/v1/backends/validate` (body = inline manifest / file path / backend URL; runs `probe_manifest` + optional `probe_live`; **read-only**); `POST /api/v1/backends` (body = backend config entry; re-validates, on pass writes the `backends:` entry into `~/.sift/gateway.yaml` and triggers the existing reload path — `gateway._pending_backends[name]=conf` + `gateway._reload_event.set()`, mirroring `reload_backends` 657–690; on fail 422 w/ reasons, never writes a non-conformant backend). Reuse existing `list_backends`/`start|stop|restart_service` for lifecycle.
+    - **Portal Backends tab** (`packages/case-dashboard/src/case_dashboard/routes.py` + `frontend/src/`, examiner-only, dashboard reaches the gateway via `request.app.state.gateway`): list backends (name/tier/started/health/unmet `requires[]`); "Add backend" form (manifest path/URL/upload → `/validate` shows namespace + declared tools + requirements + verdict → "Register" → hot-reload, row appears); enable/disable + start/stop/restart wired to the service endpoints.
+  - *Why:* delivers the MVP "plug-and-play" pitch; the building blocks existed but were never wired into an operator experience.
+  - *Test:* from the portal, add a backend by manifest path/URL → probe runs → register → its tools appear in `tools/list`; a non-conformant manifest is rejected with field-level reasons and writes nothing; disable it → its tools vanish, core stays up.
+
+- [ ] **6.4 Contract graduation — permanent hard-reject**
+  - *How:* remove the `SIFT_PHASE == "6"` conditionals in `backends/__init__.py` (~92, ~115) and any gateway-path guard so a missing/invalid **add-on** manifest is **always** rejected with an actionable reason (one-time, legitimate core change — the contract graduating, not a per-add-on cost). Drop `monkeypatch.setenv("SIFT_PHASE","6")` from `test_phase4.py`.
+  - *Test:* a backend with no/invalid manifest refuses to load with a reason, no env needed; conformant backends unaffected.
+
+- [ ] **6.5 Tests + tracker + spec sync**
+  - New `packages/sift-gateway/tests/test_phase6.py`: four manifests validate (incl. new fields); namespace enforced; **no add-on tool name in `mcp_endpoint.py`** (grep-style); annotations + `environment_summary` derive from manifests; `provides:["reference"]` → grounding; manifest-missing hard-reject; `/backends/validate` pass+fail; `POST /backends` refuses non-conformant. Update `opensearch-mcp/tests/test_server_tools.py` + per-package suites to namespaced names. Run **per-package** (`uv run python -m pytest packages/<pkg>/ -q`); never bare `uv sync` (always `--extra full`). Update HTML/mmd if behaviour drifts (R-spec-truth); Session Log per §3.
+
+🔒 **PHASE 6 GATE = MVP COMPLETE:** core is **provably add-on-agnostic** (zero add-on tool names in `mcp_endpoint.py`; the only one-time core change is the hard-reject flip); contract enforced; four add-ons conformant and namespaced; **an operator can integrate a compliant backend from the portal** (validate → register → hot-reload, core survives disable); F-A/F-B verified live. **Live VM** (192.168.122.81, wiped → re-run `install.sh`): this is the **full-addon** install + e2e (discharges the deferred Phase 4 probe + Phase 5 output-cap live caveats); full ROCBA workflow reproduced end-to-end.
 
 ### Phase 7 — Methodology → /skills + SDK (POST-MVP, last)
 - [ ] **7.1 Build `/skills` endpoint** serving versioned, signed markdown packs as a **downloadable zip following Anthropic's skills standard** (your note @595).
@@ -376,7 +413,7 @@ This phase does two coupled things. **(a)** It makes **identity a core-native, t
   - The portal **rejects agent tokens** (`case-dashboard/auth.py`); `/mcp` is the **agent-only** surface. The operator never calls `/mcp`; the agent never reaches the portal.
   - The operator's only out-of-portal actions are the one-time `install.sh` and pasting the portal-issued token into the agent config. Everything case/evidence/findings/token-related is portal-only.
 - **R-provenance:** a finding with no evidence trail is rejected, not warned.
-- **R-no-hardcoded-names:** grounding and the gate decide by *declaration*, never by a hardcoded backend list.
+- **R-no-hardcoded-names:** the core never hardcodes add-on backend *or tool* names. Grounding and the gate decide by *declaration*; **tool categorization, phase hints, and `environment_summary` health-tool selection are also manifest-driven** (Phase 6.1) — `mcp_endpoint.py` contains zero add-on tool names. Adding a conformant backend requires no core edit.
 - **R-core-survives:** disabling/killing any add-on never removes a core capability.
 - **R-spec-truth:** the HTML/mmd spec matches the code; fix the spec in the same commit that changes behaviour.
 
@@ -385,6 +422,18 @@ This phase does two coupled things. **(a)** It makes **identity a core-native, t
 ## 8 · Session Log
 
 > Append newest at the top. Use the §3 template.
+
+### Session 23 — 2026-06-02 — Phase 6 re-scope + 6.1 (manifest-driven core)
+- Branch/commit: revamp/spg-v1 @ <commit after this session>
+- Phase: 6 — tasks touched: Phase 6 rewrite (6.1–6.5 + gate), §5 playbook align, **6.1 DONE**
+- Trigger: operator flagged a real disconnect — "core should never change to accept an add-on, and the portal should let an operator add a compliant backend after a compliance check." Verified in code: Phase 4 contract machinery is already zero-hardcoded-names; the **only** leak was three UX maps in `mcp_endpoint.py` (`_TOOL_CATEGORIES`/`_PHASE_RECOMMENDED`/`_ENV_SUMMARY_TOOLS`) hardcoding add-on **tool names**, and there is **no portal self-service add-backend flow** (only hand-edit gateway.yaml + `POST /backends/reload` + CLI probe).
+- Decisions (operator-confirmed): (1) make those maps **manifest-driven** before migrating backends; (2) **build the portal add-backend flow** (validate→register→hot-reload) as part of Phase 6. Rewrote Phase 6 into ordered 6.1→6.5 and fixed §5 (added per-tool category/phase/health to the manifest authoring step; removed the retired `accepts_analyst_override`); extended `R-no-hardcoded-names` to tool categorization/phase/env-summary.
+- DONE (boxes ticked): **6.1** — schema `+category/recommended_phase/health/health_args/hidden_from_agent`; gateway builds `_tool_manifest_meta` in `_build_tool_map`; `mcp_endpoint.py` category/phase maps reduced to core+synthetic (`_CORE_TOOL_*`), add-on category/phase/hide + `environment_summary` health tools now read from manifests. Zero add-on tool names left in `mcp_endpoint.py`.
+- Tests: 121 passed / 0 failed — `uv run python -m pytest packages/sift-gateway/ -q`. Schema self-validates + sample manifest with new fields validates. Grep gate (add-on tool names in `mcp_endpoint.py`) = CLEAN.
+- Live test on VM: NO (code+unit only). VM (192.168.122.81) was wiped; repo synced this session, ready for **full-addon** `./install.sh -y` (NOT `--core-only`). Live probe of 6.1 folds into the 6.2 migration (first real manifest to advertise category/phase/health).
+- Spec changed?: tracker only (Phase 6 + §5 + invariant + this log). HTML/mmd unchanged — sync if 6.2/6.3 behaviour drifts (R-spec-truth).
+- BLOCKERS / open questions: none.
+- NEXT: **6.4** (flip `SIFT_PHASE==6` guards → permanent hard-reject; tiny) then **6.2** rag-first migration (kb_*) verified live on the VM, one backend at a time. 6.3 (portal Backends tab + REST validate/register) is its own focused session.
 
 ### Session 22 — 2026-06-02 — Phase 5.1: central output cap (trust layer)
 - Branch/commit: revamp/spg-v1 @ <commit after this session> (Phase 4 now committed `a73dbec`; tree was clean at session start)

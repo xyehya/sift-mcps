@@ -46,7 +46,12 @@
           "evidence_class": {
             "type": "string",
             "enum": ["read_only", "analysis", "mutating"]
-          }
+          },
+          "category": { "type": "string" },
+          "recommended_phase": { "type": "string" },
+          "health": { "type": "boolean" },
+          "health_args": { "type": "object" },
+          "hidden_from_agent": { "type": "boolean" }
         },
         "required": ["name", "description"],
         "additionalProperties": false
