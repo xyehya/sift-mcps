@@ -3763,6 +3763,12 @@ async def post_case_create(request: Request) -> JSONResponse:
 
     casename = body.get("casename", "").strip()
     title = body.get("title", "").strip()
+    description = body.get("description", "")
+    if not isinstance(description, str):
+        return JSONResponse({"error": "description must be a string"}, status_code=400)
+    description = description.strip()
+    if len(description) > 10_000:
+        return JSONResponse({"error": "description exceeds 10000 characters"}, status_code=400)
 
     if not casename or not title:
         return JSONResponse({"error": "Missing required fields"}, status_code=400)
@@ -3805,6 +3811,8 @@ async def post_case_create(request: Request) -> JSONResponse:
             "created": ts.isoformat(),
             "created_at": ts.isoformat(),
         }
+        if description:
+            case_meta["description"] = description
 
         tmp_fd, tmp_yaml = tempfile.mkstemp(dir=str(real_requested), suffix=".tmp")
         try:

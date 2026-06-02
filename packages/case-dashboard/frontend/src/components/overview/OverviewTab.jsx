@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../../store/useStore'
 import { Skeleton } from '../common/Skeleton'
+import { CaseBriefCard } from './CaseBriefCard'
 import { formatDistanceToNow } from 'date-fns'
 
 const CONFIDENCE_COLORS = {
@@ -84,6 +85,9 @@ export function OverviewTab() {
           )}
         </button>
       )}
+
+      {/* Case brief (intake scope + objectives; examiner-editable) */}
+      <CaseBriefCard />
 
       {/* KPI row */}
       <div className="grid grid-cols-4 gap-3 mb-4">

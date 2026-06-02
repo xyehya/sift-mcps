@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useStore } from '../../store/useStore'
-import { postLogout, postCaseActivate, getCaseActivateChallenge } from '../../api/endpoints'
+import { postLogout, postCaseActivate, getCaseActivateChallenge, postCaseCreate } from '../../api/endpoints'
 import { computeSimpleChallengeResponse } from '../../api/crypto'
 import { Icon } from '../common/Icon'
 
@@ -16,7 +16,16 @@ export function Header({ onLogout }) {
   const [activatePassword, setActivatePassword] = useState('')
   const [activateErr, setActivateErr] = useState('')
   const [activating, setActivating] = useState(false)
+  // Create-case modal state
+  const [creatingCase, setCreatingCase] = useState(false)
+  const [newCaseName, setNewCaseName] = useState('')
+  const [newCaseTitle, setNewCaseTitle] = useState('')
+  const [newCaseSynopsis, setNewCaseSynopsis] = useState('')
+  const [createErr, setCreateErr] = useState('')
+  const [creating, setCreating] = useState(false)
   const menuRef = useRef(null)
+
+  const isExaminer = (user?.role || '').toLowerCase() === 'examiner'
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -67,6 +76,53 @@ export function Header({ onLogout }) {
       console.error('Activation failed:', ex)
       setActivating(false)
       setActivateErr('Activation failed. Verify password and try again.')
+    }
+  }
+
+  function openCreate() {
+    setCaseMenuOpen(false)
+    setCreateErr('')
+    setNewCaseName('')
+    setNewCaseTitle('')
+    setNewCaseSynopsis('')
+    setCreatingCase(true)
+  }
+
+  async function confirmCreate(e) {
+    e.preventDefault()
+    setCreateErr('')
+    const casename = newCaseName.trim().toLowerCase()
+    const title = newCaseTitle.trim()
+    if (!casename || !title) {
+      setCreateErr('Case name and title are required.')
+      return
+    }
+    setCreating(true)
+    try {
+      // Backend computes case_id + directory and auto-activates the new case.
+      const synopsis = newCaseSynopsis.trim()
+      await postCaseCreate(synopsis ? { casename, title, description: synopsis } : { casename, title })
+      setCreatingCase(false)
+      setCreating(false)
+      // Reset case-scoped data; next poll picks up the newly active case.
+      setFindings([])
+      setTimeline([])
+      setDelta([])
+      setChainStatus(null)
+      setIocs([])
+      setTodos([])
+      setReports([])
+      setSummary(null)
+      setActiveCase(null)
+      setIsLoading(true)
+    } catch (ex) {
+      console.error('Case creation failed:', ex)
+      setCreating(false)
+      let msg = 'Case creation failed. Check your role and try again.'
+      if (ex?.message) {
+        try { msg = JSON.parse(ex.message).error || msg } catch { msg = ex.message }
+      }
+      setCreateErr(msg)
     }
   }
 
@@ -142,7 +198,17 @@ export function Header({ onLogout }) {
                 </button>
               ))}
               {cases.length === 0 && (
-                <p className="px-3 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>No cases found</p>
+                <p className="px-3 py-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {isExaminer ? 'No cases yet — create one to begin.' : 'No cases found'}
+                </p>
+              )}
+              {isExaminer && (
+                <button onClick={openCreate}
+                  className="w-full text-left px-3 py-2 text-xs font-sans font-semibold flex items-center gap-2 hover:bg-bg-raised transition-colors border-t border-border-faint"
+                  style={{ color: 'var(--cyan)' }}>
+                  <Icon name="plus" className="w-3.5 h-3.5 shrink-0" />
+                  New case
+                </button>
               )}
             </div>
           )}
@@ -211,6 +277,72 @@ export function Header({ onLogout }) {
               </button>
               <button type="button" disabled={activating}
                 onClick={() => { setActivatingCase(null); setActivatePassword('') }}
+                className="px-3 py-1.5 rounded text-xs font-sans"
+                style={{ border: '1px solid var(--border-soft)', color: 'var(--text-muted)' }}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Case creation modal */}
+      {creatingCase && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: 'rgba(7,9,14,0.8)' }}
+          onClick={() => !creating && setCreatingCase(false)}>
+          <form onSubmit={confirmCreate} onClick={(e) => e.stopPropagation()}
+            className="w-96 p-6 rounded-lg space-y-4"
+            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-soft)' }}>
+            <h2 className="text-sm font-sans font-semibold" style={{ color: 'var(--text-bright)' }}>
+              Create new case
+            </h2>
+            {createErr && <p className="text-xs" style={{ color: 'var(--crimson)' }}>{createErr}</p>}
+            <label className="block">
+              <span className="text-xs font-sans uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                Case name <span className="normal-case">(lowercase, used for the case id)</span>
+              </span>
+              <input type="text" value={newCaseName}
+                onChange={(e) => setNewCaseName(e.target.value)}
+                placeholder="e.g. rocba"
+                className="mt-1 w-full px-3 py-2 rounded text-sm font-mono"
+                style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }}
+                autoFocus required />
+            </label>
+            <label className="block">
+              <span className="text-xs font-sans uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Title</span>
+              <input type="text" value={newCaseTitle}
+                onChange={(e) => setNewCaseTitle(e.target.value)}
+                placeholder="e.g. ROCBA intrusion investigation"
+                className="mt-1 w-full px-3 py-2 rounded text-sm font-sans"
+                style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }}
+                required />
+            </label>
+            <label className="block">
+              <span className="text-xs font-sans uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                Synopsis <span className="normal-case">(optional — case scope/background for the brief)</span>
+              </span>
+              <textarea value={newCaseSynopsis}
+                onChange={(e) => setNewCaseSynopsis(e.target.value)}
+                placeholder="Short narrative: what happened, the in-scope system(s), and the investigative objectives."
+                rows={4}
+                className="mt-1 w-full px-3 py-2 rounded text-sm font-sans resize-y"
+                style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }} />
+            </label>
+            <div className="flex gap-2">
+              <button type="submit" disabled={creating}
+                className="flex-1 py-1.5 rounded text-xs font-sans font-semibold disabled:opacity-60 flex items-center justify-center gap-1.5"
+                style={{ background: 'var(--cyan)', color: 'var(--bg-base)' }}>
+                {creating && (
+                  <svg className="animate-spin w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                )}
+                {creating ? 'Creating...' : 'Create case'}
+              </button>
+              <button type="button" disabled={creating}
+                onClick={() => setCreatingCase(false)}
                 className="px-3 py-1.5 rounded text-xs font-sans"
                 style={{ border: '1px solid var(--border-soft)', color: 'var(--text-muted)' }}>
                 Cancel

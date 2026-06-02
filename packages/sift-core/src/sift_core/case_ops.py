@@ -26,6 +26,46 @@ from sift_core.case_io import (
 )
 from sift_core.evidence_chain import init_evidence_chain
 
+# Curated case-intake fields surfaced to the agent as the "case brief" so an
+# autonomous investigator is grounded in scope + objectives (D-008). These mirror
+# the examiner-settable schema in ``case_metadata`` plus the at-creation
+# ``description``. Order is presentation order; only non-empty values are emitted.
+CASE_BRIEF_FIELDS = (
+    "description",
+    "incident_type",
+    "severity",
+    "tlp",
+    "client",
+    "point_of_contact",
+    "impact_summary",
+    "detected_at",
+    "occurred_at",
+    "reported_at",
+    "contained_at",
+    "eradicated_at",
+    "recovered_at",
+    "affected_systems",
+    "affected_accounts",
+    "tags",
+    "related_cases",
+)
+
+
+def build_case_brief(meta: dict) -> dict:
+    """Extract the non-empty case-intake fields from CASE.yaml metadata.
+
+    Returns a curated brief (scope narrative + structured incident facts) for
+    grounding the agent. Empty/missing fields are omitted so the agent only sees
+    what the examiner actually recorded.
+    """
+    brief: dict = {}
+    for key in CASE_BRIEF_FIELDS:
+        val = meta.get(key)
+        if val in (None, "", [], {}):
+            continue
+        brief[key] = val
+    return brief
+
 
 def case_status_data(case_dir) -> dict:
     """Return case status as structured data."""
@@ -52,6 +92,7 @@ def case_status_data(case_dir) -> dict:
         "name": meta.get("name", "(unnamed)"),
         "status": meta.get("status", "unknown"),
         "examiner": meta.get("examiner", "unknown"),
+        "case_brief": build_case_brief(meta),
         "path": str(case_dir),
         "evidence_dir": str(case_dir / "evidence"),
         "extractions_dir": str(case_dir / "extractions"),

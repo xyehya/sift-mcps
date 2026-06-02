@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 from sift_common.audit import resolve_examiner
 from sift_core.case_io import case_audit_dir, cases_root
+from sift_core.case_ops import build_case_brief
 from sift_core.evidence_ops import list_manifest_evidence_data
 from sift_core.finding_validation import validate as validate_finding_data
 
@@ -687,6 +688,7 @@ class CaseManager:
             "name": meta.get("name", ""),
             "status": meta.get("status", "unknown"),
             "examiner": meta.get("examiner", ""),
+            "case_brief": build_case_brief(meta),
             "findings": {
                 "total": len(findings),
                 "draft": sum(1 for f in findings if f.get("status") == "DRAFT"),

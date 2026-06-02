@@ -231,6 +231,40 @@ def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
     assert (Path.home() / ".sift" / "active_case").read_text().strip() == str(requested_dir)
 
 
+def test_case_creation_persists_optional_synopsis(client, case_env, passwords_dir, monkeypatch):
+    """D-006-note: an optional synopsis is stored as CASE.yaml `description`."""
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 5, 25, 14, 13, 0, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+    case_root, _cfg_path = case_env
+    monkeypatch.setattr(routes_mod, "datetime", FrozenDatetime)
+    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+
+    resp = client.post("/api/case/create", json={
+        "casename": "brief-case",
+        "title": "Brief Case",
+        "description": "Home break-in targeting an SRL-issued laptop; determine exfiltration.",
+    })
+    assert resp.status_code == 200
+    case_dir = case_root / "brief-case-20260525-1413"
+    with open(case_dir / "CASE.yaml") as f:
+        meta = yaml.safe_load(f)
+    assert meta["description"].startswith("Home break-in")
+
+
+def test_case_creation_rejects_oversized_synopsis(client, case_env, passwords_dir):
+    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+    resp = client.post("/api/case/create", json={
+        "casename": "big-case",
+        "title": "Big Case",
+        "description": "x" * 10_001,
+    })
+    assert resp.status_code == 400
+
+
 def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_path, monkeypatch):
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     class FrozenDatetime(datetime):

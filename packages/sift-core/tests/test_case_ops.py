@@ -237,6 +237,54 @@ class TestCaseStatusData:
         assert result["name"] == "Status Test"
         assert result["status"] == "open"
 
+    def test_status_surfaces_case_brief(self, cases_dir):
+        """D-008: case_status exposes the curated intake brief to the agent."""
+        case_dir = cases_dir / "INC-TEST-BRIEF"
+        case_dir.mkdir()
+        for subdir in ("evidence", "extractions", "reports", "audit"):
+            (case_dir / subdir).mkdir()
+        with open(case_dir / "CASE.yaml", "w") as f:
+            yaml.dump(
+                {
+                    "case_id": "INC-TEST-BRIEF",
+                    "name": "Brief Test",
+                    "status": "open",
+                    "examiner": "tester",
+                    "description": "Home break-in targeting SRL laptop.",
+                    "incident_type": "unauthorized_access",
+                    "severity": "high",
+                    "occurred_at": "2020-11-13",
+                    "affected_accounts": ["frocba@stark-research-labs.com"],
+                    "impact_summary": "",  # empty → must be omitted
+                },
+                f,
+            )
+        for fname in ("findings.json", "timeline.json", "evidence.json"):
+            (case_dir / fname).write_text("[]")
+
+        brief = case_status_data(case_dir)["case_brief"]
+        assert brief["description"].startswith("Home break-in")
+        assert brief["incident_type"] == "unauthorized_access"
+        assert brief["severity"] == "high"
+        assert brief["affected_accounts"] == ["frocba@stark-research-labs.com"]
+        assert "impact_summary" not in brief  # empty values dropped
+        assert "examiner" not in brief  # lifecycle fields stay out of the brief
+
+    def test_status_brief_empty_when_no_intake(self, cases_dir):
+        """No intake metadata → empty brief (not missing key)."""
+        case_dir = cases_dir / "INC-NO-BRIEF"
+        case_dir.mkdir()
+        for subdir in ("evidence", "extractions", "reports", "audit"):
+            (case_dir / subdir).mkdir()
+        with open(case_dir / "CASE.yaml", "w") as f:
+            yaml.dump(
+                {"case_id": "INC-NO-BRIEF", "name": "n", "status": "open", "examiner": "t"},
+                f,
+            )
+        for fname in ("findings.json", "timeline.json", "evidence.json"):
+            (case_dir / fname).write_text("[]")
+        assert case_status_data(case_dir)["case_brief"] == {}
+
 
 # ---------------------------------------------------------------------------
 # R0-4: case_list_data — reads SIFT_CASES_ROOT first
