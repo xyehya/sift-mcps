@@ -103,30 +103,35 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 if op == "2>&1":
                     merge_stderr = True
                     continue
-                if op == ">":
-                    f = open(target, "wb")
-                    stage_stdout = f
-                    opened_files.append(f)
-                elif op == ">>":
-                    f = open(target, "ab")
-                    stage_stdout = f
-                    opened_files.append(f)
-                elif op == "<":
-                    f = open(target, "rb")
-                    stage_stdin = f
-                    opened_files.append(f)
-                    if prev_stdout is not None:
-                        prev_stdout.close()
-                        prev_stdout = None
-                elif op in ("2>", "2>>"):
-                    f = open(target, "ab" if op == "2>>" else "wb")
-                    stage_stderr = f
-                    opened_files.append(f)
-                elif op in ("&>", "&>>"):
-                    f = open(target, "ab" if op == "&>>" else "wb")
-                    stage_stdout = f
-                    stage_stderr = f
-                    opened_files.append(f)
+                try:
+                    if op == ">":
+                        f = open(target, "wb")
+                        stage_stdout = f
+                        opened_files.append(f)
+                    elif op == ">>":
+                        f = open(target, "ab")
+                        stage_stdout = f
+                        opened_files.append(f)
+                    elif op == "<":
+                        f = open(target, "rb")
+                        stage_stdin = f
+                        opened_files.append(f)
+                        if prev_stdout is not None:
+                            prev_stdout.close()
+                            prev_stdout = None
+                    elif op in ("2>", "2>>"):
+                        f = open(target, "ab" if op == "2>>" else "wb")
+                        stage_stderr = f
+                        opened_files.append(f)
+                    elif op in ("&>", "&>>"):
+                        f = open(target, "ab" if op == "&>>" else "wb")
+                        stage_stdout = f
+                        stage_stderr = f
+                        opened_files.append(f)
+                except FileNotFoundError as exc:
+                    raise FileNotFoundError(f"Redirection target not found: {target}") from exc
+                except PermissionError as exc:
+                    raise PermissionError(f"Permission denied on redirection target: {target}") from exc
 
             # '2>&1' wins if combined with an explicit stderr file: merge means
             # stderr follows stdout's destination.

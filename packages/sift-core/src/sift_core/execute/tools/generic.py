@@ -156,6 +156,14 @@ def run_command(
     next_cond = None
     executed_stages_info = []
 
+    # Aggregation variables for sequential execution
+    accumulated_stdout = []
+    accumulated_stderr = []
+    total_stdout_bytes = 0
+    total_elapsed = 0.0
+    truncated = False
+    any_stdout_none = False
+
     for current_pipeline, operator in pipelines:
         # Check sequencing condition
         if next_cond == "&&" and last_exit_code != 0:
@@ -268,11 +276,34 @@ def run_command(
                 "exit_code": exit_code
             })
 
+        if pipeline_result:
+            p_stdout = pipeline_result.get("stdout")
+            if p_stdout is not None:
+                accumulated_stdout.append(p_stdout)
+            else:
+                any_stdout_none = True
+
+            p_stderr = pipeline_result.get("stderr")
+            if p_stderr is not None:
+                accumulated_stderr.append(p_stderr)
+
+            total_stdout_bytes += pipeline_result.get("stdout_total_bytes", 0)
+            total_elapsed += pipeline_result.get("elapsed_seconds", 0.0)
+            if pipeline_result.get("truncated"):
+                truncated = True
+
         exec_result = pipeline_result
         last_exit_code = pipeline_result["exit_code"] if pipeline_result else 1
         next_cond = operator
 
     if exec_result:
+        exec_result["stdout"] = None if any_stdout_none else "".join(accumulated_stdout)
+        exec_result["stderr"] = "".join(accumulated_stderr)
+        exec_result["stdout_total_bytes"] = total_stdout_bytes
+        exec_result["elapsed_seconds"] = round(total_elapsed, 2)
+        if truncated:
+            exec_result["truncated"] = True
+
         exec_result["stages"] = executed_stages_info
         if escalation_info:
             exec_result["privilege_escalation"] = escalation_info

@@ -436,7 +436,7 @@ def split_command_by_operators(cmd_str: str) -> list[tuple[str, str]]:
     """
     subcommands = []
     current = []
-    state = "NORMAL"  # NORMAL, SINGLE, DOUBLE, ESCAPE
+    state = "NORMAL"  # NORMAL, SINGLE, DOUBLE, ESCAPE, ESCAPE_DOUBLE
     i = 0
     n = len(cmd_str)
     
@@ -449,9 +449,9 @@ def split_command_by_operators(cmd_str: str) -> list[tuple[str, str]]:
             i += 1
             continue
             
-        if char == "\\":
+        if state == "ESCAPE_DOUBLE":
             current.append(char)
-            state = "ESCAPE"
+            state = "DOUBLE"
             i += 1
             continue
             
@@ -463,6 +463,11 @@ def split_command_by_operators(cmd_str: str) -> list[tuple[str, str]]:
             continue
             
         if state == "DOUBLE":
+            if char == "\\":
+                current.append(char)
+                state = "ESCAPE_DOUBLE"
+                i += 1
+                continue
             current.append(char)
             if char == '"':
                 state = "NORMAL"
@@ -470,7 +475,12 @@ def split_command_by_operators(cmd_str: str) -> list[tuple[str, str]]:
             continue
             
         # NORMAL state
-        if char == "'":
+        if char == "\\":
+            current.append(char)
+            state = "ESCAPE"
+            i += 1
+            continue
+        elif char == "'":
             current.append(char)
             state = "SINGLE"
             i += 1
@@ -551,9 +561,9 @@ def parse_subcommand_argv_and_redirects(subcmd_str: str) -> tuple[list[str], lis
             state = "NORMAL"
             i += 1
             continue
-        if char == "\\":
+        if state == "ESCAPE_DOUBLE":
             processed_chars.append(char)
-            state = "ESCAPE"
+            state = "DOUBLE"
             i += 1
             continue
         if state == "SINGLE":
@@ -563,13 +573,23 @@ def parse_subcommand_argv_and_redirects(subcmd_str: str) -> tuple[list[str], lis
             i += 1
             continue
         if state == "DOUBLE":
+            if char == "\\":
+                processed_chars.append(char)
+                state = "ESCAPE_DOUBLE"
+                i += 1
+                continue
             processed_chars.append(char)
             if char == '"':
                 state = "NORMAL"
             i += 1
             continue
             
-        if char == "'":
+        if char == "\\":
+            processed_chars.append(char)
+            state = "ESCAPE"
+            i += 1
+            continue
+        elif char == "'":
             processed_chars.append(char)
             state = "SINGLE"
             i += 1
@@ -820,8 +840,10 @@ def validate_shell_command(
         argv[0] = resolved
 
         # Validate redirection targets
+        resolved_redirects = []
         for op, target in redirects:
             if op == "2>&1":
+                resolved_redirects.append((op, target))
                 # stderr-into-stdout merge: no path to validate.
                 continue
             if op == "<<":
@@ -832,9 +854,12 @@ def validate_shell_command(
             if "$" in target or "%" in target:
                 raise ValueError("Shell expansion syntax in paths is blocked by security policy")
             if op in (">", ">>", "2>", "2>>", "&>", "&>>"):
-                validate_output_path(target, base_dir=cwd)
+                resolved_target = validate_output_path(target, base_dir=cwd)
             elif op == "<":
-                validate_input_path(target, base_dir=cwd)
+                resolved_target = validate_input_path(target, base_dir=cwd)
+            else:
+                resolved_target = target
+            resolved_redirects.append((op, resolved_target))
                 
         # Validate argv paths. Common mutating positional tools need
         # command-specific source/destination handling, so do not treat every
@@ -979,7 +1004,7 @@ def validate_shell_command(
             "subcmd_str": subcmd_str,
             "operator": operator,
             "argv": argv,
-            "redirects": redirects,
+            "redirects": resolved_redirects,
             "binary": binary,
             "resolved": resolved,
             "privileged": binary in _PRIVILEGED_TARGETS,

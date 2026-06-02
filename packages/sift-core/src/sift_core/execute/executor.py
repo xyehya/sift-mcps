@@ -215,8 +215,14 @@ def execute(
             f"Command timed out after {timeout}s: {_format_command(cmd_list)}"
         ) from exc
     except FileNotFoundError as exc:
+        msg = str(exc)
+        if msg.startswith("Redirection target not found:"):
+            raise ExecutionError(msg) from exc
         raise ExecutionError(f"Binary not found: {_first_command_name(cmd_list)}") from exc
     except PermissionError as exc:
+        msg = str(exc)
+        if msg.startswith("Permission denied on redirection target:"):
+            raise ExecutionError(msg) from exc
         raise ExecutionError(f"Permission denied: {_first_command_name(cmd_list)}") from exc
     except OSError as e:
         raise ExecutionError(f"OS error executing {_first_command_name(cmd_list)}: {e}") from e
