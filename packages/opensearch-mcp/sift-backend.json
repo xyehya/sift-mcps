@@ -1,0 +1,158 @@
+{
+  "spec_version": "1.0",
+  "name": "opensearch-mcp",
+  "version": "1.0.0",
+  "tier": "addon",
+  "transport": "stdio",
+  "namespace": "opensearch",
+  "capabilities": {
+    "provides": ["search", "ingest"],
+    "requires": ["https://localhost:9200"],
+    "enriches_responses": false
+  },
+  "tools": [
+    {
+      "name": "opensearch_search",
+      "description": "Search indexed evidence with query_string syntax (supports time_from/time_to, offset pagination).",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_count",
+      "description": "Count documents matching a query.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_aggregate",
+      "description": "Group indexed evidence by a field (terms aggregation) with an optional query filter.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_get_event",
+      "description": "Retrieve a single indexed document by its _id.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_timeline",
+      "description": "Event count over time as a date histogram (supports time_from/time_to).",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_field_values",
+      "description": "List unique values for a field (terms aggregation) with an optional query filter.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_status",
+      "description": "OpenSearch cluster connectivity and per-case index status.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "ingest",
+      "recommended_phase": "SEALED",
+      "health": true
+    },
+    {
+      "name": "opensearch_shard_status",
+      "description": "Shard usage and capacity headroom across the cluster.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "recommended_phase": "SEALED"
+    },
+    {
+      "name": "opensearch_case_summary",
+      "description": "Complete coverage overview of indexed evidence for a case — the first call in any indexed investigation.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_inspect_container",
+      "description": "Inspect a forensic container (E01/zip/etc.) before ingest to preview its contents.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "evidence-survey",
+      "recommended_phase": "SEALED"
+    },
+    {
+      "name": "opensearch_ingest",
+      "description": "Discover and ingest forensic artifacts into OpenSearch. dry_run=True by default — the agent must explicitly set dry_run=False to write.",
+      "read_only": false,
+      "readOnlyHint": false,
+      "evidence_class": "mutating",
+      "category": "ingest",
+      "recommended_phase": "SEALED"
+    },
+    {
+      "name": "opensearch_ingest_status",
+      "description": "Check running/recent ingest operations for a case (\"*\" for all cases).",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "ingest",
+      "recommended_phase": "SEALED"
+    },
+    {
+      "name": "opensearch_enrich_intel",
+      "description": "Enrich indexed evidence with OpenCTI threat intel. Async — returns immediately with a run_id.",
+      "read_only": false,
+      "readOnlyHint": false,
+      "evidence_class": "mutating",
+      "category": "enrichment",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_enrich_triage",
+      "description": "Run Windows baseline (windows-triage) enrichment on indexed data.",
+      "read_only": false,
+      "readOnlyHint": false,
+      "evidence_class": "mutating",
+      "category": "enrichment",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_list_detections",
+      "description": "Query the Security Analytics plugin for Sigma rule detections; suggests Hayabusa alternatives.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "search-analysis",
+      "recommended_phase": "TRIAGE"
+    },
+    {
+      "name": "opensearch_host_fix",
+      "description": "Correct a wrong host.id mapping across all indexed documents (reindexes affected docs). Scoped to OpenSearch index/alias state.",
+      "read_only": false,
+      "readOnlyHint": false,
+      "evidence_class": "mutating"
+    }
+  ],
+  "health": "opensearch_status"
+}

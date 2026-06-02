@@ -67,7 +67,7 @@ key_plugins:
 
 cross_mcp_checks:
   - mcp: "opensearch-mcp"
-    tool: "idx_search"
+    tool: "opensearch_search"
     when: "BAM shows execution — search indexed evidence for same binary across hosts"
   - mcp: "windows-triage"
     tool: "check_file"

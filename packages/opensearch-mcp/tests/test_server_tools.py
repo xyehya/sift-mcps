@@ -11,15 +11,15 @@ from opensearch_mcp.server import (
     _get_os,
     _os_call,
     _strip_hits,
-    idx_aggregate,
-    idx_count,
-    idx_field_values,
-    idx_get_event,
-    idx_ingest,
-    idx_ingest_status,
-    idx_search,
-    idx_status,
-    idx_timeline,
+    opensearch_aggregate,
+    opensearch_count,
+    opensearch_field_values,
+    opensearch_get_event,
+    opensearch_ingest,
+    opensearch_ingest_status,
+    opensearch_search,
+    opensearch_status,
+    opensearch_timeline,
 )
 
 
@@ -48,7 +48,7 @@ class TestToolRegistry:
     def test_ingest_format_variants_are_consolidated_under_idx_ingest(self):
         tools = srv.server._tool_manager._tools
 
-        assert "idx_ingest" in tools
+        assert "opensearch_ingest" in tools
         for old_name in (
             "idx_ingest_json",
             "idx_ingest_delimited",
@@ -57,21 +57,21 @@ class TestToolRegistry:
         ):
             assert old_name not in tools
 
-        schema = tools["idx_ingest"].fn_metadata.arg_model.model_json_schema()
+        schema = tools["opensearch_ingest"].fn_metadata.arg_model.model_json_schema()
         assert "format" in schema["properties"]
 
     def test_query_and_status_tools_are_marked_read_only(self):
         read_only_tools = [
-            "idx_search",
-            "idx_count",
-            "idx_aggregate",
-            "idx_get_event",
-            "idx_timeline",
-            "idx_field_values",
-            "idx_status",
-            "idx_shard_status",
-            "idx_case_summary",
-            "idx_list_detections",
+            "opensearch_search",
+            "opensearch_count",
+            "opensearch_aggregate",
+            "opensearch_get_event",
+            "opensearch_timeline",
+            "opensearch_field_values",
+            "opensearch_status",
+            "opensearch_shard_status",
+            "opensearch_case_summary",
+            "opensearch_list_detections",
         ]
         tools = srv.server._tool_manager._tools
 
@@ -79,13 +79,16 @@ class TestToolRegistry:
             assert getattr(tools[name].annotations, "readOnlyHint", None) is True
 
     def test_admin_pipeline_install_not_in_public_registry(self):
-        """idx_install_pipelines is an internal admin function, not a public MCP tool.
+        """The pipeline-install admin function is not an MCP tool.
 
-        It was removed from the agent-facing surface during Group 3 consolidation.
-        Confirm it is absent from the tool manager so the agent cannot call it.
+        idx_install_pipelines was removed entirely in Phase 6 — pipeline/template
+        setup now runs via ensure_winlog_pipeline at server first-connection. Guard
+        that it does not reappear under either the old or namespaced name.
         """
         tools = srv.server._tool_manager._tools
         assert "idx_install_pipelines" not in tools
+        assert "opensearch_install_pipelines" not in tools
+        assert not hasattr(srv, "idx_install_pipelines")
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +188,7 @@ class TestStripHits:
 
 
 # ---------------------------------------------------------------------------
-# idx_search
+# opensearch_search
 # ---------------------------------------------------------------------------
 
 
@@ -200,7 +203,7 @@ class TestIdxSearch:
                 ],
             }
         }
-        resp = idx_search(query="event.code:4624")
+        resp = opensearch_search(query="event.code:4624")
         assert resp["total"] == 2
         assert resp["returned"] == 2
         assert len(resp["results"]) == 2
@@ -209,7 +212,7 @@ class TestIdxSearch:
         mock_client.search.return_value = {
             "hits": {"total": {"value": 0}, "hits": []},
         }
-        idx_search(query="*", limit=999)
+        opensearch_search(query="*", limit=999)
         call_body = mock_client.search.call_args[1]["body"]
         assert call_body["size"] == 200
 
@@ -217,7 +220,7 @@ class TestIdxSearch:
         mock_client.search.return_value = {
             "hits": {"total": {"value": 0}, "hits": []},
         }
-        idx_search(query="*", sort="@timestamp:INVALID")
+        opensearch_search(query="*", sort="@timestamp:INVALID")
         call_body = mock_client.search.call_args[1]["body"]
         assert call_body["sort"][0]["@timestamp"]["order"] == "desc"
 
@@ -226,30 +229,30 @@ class TestIdxSearch:
             "hits": {"total": {"value": 0}, "hits": []},
         }
         with patch.object(srv.audit, "log", return_value="audit-123"):
-            resp = idx_search(query="*")
+            resp = opensearch_search(query="*")
         assert resp["audit_id"] == "audit-123"
 
 
 # ---------------------------------------------------------------------------
-# idx_count
+# opensearch_count
 # ---------------------------------------------------------------------------
 
 
 class TestIdxCount:
     def test_returns_count(self, mock_client):
         mock_client.count.return_value = {"count": 42}
-        resp = idx_count(query="*")
+        resp = opensearch_count(query="*")
         assert resp["count"] == 42
 
     def test_audit_id_in_response(self, mock_client):
         mock_client.count.return_value = {"count": 0}
         with patch.object(srv.audit, "log", return_value="audit-456"):
-            resp = idx_count()
+            resp = opensearch_count()
         assert resp["audit_id"] == "audit-456"
 
 
 # ---------------------------------------------------------------------------
-# idx_aggregate
+# opensearch_aggregate
 # ---------------------------------------------------------------------------
 
 
@@ -266,7 +269,7 @@ class TestIdxAggregate:
                 }
             },
         }
-        resp = idx_aggregate(field="host.name")
+        resp = opensearch_aggregate(field="host.name")
         assert resp["field"] == "host.name"
         assert resp["total_docs"] == 100
         assert len(resp["buckets"]) == 2
@@ -277,13 +280,13 @@ class TestIdxAggregate:
             "hits": {"total": {"value": 0}},
             "aggregations": {"agg": {"buckets": []}},
         }
-        idx_aggregate(field="host.name", limit=9999)
+        opensearch_aggregate(field="host.name", limit=9999)
         call_body = mock_client.search.call_args[1]["body"]
         assert call_body["aggs"]["agg"]["terms"]["size"] == 500
 
 
 # ---------------------------------------------------------------------------
-# idx_get_event
+# opensearch_get_event
 # ---------------------------------------------------------------------------
 
 
@@ -294,14 +297,14 @@ class TestIdxGetEvent:
             "_index": "case-test-evtx-host1",
             "_source": {"event.code": 4624, "user.name": "admin"},
         }
-        resp = idx_get_event(event_id="doc123", index="case-test-evtx-host1")
+        resp = opensearch_get_event(event_id="doc123", index="case-test-evtx-host1")
         assert resp["_id"] == "doc123"
         assert resp["_index"] == "case-test-evtx-host1"
         assert resp["event.code"] == 4624
 
 
 # ---------------------------------------------------------------------------
-# idx_timeline
+# opensearch_timeline
 # ---------------------------------------------------------------------------
 
 
@@ -318,7 +321,7 @@ class TestIdxTimeline:
                 }
             },
         }
-        resp = idx_timeline(query="*", interval="1h")
+        resp = opensearch_timeline(query="*", interval="1h")
         assert resp["total_docs"] == 500
         assert resp["interval"] == "1h"
         assert len(resp["buckets"]) == 2
@@ -326,7 +329,7 @@ class TestIdxTimeline:
 
 
 # ---------------------------------------------------------------------------
-# idx_field_values
+# opensearch_field_values
 # ---------------------------------------------------------------------------
 
 
@@ -343,14 +346,14 @@ class TestIdxFieldValues:
                 }
             },
         }
-        resp = idx_field_values(field="winlog.provider_name")
+        resp = opensearch_field_values(field="winlog.provider_name")
         assert resp["field"] == "winlog.provider_name"
         assert len(resp["values"]) == 2
         assert resp["values"][0] == {"value": "Sysmon", "count": 50, "doc_count": 50}
 
 
 # ---------------------------------------------------------------------------
-# idx_status
+# opensearch_status
 # ---------------------------------------------------------------------------
 
 
@@ -372,7 +375,7 @@ class TestIdxStatus:
             },
         ]
         mock_client.cluster.health.return_value = {"status": "green"}
-        resp = idx_status()
+        resp = opensearch_status()
         assert resp["total_indices"] == 2
         index_names = [i["index"] for i in resp["indices"]]
         assert ".kibana_1" not in index_names
@@ -384,7 +387,7 @@ class TestIdxStatus:
             "status": "yellow",
             "number_of_nodes": 1,
         }
-        resp = idx_status()
+        resp = opensearch_status()
         assert "yellow" in resp["cluster_status"]
         assert "single-node" in resp["cluster_status"]
 
@@ -394,19 +397,19 @@ class TestIdxStatus:
             "status": "green",
             "number_of_nodes": 3,
         }
-        resp = idx_status()
+        resp = opensearch_status()
         assert resp["cluster_status"] == "green"
 
 
 # ---------------------------------------------------------------------------
-# idx_ingest
+# opensearch_ingest
 # ---------------------------------------------------------------------------
 
 
 class TestIdxIngest:
     def test_rejects_unknown_format(self, mock_client, monkeypatch):
         monkeypatch.setattr(srv, "_get_active_case", lambda: "test-case")
-        resp = idx_ingest(path="evidence", format="unknown", dry_run=True)
+        resp = opensearch_ingest(path="evidence", format="unknown", dry_run=True)
         assert "error" in resp
         assert "supported_formats" in resp
 
@@ -414,7 +417,7 @@ class TestIdxIngest:
         monkeypatch.setattr(srv, "_get_active_case", lambda: "test-case")
         with patch("opensearch_mcp.server.idx_ingest_json") as handler:
             handler.return_value = {"status": "preview", "format": "jsonl"}
-            resp = idx_ingest(
+            resp = opensearch_ingest(
                 path="evidence/events.jsonl",
                 format="json",
                 hostname="HOST1",
@@ -435,7 +438,7 @@ class TestIdxIngest:
         monkeypatch.setattr(srv, "_get_active_case", lambda: "test-case")
         with patch("opensearch_mcp.server.idx_ingest_delimited") as handler:
             handler.return_value = {"status": "preview", "format": "csv"}
-            resp = idx_ingest(
+            resp = opensearch_ingest(
                 path="evidence/csv",
                 format="delimited",
                 hostname="auto",
@@ -458,7 +461,7 @@ class TestIdxIngest:
         monkeypatch.setattr(srv, "_get_active_case", lambda: "test-case")
         with patch("opensearch_mcp.server.idx_ingest_memory") as handler:
             handler.return_value = {"status": "preview", "plugin_count": 2}
-            resp = idx_ingest(
+            resp = opensearch_ingest(
                 path="evidence/memdump.raw",
                 format="memory",
                 hostname="HOST1",
@@ -477,7 +480,7 @@ class TestIdxIngest:
 
     def test_rejects_paths_outside_allowed_locations(self, mock_client):
         """Paths outside the active case are rejected."""
-        resp = idx_ingest(path="/etc")
+        resp = opensearch_ingest(path="/etc")
         assert "error" in resp
         assert "No active case" in resp["error"]
 
@@ -496,7 +499,7 @@ class TestIdxIngest:
 
         mock_client.count.side_effect = Exception("no index")
 
-        resp = idx_ingest(path="evidence", dry_run=True)
+        resp = opensearch_ingest(path="evidence", dry_run=True)
         assert resp.get("status") == "preview"
         assert len(resp.get("hosts", [])) >= 1
 
@@ -508,28 +511,28 @@ class TestIdxIngest:
         monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         f = evidence_dir / "not_a_dir.txt"
         f.write_text("test")
-        resp = idx_ingest(path="not_a_dir.txt")
+        resp = opensearch_ingest(path="not_a_dir.txt")
         assert "error" in resp
         assert "Not a directory or supported container" in resp["error"]
 
     def test_ingest_status_returns_empty_when_no_status(self, mock_client):
-        """idx_ingest_status returns empty when no status files exist."""
+        """opensearch_ingest_status returns empty when no status files exist."""
         with patch(
             "opensearch_mcp.ingest_status.read_active_ingests",
             return_value=[],
         ):
-            resp = idx_ingest_status(case_id="*")
+            resp = opensearch_ingest_status(case_id="*")
         assert resp["ingests"] == []
         assert "No active" in resp["message"]
 
 
 # ---------------------------------------------------------------------------
-# idx_enrich_intel — async launch (UAT 2026-04-23 B79)
+# opensearch_enrich_intel — async launch (UAT 2026-04-23 B79)
 # ---------------------------------------------------------------------------
 
 
 class TestEnrichIntelAsync:
-    """B79: idx_enrich_intel with dry_run=False must return immediately
+    """B79: opensearch_enrich_intel with dry_run=False must return immediately
     with {status: started, pid, run_id, ...} so the gateway's 300s
     synchronous tool timeout cannot kill a real enrichment run. The
     worker runs under systemd-run scope and writes progress to the
@@ -538,7 +541,7 @@ class TestEnrichIntelAsync:
     def test_dry_run_stays_synchronous(self, mock_client, monkeypatch):
         """dry_run=True must keep the synchronous preview path — operators
         rely on the IOC count for decide-before-run flow."""
-        from opensearch_mcp.server import idx_enrich_intel
+        from opensearch_mcp.server import opensearch_enrich_intel
 
         monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
         fake_iocs = {
@@ -547,7 +550,7 @@ class TestEnrichIntelAsync:
             "domain": {"evil.example"},
         }
         with patch("opensearch_mcp.threat_intel.extract_unique_iocs", return_value=fake_iocs):
-            resp = idx_enrich_intel(dry_run=True)
+            resp = opensearch_enrich_intel(dry_run=True)
         assert resp["status"] == "preview"
         assert resp["ips"] == 2
         assert resp["hashes"] == 3
@@ -557,7 +560,7 @@ class TestEnrichIntelAsync:
     def test_execute_launches_background(self, mock_client, monkeypatch, tmp_path):
         """dry_run=False must return {status: started, pid, run_id}
         immediately — does NOT block on enrich_case."""
-        from opensearch_mcp.server import idx_enrich_intel
+        from opensearch_mcp.server import opensearch_enrich_intel
 
         monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
 
@@ -571,20 +574,20 @@ class TestEnrichIntelAsync:
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
             patch("opensearch_mcp.paths.sift_dir", return_value=tmp_path),
         ):
-            resp = idx_enrich_intel(dry_run=False)
+            resp = opensearch_enrich_intel(dry_run=False)
 
         assert resp["status"] == "started"
         assert resp["pid"] == 54321
         assert "run_id" in resp
         assert resp["case_id"] == "TEST-CASE"
         # Message points operators at the right status tool.
-        assert "idx_ingest_status" in resp["message"]
+        assert "opensearch_ingest_status" in resp["message"]
         assert "intel" in resp["message"]
 
     def test_execute_respects_explicit_case_arg(self, mock_client, monkeypatch, tmp_path):
         """Explicit case_id must be passed to the worker, not silently
         overridden by the active-case."""
-        from opensearch_mcp.server import idx_enrich_intel
+        from opensearch_mcp.server import opensearch_enrich_intel
 
         monkeypatch.setattr(srv, "_get_active_case", lambda: "ACTIVE-CASE")
 
@@ -602,7 +605,7 @@ class TestEnrichIntelAsync:
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
             patch("opensearch_mcp.paths.sift_dir", return_value=tmp_path),
         ):
-            resp = idx_enrich_intel(case_id="OVERRIDE-CASE", dry_run=False)
+            resp = opensearch_enrich_intel(case_id="OVERRIDE-CASE", dry_run=False)
 
         assert resp["case_id"] == "OVERRIDE-CASE"
         # Worker cmd includes --case OVERRIDE-CASE, not ACTIVE-CASE.
@@ -611,7 +614,7 @@ class TestEnrichIntelAsync:
 
     def test_execute_force_flag_propagated(self, mock_client, monkeypatch, tmp_path):
         """--force flag must reach the worker command line."""
-        from opensearch_mcp.server import idx_enrich_intel
+        from opensearch_mcp.server import opensearch_enrich_intel
 
         monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
 
@@ -629,7 +632,7 @@ class TestEnrichIntelAsync:
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
             patch("opensearch_mcp.paths.sift_dir", return_value=tmp_path),
         ):
-            idx_enrich_intel(dry_run=False, force=True)
+            opensearch_enrich_intel(dry_run=False, force=True)
 
         assert "--force" in captured_cmd
 
@@ -637,7 +640,7 @@ class TestEnrichIntelAsync:
         """Enrichment must respect the same concurrency cap as ingest —
         running 5+ long enrichments simultaneously would starve the
         OpenCTI rate limiter and is a stability hazard."""
-        from opensearch_mcp.server import _MAX_CONCURRENT_INGESTS, idx_enrich_intel
+        from opensearch_mcp.server import _MAX_CONCURRENT_INGESTS, opensearch_enrich_intel
 
         monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
         full_roster = [
@@ -645,7 +648,7 @@ class TestEnrichIntelAsync:
             for i in range(_MAX_CONCURRENT_INGESTS)
         ]
         with patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=full_roster):
-            resp = idx_enrich_intel(dry_run=False)
+            resp = opensearch_enrich_intel(dry_run=False)
         assert "error" in resp
         assert "Too many concurrent" in resp["error"]
 
@@ -711,7 +714,7 @@ class TestGetActiveCase:
 
 
 # ---------------------------------------------------------------------------
-# R0-2: idx_ingest — uses _get_active_case, not inline active_case read
+# R0-2: opensearch_ingest — uses _get_active_case, not inline active_case read
 # ---------------------------------------------------------------------------
 
 
@@ -725,7 +728,7 @@ class TestIdxIngestActiveCase:
         # A valid path to satisfy path validation
         import tempfile
         with tempfile.TemporaryDirectory() as d:
-            resp = idx_ingest(path=d)
+            resp = opensearch_ingest(path=d)
         assert "error" in resp
         assert "portal_hint" in resp
         assert "portal" in resp["portal_hint"].lower()
@@ -742,13 +745,13 @@ class TestIdxIngestActiveCase:
         evidence_dir.mkdir()
         make_windows_tree(evidence_dir)
         mock_client.count.side_effect = Exception("no index")
-        resp = idx_ingest(path="evidence", dry_run=True)
+        resp = opensearch_ingest(path="evidence", dry_run=True)
         assert resp.get("status") == "preview"
         assert resp.get("case_id") == "rocba-20260525-1200"
 
 
 # ---------------------------------------------------------------------------
-# R0-3: idx_ingest — directory with containers returns containers_detected
+# R0-3: opensearch_ingest — directory with containers returns containers_detected
 # ---------------------------------------------------------------------------
 
 
@@ -761,19 +764,19 @@ class TestIdxIngestContainerDetection:
         monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         e01 = evidence_dir / "rocba-cdrive.e01"
         e01.write_bytes(b"EVF" + b"\x00" * 100)  # minimal EWF magic
-        resp = idx_ingest(path="evidence", dry_run=True)
+        resp = opensearch_ingest(path="evidence", dry_run=True)
         assert resp.get("status") == "containers_detected"
         assert resp.get("case_id") == "test-case-001"
         assert len(resp.get("containers", [])) >= 1
         assert "next_step" in resp
-        assert "idx_ingest" in resp["next_step"]
+        assert "opensearch_ingest" in resp["next_step"]
 
     def test_directory_empty_returns_error(self, mock_client, tmp_path, monkeypatch):
         """Empty directory → no containers, falls through to original error."""
         case_dir = tmp_path / "test-case-001"
         (case_dir / "evidence").mkdir(parents=True)
         monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
-        resp = idx_ingest(path="evidence", dry_run=True)
+        resp = opensearch_ingest(path="evidence", dry_run=True)
         assert "error" in resp
         assert "containers_detected" != resp.get("status")
 
@@ -784,7 +787,7 @@ class TestIdxIngestContainerDetection:
         evidence_dir.mkdir(parents=True)
         monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         (evidence_dir / "notes.txt").write_text("not a container")
-        resp = idx_ingest(path="evidence", dry_run=True)
+        resp = opensearch_ingest(path="evidence", dry_run=True)
         assert "error" in resp
         assert "No Windows artifacts found" in resp["error"]
 
@@ -806,7 +809,7 @@ class TestIdxIngestContainerDetection:
             patch("opensearch_mcp.shard_capacity.check_shard_headroom", return_value=(True, "ok")),
             patch("opensearch_mcp.server._spawn_ingest", side_effect=[proc1, proc2]) as mock_spawn,
         ):
-            resp = idx_ingest(path="evidence", hostname="srl-forge", dry_run=False, force=True)
+            resp = opensearch_ingest(path="evidence", hostname="srl-forge", dry_run=False, force=True)
 
         assert resp["status"] == "multi_started"
         assert len(resp["containers"]) == 2

@@ -389,7 +389,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         """Single entry point — detect current investigation phase and recommend next steps.
 
         Call this FIRST every session. Replaces 7+ discovery calls (case_status,
-        evidence_list, idx_case_summary, idx_ingest_status,
+        evidence_list, opensearch_case_summary, opensearch_ingest_status,
         list_existing_findings, query_case, manage_todo) with one call.
 
         Returns: {phase, case_id, evidence_summary, indexing_status,
@@ -544,13 +544,13 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                     "Copy evidence to the case directory (e.g., /cases/{case}/evidence/)",
                     "Seal evidence via the Examiner Portal (Evidence tab → Seal Manifest)",
                     "NOTE: Write tools are BLOCKED until evidence is sealed. Read-only tools (case_status, evidence_list, evidence_verify, kb_search_knowledge) still work.",
-                    "Then run idx_ingest() to index evidence into OpenSearch for structured analysis",
+                    "Then run opensearch_ingest() to index evidence into OpenSearch for structured analysis",
                 ]
             else:
                 next_steps = [
                     "Copy evidence to the case directory (e.g., /cases/{case}/evidence/)",
                     "Seal evidence via the Examiner Portal (Evidence tab → Seal Manifest)",
-                    "Then run idx_ingest() to index evidence into OpenSearch for structured analysis",
+                    "Then run opensearch_ingest() to index evidence into OpenSearch for structured analysis",
                 ]
         elif sealed_count > 0 and not ingest_complete and not ingest_running and not ingest_failed:
             phase = "SEALED"
@@ -564,31 +564,31 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             if evidence_names:
                 hint = f" (e.g., {evidence_names[0]})"
             next_steps = [
-                f"Run idx_ingest(path='evidence/<file>', hostname='<HOST>') to index {sealed_count} sealed evidence file(s){hint}",
-                "After ingestion, use idx_case_summary() for a full overview of indexed artifacts",
+                f"Run opensearch_ingest(path='evidence/<file>', hostname='<HOST>') to index {sealed_count} sealed evidence file(s){hint}",
+                "After ingestion, use opensearch_case_summary() for a full overview of indexed artifacts",
             ]
         elif ingest_running:
             phase = "INGESTING"
             next_steps = [
                 "Ingestion is currently running. Wait for it to complete.",
-                "Call idx_ingest_status() to check progress.",
-                "Once complete, use idx_case_summary() to review indexed artifacts.",
+                "Call opensearch_ingest_status() to check progress.",
+                "Once complete, use opensearch_case_summary() to review indexed artifacts.",
             ]
         elif ingest_failed and not ingest_complete:
             phase = "SEALED"
             next_steps = [
                 f"Ingestion failed: {ingest_error or 'unknown error'}",
                 "Check ingest logs in ~/.sift/ingest-logs/ for details.",
-                "Fix the issue and re-run idx_ingest().",
+                "Fix the issue and re-run opensearch_ingest().",
             ]
         elif ingest_complete and draft_count == 0 and approved_count == 0:
             phase = "TRIAGE"
             next_steps = [
                 "Evidence is indexed — start your analysis:",
-                "1. Run idx_case_summary() for a complete overview of all indexed artifacts",
-                "2. Search for IOCs with idx_search() across all artifact types",
-                "3. Use idx_aggregate() to spot patterns (top commands, accounts, etc.)",
-                "4. Query specific hosts with idx_artifact_browse()",
+                "1. Run opensearch_case_summary() for a complete overview of all indexed artifacts",
+                "2. Search for IOCs with opensearch_search() across all artifact types",
+                "3. Use opensearch_aggregate() to spot patterns (top commands, accounts, etc.)",
+                "4. Query specific hosts with opensearch_search() filtered on host.name",
                 "5. Check the RAG knowledge base with kb_search_knowledge() for relevant detection guidance",
                 "6. Run timeline analysis on EVTX files if available",
                 "Stage findings as you go with record_finding() — they'll be DRAFT until examiner approval",
@@ -632,7 +632,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 "failed": ingest_failed,
                 "docs_indexed": ingest_docs,
                 "indices": ingest_indices,
-                "note": "docs_indexed reflects ingest status files only. Call idx_case_summary for authoritative OpenSearch counts.",
+                "note": "docs_indexed reflects ingest status files only. Call opensearch_case_summary for authoritative OpenSearch counts.",
             },
             "findings_summary": {
                 "total": len(findings),

@@ -76,7 +76,7 @@ def reset_circuit_breaker() -> None:
     tracker — both live on the same `_tls` and both need to be reset
     per ingest so an in-process MCP tool (idx_ingest_json,
     idx_ingest_delimited, idx_ingest_accesslog, idx_ingest_memory,
-    idx_ingest) running a second time in the same thread doesn't
+    opensearch_ingest) running a second time in the same thread doesn't
     inherit stale state from the prior call. Subprocess-launched
     ingests get a fresh process regardless — this matters for the
     in-process path.

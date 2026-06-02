@@ -396,13 +396,13 @@ class TestCsvIntegration:
 
 
 # ---------------------------------------------------------------------------
-# idx_status integration
+# opensearch_status integration
 # ---------------------------------------------------------------------------
 
 
 class TestIdxStatusIntegration:
     def test_idx_status_shows_case_indices(self, os_client, test_index):
-        """idx_status returns case-* indices."""
+        """opensearch_status returns case-* indices."""
         from opensearch_mcp.bulk import flush_bulk
 
         # Create a doc to make the index exist

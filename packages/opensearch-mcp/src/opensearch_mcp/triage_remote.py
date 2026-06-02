@@ -68,7 +68,7 @@ def enrich_remote(
     if not wait_for_gateway(timeout=60):
         return {
             "_gateway": "Gateway not reachable after 60s — enrichment skipped. "
-            "Run idx_enrich_triage() once gateway is ready.",
+            "Run opensearch_enrich_triage() once gateway is ready.",
             "status": "degraded",
         }
 

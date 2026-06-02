@@ -1,4 +1,4 @@
-"""A5 lint test — every idx_ingest* MCP tool must pre-flight shard capacity.
+"""A5 lint test — every opensearch_ingest* MCP tool must pre-flight shard capacity.
 
 Prevents silent regression if a future entry point is added without
 wiring up the pre-flight check. The UAT incident that motivated Fix A
@@ -11,7 +11,7 @@ import inspect
 
 
 def test_all_ingest_entry_points_have_preflight():
-    """Every idx_ingest* tool in server.py must either call
+    """Every opensearch_ingest* tool in server.py must either call
     check_shard_headroom directly, route through _launch_background
     (which calls it), or be the read-only status tool.
     """
@@ -20,12 +20,12 @@ def test_all_ingest_entry_points_have_preflight():
     ingest_tools = [
         (name, obj)
         for name, obj in inspect.getmembers(srv)
-        if callable(obj) and name.startswith("idx_ingest") and not name.startswith("_")
+        if callable(obj) and name.startswith("opensearch_ingest") and not name.startswith("_")
     ]
     # Status reader is exempt — it's not an ingest entry point.
-    ingest_tools = [(name, obj) for name, obj in ingest_tools if name != "idx_ingest_status"]
+    ingest_tools = [(name, obj) for name, obj in ingest_tools if name != "opensearch_ingest_status"]
 
-    assert ingest_tools, "No idx_ingest* tools found — test harness wrong?"
+    assert ingest_tools, "No opensearch_ingest* tools found — test harness wrong?"
 
     missing = []
     for name, obj in ingest_tools:
@@ -38,7 +38,7 @@ def test_all_ingest_entry_points_have_preflight():
         missing.append(name)
 
     assert not missing, (
-        f"These idx_ingest* tools are missing pre-flight shard-capacity "
+        f"These opensearch_ingest* tools are missing pre-flight shard-capacity "
         f"checks: {missing}. Every ingest entry point must call "
         f"check_shard_headroom() or route through _launch_background "
         f"(which calls it). The UAT incident that motivated Fix A was "

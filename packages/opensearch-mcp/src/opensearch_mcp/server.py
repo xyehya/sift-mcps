@@ -90,7 +90,7 @@ _hints_delivered = False
 
 
 def _add_investigation_hints(resp: dict, artifacts: dict) -> None:
-    """Add investigation hints to idx_case_summary. Full on first call, pointer after."""
+    """Add investigation hints to opensearch_case_summary. Full on first call, pointer after."""
     global _hints_delivered
     if _hints_delivered:
         resp["investigation_hints"] = [
@@ -124,7 +124,7 @@ def _add_investigation_hints(resp: dict, artifacts: dict) -> None:
         hints.append(
             "EVTX indexed. Key queries: event.code:4624 (logons), "
             "event.code:4688 (process creation), event.code:7045 (service install). "
-            "Use idx_aggregate on event.code for frequency overview."
+            "Use opensearch_aggregate on event.code for frequency overview."
         )
     if has_prefetch and has_mft:
         hints.append(
@@ -162,7 +162,7 @@ def _build_coverage_state(
     enrichment: dict,
     case_dir: "Path | None" = None,
 ) -> dict:
-    """Compute coverage state for idx_case_summary.
+    """Compute coverage state for opensearch_case_summary.
 
     Compares present artifact keys against expected registry. Returns
     disk_artifacts, memory tier/plugin state, enrichment status, actionable
@@ -239,9 +239,9 @@ def _build_coverage_state(
         gaps.append({
             "coverage_gap": "No memory analysis run — process, network, and module data unavailable.",
             "when_to_run": "When a memory image is available in evidence/.",
-            "command": "idx_ingest(path='<memory_image>', format='memory', hostname='<hostname>', tier=1)",
+            "command": "opensearch_ingest(path='<memory_image>', format='memory', hostname='<hostname>', tier=1)",
             "output_path": None,
-            "next_mcp_step": "idx_case_summary to verify vol-pslist, vol-netscan, vol-psscan indices",
+            "next_mcp_step": "opensearch_case_summary to verify vol-pslist, vol-netscan, vol-psscan indices",
             "warning": "Tier 1 takes 2-5 minutes on a 16GB image.",
         })
     elif tier_run == 1:
@@ -252,9 +252,9 @@ def _build_coverage_state(
         gaps.append({
             "coverage_gap": "Memory Tier 2 not run — dlllist, envars, getsids, ldrmodules not indexed.",
             "when_to_run": "When suspicious processes or services found in Tier 1 results.",
-            "command": f"idx_ingest(path='<memory_image>', format='memory', hostname='{mem_host}', tier=2)",
+            "command": f"opensearch_ingest(path='<memory_image>', format='memory', hostname='{mem_host}', tier=2)",
             "output_path": None,
-            "next_mcp_step": "idx_search on vol-dlllist or vol-ldrmodules after completion",
+            "next_mcp_step": "opensearch_search on vol-dlllist or vol-ldrmodules after completion",
             "warning": "Tier 2 adds 5-10 minutes on a 16GB image.",
         })
 
@@ -262,9 +262,9 @@ def _build_coverage_state(
         gaps.append({
             "coverage_gap": "MFT not indexed — file creation/deletion/timestomping analysis unavailable.",
             "when_to_run": "Include in initial ingest when disk image is available.",
-            "command": "idx_ingest(path='<disk_image>', format='auto', hostname='<hostname>')",
+            "command": "opensearch_ingest(path='<disk_image>', format='auto', hostname='<hostname>')",
             "output_path": None,
-            "next_mcp_step": "idx_search on mft index for InUse=False (deleted) or SI<FN (timestomping)",
+            "next_mcp_step": "opensearch_search on mft index for InUse=False (deleted) or SI<FN (timestomping)",
             "warning": None,
         })
 
@@ -272,9 +272,9 @@ def _build_coverage_state(
         gaps.append({
             "coverage_gap": "Triage enrichment not run — file/service/registry baselines not checked.",
             "when_to_run": "After initial ingest completes.",
-            "command": "idx_enrich_triage()",
+            "command": "opensearch_enrich_triage()",
             "output_path": None,
-            "next_mcp_step": "idx_case_summary to verify enrichment.triage counts",
+            "next_mcp_step": "opensearch_case_summary to verify enrichment.triage counts",
             "warning": None,
         })
 
@@ -282,9 +282,9 @@ def _build_coverage_state(
         gaps.append({
             "coverage_gap": "Threat intel enrichment not run — IPs and hashes not checked against OpenCTI.",
             "when_to_run": "After initial ingest; requires OpenCTI running.",
-            "command": "idx_enrich_intel()",
+            "command": "opensearch_enrich_intel()",
             "output_path": None,
-            "next_mcp_step": "idx_case_summary to verify enrichment.threat_intel counts",
+            "next_mcp_step": "opensearch_case_summary to verify enrichment.threat_intel counts",
             "warning": "Takes 15-60 minutes for large IOC corpora.",
         })
 
@@ -479,9 +479,9 @@ def _os_call(fn, *args, **kwargs):
         raise ValueError(f"Query error: {reason}") from e
 
 
-# Fields excluded from idx_search results by default (token optimization).
+# Fields excluded from opensearch_search results by default (token optimization).
 # These are duplicated content, raw unparsed data where parsed equivalents
-# exist, or metadata with zero triage value. Full docs via idx_get_event.
+# exist, or metadata with zero triage value. Full docs via opensearch_get_event.
 _SEARCH_EXCLUDE_FIELDS = frozenset(
     {
         # Duplicated content (parsed equivalents exist)
@@ -494,7 +494,7 @@ _SEARCH_EXCLUDE_FIELDS = frozenset(
         # EvtxECmd duplicate/metadata
         "SourceFile",  # duplicates vhir.source_file
         "Computer",  # duplicated to host.name by parse_delimited
-        # Metadata (available via idx_get_event, zero triage value)
+        # Metadata (available via opensearch_get_event, zero triage value)
         "ExtraDataOffset",
         "HiddenRecord",
         "Keywords",
@@ -627,20 +627,20 @@ def _detect_preparsed_csvs(path: Path) -> str | None:
         parts.append(
             f"Detected ZimmermanTools CSV output "
             f"({', '.join(sorted(found_zt))}). "
-            "Use idx_ingest(path=..., format='delimited', hostname=...) "
+            "Use opensearch_ingest(path=..., format='delimited', hostname=...) "
             "to ingest."
         )
     if hayabusa:
         parts.append(
             "Detected Hayabusa CSV output. "
-            "Use idx_ingest(path=..., format='delimited', hostname=...) "
+            "Use opensearch_ingest(path=..., format='delimited', hostname=...) "
             "to ingest."
         )
     if not parts and csv_files:
         parts.append(
             f"Found {len(csv_files)} CSV files but no raw Windows "
             "artifacts. If these are pre-parsed tool output, use "
-            "idx_ingest(path=..., format='delimited', hostname=...)."
+            "opensearch_ingest(path=..., format='delimited', hostname=...)."
         )
     return " ".join(parts) if parts else None
 
@@ -709,7 +709,7 @@ def _resolve_tool_path(path: str, *, default_subdir: str = "evidence") -> tuple[
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_search(
+def opensearch_search(
     query: str,
     index: str = "",
     case_id: str = "",
@@ -723,14 +723,14 @@ def idx_search(
     """Search indexed evidence using OpenSearch query_string syntax.
 
     Use for targeted lookups by indicator, user, IP, hash, or exact field value.
-    Prefer idx_aggregate for frequency counts; prefer idx_timeline for activity spikes.
+    Prefer opensearch_aggregate for frequency counts; prefer opensearch_timeline for activity spikes.
 
     Returns: {hits: [{_id, _index, @timestamp, <fields>}], total, offset, truncated}
     Output cap: limit max 200; compact=True strips bloat fields and truncates values
-      to 500 chars. Use idx_get_event(event_id, index) to fetch a full document.
+      to 500 chars. Use opensearch_get_event(event_id, index) to fetch a full document.
 
     Example:
-      idx_search(query='event.code:4688 AND process.name:*powershell*',
+      opensearch_search(query='event.code:4688 AND process.name:*powershell*',
                  case_id='rocba-drive-20260526-1417')
 
     Notes:
@@ -800,7 +800,7 @@ def idx_search(
     resp: dict = {"total": total, "returned": len(docs), "results": docs, "compact": compact}
     if total_capped:
         resp["total_capped"] = True
-        resp["total_note"] = f"At least {total} results. Use idx_count for exact total."
+        resp["total_note"] = f"At least {total} results. Use opensearch_count for exact total."
     if not docs:
         resp["hint"] = (
             "No results. If searching for filenames, include the extension "
@@ -810,7 +810,7 @@ def idx_search(
     if compact:
         resp["note"] = (
             "Results are compact — bloat fields excluded, long values truncated. "
-            "Use idx_get_event(id, index) for full documents."
+            "Use opensearch_get_event(id, index) for full documents."
         )
 
     # Detect when query targets indices with different field naming.
@@ -820,7 +820,7 @@ def idx_search(
 
     _add_shimcache_reminder(resp, index, docs)
     aid = audit.log(
-        tool="idx_search",
+        tool="opensearch_search",
         params={"query": query, "index": index, "limit": limit},
         result_summary=f"{total} total, {len(docs)} returned",
     )
@@ -830,7 +830,7 @@ def idx_search(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_count(
+def opensearch_count(
     query: str = "*",
     index: str = "",
     case_id: str = "",
@@ -838,13 +838,13 @@ def idx_count(
     """Count matching documents — returns a scalar, no documents returned.
 
     Use to verify index population or check magnitude before committing to
-    idx_search. Faster than idx_search with limit=0. Use idx_aggregate when
+    opensearch_search. Faster than opensearch_search with limit=0. Use opensearch_aggregate when
     you need counts per value, not a single total.
 
     Returns: {count: N, audit_id}
 
     Example:
-      idx_count(query='event.code:4624', case_id='rocba-drive-20260526-1417')
+      opensearch_count(query='event.code:4624', case_id='rocba-drive-20260526-1417')
 
     Args:
         query: OpenSearch query_string (default: all).
@@ -864,7 +864,7 @@ def idx_count(
     )
     resp = {"count": result["count"]}
     aid = audit.log(
-        tool="idx_count",
+        tool="opensearch_count",
         params={"query": query, "index": index},
         result_summary=f"count={result['count']}",
     )
@@ -874,7 +874,7 @@ def idx_count(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_aggregate(
+def opensearch_aggregate(
     field: str,
     query: str = "*",
     index: str = "",
@@ -884,19 +884,19 @@ def idx_aggregate(
     """Aggregate (group by) a field — frequency analysis, top-N counts.
 
     Use for distribution overview: top event codes, top users, top process names.
-    Prefer over idx_search when you need a distribution, not individual documents.
-    Use idx_field_values when you only need the value set without frequency ranking.
+    Prefer over opensearch_search when you need a distribution, not individual documents.
+    Use opensearch_field_values when you only need the value set without frequency ranking.
 
     Returns: {field, total_docs, buckets: [{key, count}], truncated, audit_id}
     Output cap: limit max 500 buckets; truncated=true when capped.
 
     Example:
-      idx_aggregate(field='event.code', case_id='rocba-drive-20260526-1417')
+      opensearch_aggregate(field='event.code', case_id='rocba-drive-20260526-1417')
 
     Notes:
       - CSV/registry fields (Path, KeyPath, ValueData) require .keyword suffix:
         field='Path.keyword'. evtx fields (event.code, process.name) are already
-        keyword-typed — no suffix needed. Check idx_case_summary include_fields=True
+        keyword-typed — no suffix needed. Check opensearch_case_summary include_fields=True
         to confirm field types.
       - Scope with query= first: query='user.name:SYSTEM' then aggregate on
         process.name to see only SYSTEM-context processes.
@@ -938,7 +938,7 @@ def idx_aggregate(
         "truncated": len(buckets) >= limit,
     }
     aid = audit.log(
-        tool="idx_aggregate",
+        tool="opensearch_aggregate",
         params={"field": field, "query": query, "index": index},
         result_summary=f"{len(buckets)} buckets",
     )
@@ -948,25 +948,25 @@ def idx_aggregate(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_get_event(
+def opensearch_get_event(
     event_id: str,
     index: str,
 ) -> dict:
     """Retrieve a single full document by its _id — all fields, no truncation.
 
-    Use after idx_search returns a hit worth inspecting completely.
-    idx_search compact=True strips fields and truncates values to 500 chars;
+    Use after opensearch_search returns a hit worth inspecting completely.
+    opensearch_search compact=True strips fields and truncates values to 500 chars;
     this returns the complete source with every field intact.
 
     Returns: {_id, _index, <all source fields>, _note}
 
     Example:
-      idx_get_event(event_id='abc123def456',
+      opensearch_get_event(event_id='abc123def456',
                     index='case-rocba-drive-20260526-1417-evtx-srl-forge')
 
     Notes:
       - index must be an exact index name, not a wildcard pattern.
-      - Obtain _id and _index from idx_search hit objects.
+      - Obtain _id and _index from opensearch_search hit objects.
 
     Args:
         event_id: Document _id from search results.
@@ -981,7 +981,7 @@ def idx_get_event(
     doc.update(result.get("_source", {}))
     doc["_note"] = "Full document — all fields included, no truncation"
     aid = audit.log(
-        tool="idx_get_event",
+        tool="opensearch_get_event",
         params={"event_id": event_id, "index": index},
         result_summary=f"doc {event_id}",
     )
@@ -991,7 +991,7 @@ def idx_get_event(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_timeline(
+def opensearch_timeline(
     query: str = "*",
     index: str = "",
     case_id: str = "",
@@ -1002,14 +1002,14 @@ def idx_timeline(
 ) -> dict:
     """Show event count over time as a date histogram — temporal spike detection.
 
-    Use to identify activity bursts and narrow a time window before idx_search
-    or idx_aggregate. After locating a spike, scope subsequent queries with
+    Use to identify activity bursts and narrow a time window before opensearch_search
+    or opensearch_aggregate. After locating a spike, scope subsequent queries with
     time_from/time_to to focus on that period.
 
     Returns: {total_docs, interval, buckets: [{time: ISO8601, count: N}], audit_id}
 
     Example:
-      idx_timeline(query='event.code:4688', case_id='rocba-drive-20260526-1417',
+      opensearch_timeline(query='event.code:4688', case_id='rocba-drive-20260526-1417',
                    interval='1h', time_from='2026-05-01T00:00:00Z')
 
     Notes:
@@ -1032,7 +1032,7 @@ def idx_timeline(
     if not _re_mod.match(r"^\d+[smhd]$", interval):
         return {
             "error": f"Invalid interval '{interval}'. Use Ns/Nm/Nh/Nd (e.g., 1h, 30m).",
-            "next_step": "Retry idx_timeline with an interval like 1h or 30m.",
+            "next_step": "Retry opensearch_timeline with an interval like 1h or 30m.",
         }
     index = _resolve_index(index, case_id)
     err = _validate_index(index)
@@ -1080,7 +1080,7 @@ def idx_timeline(
         "buckets": buckets,
     }
     aid = audit.log(
-        tool="idx_timeline",
+        tool="opensearch_timeline",
         params={"query": query, "index": index, "interval": interval},
         result_summary=f"{len(buckets)} buckets",
     )
@@ -1090,7 +1090,7 @@ def idx_timeline(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_field_values(
+def opensearch_field_values(
     field: str,
     query: str = "*",
     index: str = "",
@@ -1100,14 +1100,14 @@ def idx_field_values(
     """List unique values for a field with occurrence counts — field discovery.
 
     Use to enumerate what values exist before writing targeted queries: all
-    usernames, all process names, all registry key paths. Use idx_aggregate
+    usernames, all process names, all registry key paths. Use opensearch_aggregate
     when ranked frequency matters more than the value set.
 
     Returns: {field, values: [{value, count}], truncated, audit_id}
     Output cap: limit max 500 values; truncated=true when capped.
 
     Example:
-      idx_field_values(field='winlog.provider_name',
+      opensearch_field_values(field='winlog.provider_name',
                        case_id='rocba-drive-20260526-1417')
 
     Notes:
@@ -1148,7 +1148,7 @@ def idx_field_values(
 
     resp = {"field": field, "values": values, "truncated": len(values) >= limit}
     aid = audit.log(
-        tool="idx_field_values",
+        tool="opensearch_field_values",
         params={"field": field, "query": query, "index": index},
         result_summary=f"{len(values)} values",
     )
@@ -1158,11 +1158,11 @@ def idx_field_values(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_status() -> dict:
+def opensearch_status() -> dict:
     """Show OpenSearch cluster health and all case index doc counts.
 
     Use to verify the cluster is reachable and see what cases have indexed data.
-    Use idx_case_summary for per-case artifact breakdown and coverage state.
+    Use opensearch_case_summary for per-case artifact breakdown and coverage state.
 
     Returns: {cluster_status, indices: [{index, docs, size, status}], total_indices}
     """
@@ -1194,7 +1194,7 @@ def idx_status() -> dict:
         "total_indices": len(case_indices),
     }
     aid = audit.log(
-        tool="idx_status",
+        tool="opensearch_status",
         params={},
         result_summary=f"{len(case_indices)} indices",
     )
@@ -1204,7 +1204,7 @@ def idx_status() -> dict:
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_shard_status() -> dict:
+def opensearch_shard_status() -> dict:
     """Report OpenSearch shard usage and capacity headroom.
 
     Use before large ingests to check whether the cluster can accept new indices.
@@ -1269,7 +1269,7 @@ def idx_shard_status() -> dict:
     ]
 
     aid = audit.log(
-        tool="idx_shard_status",
+        tool="opensearch_shard_status",
         params={},
         result_summary=(f"{current}/{max_total} shards ({headroom_pct}% headroom)"),
     )
@@ -1287,70 +1287,13 @@ def idx_shard_status() -> dict:
     return resp
 
 
-def idx_install_pipelines() -> dict:
-    """Install or verify OpenSearch ingest pipelines and index templates.
-
-    Admin/installer function — not exposed as an agent tool.
-    Called by the installer and gateway startup; agents do not need
-    to call this directly. Use idx_shard_status to diagnose cluster state.
-
-    This writes cluster pipeline/template configuration and is not read-only.
-    Idempotent. Runs collision detection against operator-installed
-    templates; simulates the pipeline against all 3 expected input
-    shapes (object/string/list) BEFORE PUT so a broken new pipeline
-    cannot overwrite a working one. Writes an audit entry.
-
-    Returns status="ok" on success, status="error" with actionable
-    reason otherwise.
-    """
-    from opensearch_mcp.mappings import ensure_winlog_pipeline
-
-    client = _get_os()
-    result = ensure_winlog_pipeline(client)
-
-    # Surface the non-evtx template install outcome in the summary so
-    # operators running this manually see both halves of the work.
-    # Also promote per-template failures to an explicit `warnings` list
-    # on the response + a logger.warning so ops noticing template-install
-    # problems don't have to dig through the nested other_templates dict.
-    other = result.get("other_templates") or {}
-    failed_tpls = other.get("failed", [])
-    if failed_tpls:
-        warn_msgs = [
-            f"Template install failed: {f.get('template')} — {f.get('error', '')[:200]}"
-            for f in failed_tpls
-        ]
-        result.setdefault("warnings", []).extend(warn_msgs)
-        for m in warn_msgs:
-            logger.warning(m)
-    tpl_counts = (
-        f" templates:installed={len(other.get('installed', []))}"
-        f",failed={len(failed_tpls)}"
-        f",skipped={len(other.get('skipped', []))}"
-        if other
-        else ""
-    )
-    aid = audit.log(
-        tool="idx_install_pipelines",
-        params={},
-        result_summary=(
-            f"status={result.get('status')}"
-            + (f" error={result.get('error')[:200]}" if result.get("error") else "")
-            + tpl_counts
-        ),
-    )
-    if aid:
-        result["audit_id"] = aid
-    return result
-
-
 @server.tool(annotations={"readOnlyHint": True})
-def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
+def opensearch_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
     """Get complete coverage overview for a case — first call every indexed session.
 
     Returns hosts, artifact types with doc counts, enrichment state, and
-    coverage_state with gaps that include exact idx_ingest commands to fill them.
-    Call this before any other idx_* tool to understand what's indexed and what's missing.
+    coverage_state with gaps that include exact opensearch_ingest commands to fill them.
+    Call this before any other opensearch_* tool to understand what's indexed and what's missing.
 
     Returns:
       {case_id, hosts: [str],
@@ -1368,10 +1311,10 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
        audit_id}
 
     Example:
-      idx_case_summary(case_id='rocba-drive-20260526-1417')
+      opensearch_case_summary(case_id='rocba-drive-20260526-1417')
 
     Notes:
-      - gaps[].command is the exact idx_ingest call to fill the gap — use verbatim.
+      - gaps[].command is the exact opensearch_ingest call to fill the gap — use verbatim.
       - filesystem_meta_path is the partition/filesystem sidecar JSON from ingest
         (null if not collected).
       - Call with include_fields=True to get field type mappings per artifact,
@@ -1591,7 +1534,7 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
     _summary_case_dir = Path(_case_dir_env) if _case_dir_env else None
     resp["coverage_state"] = _build_coverage_state(artifacts, enrichment, case_dir=_summary_case_dir)
     aid = audit.log(
-        tool="idx_case_summary",
+        tool="opensearch_case_summary",
         params={"case_id": cid},
         result_summary=f"{len(indexed_hosts)} hosts, {len(artifacts)} artifact types, {total_docs} docs",
     )
@@ -1601,17 +1544,17 @@ def idx_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_inspect_container(path: str) -> dict:
+def opensearch_inspect_container(path: str) -> dict:
     """Inspect a forensic container (E01, raw image) without mounting — pre-ingest survey.
 
-    Use before idx_ingest to verify integrity, check size, and identify partitions.
-    Does NOT mount the image. Follow with idx_ingest(dry_run=True) for the full plan.
+    Use before opensearch_ingest to verify integrity, check size, and identify partitions.
+    Does NOT mount the image. Follow with opensearch_ingest(dry_run=True) for the full plan.
 
     Returns: {container_type, size_bytes, size_human, hashes, partitions[],
       acquiry_info (E01 only), tool_available}
 
     Example:
-      idx_inspect_container(path='evidence/rocba-cdrive.e01')
+      opensearch_inspect_container(path='evidence/rocba-cdrive.e01')
 
     Notes:
       - Uses ewfinfo for E01; fdisk/img_stat for raw images.
@@ -1784,7 +1727,7 @@ def _launch_container_ingest(
         return {
             "error": (
                 f"Too many concurrent ingests ({len(_running)} running, "
-                f"max {_MAX_CONCURRENT_INGESTS}). Use idx_ingest_status()."
+                f"max {_MAX_CONCURRENT_INGESTS}). Use opensearch_ingest_status()."
             ),
         }
 
@@ -1850,7 +1793,7 @@ def _launch_container_ingest(
 
     host_names = [h.hostname for h in hosts] if hosts else ([hostname] if hostname else [])
     aid = audit.log(
-        tool="idx_ingest",
+        tool="opensearch_ingest",
         params={
             "path": resolved_path,
             "dry_run": False,
@@ -1868,7 +1811,7 @@ def _launch_container_ingest(
         "hosts": host_names,
         "case_id": case_id,
         "message": (
-            "Ingest started. IMPORTANT: Call idx_ingest_status() every 30 seconds "
+            "Ingest started. IMPORTANT: Call opensearch_ingest_status() every 30 seconds "
             "to monitor progress and report it to the examiner as a checklist. "
             "Continue polling until status is 'complete' or 'failed'."
         ),
@@ -1881,7 +1824,7 @@ def _launch_container_ingest(
 
 
 @server.tool()
-def idx_ingest(
+def opensearch_ingest(
     path: str,
     format: str = "auto",
     hostname: str = "",
@@ -1912,15 +1855,15 @@ def idx_ingest(
     Formats:
       - auto: E01/VHDX/raw/archive containers, mounted images, or Windows
         artifact directories. Example:
-        idx_ingest(path="evidence/rocba-cdrive.e01", format="auto", dry_run=True)
+        opensearch_ingest(path="evidence/rocba-cdrive.e01", format="auto", dry_run=True)
       - json: JSON/JSONL evidence. Example:
-        idx_ingest(path="evidence/events.jsonl", format="json", hostname="host1")
+        opensearch_ingest(path="evidence/events.jsonl", format="json", hostname="host1")
       - delimited: CSV/TSV/Zeek/bodyfile text evidence. Example:
-        idx_ingest(path="evidence/hayabusa", format="delimited", hostname="auto")
+        opensearch_ingest(path="evidence/hayabusa", format="delimited", hostname="auto")
       - accesslog: Apache/Nginx access logs. Example:
-        idx_ingest(path="evidence/access.log", format="accesslog", hostname="web01")
+        opensearch_ingest(path="evidence/access.log", format="accesslog", hostname="web01")
       - memory: Volatility 3 memory-image parsing. Example:
-        idx_ingest(path="evidence/memdump.raw", format="memory", hostname="host1", tier=1)
+        opensearch_ingest(path="evidence/memdump.raw", format="memory", hostname="host1", tier=1)
 
     Memory tier plugins (format="memory"):
       Tier 1 (default): pslist, psscan, pstree, cmdline, netstat, netscan,
@@ -1929,8 +1872,8 @@ def idx_ingest(
       Tier 3: malfind, vadinfo, dumpfiles — targeted, high cost, high noise.
 
     Ingest can add baseline context automatically for supported artifacts.
-    Keep enrichment decisions explicit after ingest: use idx_case_summary to
-    inspect coverage, then idx_enrich_triage or idx_enrich_intel when baseline
+    Keep enrichment decisions explicit after ingest: use opensearch_case_summary to
+    inspect coverage, then opensearch_enrich_triage or opensearch_enrich_intel when baseline
     or threat-intel enrichment needs rerun.
 
     Args:
@@ -1959,7 +1902,7 @@ def idx_ingest(
             immediately if path and parameters are confirmed.
         force: Allow re-ingest when data already exists (default False). Required
             when dry_run=False and the case already has indexed docs — prevents
-            accidental re-indexing. Set True only after reviewing idx_case_summary.
+            accidental re-indexing. Set True only after reviewing opensearch_case_summary.
     """
     import subprocess as _check_sp
     from pathlib import Path
@@ -1989,7 +1932,7 @@ def idx_ingest(
         if not hostname:
             return {
                 "error": "hostname is required for format='json'.",
-                "next_step": "Call idx_ingest(..., format='json', hostname='<source-host>', dry_run=True).",
+                "next_step": "Call opensearch_ingest(..., format='json', hostname='<source-host>', dry_run=True).",
             }
         return idx_ingest_json(path, hostname, index_suffix, time_field, dry_run)
     if ingest_format == "delimited":
@@ -2007,7 +1950,7 @@ def idx_ingest(
             return {
                 "error": "hostname is required for format='accesslog'.",
                 "next_step": (
-                    "Call idx_ingest(..., format='accesslog', hostname='<web-host>', dry_run=True)."
+                    "Call opensearch_ingest(..., format='accesslog', hostname='<web-host>', dry_run=True)."
                 ),
             }
         return idx_ingest_accesslog(path, hostname, index_suffix or "accesslog", dry_run)
@@ -2015,7 +1958,7 @@ def idx_ingest(
         if not hostname:
             return {
                 "error": "hostname is required for format='memory'.",
-                "next_step": "Call idx_ingest(..., format='memory', hostname='<source-host>', dry_run=True).",
+                "next_step": "Call opensearch_ingest(..., format='memory', hostname='<source-host>', dry_run=True).",
             }
         return idx_ingest_memory(path, hostname, tier=tier, plugins=plugins, dry_run=dry_run)
 
@@ -2048,7 +1991,7 @@ def idx_ingest(
             if not sudo_ok:
                 resp["warning"] = (
                     "Container mounting requires sudo. If ingest fails, "
-                    "mount manually and point idx_ingest at the mount."
+                    "mount manually and point opensearch_ingest at the mount."
                 )
             if hostname:
                 resp["hostname"] = hostname
@@ -2075,7 +2018,7 @@ def idx_ingest(
                             "message": (
                                 f"This case already has {_total:,} docs across "
                                 f"{len(_existing)} indices. "
-                                "Call idx_case_summary to review coverage. "
+                                "Call opensearch_case_summary to review coverage. "
                                 "Only set dry_run=false to add new evidence."
                             ),
                         }
@@ -2083,12 +2026,12 @@ def idx_ingest(
                             f"Container image detected ({container_type}). "
                             f"Case already indexed ({_total:,} docs across "
                             f"{len(_existing)} indices) — "
-                            "review with idx_case_summary before re-ingesting."
+                            "review with opensearch_case_summary before re-ingesting."
                         )
             except Exception:
                 pass
             aid = audit.log(
-                tool="idx_ingest",
+                tool="opensearch_ingest",
                 params={
                     "path": resolved_path,
                     "dry_run": True,
@@ -2137,11 +2080,11 @@ def idx_ingest(
                     "case_id": case_id,
                     "message": (
                         f"The directory contains {len(containers_found)} forensic container file(s). "
-                        "Re-run idx_ingest with the container file path directly."
+                        "Re-run opensearch_ingest with the container file path directly."
                     ),
                     "containers": containers_found,
                     "next_step": (
-                        f"Call idx_ingest(path=\"{containers_found[0]['relative_path']}\", "
+                        f"Call opensearch_ingest(path=\"{containers_found[0]['relative_path']}\", "
                         "format=\"auto\", "
                         f"hostname=\"<hostname>\", dry_run=True) to preview ingest."
                     ),
@@ -2179,7 +2122,7 @@ def idx_ingest(
                                     "prevent accidental data duplication."
                                 ),
                                 "next_step": (
-                                    "1. Call idx_case_summary to review current coverage. "
+                                    "1. Call opensearch_case_summary to review current coverage. "
                                     "2. If re-ingest is intentional, set force=True. "
                                     "3. To add new evidence only, use a different evidence file path."
                                 ),
@@ -2249,7 +2192,7 @@ def idx_ingest(
                 "case_id": case_id,
                 "containers": started,
                 "message": (
-                    f"Launched {len(started)} ingest(s). Poll idx_ingest_status() for progress."
+                    f"Launched {len(started)} ingest(s). Poll opensearch_ingest_status() for progress."
                 ),
             }
         csv_hint = _detect_preparsed_csvs(evidence_path)
@@ -2312,7 +2255,7 @@ def idx_ingest(
             summary.append(host_info)
 
         aid = audit.log(
-            tool="idx_ingest",
+            tool="opensearch_ingest",
         params={"path": resolved_path, "dry_run": True},
             result_summary=f"discovery: {len(hosts)} hosts",
         )
@@ -2355,7 +2298,7 @@ def idx_ingest(
                             "prevent accidental data duplication."
                         ),
                         "next_step": (
-                            "1. Call idx_case_summary to review current coverage. "
+                            "1. Call opensearch_case_summary to review current coverage. "
                             "2. If re-ingest is intentional, set force=True. "
                             "3. To add new evidence only, use a different evidence file path."
                         ),
@@ -2379,11 +2322,11 @@ def idx_ingest(
     )
     if not ok:
         aid = audit.log(
-            tool="idx_ingest",
+            tool="opensearch_ingest",
             params={"path": resolved_path, "dry_run": False},
             result_summary=f"aborted: {reason[:120]}",
         )
-        # Write terminal status so idx_ingest_status surfaces the
+        # Write terminal status so opensearch_ingest_status surfaces the
         # refusal (otherwise it returns "no active ingests" after a
         # refuse). Error-prefix convention: HALT_SHARD_CAPACITY.
         from datetime import datetime as _dt
@@ -2428,7 +2371,7 @@ def idx_ingest(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_ingest_status(case_id: str = "") -> dict:
+def opensearch_ingest_status(case_id: str = "") -> dict:
     """Check status of running or recent ingest operations.
 
     Defaults to active case. Pass case_id="*" to see all cases.
@@ -2485,7 +2428,7 @@ def idx_ingest_status(case_id: str = "") -> dict:
             if reason:
                 warn_msg += f" (first reason: {reason[:160]})"
             warn_msg += (
-                ". Likely cluster capacity or mapping issue. Run idx_shard_status() to diagnose."
+                ". Likely cluster capacity or mapping issue. Run opensearch_shard_status() to diagnose."
             )
             warnings.append(warn_msg)
 
@@ -2526,7 +2469,7 @@ def idx_ingest_status(case_id: str = "") -> dict:
         if status == "running":
             s["message"] = (
                 "Ingest in progress. Present the checklist above to the examiner. "
-                "Call idx_ingest_status() again in 30 seconds for updated progress."
+                "Call opensearch_ingest_status() again in 30 seconds for updated progress."
             )
         elif status == "killed":
             s["message"] = (
@@ -2546,7 +2489,7 @@ def idx_ingest_status(case_id: str = "") -> dict:
                     f"Ingest refused before start ({_prefix}). No documents "
                     f"were indexed. Address the underlying condition "
                     f"(raise cluster.max_shards_per_node, archive old cases, "
-                    f"or run idx_shard_status() to inspect) then re-run."
+                    f"or run opensearch_shard_status() to inspect) then re-run."
                 )
             elif _prefix == "circuit_breaker_tripped":
                 s["message"] = (
@@ -2579,12 +2522,12 @@ def idx_ingest_status(case_id: str = "") -> dict:
             next_steps = []
             if "evtx" in artifacts_done or any("evtx" in a for a in artifacts_done):
                 next_steps.append(
-                    "Run idx_case_summary for investigation overview, "
-                    "then idx_aggregate on host.name and event.code"
+                    "Run opensearch_case_summary for investigation overview, "
+                    "then opensearch_aggregate on host.name and event.code"
                 )
             if "hayabusa" in artifacts_done or any("hayabusa" in a for a in artifacts_done):
                 next_steps.append(
-                    "Query Hayabusa alerts: idx_search(query='Level:critical OR "
+                    "Query Hayabusa alerts: opensearch_search(query='Level:critical OR "
                     "Level:high', index='case-*-hayabusa-*')"
                 )
             # Pick a concrete artifact_type example from what was ingested
@@ -2841,7 +2784,7 @@ def idx_ingest_accesslog(
 
 
 @server.tool()
-def idx_enrich_intel(
+def opensearch_enrich_intel(
     case_id: str = "",
     dry_run: bool = True,
     force: bool = False,
@@ -2866,7 +2809,7 @@ def idx_enrich_intel(
     which is well past the gateway's 300-second synchronous tool
     timeout — hence the async shape.
 
-    Progress is surfaced through the existing `idx_ingest_status`
+    Progress is surfaced through the existing `opensearch_ingest_status`
     tool. Enrichment runs appear alongside ingest runs with
     `artifact_name="intel"` — use that to disambiguate.
     """
@@ -2898,7 +2841,7 @@ def idx_enrich_intel(
 
 
 @server.tool()
-def idx_enrich_triage(
+def opensearch_enrich_triage(
     case_id: str = "",
 ) -> dict:
     """Run triage baseline enrichment on already-indexed data.
@@ -2938,7 +2881,7 @@ def idx_enrich_triage(
         "details": results,
     }
     aid = audit.log(
-        tool="idx_enrich_triage",
+        tool="opensearch_enrich_triage",
         params={"case_id": cid},
         result_summary=f"{total_enriched} docs enriched",
     )
@@ -3084,7 +3027,7 @@ def _launch_background(
 
     # Pre-flight shard capacity check — single insertion point covers
     # json / delimited / accesslog subcommands routed through here.
-    # (idx_ingest and idx_ingest_memory have their own pre-flight
+    # (opensearch_ingest and idx_ingest_memory have their own pre-flight
     # before their specific subprocess launches.)
     from opensearch_mcp.shard_capacity import (
         _estimate_new_shards,
@@ -3135,7 +3078,7 @@ def _launch_background(
             "error": (
                 f"Too many concurrent ingests ({len(running)} running, "
                 f"max {_MAX_CONCURRENT_INGESTS}). Wait for current ingests "
-                "to complete. Use idx_ingest_status() to check progress."
+                "to complete. Use opensearch_ingest_status() to check progress."
             ),
             "running": [{"case_id": r.get("case_id"), "pid": r.get("pid")} for r in running],
         }
@@ -3210,7 +3153,7 @@ def _launch_background(
         "run_id": run_id,
         "log_file": str(log_file),
         "message": (
-            f"Ingest started. Call idx_ingest_status() to monitor progress. Log file: {log_file}"
+            f"Ingest started. Call opensearch_ingest_status() to monitor progress. Log file: {log_file}"
         ),
     }
     aid = audit.log(
@@ -3225,7 +3168,7 @@ def _launch_background(
 
 
 def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
-    """Launch idx_enrich_intel as a background subprocess.
+    """Launch opensearch_enrich_intel as a background subprocess.
 
     Mirrors `_launch_background` but shaped for enrichment: no path
     positional, no hostname, no shard-capacity preflight (enrichment
@@ -3237,7 +3180,7 @@ def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
 
     Status records use `artifact_name="intel"` so the sweep + monotonic
     transition protection in `ingest_status` apply equally; operators
-    watch progress via `idx_ingest_status` (intel and ingest runs
+    watch progress via `opensearch_ingest_status` (intel and ingest runs
     interleave there — disambiguate on `artifact_name`).
     """
     import os as _os
@@ -3268,7 +3211,7 @@ def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
             "error": (
                 f"Too many concurrent ingest/enrich runs ({len(running)} "
                 f"running, max {_MAX_CONCURRENT_INGESTS}). Wait for "
-                "current runs to complete. Use idx_ingest_status() to check."
+                "current runs to complete. Use opensearch_ingest_status() to check."
             ),
             "running": [{"case_id": r.get("case_id"), "pid": r.get("pid")} for r in running],
         }
@@ -3332,12 +3275,12 @@ def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
         "case_id": status_case,
         "log_file": str(log_file),
         "message": (
-            "Intel enrichment started. Call idx_ingest_status() to monitor "
+            "Intel enrichment started. Call opensearch_ingest_status() to monitor "
             f"progress (artifact_name='intel'). Log file: {log_file}"
         ),
     }
     aid = audit.log(
-        tool="idx_enrich_intel",
+        tool="opensearch_enrich_intel",
         params={"case_id": status_case, "force": force},
         result_summary=f"Background enrichment started (pid={proc.pid})",
     )
@@ -3464,7 +3407,7 @@ def idx_ingest_memory(
             "error": (
                 f"Too many concurrent ingests ({len(_running_mem)} running, "
                 f"max {_MAX_CONCURRENT_INGESTS}). Wait for current ingests "
-                "to complete. Use idx_ingest_status() to check progress."
+                "to complete. Use opensearch_ingest_status() to check progress."
             ),
         }
 
@@ -3542,7 +3485,7 @@ def idx_ingest_memory(
         "plugins": plugin_list,
         "message": (
             f"Memory analysis started ({len(plugin_list)} plugins). "
-            "This may take several minutes. Use idx_ingest_status() to monitor."
+            "This may take several minutes. Use opensearch_ingest_status() to monitor."
         ),
     }
     if _fs_meta_rel_m:
@@ -3585,7 +3528,7 @@ def _get_active_case() -> str | None:
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def idx_list_detections(
+def opensearch_list_detections(
     severity: str = "",
     detector_type: str = "",
     limit: int = 50,
@@ -3630,7 +3573,7 @@ def idx_list_detections(
                 if hb_count:
                     resp["suggestion"] = (
                         f"Sigma detectors unavailable. {hb_count:,} Hayabusa alerts available. "
-                        "Query: idx_search(query='Level:critical OR Level:high', "
+                        "Query: opensearch_search(query='Level:critical OR Level:high', "
                         "index='case-*-hayabusa-*')"
                     )
                 else:
@@ -3641,7 +3584,7 @@ def idx_list_detections(
             except Exception:
                 resp["suggestion"] = (
                     "Sigma detectors unavailable. Check Hayabusa: "
-                    "idx_search(query='Level:*', index='case-*-hayabusa-*')"
+                    "opensearch_search(query='Level:*', index='case-*-hayabusa-*')"
                 )
             return resp
         raise
@@ -3684,7 +3627,7 @@ def idx_list_detections(
             if hb_count:
                 hayabusa_hint = (
                     f"No Sigma detections. {hb_count:,} Hayabusa alerts available. "
-                    "Query: idx_search(query='Level:critical OR Level:high', "
+                    "Query: opensearch_search(query='Level:critical OR Level:high', "
                     "index='case-*-hayabusa-*')"
                 )
             else:
@@ -3704,7 +3647,7 @@ def idx_list_detections(
     if hayabusa_hint:
         resp["suggestion"] = hayabusa_hint
     aid = audit.log(
-        tool="idx_list_detections",
+        tool="opensearch_list_detections",
         params={
             "severity": severity,
             "detector_type": detector_type,
@@ -3719,10 +3662,10 @@ def idx_list_detections(
 
 
 @server.tool()
-def case_host_fix(raw: str, new_canonical: str) -> dict:
+def opensearch_host_fix(raw: str, new_canonical: str) -> dict:
     """Correct a wrong host.id mapping in the active case.
 
-    Use this tool when an earlier `idx_ingest` auto-applied a wrong
+    Use this tool when an earlier `opensearch_ingest` auto-applied a wrong
  proposal (e.g., proposed `wkstn01` for raw `wksn01` but the operator
  confirms `wksn01` is actually a separate host).
 
@@ -3775,7 +3718,7 @@ def case_host_fix(raw: str, new_canonical: str) -> dict:
 def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
     """Correct a wrong host.id mapping in the active case.
 
-    Use this tool when an earlier `idx_ingest` auto-applied a wrong
+    Use this tool when an earlier `opensearch_ingest` auto-applied a wrong
     decision (e.g., proposed `wkstn01` for raw `wksn01` but the operator
     confirms `wksn01` is actually a separate host).
 
@@ -3838,7 +3781,7 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
         return {
             "error": (
                 f"host-dictionary.yaml not found at {dict_path}. "
-                "Run idx_ingest at least once to create it."
+                "Run opensearch_ingest at least once to create it."
             )
         }
 
@@ -3909,7 +3852,7 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
                 "status": "mapping_upgrade_required",
                 "error": (
                     f"{len(_bad_indices)} indices have host.id as non-keyword "
-                    "from a pre-v1 ingest. case_host_fix would silently leave "
+                    "from a pre-v1 ingest. opensearch_host_fix would silently leave "
                     "host.id unqueryable on those indices. Reindex or delete "
                     "before retrying."
                 ),
@@ -3974,14 +3917,14 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
             "dict_saved": True,
             "dict_path": str(dict_path),
             "retry_hint": (
-                "Dict is saved with the new mapping. Re-call case_host_fix "
+                "Dict is saved with the new mapping. Re-call opensearch_host_fix "
                 "with the same args to retry the reindex."
             ),
             "isError": True,
         }
         try:
             audit.log(
-                tool="case_host_fix",
+                tool="opensearch_host_fix",
                 params={
                     "raw": raw,
                     "new_canonical": new_canonical,
@@ -4001,7 +3944,7 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
     }
     try:
         aid = audit.log(
-            tool="case_host_fix",
+            tool="opensearch_host_fix",
             params={
                 "raw": raw,
                 "new_canonical": new_canonical,

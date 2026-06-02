@@ -481,7 +481,7 @@ def run_hayabusa_batch(
 
     # Rev 6 halt-state hygiene: if every host failed with rules_not_found,
     # the entire detection phase was systematically disabled — write a
-    # halt-status file so portal + idx_ingest_status surface the reason.
+    # halt-status file so portal + opensearch_ingest_status surface the reason.
     hosts_with_results = [h for h in hosts if h.evtx_dir]
     if hosts_with_results and all(
         isinstance(results.get(h.hostname), dict)

@@ -44,7 +44,7 @@ class InvalidHostnameValue(ValueError):
     rather than raising — adversarial values would survive into
     host-dictionary.yaml as escape-encoded strings and contaminate
     downstream queries. The dict primitives gate at the write boundary
-    so every mutation path (preflight, case_host_fix, future CLI) is
+    so every mutation path (preflight, opensearch_host_fix, future CLI) is
     covered.
     """
 
@@ -62,7 +62,7 @@ def detect_host_id_mapping_type(props: dict) -> str | None:
     field is genuinely absent from both forms.
 
     Lives in host_dictionary (not ingest_cli) because both server.py's
-    case_host_fix and ingest_cli's preflight need it; lazy-import from
+    opensearch_host_fix and ingest_cli's preflight need it; lazy-import from
     ingest_cli created a stale-loaded-code surface where a long-running
     MCP gateway could miss this detector.
     """
@@ -274,7 +274,7 @@ class HostDictionary:
 
         - **`merge=False` (default, replacing semantics)**: the
           in-memory state IS the operator's intent. Save writes it
-          verbatim. Use for `case_host_fix` where deletions and
+          verbatim. Use for `opensearch_host_fix` where deletions and
           remappings must take effect (caller is responsible for
           calling load() under the same lock if needed for atomicity).
 
@@ -360,7 +360,7 @@ class HostDictionary:
 
         Idempotent: re-adding an existing alias is a no-op.
         Inputs are validated via `_validate_hostname_for_storage` — gate
-        applies regardless of caller (preflight, case_host_fix, CLI).
+        applies regardless of caller (preflight, opensearch_host_fix, CLI).
         """
         _validate_hostname_for_storage(raw, "add_alias raw")
         _validate_hostname_for_storage(canonical, "add_alias canonical")
@@ -379,7 +379,7 @@ class HostDictionary:
 
         Used when preflight discovers a host that has no close match in
         the existing dictionary — `raw` becomes its own canonical. Also
-        used by `case_host_fix` when the operator targets a new
+        used by `opensearch_host_fix` when the operator targets a new
         canonical that doesn't exist yet.
 
         Mutates `self.hosts` and rebuilds the lookup map. Idempotent —

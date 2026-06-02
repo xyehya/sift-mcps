@@ -1,4 +1,4 @@
-"""Exhaustive tests for idx_list_detections tool (Phase 4)."""
+"""Exhaustive tests for opensearch_list_detections tool (Phase 4)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import opensearch_mcp.server as srv
-from opensearch_mcp.server import idx_list_detections
+from opensearch_mcp.server import opensearch_list_detections
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +73,7 @@ class TestIdxListDetections:
             ],
         }
 
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["total"] == 2
         assert resp["returned"] == 2
         assert len(resp["findings"]) == 2
@@ -85,7 +85,7 @@ class TestIdxListDetections:
     def test_empty_findings(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
 
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["total"] == 0
         assert resp["returned"] == 0
         assert resp["findings"] == []
@@ -103,7 +103,7 @@ class TestIdxListDetections:
             ],
         }
 
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert len(resp["findings"][0]["rules"]) == 2
         assert resp["findings"][0]["rules"][0]["name"] == "Rule A"
         assert resp["findings"][0]["rules"][1]["name"] == "Rule B"
@@ -115,7 +115,7 @@ class TestIdxListDetections:
             "findings": [_make_finding(doc_ids=[], queries=[])],
         }
 
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["rules"] == []
         assert resp["findings"][0]["matched_docs"] == 0
 
@@ -128,7 +128,7 @@ class TestIdxListDetections:
 class TestDetectionsAPIParams:
     def test_default_params(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
-        idx_list_detections()
+        opensearch_list_detections()
         call_kwargs = mock_client.transport.perform_request.call_args
         assert call_kwargs[0][0] == "GET"
         assert "/_plugins/_security_analytics/findings/_search" in call_kwargs[0][1]
@@ -136,7 +136,7 @@ class TestDetectionsAPIParams:
     def test_default_shows_all_detector_types(self, mock_client):
         """Default (no detector_type) queries all detectors."""
         mock_client.transport.perform_request.return_value = _empty_response()
-        idx_list_detections()
+        opensearch_list_detections()
         call_args = mock_client.transport.perform_request.call_args
         params = call_args[1].get("params", {})
         assert "detectorType" not in params
@@ -144,7 +144,7 @@ class TestDetectionsAPIParams:
     def test_explicit_detector_type_filters(self, mock_client):
         """Explicit detector_type filters to that type."""
         mock_client.transport.perform_request.return_value = _empty_response()
-        idx_list_detections(detector_type="linux")
+        opensearch_list_detections(detector_type="linux")
         call_args = mock_client.transport.perform_request.call_args
         params = call_args[1].get("params", {})
         assert params["detectorType"] == "linux"
@@ -158,7 +158,7 @@ class TestDetectionsAPIParams:
                 _make_finding("f2", queries=[{"name": "R2", "tags": ["low"]}]),
             ],
         }
-        resp = idx_list_detections(severity="high")
+        resp = opensearch_list_detections(severity="high")
         assert resp["returned"] == 1
         assert resp["findings"][0]["id"] == "f1"
 
@@ -170,13 +170,13 @@ class TestDetectionsAPIParams:
             ],
         }
         # Sigma tags are typically lowercase, but test case-insensitive matching
-        resp = idx_list_detections(severity="high")
+        resp = opensearch_list_detections(severity="high")
         assert resp["returned"] == 1
 
     def test_severity_not_in_api_params(self, mock_client):
         """Severity is NOT passed to the API — filtered in Python."""
         mock_client.transport.perform_request.return_value = _empty_response()
-        idx_list_detections(severity="critical")
+        opensearch_list_detections(severity="critical")
         params = mock_client.transport.perform_request.call_args[1].get("params", {})
         assert "severity" not in params
 
@@ -188,24 +188,24 @@ class TestDetectionsAPIParams:
                 _make_finding("f2", queries=[{"name": "R2", "tags": ["low"]}]),
             ],
         }
-        resp = idx_list_detections(severity="")
+        resp = opensearch_list_detections(severity="")
         assert resp["returned"] == 2
 
     def test_limit_passed_as_size(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
-        idx_list_detections(limit=25)
+        opensearch_list_detections(limit=25)
         params = mock_client.transport.perform_request.call_args[1].get("params", {})
         assert params["size"] == 25
 
     def test_offset_passed_as_start_index(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
-        idx_list_detections(offset=100)
+        opensearch_list_detections(offset=100)
         params = mock_client.transport.perform_request.call_args[1].get("params", {})
         assert params["startIndex"] == 100
 
     def test_sort_order_desc(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
-        idx_list_detections()
+        opensearch_list_detections()
         params = mock_client.transport.perform_request.call_args[1].get("params", {})
         assert params["sortOrder"] == "desc"
 
@@ -221,7 +221,7 @@ class TestDetectionsResponseSchema:
             "total_findings": 42,
             "findings": [],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["total"] == 42
 
     def test_response_has_returned(self, mock_client):
@@ -229,17 +229,17 @@ class TestDetectionsResponseSchema:
             "total_findings": 100,
             "findings": [_make_finding()],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["returned"] == 1
 
     def test_response_has_offset(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
-        resp = idx_list_detections(offset=50)
+        resp = opensearch_list_detections(offset=50)
         assert resp["offset"] == 50
 
     def test_offset_zero_by_default(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["offset"] == 0
 
     def test_finding_has_id(self, mock_client):
@@ -247,7 +247,7 @@ class TestDetectionsResponseSchema:
             "total_findings": 1,
             "findings": [_make_finding(id="abc-123")],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["id"] == "abc-123"
 
     def test_finding_has_timestamp(self, mock_client):
@@ -255,7 +255,7 @@ class TestDetectionsResponseSchema:
             "total_findings": 1,
             "findings": [_make_finding(ts=1708647166500)],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["timestamp"] == 1708647166500
 
     def test_finding_has_index(self, mock_client):
@@ -263,7 +263,7 @@ class TestDetectionsResponseSchema:
             "total_findings": 1,
             "findings": [_make_finding(index="case-inc001-evtx-ws05")],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["index"] == "case-inc001-evtx-ws05"
 
     def test_finding_has_matched_docs_count(self, mock_client):
@@ -271,7 +271,7 @@ class TestDetectionsResponseSchema:
             "total_findings": 1,
             "findings": [_make_finding(doc_ids=["d1", "d2", "d3"])],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["matched_docs"] == 3
 
     def test_rule_has_name(self, mock_client):
@@ -281,7 +281,7 @@ class TestDetectionsResponseSchema:
                 _make_finding(queries=[{"name": "Suspicious Process", "tags": ["high"]}])
             ],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["rules"][0]["name"] == "Suspicious Process"
 
     def test_rule_has_tags(self, mock_client):
@@ -293,7 +293,7 @@ class TestDetectionsResponseSchema:
                 )
             ],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         tags = resp["findings"][0]["rules"][0]["tags"]
         assert "high" in tags
         assert "attack.persistence" in tags
@@ -309,21 +309,21 @@ class TestDetectionsAudit:
     def test_audit_id_in_response(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
         with patch.object(srv.audit, "log", return_value="audit-789"):
-            resp = idx_list_detections()
+            resp = opensearch_list_detections()
         assert resp["audit_id"] == "audit-789"
 
     def test_no_audit_id_when_none(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
         with patch.object(srv.audit, "log", return_value=None):
-            resp = idx_list_detections()
+            resp = opensearch_list_detections()
         assert "audit_id" not in resp
 
     def test_audit_params_recorded(self, mock_client):
         mock_client.transport.perform_request.return_value = _empty_response()
         with patch.object(srv.audit, "log", return_value="a1") as mock_log:
-            idx_list_detections(severity="critical", limit=10, offset=20)
+            opensearch_list_detections(severity="critical", limit=10, offset=20)
         call_kwargs = mock_log.call_args[1]
-        assert call_kwargs["tool"] == "idx_list_detections"
+        assert call_kwargs["tool"] == "opensearch_list_detections"
         assert call_kwargs["params"]["severity"] == "critical"
         assert call_kwargs["params"]["limit"] == 10
         assert call_kwargs["params"]["offset"] == 20
@@ -334,7 +334,7 @@ class TestDetectionsAudit:
             "findings": [_make_finding(), _make_finding(id="f2"), _make_finding(id="f3")],
         }
         with patch.object(srv.audit, "log", return_value="a1") as mock_log:
-            idx_list_detections()
+            opensearch_list_detections()
         assert mock_log.call_args[1]["result_summary"] == "3 findings"
 
 
@@ -358,7 +358,7 @@ class TestDetectionsEdgeCases:
                 }
             ],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["matched_docs"] == 0
 
     def test_missing_queries_key(self, mock_client):
@@ -375,7 +375,7 @@ class TestDetectionsEdgeCases:
                 }
             ],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["rules"] == []
 
     def test_missing_total_findings(self, mock_client):
@@ -383,7 +383,7 @@ class TestDetectionsEdgeCases:
         mock_client.transport.perform_request.return_value = {
             "findings": [_make_finding()],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["total"] == 0
         assert resp["returned"] == 1
 
@@ -393,7 +393,7 @@ class TestDetectionsEdgeCases:
             "total_findings": 1,
             "findings": [_make_finding(queries=[{"name": "Rule"}])],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["rules"][0]["tags"] == []
 
     def test_query_missing_name(self, mock_client):
@@ -402,7 +402,7 @@ class TestDetectionsEdgeCases:
             "total_findings": 1,
             "findings": [_make_finding(queries=[{"tags": ["high"]}])],
         }
-        resp = idx_list_detections()
+        resp = opensearch_list_detections()
         assert resp["findings"][0]["rules"][0]["name"] is None
 
     def test_connection_error_propagates(self, mock_client):
@@ -411,7 +411,7 @@ class TestDetectionsEdgeCases:
         # _os_call wraps connection errors as RuntimeError
         with patch("opensearch_mcp.server._os_call", side_effect=RuntimeError("Lost connection")):
             with pytest.raises(RuntimeError, match="Lost connection"):
-                idx_list_detections()
+                opensearch_list_detections()
 
 
 # ---------------------------------------------------------------------------
@@ -421,17 +421,18 @@ class TestDetectionsEdgeCases:
 
 class TestDetectionsToolRegistration:
     def test_tool_exists_in_server(self):
-        """idx_list_detections is registered as an MCP tool."""
-        assert hasattr(srv, "idx_list_detections")
+        """opensearch_list_detections is registered as an MCP tool."""
+        assert hasattr(srv, "opensearch_list_detections")
 
     def test_tool_count(self):
-        """All idx_* tools registered."""
+        """All advertised opensearch_* tools are registered as module callables."""
         import inspect
 
         tool_names = [
             name
             for name, obj in inspect.getmembers(srv)
-            if callable(obj) and name.startswith("idx_") and not name.startswith("_")
+            if callable(obj) and name.startswith("opensearch_") and not name.startswith("_")
         ]
-        # 17 original + idx_shard_status + idx_install_pipelines + idx_inspect_container (B2)
-        assert len(tool_names) == 20
+        # 15 search/ingest/enrich tools + opensearch_host_fix (idx_install_pipelines
+        # removed in Phase 6 — ensure_winlog_pipeline runs at startup instead)
+        assert len(tool_names) == 16

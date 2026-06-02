@@ -108,7 +108,7 @@ def install_all_templates(client) -> dict[str, Any]:
     a typo in one template file should not strand the others.
 
     Called from the same sites as ensure_winlog_pipeline (server
-    first-connection, ingest pre-flight, idx_install_pipelines tool).
+    first-connection, ingest pre-flight).
     Without this, edits to csv/prefetch/srum/transcripts/w3c/defender/
     tasks/wer/ssh/vol3/json/delimited/accesslog/hayabusa templates on
     disk never reach the cluster after initial setup-opensearch.sh run.

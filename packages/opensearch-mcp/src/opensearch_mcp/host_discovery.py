@@ -238,7 +238,7 @@ def _harvest_velociraptor_client_idx(
 
     Each JSON file maps a client GUID to a hostname. Both values become
     aliases of the eventual canonical (operator typically aliases the
-    GUID to the hostname via case_host_fix later).
+    GUID to the hostname via opensearch_host_fix later).
     """
     candidates = safe_rglob(evidence_root, "client_idx/hostname/*")
     for path in candidates[:200]:  # cap to bound runaway datastores

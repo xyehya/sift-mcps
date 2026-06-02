@@ -100,7 +100,7 @@ investigation_patterns:
     query: "Name:<filename> AND UpdateReasons:*FileCreate*"
     index: "case-*-usn-*"
     purpose: "Same file on multiple hosts indicates lateral movement or automated deployment"
-    follow_up: "idx_aggregate on host.name with the filename to see deployment scope"
+    follow_up: "opensearch_aggregate on host.name with the filename to see deployment scope"
 
 scale_advantage: |
   OpenSearch enables these queries across all hosts for which USN Journal

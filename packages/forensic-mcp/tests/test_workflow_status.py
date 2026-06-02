@@ -123,7 +123,7 @@ def test_workflow_status_sealed_evidence(server_with_case):
     result = _call(tools["workflow_status"])
     assert result["phase"] == "SEALED"
     assert result["evidence_summary"]["sealed_files"] == 1
-    assert any("idx_ingest" in s.lower() for s in result["next_steps"])
+    assert any("opensearch_ingest" in s.lower() for s in result["next_steps"])
 
 
 def test_workflow_status_post_ingest_triage(server_with_case):

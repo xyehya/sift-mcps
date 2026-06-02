@@ -142,14 +142,14 @@ class TestCredentialsSecurity:
 
 class TestQueryInjection:
     def test_query_string_is_search_only(self):
-        """Verify that idx_search uses query_string (read-only search),
+        """Verify that opensearch_search uses query_string (read-only search),
         not a raw HTTP endpoint that could be abused for admin operations."""
         # Read the server module source to verify it uses query_string
         import inspect
 
         from opensearch_mcp import server
 
-        source = inspect.getsource(server.idx_search)
+        source = inspect.getsource(server.opensearch_search)
         assert "query_string" in source
         # Should NOT use raw HTTP endpoints
         assert "perform_request" not in source

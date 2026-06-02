@@ -661,7 +661,7 @@ class CaseManager:
         guidance.append("- SIFT forensic tools via run_command (65+ tools)")
         if capabilities["opensearch"]:
             guidance.append(
-                "- Evidence indexing: idx_ingest for structured querying at scale"
+                "- Evidence indexing: opensearch_ingest for structured querying at scale"
             )
         if capabilities["remnux"]:
             guidance.append(
@@ -1053,7 +1053,7 @@ class CaseManager:
                     except OSError:
                         pass
 
-                # Indirect path: idx_search/idx_aggregate → trace to idx_ingest
+                # Indirect path: opensearch_search/opensearch_aggregate → trace to opensearch_ingest
                 tool = entry.get("tool", "")
                 if tool.startswith("idx_"):
                     search_index = entry.get("params", {}).get("index", "")
@@ -1062,7 +1062,7 @@ class CaseManager:
                     for e in all_audit_entries:
                         e_tool = e.get("tool", "")
                         if not (
-                            e_tool.startswith("idx_ingest") and e.get("input_files")
+                            e_tool.startswith("opensearch_ingest") and e.get("input_files")
                         ):
                             continue
                         e_cid = e.get("case_id", "")

@@ -23,14 +23,14 @@ investigation_patterns:
 
   - name: "MITRE technique heatmap"
     query: "MitreTactics:*"
-    aggregation: "idx_aggregate on MitreTactics.keyword"
+    aggregation: "opensearch_aggregate on MitreTactics.keyword"
     purpose: "Identify which MITRE tactics are represented — reveals attack phases present in evidence"
 
   - name: "Cross-host alert correlation"
     query: "RuleTitle.keyword:<rule_name>"
     index: "case-*-hayabusa-*"
     purpose: "Same detection firing on multiple hosts indicates coordinated activity"
-    follow_up: "idx_aggregate on host.name to see affected scope"
+    follow_up: "opensearch_aggregate on host.name to see affected scope"
 
   - name: "Account-based pivoting"
     query: "Level:(critical OR high) AND user.name.keyword:<username>"

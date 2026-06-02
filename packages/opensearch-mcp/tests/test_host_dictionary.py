@@ -320,7 +320,7 @@ class TestSaveAtomic:
         assert "admin01" in reloaded.hosts
 
     def test_save_replace_mode_preserves_deletions(self, tmp_path):
-        """case_host_fix deletes a canonical when collapsing into another.
+        """opensearch_host_fix deletes a canonical when collapsing into another.
         `merge=False` (default) preserves that deletion — merge=True
         would un-delete it from disk."""
         p = tmp_path / "host-dictionary.yaml"

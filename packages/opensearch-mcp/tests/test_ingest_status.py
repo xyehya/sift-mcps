@@ -565,7 +565,7 @@ class TestCleanupOld:
 # to "running", then the excepthook guard re-labelled it as
 # "failed: process_died_unexpectedly: …" — misframing a caught exception as
 # an uncaught crash and making the real exception invisible to
-# idx_ingest_status consumers.
+# opensearch_ingest_status consumers.
 # ---------------------------------------------------------------------------
 
 

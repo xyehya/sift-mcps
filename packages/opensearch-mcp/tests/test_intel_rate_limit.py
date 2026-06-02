@@ -298,7 +298,7 @@ class TestEnrichmentRateLimitFlow:
 
 # ---------------------------------------------------------------------------
 # CR follow-ons (B79 v0.6.x patch) — worker-level resilience coverage for
-# idx_enrich_intel's async path. The batch_lookup-level tests above prove
+# opensearch_enrich_intel's async path. The batch_lookup-level tests above prove
 # per-IOC isolation survives rate-limit cascades; these exercise the
 # cmd_enrich_intel worker on top of that, confirming:
 #   1. A rate-limit storm does NOT crash the worker — terminal "complete"

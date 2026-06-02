@@ -156,7 +156,7 @@ def _ensure_host_id_keyword_mapping(case_id: str) -> dict:
                 f"{len(indices_text)} existing case indices have host.id mapped "
                 "as a non-keyword type (likely from pre-v1 ingest). Reindex those "
                 "indices to the v1 mapping, or delete + re-ingest. Otherwise term "
-                "queries on host.id and case_host_fix reindex will silently miss."
+                "queries on host.id and opensearch_host_fix reindex will silently miss."
             ),
         }
     return {"status": "ok", "indices_patched": indices_patched}
@@ -171,13 +171,13 @@ def _warn_if_mapping_upgrade_required(case_id: str) -> None:
     pre-v1 case still gets host.id=keyword on its existing indices.
 
     Stderr warning if any index is text-mapped — operator gets the
-    breadcrumb before case_host_fix later refuses with the same error.
+    breadcrumb before opensearch_host_fix later refuses with the same error.
     """
     result = _ensure_host_id_keyword_mapping(case_id)
     if result.get("status") == "mapping_upgrade_required":
         print(
             f"WARNING: {len(result.get('indices_text', []))} case indices have "
-            "host.id as non-keyword (pre-v1 mapping). case_host_fix will "
+            "host.id as non-keyword (pre-v1 mapping). opensearch_host_fix will "
             "refuse on these indices. Reindex or delete + re-ingest. "
             f"Affected: {result.get('indices_text', [])}",
             file=sys.stderr,
@@ -287,7 +287,7 @@ def _preflight_host_discovery(
 
     # Save dict BEFORE returning. Any parser that starts up after this
     # point sees the new mapping. (Arch's correctness finding for
-    # case_host_fix applies here too: save before the next phase begins.)
+    # opensearch_host_fix applies here too: save before the next phase begins.)
     # Always save when the dict file doesn't exist yet — first-ever ingest
     # on a fresh case must persist even when no decisions were applied.
     # `merge=True`: concurrent ingests applying ADD-ONLY decisions must
@@ -309,7 +309,7 @@ def _preflight_host_discovery(
         "mapping_status": mapping_status,
         "action_recommended": (
             "Review decisions_applied with the operator. If any decision is "
-            "wrong, call case_host_fix(raw, new_canonical) to correct."
+            "wrong, call opensearch_host_fix(raw, new_canonical) to correct."
         ),
     }
     if mapping_status.get("status") == "mapping_upgrade_required":
@@ -317,7 +317,7 @@ def _preflight_host_discovery(
         report["action_required"] = mapping_status["action_required"]
 
     # Audit trail for the preflight invocation (closes WSL2 Test B4).
-    # Every dict mutation needs a forensic audit-trail entry; case_host_fix
+    # Every dict mutation needs a forensic audit-trail entry; opensearch_host_fix
     # already logs, preflight didn't.
     try:
         _audit = AuditWriter(mcp_name=f"opensearch-preflight-{os.getpid()}")
@@ -338,7 +338,7 @@ def _preflight_host_discovery(
         pass  # Non-fatal — audit failure shouldn't block ingest.
 
     # Persist the report keyed by run_id so concurrent ingests don't
-    # overwrite each other. idx_ingest_status reads the file per-summary
+    # overwrite each other. opensearch_ingest_status reads the file per-summary
     # and only when an ingest run_id is present — skip the write entirely
     # when no run_id is available (CLI direct invocation, tests) to avoid
     # leaving an orphan file the MCP layer will never read.
@@ -351,7 +351,7 @@ def _preflight_host_discovery(
         except OSError:
             pass
         report_path = reports_dir / f"{run_id}.json"
-        # M4: atomic temp+rename so idx_ingest_status doesn't read a
+        # M4: atomic temp+rename so opensearch_ingest_status doesn't read a
         # half-written file. write_text on the destination would leave
         # the file truncated between truncate and final close.
         tmp_path = reports_dir / f"{run_id}.json.tmp"
@@ -375,7 +375,7 @@ def _preflight_shard_capacity(
 
     On refusal, writes a terminal status file via write_status with the
     error field prefixed by HALT_SHARD_CAPACITY so portal /
-    idx_ingest_status can startswith()-render the halt reason. Calls
+    opensearch_ingest_status can startswith()-render the halt reason. Calls
     sys.exit(1) after. Fail-open on stats-query errors (handled inside
     check_shard_headroom).
 
@@ -902,13 +902,13 @@ def cmd_scan(args: argparse.Namespace) -> None:
                         f"({d['decision']}, confidence {d['confidence']:.2f})"
                     )
         # CR round-4 UX: surface mapping_upgrade_required on the CLI
-        # path. The MCP path already exposes it via idx_ingest_status;
+        # path. The MCP path already exposes it via opensearch_ingest_status;
         # CLI operators see it via stderr.
         _ms = host_discovery_report.get("mapping_status", {})
         if _ms.get("status") == "mapping_upgrade_required":
             print(
                 f"WARNING: {len(_ms.get('indices_text', []))} case indices have "
-                "host.id as non-keyword (pre-v1 mapping). case_host_fix will "
+                "host.id as non-keyword (pre-v1 mapping). opensearch_host_fix will "
                 "refuse on these indices. Reindex or delete + re-ingest. "
                 f"Affected: {_ms.get('indices_text', [])}",
                 file=sys.stderr,
@@ -1053,7 +1053,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
             )
         except ShardCapacityExhausted as _sce:
             # Circuit-breaker trip mid-run. Write a terminal status so
-            # idx_ingest_status surfaces the halt reason via the
+            # opensearch_ingest_status surfaces the halt reason via the
             # error-prefix convention (replaces pre-0.6.2 halt-state
             # taxonomy; portal startswith()-renders the prefix).
             write_status(
@@ -1096,7 +1096,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 f"\n*** {total_bulk_failed:,} events failed to index. ***"
                 f"\n  Re-run ingest on the same evidence to recover"
                 f" — dedup prevents duplicates."
-                f"\n  To verify before re-running, run idx_search on"
+                f"\n  To verify before re-running, run opensearch_search on"
                 f" the expected timestamp range."
             )
         if errors:
@@ -2025,8 +2025,8 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
 
     Progress is written to the shared `ingest-status` dir with
     `artifact_name="intel"` so the async MCP entry point
-    (`idx_enrich_intel` via `_launch_enrich_background`) can surface
-    it through `idx_ingest_status`.
+    (`opensearch_enrich_intel` via `_launch_enrich_background`) can surface
+    it through `opensearch_ingest_status`.
     """
     case_id = _resolve_case_id(getattr(args, "case", None))
     force = getattr(args, "force", False)
@@ -2102,7 +2102,7 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
         result = enrich_case(client, case_id, force=force, on_progress=_progress)
     except Exception as e:  # noqa: BLE001
         # Terminal failed write with the real exception text so
-        # idx_ingest_status surfaces *why* enrichment failed without
+        # opensearch_ingest_status surfaces *why* enrichment failed without
         # forcing the operator into the log file. The excepthook guard
         # would otherwise stamp "process_died_unexpectedly: …" which
         # misframes a caught exception as an uncaught crash.

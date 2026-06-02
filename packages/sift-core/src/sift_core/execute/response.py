@@ -54,7 +54,7 @@ _RELATED_TOOLS: dict[str, list[str]] = {
         "wintools-mcp run_windows_command(PECmd/AmcacheParser): Parse on Windows for maximum fidelity",
     ],
     "memory": [
-        "opensearch-mcp idx_ingest(format='memory'): Index Volatility results for querying",
+        "opensearch-mcp opensearch_ingest(format='memory'): Index Volatility results for querying",
         "remnux-mcp analyze_file: Upload suspicious processes for malware analysis",
     ],
 }

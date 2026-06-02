@@ -1,5 +1,5 @@
 """Tests for shard capacity pre-flight, circuit breaker, and
-idx_shard_status tool.
+opensearch_shard_status tool.
 
 Covers:
 - check_shard_headroom: ample / exhausted / low-headroom / stats-error
@@ -394,7 +394,7 @@ class TestBulkFailedAccumulation:
         assert totals["hosts_complete"] == 2
 
 
-# --- idx_shard_status tool ---
+# --- opensearch_shard_status tool ---
 
 
 class TestIdxShardStatus:
@@ -432,7 +432,7 @@ class TestIdxShardStatus:
         monkeypatch.setattr(srv, "_get_os", lambda: client)
         monkeypatch.setattr(srv.audit, "log", lambda **kw: "test-aid")
 
-        resp = srv.idx_shard_status()
+        resp = srv.opensearch_shard_status()
         assert resp["status"] == "ok"
         assert resp["current_shards"] == 100
         assert resp["max_total"] == 1000
@@ -445,7 +445,7 @@ class TestIdxShardStatus:
         monkeypatch.setattr(srv, "_get_os", lambda: client)
         monkeypatch.setattr(srv.audit, "log", lambda **kw: "test-aid")
 
-        resp = srv.idx_shard_status()
+        resp = srv.opensearch_shard_status()
         assert resp["status"] == "critical"
         assert resp["current_shards"] == 9999
 
@@ -461,8 +461,8 @@ class TestIdxShardStatus:
             return "test-aid"
 
         monkeypatch.setattr(srv.audit, "log", fake_log)
-        resp = srv.idx_shard_status()
-        assert captured["tool"] == "idx_shard_status"
+        resp = srv.opensearch_shard_status()
+        assert captured["tool"] == "opensearch_shard_status"
         assert resp["audit_id"] == "test-aid"
 
     def test_filter_path_plumbed(self, monkeypatch):
@@ -471,7 +471,7 @@ class TestIdxShardStatus:
         client = self._mock_client_ok()
         monkeypatch.setattr(srv, "_get_os", lambda: client)
         monkeypatch.setattr(srv.audit, "log", lambda **kw: None)
-        srv.idx_shard_status()
+        srv.opensearch_shard_status()
         assert client.cluster.stats.call_args.kwargs.get("filter_path") == [
             "indices.shards.total",
             "nodes.count.data",
@@ -490,7 +490,7 @@ class TestIdxShardStatus:
         client = self._mock_client_ok()
         monkeypatch.setattr(srv, "_get_os", lambda: client)
         monkeypatch.setattr(srv.audit, "log", lambda **kw: None)
-        resp = srv.idx_shard_status()
+        resp = srv.opensearch_shard_status()
         top_names = [i["index"] for i in resp["top_indices_by_shard_count"]]
         assert ".opendistro_security" not in top_names
         assert "case-inc-evtx-host01" in top_names

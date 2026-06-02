@@ -4,7 +4,7 @@ Covers:
   parse_csv per-row host.name + host.id stamping
   parse_json per-doc host.name + host.id stamping
   Preflight auto-apply (always-proceed, never block)
-  case_host_fix correctness invariants
+  opensearch_host_fix correctness invariants
   Parser resolve-miss → stamp host.id = raw
   Deletion regression guard for the old fail-loud surface
 """
@@ -478,7 +478,7 @@ class TestPreflightToParserIntegration:
         assert _detect_host_id_mapping_type(both) == "keyword"
 
     def test_case_host_fix_passes_request_timeout(self):
-        """WSL2 R4 Test 3 — case_host_fix must pass request_timeout to
+        """WSL2 R4 Test 3 — opensearch_host_fix must pass request_timeout to
         update_by_query so the default client read_timeout doesn't fire
         false-negative on hundred-thousand-doc reindex calls. Verified
         via source-text (test-mocking the timeout would over-fit)."""
@@ -488,7 +488,7 @@ class TestPreflightToParserIntegration:
 
         src = inspect.getsource(server._case_host_fix_impl)
         assert "request_timeout=600" in src, (
-            "case_host_fix must pass request_timeout=600 to update_by_query "
+            "opensearch_host_fix must pass request_timeout=600 to update_by_query "
             "to avoid client-side ConnectionTimeout on multi-100K-doc hosts."
         )
 
@@ -532,14 +532,14 @@ class TestPreflightToParserIntegration:
 
         src = inspect.getsource(server._case_host_fix_impl)
         assert "ctx.op = 'noop'" in src, (
-            "case_host_fix painless script must include ctx.op = 'noop' "
+            "opensearch_host_fix painless script must include ctx.op = 'noop' "
             "guard so retry-after-timeout doesn't re-touch already-flipped "
             "docs on text-mapped indices."
         )
         assert "ctx._source['host.id'] == params.id" in src
 
     def test_case_host_fix_outer_envelope_catches_unexpected_exception(self):
-        """WSL2 R5 — case_host_fix entry has an outer try/except that
+        """WSL2 R5 — opensearch_host_fix entry has an outer try/except that
         catches InvalidHostnameValue + generic Exception and returns
         isError envelope. Without this guard, FastMCP wraps exceptions
         with isError:false envelopes."""
@@ -547,13 +547,13 @@ class TestPreflightToParserIntegration:
 
         from opensearch_mcp import server
 
-        src = inspect.getsource(server.case_host_fix)
+        src = inspect.getsource(server.opensearch_host_fix)
         assert "except InvalidHostnameValue" in src
         assert "except Exception" in src
         assert '"isError": True' in src
 
     def test_case_host_fix_retry_skips_already_flipped(self):
-        """WSL2 Round-3 Test 3 — case_host_fix on 188K docs hit a
+        """WSL2 Round-3 Test 3 — opensearch_host_fix on 188K docs hit a
         ConnectionTimeout after 174K flipped. Retry must skip the
         already-flipped 174K and only touch the remaining 14K.
 
@@ -567,16 +567,16 @@ class TestPreflightToParserIntegration:
         src = inspect.getsource(server._case_host_fix_impl)
         # Must clause: term host.name == raw
         assert '"must": [{"term": {"host.name": raw}}]' in src, (
-            "case_host_fix must use bool/must term filter on host.name"
+            "opensearch_host_fix must use bool/must term filter on host.name"
         )
         # Must-not clause: host.id already at new_canonical → skip
         assert '"must_not": [{"term": {"host.id": new_canonical}}]' in src, (
-            "case_host_fix must skip already-flipped docs on retry "
+            "opensearch_host_fix must skip already-flipped docs on retry "
             "to bound the cost of retry-after-ConnectionTimeout"
         )
 
     def test_case_host_fix_refuses_text_mapped_index(self, tmp_path, monkeypatch):
-        """H1 defensive — refuse case_host_fix when any case index has
+        """H1 defensive — refuse opensearch_host_fix when any case index has
         host.id mapped as text (pre-v1 upgrade path). update_by_query
         would succeed but host.id queries would silently miss."""
         from unittest.mock import patch
@@ -607,9 +607,9 @@ class TestPreflightToParserIntegration:
             }
             mock_get_os.return_value = mock_client
 
-            from opensearch_mcp.server import case_host_fix
+            from opensearch_mcp.server import opensearch_host_fix
 
-            result = case_host_fix(raw="admin01", new_canonical="admin01-new")
+            result = opensearch_host_fix(raw="admin01", new_canonical="admin01-new")
 
         assert result.get("status") == "mapping_upgrade_required"
         assert result.get("isError") is True
@@ -664,7 +664,7 @@ class TestPreflightToParserIntegration:
         assert "rd01" in reloaded.hosts  # B's add survived too
 
     def test_case_host_fix_rejection_response_shape(self, tmp_path, monkeypatch):
-        """WSL2 minor — case_host_fix rejection returns a structured error
+        """WSL2 minor — opensearch_host_fix rejection returns a structured error
         response with `status: rejected`, `isError: true`, and operator-
         readable context. Avoids confusing the AI/operator with a bare
         ToolError when the cause is operator input."""
@@ -681,9 +681,9 @@ class TestPreflightToParserIntegration:
 
         with patch("opensearch_mcp.server._get_os") as mock_get_os:
             mock_get_os.return_value = MagicMock()
-            from opensearch_mcp.server import case_host_fix
+            from opensearch_mcp.server import opensearch_host_fix
 
-            result = case_host_fix(raw="admin\x0001", new_canonical="admin01")
+            result = opensearch_host_fix(raw="admin\x0001", new_canonical="admin01")
 
         assert result.get("status") == "rejected"
         assert result.get("isError") is True
@@ -692,7 +692,7 @@ class TestPreflightToParserIntegration:
 
     def test_dict_primitives_reject_adversarial_input(self):
         """Fresh-eyes Issue 3 — gate is at the dict primitive, not just at
-        discover_hosts. Covers preflight + case_host_fix + future CLI paths."""
+        discover_hosts. Covers preflight + opensearch_host_fix + future CLI paths."""
         import pytest
 
         from opensearch_mcp.host_dictionary import (
@@ -718,7 +718,7 @@ class TestPreflightToParserIntegration:
 
     def test_case_host_fix_writes_audit_log(self, tmp_path, monkeypatch):
         """Fresh-eyes Issue 2 — every other server.py tool calls audit.log;
-        case_host_fix must too. Forensic audit trail for dict mutation +
+        opensearch_host_fix must too. Forensic audit trail for dict mutation +
         reindex must not be silent."""
         from unittest.mock import patch
 
@@ -740,13 +740,13 @@ class TestPreflightToParserIntegration:
             mock_get_os.return_value = mock_client
             mock_audit.log.return_value = "audit-123"
 
-            from opensearch_mcp.server import case_host_fix
+            from opensearch_mcp.server import opensearch_host_fix
 
-            result = case_host_fix(raw="wksn01", new_canonical="admin01")
+            result = opensearch_host_fix(raw="wksn01", new_canonical="admin01")
 
-        assert mock_audit.log.called, "case_host_fix must call audit.log"
+        assert mock_audit.log.called, "opensearch_host_fix must call audit.log"
         call_kwargs = mock_audit.log.call_args.kwargs
-        assert call_kwargs.get("tool") == "case_host_fix"
+        assert call_kwargs.get("tool") == "opensearch_host_fix"
         assert call_kwargs.get("params", {}).get("raw") == "wksn01"
         assert call_kwargs.get("params", {}).get("new_canonical") == "admin01"
         assert result.get("audit_id") == "audit-123"
@@ -884,7 +884,7 @@ class TestPreflightToParserIntegration:
 
 
 # ---------------------------------------------------------------------------
-# v1 Tests 10 / 11 / 12 / 18 — case_host_fix correctness
+# v1 Tests 10 / 11 / 12 / 18 — opensearch_host_fix correctness
 # ---------------------------------------------------------------------------
 
 
@@ -892,7 +892,7 @@ class TestCaseHostFix:
     def test_fix_changes_dictionary(self, tmp_path):
         """Test 10 — alias moves from old canonical to new canonical.
 
-        Exercises the in-memory dict-edit half of case_host_fix.
+        Exercises the in-memory dict-edit half of opensearch_host_fix.
         """
         from opensearch_mcp.host_dictionary import HostDictionary
 
@@ -925,7 +925,7 @@ class TestCaseHostFix:
     def test_fix_when_raw_is_itself_a_canonical(self, tmp_path, monkeypatch):
         """Issue #4 — operator collapses an existing canonical into another.
 
-        Pre-fix: case_host_fix("wkstn01", "admin01") with wkstn01 as a
+        Pre-fix: opensearch_host_fix("wkstn01", "admin01") with wkstn01 as a
         canonical would leave wkstn01.hosts entry orphaned. After
         _rebuild_alias_map, the canonical self-mapping (wkstn01 → wkstn01)
         wins over the new alias mapping (wkstn01 → admin01), so resolve
@@ -954,9 +954,9 @@ class TestCaseHostFix:
             mock_client.update_by_query.return_value = {"updated": 0, "took": 1}
             mock_get_os.return_value = mock_client
 
-            from opensearch_mcp.server import case_host_fix
+            from opensearch_mcp.server import opensearch_host_fix
 
-            result = case_host_fix(raw="wkstn01", new_canonical="admin01")
+            result = opensearch_host_fix(raw="wkstn01", new_canonical="admin01")
 
         assert "error" not in result, f"unexpected error: {result.get('error')}"
 
@@ -973,7 +973,7 @@ class TestCaseHostFix:
         )
 
     def test_fix_uses_term_filter_not_query_string(self):
-        """Test 12 — case_host_fix builds a term-DSL query, NEVER query_string.
+        """Test 12 — opensearch_host_fix builds a term-DSL query, NEVER query_string.
 
         Source-text guard against Lucene-injection regression.
         """
@@ -983,11 +983,11 @@ class TestCaseHostFix:
 
         src = inspect.getsource(server._case_host_fix_impl)
         assert '"term": {"host.name": raw}' in src, (
-            "case_host_fix must use term-DSL filter; raw values may contain Lucene metacharacters."
+            "opensearch_host_fix must use term-DSL filter; raw values may contain Lucene metacharacters."
         )
         # The quoted-string `"query_string"` is how the DSL key would appear
         # if used as a filter. Plain-text references in comments are fine.
-        assert '"query_string"' not in src, "case_host_fix must NOT use query_string DSL clause."
+        assert '"query_string"' not in src, "opensearch_host_fix must NOT use query_string DSL clause."
 
     def test_fix_saves_dict_before_reindex(self, tmp_path, monkeypatch):
         """Test 18 — save() is invoked BEFORE update_by_query.
@@ -1028,9 +1028,9 @@ class TestCaseHostFix:
             mock_client.update_by_query.side_effect = fake_update_by_query
             mock_get_os.return_value = mock_client
 
-            from opensearch_mcp.server import case_host_fix
+            from opensearch_mcp.server import opensearch_host_fix
 
-            case_host_fix(raw="wksn01", new_canonical="wkstn01-new")
+            opensearch_host_fix(raw="wksn01", new_canonical="wkstn01-new")
 
         assert call_order == ["save", "update_by_query"], (
             f"Expected save before update_by_query, got {call_order}"
