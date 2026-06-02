@@ -136,32 +136,36 @@ open(p, 'w').write(yaml.dump(c, default_flow_style=False))
 fi
 
 # -------------------------------------------------------------------------
-# Step 3: Kill and restart gateway
+# Step 3: Restart gateway (systemd user service — matches install.sh)
 # -------------------------------------------------------------------------
 info "Restarting gateway..."
 
-# Kill all gateway processes (uv launcher + python worker)
-GATEWAY_PIDS=$(pgrep -f "sift-gateway" 2>/dev/null || true)
-if [[ -n "$GATEWAY_PIDS" ]]; then
-    info "Killing gateway PIDs: $GATEWAY_PIDS"
-    echo "$GATEWAY_PIDS" | xargs kill 2>/dev/null || true
-    sleep 3
+# install.sh ships the gateway as a systemd --user service that runs the venv
+# binary directly (.venv/bin/sift-gateway). Prefer restarting that unit so we
+# match the production service path; fall back to launching the venv binary
+# directly only if the unit is absent.
+if systemctl --user list-unit-files sift-gateway.service >/dev/null 2>&1 \
+   && systemctl --user cat sift-gateway.service >/dev/null 2>&1; then
+    systemctl --user restart sift-gateway.service \
+        && info "Restarted sift-gateway.service (systemd --user)." \
+        || info "WARNING: systemctl --user restart sift-gateway.service failed."
+else
+    info "No sift-gateway.service unit found — falling back to direct venv binary."
+    GATEWAY_PIDS=$(pgrep -f "sift-gateway" 2>/dev/null || true)
+    if [[ -n "$GATEWAY_PIDS" ]]; then
+        info "Killing gateway PIDs: $GATEWAY_PIDS"
+        echo "$GATEWAY_PIDS" | xargs kill 2>/dev/null || true
+        sleep 2
+    fi
+    GW_BIN=""
+    for cand in "${UV_PROJECT}/.venv/bin/sift-gateway" "${HOME}/sift-mcps/.venv/bin/sift-gateway"; do
+        [[ -x "$cand" ]] && { GW_BIN="$cand"; break; }
+    done
+    [[ -n "$GW_BIN" ]] || die "Could not find .venv/bin/sift-gateway. Re-run install.sh."
+    nohup "$GW_BIN" --config "$GATEWAY_YAML" \
+        >>"${HOME}/.sift/gateway.log" 2>&1 &
+    info "Gateway launched directly (PID $!). Log: ~/.sift/gateway.log"
 fi
-
-# Locate uv
-[[ -x "$UV" ]] || die "uv not found at $UV. Adjust UV= in this script."
-
-# Restart gateway in background using same invocation observed via ps
-nohup "$UV" run \
-    --project "$UV_PROJECT" \
-    --python "$UV_PYTHON" \
-    --no-managed-python \
-    --no-python-downloads \
-    sift-gateway --config "$GATEWAY_YAML" \
-    >>"${HOME}/.sift/gateway.log" 2>&1 &
-
-GW_PID=$!
-info "Gateway launched (PID $GW_PID). Log: ~/.sift/gateway.log"
 
 # -------------------------------------------------------------------------
 # Step 4: Wait for health

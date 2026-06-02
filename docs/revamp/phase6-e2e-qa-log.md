@@ -1,0 +1,81 @@
+# Phase 6 GATE — live e2e QA log
+
+> Structured ledger for the MVP-completion run (full add-on install + ROCBA e2e on the
+> live VM, 192.168.122.81). Append as you go; triage at the end of each stage; fix every
+> **blocker/major** before advancing and re-run the affected stage.
+
+## Framing (do not drift)
+
+The **SIFT Protocol Gateway (SPG)** *is* the product: core + gateway + portal + the agent's
+in-process MCP server. It is complete on its own (`install.sh --core-only`). OpenCTI,
+OpenSearch, windows-triage, and forensic-rag are **external, independent, optional** add-on
+backends — *reference implementations* of the SIFT MCP Backend Contract. An operator runs
+any subset (including none) or brings their own conformant backend. There is exactly **one**
+integration door for all of them: point the portal at a `sift-backend.json` manifest →
+validate against the spec → register → hot-reload. The core never special-cases a backend.
+
+## Run metadata
+
+| | |
+|---|---|
+| VM | 192.168.122.81 (sansforensics / forensics) |
+| Branch / commit | revamp/spg-v1 @ _(fill at close)_ |
+| Evidence set | ROCBA (23 GB `.e01` + 19 GB RAM) |
+| Service token | _(record `sift_svc_*`, redacted, at close)_ |
+| Case path | _(fill)_ |
+
+## Severity scale
+
+`blocker` = stops the gate · `major` = wrong behavior, must fix before MVP · `minor` =
+works but rough · `cosmetic` = wording/UX nit.
+
+---
+
+## Table 1 — Tool inventory & definition review
+
+One row per advertised tool. "Description verdict" = is the tool's description/schema clear
+and correct *for an autonomous DFIR agent* (OK / vague / misleading). "Call test" = result
+of invoking it once on a sealed case via Claude Code.
+
+| Tool | Backend / namespace | Description verdict | inputSchema sanity | Call test | Notes |
+|------|---------------------|---------------------|--------------------|-----------|-------|
+| _(core tools — fill from `tools/list` at Stage 2)_ | sift-core | | | | |
+| _(add-on tools — fill per backend at Stage 3/4)_ | | | | | |
+
+---
+
+## Table 2 — Defect ledger
+
+| ID | Area | Severity | Repro | Expected vs actual | Root-cause hypothesis | Remediation status | Retest |
+|----|------|----------|-------|--------------------|-----------------------|--------------------|--------|
+| _(none yet)_ | | | | | | | |
+
+Area ∈ { install · core · add-on · portal · agent-tool · security }.
+
+---
+
+## Pre-run notes (Stage 0, local — recorded before touching the VM)
+
+- **Scripts:** added source-guard to `install.sh` (reusable as a function library); hardened
+  `scripts/reset-vm-test.sh` to restart via `systemctl --user` (was stale `nohup uv run`);
+  added `scripts/setup-addon.sh` (optional add-on provisioning + env echo + generic
+  register-payload emitter; registers nothing, edits no config).
+- **OpenSearch `requires` string** (`https://localhost:9200`) vs runtime `http://127.0.0.1:9200`:
+  **verified benign** — `Gateway.evaluate_requirement` (server.py:247) does a plain TCP
+  connect to host:port (explicit `:9200`), so scheme and `localhost`↔`127.0.0.1` don't
+  matter. No change made.
+- **Offline manifest probe:** `probe_backends.py --manifest-dir packages --skip-mcp` →
+  all 4 backends conform.
+- **setup-addon.sh payload smoke:** emits valid `{name, config{type,command,args,
+  manifest_path,enabled}}` with explicit `manifest_path` — the same shape an external backend
+  submits.
+
+## Stage checklist (tick as completed live)
+
+- [ ] **Stage 1** — `install.sh --uninstall --purge-data -y` → `install.sh --core-only`; healthy, 19 core tools, 0 add-on tools.
+- [ ] **Stage 2** — portal first-run; F-A blocks pre-seal; tool-definition review (Table 1); `phase2_gate_test.py` 14/14.
+- [ ] **Stage 3** — `setup-addon.sh` per backend → portal validate→register→hot-reload; `tools/list` namespaced; `environment_summary` health; `requires[]` gating; live `probe_backends.py`; non-conformant manifest → 422, no write.
+- [ ] **Stage 4** — Claude Code MCP wired to `https://192.168.122.81:4508/mcp/`; call each tool once (Table 1).
+- [ ] **Stage 5** — ROCBA: create case → copy evidence → seal → full agent loop → examiner commit → signed report.
+- [ ] **Stage 6** — invariants: F-A corrupt-evidence; R-B jail; executor deny-floor/traversal/output-cap; R-core-survives (disable add-on); R-roles (portal rejects agent token).
+- [ ] **Stage 7** — all blocker/major fixed + retested; gate ticked in `revamp-tasks.md`; Session Log appended.

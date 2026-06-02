@@ -1300,4 +1300,10 @@ main() {
   print_summary
 }
 
-main "$@"
+# Run main() only when executed directly. When sourced (e.g. by
+# scripts/setup-addon.sh) this file acts as a function library: sourcing it
+# defines the provisioning functions and resolves the path vars without
+# kicking off an install.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
