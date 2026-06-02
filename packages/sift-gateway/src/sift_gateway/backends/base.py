@@ -12,9 +12,10 @@ class MCPBackend(ABC):
     It may be a local subprocess (stdio) or a remote HTTP server.
     """
 
-    def __init__(self, name: str, config: dict):
+    def __init__(self, name: str, config: dict, manifest: dict | None = None):
         self.name = name
         self.config = config
+        self.manifest = manifest
         self._started = False
         self._instructions: str | None = None
         self.last_tool_call: float = 0.0  # time.monotonic() of last activity

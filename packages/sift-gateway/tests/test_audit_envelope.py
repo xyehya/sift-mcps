@@ -76,6 +76,7 @@ class TestExtractRequestContext:
             "role": "agent",
             "token_id": "abc123ef",
             "source_ip": "10.0.0.1",
+            "identity": None,
         }
 
     def test_null_request_returns_safe_defaults(self):

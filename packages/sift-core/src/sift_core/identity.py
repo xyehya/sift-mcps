@@ -78,9 +78,6 @@ def get_examiner_identity(flag_override: str | None = None) -> dict:
     return _result(os_user, "os_user")
 
 
-get_analyst_identity = get_examiner_identity
-
-
 def warn_if_unconfigured(identity: dict) -> None:
     if identity["examiner_source"] == "os_user":
         print(

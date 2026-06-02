@@ -128,14 +128,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
             or is_portal_static
             or path.startswith("/portal/")  # portal sub-app owns its own auth
         ):
+            request.state.identity = None
             request.state.examiner = None
             request.state.role = None
             return await call_next(request)
 
         # If no api_keys configured, auth is disabled (single-user mode)
         if not self.api_keys:
-            request.state.examiner = "anonymous"
-            request.state.role = "examiner"
+            from sift_gateway.identity import resolve_identity
+            identity = resolve_identity(None, self.api_keys, source_ip=request.client.host if request.client else "unknown", auth_surface="rest")
+            request.state.identity = identity
+            request.state.examiner = identity.principal
+            request.state.role = identity.role
+            request.state.token_id = identity.token_id
+            request.state.source_ip = identity.source_ip
             return await call_next(request)
 
         # Extract bearer token
@@ -148,16 +154,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         token = auth_header[7:].strip()
 
-        key_info = verify_api_key(token, self.api_keys)
-        if key_info is None:
+        from sift_gateway.identity import resolve_identity
+        identity = resolve_identity(token, self.api_keys, source_ip=request.client.host if request.client else "unknown", auth_surface="rest")
+        if identity is None:
             logger.warning("AuthMiddleware: rejected invalid or expired token")
             return JSONResponse(
                 {"error": "Invalid API key"},
                 status_code=403,
             )
 
-        request.state.examiner = key_info.get("examiner", key_info.get("analyst", "unknown"))
-        request.state.role = key_info.get("role", "examiner")
+        request.state.identity = identity
+        request.state.examiner = identity.principal
+        request.state.role = identity.role
+        request.state.token_id = identity.token_id
+        request.state.source_ip = identity.source_ip
         return await call_next(request)
 
 

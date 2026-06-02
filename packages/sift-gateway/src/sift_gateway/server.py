@@ -10,7 +10,6 @@ import anyio
 from mcp.types import TextContent, Tool
 from sift_common.audit import AuditWriter
 from sift_core.agent_tools import (
-    accepts_analyst_override as core_accepts_analyst_override,
     call_core_tool,
     core_tool_names,
     core_tool_specs,
@@ -102,7 +101,6 @@ from sift_gateway.backends.http_backend import HttpMCPBackend
 from sift_gateway.config import apply_case_env, apply_execute_security_env
 from sift_gateway.health import health_routes
 from sift_gateway.mcp_endpoint import (
-    ANALYST_TOOLS,
     MCPAuthASGIApp,
     create_backend_mcp_server,
     create_mcp_server,
@@ -136,16 +134,19 @@ class Gateway:
         self._reload_event = asyncio.Event()
         self._pending_backends: dict[str, dict] = {}
         self._audit = AuditWriter(mcp_name="sift-gateway")
+        self._available_backends: set[str] = set()
+
+        # Register grounding reference provider
+        from sift_core.case_manager import set_reference_backend_provider
+        set_reference_backend_provider(self.get_reference_backends)
 
         # Create backend instances from config
         backends_config = config.get("backends", {})
         for name, backend_conf in backends_config.items():
-            if name in _RETIRED_CORE_BACKENDS:
-                logger.info(
-                    "Core backend %s is retired; exposing its core tools in-process",
-                    name,
+            if name in _RETIRED_CORE_BACKENDS or name == "sift-core":
+                raise ValueError(
+                    f"Core backend {name} is not allowed as a configured subprocess/add-on backend"
                 )
-                continue
             if not backend_conf.get("enabled", True):
                 logger.info("Backend %s is disabled, skipping", name)
                 continue
@@ -239,61 +240,195 @@ class Gateway:
         await self.start()
 
 
+    def evaluate_requirement(self, req: str) -> bool:
+        """Evaluate a declared backend requirement."""
+        import os
+        import re
+        import shutil
+        
+        req = req.strip()
+        if not req:
+            return True
+            
+        if req.lower() == "docker":
+            return shutil.which("docker") is not None
+            
+        if req.lower().startswith("ram:"):
+            try:
+                total_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+                total_gb = total_bytes / (1024 ** 3)
+            except Exception:
+                total_gb = 16.0
+                
+            match = re.match(r"ram:(\d+(?:\.\d+)?)\s*(gb|g|mb|m)?", req, re.IGNORECASE)
+            if match:
+                val = float(match.group(1))
+                unit = (match.group(2) or "gb").lower()
+                required_gb = val if "g" in unit else val / 1024
+                return total_gb >= required_gb
+            return True
+            
+        if req.lower().startswith("env:"):
+            var_name = req[4:].strip()
+            if var_name not in os.environ:
+                return False
+            val = os.environ[var_name]
+            if val.startswith("/") or val.startswith("./") or val.startswith("../"):
+                if not os.path.exists(val):
+                    return False
+            return True
+            
+        host = ""
+        port = 0
+        if req.startswith(("http://", "https://")):
+            from urllib.parse import urlparse
+            try:
+                parsed = urlparse(req)
+                host = parsed.hostname or ""
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            except Exception:
+                pass
+        elif ":" in req:
+            parts = req.rsplit(":", 1)
+            host = parts[0]
+            try:
+                port = int(parts[1])
+            except ValueError:
+                pass
+                
+        if host and port:
+            import socket
+            try:
+                with socket.create_connection((host, port), timeout=2.0):
+                    return True
+            except Exception:
+                return False
+
+        # Fail closed: an unrecognized requirement string is treated as unmet so
+        # a typo'd `requires[]` entry gates the backend loudly instead of
+        # silently passing. The backend is omitted from tools/list (core stays
+        # up); the operator sees the warning and fixes the manifest.
+        logger.warning(
+            "Unknown requirement format: %r — treating as UNMET (backend gated).", req
+        )
+        return False
+
+    def get_reference_backends(self) -> list[str]:
+        res = []
+        for name in self._available_backends:
+            backend = self.backends.get(name)
+            manifest = getattr(backend, "manifest", None) if backend else None
+            if manifest:
+                provides = manifest.get("capabilities", {}).get("provides", [])
+                if "reference" in provides:
+                    res.append(name)
+        return res
+
     async def _build_tool_map(self) -> None:
         """Build a map from tool names to backend names.
 
-        If two backends expose the same tool name, both get prefixed
-        with their backend name: {backend}__toolname.
+        If two backends expose the same tool name, raises ValueError.
         """
         raw_map: dict[str, list[str]] = {}  # tool_name -> [backend_names]
         tool_objects: dict[str, Tool] = {}  # tool_name -> Tool
+        self._available_backends.clear()
 
         for name, backend in self.backends.items():
-            if not backend.started:
+            is_available = True
+            manifest = getattr(backend, "manifest", None)
+            if manifest:
+                reqs = manifest.get("capabilities", {}).get("requires", [])
+                for r in reqs:
+                    if not self.evaluate_requirement(r):
+                        logger.warning(
+                            "Backend %s requires %r which is not met. Gating this backend.",
+                            name,
+                            r,
+                        )
+                        is_available = False
+                        break
+            if not is_available:
                 continue
-            try:
-                tools = await asyncio.wait_for(backend.list_tools(), timeout=15.0)
-                for tool in tools:
-                    raw_map.setdefault(tool.name, []).append(name)
-                    tool_objects[tool.name] = tool
-            except asyncio.TimeoutError:
-                logger.error("Timeout listing tools for backend %s", name)
-            except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
-                logger.error("Failed to list tools for %s: %s", name, exc)
+
+            self._available_backends.add(name)
+
+            if backend.started:
+                try:
+                    tools = await asyncio.wait_for(backend.list_tools(), timeout=15.0)
+                    declared_names = set()
+                    if manifest:
+                        declared_names = {t["name"] for t in manifest.get("tools", [])}
+                    for tool in tools:
+                        if manifest:
+                            ns = manifest.get("namespace", "")
+                            if ns and not tool.name.startswith(f"{ns}_"):
+                                raise ValueError(
+                                    f"Tool '{tool.name}' from backend '{name}' does not start with declared namespace prefix '{ns}_'"
+                                )
+                            if tool.name not in declared_names:
+                                raise ValueError(
+                                    f"Tool '{tool.name}' from backend '{name}' is not declared in the manifest 'tools' block"
+                                )
+                        else:
+                            logger.warning(
+                                "Backend '%s' has no manifest. Gracefully degrading namespace enforcement.",
+                                name,
+                            )
+                        raw_map.setdefault(tool.name, []).append(name)
+                        tool_objects[tool.name] = tool
+                except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
+                    if isinstance(exc, ValueError):
+                        raise
+                    logger.error("Failed to list tools for %s: %s", name, exc)
+            else:
+                if manifest:
+                    ns = manifest.get("namespace", "")
+                    for t_decl in manifest.get("tools", []):
+                        t_name = t_decl["name"]
+                        if ns and not t_name.startswith(f"{ns}_"):
+                            raise ValueError(
+                                f"Tool '{t_name}' declared in manifest for backend '{name}' does not start with declared namespace prefix '{ns}_'"
+                            )
+                        tool_obj = Tool(
+                            name=t_name,
+                            description=t_decl.get("description", ""),
+                            inputSchema={"type": "object", "properties": {}},
+                            annotations={"readOnlyHint": True} if t_decl.get("read_only") or t_decl.get("readOnlyHint") else None,
+                        )
+                        raw_map.setdefault(t_name, []).append(name)
+                        tool_objects[t_name] = tool_obj
+                else:
+                    logger.warning(
+                        "Backend '%s' is not started and has no manifest. Tools cannot be discovered.",
+                        name,
+                    )
 
         new_map: dict[str, str] = {}
         for tool_name, backend_names in raw_map.items():
-            if len(backend_names) == 1:
-                new_map[tool_name] = backend_names[0]
-            else:
-                # Collision: prefix with backend name
-                logger.warning(
-                    "Tool name collision for %r across backends: %s — prefixing",
-                    tool_name,
-                    backend_names,
+            if len(backend_names) > 1:
+                raise ValueError(
+                    f"Tool name collision for {tool_name!r} across backends: {backend_names}"
                 )
-                for bname in backend_names:
-                    prefixed = f"{bname}__{tool_name}"
-                    new_map[prefixed] = bname
+            if tool_name in core_tool_names():
+                raise ValueError(
+                    f"Tool name {tool_name!r} from backend {backend_names[0]} collides with in-process core tool"
+                )
+            new_map[tool_name] = backend_names[0]
 
         self._tool_map = new_map  # atomic reference swap
-        # Cache Tool objects for get_tools_list fallback
         new_cache: dict[str, Tool] = {}
         for mapped_name in new_map:
-            original = (
-                mapped_name.split("__", 1)[1] if "__" in mapped_name else mapped_name
-            )
-            if original in tool_objects:
+            if mapped_name in tool_objects:
                 new_cache[mapped_name] = Tool(
                     name=mapped_name,
-                    title=tool_objects[original].title,
-                    description=tool_objects[original].description or "",
-                    inputSchema=tool_objects[original].inputSchema,
-                    outputSchema=tool_objects[original].outputSchema,
-                    icons=tool_objects[original].icons,
-                    annotations=tool_objects[original].annotations,
-                    meta=tool_objects[original].meta,
-                    execution=tool_objects[original].execution,
+                    title=tool_objects[mapped_name].title,
+                    description=tool_objects[mapped_name].description or "",
+                    inputSchema=tool_objects[mapped_name].inputSchema,
+                    outputSchema=tool_objects[mapped_name].outputSchema,
+                    icons=tool_objects[mapped_name].icons,
+                    annotations=tool_objects[mapped_name].annotations,
+                    meta=tool_objects[mapped_name].meta,
+                    execution=tool_objects[mapped_name].execution,
                 )
         self._tool_cache = new_cache
 
@@ -456,19 +591,17 @@ class Gateway:
     async def get_tools_list(self) -> list[Tool]:
         """Return MCP ``Tool`` objects for all aggregated tools.
 
-        Collision-prefixed names are used where applicable.  Shared by
-        both the REST and MCP surfaces.
+        Shared by both the REST and MCP surfaces.
         """
-        # Collect raw Tool objects from each backend
         by_name: dict[str, Tool] = {}
-        for backend in self.backends.values():
-            if not backend.started:
-                continue
-            try:
-                for t in await backend.list_tools():
-                    by_name[t.name] = t
-            except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
-                logger.error("get_tools_list: backend error: %s", exc)
+        for name in self._available_backends:
+            backend = self.backends[name]
+            if backend.started:
+                try:
+                    for t in await backend.list_tools():
+                        by_name[t.name] = t
+                except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
+                    logger.error("get_tools_list: backend error: %s", exc)
 
         tools: list[Tool] = []
         for spec in core_tool_specs():
@@ -481,13 +614,7 @@ class Gateway:
                 )
             )
         for mapped_name in self._tool_map:
-            # Strip prefix to find the original tool object
-            if "__" in mapped_name:
-                original = mapped_name.split("__", 1)[1]
-            else:
-                original = mapped_name
-
-            src = by_name.get(original)
+            src = by_name.get(mapped_name)
             if src is None:
                 # Use cached Tool from _build_tool_map if available
                 cached = self._tool_cache.get(mapped_name)
@@ -535,9 +662,6 @@ class Gateway:
             RuntimeError: If the backend is not started.
         """
         if name in core_tool_names():
-            arguments = dict(arguments or {})
-            if examiner and core_accepts_analyst_override(name):
-                arguments["analyst_override"] = examiner
             logger.info(
                 "Routing tool %s -> in-process sift-core (examiner=%s)",
                 name,
@@ -562,37 +686,24 @@ class Gateway:
         if not backend.started:
             await self.ensure_backend_started(backend_name)
 
-        # If the tool was prefixed due to collision, strip the prefix for the actual call
-        actual_name = name
-        prefix = f"{backend_name}__"
-        if name.startswith(prefix):
-            actual_name = name[len(prefix) :]
-
-        # Inject examiner identity into tools that accept analyst_override.
-        # Always overwrite to prevent identity spoofing.
-        # Role-based filtering (e.g., restricting certain tools by role) is
-        # deferred — currently all authenticated users can call any tool.
-        if examiner:
-            if actual_name in ANALYST_TOOLS:
-                arguments = {**arguments, "analyst_override": examiner}
-
         backend.last_tool_call = time.monotonic()
 
         logger.info(
             "Routing tool %s -> backend %s (examiner=%s)",
-            actual_name,
+            name,
             backend_name,
             examiner,
         )
+
         _start = time.monotonic()
         try:
             result = await asyncio.wait_for(
-                backend.call_tool(actual_name, arguments), timeout=300.0
+                backend.call_tool(name, arguments), timeout=300.0
             )
         except asyncio.TimeoutError as exc:
             logger.error(
                 "Tool call %s on backend %s timed out after 300s",
-                actual_name,
+                name,
                 backend_name,
             )
             if isinstance(backend, HttpMCPBackend):
@@ -600,7 +711,7 @@ class Gateway:
                 try:
                     await asyncio.to_thread(
                         self._audit.log,
-                        tool=actual_name,
+                        tool=name,
                         params=_truncate_params(arguments),
                         result_summary="timeout after 300s",
                         source="gateway_proxy",
@@ -609,7 +720,7 @@ class Gateway:
                     )
                 except Exception:
                     pass
-            raise RuntimeError(f"Tool call {actual_name} timed out after 300s") from exc
+            raise RuntimeError(f"Tool call {name} timed out after 300s") from exc
 
         # Centralized audit for HTTP backends (stdio backends audit themselves)
         if isinstance(backend, HttpMCPBackend):
@@ -617,7 +728,7 @@ class Gateway:
             try:
                 await asyncio.to_thread(
                     self._audit.log,
-                    tool=actual_name,
+                    tool=name,
                     params=_truncate_params(arguments),
                     result_summary=_summarize_result(result),
                     source="gateway_proxy",
@@ -629,7 +740,7 @@ class Gateway:
                     },
                 )
             except Exception as exc:
-                logger.warning("Gateway audit failed for %s: %s", actual_name, exc)
+                logger.warning("Gateway audit failed for %s: %s", name, exc)
 
         return result
 

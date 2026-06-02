@@ -68,7 +68,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
     @server.tool()
     def record_finding(
         finding: dict,
-        analyst_override: str = "",
         supporting_commands: list[dict] | None = None,
         artifacts: list[dict] | None = None,
     ) -> dict:
@@ -116,7 +115,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         calls may be lost to context compaction.
 
         Requires human approval via 'sift approve'."""
-        _validate_str_length(analyst_override, "analyst_override", _MAX_SHORT)
         if isinstance(finding, dict):
             _validate_str_length(finding.get("title"), "title", _MAX_TITLE)
             _validate_str_length(finding.get("observation"), "observation", _MAX_TEXT)
@@ -156,7 +154,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         try:
             result = manager.record_finding(
                 finding,
-                examiner_override=analyst_override,
                 supporting_commands=supporting_commands,
                 artifacts=artifacts,
                 audit=audit,
@@ -196,7 +193,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         return result
 
     @server.tool()
-    def record_timeline_event(event: dict, analyst_override: str = "") -> dict:
+    def record_timeline_event(event: dict) -> dict:
         """Stage timeline event as DRAFT. Requires human approval via 'sift approve'.
 
         Required fields in event dict:
@@ -211,13 +208,12 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         - event_type: process, network, file, registry, auth, persistence, lateral, execution, or other
         - artifact_ref: deduplication hint (e.g. "prefetch:EVIL.EXE-{hash}", "evtx:Security:4624:12345")
         """
-        _validate_str_length(analyst_override, "analyst_override", _MAX_SHORT)
         if isinstance(event, dict):
             _validate_str_length(event.get("description"), "description", _MAX_TEXT)
             _validate_str_length(event.get("source"), "source", _MAX_TITLE)
         try:
             result = manager.record_timeline_event(
-                event, examiner_override=analyst_override
+                event
             )
         except Exception as e:
             logger.error("record_timeline_event failed: %s", e)
@@ -656,19 +652,16 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         assignee: str = "",
         priority: str = "medium",
         related_findings: list[str] | None = None,
-        analyst_override: str = "",
     ) -> dict:
         """Create a TODO item for the investigation. Priority: high/medium/low."""
         _validate_str_length(description, "description", _MAX_TEXT)
         _validate_str_length(assignee, "assignee", _MAX_SHORT)
-        _validate_str_length(analyst_override, "analyst_override", _MAX_SHORT)
         try:
             result = manager.add_todo(
                 description,
                 assignee,
                 priority,
                 related_findings,
-                examiner_override=analyst_override,
             )
         except Exception as e:
             logger.error("add_todo failed: %s", e)
@@ -696,12 +689,10 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         note: str = "",
         assignee: str = "",
         priority: str = "",
-        analyst_override: str = "",
     ) -> dict:
         """Update a TODO: change status, add note, reassign, reprioritize."""
         _validate_str_length(note, "note", _MAX_TEXT)
         _validate_str_length(assignee, "assignee", _MAX_SHORT)
-        _validate_str_length(analyst_override, "analyst_override", _MAX_SHORT)
         try:
             result = manager.update_todo(
                 todo_id,
@@ -709,7 +700,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 note,
                 assignee,
                 priority,
-                examiner_override=analyst_override,
             )
         except Exception as e:
             logger.error("update_todo failed: %s", e)
@@ -721,10 +711,10 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             result["warning"] = "Audit write failed — action not recorded"
         return result
 
-    def complete_todo(todo_id: str, analyst_override: str = "") -> dict:
+    def complete_todo(todo_id: str) -> dict:
         """Mark a TODO as completed."""
         try:
-            result = manager.complete_todo(todo_id, examiner_override=analyst_override)
+            result = manager.complete_todo(todo_id)
         except Exception as e:
             logger.error("complete_todo failed: %s", e)
             return {"error": str(e)}
@@ -745,7 +735,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         status: str = "",
         note: str = "",
         related_findings: list[str] | None = None,
-        analyst_override: str = "",
     ):
         """Create, list, update, or complete investigation TODOs.
 
@@ -775,7 +764,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 assignee=assignee,
                 priority=priority,
                 related_findings=related_findings,
-                analyst_override=analyst_override,
             )
         if normalized == "list":
             return {
@@ -797,7 +785,6 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                 note=note,
                 assignee=assignee,
                 priority=priority,
-                analyst_override=analyst_override,
             )
         if normalized == "complete":
             if not todo_id:
@@ -806,7 +793,7 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
                     "message": "todo_id is required when action='complete'.",
                     "next_step": "Call manage_todo(action='complete', todo_id='...').",
                 }
-            return complete_todo(todo_id=todo_id, analyst_override=analyst_override)
+            return complete_todo(todo_id=todo_id)
         return {
             "error": "unsupported_todo_action",
             "message": "action must be one of: add, list, update, complete",

@@ -10,7 +10,6 @@ in the Starlette app.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -35,13 +34,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from sift_gateway.audit_helpers import _extract_audit_id, _summarize_result, _truncate_params
-from sift_gateway.auth import verify_api_key
 from sift_gateway.evidence_gate import (
     build_block_response,
-    build_unsealed_warning,
     check_evidence_gate,
-    is_violation,
 )
+from sift_gateway.identity import _hash_token  # re-exported for callers/tests
 from sift_gateway.rate_limit import check_examiner_rate_limit, check_rate_limit
 from sift_gateway.response_guard import get_override_status, is_override_active, redact_tool_result
 
@@ -59,20 +56,51 @@ _BACKEND_INSTRUCTIONS: dict[str, str] = {
     "opensearch-mcp": OPENSEARCH,
 }
 
-# Tools that accept analyst_override for identity injection.
-ANALYST_TOOLS: frozenset[str] = frozenset(
-    {
-        "record_action",
-        "record_finding",
-        "record_timeline_event",
-        "manage_todo",
-        "log_reasoning",
-        "log_external_action",
-    }
-)
-
 # Maximum MCP request body size (10 MB)
 _MAX_REQUEST_BYTES = 10 * 1024 * 1024
+
+
+_LAST_429_AUDIT: dict[str, float] = {}
+_429_AUDIT_INTERVAL = 5.0  # limit to one audit log entry per 5 seconds per key/IP
+
+def log_rate_limit_violation(gateway: Any, key: str, client_ip: str, identity: Any = None):
+    now = time.monotonic()
+    last_log = _LAST_429_AUDIT.get(key, 0.0)
+    if now - last_log >= _429_AUDIT_INTERVAL:
+        _LAST_429_AUDIT[key] = now
+        extra = {
+            "source_ip": client_ip,
+            "status": "rate_limited",
+        }
+        if identity:
+            extra.update({
+                "principal": identity.principal,
+                "principal_type": identity.principal_type,
+                "agent_id": identity.agent_id,
+                "created_by": identity.created_by,
+                "auth_surface": identity.auth_surface,
+                "role": identity.role,
+                "token_id": identity.token_id,
+            })
+        else:
+            extra.update({
+                "principal": "anonymous",
+                "principal_type": "user",
+                "auth_surface": "mcp",
+                "role": "unknown",
+            })
+        
+        if gateway and hasattr(gateway, "_audit"):
+            try:
+                gateway._audit.log(
+                    tool="rate_limit",
+                    params={},
+                    result_summary="rate_limited",
+                    source="gateway_rate_limiter",
+                    extra=extra
+                )
+            except Exception as exc:
+                logger.warning("Failed to write rate limit audit: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -96,10 +124,12 @@ class MCPAuthASGIApp:
         api_keys: dict[str, dict] | None = None,
         allowed_origins: set[str] | None = None,
         examiner_calls_per_minute: int = 120,
+        gateway: Any | None = None,
     ):
         self.session_manager = session_manager
         self.api_keys = api_keys or {}
         self.allowed_origins = allowed_origins or set()
+        self.gateway = gateway
         # Initialize the examiner rate limiter singleton with configured limit
         from sift_gateway.rate_limit import get_examiner_rate_limiter
         get_examiner_rate_limiter(limit=examiner_calls_per_minute)
@@ -119,6 +149,7 @@ class MCPAuthASGIApp:
             if forwarded:
                 client_ip = forwarded.split(",")[0].strip()
         if not check_rate_limit(client_ip):
+            log_rate_limit_violation(self.gateway, f"ip:{client_ip}", client_ip)
             resp = JSONResponse(
                 {"error": "Rate limit exceeded"},
                 status_code=429,
@@ -153,13 +184,17 @@ class MCPAuthASGIApp:
                 await resp(scope, receive, send)
                 return
 
+        from sift_gateway.identity import resolve_identity
         if not self.api_keys:
             # No keys configured — single-user / anonymous mode
-            scope["state"]["examiner"] = "anonymous"
-            scope["state"]["role"] = "examiner"
-            scope["state"]["source_ip"] = client_ip
-            scope["state"]["token_id"] = None
+            identity = resolve_identity(None, self.api_keys, source_ip=client_ip, auth_surface="mcp")
+            scope["state"]["identity"] = identity
+            scope["state"]["examiner"] = identity.principal
+            scope["state"]["role"] = identity.role
+            scope["state"]["source_ip"] = identity.source_ip
+            scope["state"]["token_id"] = identity.token_id
             if not check_examiner_rate_limit("anonymous"):
+                log_rate_limit_violation(self.gateway, "examiner:anonymous", client_ip, identity)
                 resp = JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
                 await resp(scope, receive, send)
                 return
@@ -176,62 +211,85 @@ class MCPAuthASGIApp:
             await resp(scope, receive, send)
             return
 
-        key_info = verify_api_key(token, self.api_keys)
-        if key_info is None:
+        identity = resolve_identity(token, self.api_keys, source_ip=client_ip, auth_surface="mcp")
+        if identity is None:
             logger.warning("MCP endpoint: rejected invalid or expired token")
             resp = JSONResponse({"error": "Invalid API key"}, status_code=403)
             await resp(scope, receive, send)
             return
 
-        examiner = key_info.get("examiner", key_info.get("analyst", "unknown"))
-        role = key_info.get("role", "examiner")
-        if role == "readonly":
+        if identity.role == "readonly":
             resp = JSONResponse(
                 {"error": "Readonly role cannot call MCP tools"},
                 status_code=403,
             )
             await resp(scope, receive, send)
             return
-        scope["state"]["examiner"] = examiner
-        scope["state"]["role"] = role
-        scope["state"]["source_ip"] = client_ip
-        scope["state"]["token_id"] = _hash_token(token)
+        scope["state"]["identity"] = identity
+        scope["state"]["examiner"] = identity.principal
+        scope["state"]["role"] = identity.role
+        scope["state"]["source_ip"] = identity.source_ip
+        scope["state"]["token_id"] = identity.token_id
 
         # Per-examiner post-auth rate limit
-        if not check_examiner_rate_limit(examiner):
+        if not check_examiner_rate_limit(identity.principal):
+            log_rate_limit_violation(self.gateway, f"examiner:{identity.principal}", client_ip, identity)
             resp = JSONResponse({"error": "Rate limit exceeded"}, status_code=429)
             await resp(scope, receive, send)
             return
 
         await self.session_manager.handle_request(scope, receive, send)
+        return
 
 
-def _hash_token(token: str) -> str:
-    """Return a safe token fingerprint (first 16 hex chars of SHA-256). Never stores raw token."""
-    return hashlib.sha256(token.encode()).hexdigest()[:16]
+def _stamp_identity_extra(extra: dict, identity: Any, examiner: str | None = None) -> dict:
+    """Stamp universal-identity fields (F-F) onto an audit ``extra`` dict.
+
+    When an :class:`Identity` is present, attribution comes from it; otherwise
+    fall back to the flat ``examiner`` (anonymous/single-user mode). Mutates and
+    returns ``extra`` for convenience.
+    """
+    if identity:
+        extra.update({
+            "principal": identity.principal,
+            "principal_type": identity.principal_type,
+            "agent_id": identity.agent_id,
+            "created_by": identity.created_by,
+            "auth_surface": identity.auth_surface,
+        })
+    else:
+        extra.update({
+            "principal": examiner or "anonymous",
+            "principal_type": "user",
+            "auth_surface": "mcp",
+        })
+    return extra
 
 
 def _extract_request_context(server: Server) -> dict:
-    """Pull examiner, role, token_id, and source_ip from the current MCP request context."""
-    result: dict = {"examiner": None, "role": "unknown", "token_id": None, "source_ip": None}
+    """Pull examiner, role, token_id, source_ip, and identity from the current MCP request context."""
+    result: dict = {"examiner": None, "role": "unknown", "token_id": None, "source_ip": None, "identity": None}
     try:
         ctx = server.request_context
         request: Request | None = ctx.request
         if request is not None:
             state = request.state
-            examiner = getattr(state, "examiner", None) or getattr(state, "analyst", None)
-            result["examiner"] = examiner
-            result["role"] = getattr(state, "role", "unknown")
-            result["token_id"] = getattr(state, "token_id", None)
-            result["source_ip"] = getattr(state, "source_ip", None)
+            identity = getattr(state, "identity", None)
+            result["identity"] = identity
+            if identity is not None:
+                result["examiner"] = identity.principal
+                result["role"] = identity.role
+                result["token_id"] = identity.token_id
+                result["source_ip"] = identity.source_ip
+            else:
+                examiner = getattr(state, "examiner", None) or getattr(state, "analyst", None)
+                result["examiner"] = examiner
+                result["role"] = getattr(state, "role", "unknown")
+                result["token_id"] = getattr(state, "token_id", None)
+                result["source_ip"] = getattr(state, "source_ip", None)
     except LookupError:
         pass
     return result
-
-
-def _extract_examiner(server: Server) -> str | None:
-    """Pull examiner identity from the current MCP request context."""
-    return _extract_request_context(server)["examiner"]
 
 
 def _build_case_context(case_dir_str: str) -> dict | None:
@@ -537,100 +595,59 @@ def create_mcp_server(gateway: Any) -> Server:
     async def _call_tool(name: str, arguments: dict) -> Sequence[TextContent]:
         req_ctx = _extract_request_context(server)
         examiner = req_ctx["examiner"]
+        identity = req_ctx["identity"]
+        _effective_principal = identity.principal if identity else examiner
 
-        # Synthetic gateway tool — aggregates backend health
-        if name == "environment_summary":
-            return await _handle_environment_summary(gateway)
         _start = time.monotonic()
         _status = "ok"
         _backend_audit_id: str | None = None
         _final_contents: list[TextContent] = []
-        _gate_unsealed_warning: str | None = None  # set when read-only tool allowed on UNSEALED
+        _block_audited = False  # gate writes its own richer line; skip the envelope
 
         try:
-            # Evidence chain gate — two-tier:
-            #   Violations (MODIFIED/MISSING/UNREGISTERED/LEDGER_ERROR) block ALL tools.
-            #   UNSEALED blocks non-read-only tools; read-only tools pass through with warning.
+            # Evidence chain gate — binary F-A block-all. Applies to EVERY agent
+            # tool, including the synthetic environment_summary: UNSEALED and
+            # every non-OK status block all agent tools until the examiner
+            # re-seals the chain in the portal.
             case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
             gate = check_evidence_gate(case_dir_str)
             if gate["blocked"]:
+                _status = "blocked"
+                _block_audited = True
                 gate_status = gate["status"]
-                if is_violation(gate_status):
-                    # Hard integrity violation — block everything including read-only
-                    _status = "blocked"
-                    try:
-                        await asyncio.to_thread(
-                            gateway._audit.log,
-                            tool=name,
-                            params={},
-                            result_summary=f"blocked: evidence_chain_{gate_status}",
-                            source="gateway_evidence_gate",
-                            extra={
-                                "examiner": examiner,
-                                "evidence_chain_status": gate_status,
-                                "issues": gate["issues"],
-                                "manifest_version": gate["manifest_version"],
-                            },
-                        )
-                    except Exception as exc:
-                        logger.warning("evidence_gate: audit write failed: %s", exc)
-                    _final_contents = _append_case_context(
-                        [TextContent(type="text", text=json.dumps(build_block_response(name, gate), indent=2))],
-                        case_dir_str,
+                extra_fields = _stamp_identity_extra({
+                    "role": req_ctx["role"],
+                    "token_id": req_ctx["token_id"],
+                    "source_ip": req_ctx["source_ip"],
+                    "evidence_chain_status": gate_status,
+                    "issues": gate["issues"],
+                    "manifest_version": gate["manifest_version"],
+                }, identity, examiner)
+
+                try:
+                    await asyncio.to_thread(
+                        gateway._audit.log,
+                        tool=name,
+                        params={},
+                        result_summary=f"blocked: evidence_chain_{gate_status}",
+                        source="gateway_evidence_gate",
+                        extra=extra_fields,
+                        examiner_override=_effective_principal,
                     )
-                    return _final_contents
-                else:
-                    # UNSEALED — check whether this tool is read-only
-                    tool_obj = getattr(gateway, "_tool_cache", {}).get(name)
-                    _is_read_only = (
-                        tool_obj is not None
-                        and getattr(tool_obj, "annotations", None) is not None
-                        and getattr(tool_obj.annotations, "readOnlyHint", None) is True
-                    )
-                    if _is_read_only:
-                        # Allow through — inject warning into response
-                        _gate_unsealed_warning = json.dumps(
-                            {"_agentir_context": build_unsealed_warning(name, gate)}, indent=2
-                        )
-                        try:
-                            await asyncio.to_thread(
-                                gateway._audit.log,
-                                tool=name,
-                                params={},
-                                result_summary="allowed_readonly_unsealed",
-                                source="gateway_evidence_gate",
-                                extra={
-                                    "examiner": examiner,
-                                    "evidence_chain_status": gate_status,
-                                    "read_only_allowed": True,
-                                },
-                            )
-                        except Exception as exc:
-                            logger.warning("evidence_gate: audit write failed: %s", exc)
-                    else:
-                        # Non-read-only tool blocked on UNSEALED
-                        _status = "blocked"
-                        try:
-                            await asyncio.to_thread(
-                                gateway._audit.log,
-                                tool=name,
-                                params={},
-                                result_summary=f"blocked: evidence_chain_{gate_status}",
-                                source="gateway_evidence_gate",
-                                extra={
-                                    "examiner": examiner,
-                                    "evidence_chain_status": gate_status,
-                                    "issues": gate["issues"],
-                                    "manifest_version": gate["manifest_version"],
-                                },
-                            )
-                        except Exception as exc:
-                            logger.warning("evidence_gate: audit write failed: %s", exc)
-                        _final_contents = _append_case_context(
-                            [TextContent(type="text", text=json.dumps(build_block_response(name, gate), indent=2))],
-                            case_dir_str,
-                        )
-                        return _final_contents
+                except Exception as exc:
+                    logger.warning("evidence_gate: audit write failed: %s", exc)
+
+                _final_contents = _append_case_context(
+                    [TextContent(type="text", text=json.dumps(build_block_response(name, gate), indent=2))],
+                    case_dir_str,
+                )
+                return _final_contents
+
+            # Synthetic gateway tool — aggregates backend health. Gated above
+            # like any other agent tool; only reached once the chain is OK.
+            if name == "environment_summary":
+                _final_contents = list(await _handle_environment_summary(gateway))
+                return _final_contents
 
             try:
                 result = await gateway.call_tool(name, arguments, examiner=examiner)
@@ -743,50 +760,50 @@ def create_mcp_server(gateway: Any) -> Server:
                     )
                 except Exception as exc:
                     logger.warning("response_guard: audit write failed: %s", exc)
-                # Inject _agentir_context metadata into the first TextContent
+                # Inject _sift_context metadata into the first TextContent
                 if contents:
                     ctx_note = json.dumps({
-                        "_agentir_context": {
+                        "_sift_context": {
                             "secret_warning": warning_names,
                             "redact_override_active": override,
                         }
                     })
                     contents.append(TextContent(type="text", text=ctx_note))
 
-            # Inject evidence gate warning for read-only tools allowed on UNSEALED
-            if _gate_unsealed_warning:
-                contents.append(TextContent(type="text", text=_gate_unsealed_warning))
-
             _final_contents = _append_case_context(contents, case_dir_str)
             return _final_contents
 
         finally:
-            # Gateway transport envelope — one entry per call_tool, every path.
-            # Records WHO called (role, token_id, source_ip) and links to the
-            # backend's own detailed audit entry via backend_audit_id.
+            # Gateway transport envelope — one entry per call_tool, except on a
+            # gate block (the gate already wrote a richer line, so a second
+            # envelope entry would double-count). Records WHO called and links to
+            # the backend's own detailed audit entry via backend_audit_id.
             # Params and result content are NOT logged here — backends own that.
-            elapsed_ms = round((time.monotonic() - _start) * 1000, 1)
-            backend_name = getattr(gateway, "_tool_map", {}).get(name, "unknown")
-            try:
-                await asyncio.to_thread(
-                    gateway._audit.log,
-                    tool=name,
-                    params={},
-                    result_summary=_status,
-                    source="gateway_mcp_envelope",
-                    elapsed_ms=elapsed_ms,
-                    extra={
-                        "examiner": examiner,
+            if not _block_audited:
+                elapsed_ms = round((time.monotonic() - _start) * 1000, 1)
+                backend_name = getattr(gateway, "_tool_map", {}).get(name, "unknown")
+                try:
+                    extra_fields = _stamp_identity_extra({
                         "role": req_ctx["role"],
                         "token_id": req_ctx["token_id"],
                         "source_ip": req_ctx["source_ip"],
                         "backend": backend_name,
                         "status": _status,
                         "backend_audit_id": _backend_audit_id,
-                    },
-                )
-            except Exception as exc:
-                logger.warning("gateway envelope audit write failed for %s: %s", name, exc)
+                    }, identity, examiner)
+
+                    await asyncio.to_thread(
+                        gateway._audit.log,
+                        tool=name,
+                        params={},
+                        result_summary=_status,
+                        source="gateway_mcp_envelope",
+                        elapsed_ms=elapsed_ms,
+                        extra=extra_fields,
+                        examiner_override=_effective_principal,
+                    )
+                except Exception as exc:
+                    logger.warning("gateway envelope audit write failed for %s: %s", name, exc)
 
     return server
 
@@ -821,11 +838,8 @@ def create_backend_mcp_server(gateway: Any, backend_name: str) -> Server:
             await gateway.ensure_backend_started(backend_name)
         backend.last_tool_call = time.monotonic()
 
-        examiner = _extract_examiner(server)
-
-        # Inject examiner identity for analyst tools
-        if examiner and name in ANALYST_TOOLS:
-            arguments = {**arguments, "analyst_override": examiner}
+        req_ctx = _extract_request_context(server)
+        examiner = req_ctx["examiner"]
 
         _start = time.monotonic()
         try:
@@ -874,6 +888,12 @@ def create_backend_mcp_server(gateway: Any, backend_name: str) -> Server:
         if isinstance(backend, HttpMCPBackend):
             elapsed_ms = (time.monotonic() - _start) * 1000
             try:
+                identity = req_ctx["identity"]
+                extra_fields = _stamp_identity_extra({
+                    "backend": backend_name,
+                    "backend_audit_id": _extract_audit_id(result),
+                }, identity, examiner)
+
                 await asyncio.to_thread(
                     gateway._audit.log,
                     tool=name,
@@ -881,10 +901,8 @@ def create_backend_mcp_server(gateway: Any, backend_name: str) -> Server:
                     result_summary=_summarize_result(result),
                     source="gateway_proxy",
                     elapsed_ms=round(elapsed_ms, 1),
-                    extra={
-                        "backend": backend_name,
-                        "backend_audit_id": _extract_audit_id(result),
-                    },
+                    extra=extra_fields,
+                    examiner_override=identity.principal if identity else examiner,
                 )
             except Exception as exc:
                 logger.warning(

@@ -49,8 +49,8 @@ def _make_pinned_tls_factory(cert_path: str):
 class HttpMCPBackend(MCPBackend):
     """Backend that connects to a remote MCP server via Streamable HTTP."""
 
-    def __init__(self, name: str, config: dict):
-        super().__init__(name, config)
+    def __init__(self, name: str, config: dict, manifest: dict | None = None):
+        super().__init__(name, config, manifest)
         self._session: ClientSession | None = None
         self._exit_stack: AsyncExitStack | None = None
         self._tools_cache: list[Tool] | None = None

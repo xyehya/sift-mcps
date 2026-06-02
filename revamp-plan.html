@@ -168,7 +168,7 @@
       <tr><td>(unstated)</td><td><code>case_host_fix</code> is implemented inside <b>opensearch-mcp</b> but its effect is scoped to <em>OpenSearch index/alias state</em>, not global case state. <b>Decision F-D:</b> it stays in opensearch-mcp (renamed <code>opensearch_host_fix</code>) — not a core concern.</td><td><code>opensearch-mcp/src/opensearch_mcp/server.py</code></td></tr>
       <tr><td>(unstated)</td><td><code>get_health</code> (opencti + others) and <code>server_status</code> (windows) collide across backends; today resolved reactively. The namespace rule (§4) fixes this structurally.</td><td>multiple <code>server.py</code></td></tr>
     </tbody></table>
-    <div class="callout"><b>ANALYST_TOOLS (verified):</b> identity is injected for exactly <code>record_action, record_finding, record_timeline_event, manage_todo, log_reasoning, log_external_action</code> (<code>mcp_endpoint.py</code>). Under the contract this list is replaced by the manifest's <code>identity.accepts_analyst_override</code> per tool, and the gateway <b>strips</b> the injected-identity param from the agent-facing schema (the agent must never see a field it cannot set). Identity for an agent token = its <code>agent_id</code> (machine attribution); the authorizing human is the token's <code>created_by</code>, and human accountability attaches at portal DRAFT→approval.</div>
+    <div class="callout"><b>Identity — universal &amp; core-native (decision F-F):</b> today identity is injected as an <code>analyst_override</code> argument for the 6 <code>ANALYST_TOOLS</code> (<code>record_action, record_finding, record_timeline_event, manage_todo, log_reasoning, log_external_action</code>) at three sites in <code>server.py</code>/<code>mcp_endpoint.py</code>. <b>The contract retires that entirely</b> — <code>analyst_override</code> / <code>analyst_identity</code> / <code>ANALYST_TOOLS</code> / <code>accepts_analyst_override</code> are removed, <em>not</em> relocated into the manifest. Identity is resolved <b>once</b> at the auth boundary into a single <code>Identity</code> object (<code>principal</code>, <code>principal_type</code>, <code>agent_id</code>, <code>created_by</code>, <code>token_id</code>, <code>source_ip</code>, <code>auth_surface</code>), threaded to core tools <b>out-of-band</b> as a Python parameter, and stamped into every audit entry. It is <b>invisible</b> to the agent's tool schemas <em>and</em> to add-on backends — it never travels as a tool argument, so it cannot be spoofed by a backend or hallucinated by the agent. Identity for an agent token = its <code>agent_id</code> (machine attribution); the authorizing human is the token's <code>created_by</code>, and human accountability attaches at portal DRAFT→approval.</div>
   </section>
 
   <!-- ============ CURRENT STATE ============ -->
@@ -183,7 +183,7 @@
       <tr><td>Backend abstraction</td><td><code>MCPBackend</code> base + <code>create_backend</code> factory, stdio &amp; HTTP transports, tool-map aggregation, lazy-start / idle-reaper / late-start retry / dynamic loader, per-backend <code>/mcp/{name}</code> diagnostic mounts. <b>This is the seam the standard formalizes.</b></td></tr>
       <tr><td>Examiner Portal</td><td>Case creation, HMAC challenge-response evidence seal, findings review queue, timline view, ToDo management,chain-of-custody, verify evidence, token management, must-reset password guard.</td></tr>
       <tr><td>Evidence chain</td><td>Versioned manifest, HMAC-signed append-only ledger, <code>chattr +i</code>, atomic writes + <code>chmod 444</code>, optional Solana anchor, <code>ChainStatus</code> enum (OK/UNSEALED/MODIFIED/MISSING/UNREGISTERED/LEDGER_ERROR).</td></tr>
-      <tr><td>Identity trust boundary</td><td>Gateway overwrites <code>analyst_override</code> for ANALYST_TOOLS with the authenticated principal (<code>mcp_endpoint.py:846</code>) — backends/agent cannot spoof examiner identity. For an agent token that principal is the <code>agent_id</code>; findings are DRAFT until the examiner approves them in the portal.</td></tr>
+      <tr><td>Identity trust boundary</td><td>The gateway is the <b>sole authority</b> for examiner identity — backends/agent cannot spoof it. <b>F-F</b> retires the <code>analyst_override</code> argument: identity is resolved once at the auth boundary and threaded <b>out-of-band</b> (never as a tool arg, never in a schema). For an agent token the principal is the <code>agent_id</code>; findings are DRAFT until the examiner approves them in the portal.</td></tr>
     </tbody></table>
 
     <h3 id="current-problems">1.2 — Problems (the "all over the place")</h3>
@@ -275,12 +275,12 @@
       <tr><td><code>evidence_verify</code></td><td>read_only</td><td>Core evidence</td></tr>
       <tr><td><code>evidence_register</code></td><td>mutating</td><td><b>Portal-managed</b> — stays hidden from agent</td></tr>
       <tr><td><code>export_bundle</code> / <code>import_bundle</code></td><td>mutating</td><td><b>F-C: dropped from agent surface</b> — cross-examiner collaboration (export = findings/timeline JSON dump; import = last-write-wins merge). sift-core functions kept for a future portal export.</td></tr>
-      <tr><td><code>record_action</code></td><td>mutating (audit)</td><td>Core audit · analyst_override — logs an action+reasoning to <code>actions.jsonl</code>. Agent-write, examiner-read (not a portal action).</td></tr>
-      <tr><td><code>log_reasoning</code></td><td>mutating (audit)</td><td>Core audit · analyst_override — writes analytical reasoning to the audit trail; never touches case data. Agent-write, examiner-read.</td></tr>
-      <tr><td><code>log_external_action</code></td><td>mutating (audit)</td><td>Core audit · analyst_override — records a command run outside MCP (e.g. Bash) and returns an <code>audit_id</code> for finding provenance; <code>hook_audit_id</code> upgrades voluntary→verified. Agent-write, examiner-read.</td></tr>
-      <tr><td rowspan="6"><code>forensic-mcp</code></td><td><code>record_finding</code></td><td>mutating</td><td>Core findings (DRAFT→approval) · analyst_override — agent records DRAFT findings via MCP; examiner approves in the portal.</td></tr>
-      <tr><td><code>record_timeline_event</code></td><td>mutating</td><td>Core findings · analyst_override — agent-write via MCP; surfaced in the portal timeline view.</td></tr>
-      <tr><td><code>manage_todo</code></td><td>mutating</td><td>Core findings/todo · analyst_override — managed by both agent (MCP) and examiner (portal).</td></tr>
+      <tr><td><code>record_action</code></td><td>mutating (audit)</td><td>Core audit · identity stamped out-of-band by the gateway (F-F) — logs an action+reasoning to <code>actions.jsonl</code>. Agent-write, examiner-read (not a portal action).</td></tr>
+      <tr><td><code>log_reasoning</code></td><td>mutating (audit)</td><td>Core audit · identity stamped out-of-band by the gateway (F-F) — writes analytical reasoning to the audit trail; never touches case data. Agent-write, examiner-read.</td></tr>
+      <tr><td><code>log_external_action</code></td><td>mutating (audit)</td><td>Core audit · identity stamped out-of-band by the gateway (F-F) — records a command run outside MCP (e.g. Bash) and returns an <code>audit_id</code> for finding provenance; <code>hook_audit_id</code> upgrades voluntary→verified. Agent-write, examiner-read.</td></tr>
+      <tr><td rowspan="6"><code>forensic-mcp</code></td><td><code>record_finding</code></td><td>mutating</td><td>Core findings (DRAFT→approval) · identity stamped out-of-band by the gateway (F-F) — agent records DRAFT findings via MCP; examiner approves in the portal.</td></tr>
+      <tr><td><code>record_timeline_event</code></td><td>mutating</td><td>Core findings · identity stamped out-of-band by the gateway (F-F) — agent-write via MCP; surfaced in the portal timeline view.</td></tr>
+      <tr><td><code>manage_todo</code></td><td>mutating</td><td>Core findings/todo · identity stamped out-of-band by the gateway (F-F) — managed by both agent (MCP) and examiner (portal).</td></tr>
       <tr><td><code>list_existing_findings</code></td><td>read_only</td><td>Core findings — read path; agent reads via MCP, examiner via portal.</td></tr>
       <tr><td><code>query_case</code></td><td>read_only</td><td>Core case</td></tr>
       <tr><td><code>workflow_status</code></td><td>read_only</td><td>Core case</td></tr>
@@ -340,7 +340,7 @@
 
     <h3 id="manifest">4.1 — Backend manifest (<code>sift-backend.json</code>)</h3>
     <p>Every backend ships a manifest at a well-known path. The gateway loads it at registration, validates against the schema, runs the conformance probe (reusing the <code>/mcp/{name}</code> endpoint, P8), and only then merges the backend's tools into <code>/mcp</code>. This replaces today's reactive discovery and collision-prefixing.</p>
-    <h4>JSON Schema (Draft 2020-12) — v2 (adds <code>evidence_class</code>, <code>requires_privilege</code>, enrichment)</h4>
+    <h4>JSON Schema (Draft 2020-12) — v3 (identity <b>retired</b> → core-native/out-of-band per F-F; <code>output_cap</code> removed → centralized in the trust layer, §Phase 5; keeps <code>evidence_class</code>, <code>requires_privilege</code>, enrichment)</h4>
     <pre><code>{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sift.org/schemas/sift-backend-1.0.json",
@@ -350,8 +350,8 @@
                "namespace","tools","health"],
   "additionalProperties": false,
   "properties": {
-    "spec_version": { "const": "1.0",
-      "description": "Gateway rejects incompatible majors." },
+    "spec_version": { "type":"string", "pattern":"^1\\.\\d+$",
+      "description": "Major-version compat: gateway accepts 1.x, rejects 2.x. Do NOT pin an exact minor." },
     "name":    { "type":"string", "pattern":"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$" },
     "version": { "type":"string", "description":"Backend semver." },
     "tier":    { "enum":["core","addon"] },
@@ -388,14 +388,9 @@ still applies the central response-guard + output-cap on top." }
         "services": { "type":"array", "items":{"type":"string"} }
       }
     },
-    "identity": {
-      "type":"object",
-      "properties": {
-        "accepts_analyst_override": { "type":"boolean", "default":false,
-          "description":"If true, gateway injects examiner identity; backend \
-MUST NOT self-assert identity. Replaces the hardcoded ANALYST_TOOLS set." }
-      }
-    },
+    "_comment_identity": "NO identity field (F-F). Identity is core-native: \
+resolved once at the auth boundary, threaded out-of-band, never declared by a \
+backend and never a tool argument. Backends are identity-transparent.",
     "instructions": { "type":"string",
       "description":"Canonical STATIC agent guidance. Gateway composes; single \
 authoritative source — ends the multi-layer sprawl (P5). Distinct from runtime \
@@ -404,7 +399,7 @@ enrichment (capabilities.enriches_responses)." },
       "type":"array", "minItems":1,
       "items": {
         "type":"object",
-        "required":["name","evidence_class","read_only","output_cap"],
+        "required":["name","evidence_class","read_only"],
         "additionalProperties": false,
         "properties": {
           "name": { "type":"string",
@@ -415,15 +410,7 @@ enrichment (capabilities.enriches_responses)." },
             "description":"Drives the evidence gate generically (§4.2)." },
           "requires_privilege": { "type":"boolean", "default":false,
             "description":"Tool needs root/caps (vol, dd, mount). Core executor \
-escalates via caps-first then sudoers-allowlist; escalation is audited (§5)." },
-          "output_cap": {
-            "type":"object", "required":["mode"],
-            "properties": {
-              "mode": { "enum":["always_compact","auto_save"] },
-              "max_inline_tokens": { "type":"integer", "default":2000 },
-              "save_dir": { "type":"string", "default":"agent/" }
-            }
-          }
+escalates via caps-first then sudoers-allowlist; escalation is audited (§5)." }
         }
       }
     },
@@ -455,15 +442,12 @@ escalates via caps-first then sudoers-allowlist; escalation is audited (§5)." }
                     "enriches_responses": true },
   "resource_requirements": { "min_ram_gb":8, "needs_docker":true,
                              "services":["sift-opensearch"] },
-  "identity": { "accepts_analyst_override": false },
   "instructions": "Indexing &amp; search. Call opensearch_case_summary first for scope.",
   "tools": [
     { "name":"opensearch_search", "read_only":true,
-      "evidence_class":"read_only",
-      "output_cap":{ "mode":"auto_save", "save_dir":"agent/search/" } },
+      "evidence_class":"read_only" },
     { "name":"opensearch_ingest", "read_only":false,
-      "evidence_class":"analysis",
-      "output_cap":{ "mode":"always_compact" } }
+      "evidence_class":"analysis" }
   ],
   "health": { "method":"mcp_initialize", "timeout_s":15 }
 }</code></pre>
@@ -506,11 +490,12 @@ escalates via caps-first then sudoers-allowlist; escalation is audited (§5)." }
       <div class="card">
         <h4>Behavioural</h4>
         <ul>
-          <li>Every tool declares <code>evidence_class</code> + <code>read_only</code> + <code>output_cap</code></li>
-          <li>Large output auto-saved to <code>agent/…</code>, not dumped inline</li>
+          <li>Every tool declares <code>evidence_class</code> + <code>read_only</code></li>
+          <li>No tool schema exposes an identity argument (<code>analyst_override</code> et al.) — <b>F-F</b>; identity is core-native and out-of-band</li>
+          <li>Large output auto-saved to <code>agent/…</code>, not dumped inline (central output-cap, §Phase 5)</li>
           <li>Path args resolve under the case dir; traversal rejected</li>
           <li>No <code>shell=True</code>; no direct shell execution (defers to core Execute)</li>
-          <li>Never self-asserts examiner identity (honours gateway injection)</li>
+          <li>Never self-asserts examiner identity (the gateway is the sole authority)</li>
           <li>Honours active-case env and restarts cleanly on case switch</li>
         </ul>
       </div>
@@ -661,10 +646,10 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
     </div></div>
 
     <div class="phase"><div class="pn">4</div><div class="pc">
-      <h4>Enforce the contract at registration (kills P3 &amp; P4)</h4>
-      <p>Manifest loading + schema validation + conformance probe in the Backend Registry. Reject non-conformant backends with a precise reason. Make <code>tier:core</code> undisablable. Replace reactive prefixing with mandatory declared namespaces. <b>Move the evidence gate to declared <code>evidence_class</code></b> (§4.2) — remove all hardcoded tool names. Replace ANALYST_TOOLS with per-tool <code>accepts_analyst_override</code>. <b>Make the Grounding Score declaration-driven (R11):</b> replace the hardcoded <code>_GROUNDING_MCPS</code> with backends declaring <code>provides:["reference"]</code> — so a community reference backend counts toward grounding with no core change.</p>
-      <div class="verify">verify → broken manifest rejected with reason; disabling core refused; gate decisions driven purely by declarations; no tool-name constants remain in the gate; grounding counts a reference backend purely from its manifest <code>provides</code>.</div>
-      <div class="files">sift-gateway/backends/* · evidence_gate.py · mcp_endpoint.py · config.py</div>
+      <h4>Universal identity + enforce the contract at registration (kills P3 &amp; P4)</h4>
+      <p><b>Identity spine first (F-F):</b> resolve identity once at the auth boundary into a single <code>Identity</code> object (new <code>identity.py</code>, shared by both auth layers), thread it out-of-band to core tools, stamp <code>principal</code>/<code>agent_id</code>/<code>created_by</code>/<code>auth_surface</code> into every audit entry, and <b>retire <code>analyst_override</code>/<code>ANALYST_TOOLS</code>/<code>accepts_analyst_override</code> entirely</b> — identity never appears as a tool argument or in any schema. Then the contract: manifest loading + schema validation + conformance probe in the Backend Registry, rejecting non-conformant backends with a precise reason (warn-and-degrade in P4, hard-reject in P6). Make <code>tier:core</code> undisablable. Replace reactive prefixing with mandatory declared namespaces (reject add-on tools that collide with core names). Gate <code>capabilities.requires</code> so an unmet prereq hides the add-on without crashing core. <b>Strict binary evidence gate (F-A):</b> any <code>chain_status != OK</code> blocks every agent tool — delete the <code>readOnlyHint</code> carve-out. <b>Make the Grounding Score declaration-driven (R11):</b> replace the hardcoded <code>_GROUNDING_MCPS</code> with backends declaring <code>provides:["reference"]</code> — so a community reference backend counts toward grounding with no core change.</p>
+      <div class="verify">verify → no <code>analyst_override</code>/identity field in any schema; audit stamps <code>principal</code>/<code>agent_id</code>/<code>created_by</code>; broken manifest rejected with reason; disabling core refused; namespace collisions fail boot; unsealed case → all agent tools blocked; grounding counts a reference backend purely from its manifest <code>provides</code>.</div>
+      <div class="files">sift-gateway/identity.py (new) · auth.py · backends/* · evidence_gate.py · mcp_endpoint.py · server.py · config.py · sift-core/agent_tools.py · sift-common/audit.py</div>
     </div></div>
 
     <div class="phase"><div class="pn">5</div><div class="pc">
@@ -708,6 +693,7 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
           <li>R11 — zero hardcoded backend names in core logic: the Grounding Score must resolve reference backends from manifest <code>provides:["reference"]</code>, mirroring the evidence gate's zero-tool-name rule.</li>
           <li>R12 — operator drives the portal only: agent tokens are portal-minted (audit identity = <code>agent_id</code>, authorizer = <code>created_by</code>); the portal rejects agent tokens and <code>/mcp</code> is agent-only; human accountability attaches at DRAFT→approval.</li>
           <li>R13 — <b>(F-B)</b> the agent (run_command jail = case dir) can never read or write the integrity records; they live at <code>/var/lib/sift/&lt;case_id&gt;/</code>.</li>
+          <li>R14 — <b>(F-F)</b> identity is core-native and out-of-band: the gateway is the only authority that sets it, it never appears as a tool argument or in any tool schema, and add-on backends are identity-transparent (attribution rides the audit envelope — <code>principal</code>/<code>agent_id</code>/<code>created_by</code>). No <code>analyst_override</code>/<code>ANALYST_TOOLS</code> anywhere.</li>
         </ul>
       </div>
       <div class="card">
@@ -718,7 +704,7 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
           <li><b>In-process core widens blast radius (P2)</b> → only pure-library logic moves in; execution stays sandboxed.</li>
           <li><b>Host vs SIFT VM</b> (two OSes) → validate every phase on the VM, not just locally; caps/sudoers/apparmor are VM-specific.</li>
           <li><b>Deleting methodology tools too early (D4)</b> → sequenced last; audit runtime deps first.</li>
-          <li><b>Contract churn</b> → freeze <code>spec_version 1.0</code> before publishing the SDK.</li>
+          <li><b>Contract churn</b> → freeze the <code>spec_version</code> <b>1.x major</b> (minors stay backward-compatible) before publishing the SDK.</li>
         </ul>
       </div>
     </div>
@@ -730,8 +716,8 @@ Auth: Bearer (same as gateway). Packs are signed; operator can verify provenance
     <p class="lead">Start here without re-reading code. Key files and the immediate first task.</p>
     <h4>Key files (verified locations)</h4>
     <pre><code>Gateway:   packages/sift-gateway/src/sift_gateway/
-  server.py · mcp_endpoint.py (ANALYST_TOOLS, auth ASGI, analyst_override)
-  evidence_gate.py (check_evidence_gate, ChainStatus, VIOLATION_STATUSES)
+  server.py · mcp_endpoint.py (auth ASGI; ANALYST_TOOLS/analyst_override → RETIRED in Phase 4, F-F) · identity.py (new, F-F)
+  evidence_gate.py (check_evidence_gate, ChainStatus; VIOLATION_STATUSES/is_violation → REMOVED in Phase 4, F-A)
   response_guard.py (30 patterns) · backends/{base,stdio_backend,http_backend}.py
   config.py · auth.py · rate_limit.py · token_gen.py
 Core lib:  packages/agentir-core/src/agentir_core/   (→ rename to sift-core)
@@ -748,7 +734,7 @@ Diagram:   docs/revamp/target-architecture.mmd (this spec's diagram, editable)</
     <ul>
       <li>D1 rename agentir→sift (package + env/path) · D2 denylist-default execute · D3 caps-first then sudoers-allowlist · D4 methodology→/skills (last)</li>
       <li>Context injection: static guidance → manifest <code>instructions</code>; runtime enrichment → per-backend (<code>enriches_responses</code>)</li>
-      <li><b>F-A</b> evidence gate → strict binary, block everything unless sealed+OK (supersedes the 3-class O2 model and the UNSEALED read-only carve-out); zero hardcoded tool names. <b>F-B</b> integrity records → <code>/var/lib/sift</code>. <b>F-C</b> drop export/import_bundle from agent. <b>F-D</b> case_host_fix stays in opensearch. <b>F-E</b> set_case_metadata + reporting → portal-owned. <b>No back-compat</b> (fresh VM + case).</li>
+      <li><b>F-A</b> evidence gate → strict binary, block everything unless sealed+OK (supersedes the 3-class O2 model and the UNSEALED read-only carve-out); zero hardcoded tool names. <b>F-B</b> integrity records → <code>/var/lib/sift</code>. <b>F-C</b> drop export/import_bundle from agent. <b>F-D</b> case_host_fix stays in opensearch. <b>F-E</b> set_case_metadata + reporting → portal-owned. <b>F-F</b> universal identity is core-native, out-of-band, invisible to schemas/backends — <code>analyst_override</code>/<code>ANALYST_TOOLS</code> retired entirely (reverses the earlier "manifest <code>identity.accepts_analyst_override</code>" plan). <b>No back-compat</b> (fresh VM + case).</li>
     </ul>
     <h4>First task — next session (repo setup already done: branch <code>revamp/spg-v1</code>, tag <code>pre-revamp-v0</code>, worktree <code>../sift-mcps-main</code>; tracker = <code>revamp-tasks.md</code>)</h4>
     <ol>

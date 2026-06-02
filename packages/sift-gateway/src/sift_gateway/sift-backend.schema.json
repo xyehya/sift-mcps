@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SiftBackendManifest",
+  "type": "object",
+  "properties": {
+    "spec_version": {
+      "type": "string",
+      "pattern": "^1\\.[0-9]+$"
+    },
+    "name": { "type": "string" },
+    "version": { "type": "string" },
+    "tier": {
+      "type": "string",
+      "enum": ["addon"]
+    },
+    "transport": {
+      "type": "string",
+      "enum": ["stdio", "http"]
+    },
+    "namespace": { "type": "string" },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "provides": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "requires": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "enriches_responses": { "type": "boolean" }
+      },
+      "required": ["provides", "requires", "enriches_responses"],
+      "additionalProperties": false
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "read_only": { "type": "boolean" },
+          "readOnlyHint": { "type": "boolean" },
+          "evidence_class": {
+            "type": "string",
+            "enum": ["read_only", "analysis", "mutating"]
+          }
+        },
+        "required": ["name", "description"],
+        "additionalProperties": false
+      }
+    },
+    "health": {
+      "type": "string"
+    }
+  },
+  "required": ["spec_version", "name", "version", "tier", "transport", "namespace", "capabilities", "tools"],
+  "additionalProperties": false
+}

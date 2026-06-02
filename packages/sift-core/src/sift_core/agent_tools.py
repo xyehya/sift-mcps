@@ -39,7 +39,6 @@ class CoreToolSpec:
     description: str
     input_schema: dict[str, Any]
     read_only: bool = False
-    accepts_analyst_override: bool = False
 
 
 _MAX_TITLE = 500
@@ -124,13 +123,11 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
             },
             ["description", "reasoning"],
         ),
-        accepts_analyst_override=True,
     ),
     CoreToolSpec(
         "log_reasoning",
         "Record analytical reasoning to the append-only audit trail.",
         _schema({"text": {"type": "string"}}, ["text"]),
-        accepts_analyst_override=True,
     ),
     CoreToolSpec(
         "log_external_action",
@@ -146,7 +143,6 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
             },
             ["command", "output_summary", "purpose"],
         ),
-        accepts_analyst_override=True,
     ),
     CoreToolSpec(
         "record_finding",
@@ -159,13 +155,11 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
             },
             ["finding"],
         ),
-        accepts_analyst_override=True,
     ),
     CoreToolSpec(
         "record_timeline_event",
         "Stage a timeline event as DRAFT for examiner approval.",
         _schema({"event": {"type": "object"}}, ["event"]),
-        accepts_analyst_override=True,
     ),
     CoreToolSpec(
         "list_existing_findings",
@@ -220,7 +214,6 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
             },
             ["action"],
         ),
-        accepts_analyst_override=True,
     ),
     CoreToolSpec(
         "list_available_tools",
@@ -283,9 +276,7 @@ def core_tool_specs() -> tuple[CoreToolSpec, ...]:
     return CORE_TOOL_SPECS
 
 
-def accepts_analyst_override(tool_name: str) -> bool:
-    spec = _SPECS_BY_NAME.get(tool_name)
-    return bool(spec and spec.accepts_analyst_override)
+
 
 
 def _validate_str_length(value: str | None, field: str, max_len: int) -> None:
@@ -398,7 +389,7 @@ def _evidence_verify() -> dict:
     return result
 
 
-def _run_command(args: dict, audit: AuditWriter) -> dict:
+def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
     command = args.get("command") or []
     if not isinstance(command, list) or not all(isinstance(item, str) for item in command):
         return {"error": "command must be a list of strings"}
@@ -407,7 +398,7 @@ def _run_command(args: dict, audit: AuditWriter) -> dict:
         return {"error": "purpose is required"}
 
     start = time.monotonic()
-    audit_id = audit._next_audit_id()
+    audit_id = audit._next_audit_id(examiner=examiner)
     try:
         working_dir = str(args.get("working_dir", ""))
         if working_dir:
@@ -519,7 +510,8 @@ def _run_command(args: dict, audit: AuditWriter) -> dict:
             audit.log(
                 tool="privilege_escalation",
                 params={"command": evt.get("command"), "reason": evt.get("reason", "")},
-                result_summary={"status": evt.get("status"), "exit_code": evt.get("exit_code", 0)}
+                result_summary={"status": evt.get("status"), "exit_code": evt.get("exit_code", 0)},
+                examiner_override=examiner,
             )
 
         extra_audit = {}
@@ -544,6 +536,7 @@ def _run_command(args: dict, audit: AuditWriter) -> dict:
             input_sha256s=list(input_hashes.values()) if input_hashes else None,
             input_detection_method=detection_method,
             extra=extra_audit if extra_audit else None,
+            examiner_override=examiner,
         ) is None:
             response["warning"] = "Audit write failed — action not recorded"
         if detection_method == "none" and binary not in _NO_INPUT_CMDS:
@@ -570,6 +563,7 @@ def _run_command(args: dict, audit: AuditWriter) -> dict:
             result_summary={"error": str(exc)},
             audit_id=audit_id,
             elapsed_ms=elapsed * 1000,
+            examiner_override=examiner,
         ) is None:
             response["warning"] = "Audit write failed — action not recorded"
         return response
@@ -588,6 +582,7 @@ def _run_command(args: dict, audit: AuditWriter) -> dict:
             result_summary={"error": str(exc)},
             audit_id=audit_id,
             elapsed_ms=elapsed * 1000,
+            examiner_override=examiner,
         )
         return response
 
@@ -626,41 +621,39 @@ def _record_action(args: dict, examiner: str, audit: AuditWriter) -> dict:
         tool="record_action",
         params={"description": description, "reasoning": reasoning},
         result_summary=result,
+        examiner_override=examiner,
     ) is None:
         result["warning"] = "Audit write failed — action not recorded"
     return result
 
 
-def _log_reasoning(args: dict, audit: AuditWriter) -> dict:
+def _log_reasoning(args: dict, examiner: str, audit: AuditWriter) -> dict:
     text = str(args.get("text", ""))
-    analyst_override = str(args.get("analyst_override", ""))
     _validate_str_length(text, "text", _MAX_TEXT)
-    _validate_str_length(analyst_override, "analyst_override", _MAX_SHORT)
     result = {"status": "logged"}
     if audit.log(
         tool="log_reasoning",
-        params={"text": text, "analyst_override": analyst_override},
+        params={"text": text},
         result_summary=result,
         source="orchestrator",
+        examiner_override=examiner,
     ) is None:
         result["status"] = "write_failed"
         result["warning"] = "Audit write failed — reasoning not recorded"
     return result
 
 
-def _log_external_action(args: dict, audit: AuditWriter) -> dict:
+def _log_external_action(args: dict, examiner: str, audit: AuditWriter) -> dict:
     command = str(args.get("command", ""))
     output_summary = str(args.get("output_summary", ""))
     purpose = str(args.get("purpose", ""))
     hook_audit_id = str(args.get("hook_audit_id", ""))
     input_files = args.get("input_files") or None
     output_files = args.get("output_files") or None
-    analyst_override = str(args.get("analyst_override", ""))
     for field, value in (
         ("command", command),
         ("output_summary", output_summary),
         ("purpose", purpose),
-        ("analyst_override", analyst_override),
         ("hook_audit_id", hook_audit_id),
     ):
         _validate_str_length(value, field, _MAX_TEXT if field in {"command", "output_summary", "purpose"} else _MAX_SHORT)
@@ -695,7 +688,6 @@ def _log_external_action(args: dict, audit: AuditWriter) -> dict:
             "command": command,
             "output_summary": output_summary,
             "purpose": purpose,
-            "analyst_override": analyst_override,
             "hook_audit_id": hook_audit_id,
         },
         result_summary={
@@ -705,6 +697,7 @@ def _log_external_action(args: dict, audit: AuditWriter) -> dict:
         },
         source=source,
         input_files=input_files,
+        examiner_override=examiner,
     )
     result = {
         "status": "logged",
@@ -763,6 +756,7 @@ def _record_finding(args: dict, examiner: str, manager: CaseManager, audit: Audi
         tool="record_finding",
         params={"finding": finding},
         result_summary=result,
+        examiner_override=examiner,
     ) is None:
         result["warning"] = "Audit write failed — action not recorded"
     if result.get("status") == "STAGED":
@@ -878,7 +872,7 @@ def _manage_todo(args: dict, examiner: str, manager: CaseManager, audit: AuditWr
             args.get("related_findings"),
             examiner_override=examiner,
         )
-        audit.log(tool="add_todo", params={"description": description}, result_summary=result)
+        audit.log(tool="add_todo", params={"description": description}, result_summary=result, examiner_override=examiner)
         return result
     if action == "list":
         return {
@@ -899,14 +893,14 @@ def _manage_todo(args: dict, examiner: str, manager: CaseManager, audit: AuditWr
             str(args.get("priority", "")),
             examiner_override=examiner,
         )
-        audit.log(tool="update_todo", params={"todo_id": todo_id}, result_summary=result)
+        audit.log(tool="update_todo", params={"todo_id": todo_id}, result_summary=result, examiner_override=examiner)
         return result
     if action == "complete":
         todo_id = str(args.get("todo_id", ""))
         if not todo_id:
             return {"error": "missing_todo_id", "message": "todo_id is required when action='complete'."}
         result = manager.complete_todo(todo_id, examiner_override=examiner)
-        audit.log(tool="complete_todo", params={"todo_id": todo_id}, result_summary=result)
+        audit.log(tool="complete_todo", params={"todo_id": todo_id}, result_summary=result, examiner_override=examiner)
         return result
     return {
         "error": "unsupported_todo_action",
@@ -927,9 +921,7 @@ def call_core_tool(
     if name not in _SPECS_BY_NAME:
         raise KeyError(name)
     args = dict(arguments or {})
-    effective_examiner = (examiner or args.get("analyst_override") or resolve_examiner()).strip().lower()
-    if accepts_analyst_override(name):
-        args["analyst_override"] = effective_examiner
+    effective_examiner = (examiner or resolve_examiner()).strip().lower()
     manager = manager or CaseManager()
     audit = audit or AuditWriter(mcp_name="sift-core")
 
@@ -946,15 +938,15 @@ def call_core_tool(
         elif name == "record_action":
             result = _record_action(args, effective_examiner, audit)
         elif name == "log_reasoning":
-            result = _log_reasoning(args, audit)
+            result = _log_reasoning(args, effective_examiner, audit)
         elif name == "log_external_action":
-            result = _log_external_action(args, audit)
+            result = _log_external_action(args, effective_examiner, audit)
         elif name == "record_finding":
             result = _record_finding(args, effective_examiner, manager, audit)
         elif name == "record_timeline_event":
             event = args.get("event") or {}
             result = manager.record_timeline_event(event, examiner_override=effective_examiner)
-            if audit.log(tool="record_timeline_event", params={"event": event}, result_summary=result) is None:
+            if audit.log(tool="record_timeline_event", params={"event": event}, result_summary=result, examiner_override=effective_examiner) is None:
                 result["warning"] = "Audit write failed — action not recorded"
         elif name == "list_existing_findings":
             status = str(args.get("status", ""))
@@ -994,7 +986,7 @@ def call_core_tool(
                 result_summary=result,
             )
         elif name == "run_command":
-            result = _run_command(args, audit)
+            result = _run_command(args, effective_examiner, audit)
         else:  # pragma: no cover - guarded by _SPECS_BY_NAME
             raise KeyError(name)
     except (ValueError, OSError, RuntimeError) as exc:

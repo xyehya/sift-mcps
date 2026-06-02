@@ -3,7 +3,7 @@
 import os
 from unittest.mock import patch
 
-from sift_core.identity import get_analyst_identity, get_examiner_identity
+from sift_core.identity import get_examiner_identity
 
 
 def test_flag_override_takes_priority():
@@ -46,13 +46,6 @@ def test_os_user_fallback():
         assert identity["os_user"] == os.environ.get(
             "USER", os.environ.get("USERNAME", "unknown")
         )
-
-
-def test_backward_compatible_alias():
-    """get_analyst_identity is an alias for get_examiner_identity."""
-    identity = get_analyst_identity(flag_override="test")
-    assert identity["examiner"] == "test"
-    assert identity["analyst"] == "test"
 
 
 class TestIdentityLowercase:

@@ -143,8 +143,16 @@ class AuditWriter:
             return None
         return audit_dir
 
-    def _next_audit_id(self) -> str:
-        """Generate next audit ID: {prefix}-{examiner}-{date}-{seq}."""
+    def _next_audit_id(self, examiner: str | None = None) -> str:
+        """Generate next audit ID: {prefix}-{examiner}-{date}-{seq}.
+
+        A single monotonic sequence is shared across all examiners (the
+        examiner only varies the human-readable prefix). Per-call attribution
+        is carried by ``examiner_override`` on :meth:`log`; the global counter
+        keeps IDs unique without one sidecar file per principal.
+        """
+        if not examiner:
+            examiner = self.examiner
         today = datetime.now(timezone.utc).strftime("%Y%m%d")
         with self._lock:
             if today != self._date_str:
@@ -153,7 +161,7 @@ class AuditWriter:
             self._sequence += 1
             seq = self._sequence
         prefix = self.mcp_name.replace("-mcp", "").replace("-", "")
-        return f"{prefix}-{self.examiner}-{today}-{seq:03d}"
+        return f"{prefix}-{examiner}-{today}-{seq:03d}"
 
     def _resume_sequence(self, date_str: str) -> int:
         """Resume sequence from sidecar file, falling back to JSONL scan.
@@ -175,12 +183,13 @@ class AuditWriter:
         except (json.JSONDecodeError, OSError):
             pass
 
-        # Fallback: scan JSONL (O(n) — only on first startup or date change)
+        # Fallback: scan JSONL (O(n) — only on first startup or date change).
+        # The counter is global, so take the max seq across ALL examiners.
         log_file = audit_dir / f"{self.mcp_name}.jsonl"
         if not log_file.exists():
             return 0
         prefix = self.mcp_name.replace("-mcp", "").replace("-", "")
-        pattern = f"{prefix}-{self.examiner}-{date_str}-"
+        suffix_re = re.compile(rf"-{re.escape(date_str)}-(\d+)$")
         max_seq = 0
         try:
             with open(log_file, encoding="utf-8") as f:
@@ -190,15 +199,14 @@ class AuditWriter:
                         continue
                     try:
                         entry = json.loads(line)
-                        eid = entry.get("audit_id", "")
-                        if eid.startswith(pattern):
-                            try:
-                                seq = int(eid[len(pattern) :])
-                                max_seq = max(max_seq, seq)
-                            except ValueError:
-                                pass
                     except json.JSONDecodeError:
                         continue
+                    eid = entry.get("audit_id", "")
+                    if not eid.startswith(f"{prefix}-"):
+                        continue
+                    m = suffix_re.search(eid)
+                    if m:
+                        max_seq = max(max_seq, int(m.group(1)))
         except OSError as e:
             logger.warning(
                 "Failed to read audit log %s for sequence resume: %s", log_file, e
@@ -212,8 +220,11 @@ class AuditWriter:
             return
         seq_file = audit_dir / f"{self.mcp_name}.seq"
         try:
+            with self._lock:
+                date_str = self._date_str
+                seq = self._sequence
             seq_file.write_text(
-                json.dumps({"date": self._date_str, "seq": self._sequence})
+                json.dumps({"date": date_str, "seq": seq})
             )
         except OSError:
             pass
@@ -246,19 +257,21 @@ class AuditWriter:
         input_detection_method: str = "",
         source_evidence: str = "",
         extra: dict[str, Any] | None = None,
+        examiner_override: str | None = None,
     ) -> str | None:
         """Write an audit entry. Returns the audit_id, or None when no case is active."""
         if not self._get_audit_dir():
             return None
         if audit_id is None:
-            audit_id = self._next_audit_id()
+            audit_id = self._next_audit_id(examiner=examiner_override)
 
+        actual_examiner = examiner_override or self.examiner
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "mcp": self.mcp_name,
             "tool": tool,
             "audit_id": audit_id,
-            "examiner": self.examiner,
+            "examiner": actual_examiner,
             "case_id": case_id
             or os.environ.get("SIFT_ACTIVE_CASE", "")
             or self._read_active_case_id(),
@@ -357,8 +370,13 @@ class AuditWriter:
         # Remove sidecar so _resume_sequence starts fresh
         audit_dir = self._get_audit_dir()
         if audit_dir:
-            seq_file = audit_dir / f"{self.mcp_name}.seq"
-            seq_file.unlink(missing_ok=True)
+            (audit_dir / f"{self.mcp_name}.seq").unlink(missing_ok=True)
+            # Clean up any legacy per-examiner sidecars from earlier builds
+            for f in audit_dir.glob(f"{self.mcp_name}-*.seq"):
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def _summarize(result: Any) -> Any:
