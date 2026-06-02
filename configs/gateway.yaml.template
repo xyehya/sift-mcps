@@ -143,10 +143,13 @@ opensearch:
 
 enrichment:
   enabled: true
+  # forensic_knowledge (FK) is a CORE runtime dependency (D4), not an add-on.
   forensic_knowledge: true
-  forensic_rag: ${SIFT_RAG_ENABLED}
-  opensearch_context: ${SIFT_OPENSEARCH_ENABLED}
   root: "/var/lib/sift/enrichment"
+  # NOTE: no add-on enrichment flags here. Whether add-on enrichment/grounding
+  # is active is derived at runtime from the capabilities a REGISTERED backend
+  # advertises in its manifest (capabilities.provides: reference/enrichment),
+  # via the gateway's declaration-driven provider — never a static core flag.
 
 # The SIFT Protocol Gateway core is self-contained and names NO add-on backend
 # here. Add-ons (OpenCTI, OpenSearch, windows-triage, forensic-rag, or any

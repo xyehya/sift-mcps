@@ -140,9 +140,15 @@ class Gateway:
         # _build_tool_map so the gateway never hardcodes add-on tool names.
         self._tool_manifest_meta: dict[str, dict] = {}
 
-        # Register grounding reference provider
-        from sift_core.case_manager import set_reference_backend_provider
+        # Register declaration-driven providers: grounding reference backends
+        # and the available-backend capability summary (both keyed on manifest
+        # capabilities.provides — no hardcoded add-on names).
+        from sift_core.case_manager import (
+            set_backend_capability_provider,
+            set_reference_backend_provider,
+        )
         set_reference_backend_provider(self.get_reference_backends)
+        set_backend_capability_provider(self.get_available_backend_capabilities)
 
         # Create backend instances from config
         backends_config = config.get("backends", {})
@@ -326,6 +332,28 @@ class Gateway:
                 provides = manifest.get("capabilities", {}).get("provides", [])
                 if "reference" in provides:
                     res.append(name)
+        return res
+
+    def get_available_backend_capabilities(self) -> list[dict]:
+        """Registered + available backends with the capabilities their manifests
+        advertise. Declaration-driven; the core uses this to build
+        platform_capabilities without hardcoding add-on names or probing for
+        installed packages."""
+        res = []
+        for name in self._available_backends:
+            backend = self.backends.get(name)
+            manifest = getattr(backend, "manifest", None) if backend else None
+            if not manifest:
+                continue
+            res.append(
+                {
+                    "name": name,
+                    "namespace": manifest.get("namespace", ""),
+                    "provides": list(
+                        manifest.get("capabilities", {}).get("provides", [])
+                    ),
+                }
+            )
         return res
 
     async def _build_tool_map(self) -> None:

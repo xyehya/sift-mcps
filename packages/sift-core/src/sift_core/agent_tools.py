@@ -17,7 +17,11 @@ from typing import Any
 
 from sift_common.audit import AuditWriter, resolve_examiner
 from sift_core.case_io import case_audit_dir, get_case_dir, resolve_case_path
-from sift_core.case_manager import CaseManager, build_finding_considerations
+from sift_core.case_manager import (
+    CaseManager,
+    build_finding_considerations,
+    build_platform_capabilities,
+)
 from sift_core.case_ops import case_status_data
 from sift_core.evidence_chain import ChainStatus, chain_status
 from sift_core.evidence_ops import list_evidence_status_data
@@ -291,32 +295,9 @@ def _json_result(data: Any) -> str:
     return json.dumps(data, indent=2, default=str)
 
 
-def _build_platform_capabilities() -> dict:
-    import importlib.util
-
-    capabilities = {
-        "opensearch": importlib.util.find_spec("opensearch_mcp") is not None,
-        "remnux": False,
-        "windows_triage": importlib.util.find_spec("windows_triage_mcp") is not None,
-        "wintools": False,
-        "forensic_rag": importlib.util.find_spec("rag_mcp") is not None,
-        "opencti": importlib.util.find_spec("opencti_mcp") is not None,
-        "sift_tools": True,
-    }
-    guidance = ["Available investigation capabilities:"]
-    guidance.append("- SIFT forensic tools via run_command")
-    if capabilities["opensearch"]:
-        guidance.append("- Evidence indexing: opensearch add-on available")
-    if capabilities["windows_triage"]:
-        guidance.append("- Windows baseline validation add-on available")
-    if capabilities["forensic_rag"]:
-        guidance.append("- Knowledge search add-on available")
-    if capabilities["opencti"]:
-        guidance.append("- Threat intel add-on available")
-    return {
-        "platform_capabilities": capabilities,
-        "investigation_guidance": "\n".join(guidance),
-    }
+# platform_capabilities is built declaration-driven in
+# sift_core.case_manager.build_platform_capabilities (sourced from the
+# gateway's registered+available backends, not installed packages).
 
 
 def _detect_artifact_context(command: list[str]) -> str | None:
@@ -928,7 +909,7 @@ def call_core_tool(
     try:
         if name == "case_status":
             result = case_status_data(get_case_dir())
-            result.update(_build_platform_capabilities())
+            result.update(build_platform_capabilities())
         elif name == "case_file_structure":
             result = _case_file_structure()
         elif name == "evidence_list":

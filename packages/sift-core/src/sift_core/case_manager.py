@@ -46,6 +46,73 @@ def _declared_reference_backends() -> list[str]:
     return [name.strip() for name in configured.split(",") if name.strip()]
 
 
+# Declaration-driven capability summary. The gateway injects a provider that
+# returns the REGISTERED + AVAILABLE backends and the capabilities their
+# manifests advertise. We never probe installed packages or hardcode add-on
+# names: a capability is "available" only when a registered backend advertises
+# it (mirrors the reference-backend / grounding model).
+_backend_capability_provider: Any | None = None
+
+
+def set_backend_capability_provider(provider: Any | None) -> None:
+    """Install the gateway lookup for available backends + advertised provides."""
+    global _backend_capability_provider
+    _backend_capability_provider = provider
+
+
+def _available_backend_capabilities() -> list[dict]:
+    """[{name, namespace, provides:[...]}] for registered+available backends.
+
+    Empty when no gateway/provider is wired (e.g. sift_core used standalone) —
+    correct: no gateway means no registered backends means no add-on
+    capabilities to advertise.
+    """
+    if _backend_capability_provider is not None:
+        try:
+            return list(_backend_capability_provider() or [])
+        except Exception:
+            logger.debug("backend capability provider failed", exc_info=True)
+            return []
+    return []
+
+
+def build_platform_capabilities() -> dict:
+    """Capability summary derived ONLY from registered, available backends and
+    the capabilities their manifests advertise. No installed-package probing,
+    no hardcoded add-on/tool names (R-no-hardcoded-names)."""
+    backends = _available_backend_capabilities()
+    provides_union = sorted({p for b in backends for p in (b.get("provides") or [])})
+    caps = {
+        "sift_tools": True,  # core forensic tools via run_command are always present
+        "provides": provides_union,
+        "backends": [
+            {
+                "name": b.get("name", ""),
+                "namespace": b.get("namespace", ""),
+                "provides": list(b.get("provides") or []),
+            }
+            for b in backends
+        ],
+    }
+    guidance = [
+        "Available investigation capabilities:",
+        "- SIFT forensic tools via run_command",
+    ]
+    for b in backends:
+        label = b.get("namespace") or b.get("name") or "add-on"
+        prov = ", ".join(b.get("provides") or []) or "tools"
+        guidance.append(f"- {label} add-on available (provides: {prov})")
+    guidance.append("")
+    guidance.append(
+        "Call capability_guide and tools/list for live tool availability and exact "
+        "schemas; suggest_tools(artifact_type='...') for analysis recommendations."
+    )
+    return {
+        "platform_capabilities": caps,
+        "investigation_guidance": "\n".join(guidance),
+    }
+
+
 def _atomic_write(path: Path, content: str) -> None:
     """Write file atomically via temp file + rename to prevent data loss on crash."""
     fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
@@ -635,56 +702,10 @@ class CaseManager:
             },
         }
 
-        # Layer 4: platform capabilities detection
-        import importlib.util
-
-        capabilities = {
-            "opensearch": importlib.util.find_spec("opensearch_mcp") is not None,
-            "remnux": False,
-            "wintools": False,
-            "forensic_rag": importlib.util.find_spec("rag_mcp") is not None,
-            "opencti": importlib.util.find_spec("opencti_mcp") is not None,
-            "sift_tools": True,
-        }
-        try:
-            gw_path = Path.home() / ".sift" / "gateway.yaml"
-            if gw_path.exists():
-                gw_config = yaml.safe_load(gw_path.read_text()) or {}
-                backends = gw_config.get("backends", {})
-                capabilities["remnux"] = "remnux-mcp" in backends
-                capabilities["wintools"] = "wintools-mcp" in backends
-        except Exception:
-            pass
-        resp["platform_capabilities"] = capabilities
-
-        guidance = ["Available investigation capabilities:"]
-        guidance.append("- SIFT forensic tools via run_command (65+ tools)")
-        if capabilities["opensearch"]:
-            guidance.append(
-                "- Evidence indexing: opensearch_ingest for structured querying at scale"
-            )
-        if capabilities["remnux"]:
-            guidance.append(
-                "- Malware analysis: upload_from_host + analyze_file on REMnux"
-            )
-        if capabilities["wintools"]:
-            guidance.append(
-                "- Windows offline analysis: run_windows_command on forensic workstation"
-            )
-        if capabilities["forensic_rag"]:
-            guidance.append(
-                "- Knowledge search: kb_search_knowledge (Sigma, MITRE ATT&CK, KAPE)"
-            )
-        if capabilities["opencti"]:
-            guidance.append(
-                "- Threat intel: cti_lookup_ioc, cti_search_threat_intel on OpenCTI"
-            )
-        guidance.append("")
-        guidance.append(
-            "Do not rely solely on OpenSearch queries. "
-            "Call suggest_tools(artifact_type='...') for deep analysis recommendations."
-        )
-        resp["investigation_guidance"] = "\n".join(guidance)
+        # Declaration-driven capability summary: only registered+available
+        # backends and the capabilities their manifests advertise (no
+        # installed-package probing, no hardcoded add-on names).
+        resp.update(build_platform_capabilities())
 
         return resp
 
