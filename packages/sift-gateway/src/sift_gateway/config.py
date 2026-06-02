@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 _ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+EXECUTE_AS_USER_ENV = "SIFT_EXECUTE_AS_USER"
 
 
 def _interpolate_env(value: str) -> str:
@@ -81,6 +82,17 @@ def apply_execute_security_env(config: dict) -> None:
     policy_config = execute_config.get("security")
     policy = build_security_policy(policy_config, require_operator_policy=True)
     os.environ[SECURITY_POLICY_ENV] = policy_to_env_json(policy)
+
+    runtime_user = execute_config.get("runtime_user", "agent_runtime")
+    if runtime_user is None:
+        runtime_user = ""
+    if not isinstance(runtime_user, str):
+        raise ValueError("execute.runtime_user must be a string")
+    runtime_user = runtime_user.strip()
+    if runtime_user:
+        os.environ[EXECUTE_AS_USER_ENV] = runtime_user
+    else:
+        os.environ[EXECUTE_AS_USER_ENV] = "__current__"
     clear_catalog_cache()
 
 

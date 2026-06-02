@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import signal
 import subprocess
 import sys
@@ -73,6 +74,8 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     max_bytes = int(payload["max_output_bytes"])
     cwd = payload.get("cwd") or None
     memory_limit_bytes = int(payload.get("memory_limit_bytes") or 0)
+    runtime_user = str(payload.get("runtime_user") or "").strip()
+    sudo_path = str(payload.get("sudo_path") or "/usr/bin/sudo").strip()
 
     start = time.monotonic()
     truncated = False
@@ -85,10 +88,12 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     
     try:
         for i, stage in enumerate(stages):
-            argv = stage["argv"]
+            original_argv = list(stage["argv"])
+            stage_runtime_user = str(stage.get("runtime_user", runtime_user) or "").strip()
+            argv = _argv_for_runtime_user(original_argv, stage_runtime_user, sudo_path)
             redirects = stage["redirects"]
             
-            stage_stdin = prev_stdout if prev_stdout is not None else subprocess.PIPE
+            stage_stdin = prev_stdout if prev_stdout is not None else subprocess.DEVNULL
             stage_stdout = subprocess.PIPE
             
             opened_files = []
@@ -138,7 +143,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 start_new_session=(os.name == "posix"),
                 preexec_fn=preexec_fn,
             )
-            processes.append((proc, opened_files))
+            processes.append((proc, opened_files, original_argv))
             
             if prev_stdout is not None:
                 prev_stdout.close()
@@ -149,7 +154,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 prev_stdout = None
                 
     except Exception as exc:
-        for proc, opened_files in processes:
+        for proc, opened_files, _ in processes:
             try:
                 _kill_process_tree(proc)
             except Exception:
@@ -177,7 +182,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     # Read stderr from all stages (skipped for stages that merged stderr into
     # stdout via 2>&1, where proc.stderr is None).
-    for proc, _ in processes:
+    for proc, _, _ in processes:
         if proc.stderr is None:
             continue
         t = threading.Thread(
@@ -192,9 +197,9 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                for proc, _ in processes:
+                for proc, _, _ in processes:
                     _kill_process_tree(proc)
-                for proc, _ in processes:
+                for proc, _, _ in processes:
                     proc.wait(timeout=5)
                 return {
                     "error_type": "timeout",
@@ -203,15 +208,15 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 }
             if total[0] >= max_bytes:
                 truncated = True
-                for proc, _ in processes:
+                for proc, _, _ in processes:
                     _kill_process_tree(proc)
-                for proc, _ in processes:
+                for proc, _, _ in processes:
                     proc.wait(timeout=5)
                 break
                 
             # Check if all processes have finished
             all_done = True
-            for proc, _ in processes:
+            for proc, _, _ in processes:
                 if proc.poll() is None:
                     all_done = False
                     break
@@ -222,7 +227,11 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     finally:
         for t in threads:
             t.join(timeout=2)
-        for _, opened_files in processes:
+        for proc, opened_files, _ in processes:
+            try:
+                proc.wait(timeout=0)
+            except subprocess.TimeoutExpired:
+                pass
             for f in opened_files:
                 try:
                     f.close()
@@ -243,10 +252,33 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "stderr": stderr_raw.decode("utf-8", errors="replace"),
         "elapsed_seconds": round(time.monotonic() - start, 2),
         "stdout_total_bytes": len(stdout_raw),
+        "stages": [
+            {
+                "argv": original_argv,
+                "exit_code": proc.returncode,
+            }
+            for proc, _, original_argv in processes
+        ],
     }
+    if runtime_user:
+        result["runtime_user"] = runtime_user
     if truncated:
         result["truncated"] = True
     return result
+
+
+def _argv_for_runtime_user(
+    argv: list[str], runtime_user: str, sudo_path: str
+) -> list[str]:
+    if not runtime_user:
+        return argv
+    try:
+        current_user = pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        current_user = ""
+    if runtime_user == current_user:
+        return argv
+    return [sudo_path, "-n", "-u", runtime_user, "--", *argv]
 
 
 def main() -> int:

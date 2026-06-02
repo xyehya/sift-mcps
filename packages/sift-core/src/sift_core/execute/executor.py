@@ -9,6 +9,8 @@ import hashlib
 import json
 import logging
 import os
+import pwd
+import shutil
 import subprocess
 import sys
 import time
@@ -29,12 +31,16 @@ def _run_isolated_worker(
     cwd: str | None,
     max_output_bytes: int,
     memory_limit_bytes: int,
+    runtime_user: str = "",
+    sudo_path: str = "",
 ) -> dict[str, Any]:
     payload = {
         "timeout": timeout,
         "cwd": cwd,
         "max_output_bytes": max_output_bytes,
         "memory_limit_bytes": memory_limit_bytes,
+        "runtime_user": runtime_user,
+        "sudo_path": sudo_path,
     }
     if cmd_list and isinstance(cmd_list[0], dict):
         payload["stages"] = cmd_list
@@ -44,74 +50,16 @@ def _run_isolated_worker(
         cmd_str = " ".join(cmd_list)
 
     worker_cmd = [sys.executable, "-m", "sift_core.execute.worker"]
-
-    import shutil
-    import uuid
-    systemd_run_path = shutil.which("systemd-run")
-
-    proc = None
-    run_id = str(uuid.uuid4())
-
-    if systemd_run_path:
-        env = os.environ.copy()
-        if "DBUS_SESSION_BUS_ADDRESS" not in env:
-            uid = os.getuid()
-            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
-        if "XDG_RUNTIME_DIR" not in env:
-            env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
-
-        scope_cmd = [
-            systemd_run_path,
-            "--user",
-            "--scope",
-            f"--unit=sift-execute-{run_id[:12]}",
-        ]
-        if memory_limit_bytes > 0:
-            scope_cmd.append(f"--property=MemoryMax={memory_limit_bytes}")
-            memory_high = int(memory_limit_bytes * 0.8)
-            scope_cmd.append(f"--property=MemoryHigh={memory_high}")
-
-        full_cmd = scope_cmd + worker_cmd
-        try:
-            logger.debug("Attempting cgroup execution: %s", " ".join(full_cmd))
-            proc = subprocess.run(
-                full_cmd,
-                input=json.dumps(payload),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout + 10,
-                shell=False,
-                env=env,
-            )
-            if proc.returncode != 0:
-                try:
-                    result = json.loads(proc.stdout or "{}")
-                    if "exit_code" in result or "error_type" in result:
-                        return result
-                except json.JSONDecodeError:
-                    pass
-
-                logger.warning(
-                    "systemd-run failed to boot worker (exit %s). Stderr: %s",
-                    proc.returncode,
-                    proc.stderr,
-                )
-                systemctl_path = shutil.which("systemctl")
-                if systemctl_path:
-                    subprocess.run(
-                        [systemctl_path, "--user", "reset-failed", f"sift-execute-{run_id[:12]}"],
-                        capture_output=True,
-                        shell=False,
-                        env=env,
-                    )
-                proc = None
-        except Exception as exc:
-            logger.warning("Error during systemd-run boot: %s", exc)
-            proc = None
-
-    if proc is None:
-        raise ExecutionError(f"Sandbox execution failed: systemd-run is unavailable or failed to boot the worker for command: {cmd_str}")
+    logger.debug("Starting native user execution worker: %s", cmd_str)
+    proc = subprocess.run(
+        worker_cmd,
+        input=json.dumps(payload),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=timeout + 10,
+        shell=False,
+    )
 
     if proc.returncode != 0:
         stderr = _truncate(proc.stderr or "", 2000)
@@ -139,8 +87,40 @@ def _run_isolated_worker(
     return result
 
 
+def _native_runtime_identity(config) -> tuple[str, str]:
+    """Return (runtime_user, sudo_path), or empty strings for same-user dev mode."""
+    runtime_user = str(config.execute_as_user or "").strip()
+    if not runtime_user or runtime_user == "__current__":
+        return "", ""
+
+    try:
+        current_user = pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        current_user = ""
+    if runtime_user == current_user:
+        return "", ""
+
+    try:
+        pwd.getpwnam(runtime_user)
+    except KeyError as exc:
+        raise ExecutionError(
+            "Native run_command isolation is configured for user "
+            f"'{runtime_user}', but that local account does not exist. "
+            "Create it with scripts/setup-agent-runtime.sh or set "
+            "execute.runtime_user to a valid restricted account."
+        ) from exc
+
+    sudo_path = shutil.which("sudo") or "/usr/bin/sudo"
+    if not Path(sudo_path).exists():
+        raise ExecutionError(
+            "Native run_command isolation requires sudo so the gateway can "
+            f"drop privileges to '{runtime_user}', but sudo was not found."
+        )
+    return runtime_user, sudo_path
+
+
 def execute(
-    cmd_list: list[str],
+    cmd_list: list[str] | list[dict[str, Any]],
     *,
     timeout: int | None = None,
     cwd: str | None = None,
@@ -165,6 +145,7 @@ def execute(
     config = get_config()
     timeout = timeout or config.default_timeout
     max_bytes = config.max_output_bytes
+    runtime_user, sudo_path = _native_runtime_identity(config)
 
     start = time.monotonic()
     try:
@@ -174,6 +155,8 @@ def execute(
             cwd=cwd,
             max_output_bytes=max_bytes,
             memory_limit_bytes=config.execute_memory_limit_bytes,
+            runtime_user=runtime_user,
+            sudo_path=sudo_path,
         )
         elapsed = time.monotonic() - start
 
@@ -190,10 +173,14 @@ def execute(
             "elapsed_seconds": round(elapsed, 2),
             "command": cmd_list,
             "stdout_total_bytes": stdout_byte_count,
-            "executor": "isolated_worker",
+            "executor": "native_user_worker" if runtime_user else "direct_worker",
         }
+        if runtime_user:
+            response["runtime_user"] = runtime_user
         if worker_result.get("truncated"):
             response["truncated"] = True
+        if worker_result.get("stages"):
+            response["stages"] = worker_result["stages"]
 
         # Threshold-based save: auto-save when output exceeds response budget
         case_dir = resolve_case_dir()
@@ -225,14 +212,30 @@ def execute(
 
     except subprocess.TimeoutExpired as exc:
         raise ExecutionTimeoutError(
-            f"Command timed out after {timeout}s: {' '.join(cmd_list)}"
+            f"Command timed out after {timeout}s: {_format_command(cmd_list)}"
         ) from exc
     except FileNotFoundError as exc:
-        raise ExecutionError(f"Binary not found: {cmd_list[0]}") from exc
+        raise ExecutionError(f"Binary not found: {_first_command_name(cmd_list)}") from exc
     except PermissionError as exc:
-        raise ExecutionError(f"Permission denied: {cmd_list[0]}") from exc
+        raise ExecutionError(f"Permission denied: {_first_command_name(cmd_list)}") from exc
     except OSError as e:
-        raise ExecutionError(f"OS error executing {cmd_list[0]}: {e}") from e
+        raise ExecutionError(f"OS error executing {_first_command_name(cmd_list)}: {e}") from e
+
+
+def _first_command_name(cmd_list: list[str] | list[dict[str, Any]]) -> str:
+    if not cmd_list:
+        return ""
+    first = cmd_list[0]
+    if isinstance(first, dict):
+        argv = first.get("argv") or []
+        return str(argv[0]) if argv else ""
+    return str(first)
+
+
+def _format_command(cmd_list: list[str] | list[dict[str, Any]]) -> str:
+    if cmd_list and isinstance(cmd_list[0], dict):
+        return " | ".join(" ".join(str(part) for part in stage.get("argv", [])) for stage in cmd_list)
+    return " ".join(str(part) for part in cmd_list)
 
 
 def _truncate(text: str, max_chars: int) -> str:
@@ -313,7 +316,8 @@ def _save_output(
         return
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    safe_cmd = "".join(c if c.isalnum() or c in "-_" else "_" for c in cmd_list[0])[:40]
+    first_cmd = Path(_first_command_name(cmd_list)).name or "command"
+    safe_cmd = "".join(c if c.isalnum() or c in "-_" else "_" for c in first_cmd)[:40]
     prefix = f"{ts}_{safe_cmd}"
 
     if stdout:

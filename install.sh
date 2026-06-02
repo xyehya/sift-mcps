@@ -59,6 +59,8 @@ SIFT_SNAPSHOTS_DIR="${SIFT_SNAPSHOTS_DIR:-$SIFT_STATE_DIR/snapshots}"
 SIFT_ENRICHMENT_DIR="${SIFT_ENRICHMENT_DIR:-$SIFT_STATE_DIR/enrichment}"
 SIFT_WINDOWS_TRIAGE_DB_DIR="${SIFT_WINDOWS_TRIAGE_DB_DIR:-$SIFT_STATE_DIR/windows-triage}"
 SIFT_EXAMINER="${SIFT_EXAMINER:-examiner}"
+SIFT_EXECUTE_AS_USER="${SIFT_EXECUTE_AS_USER:-agent_runtime}"
+SIFT_GATEWAY_SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-$(user_name)}"
 MATERIALS_FILE="${MATERIALS_FILE:-$SIFT_TOKENS_DIR/installer-handoff.txt}"
 SYSTEMD_USER_DIR="${SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 GATEWAY_SERVICE_FILE="$SYSTEMD_USER_DIR/sift-gateway.service"
@@ -224,6 +226,34 @@ install_state_dirs() {
   sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_WINDOWS_TRIAGE_DB_DIR"
   sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_CASE_ROOT"
   install -d -m 700 "$SIFT_HOME" "$SIFT_TLS_DIR" "$SIFT_BACKUP_DIR"
+}
+
+configure_agent_runtime() {
+  if [[ -z "${SIFT_EXECUTE_AS_USER:-}" || "${SIFT_EXECUTE_AS_USER}" == "__current__" ]]; then
+    warn "execute.runtime_user disabled; run_command will execute as the gateway user. Use only for development."
+    return 0
+  fi
+
+  if ! command -v setfacl >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      log "Installing acl package for run_command native user isolation."
+      sudo_if_needed apt-get update
+      sudo_if_needed apt-get install -y acl
+    fi
+  fi
+
+  require_cmd setfacl
+  require_cmd getfacl
+  if ! command -v visudo >/dev/null 2>&1 && [[ ! -x /usr/sbin/visudo ]]; then
+    die "Missing required command: visudo"
+  fi
+
+  log "Configuring run_command native user isolation: runtime=${SIFT_EXECUTE_AS_USER}, service=${SIFT_GATEWAY_SERVICE_USER}."
+  sudo_if_needed "$REPO_DIR/scripts/setup-agent-runtime.sh" \
+    --runtime-user "$SIFT_EXECUTE_AS_USER" \
+    --service-user "$SIFT_GATEWAY_SERVICE_USER" \
+    --cases-root "$SIFT_CASES_ROOT" \
+    --state-root "$SIFT_STATE_DIR"
 }
 
 # =============================================================================
@@ -465,6 +495,7 @@ _render_file() {
   export SIFT_HOME SIFT_TLS_DIR SIFT_CONFIG SIFT_CASES_ROOT SIFT_CASE_ROOT
   export SIFT_WINDOWS_TRIAGE_DB_DIR
   export SIFT_GATEWAY_TOKEN SIFT_SERVICE_TOKEN SIFT_PORTAL_SESSION_SECRET
+  export SIFT_EXECUTE_AS_USER
   export SIFT_EXAMINER SIFT_MCPS_ROOT UV_BIN PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
   export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED SIFT_OPENSEARCH_ENABLED
 
@@ -527,6 +558,7 @@ write_gateway_config() {
 _migrate_gateway_config() {
   log "Checking gateway config compatibility."
   export SIFT_CONFIG SIFT_MCPS_ROOT PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
+  export SIFT_EXECUTE_AS_USER
   export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
@@ -568,6 +600,13 @@ if enrichment.get("forensic_rag") is not True and os.environ.get("SIFT_RAG_ENABL
 # We only normalise args for whatever backends already exist (e.g.
 # portal-registered ones) below — we never add or enable a backend here.
 cfg.setdefault("backends", {})
+
+# Native runtime user for run_command. Existing configs predate this key, so
+# migrate them to the installer default instead of leaving production same-user.
+execute = cfg.setdefault("execute", {})
+if isinstance(execute, dict) and "runtime_user" not in execute:
+    execute["runtime_user"] = os.environ.get("SIFT_EXECUTE_AS_USER") or "agent_runtime"
+    changed = True
 
 # Backend arg normalisation (ensure --python, --no-managed-python, --no-python-downloads)
 root = os.environ.get("SIFT_MCPS_ROOT") or ""
@@ -1105,6 +1144,11 @@ uninstall_system_hardening() {
     sudo_if_needed rm -f /usr/local/bin/hayabusa
     log "Removed /usr/local/bin/hayabusa symlink."
   fi
+  # native run_command user-isolation sudoers bridge
+  if [[ -f /etc/sudoers.d/sift-agent-runtime ]]; then
+    sudo_if_needed rm -f /etc/sudoers.d/sift-agent-runtime
+    log "Removed run_command runtime sudoers bridge."
+  fi
 }
 
 uninstall_runtime() {
@@ -1252,6 +1296,7 @@ main() {
 
   sync_workspace
   install_state_dirs
+  configure_agent_runtime
   configure_fuse
   generate_tls
   write_default_examiner

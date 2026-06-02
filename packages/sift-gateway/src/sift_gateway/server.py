@@ -70,20 +70,28 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
 
 
 class _NormalizeMCPPath:
-    """Append trailing slash to per-backend MCP paths.
+    """Append trailing slash to mounted MCP paths internally.
 
-    Starlette Mount("/mcp/name") returns a 307 redirect for the exact
-    path /mcp/name (no trailing slash). MCP streaming clients don't
-    follow redirects, so the request falls through to the aggregate
-    /mcp mount instead. This middleware rewrites the path in-place.
+    Starlette Mount("/mcp") and Mount("/mcp/name") return a 307 redirect for
+    the exact no-slash path. MCP streaming clients should use /mcp without
+    handling a redirect, so this middleware rewrites the path in-place before
+    Starlette routing.
     """
 
-    def __init__(self, app, backend_paths: frozenset[str] = frozenset()):
+    def __init__(
+        self,
+        app,
+        backend_paths: frozenset[str] = frozenset(),
+        aggregate_path: str = "/mcp",
+    ):
         self.app = app
         self.backend_paths = backend_paths
+        self.aggregate_path = aggregate_path
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and scope.get("path", "") in self.backend_paths:
+        if scope["type"] == "http" and scope.get("path", "") in (
+            self.backend_paths | {self.aggregate_path}
+        ):
             scope = dict(scope)
             scope["path"] += "/"
             if scope.get("raw_path"):

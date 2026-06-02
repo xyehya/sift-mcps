@@ -14,6 +14,11 @@ from sift_core.execute.security_policy import SECURITY_POLICY_ENV, policy_to_env
 from sift_core.execute.tools import generic
 
 
+@pytest.fixture(autouse=True)
+def _run_as_current_user(monkeypatch):
+    monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "__current__")
+
+
 def _set_policy(monkeypatch, policy: dict) -> None:
     monkeypatch.setenv(SECURITY_POLICY_ENV, policy_to_env_json(policy))
     clear_catalog_cache()
@@ -31,8 +36,8 @@ def test_run_command_executes_allowed_command_through_isolated_worker(
     result = generic.run_command(["date"], purpose="test isolated worker")
 
     assert result["exit_code"] == 0
-    assert result["executor"] == "isolated_worker"
-    assert result["command"][0]["argv"] == ["date"]
+    assert result["executor"] == "direct_worker"
+    assert Path(result["command"][0]["argv"][0]).name == "date"
 
 
 
@@ -146,54 +151,39 @@ def test_large_output_autowrites_under_case_run_commands(tmp_path, monkeypatch):
 
 
 
-def test_run_command_uses_systemd_run_when_available(monkeypatch):
-    import shutil
-    import subprocess
+def test_run_command_uses_direct_worker_without_systemd(monkeypatch):
     import json
+    import subprocess
 
     called_cmd = []
-    called_env = {}
-
-    def fake_which(cmd):
-        if cmd in ("systemd-run", "systemctl"):
-            return f"/usr/bin/{cmd}"
-        return None
 
     class FakeCompletedProcess:
         returncode = 0
-        stdout = json.dumps({"exit_code": 0, "stdout": "systemd-run-ok", "stderr": "", "stdout_total_bytes": 14})
+        stdout = json.dumps({"exit_code": 0, "stdout": "worker-ok", "stderr": "", "stdout_total_bytes": 9})
         stderr = ""
 
     def fake_run(cmd, *args, **kwargs):
         called_cmd.append(cmd)
-        called_env.update(kwargs.get("env", {}))
+        payload = json.loads(kwargs["input"])
+        assert payload["cmd"] == ["/usr/bin/date"]
+        assert payload["runtime_user"] == ""
         return FakeCompletedProcess()
 
-    monkeypatch.setattr(shutil, "which", fake_which)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     # Trigger via direct executor run helper
     from sift_core.execute.executor import _run_isolated_worker
     res = _run_isolated_worker(["/usr/bin/date"], timeout=5, cwd=None, max_output_bytes=1024, memory_limit_bytes=0)
 
-    assert res["stdout"] == "systemd-run-ok"
-    assert called_cmd[0][0] == "/usr/bin/systemd-run"
-    assert called_cmd[0][1] == "--user"
-    assert called_cmd[0][2] == "--scope"
-    assert any(arg.startswith("--unit=sift-execute-") for arg in called_cmd[0])
-    assert "DBUS_SESSION_BUS_ADDRESS" in called_env
-    assert "XDG_RUNTIME_DIR" in called_env
+    assert res["stdout"] == "worker-ok"
+    assert called_cmd[0][:3] == [sys.executable, "-m", "sift_core.execute.worker"]
 
 
-def test_run_command_sets_systemd_run_memory_limits(monkeypatch):
-    import shutil
-    import subprocess
+def test_run_command_passes_memory_limit_to_worker(monkeypatch):
     import json
+    import subprocess
 
-    called_cmd = []
-
-    def fake_which(cmd):
-        return f"/usr/bin/{cmd}"
+    payloads = []
 
     class FakeCompletedProcess:
         returncode = 0
@@ -201,59 +191,68 @@ def test_run_command_sets_systemd_run_memory_limits(monkeypatch):
         stderr = ""
 
     def fake_run(cmd, *args, **kwargs):
-        called_cmd.append(cmd)
+        payloads.append(json.loads(kwargs["input"]))
         return FakeCompletedProcess()
 
-    monkeypatch.setattr(shutil, "which", fake_which)
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     from sift_core.execute.executor import _run_isolated_worker
     _run_isolated_worker(["/usr/bin/date"], timeout=5, cwd=None, max_output_bytes=1024, memory_limit_bytes=50_000_000)
 
-    assert called_cmd[0][0] == "/usr/bin/systemd-run"
-    assert "--property=MemoryMax=50000000" in called_cmd[0]
-    assert "--property=MemoryHigh=40000000" in called_cmd[0]
+    assert payloads[0]["memory_limit_bytes"] == 50_000_000
 
 
-def test_run_command_falls_back_when_systemd_run_fails(monkeypatch):
-    import shutil
-    import subprocess
-    import json
+def test_native_runtime_user_requires_existing_local_account(monkeypatch):
+    import pwd
+
     from sift_core.execute.exceptions import ExecutionError
 
-    called_cmds = []
+    monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "agent_runtime")
+    monkeypatch.setattr(pwd, "getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name)))
 
-    def fake_which(cmd):
-        return f"/usr/bin/{cmd}"
+    with pytest.raises(ExecutionError, match="local account does not exist"):
+        execute(["/usr/bin/date"], timeout=5, cwd=None)
 
-    class FakeFailProcess:
-        returncode = 1
-        stdout = ""
-        stderr = "Failed to connect to bus"
 
-    class FakeSuccessProcess:
+def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
+    calls = []
+
+    class FakeProcess:
+        pid = 12345
         returncode = 0
-        stdout = json.dumps({"exit_code": 0, "stdout": "fallback-ok", "stderr": ""})
-        stderr = ""
+        stdout = io.BytesIO(b"ok\n")
+        stderr = io.BytesIO(b"")
 
-    def fake_run(cmd, *args, **kwargs):
-        called_cmds.append(cmd)
-        if cmd[0] == "/usr/bin/systemd-run":
-            return FakeFailProcess()
-        # systemctl reset-failed
-        return FakeSuccessProcess()
+        def wait(self, timeout=None):
+            return self.returncode
 
-    monkeypatch.setattr(shutil, "which", fake_which)
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        def kill(self):
+            self.returncode = -9
 
-    from sift_core.execute.executor import _run_isolated_worker
-    with pytest.raises(ExecutionError, match="Sandbox execution failed"):
-        _run_isolated_worker(["/usr/bin/date"], timeout=5, cwd=None, max_output_bytes=1024, memory_limit_bytes=0)
+        def poll(self):
+            return self.returncode
 
-    assert len(called_cmds) == 2  # systemd-run, systemctl reset-failed
-    assert called_cmds[0][0] == "/usr/bin/systemd-run"
-    assert called_cmds[1][0] == "/usr/bin/systemctl"
-    assert called_cmds[1][1:] == ["--user", "reset-failed", called_cmds[0][3].split("=")[1]]
+    def fake_popen(cmd, **kwargs):
+        calls.append(cmd)
+        return FakeProcess()
+
+    monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
+
+    result = worker._execute_payload(
+        {
+            "cmd": ["/usr/bin/id"],
+            "runtime_user": "agent_runtime",
+            "sudo_path": "/usr/bin/sudo",
+            "timeout": 5,
+            "cwd": None,
+            "max_output_bytes": 1024,
+            "memory_limit_bytes": 0,
+        }
+    )
+
+    assert result["stdout"] == "ok\n"
+    assert calls[0][:5] == ["/usr/bin/sudo", "-n", "-u", "agent_runtime", "--"]
+    assert calls[0][5:] == ["/usr/bin/id"]
 
 
 def test_sudo_validation_rules(tmp_path, monkeypatch):
@@ -313,7 +312,7 @@ def test_privileged_path_direct_success(tmp_path, monkeypatch):
     assert res["privilege_escalation"]["mechanism"] == "direct_unprivileged"
     assert res["privilege_escalation"]["status"] == "success"
     assert len(calls) == 1
-    assert calls[0] == [{"argv": ["mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
+    assert calls[0] == [{"argv": ["/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
 
 
 
@@ -363,8 +362,8 @@ def test_privileged_path_sudo_fallback(tmp_path, monkeypatch):
     assert res["privilege_escalation"]["mechanism"] == "sudo_fallback"
     assert res["privilege_escalation"]["status"] == "success"
     assert len(calls) == 2
-    assert calls[0] == [{"argv": ["mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
-    assert calls[1] == [{"argv": ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
+    assert calls[0] == [{"argv": ["/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
+    assert calls[1] == [{"argv": ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": [], "runtime_user": ""}]
     assert len(res["privilege_events"]) == 2
     assert res["privilege_events"][0]["status"] == "fallback_attempt"
     assert res["privilege_events"][1]["status"] == "success"
@@ -406,7 +405,7 @@ def test_privileged_path_non_permission_failure(tmp_path, monkeypatch):
     # Exit code is 1, and no sudo was called (only 1 execute call)
     assert res["exit_code"] == 1
     assert len(calls) == 1
-    assert calls[0] == [{"argv": ["mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
+    assert calls[0] == [{"argv": ["/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
     # No escalation metadata because it failed and didn't fall back
     assert "privilege_escalation" not in res
 
@@ -526,8 +525,8 @@ def test_validate_shell_command_safety_checks(tmp_path, monkeypatch):
     res = generic.run_command("ls -la | grep txt", purpose="test pipeline")
     assert res["exit_code"] == 0
     assert calls[0] == [
-        {"argv": ["ls", "-la"], "redirects": []},
-        {"argv": ["grep", "txt"], "redirects": []}
+        {"argv": ["/usr/bin/ls", "-la"], "redirects": []},
+        {"argv": ["/usr/bin/grep", "txt"], "redirects": []}
     ]
 
     # 2. Control characters rejection
@@ -629,13 +628,69 @@ def test_basename_evasion_prevention(tmp_path, monkeypatch):
         generic.run_command("evil_bin", purpose="test basename evasion")
 
 
-def test_sandbox_fail_closed_if_unavailable(monkeypatch):
+def test_evidence_write_delete_mutation_blocked(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    evidence_dir = case_dir / "evidence"
+    tmp_dir = case_dir / "tmp"
+    evidence_dir.mkdir(parents=True)
+    tmp_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-018\n", encoding="utf-8")
+    (evidence_dir / "sealed.bin").write_text("sealed", encoding="utf-8")
+    (tmp_dir / "work.bin").write_text("work", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
     import shutil
-    monkeypatch.setattr(shutil, "which", lambda cmd: None)
+
+    def fake_which(cmd):
+        if cmd in ("cp", "rm", "mv"):
+            return f"/usr/bin/{cmd}"
+        return None
+
+    monkeypatch.setattr(shutil, "which", fake_which)
+
+    calls = []
+
+    def fake_execute(cmd_list, **kwargs):
+        calls.append(cmd_list)
+        return {"exit_code": 0, "stdout": "", "stderr": "", "stdout_total_bytes": 0}
+
+    monkeypatch.setattr(generic, "execute", fake_execute)
+
+    res = generic.run_command(
+        "cp evidence/sealed.bin tmp/copy.bin",
+        purpose="allow evidence read to writable output",
+    )
+    assert res["exit_code"] == 0
+    assert calls[0] == [
+        {"argv": ["/usr/bin/cp", "evidence/sealed.bin", "tmp/copy.bin"], "redirects": []}
+    ]
+
+    with pytest.raises(ValueError, match="Output denied: path .*protected case"):
+        generic.run_command(
+            "cp /usr/bin/python3 evidence/qa-decoy-REMOVEME",
+            purpose="block evidence write",
+        )
+
+    with pytest.raises(ValueError, match="Blocked: rm in protected directory"):
+        generic.run_command("rm evidence/sealed.bin", purpose="block evidence delete")
+
+    with pytest.raises(ValueError, match="Move denied: path .*protected case"):
+        generic.run_command("mv evidence/sealed.bin tmp/sealed.bin", purpose="block evidence move")
+
+
+def test_native_runtime_fails_when_sudo_missing(monkeypatch):
+    import pwd
+
+    from sift_core.execute import executor as executor_module
 
     from sift_core.execute.exceptions import ExecutionError
-    with pytest.raises(ExecutionError, match="Sandbox execution failed: systemd-run is unavailable"):
-        generic.execute(["date"])
+
+    monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "agent_runtime")
+    monkeypatch.setattr(pwd, "getpwnam", lambda name: object())
+    monkeypatch.setattr(executor_module.shutil, "which", lambda cmd: "/missing/sudo")
+
+    with pytest.raises(ExecutionError, match="requires sudo"):
+        execute(["date"])
 
 
 def test_stages_auditing(tmp_path, monkeypatch):
@@ -839,5 +894,3 @@ def test_worker_merges_stderr_into_stdout(tmp_path):
     assert result["exit_code"] == 0
     assert "O" in result["stdout"] and "E" in result["stdout"]
     assert result["stderr"] == ""
-
-

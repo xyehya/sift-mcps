@@ -6,7 +6,7 @@ import yaml
 
 from sift_core.execute.catalog import load_security_policy
 from sift_core.execute.security_policy import SECURITY_POLICY_ENV
-from sift_gateway.config import load_config
+from sift_gateway.config import EXECUTE_AS_USER_ENV, load_config
 
 
 def test_gateway_config_exports_effective_executor_policy(tmp_path, monkeypatch):
@@ -15,12 +15,16 @@ def test_gateway_config_exports_effective_executor_policy(tmp_path, monkeypatch)
         yaml.safe_dump(
             {
                 "case": {"root": str(tmp_path / "cases"), "dir": ""},
-                "execute": {"security": {"denied_binaries": ["echo"]}},
+                "execute": {
+                    "runtime_user": "agent_runtime",
+                    "security": {"denied_binaries": ["echo"]},
+                },
             }
         ),
         encoding="utf-8",
     )
     monkeypatch.delenv(SECURITY_POLICY_ENV, raising=False)
+    monkeypatch.delenv(EXECUTE_AS_USER_ENV, raising=False)
 
     load_config(str(cfg_path))
 
@@ -30,6 +34,7 @@ def test_gateway_config_exports_effective_executor_policy(tmp_path, monkeypatch)
     assert "echo" in policy["denied_binaries"]
     assert "env" in policy["denied_binaries"]
     assert Path(os.environ["SIFT_CASES_ROOT"]) == tmp_path / "cases"
+    assert os.environ[EXECUTE_AS_USER_ENV] == "agent_runtime"
 
 
 def test_gateway_config_exports_allowlist_executor_policy(tmp_path, monkeypatch):
@@ -39,6 +44,7 @@ def test_gateway_config_exports_allowlist_executor_policy(tmp_path, monkeypatch)
             {
                 "case": {"root": str(tmp_path / "cases"), "dir": ""},
                 "execute": {
+                    "runtime_user": "__current__",
                     "security": {
                         "mode": "allowlist",
                         "allowed_binaries": ["date"],
@@ -50,6 +56,7 @@ def test_gateway_config_exports_allowlist_executor_policy(tmp_path, monkeypatch)
         encoding="utf-8",
     )
     monkeypatch.delenv(SECURITY_POLICY_ENV, raising=False)
+    monkeypatch.delenv(EXECUTE_AS_USER_ENV, raising=False)
 
     load_config(str(cfg_path))
 
@@ -58,6 +65,7 @@ def test_gateway_config_exports_allowlist_executor_policy(tmp_path, monkeypatch)
     assert "date" in policy["allowed_binaries"]
     assert "echo" in policy["denied_binaries"]
     assert "env" in policy["denied_binaries"]
+    assert os.environ[EXECUTE_AS_USER_ENV] == "__current__"
 
 
 def test_gateway_config_rejects_empty_executor_policy(tmp_path):

@@ -113,8 +113,9 @@ def run_command(
     if cwd is None:
         cwd = os.environ.get("SIFT_CASE_DIR") or None
 
-    # Run the comprehensive shell validation and get validated stages
-    validated_stages = validate_shell_command(command)
+    # Run the comprehensive command-plan validation and get validated stages.
+    # Paths are resolved against the same cwd that the worker will use.
+    validated_stages = validate_shell_command(command, cwd=cwd)
 
     first_binary = ""
     privileged_candidate = False
@@ -209,10 +210,13 @@ def run_command(
                     escalated_argv = ["/usr/bin/sudo", "-n", "--", stage["resolved"]] + stage["argv"][1:]
                 else:
                     escalated_argv = stage["argv"]
-                escalated_stages.append({
+                escalated_stage = {
                     "argv": escalated_argv,
                     "redirects": stage["redirects"],
-                })
+                }
+                if stage["privileged"]:
+                    escalated_stage["runtime_user"] = ""
+                escalated_stages.append(escalated_stage)
 
             # Execute escalated stages
             pipeline_result = execute(

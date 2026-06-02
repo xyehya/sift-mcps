@@ -8,7 +8,12 @@ from sift_gateway.server import Gateway
 
 
 def _execute_security():
-    return {"execute": {"security": {"denied_binaries": ["env"]}}}
+    return {
+        "execute": {
+            "runtime_user": "__current__",
+            "security": {"denied_binaries": ["env"]},
+        }
+    }
 
 
 async def test_core_tools_are_in_process_when_core_backends_disabled(tmp_path, monkeypatch):
@@ -139,6 +144,7 @@ async def test_run_command_allowlist_mode_permits_configured_command(tmp_path, m
             "case": {"root": str(cases_root), "dir": case["case_dir"]},
             "backends": {},
             "execute": {
+                "runtime_user": "__current__",
                 "security": {
                     "mode": "allowlist",
                     "allowed_binaries": ["date"],
@@ -179,6 +185,7 @@ async def test_run_command_allowlist_mode_blocks_unlisted_command(tmp_path, monk
             "case": {"root": str(cases_root), "dir": case["case_dir"]},
             "backends": {},
             "execute": {
+                "runtime_user": "__current__",
                 "security": {
                     "mode": "allowlist",
                     "allowed_binaries": ["date"],
@@ -219,6 +226,7 @@ async def test_run_command_allowlist_mode_keeps_deny_floor_end_to_end(tmp_path, 
             "case": {"root": str(cases_root), "dir": case["case_dir"]},
             "backends": {},
             "execute": {
+                "runtime_user": "__current__",
                 "security": {
                     "mode": "allowlist",
                     "allowed_binaries": ["date", "env"],
@@ -352,8 +360,8 @@ async def test_run_command_privileged_escalation_integration(tmp_path, monkeypat
 
     # 2. Verify that calls were made directly then with sudo
     assert len(calls) == 2
-    assert calls[0] == [{"argv": ["mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")], "redirects": []}]
-    assert calls[1] == [{"argv": ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")], "redirects": []}]
+    assert calls[0] == [{"argv": ["/usr/bin/mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")], "redirects": []}]
+    assert calls[1] == [{"argv": ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")], "redirects": [], "runtime_user": ""}]
 
     # 3. Verify audit entries are written under SIFT_STATE_DIR / PRIV-001 / audit / sift-gateway.jsonl
     audit_file = state_dir / "PRIV-001" / "audit" / "sift-gateway.jsonl"

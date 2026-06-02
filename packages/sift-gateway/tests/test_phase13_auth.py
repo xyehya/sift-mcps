@@ -9,7 +9,12 @@ import secrets
 
 from sift_gateway.auth import verify_api_key
 from sift_gateway.mcp_endpoint import MCPAuthASGIApp
+from sift_gateway.server import _NormalizeMCPPath
 from sift_gateway.token_gen import generate_gateway_token, generate_service_token
+from starlette.applications import Starlette
+from starlette.responses import PlainTextResponse
+from starlette.routing import Mount
+from starlette.testclient import TestClient
 
 
 class _FakeSessionManager:
@@ -37,6 +42,22 @@ def test_generate_service_token_uses_sift_prefix_and_192_bits():
 def test_verify_api_key_rejects_revoked_token():
     token = "sift_svc_" + secrets.token_hex(24)
     assert verify_api_key(token, {token: {"role": "agent", "revoked_at": "2026-01-01T00:00:00Z"}}) is None
+
+
+def test_exact_mcp_path_is_rewritten_without_redirect():
+    async def endpoint(scope, receive, send):
+        response = PlainTextResponse(scope["path"])
+        await response(scope, receive, send)
+
+    app = Starlette(routes=[Mount("/mcp", app=endpoint)])
+    app.add_middleware(_NormalizeMCPPath)
+
+    client = TestClient(app, follow_redirects=False)
+    response = client.get("/mcp")
+
+    assert response.status_code == 200
+    assert response.text == "/mcp/"
+    assert "location" not in response.headers
 
 
 async def test_mcp_rejects_readonly_role_before_session_manager():

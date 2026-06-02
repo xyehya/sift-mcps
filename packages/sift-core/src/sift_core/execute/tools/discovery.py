@@ -90,20 +90,23 @@ def get_tool_help(tool_name: str) -> dict:
     if tool_name == "run_command":
         return {
             "name": "run_command",
-            "description": "Execute a forensic binary securely with policy-enforced arguments and paths.",
+            "description": "Execute a validated command plan as the low-privilege native runtime user. No shell wrapper is used; parsed argv stages are launched with shell=False.",
             "policy": {
                 "blocked_constructs": [
-                    "multi-command sh -c with semicolons or &&",
-                    "awk regex alternation (often interpreted as a pipe operator by security guards)",
-                    "Python snippets with shell metacharacters",
-                    "awk system(), getline, and pipes"
+                    "agent-supplied sudo",
+                    "nested shells/interpreters such as sh, bash, python, perl, ruby, node",
+                    "background operator '&'",
+                    "heredocs and exotic file-descriptor duplication",
+                    "writes, deletes, or metadata changes under evidence/ or integrity-record directories",
+                    "awk system(), getline, and pipe constructs",
                 ],
                 "safe_alternatives": [
-                    "Use explicit filtering tools like grep instead of complex awk matching",
-                    "Use absolute file paths for output directories",
-                    "Chain operations using subsequent agent turns rather than shell pipelines"
+                    "Use a single command string for pipelines: fls evidence/disk.E01 | grep Users",
+                    "Write analysis outputs under agent/, extractions/, or tmp/",
+                    "Use '< input-file' instead of heredocs",
+                    "Use '2>&1', '2> agent/file.err', or '>/dev/null' for stderr control",
                 ],
-                "path_restrictions": "Outputs must be within the active case directory if set, or /tmp. Input paths outside evidence are restricted."
+                "path_restrictions": "Outputs must be under the active case agent/, extractions/, or tmp/ directories. Evidence and integrity records are read-only to the runtime user and write-blocked by policy."
             }
         }
     td = get_tool_def(tool_name)

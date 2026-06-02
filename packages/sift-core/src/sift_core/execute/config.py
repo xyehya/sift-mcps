@@ -34,6 +34,10 @@ class SiftConfig:
     # Optional address-space limit applied inside the isolated worker process.
     execute_memory_limit_bytes: int = 0
 
+    # Low-privilege local account used for native Linux user isolation.
+    # Set SIFT_EXECUTE_AS_USER=__current__ only for local tests/dev.
+    execute_as_user: str = "agent_runtime"
+
     # Hayabusa install location
     hayabusa_dir: str = "/opt/hayabusa"
 
@@ -80,6 +84,11 @@ class SiftConfig:
                 )
             except ValueError:
                 pass
+
+        execute_as_user = os.environ.get("SIFT_EXECUTE_AS_USER")
+        if execute_as_user is not None:
+            normalized = execute_as_user.strip()
+            cfg.execute_as_user = "" if normalized == "__current__" else normalized
 
         return cfg
 

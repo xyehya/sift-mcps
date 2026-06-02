@@ -9,7 +9,7 @@ import shlex
 import unicodedata
 from pathlib import Path
 
-from sift_core.case_io import cases_root
+from sift_core.case_io import case_records_dir, cases_root
 from sift_core.execute.environment import find_binary
 from sift_core.execute.exceptions import DeniedBinaryError, ExecutionError
 
@@ -139,7 +139,78 @@ def is_allowed_by_mode(binary_name: str) -> bool:
     )
 
 
-def validate_rm_targets(args: list[str]) -> None:
+def _resolve_user_path(path: str, *, base_dir: str | Path | None = None) -> Path:
+    raw = Path(path)
+    if raw.is_absolute():
+        return raw.resolve()
+    root = Path(base_dir).resolve() if base_dir else Path.cwd().resolve()
+    return (root / raw).resolve()
+
+
+def _path_is_under(path: Path, parent: Path) -> bool:
+    try:
+        return path == parent or path.is_relative_to(parent)
+    except ValueError:
+        return False
+
+
+def _case_dir_path() -> Path | None:
+    case_dir = resolve_case_dir()
+    if not case_dir:
+        return None
+    return Path(case_dir).resolve()
+
+
+def _case_writable_dirs(case_dir: Path) -> tuple[Path, ...]:
+    return (case_dir / "agent", case_dir / "extractions", case_dir / "tmp")
+
+
+def _case_protected_dirs(case_dir: Path, *, include_evidence: bool = True) -> tuple[Path, ...]:
+    dirs = [case_records_dir(case_dir)]
+    if include_evidence:
+        dirs.append(case_dir / "evidence")
+    # Temporary test cases keep legacy record shadows in the case root.
+    dirs.append(case_dir / "audit")
+    return tuple(path.resolve() for path in dirs)
+
+
+def _case_protected_record_files(case_dir: Path) -> tuple[Path, ...]:
+    names = (
+        "approvals.jsonl",
+        "evidence-ledger.jsonl",
+        "evidence-manifest.json",
+        "evidence-verify-state.json",
+    )
+    return tuple((case_dir / name).resolve() for name in names)
+
+
+def _reject_if_protected_case_path(resolved: Path, *, action: str) -> None:
+    case_dir = _case_dir_path()
+    if not case_dir:
+        return
+    include_evidence = action.lower() != "read"
+    for protected in _case_protected_dirs(case_dir, include_evidence=include_evidence):
+        if _path_is_under(resolved, protected):
+            raise ValueError(
+                f"{action} denied: path '{resolved}' is inside protected case "
+                f"directory '{protected}'. Evidence and integrity records are "
+                "operator-controlled; write analysis outputs under agent/, "
+                "extractions/, or tmp/."
+            )
+    for protected_file in _case_protected_record_files(case_dir):
+        if resolved == protected_file:
+            raise ValueError(
+                f"{action} denied: path '{resolved}' is a protected integrity record."
+            )
+
+
+def _validate_case_output_target(path: str, *, base_dir: str | Path | None = None) -> str:
+    resolved = _resolve_user_path(path, base_dir=base_dir)
+    _reject_if_protected_case_path(resolved, action="Output")
+    return validate_output_path(path, base_dir=base_dir)
+
+
+def validate_rm_targets(args: list[str], *, base_dir: str | Path | None = None) -> None:
     """Block rm from targeting evidence storage directories.
 
     rm is allowed for general cleanup but blocked inside evidence
@@ -152,19 +223,29 @@ def validate_rm_targets(args: list[str]) -> None:
     )
     path_args = [a for a in args if not a.startswith("-")]
     for arg in path_args:
-        resolved = str(Path(arg).resolve())
-        if resolved == "/":
+        resolved_path = _resolve_user_path(arg, base_dir=base_dir)
+        resolved = str(resolved_path)
+        if resolved_path == Path("/"):
             raise ValueError("Blocked: rm targeting filesystem root")
+        case_dir = resolve_case_dir()
+        if case_dir:
+            case_resolved_path = Path(case_dir).resolve()
+            if any(_path_is_under(resolved_path, d) for d in _case_writable_dirs(case_resolved_path)):
+                continue
+            protected_roots = [case_resolved_path / "evidence", case_records_dir(case_resolved_path)]
+            protected_roots.append(case_resolved_path / "audit")
+            for protected in protected_roots:
+                protected = protected.resolve()
+                if _path_is_under(resolved_path, protected):
+                    raise ValueError(
+                        f"Blocked: rm in protected directory '{protected}'." + _RM_GUIDANCE
+                    )
         for protected in _get_protected_dirs():
-            if resolved == protected or resolved.startswith(protected + "/"):
+            protected_path = Path(protected).resolve()
+            if _path_is_under(resolved_path, protected_path):
                 raise ValueError(
                     f"Blocked: rm in protected directory '{protected}'." + _RM_GUIDANCE
                 )
-        case_dir = resolve_case_dir()
-        if case_dir:
-            case_resolved = str(Path(case_dir).resolve())
-            if resolved == case_resolved or resolved.startswith(case_resolved + "/"):
-                raise ValueError("Blocked: rm in case directory." + _RM_GUIDANCE)
 
 
 _BLOCKED_DIRECTORIES = (
@@ -199,7 +280,7 @@ _OUTPUT_BLOCKED_DIRECTORIES = _BLOCKED_DIRECTORIES + (
 )
 
 
-def validate_output_path(path: str) -> str:
+def validate_output_path(path: str, *, base_dir: str | Path | None = None) -> str:
     """Validate that an output path is safe to write to.
 
     Stricter than validate_input_path. When SIFT_CASE_DIR is set, the
@@ -209,7 +290,7 @@ def validate_output_path(path: str) -> str:
     Case-dir containment is checked first so that case directories
     under /home are allowed.
     """
-    resolved = str(Path(path).resolve())
+    resolved = str(_resolve_user_path(path, base_dir=base_dir))
 
     # The null device is always an allowed sink: '> /dev/null' and
     # '2> /dev/null' are ubiquitous, benign idioms for discarding output.
@@ -255,7 +336,7 @@ def validate_output_path(path: str) -> str:
     )
 
 
-def validate_input_path(path: str) -> str:
+def validate_input_path(path: str, *, base_dir: str | Path | None = None) -> str:
     """Validate that an input file path is not in a blocked system directory.
 
     Resolves symlinks, then checks against a blocklist of sensitive system
@@ -267,10 +348,12 @@ def validate_input_path(path: str) -> str:
     if "=" in path and path.startswith("-"):
         value = path.split("=", 1)[1]
         if value and (value.startswith("/") or value.startswith("..") or "/" in value):
-            return validate_input_path(value)
+            return validate_input_path(value, base_dir=base_dir)
         return path
 
-    resolved = str(Path(path).resolve())
+    resolved_path = _resolve_user_path(path, base_dir=base_dir)
+    _reject_if_protected_case_path(resolved_path, action="Read")
+    resolved = str(resolved_path)
     for blocked in _BLOCKED_DIRECTORIES:
         if resolved == blocked or resolved.startswith(blocked + "/"):
             # Check if path falls within an allowed exception (evidence data)
@@ -312,16 +395,35 @@ _PRIVILEGED_TARGETS = {
     "dd", "dc3dd", "dcfldd", "vol", "vol3", "palso", "yara"
 }
 
+_MUTATING_POSITIONAL_TOOLS = {
+    "chmod",
+    "chown",
+    "chgrp",
+    "cp",
+    "install",
+    "mkdir",
+    "mv",
+    "rm",
+    "rmdir",
+    "rsync",
+    "setfacl",
+    "tee",
+    "touch",
+    "truncate",
+}
+
 _DESTRUCTIVE_PATTERNS = [
     # Database destructive commands
     re.compile(r"\b(drop|truncate)\s+(table|database|schema)\b", re.IGNORECASE),
     re.compile(r"\bdelete\s+from\s+\w+[ \t]*(?:;|\"|'|\n|$)", re.IGNORECASE),
 ]
 
-def _is_in_directory(path_str: str, parent: Path) -> bool:
+def _is_in_directory(
+    path_str: str, parent: Path, *, base_dir: str | Path | None = None
+) -> bool:
     try:
-        p = Path(path_str).absolute()
-        par = parent.absolute()
+        p = _resolve_user_path(path_str, base_dir=base_dir)
+        par = parent.resolve()
         return p == par or p.is_relative_to(par)
     except Exception:
         return False
@@ -570,7 +672,65 @@ def parse_subcommand_argv_and_redirects(subcmd_str: str) -> tuple[list[str], lis
     return argv, redirects
 
 
-def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
+def _path_args(argv: list[str]) -> list[str]:
+    return [arg for arg in argv[1:] if arg and not arg.startswith("-")]
+
+
+def _validate_no_protected_targets(
+    paths: list[str], *, base_dir: str | Path | None, action: str
+) -> None:
+    for path in paths:
+        if "=" in path and path.startswith("-"):
+            continue
+        resolved = _resolve_user_path(path, base_dir=base_dir)
+        _reject_if_protected_case_path(resolved, action=action)
+
+
+def validate_mutating_command_targets(
+    binary: str, argv: list[str], *, base_dir: str | Path | None = None
+) -> None:
+    """Validate common file-mutating tools against the case write policy."""
+    path_args = _path_args(argv)
+    if not path_args:
+        return
+
+    if binary == "rm":
+        validate_rm_targets(argv[1:], base_dir=base_dir)
+        return
+
+    if binary in {"mkdir", "rmdir", "touch", "truncate", "tee"}:
+        for target in path_args:
+            _validate_case_output_target(target, base_dir=base_dir)
+        return
+
+    if binary == "cp":
+        if len(path_args) >= 2:
+            for source in path_args[:-1]:
+                validate_input_path(source, base_dir=base_dir)
+            _validate_case_output_target(path_args[-1], base_dir=base_dir)
+        return
+
+    if binary == "mv":
+        if len(path_args) >= 2:
+            _validate_no_protected_targets(
+                path_args[:-1], base_dir=base_dir, action="Move"
+            )
+            _validate_case_output_target(path_args[-1], base_dir=base_dir)
+        return
+
+    if binary in {"chmod", "chown", "chgrp", "setfacl"}:
+        _validate_no_protected_targets(path_args, base_dir=base_dir, action="Metadata change")
+        return
+
+    if binary in {"install", "rsync"} and len(path_args) >= 2:
+        for source in path_args[:-1]:
+            validate_input_path(source, base_dir=base_dir)
+        _validate_case_output_target(path_args[-1], base_dir=base_dir)
+
+
+def validate_shell_command(
+    command_str: str, *, cwd: str | Path | None = None
+) -> list[dict[str, Any]]:
     """Validate a shell command string for safety across all subcommands.
     
     Returns a list of parsed and validated subcommand dictionaries.
@@ -604,6 +764,12 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
     validated_stages = []
     subcmds = split_command_by_operators(command_str)
     for subcmd_str, operator in subcmds:
+        if operator == "&":
+            raise ValueError(
+                "Background operator '&' is not supported by run_command. "
+                "Use a tool-specific persistent mount command, or run a separate "
+                "foreground command."
+            )
         if not subcmd_str.strip():
             continue
             
@@ -651,8 +817,7 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
         # validation yet execute the attacker-controlled file. find_binary()
         # resolves by basename via PATH / forensic dirs, so `resolved` is the
         # exact binary that was validated above.
-        if "/" in argv[0]:
-            argv[0] = resolved
+        argv[0] = resolved
 
         # Validate redirection targets
         for op, target in redirects:
@@ -667,44 +832,47 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
             if "$" in target or "%" in target:
                 raise ValueError("Shell expansion syntax in paths is blocked by security policy")
             if op in (">", ">>", "2>", "2>>", "&>", "&>>"):
-                validate_output_path(target)
+                validate_output_path(target, base_dir=cwd)
             elif op == "<":
-                validate_input_path(target)
+                validate_input_path(target, base_dir=cwd)
                 
-        # Validate argv paths
-        output_flags = get_output_flags()
-        prev_was_output_flag = False
-        for arg in argv[1:]:
-            if "=" in arg and arg.startswith("-"):
-                flag_part = arg.split("=", 1)[0]
-                value = arg.split("=", 1)[1]
-                if value and (value.startswith("/") or value.startswith("..") or "/" in value):
-                    if value.startswith("/dev/") and binary in _DEV_PATH_TOOLS:
-                        pass
-                    elif flag_part in output_flags:
-                        validate_output_path(value)
-                    else:
-                        validate_input_path(value)
-                prev_was_output_flag = False
-                continue
-            if arg.startswith("-") and "=" not in arg:
-                prev_was_output_flag = arg in output_flags
-                continue
-            if arg.startswith("/") or arg.startswith("..") or "/" in arg:
-                if arg.startswith("/dev/") and binary in _DEV_PATH_TOOLS:
-                    pass
-                elif prev_was_output_flag:
-                    validate_output_path(arg)
-                else:
-                     validate_input_path(arg)
+        # Validate argv paths. Common mutating positional tools need
+        # command-specific source/destination handling, so do not treat every
+        # path-looking positional argument as an input.
+        if binary in _MUTATING_POSITIONAL_TOOLS:
+            validate_mutating_command_targets(binary, argv, base_dir=cwd)
+        else:
+            output_flags = get_output_flags()
             prev_was_output_flag = False
+            for arg in argv[1:]:
+                if "=" in arg and arg.startswith("-"):
+                    flag_part = arg.split("=", 1)[0]
+                    value = arg.split("=", 1)[1]
+                    if value and (value.startswith("/") or value.startswith("..") or "/" in value):
+                        if value.startswith("/dev/") and binary in _DEV_PATH_TOOLS:
+                            pass
+                        elif flag_part in output_flags:
+                            validate_output_path(value, base_dir=cwd)
+                        else:
+                            validate_input_path(value, base_dir=cwd)
+                    prev_was_output_flag = False
+                    continue
+                if arg.startswith("-") and "=" not in arg:
+                    prev_was_output_flag = arg in output_flags
+                    continue
+                if arg.startswith("/") or arg.startswith("..") or "/" in arg:
+                    if arg.startswith("/dev/") and binary in _DEV_PATH_TOOLS:
+                        pass
+                    elif prev_was_output_flag:
+                        validate_output_path(arg, base_dir=cwd)
+                    else:
+                        validate_input_path(arg, base_dir=cwd)
+                prev_was_output_flag = False
             
         # Sanitize extra args
         sanitize_extra_args(argv[1:], tool_name=binary)
         
         # rm protection
-        if binary == "rm":
-            validate_rm_targets(argv[1:])
             
         # Privileged target checks
         if binary in _PRIVILEGED_TARGETS:
@@ -727,14 +895,14 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
                 if not case_dir:
                     raise ValueError("An active case is required to execute mount.")
                 allowed_target_dirs = [case_dir / "tmp", case_dir / "extractions", case_dir / "agent"]
-                if not any(_is_in_directory(target, d) for d in allowed_target_dirs):
+                if not any(_is_in_directory(target, d, base_dir=cwd) for d in allowed_target_dirs):
                     raise ValueError("mount target directory must be inside the case tmp/, extractions/, or agent/ directories.")
                     
                 source_ok = (
                     source.startswith("/dev/") or 
-                    _is_in_directory(source, Path("/dev")) or
-                    (case_dir and _is_in_directory(source, case_dir)) or
-                    (cases_root_dir and _is_in_directory(source, cases_root_dir))
+                    _is_in_directory(source, Path("/dev"), base_dir=cwd) or
+                    (case_dir and _is_in_directory(source, case_dir, base_dir=cwd)) or
+                    (cases_root_dir and _is_in_directory(source, cases_root_dir, base_dir=cwd))
                 )
                 if not source_ok:
                     raise ValueError("mount source must be under /dev/*, inside the active case, or the cases root.")
@@ -748,7 +916,7 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
                 if not case_dir:
                     raise ValueError("An active case is required to execute umount.")
                 allowed_target_dirs = [case_dir / "tmp", case_dir / "extractions", case_dir / "agent"]
-                if not any(_is_in_directory(target, d) for d in allowed_target_dirs):
+                if not any(_is_in_directory(target, d, base_dir=cwd) for d in allowed_target_dirs):
                     raise ValueError("umount target must be under case controlled mount directories (tmp/, extractions/, or agent/).")
                     
             elif binary == "losetup":
@@ -763,13 +931,13 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
                     positional_args = [arg for arg in argv[1:] if not arg.startswith("-")]
                     file_args = []
                     for arg in positional_args:
-                        if arg.startswith("/dev/") or _is_in_directory(arg, Path("/dev")):
+                        if arg.startswith("/dev/") or _is_in_directory(arg, Path("/dev"), base_dir=cwd):
                             continue
                         file_args.append(arg)
                     for farg in file_args:
                         ok = (
-                            (case_dir and _is_in_directory(farg, case_dir)) or
-                            (cases_root_dir and _is_in_directory(farg, cases_root_dir))
+                            (case_dir and _is_in_directory(farg, case_dir, base_dir=cwd)) or
+                            (cases_root_dir and _is_in_directory(farg, cases_root_dir, base_dir=cwd))
                         )
                         if not ok:
                             raise ValueError(f"losetup file target '{farg}' must be inside the active case or cases root.")
@@ -788,9 +956,9 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
                     
                 if_ok = (
                     if_val.startswith("/dev/") or 
-                    _is_in_directory(if_val, Path("/dev")) or
-                    (case_dir and _is_in_directory(if_val, case_dir)) or
-                    (cases_root_dir and _is_in_directory(if_val, cases_root_dir))
+                    _is_in_directory(if_val, Path("/dev"), base_dir=cwd) or
+                    (case_dir and _is_in_directory(if_val, case_dir, base_dir=cwd)) or
+                    (cases_root_dir and _is_in_directory(if_val, cases_root_dir, base_dir=cwd))
                 )
                 if not if_ok:
                     raise ValueError(f"{binary} if= source must be under /dev/*, inside the active case, or the cases root.")
@@ -798,7 +966,7 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
                 if not case_dir:
                     raise ValueError("An active case is required to execute dd.")
                 allowed_of_dirs = [case_dir / "agent", case_dir / "extractions", case_dir / "tmp"]
-                if not any(_is_in_directory(of_val, d) for d in allowed_of_dirs):
+                if not any(_is_in_directory(of_val, d, base_dir=cwd) for d in allowed_of_dirs):
                     raise ValueError(f"{binary} of= target must be under case agent/, extractions/, or tmp/ directories.")
                     
             elif binary == "fdisk":
@@ -818,4 +986,3 @@ def validate_shell_command(command_str: str) -> list[dict[str, Any]]:
         })
         
     return validated_stages
-

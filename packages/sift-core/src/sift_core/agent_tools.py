@@ -251,10 +251,15 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
     ),
     CoreToolSpec(
         "run_command",
-        "Execute a shell command (supporting pipes, semicolons, and redirects) securely on this SIFT VM. Security policies, denylists, path jails, audit logging, and response-capping are strictly enforced.",
+        "Execute a validated command plan on this SIFT VM as the low-privilege runtime user. Use a command string for pipes, semicolons, &&/||, and redirects; legacy command arrays are accepted only for simple argv calls. Security policy, case path jails, audit logging, provenance hashing, and response-capping are enforced.",
         _schema(
             {
-                "command": {"type": "string"},
+                "command": {
+                    "oneOf": [
+                        {"type": "string"},
+                        {"type": "array", "items": {"type": "string"}},
+                    ]
+                },
                 "purpose": {"type": "string"},
                 "timeout": {"type": "integer", "default": 0},
                 "save_output": {"type": "boolean", "default": False},
@@ -294,6 +299,31 @@ def _validate_str_length(value: str | None, field: str, max_len: int) -> None:
 
 def _json_result(data: Any) -> str:
     return json.dumps(data, indent=2, default=str)
+
+
+_ARRAY_OPERATOR_TOKENS = frozenset(
+    {"|", "&&", "||", ";", "&", ">", ">>", "<", "<<", "2>&1", "2>", "2>>", "&>", "&>>"}
+)
+
+
+def _coerce_run_command(command: Any) -> tuple[str | None, str | None]:
+    if isinstance(command, str):
+        return command, None
+    if isinstance(command, list) and all(isinstance(item, str) for item in command):
+        for token in command:
+            if token in _ARRAY_OPERATOR_TOKENS or any(
+                op in token for op in ("|", "&&", "||", ";", ">", "<")
+            ):
+                return (
+                    None,
+                    "command arrays are literal argv and cannot contain shell operators. "
+                    "Pass command as a single string when using pipes, redirects, "
+                    "semicolons, &&, or ||.",
+                )
+        import shlex
+
+        return shlex.join(command), None
+    return None, "command must be a string or an array of strings"
 
 
 # platform_capabilities is built declaration-driven in
@@ -372,12 +402,10 @@ def _evidence_verify() -> dict:
 
 
 def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
-    command = args.get("command") or ""
-    if isinstance(command, list) and all(isinstance(item, str) for item in command):
-        import shlex
-        command = shlex.join(command)
-    if not isinstance(command, str):
-        return {"error": "command must be a string"}
+    command, command_error = _coerce_run_command(args.get("command") or "")
+    if command_error:
+        return {"error": command_error}
+    assert command is not None
     purpose = str(args.get("purpose", ""))
     if not purpose:
         return {"error": "purpose is required"}
