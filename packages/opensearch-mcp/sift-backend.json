@@ -5,8 +5,9 @@
   "tier": "addon",
   "transport": "stdio",
   "namespace": "opensearch",
+  "instructions": "Use this backend for indexed evidence search, aggregation, timeline analysis, ingest, and enrichment. It is not an independent reference source; use reference-providing backends for grounding.",
   "capabilities": {
-    "provides": ["search", "ingest"],
+    "provides": ["search", "ingest", "enrichment"],
     "requires": ["https://localhost:9200"],
     "enriches_responses": false
   },
@@ -14,144 +15,184 @@
     {
       "name": "opensearch_search",
       "description": "Search indexed evidence with query_string syntax (supports time_from/time_to, offset pagination).",
+      "when_to_use": "Use for targeted searches across already indexed case evidence.",
+      "avoid_when": "Avoid before evidence has been ingested or when you need independent reference grounding.",
+      "output_notes": "Returns indexed case records; use tools/list for query syntax and schema details.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "ANALYZE"
     },
     {
       "name": "opensearch_count",
       "description": "Count documents matching a query.",
+      "when_to_use": "Use to size a search result set before retrieving records.",
+      "output_notes": "Returns counts only; follow with search or aggregate for evidence details.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "ANALYZE"
     },
     {
       "name": "opensearch_aggregate",
       "description": "Group indexed evidence by a field (terms aggregation) with an optional query filter.",
+      "when_to_use": "Use for scoping distributions such as event codes, users, hosts, processes, or IPs.",
+      "output_notes": "Aggregation output identifies pivots but is not itself a finding.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "ANALYZE"
     },
     {
       "name": "opensearch_get_event",
       "description": "Retrieve a single indexed document by its _id.",
+      "when_to_use": "Use when a search or timeline result gives a specific document ID to inspect.",
+      "output_notes": "Returns one indexed event/document for evidence review.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "ANALYZE"
     },
     {
       "name": "opensearch_timeline",
       "description": "Event count over time as a date histogram (supports time_from/time_to).",
+      "when_to_use": "Use to find activity spikes and temporal windows for deeper investigation.",
+      "output_notes": "Timeline buckets are scoping aids; inspect underlying events before conclusions.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "ANALYZE"
     },
     {
       "name": "opensearch_field_values",
       "description": "List unique values for a field (terms aggregation) with an optional query filter.",
+      "when_to_use": "Use to discover field values before writing narrower searches.",
+      "output_notes": "Returns value inventory for indexed evidence fields.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "ANALYZE"
     },
     {
       "name": "opensearch_status",
       "description": "OpenSearch cluster connectivity and per-case index status.",
+      "when_to_use": "Use as the backend health/readiness check and to confirm per-case index state.",
+      "output_notes": "Health/status output only; it is not case evidence.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "ingest",
-      "recommended_phase": "SEALED",
+      "recommended_phase": "INGEST",
       "health": true
     },
     {
       "name": "opensearch_shard_status",
       "description": "Shard usage and capacity headroom across the cluster.",
+      "when_to_use": "Use for operational readiness before large ingest or when indexing fails.",
+      "output_notes": "Administrative capacity signal; not investigation evidence.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
-      "recommended_phase": "SEALED"
+      "category": "admin",
+      "recommended_phase": "INGEST"
     },
     {
       "name": "opensearch_case_summary",
       "description": "Complete coverage overview of indexed evidence for a case — the first call in any indexed investigation.",
+      "when_to_use": "Use after ingest or at session start to understand indexed coverage and gaps.",
+      "output_notes": "Coverage gaps guide next actions; verify important claims with underlying records.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "ANALYZE"
     },
     {
       "name": "opensearch_inspect_container",
       "description": "Inspect a forensic container (E01/zip/etc.) before ingest to preview its contents.",
+      "when_to_use": "Use during evidence survey before deciding what to ingest.",
+      "output_notes": "Preview output helps plan ingest and does not modify evidence.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "evidence-survey",
-      "recommended_phase": "SEALED"
+      "recommended_phase": "SURVEY"
     },
     {
       "name": "opensearch_ingest",
       "description": "Discover and ingest forensic artifacts into OpenSearch. dry_run=True by default — the agent must explicitly set dry_run=False to write.",
+      "when_to_use": "Use after examiner approval to index evidence for structured search.",
+      "avoid_when": "Avoid setting dry_run=False until the target evidence and ingest plan are clear.",
+      "output_notes": "Mutating operation scoped to the OpenSearch index; dry runs should precede writes.",
       "read_only": false,
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "ingest",
-      "recommended_phase": "SEALED"
+      "recommended_phase": "INGEST"
     },
     {
       "name": "opensearch_ingest_status",
       "description": "Check running/recent ingest operations for a case (\"*\" for all cases).",
+      "when_to_use": "Use to monitor ingest progress or troubleshoot recent ingest runs.",
+      "output_notes": "Operational status only; inspect indexed records for evidence.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "ingest",
-      "recommended_phase": "SEALED"
+      "recommended_phase": "INGEST"
     },
     {
       "name": "opensearch_enrich_intel",
       "description": "Enrich indexed evidence with OpenCTI threat intel. Async — returns immediately with a run_id.",
+      "when_to_use": "Use after indexed indicators exist and CTI context would help prioritize pivots.",
+      "avoid_when": "Avoid when OpenCTI is unavailable or when indicators are speculative.",
+      "output_notes": "Starts asynchronous enrichment; follow status/results before relying on output.",
       "read_only": false,
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "enrichment",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "CORRELATE"
     },
     {
       "name": "opensearch_enrich_triage",
       "description": "Run Windows baseline (windows-triage) enrichment on indexed data.",
+      "when_to_use": "Use after indexed Windows artifacts exist and baseline context can prioritize anomalies.",
+      "avoid_when": "Avoid treating UNKNOWN baseline enrichment as malicious by itself.",
+      "output_notes": "Starts enrichment over indexed data; verify interesting results against source records.",
       "read_only": false,
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "enrichment",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "CORRELATE"
     },
     {
       "name": "opensearch_list_detections",
       "description": "Query the Security Analytics plugin for Sigma rule detections; suggests Hayabusa alternatives.",
+      "when_to_use": "Use to identify indexed Sigma/Security Analytics detections for triage pivots.",
+      "output_notes": "Detection hits require validation against source events and surrounding context.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "ANALYZE"
     },
     {
       "name": "opensearch_host_fix",
       "description": "Correct a wrong host.id mapping across all indexed documents (reindexes affected docs). Scoped to OpenSearch index/alias state.",
+      "when_to_use": "Use only when indexed host identity is known to be wrong and needs correction.",
+      "avoid_when": "Avoid before confirming the canonical host mapping with the examiner or evidence.",
+      "output_notes": "Mutates indexed OpenSearch documents only; it does not alter original evidence.",
       "read_only": false,
       "readOnlyHint": false,
-      "evidence_class": "mutating"
+      "evidence_class": "mutating",
+      "category": "admin",
+      "recommended_phase": "INGEST"
     }
   ],
   "health": "opensearch_status"

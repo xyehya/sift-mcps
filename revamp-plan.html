@@ -300,7 +300,7 @@
     <h3>3.3 — ADD-ON (stay external · contract-governed · renamed namespaces)</h3>
     <table>
       <tbody><tr><th>Backend</th><th>Tools (count)</th><th>Namespace</th><th>requires[]</th></tr>
-      <tr><td><code>opensearch-mcp</code></td><td>15 <code>idx_*</code> + <code>case_host_fix</code></td><td><code>idx_*</code> → <b><code>opensearch_*</code></b></td><td>opensearch_service, docker, RAM</td></tr>
+      <tr><td><code>opensearch-mcp</code></td><td>15 <code>idx_*</code> + <code>case_host_fix</code></td><td><code>idx_*</code> → <b><code>opensearch_*</code></b></td><td><code>https://localhost:9200</code></td></tr>
       <tr><td><code>opencti-mcp</code></td><td>8 (get_entity, lookup_ioc, search_threat_intel, search_entity, get_relationships, get_recent_indicators, search_reports, get_health)</td><td><b><code>cti_*</code></b></td><td>opencti_service, ≥14 GB</td></tr>
       <tr><td><code>windows-triage-mcp</code></td><td>6 (check_artifact, check_process_tree, check_system, check_registry, check_pipe, server_status)</td><td><b><code>wintriage_*</code></b></td><td>baseline_db (SQLite, offline)</td></tr>
       <tr><td><code>forensic-rag-mcp</code></td><td>3 (search_knowledge, list_knowledge_sources, get_knowledge_stats)</td><td><b><code>kb_*</code></b></td><td>vector_index</td></tr>
@@ -340,88 +340,54 @@
 
     <h3 id="manifest">4.1 — Backend manifest (<code>sift-backend.json</code>)</h3>
     <p>Every backend ships a manifest at a well-known path. The gateway loads it at registration, validates against the schema, runs the conformance probe (reusing the <code>/mcp/{name}</code> endpoint, P8), and only then merges the backend's tools into <code>/mcp</code>. This replaces today's reactive discovery and collision-prefixing.</p>
-    <h4>JSON Schema (Draft 2020-12) — v3 (identity <b>retired</b> → core-native/out-of-band per F-F; <code>output_cap</code> removed → centralized in the trust layer, §Phase 5; keeps <code>evidence_class</code>, <code>requires_privilege</code>, enrichment)</h4>
+    <h4>JSON Schema (Draft 2020-12) — v4 (identity <b>retired</b> → core-native/out-of-band per F-F; <code>output_cap</code> removed → centralized in the trust layer, §Phase 5; hardens add-on metadata so plug-and-play registration is contract-enforced)</h4>
+    <div class="callout fix"><b>Contract hardening:</b> add-on manifests now use schema/probe-enforced metadata, not per-backend conventions. <code>capabilities.provides</code> is restricted to <code>reference</code>, <code>search</code>, <code>ingest</code>, <code>enrichment</code>, <code>baseline</code>, and <code>threat-intel</code>. <code>reference</code> is the backend-level grounding switch and means independent corroboration/reference context; OpenSearch search/ingest does not count as grounding. Add-on <code>recommended_phase</code> is standardized as <code>SURVEY</code>, <code>INGEST</code>, <code>ANALYZE</code>, <code>CORRELATE</code>, <code>FINDING</code>. <code>SEALED</code> is a custody state, not a phase. Every add-on tool declares <code>read_only</code>, <code>readOnlyHint</code>, <code>evidence_class</code>, <code>category</code>, and <code>recommended_phase</code>; top-level <code>health</code> must point at exactly one declared <code>health:true</code> tool.</div>
     <pre><code>{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sift.org/schemas/sift-backend-1.0.json",
-  "title": "SIFT MCP Backend Manifest",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SiftBackendManifest",
   "type": "object",
   "required": ["spec_version","name","version","tier","transport",
-               "namespace","tools","health"],
+               "namespace","capabilities","tools","health"],
   "additionalProperties": false,
   "properties": {
-    "spec_version": { "type":"string", "pattern":"^1\\.\\d+$",
-      "description": "Major-version compat: gateway accepts 1.x, rejects 2.x. Do NOT pin an exact minor." },
-    "name":    { "type":"string", "pattern":"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$" },
-    "version": { "type":"string", "description":"Backend semver." },
-    "tier":    { "enum":["core","addon"] },
-    "transport": {
-      "type":"object", "required":["type"],
-      "properties": {
-        "type": { "enum":["stdio","http"] },
-        "command": { "type":"string" },
-        "args": { "type":"array", "items":{"type":"string"} },
-        "url": { "type":"string", "format":"uri" },
-        "env": { "type":"object", "additionalProperties":{"type":"string"} }
-      }
-    },
-    "namespace": { "type":"string", "pattern":"^[a-z][a-z0-9_]*$",
-      "description":"Mandatory tool-name prefix. Replaces reactive prefixing." },
+    "spec_version": { "type":"string", "pattern":"^1\\.[0-9]+$" },
+    "name": { "type":"string" },
+    "version": { "type":"string" },
+    "tier": { "enum":["addon"] },
+    "transport": { "enum":["stdio","http"] },
+    "namespace": { "type":"string" },
     "capabilities": {
       "type":"object",
+      "required":["provides","requires","enriches_responses"],
+      "additionalProperties": false,
       "properties": {
-        "provides": { "type":"array", "items":{"type":"string"} },
-        "requires": { "type":"array", "items":{"type":"string"},
-          "description":"Host caps/services needed. Tools hidden if unmet." },
-        "enriches_responses": { "type":"boolean", "default":false,
-          "description":"Backend injects runtime enrichment into its OWN tool \
-responses (per-backend context injection, allowed by design). The gateway \
-still applies the central response-guard + output-cap on top." }
+        "provides": { "type":"array", "uniqueItems":true,
+          "items":{"enum":["reference","search","ingest","enrichment","baseline","threat-intel"]} },
+        "requires": { "type":"array", "items":{"type":"string"} },
+        "enriches_responses": { "type":"boolean" }
       }
     },
-    "resource_requirements": {
-      "type":"object",
-      "properties": {
-        "min_ram_gb": { "type":"number" },
-        "needs_docker": { "type":"boolean" },
-        "host_tools": { "type":"array", "items":{"type":"string"} },
-        "services": { "type":"array", "items":{"type":"string"} }
-      }
-    },
-    "_comment_identity": "NO identity field (F-F). Identity is core-native: \
-resolved once at the auth boundary, threaded out-of-band, never declared by a \
-backend and never a tool argument. Backends are identity-transparent.",
-    "instructions": { "type":"string",
-      "description":"Canonical STATIC agent guidance. Gateway composes; single \
-authoritative source — ends the multi-layer sprawl (P5). Distinct from runtime \
-enrichment (capabilities.enriches_responses)." },
     "tools": {
       "type":"array", "minItems":1,
       "items": {
         "type":"object",
-        "required":["name","evidence_class","read_only"],
+        "required":["name","description","read_only","readOnlyHint","evidence_class","category","recommended_phase"],
         "additionalProperties": false,
         "properties": {
-          "name": { "type":"string",
-            "description":"MUST start with namespace + '_'." },
+          "name": { "type":"string" },
           "description": { "type":"string" },
           "read_only": { "type":"boolean" },
-          "evidence_class": { "enum":["read_only","analysis","mutating"],
-            "description":"Drives the evidence gate generically (§4.2)." },
-          "requires_privilege": { "type":"boolean", "default":false,
-            "description":"Tool needs root/caps (vol, dd, mount). Core executor \
-escalates via caps-first then sudoers-allowlist; escalation is audited (§5)." }
+          "readOnlyHint": { "type":"boolean" },
+          "evidence_class": { "enum":["read_only","analysis","mutating"] },
+          "category": { "enum":["evidence-survey","ingest","search-analysis","enrichment","baseline-check","threat-intel","admin"] },
+          "recommended_phase": { "enum":["SURVEY","INGEST","ANALYZE","CORRELATE","FINDING"] },
+          "health": { "type":"boolean" },
+          "health_args": { "type":"object" },
+          "hidden_from_agent": { "type":"boolean" }
         }
       }
     },
-    "health": {
-      "type":"object", "required":["method"],
-      "properties": {
-        "method": { "enum":["mcp_initialize","http_get"] },
-        "path": { "type":"string" },
-        "timeout_s": { "type":"integer", "default":15 }
-      }
-    }
+    "health": { "type":"string" }
   }
 }</code></pre>
 
@@ -433,23 +399,26 @@ escalates via caps-first then sudoers-allowlist; escalation is audited (§5)." }
   "name": "opensearch-mcp",
   "version": "2.3.0",
   "tier": "addon",
-  "transport": { "type":"stdio", "command":"uv",
-    "args":["run","opensearch-mcp"],
-    "env":{ "OPENSEARCH_HOST":"http://127.0.0.1:9200" } },
+  "transport": "stdio",
   "namespace": "opensearch",
-  "capabilities": { "provides":["evidence_indexing","search"],
-                    "requires":["opensearch_service"],
-                    "enriches_responses": true },
+  "capabilities": { "provides":["search","ingest","enrichment"],
+                    "requires":["https://localhost:9200"],
+                    "enriches_responses": false },
   "resource_requirements": { "min_ram_gb":8, "needs_docker":true,
                              "services":["sift-opensearch"] },
   "instructions": "Indexing &amp; search. Call opensearch_case_summary first for scope.",
   "tools": [
-    { "name":"opensearch_search", "read_only":true,
-      "evidence_class":"read_only" },
-    { "name":"opensearch_ingest", "read_only":false,
-      "evidence_class":"analysis" }
+    { "name":"opensearch_search", "description":"Search indexed evidence.",
+      "read_only":true, "readOnlyHint":true, "evidence_class":"read_only",
+      "category":"search-analysis", "recommended_phase":"ANALYZE" },
+    { "name":"opensearch_status", "description":"Check OpenSearch readiness.",
+      "read_only":true, "readOnlyHint":true, "evidence_class":"read_only",
+      "category":"ingest", "recommended_phase":"INGEST", "health":true },
+    { "name":"opensearch_ingest", "description":"Ingest evidence into OpenSearch.",
+      "read_only":false, "readOnlyHint":false, "evidence_class":"mutating",
+      "category":"ingest", "recommended_phase":"INGEST" }
   ],
-  "health": { "method":"mcp_initialize", "timeout_s":15 }
+  "health": "opensearch_status"
 }</code></pre>
       </div>
     </details>

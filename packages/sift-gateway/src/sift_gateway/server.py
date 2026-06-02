@@ -372,6 +372,9 @@ class Gateway:
                         "health": bool(t_decl.get("health", False)),
                         "health_args": t_decl.get("health_args", {}) or {},
                         "hidden_from_agent": bool(t_decl.get("hidden_from_agent", False)),
+                        "when_to_use": t_decl.get("when_to_use", ""),
+                        "avoid_when": t_decl.get("avoid_when", ""),
+                        "output_notes": t_decl.get("output_notes", ""),
                     }
 
             if backend.started:

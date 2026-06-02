@@ -16,6 +16,118 @@ logger = logging.getLogger(__name__)
 
 # Load schema
 SCHEMA_PATH = Path(__file__).parent.parent / "sift-backend.schema.json"
+VALID_EVIDENCE_CLASSES = {"read_only", "analysis", "mutating"}
+VALID_PHASES = {"SURVEY", "INGEST", "ANALYZE", "CORRELATE", "FINDING"}
+
+
+def _validate_manifest_instructions(manifest: dict, manifest_path: Path | None) -> None:
+    """Validate and resolve optional backend-level manifest instructions."""
+    inline = manifest.get("instructions")
+    path_value = manifest.get("instructions_path")
+
+    if inline and path_value:
+        raise ValueError("Manifest must use only one of instructions or instructions_path.")
+    if inline is not None and not str(inline).strip():
+        raise ValueError("Manifest instructions must not be empty when provided.")
+    if not path_value:
+        return
+    if manifest_path is None:
+        raise ValueError(
+            "Manifest instructions_path is only supported for local manifests."
+        )
+
+    rel_path = Path(str(path_value))
+    if rel_path.is_absolute():
+        raise ValueError("Manifest instructions_path must be relative to the backend package.")
+
+    package_root = manifest_path.resolve().parent
+    resolved = (package_root / rel_path).resolve()
+    try:
+        resolved.relative_to(package_root)
+    except ValueError as exc:
+        raise ValueError(
+            "Manifest instructions_path must stay inside the backend package."
+        ) from exc
+
+    if not resolved.is_file():
+        raise ValueError(f"Manifest instructions_path is not readable: {path_value}")
+    try:
+        text = resolved.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"Manifest instructions_path is not readable: {path_value}") from exc
+    if not text.strip():
+        raise ValueError("Manifest instructions_path file must not be empty.")
+    manifest["_resolved_instructions"] = text
+
+
+def validate_manifest_contract(manifest: dict, manifest_path: Path | None = None) -> None:
+    """Validate cross-field Backend Contract invariants."""
+    _validate_manifest_instructions(manifest, manifest_path)
+
+    namespace = manifest.get("namespace", "")
+    tools = manifest.get("tools", [])
+    if not tools:
+        raise ValueError("Manifest must declare at least one tool.")
+
+    declared_tools: dict[str, dict] = {}
+    health_tools: list[str] = []
+    for tool in tools:
+        tool_name = tool.get("name", "")
+        if tool_name in declared_tools:
+            raise ValueError(f"Duplicate tool declaration: {tool_name}")
+        declared_tools[tool_name] = tool
+
+        if namespace and not tool_name.startswith(f"{namespace}_"):
+            raise ValueError(
+                f"Tool '{tool_name}' does not start with declared namespace "
+                f"prefix '{namespace}_'"
+            )
+
+        read_only = tool.get("read_only")
+        read_only_hint = tool.get("readOnlyHint")
+        evidence_class = tool.get("evidence_class")
+        if read_only != read_only_hint:
+            raise ValueError(
+                f"Tool '{tool_name}' has inconsistent read_only/readOnlyHint "
+                f"values ({read_only!r} vs {read_only_hint!r})."
+            )
+        if evidence_class not in VALID_EVIDENCE_CLASSES:
+            raise ValueError(
+                f"Tool '{tool_name}' has invalid evidence_class: {evidence_class!r}"
+            )
+        if evidence_class == "read_only" and read_only is not True:
+            raise ValueError(
+                f"Tool '{tool_name}' evidence_class=read_only requires read_only=true."
+            )
+        if evidence_class == "mutating" and read_only is not False:
+            raise ValueError(
+                f"Tool '{tool_name}' evidence_class=mutating requires read_only=false."
+            )
+        if tool.get("recommended_phase") not in VALID_PHASES:
+            raise ValueError(
+                f"Tool '{tool_name}' has invalid recommended_phase: "
+                f"{tool.get('recommended_phase')!r}"
+            )
+        if tool.get("health"):
+            health_tools.append(tool_name)
+
+    health_name = manifest.get("health")
+    if not health_name:
+        raise ValueError("Manifest must declare top-level health tool name.")
+    if health_name not in declared_tools:
+        raise ValueError(
+            f"Top-level health tool '{health_name}' is not declared in tools[]."
+        )
+    if not declared_tools[health_name].get("health"):
+        raise ValueError(
+            f"Top-level health tool '{health_name}' must have tool-level "
+            '"health": true.'
+        )
+    if len(health_tools) != 1:
+        raise ValueError(
+            "Manifest must declare exactly one tool with health=true; "
+            f"found {len(health_tools)}."
+        )
 
 
 def load_and_validate_manifest(name: str, config: dict) -> dict | None:
@@ -109,6 +221,8 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
             raise jsonschema.ValidationError(f"Unsupported spec_version: {spec_version}. Gateway only supports version 1.x.")
 
         jsonschema.validate(instance=manifest_data, schema=schema)
+        local_manifest_path = manifest_path if "manifest_path" in locals() else None
+        validate_manifest_contract(manifest_data, local_manifest_path)
         logger.info("Successfully validated manifest for backend %s from %s", name, manifest_source)
         return manifest_data
     except Exception as e:

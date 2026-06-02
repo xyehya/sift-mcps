@@ -5,8 +5,9 @@
   "tier": "addon",
   "transport": "stdio",
   "namespace": "cti",
+  "instructions": "Use this backend for threat intelligence context and IOC enrichment. Treat intelligence as supporting context that must be correlated with case evidence.",
   "capabilities": {
-    "provides": ["reference"],
+    "provides": ["reference", "threat-intel"],
     "requires": [],
     "enriches_responses": false
   },
@@ -14,73 +15,93 @@
     {
       "name": "cti_get_health",
       "description": "Check OpenCTI server connectivity and API health.",
+      "when_to_use": "Use to confirm OpenCTI API readiness before relying on CTI lookups.",
+      "output_notes": "Health/status output only; it is not case evidence.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "threat-intel",
+      "recommended_phase": "SURVEY",
       "health": true
     },
     {
       "name": "cti_search_threat_intel",
       "description": "Broad search across all OpenCTI entity types: indicators, threat actors, malware, techniques, CVEs, and reports.",
+      "when_to_use": "Use for broad CTI discovery when you have a keyword, malware family, actor, CVE, or campaign term.",
+      "avoid_when": "Avoid using broad matches as attribution or root-cause evidence without corroborating case artifacts.",
+      "output_notes": "Returns intelligence entities and context; correlate with observed case indicators.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "threat-intel",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "CORRELATE"
     },
     {
       "name": "cti_search_entity",
       "description": "Search OpenCTI entities filtered by a single type (more precise than cti_search_threat_intel).",
+      "when_to_use": "Use when you know the desired OpenCTI entity type and need a more precise search.",
+      "output_notes": "Returns matching entities; use entity IDs with detail/relationship tools for deeper context.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "threat-intel",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "CORRELATE"
     },
     {
       "name": "cti_lookup_ioc",
       "description": "Look up a specific IOC (IP, hash, domain, or URL) and return full context.",
+      "when_to_use": "Use after extracting a concrete IOC from case evidence.",
+      "avoid_when": "Avoid looking up speculative indicators that have not been observed in evidence.",
+      "output_notes": "IOC context is supporting evidence; preserve the source artifact that produced the IOC.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "threat-intel",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "CORRELATE"
     },
     {
       "name": "cti_get_recent_indicators",
       "description": "Get recently added IOCs from the last N days.",
+      "when_to_use": "Use for situational awareness during active incident response when recent indicators may matter.",
+      "avoid_when": "Avoid bulk-pivoting on recent IOCs without a case-specific hypothesis or observed overlap.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "threat-intel",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "CORRELATE"
     },
     {
       "name": "cti_get_entity",
       "description": "Get full details for a specific entity by its OpenCTI UUID.",
+      "when_to_use": "Use after search returns an entity ID that needs full context.",
+      "output_notes": "Returns detailed CTI fields for a known entity.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
-      "category": "threat-intel"
+      "category": "threat-intel",
+      "recommended_phase": "CORRELATE"
     },
     {
       "name": "cti_get_relationships",
       "description": "Get relationships for an entity (who uses it, what it indicates, what it targets, etc.).",
+      "when_to_use": "Use to understand CTI relationships after selecting a relevant entity.",
+      "avoid_when": "Avoid converting relationships into attribution without independent evidence.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "threat-intel",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "CORRELATE"
     },
     {
       "name": "cti_search_reports",
       "description": "Search threat intelligence reports by keyword (campaign name, threat actor, malware family, CVE).",
+      "when_to_use": "Use when narrative report context may explain observed case indicators or techniques.",
+      "output_notes": "Reports are contextual references; quote sparingly and tie back to case artifacts.",
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "threat-intel",
-      "recommended_phase": "TRIAGE"
+      "recommended_phase": "CORRELATE"
     }
   ],
   "health": "cti_get_health"

@@ -22,13 +22,6 @@ import yaml
 from mcp.server.lowlevel.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import TextContent, Tool
-from sift_common.instructions import (
-    FORENSIC_MCP,
-    FORENSIC_RAG,
-    OPENCTI,
-    OPENSEARCH,
-    WINDOWS_TRIAGE,
-)
 from sift_common.instructions import GATEWAY as _GATEWAY_INSTRUCTIONS
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -50,24 +43,85 @@ from sift_gateway.response_guard import (
 
 logger = logging.getLogger(__name__)
 
-# Static instruction map for known local backends.
-# Used by create_backend_mcp_server() so per-backend MCP endpoints deliver
-# backend-specific instructions to clients during the Initialize handshake,
-# regardless of whether the backend subprocess has started yet.
-_BACKEND_INSTRUCTIONS: dict[str, str] = {
-    "forensic-mcp": FORENSIC_MCP,
-    "forensic-rag-mcp": FORENSIC_RAG,
-    "windows-triage-mcp": WINDOWS_TRIAGE,
-    "opencti-mcp": OPENCTI,
-    "opensearch-mcp": OPENSEARCH,
-}
-
 # Maximum MCP request body size (10 MB)
 _MAX_REQUEST_BYTES = 10 * 1024 * 1024
 
 
 _LAST_429_AUDIT: dict[str, float] = {}
 _429_AUDIT_INTERVAL = 5.0  # limit to one audit log entry per 5 seconds per key/IP
+
+
+def _build_gateway_instructions(gateway: Any) -> str:
+    """Compose aggregate /mcp instructions from core policy + add-on manifests."""
+    addon_lines: list[str] = []
+    for backend_name, backend in sorted(getattr(gateway, "backends", {}).items()):
+        manifest = getattr(backend, "manifest", None)
+        if not manifest:
+            continue
+
+        reqs = manifest.get("capabilities", {}).get("requires", [])
+        unmet = [req for req in reqs if not getattr(gateway, "evaluate_requirement")(req)]
+        if unmet:
+            addon_lines.append(
+                f"- {backend_name}: configured but currently unavailable "
+                f"(unmet requires: {', '.join(unmet)})."
+            )
+            continue
+
+        provides = manifest.get("capabilities", {}).get("provides", [])
+        tools = manifest.get("tools", [])
+        categories = sorted({
+            str(tool.get("category", ""))
+            for tool in tools
+            if tool.get("category")
+        })
+        phases = sorted({
+            str(tool.get("recommended_phase", ""))
+            for tool in tools
+            if tool.get("recommended_phase")
+        })
+        health = manifest.get("health", "")
+        line = (
+            f"- {backend_name}: provides {', '.join(provides) or 'unspecified'}; "
+            f"{len(tools)} declared tools"
+        )
+        if categories:
+            line += f"; categories: {', '.join(categories)}"
+        if phases:
+            line += f"; phases: {', '.join(phases)}"
+        if health:
+            line += f"; health: {health}"
+        line += "."
+        addon_lines.append(line)
+
+    if not addon_lines:
+        addon_text = (
+            "No add-on backend is currently configured and requirement-satisfied. "
+            "Use core tools only unless tools/list shows add-on tools."
+        )
+    else:
+        addon_text = "\n".join(addon_lines)
+
+    return (
+        f"{_GATEWAY_INSTRUCTIONS}\n\n"
+        "ADD-ON MANIFEST SUMMARY:\n"
+        "This section is generated from loaded sift-backend.json manifests and "
+        "current requires[] checks at gateway startup. For live backend health "
+        "and the exact tool surface, call workflow_status, environment_summary, "
+        "capability_guide, and tools/list.\n"
+        f"{addon_text}"
+    )
+
+
+def _backend_manifest_instructions(backend: Any) -> str | None:
+    manifest = getattr(backend, "manifest", None)
+    if not manifest:
+        return None
+    text = manifest.get("_resolved_instructions") or manifest.get("instructions")
+    if isinstance(text, str) and text.strip():
+        return text
+    return None
+
 
 def log_rate_limit_violation(gateway: Any, key: str, client_ip: str, identity: Any = None):
     now = time.monotonic()
@@ -420,6 +474,97 @@ async def _handle_environment_summary(gateway: Any) -> Sequence[TextContent]:
     return [TextContent(type="text", text=json.dumps(summary, indent=2, default=str))]
 
 
+def _capability_guide(gateway: Any) -> dict:
+    """Build a live manifest-derived guide for currently usable add-on tools."""
+    available = set(getattr(gateway, "_available_backends", set()))
+    meta_index: dict[str, dict] = getattr(gateway, "_tool_manifest_meta", {})
+    guide: dict[str, Any] = {
+        "platform": "sift-mcps",
+        "purpose": (
+            "Live capability guide from enabled, requirement-satisfied manifests. "
+            "Use tools/list for exact input schemas before calling a tool."
+        ),
+        "available_backends": [],
+        "unavailable_backends": [],
+        "groups": {
+            "by_provides": {},
+            "by_category": {},
+            "by_recommended_phase": {},
+        },
+    }
+
+    for backend_name, backend in sorted(getattr(gateway, "backends", {}).items()):
+        manifest = getattr(backend, "manifest", None)
+        if not manifest:
+            continue
+
+        reqs = list(manifest.get("capabilities", {}).get("requires", []))
+        unmet = [req for req in reqs if not getattr(gateway, "evaluate_requirement")(req)]
+        if backend_name not in available or unmet:
+            guide["unavailable_backends"].append({
+                "backend": backend_name,
+                "status": "unavailable",
+                "unmet_requires": unmet,
+            })
+            continue
+
+        provides = list(manifest.get("capabilities", {}).get("provides", []))
+        tool_entries: list[dict] = []
+        for decl in manifest.get("tools", []):
+            tool_name = decl.get("name")
+            if not tool_name or tool_name not in meta_index:
+                continue
+            meta = meta_index[tool_name]
+            if meta.get("hidden_from_agent"):
+                continue
+
+            entry = {
+                "name": tool_name,
+                "description": decl.get("description", ""),
+                "category": meta.get("category", ""),
+                "recommended_phase": meta.get("recommended_phase", ""),
+                "health": bool(meta.get("health")),
+                "when_to_use": decl.get("when_to_use", ""),
+                "avoid_when": decl.get("avoid_when", ""),
+                "output_notes": decl.get("output_notes", ""),
+            }
+            tool_entries.append({k: v for k, v in entry.items() if v not in ("", None)})
+
+            for provided in provides:
+                guide["groups"]["by_provides"].setdefault(provided, []).append(tool_name)
+            category = meta.get("category")
+            if category:
+                guide["groups"]["by_category"].setdefault(category, []).append(tool_name)
+            phase = meta.get("recommended_phase")
+            if phase:
+                guide["groups"]["by_recommended_phase"].setdefault(phase, []).append(tool_name)
+
+        health_tool = manifest.get("health")
+        guide["available_backends"].append({
+            "backend": backend_name,
+            "provides": provides,
+            "requires": reqs,
+            "unmet_requires": [],
+            "health_tool": health_tool,
+            "instructions": _backend_manifest_instructions(backend) or "",
+            "tools": tool_entries,
+        })
+
+    for groups in guide["groups"].values():
+        for key, names in list(groups.items()):
+            groups[key] = sorted(set(names))
+    return guide
+
+
+async def _handle_capability_guide(gateway: Any) -> Sequence[TextContent]:
+    return [
+        TextContent(
+            type="text",
+            text=json.dumps(_capability_guide(gateway), indent=2, default=str),
+        )
+    ]
+
+
 def _extract_dict_from_tool_result(result: list) -> dict:
     """Pull a dict out of TextContent tool results."""
     for item in result:
@@ -440,11 +585,10 @@ def _extract_dict_from_tool_result(result: list) -> dict:
 def create_mcp_server(gateway: Any) -> Server:
     """Build a low-level MCP ``Server`` that proxies through *gateway*.
 
-    ``@server.list_tools()`` aggregates tools from all backends (with
-    collision-prefixed names).  ``@server.call_tool()`` routes to the
+    ``@server.list_tools()`` aggregates tools from all backends.  ``@server.call_tool()`` routes to the
     correct backend, injecting analyst identity from the HTTP request.
     """
-    server = Server("sift-gateway", instructions=_GATEWAY_INSTRUCTIONS)
+    server = Server("sift-gateway", instructions=_build_gateway_instructions(gateway))
 
     # Core-policy agent-view filter: portal-managed in-process tools.
     # Add-on tools opt out of the agent view via their manifest
@@ -460,6 +604,7 @@ def create_mcp_server(gateway: Any) -> Server:
         # ── session-start: first calls every session ──
         "workflow_status": "session-start",
         "environment_summary": "session-start",
+        "capability_guide": "session-start",
         "case_status": "session-start",
         "case_file_structure": "session-start",
         # ── evidence-survey: inspect evidence before ingest ──
@@ -493,6 +638,7 @@ def create_mcp_server(gateway: Any) -> Server:
         # ORIENT: fresh case — understand what we have
         "workflow_status": "ORIENT",
         "environment_summary": "ORIENT",
+        "capability_guide": "ORIENT",
         "case_status": "ORIENT",
         "case_list": "ORIENT",
         "case_file_structure": "ORIENT",
@@ -535,6 +681,12 @@ def create_mcp_server(gateway: Any) -> Server:
         tools.append(Tool(
             name="environment_summary",
             description="Single-call environment overview. Collapses case_status, evidence_list, available core tooling, and the health tool each enabled add-on declares in its manifest into one response. Call this after workflow_status for a complete picture of platform readiness.",
+            inputSchema={"type": "object", "properties": {}},
+            annotations={"readOnlyHint": True},
+        ))
+        tools.append(Tool(
+            name="capability_guide",
+            description="Live manifest-derived guide to currently usable add-on capabilities. Groups tools by backend, provides[], category, and recommended phase, includes health and requires[] status, and points to tools/list for exact schemas.",
             inputSchema={"type": "object", "properties": {}},
             annotations={"readOnlyHint": True},
         ))
@@ -609,6 +761,9 @@ def create_mcp_server(gateway: Any) -> Server:
             # like any other agent tool; only reached once the chain is OK.
             if name == "environment_summary":
                 _final_contents = list(await _handle_environment_summary(gateway))
+                return _final_contents
+            if name == "capability_guide":
+                _final_contents = list(await _handle_capability_guide(gateway))
                 return _final_contents
 
             try:
@@ -812,9 +967,7 @@ def create_backend_mcp_server(gateway: Any, backend_name: str) -> Server:
     so that MCP sessions are isolated per backend.
     """
     backend = gateway.backends[backend_name]
-    instructions = _BACKEND_INSTRUCTIONS.get(backend_name)
-    if instructions is None:
-        instructions = backend.instructions
+    instructions = _backend_manifest_instructions(backend) or backend.instructions
     server = Server(f"sift-gateway/{backend_name}", instructions=instructions)
 
     @server.list_tools()

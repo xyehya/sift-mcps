@@ -16,6 +16,31 @@ from sift_core.case_manager import set_reference_backend_provider
 def _execute_security():
     return {"execute": {"security": {"denied_binaries": ["env"]}}}
 
+
+def _manifest_tool(
+    name: str,
+    *,
+    description: str = "test tool",
+    read_only: bool = True,
+    evidence_class: str = "read_only",
+    category: str = "search-analysis",
+    recommended_phase: str = "SURVEY",
+    health: bool = False,
+) -> dict:
+    tool = {
+        "name": name,
+        "description": description,
+        "read_only": read_only,
+        "readOnlyHint": read_only,
+        "evidence_class": evidence_class,
+        "category": category,
+        "recommended_phase": recommended_phase,
+    }
+    if health:
+        tool["health"] = True
+    return tool
+
+
 # Test identity resolution mapping
 def test_resolve_identity():
     api_keys = {
@@ -99,7 +124,8 @@ def test_manifest_validation(tmp_path):
             "requires": [],
             "enriches_responses": False
         },
-        "tools": []
+        "tools": [_manifest_tool("test_health", health=True)],
+        "health": "test_health"
     }
     
     manifest_path = tmp_path / "sift-backend.json"
@@ -130,9 +156,8 @@ def test_namespace_enforcement(tmp_path):
             "requires": [],
             "enriches_responses": False
         },
-        "tools": [
-            {"name": "search", "description": "bad tool"}
-        ]
+        "tools": [_manifest_tool("search", description="bad tool", health=True)],
+        "health": "search"
     }
     
     manifest_path = tmp_path / "sift-backend.json"
@@ -178,9 +203,8 @@ def test_requirements_gating(tmp_path):
             "requires": ["127.0.0.1:9999"],  # unreachable tcp port
             "enriches_responses": False
         },
-        "tools": [
-            {"name": "gated_tool", "description": "gated tool"}
-        ]
+        "tools": [_manifest_tool("gated_tool", description="gated tool", health=True)],
+        "health": "gated_tool"
     }
     
     manifest_path = tmp_path / "sift-backend.json"
@@ -228,9 +252,8 @@ def test_reference_provider(tmp_path):
             "requires": [],
             "enriches_responses": False
         },
-        "tools": [
-            {"name": "ref_tool", "description": "ref tool"}
-        ]
+        "tools": [_manifest_tool("ref_tool", description="ref tool", health=True)],
+        "health": "ref_tool"
     }
     
     manifest_path = tmp_path / "sift-backend.json"
@@ -327,8 +350,9 @@ def test_probe_backends_script_offline(tmp_path):
             "enriches_responses": False
         },
         "tools": [
-            {"name": "testvalid_tool", "description": "A valid tool"}
-        ]
+            _manifest_tool("testvalid_tool", description="A valid tool", health=True)
+        ],
+        "health": "testvalid_tool"
     }
     
     manifest_path = tmp_path / "sift-backend.json"

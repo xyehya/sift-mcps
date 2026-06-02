@@ -18,12 +18,18 @@
       "enum": ["stdio", "http"]
     },
     "namespace": { "type": "string" },
+    "instructions": { "type": "string" },
+    "instructions_path": { "type": "string" },
     "capabilities": {
       "type": "object",
       "properties": {
         "provides": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string",
+            "enum": ["reference", "search", "ingest", "enrichment", "baseline", "threat-intel"]
+          },
+          "uniqueItems": true
         },
         "requires": {
           "type": "array",
@@ -36,6 +42,7 @@
     },
     "tools": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "properties": {
@@ -47,13 +54,38 @@
             "type": "string",
             "enum": ["read_only", "analysis", "mutating"]
           },
-          "category": { "type": "string" },
-          "recommended_phase": { "type": "string" },
+          "category": {
+            "type": "string",
+            "enum": [
+              "evidence-survey",
+              "ingest",
+              "search-analysis",
+              "enrichment",
+              "baseline-check",
+              "threat-intel",
+              "admin"
+            ]
+          },
+          "recommended_phase": {
+            "type": "string",
+            "enum": ["SURVEY", "INGEST", "ANALYZE", "CORRELATE", "FINDING"]
+          },
           "health": { "type": "boolean" },
           "health_args": { "type": "object" },
-          "hidden_from_agent": { "type": "boolean" }
+          "hidden_from_agent": { "type": "boolean" },
+          "when_to_use": { "type": "string" },
+          "avoid_when": { "type": "string" },
+          "output_notes": { "type": "string" }
         },
-        "required": ["name", "description"],
+        "required": [
+          "name",
+          "description",
+          "read_only",
+          "readOnlyHint",
+          "evidence_class",
+          "category",
+          "recommended_phase"
+        ],
         "additionalProperties": false
       }
     },
@@ -61,6 +93,6 @@
       "type": "string"
     }
   },
-  "required": ["spec_version", "name", "version", "tier", "transport", "namespace", "capabilities", "tools"],
+  "required": ["spec_version", "name", "version", "tier", "transport", "namespace", "capabilities", "tools", "health"],
   "additionalProperties": false
 }

@@ -17,6 +17,106 @@ import jsonschema
 
 # Locate repo root
 REPO_ROOT = Path(__file__).resolve().parent.parent
+VALID_EVIDENCE_CLASSES = {"read_only", "analysis", "mutating"}
+VALID_PHASES = {"SURVEY", "INGEST", "ANALYZE", "CORRELATE", "FINDING"}
+
+
+def validate_manifest_instructions(manifest, manifest_path):
+    inline = manifest.get("instructions")
+    path_value = manifest.get("instructions_path")
+    if inline and path_value:
+        return "Manifest must use only one of instructions or instructions_path."
+    if inline is not None and not str(inline).strip():
+        return "Manifest instructions must not be empty when provided."
+    if not path_value:
+        return None
+
+    rel_path = Path(str(path_value))
+    if rel_path.is_absolute():
+        return "Manifest instructions_path must be relative to the backend package."
+
+    package_root = manifest_path.resolve().parent
+    resolved = (package_root / rel_path).resolve()
+    try:
+        resolved.relative_to(package_root)
+    except ValueError:
+        return "Manifest instructions_path must stay inside the backend package."
+
+    if not resolved.is_file():
+        return f"Manifest instructions_path is not readable: {path_value}"
+    try:
+        text = resolved.read_text(encoding="utf-8")
+    except OSError:
+        return f"Manifest instructions_path is not readable: {path_value}"
+    if not text.strip():
+        return "Manifest instructions_path file must not be empty."
+    return None
+
+
+def validate_manifest_contract(manifest, manifest_path):
+    """Validate cross-field manifest invariants beyond JSON Schema."""
+    instructions_error = validate_manifest_instructions(manifest, manifest_path)
+    if instructions_error:
+        return instructions_error
+
+    namespace = manifest.get("namespace", "")
+    tools = manifest.get("tools", [])
+    if not tools:
+        return "Manifest must declare at least one tool."
+
+    declared_tools = {}
+    health_tools = []
+    for tool in tools:
+        name = tool.get("name", "")
+        if name in declared_tools:
+            return f"Duplicate tool declaration: {name}"
+        declared_tools[name] = tool
+
+        if namespace and not name.startswith(f"{namespace}_"):
+            return (
+                f"Tool '{name}' does not start with declared namespace prefix "
+                f"'{namespace}_'"
+            )
+
+        read_only = tool.get("read_only")
+        read_only_hint = tool.get("readOnlyHint")
+        evidence_class = tool.get("evidence_class")
+        if read_only != read_only_hint:
+            return (
+                f"Tool '{name}' has inconsistent read_only/readOnlyHint values "
+                f"({read_only!r} vs {read_only_hint!r})."
+            )
+        if evidence_class not in VALID_EVIDENCE_CLASSES:
+            return f"Tool '{name}' has invalid evidence_class: {evidence_class!r}"
+        if evidence_class == "read_only" and read_only is not True:
+            return f"Tool '{name}' evidence_class=read_only requires read_only=true."
+        if evidence_class == "mutating" and read_only is not False:
+            return f"Tool '{name}' evidence_class=mutating requires read_only=false."
+        if tool.get("recommended_phase") not in VALID_PHASES:
+            return (
+                f"Tool '{name}' has invalid recommended_phase: "
+                f"{tool.get('recommended_phase')!r}"
+            )
+        if tool.get("health"):
+            health_tools.append(name)
+
+    health_name = manifest.get("health")
+    if not health_name:
+        return "Manifest must declare top-level health tool name."
+    if health_name not in declared_tools:
+        return f"Top-level health tool '{health_name}' is not declared in tools[]."
+    if not declared_tools[health_name].get("health"):
+        return (
+            f"Top-level health tool '{health_name}' must have tool-level "
+            '"health": true.'
+        )
+    if len(health_tools) != 1:
+        return (
+            "Manifest must declare exactly one tool with health=true; "
+            f"found {len(health_tools)}."
+        )
+
+    return None
 
 # SSL context helper
 def get_ssl_context():
@@ -204,6 +304,12 @@ def validate_backend(manifest_path, schema, gateway_url, token, skip_mcp_check=F
     except Exception as e:
         print(f"  [FAIL] JSON schema validation failed: {e}")
         return False
+
+    contract_error = validate_manifest_contract(manifest, Path(manifest_path))
+    if contract_error:
+        print(f"  [FAIL] Manifest contract validation failed: {contract_error}")
+        return False
+    print("  [PASS] Manifest contract invariants passed.")
 
     name = manifest.get("name")
     namespace = manifest.get("namespace", "")
