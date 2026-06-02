@@ -562,30 +562,12 @@ if enrichment.get("forensic_rag") is not True and os.environ.get("SIFT_RAG_ENABL
     enrichment["forensic_rag"] = True
     changed = True
 
-rag_backend = cfg.setdefault("backends", {}).get("forensic-rag-mcp")
-if isinstance(rag_backend, dict) and rag_backend.get("enabled") is not True and os.environ.get("SIFT_RAG_ENABLED") == "true":
-    rag_backend["enabled"] = True
-    changed = True
-
-wt_backend = cfg.setdefault("backends", {}).get("windows-triage-mcp")
-if isinstance(wt_backend, dict) and wt_backend.get("enabled") is not True:
-    wt_backend["enabled"] = True
-    changed = True
-
-if os.environ.get("SIFT_OPENCTI_ENABLED") == "true":
-    octi = cfg.setdefault("backends", {}).setdefault("opencti-mcp", {})
-    if octi.get("enabled") is not True:
-        octi["enabled"] = True
-        changed = True
-    env = octi.setdefault("env", {})
-    url = os.environ.get("OPENCTI_URL") or "http://127.0.0.1:8080"
-    token = os.environ.get("OPENCTI_TOKEN") or ""
-    if env.get("OPENCTI_URL") != url:
-        env["OPENCTI_URL"] = url
-        changed = True
-    if env.get("OPENCTI_TOKEN") != token:
-        env["OPENCTI_TOKEN"] = token
-        changed = True
+# NOTE: the installer no longer auto-enables add-on backends. Add-ons are
+# external/optional and are integrated through the portal self-service contract
+# door (validate -> register -> hot-reload), which writes their backend entry.
+# We only normalise args for whatever backends already exist (e.g.
+# portal-registered ones) below — we never add or enable a backend here.
+cfg.setdefault("backends", {})
 
 # Backend arg normalisation (ensure --python, --no-managed-python, --no-python-downloads)
 root = os.environ.get("SIFT_MCPS_ROOT") or ""
@@ -1032,6 +1014,9 @@ print_summary() {
   printf '  1. On the analyst machine, trust the CA cert or set REQUESTS_CA_BUNDLE.\n'
   printf '  2. Configure Hermes with configs/hermes-forensics-profile.yaml and the service token.\n'
   printf '  3. Sign into the portal as %s and reset the temporary password.\n' "$SIFT_EXAMINER"
+  printf '  4. Add-on backends are OPTIONAL and external. To integrate one, prepare it with\n'
+  printf '     scripts/setup-addon.sh, then register it from Portal -> Backends\n'
+  printf '     (validate -> register -> hot-reload). The core ships with none enabled.\n'
 }
 
 # =============================================================================

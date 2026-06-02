@@ -148,35 +148,12 @@ enrichment:
   opensearch_context: ${SIFT_OPENSEARCH_ENABLED}
   root: "/var/lib/sift/enrichment"
 
-backends:
-  forensic-rag-mcp:
-    enabled: ${SIFT_RAG_ENABLED}
-    type: stdio
-    command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "rag-mcp"]
-
-  windows-triage-mcp:
-    enabled: ${SIFT_WINDOWS_TRIAGE_ENABLED}
-    type: stdio
-    command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "windows-triage-mcp"]
-    env:
-      SIFT_WINDOWS_TRIAGE_DB_DIR: "${SIFT_WINDOWS_TRIAGE_DB_DIR}"
-
-  opensearch-mcp:
-    enabled: ${SIFT_OPENSEARCH_ENABLED}
-    type: stdio
-    command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "opensearch-mcp"]
-    env:
-      OPENSEARCH_CONFIG: "${SIFT_HOME}/opensearch.yaml"
-      OPENSEARCH_HOST: "http://127.0.0.1:9200"
-
-  opencti-mcp:
-    enabled: ${SIFT_OPENCTI_ENABLED}
-    type: stdio
-    command: "${UV_BIN}"
-    args: ["run", "--project", "${SIFT_MCPS_ROOT}", "--python", "${PYTHON_BIN}", "--no-managed-python", "--no-python-downloads", "opencti-mcp"]
-    env:
-      OPENCTI_URL: "${OPENCTI_URL}"
-      OPENCTI_TOKEN: "${OPENCTI_TOKEN}"
+# The SIFT Protocol Gateway core is self-contained and names NO add-on backend
+# here. Add-ons (OpenCTI, OpenSearch, windows-triage, forensic-rag, or any
+# third-party backend written to the SIFT MCP Backend Contract) are external
+# and optional. They are added through the ONE integration door — the portal
+# self-service flow (validate -> register -> hot-reload), which writes the
+# backend entry into this block at registration time. Do not pre-seed add-ons
+# here; that would couple the core to specific backends. Use the portal, or
+# `scripts/setup-addon.sh` to prepare a register payload for it.
+backends: {}

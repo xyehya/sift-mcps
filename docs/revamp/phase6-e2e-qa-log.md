@@ -48,7 +48,8 @@ of invoking it once on a sealed case via Claude Code.
 
 | ID | Area | Severity | Repro | Expected vs actual | Root-cause hypothesis | Remediation status | Retest |
 |----|------|----------|-------|--------------------|-----------------------|--------------------|--------|
-| _(none yet)_ | | | | | | | |
+| D-001 | install / core | major (off-message; runtime-inert) | `install.sh --core-only` → inspect `~/.sift/gateway.yaml` | Expected: a standalone-core config names **no** add-on backends. Actual: `backends:` block enumerated all four reference add-ons with `enabled: false`. | `configs/gateway.yaml.template` hardcoded the four reference backends, each `enabled: ${SIFT_*_ENABLED}`; core-only set the flags false but the entries still rendered. Contradicts "SPG core is self-contained; add-ons external/optional/bring-your-own" and is redundant with the portal register flow that writes entries on registration. | **FIXED (all paths)** — template now ships `backends: {}` (with a comment forbidding pre-seeding); `_migrate_gateway_config` no longer auto-enables rag/wintriage/opensearch/opencti (only normalizes args for portal-written entries); install summary directs operators to register add-ons via Portal → Backends / `setup-addon.sh`. Template renders to `backends: {}`, valid YAML. | Pending live re-gen on VM (`rm ~/.sift/gateway.yaml && ./install.sh --core-only`) |
+| D-001-note | install / core | minor (follow-up) | inspect `enrichment:` block | The `enrichment.forensic_rag` / `enrichment.opensearch_context` toggles still carry add-on-capability names in core config (rendered `false` in core-only). | Separate enrichment feature flags, not backend registration; declaration-driven grounding makes them inert without a registered reference backend. | OPEN (low priority) — revisit if it causes a mismatch when an add-on is registered without flipping the flag | — |
 
 Area ∈ { install · core · add-on · portal · agent-tool · security }.
 
