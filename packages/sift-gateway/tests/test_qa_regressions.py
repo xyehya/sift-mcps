@@ -248,3 +248,67 @@ def test_capability_guide_empty_state_has_note():
     assert guide["scope"] == "add-on backends only"
     assert guide["available_backends"] == []
     assert "note" in guide and "expected" in guide["note"].lower()
+
+
+# ── Session 35: large-output save path (root cause behind KeyError/no path) ──
+
+
+async def test_large_output_no_preview_returns_path_not_keyerror(tmp_path, monkeypatch):
+    """Over-budget output WITHOUT preview_lines must succeed and surface
+    full_output_path. The pre-fix code popped _output_format/output_file before
+    reading them, so this exact path raised `KeyError: '_output_format'` and the
+    full output (saved on disk) was never reachable via the response."""
+    gateway, _ = _make_gateway(tmp_path, monkeypatch, "LARGE-OUT")
+    payload = await _call(
+        gateway,
+        "run_command",
+        {"command": ["seq", "1", "5000"], "purpose": "large output, no preview"},
+        examiner="alice",
+    )
+    assert "keyerror" not in json.dumps(payload).lower(), payload
+    assert payload["success"] is True, payload
+    path = payload.get("full_output_path")
+    assert path, f"full_output_path missing on saved large output: {payload}"
+    assert Path(path).is_file(), path
+    assert payload.get("full_output_bytes", 0) > 10_240, payload
+
+
+async def test_preview_plus_save_surfaces_recoverable_full_output(tmp_path, monkeypatch):
+    """preview_lines + save_output must cap inline stdout AND return a
+    full_output_path whose file holds the COMPLETE (un-truncated) output."""
+    gateway, _ = _make_gateway(tmp_path, monkeypatch, "SAVE-PREVIEW")
+    payload = await _call(
+        gateway,
+        "run_command",
+        {
+            "command": ["seq", "1", "5000"],
+            "purpose": "preview plus save",
+            "preview_lines": 5,
+            "save_output": True,
+        },
+        examiner="alice",
+    )
+    assert payload["success"] is True, payload
+    data = payload["data"]
+    assert (data.get("stdout") or "").count("\n") <= 5, data
+    assert data.get("stdout_truncated") is True, data
+    path = payload.get("full_output_path")
+    assert path and Path(path).is_file(), payload
+    with open(path) as fh:
+        assert sum(1 for _ in fh) == 5000, "saved file must hold the full output"
+
+
+async def test_unsaved_command_mints_no_empty_output_dir(tmp_path, monkeypatch):
+    """A small command with no save_output must not create an empty
+    agent/run_commands/outputN/ directory (executor dir-creation was eager)."""
+    gateway, case = _make_gateway(tmp_path, monkeypatch, "NO-EMPTY-DIR")
+    payload = await _call(
+        gateway,
+        "run_command",
+        {"command": ["date"], "purpose": "tiny output"},
+        examiner="alice",
+    )
+    assert payload["success"] is True, payload
+    run_commands = Path(case["case_dir"]) / "agent" / "run_commands"
+    dirs = list(run_commands.glob("output*")) if run_commands.exists() else []
+    assert dirs == [], f"unexpected empty output dirs minted: {dirs}"

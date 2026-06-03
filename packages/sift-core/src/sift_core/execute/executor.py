@@ -182,22 +182,23 @@ def execute(
         if worker_result.get("stages"):
             response["stages"] = worker_result["stages"]
 
-        # Threshold-based save: auto-save when output exceeds response budget,
-        # or when save_output is explicitly requested.
+        # Threshold-based save: auto-save when output exceeds the response
+        # budget, or when save_output is explicitly requested. Resolve (and
+        # create) the numbered output dir lazily — only when we are actually
+        # going to save — so unsaved commands don't litter agent/run_commands/
+        # with empty outputN/ directories.
         case_dir = resolve_case_dir()
         exceeds_budget = stdout_byte_count > config.response_byte_budget
 
-        # Resolve save directory once
-        if save_dir:
-            out_dir = save_dir
-        elif case_dir:
-            out_dir = str(_next_run_command_output_dir(Path(case_dir)))
-        elif cwd:
-            out_dir = str(Path(cwd) / "extracted")
-        else:
-            out_dir = None
-
         if (exceeds_budget and case_dir) or save_output:
+            if save_dir:
+                out_dir = save_dir
+            elif case_dir:
+                out_dir = str(_next_run_command_output_dir(Path(case_dir)))
+            elif cwd:
+                out_dir = str(Path(cwd) / "extracted")
+            else:
+                out_dir = None
             _save_output(cmd_list, stdout, stderr, out_dir, response)
 
         return response

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import shlex
-from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -31,16 +30,6 @@ from sift_core.execute.security import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class CommandPlan:
-    original_argv: list[str]
-    direct_argv: list[str]
-    binary: str
-    privileged_candidate: bool
-    output_paths: list[str]
-    input_paths: list[str]
 
 
 def _is_in_directory(path_str: str, parent: Path) -> bool:
@@ -90,15 +79,20 @@ def run_command(
     cwd: str | None = None,
     preview_lines: int = 0,
 ) -> dict:
-    """Execute a shell command securely via bash.
+    """Execute a validated forensic command securely.
+
+    The command is parsed into argv stages and launched directly with
+    shell=False — there is no shell or bash wrapper. Pipes, sequencing
+    (&&/||/;), and redirects are interpreted by this function, not a shell.
 
     Args:
-        command: Command string or list to execute.
+        command: Command string or argv list to execute.
         purpose: Reason for running (audit trail).
         timeout: Override timeout.
         save_output: Save stdout/stderr to files.
         save_dir: Directory for saved output.
         cwd: Working directory.
+        preview_lines: Cap inline stdout to this many lines (0 = no cap).
 
     Raises:
         DeniedBinaryError: Binary is on the hard denylist.
@@ -126,17 +120,6 @@ def run_command(
             privileged_candidate = True
 
     binary = first_binary or "bash"
-
-    # CommandPlan creation
-    primary_stage = validated_stages[0]
-    plan = CommandPlan(
-        original_argv=[command],
-        direct_argv=primary_stage["argv"],
-        binary=binary,
-        privileged_candidate=privileged_candidate,
-        output_paths=[],
-        input_paths=[]
-    )
 
     # Group validated_stages by pipeline operator '|'
     pipelines = []

@@ -566,27 +566,32 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             preview_lines=min(int(args.get("preview_lines") or 0), 200),
         )
         elapsed = time.monotonic() - start
+        # Capture internal bookkeeping fields BEFORE stripping them from the
+        # inline data block. They drive full_output_path, the output format, the
+        # stage summary, and the audit record below. Popping them first (the
+        # original bug) raised KeyError on the large-output `_parsed` path and
+        # silently dropped full_output_path for every saved output.
+        output_file = exec_result.get("output_file")
+        output_sha256 = exec_result.get("output_sha256")
+        output_format = exec_result.get("_output_format", "text")
+        raw_stages = exec_result.get("stages") or []
+        stdout_total_bytes = exec_result.get("stdout_total_bytes")
         for _internal in ("stages", "_output_format", "executor", "runtime_user", "output_file", "output_sha256"):
             exec_result.pop(_internal, None)
         fk_name = get_tool_def(first_binary).knowledge_name if get_tool_def(first_binary) else first_binary
         artifact_hint = _detect_artifact_context([command])
-        if exec_result.get("_parsed"):
-            resp_data = exec_result["_parsed"]
-            resp_format = exec_result["_output_format"]
-        else:
-            resp_data = exec_result
-            resp_format = exec_result.get("_output_format", "text")
+        resp_data = exec_result["_parsed"] if exec_result.get("_parsed") else exec_result
         response = build_response(
             tool_name="run_command",
             success=exec_result["exit_code"] == 0,
             data=resp_data,
             audit_id=audit_id,
-            output_format=resp_format,
+            output_format=output_format,
             elapsed_seconds=elapsed,
             exit_code=exec_result["exit_code"],
             command=[command],
             fk_tool_name=fk_name,
-            output_files=[exec_result["output_file"]] if exec_result.get("output_file") else None,
+            output_files=[output_file] if output_file else None,
             extractions=exec_result.get("extractions"),
             skip_enrichment=bool(args.get("skip_enrichment", False)),
             artifact_context=artifact_hint,
@@ -598,17 +603,16 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                 response["agent_action"] = exec_result["agent_action"]
         if "privilege_escalation" in exec_result:
             response["privilege_escalation"] = exec_result["privilege_escalation"]
-        raw_stages = exec_result.get("stages") or []
         if len(raw_stages) > 1:
             response["stages"] = [
                 {"binary": s["binary"], "exit_code": s["exit_code"]}
                 for s in raw_stages
                 if "binary" in s
             ]
-        if exec_result.get("output_file"):
-            response["full_output_path"] = exec_result["output_file"]
-            response["full_output_sha256"] = exec_result.get("output_sha256")
-            response["full_output_bytes"] = exec_result.get("stdout_total_bytes")
+        if output_file:
+            response["full_output_path"] = output_file
+            response["full_output_sha256"] = output_sha256
+            response["full_output_bytes"] = stdout_total_bytes
 
         # Log privilege events using the same audit writer
         priv_events = exec_result.get("privilege_events", [])
@@ -625,17 +629,17 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             extra_audit["privilege_escalation"] = exec_result["privilege_escalation"]
         if "privilege_events" in exec_result:
             extra_audit["privilege_events"] = exec_result["privilege_events"]
-        if "stages" in exec_result:
-            extra_audit["stages"] = exec_result["stages"]
+        if raw_stages:
+            extra_audit["stages"] = raw_stages
 
         if audit.log(
             tool="run_command",
             params={"command": command, "purpose": purpose},
             result_summary={
                 "exit_code": exec_result["exit_code"],
-                "output_file": exec_result.get("output_file", ""),
-                "output_sha256": exec_result.get("output_sha256", ""),
-                "stdout_bytes": exec_result.get("stdout_total_bytes", 0),
+                "output_file": output_file or "",
+                "output_sha256": output_sha256 or "",
+                "stdout_bytes": stdout_total_bytes or 0,
                 "stdout_head": (exec_result.get("stdout") or "")[:500],
             },
             audit_id=audit_id,
