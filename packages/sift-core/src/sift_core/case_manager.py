@@ -106,8 +106,11 @@ def build_platform_capabilities() -> dict:
         guidance.append(f"- {label} add-on available (provides: {prov})")
     guidance.append("")
     guidance.append(
-        "Call capability_guide and tools/list for live tool availability and exact "
-        "schemas; suggest_tools(artifact_type='...') for analysis recommendations."
+        "For the core forensic tool catalog use list_available_tools (or "
+        "environment_summary); get_tool_help(tool_name='...') for usage and "
+        "suggest_tools(artifact_type='...') for analysis recommendations. "
+        "capability_guide lists ADD-ON backend tools only. Use tools/list for "
+        "exact input schemas before calling a tool."
     )
     return {
         "platform_capabilities": caps,

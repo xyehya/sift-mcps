@@ -529,9 +529,12 @@ def _capability_guide(gateway: Any) -> dict:
     guide: dict[str, Any] = {
         "platform": "sift-mcps",
         "purpose": (
-            "Live capability guide from enabled, requirement-satisfied manifests. "
-            "Use tools/list for exact input schemas before calling a tool."
+            "ADD-ON backend capabilities only, from enabled requirement-satisfied "
+            "manifests. The core forensic tool catalog is NOT listed here — use "
+            "list_available_tools or environment_summary for that. Use tools/list "
+            "for exact input schemas before calling a tool."
         ),
+        "scope": "add-on backends only",
         "available_backends": [],
         "unavailable_backends": [],
         "groups": {
@@ -601,6 +604,13 @@ def _capability_guide(gateway: Any) -> dict:
     for groups in guide["groups"].values():
         for key, names in list(groups.items()):
             groups[key] = sorted(set(names))
+
+    if not guide["available_backends"]:
+        guide["note"] = (
+            "No add-on backend is registered — this is the expected default, not "
+            "an error. Core forensic tools are available via run_command; list them "
+            "with list_available_tools or environment_summary."
+        )
     return guide
 
 
@@ -734,7 +744,7 @@ def create_mcp_server(gateway: Any) -> Server:
         ))
         tools.append(Tool(
             name="capability_guide",
-            description="Live manifest-derived guide to currently usable add-on capabilities. Groups tools by backend, provides[], category, and recommended phase, includes health and requires[] status, and points to tools/list for exact schemas.",
+            description="ADD-ON backends only: manifest-derived guide to currently usable add-on tools, grouped by backend, provides[], category, and recommended phase. Returns empty when no add-on backend is registered — that is expected, NOT an error. For the core forensic tool catalog use list_available_tools or environment_summary.",
             inputSchema={"type": "object", "properties": {}},
             annotations={"readOnlyHint": True},
         ))

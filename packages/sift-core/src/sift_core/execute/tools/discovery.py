@@ -33,6 +33,88 @@ ARTIFACT_ALIASES: dict[str, list[str]] = {
 
 _suggest_counter = itertools.count(1)
 
+
+def _normalize_artifact_key(value: str) -> str:
+    """Lowercase and collapse non-alphanumeric runs to single spaces.
+
+    Makes 'Security Event Log', 'security_event_log', and 'Security  Event-Log'
+    all comparable. Used to match user input against artifact ids and names.
+    """
+    out: list[str] = []
+    prev_sep = False
+    for ch in value.strip().lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_sep = False
+        elif not prev_sep:
+            out.append(" ")
+            prev_sep = True
+    return "".join(out).strip()
+
+
+_ARTIFACT_INDEX: dict[str, str] | None = None
+
+
+def _artifact_index() -> dict[str, str]:
+    """Build (and cache) a normalized-key -> artifact id lookup.
+
+    Indexes each artifact by its canonical id (file stem), its display name,
+    and any declared aliases, so that whatever identifier suggest_tools
+    advertises in available_artifacts can be passed straight back in.
+    """
+    global _ARTIFACT_INDEX
+    if _ARTIFACT_INDEX is not None:
+        return _ARTIFACT_INDEX
+    index: dict[str, str] = {}
+    try:
+        catalog = loader.artifact_catalog()
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug("artifact_catalog failed: %s", e)
+        catalog = []
+    for entry in catalog:
+        art_id = entry.get("id", "")
+        if not art_id:
+            continue
+        keys = [art_id, entry.get("name", ""), *entry.get("aliases", [])]
+        for key in keys:
+            norm = _normalize_artifact_key(str(key))
+            if norm:
+                index.setdefault(norm, art_id)
+    _ARTIFACT_INDEX = index
+    return index
+
+
+def _resolve_artifact_ids(artifact_type: str) -> list[str]:
+    """Resolve a user-supplied artifact_type to FK artifact ids.
+
+    Resolution order: multi-target alias map -> exact normalized match against
+    id/name/alias -> token-subset match. Returns [] when nothing matches.
+    """
+    raw = (artifact_type or "").strip()
+    if not raw:
+        return []
+    # 1. Multi-target alias map (e.g. "evtx" -> several event-log artifacts).
+    alias_hit = ARTIFACT_ALIASES.get(raw.lower())
+    if alias_hit:
+        return list(alias_hit)
+    index = _artifact_index()
+    norm = _normalize_artifact_key(raw)
+    if not norm:
+        return []
+    # 2. Exact normalized match.
+    if norm in index:
+        return [index[norm]]
+    # 3. Token-subset: every input token appears in a candidate key (and the
+    #    candidate is not absurdly broader). Conservative, deterministic.
+    input_tokens = set(norm.split())
+    matches: list[str] = []
+    for key, art_id in index.items():
+        key_tokens = set(key.split())
+        if input_tokens and input_tokens.issubset(key_tokens):
+            if art_id not in matches:
+                matches.append(art_id)
+    return matches
+
 # Layer 7b: SIFT limitations where wintools-mcp produces better results
 _SIFT_LIMITATIONS: dict[str, str] = {
     "srum": (
@@ -113,6 +195,7 @@ def get_tool_help(tool_name: str) -> dict:
     if not td:
         return {"error": f"Tool '{tool_name}' not in catalog. You can still run it, but run_command security policies apply."}
 
+    available = find_binary(td.binary) is not None
     result = {
         "name": td.name,
         "binary": td.binary,
@@ -123,8 +206,16 @@ def get_tool_help(tool_name: str) -> dict:
         "output_format": td.output_format,
         "timeout_seconds": td.timeout_seconds,
         "common_flags": td.common_flags,
-        "available": find_binary(td.binary) is not None,
+        "available": available,
     }
+    # This help reflects the catalog + curated forensic-knowledge entry, which
+    # may not cover every flag. For the tool's own complete CLI reference, run it
+    # with its help flag via run_command (e.g. run_command(['EvtxECmd','--help'])).
+    if available:
+        result["usage_hint"] = (
+            f"For the full CLI reference run: run_command(['{td.binary}', '--help']) "
+            f"(or '-h'). This card shows curated catalog + forensic-knowledge notes."
+        )
 
     # Add FK knowledge
     try:
@@ -179,8 +270,9 @@ def suggest_tools(artifact_type: str, question: str = "") -> dict:
     Returns an enriched envelope with suggestions, advisories, corroboration,
     cross-MCP checks, and discipline reminders.
     """
-    # Resolve aliases
-    artifact_names = ARTIFACT_ALIASES.get(artifact_type.lower(), [artifact_type])
+    # Resolve the requested artifact (display name, file-stem id, or alias) to
+    # one or more canonical FK artifact ids that get_artifact() accepts.
+    artifact_names = _resolve_artifact_ids(artifact_type)
 
     suggestions: list[dict] = []
     all_advisories: list[str] = []
@@ -243,13 +335,19 @@ def suggest_tools(artifact_type: str, question: str = "") -> dict:
 
     if not suggestions:
         try:
-            available = [a["name"] for a in loader.list_artifacts()]
+            available = [
+                {"id": a["id"], "name": a["name"]}
+                for a in loader.artifact_catalog()
+            ]
         except Exception as e:
-            logger.debug("FK list_artifacts failed: %s", e)
+            logger.debug("FK artifact_catalog failed: %s", e)
             available = []
         return {
             "suggestions": [],
-            "info": f"No tools found for artifact type '{artifact_type}'",
+            "info": (
+                f"No artifact matched '{artifact_type}'. Pass either the 'id' or "
+                "'name' of an entry in available_artifacts."
+            ),
             "available_artifacts": available,
         }
 

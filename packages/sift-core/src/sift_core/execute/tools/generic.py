@@ -273,6 +273,7 @@ def run_command(
             executed_stages_info.append({
                 "binary": stage["binary"],
                 "argv": stage["argv"],
+                "redirects": stage["redirects"],
                 "exit_code": exit_code
             })
 
@@ -305,6 +306,15 @@ def run_command(
             exec_result["truncated"] = True
 
         exec_result["stages"] = executed_stages_info
+        # Provenance fidelity: record the exact command string the agent ran and
+        # the structured argv/redirects for EVERY executed stage — not just the
+        # last pipeline segment (which is all `exec_result` would otherwise hold
+        # after the aggregation loop). Forensic audit must reflect the whole plan.
+        exec_result["original_command"] = command
+        exec_result["command"] = [
+            {"argv": s["argv"], "redirects": s["redirects"]}
+            for s in executed_stages_info
+        ]
         if escalation_info:
             exec_result["privilege_escalation"] = escalation_info
         if privilege_events:
@@ -335,6 +345,21 @@ def run_command(
     if warnings:
         exec_result["warnings"] = warnings
         exec_result["agent_action"] = agent_action
+
+    # Explicit preview: when the caller sets preview_lines, it is authoritative.
+    # Cap the inline stdout to that many lines and report truncation, regardless
+    # of size. The full output is preserved on disk (auto-saved when it exceeds
+    # the response budget, or whenever save_output is set), reachable via
+    # full_output_path — so context stays small without losing evidence.
+    if preview_lines and stdout:
+        lines = stdout.splitlines(keepends=True)
+        if len(lines) > preview_lines:
+            exec_result["stdout"] = "".join(lines[:preview_lines])
+            exec_result["stdout_truncated"] = True
+            exec_result["stdout_returned_lines"] = preview_lines
+            exec_result["stdout_total_lines"] = len(lines)
+        exec_result["_output_format"] = output_format
+        return exec_result
 
     # Small output — return as-is (no parsing overhead)
     if stdout_bytes <= cfg.response_byte_budget:

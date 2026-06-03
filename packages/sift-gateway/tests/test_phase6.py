@@ -144,10 +144,12 @@ def test_capability_guide_exact_shape_and_omits_disabled_or_gated_addons():
     assert set(guide) == {
         "platform",
         "purpose",
+        "scope",
         "available_backends",
         "unavailable_backends",
         "groups",
     }
+    assert guide["scope"] == "add-on backends only"
     assert set(guide["groups"]) == {
         "by_provides",
         "by_category",

@@ -154,6 +154,35 @@ def list_artifacts(platform: str | None = None) -> list[dict]:
     return results
 
 
+def artifact_catalog(platform: str | None = None) -> list[dict]:
+    """Return the artifact catalog with resolver-ready identifiers.
+
+    Each entry has both ``id`` (the file stem that :func:`get_artifact`
+    accepts, e.g. ``event_logs_security``) and ``name`` (the human display
+    name, e.g. ``Security Event Log``), plus any ``aliases`` and platform.
+    Use this — not :func:`list_artifacts` — whenever a caller needs an
+    identifier it can feed back into :func:`get_artifact`/``suggest_tools``.
+    """
+    results: list[dict] = []
+    platforms = [platform] if platform else ["windows", "linux", "macos"]
+    for plat in platforms:
+        data_dir = _find_data_dir() / f"artifacts/{plat}"
+        if not data_dir.is_dir():
+            continue
+        for yaml_file in sorted(data_dir.glob("*.yaml")):
+            doc = _load_yaml(f"artifacts/{plat}/{yaml_file.name}") or {}
+            aliases = doc.get("aliases", [])
+            results.append(
+                {
+                    "id": yaml_file.stem,
+                    "name": doc.get("name", yaml_file.stem),
+                    "aliases": list(aliases) if isinstance(aliases, list) else [],
+                    "platform": doc.get("platform", plat),
+                }
+            )
+    return results
+
+
 def get_artifacts_for_tool(tool_name: str) -> list[dict]:
     """Find artifacts that reference a specific tool in their related_tools."""
     results = []

@@ -739,25 +739,25 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
         """Create, list, update, or complete investigation TODOs.
 
         Use this for investigation task tracking, not for findings. Actions:
-        - action='add': requires description; optional assignee, priority,
-          related_findings.
+        - action='create': requires description; optional assignee, priority,
+          related_findings. ('add' is accepted as a legacy alias.)
         - action='list': optional status='open|completed|all' and assignee.
         - action='update': requires todo_id; optional status, note, assignee,
           priority.
         - action='complete': requires todo_id.
 
         Examples:
-        - manage_todo(action='add', description='Correlate 4624 logons for SRL-FORGE', priority='high')
+        - manage_todo(action='create', description='Correlate 4624 logons for SRL-FORGE', priority='high')
         - manage_todo(action='list', status='open')
         - manage_todo(action='complete', todo_id='T-001')
         """
         normalized = action.strip().lower()
-        if normalized == "add":
+        if normalized in ("create", "add"):
             if not description:
                 return {
                     "error": "missing_description",
-                    "message": "description is required when action='add'.",
-                    "next_step": "Call manage_todo(action='add', description='...').",
+                    "message": "description is required when action='create'.",
+                    "next_step": "Call manage_todo(action='create', description='...').",
                 }
             return add_todo(
                 description=description,
@@ -796,9 +796,9 @@ def create_server(reference_mode: str = "resources") -> FastMCP:
             return complete_todo(todo_id=todo_id)
         return {
             "error": "unsupported_todo_action",
-            "message": "action must be one of: add, list, update, complete",
-            "supported_actions": ["add", "list", "update", "complete"],
-            "next_step": "Call manage_todo with action='add', 'list', 'update', or 'complete'.",
+            "message": "action must be one of: create, list, update, complete",
+            "supported_actions": ["create", "list", "update", "complete"],
+            "next_step": "Call manage_todo with action='create', 'list', 'update', or 'complete'.",
         }
 
     # --- Discipline Reference Data ---

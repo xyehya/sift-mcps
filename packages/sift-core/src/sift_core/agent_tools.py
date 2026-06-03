@@ -7,6 +7,7 @@ this module and exposes the specs on its aggregate /mcp surface.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import hashlib
 import time
@@ -35,6 +36,8 @@ from sift_core.execute.tools.discovery import (
     suggest_tools as _suggest_tools,
 )
 from sift_core.execute.tools.generic import run_command as _execute_command
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -204,7 +207,10 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
     ),
     CoreToolSpec(
         "manage_todo",
-        "Create, list, update, or complete investigation TODOs.",
+        "Manage investigation TODOs. action='create' needs description (optional "
+        "priority, assignee, related_findings); 'list' takes optional status/assignee; "
+        "'update' needs todo_id (optional status/note/assignee/priority); 'complete' "
+        "needs todo_id.",
         _schema(
             {
                 "action": {"type": "string", "enum": ["create", "list", "update", "complete"]},
@@ -251,22 +257,29 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
     ),
     CoreToolSpec(
         "run_command",
-        "Execute a validated command plan on this SIFT VM as the low-privilege runtime user. Use a command string for pipes, semicolons, &&/||, and redirects; legacy command arrays are accepted only for simple argv calls. Security policy, case path jails, audit logging, provenance hashing, and response-capping are enforced.",
+        "Execute a validated command on this SIFT VM as the low-privilege runtime user. "
+        "Pass a command string; pipes (|), sequencing (&&/||/;), and redirects (>,>>,<,2>&1) are supported. "
+        "Parsed argv stages run directly (shell=False, NOT wrapped in a shell): shells/interpreters "
+        "(sh, bash, python, perl, ruby, node) and awk system()/getline/pipe constructs are blocked by policy — "
+        "call get_tool_help('run_command') for the full policy. Legacy argv arrays are accepted only for simple "
+        "calls without operators. Set preview_lines to cap inline stdout and save_output for large output. "
+        "Case path jails, audit logging, and provenance hashing are enforced.",
         _schema(
             {
                 "command": {
                     "oneOf": [
                         {"type": "string"},
                         {"type": "array", "items": {"type": "string"}},
-                    ]
+                    ],
+                    "description": "Command to run. Prefer a single string; it may contain pipes, &&/||/;, and redirects. An argv array is accepted only for simple calls without operators.",
                 },
-                "purpose": {"type": "string"},
-                "timeout": {"type": "integer", "default": 0},
-                "save_output": {"type": "boolean", "default": False},
-                "input_files": {"type": "array", "items": {"type": "string"}},
-                "working_dir": {"type": "string"},
-                "preview_lines": {"type": "integer", "default": 0},
-                "skip_enrichment": {"type": "boolean", "default": False},
+                "purpose": {"type": "string", "description": "Short reason for this command, recorded in the audit trail. Required."},
+                "timeout": {"type": "integer", "default": 0, "description": "Per-command timeout in seconds. 0 uses the platform default."},
+                "save_output": {"type": "boolean", "default": False, "description": "Persist full stdout/stderr to agent/run_commands/ and return the path. Output over the response budget is saved automatically regardless."},
+                "input_files": {"type": "array", "items": {"type": "string"}, "description": "Evidence/input file paths this command reads, for provenance hashing. Pass when the inputs are not obvious from the command."},
+                "working_dir": {"type": "string", "description": "Working directory, relative to the case directory. Must stay within the case jail."},
+                "preview_lines": {"type": "integer", "default": 0, "description": "Cap inline stdout to this many lines (0 = no inline cap). The full output remains available via save_output / full_output_path; stdout_truncated flags when the cap applied."},
+                "skip_enrichment": {"type": "boolean", "default": False, "description": "Skip forensic-knowledge enrichment after the first call to the same tool in a session, to save context."},
             },
             ["command", "purpose"],
         ),
@@ -444,6 +457,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             data=None,
             audit_id=audit_id,
             error=command_error,
+            examiner=examiner,
         )
     assert command is not None
     purpose = str(args.get("purpose", ""))
@@ -454,6 +468,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             data=None,
             audit_id=audit_id,
             error="purpose is required",
+            examiner=examiner,
         )
     try:
         working_dir = str(args.get("working_dir", ""))
@@ -468,6 +483,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             data=None,
             audit_id=audit_id,
             error="Path must be within the case directory",
+            examiner=examiner,
         )
 
     # Parse command using our split/parse state machines to extract binary and detect inputs
@@ -649,6 +665,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             data=None,
             audit_id=audit_id,
             error=str(exc),
+            examiner=examiner,
         )
         if audit.log(
             tool="run_command",
@@ -668,6 +685,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             data=None,
             audit_id=audit_id,
             error=str(exc),
+            examiner=examiner,
         )
         audit.log(
             tool="run_command",
@@ -957,10 +975,12 @@ def _workflow_status(manager: CaseManager) -> dict:
 
 def _manage_todo(args: dict, examiner: str, manager: CaseManager, audit: AuditWriter) -> dict:
     action = str(args.get("action", "")).strip().lower()
-    if action == "add":
+    # 'create' is the canonical verb (matches the input schema and description);
+    # 'add' is accepted as a backward-compatible alias.
+    if action in ("create", "add"):
         description = str(args.get("description", ""))
         if not description:
-            return {"error": "missing_description", "message": "description is required when action='add'."}
+            return {"error": "missing_description", "message": "description is required when action='create'."}
         result = manager.add_todo(
             description,
             str(args.get("assignee", "")),
@@ -1000,8 +1020,8 @@ def _manage_todo(args: dict, examiner: str, manager: CaseManager, audit: AuditWr
         return result
     return {
         "error": "unsupported_todo_action",
-        "message": "action must be one of: add, list, update, complete",
-        "supported_actions": ["add", "list", "update", "complete"],
+        "message": "action must be one of: create, list, update, complete",
+        "supported_actions": ["create", "list", "update", "complete"],
     }
 
 
@@ -1083,8 +1103,20 @@ def call_core_tool(
         elif name == "manage_todo":
             result = _manage_todo(args, effective_examiner, manager, audit)
         elif name == "list_available_tools":
-            result = {"tools": _list_available_tools(category=args.get("category") or None)}
-            result["count"] = len(result["tools"])
+            requested_category = args.get("category") or None
+            tools = _list_available_tools(category=requested_category)
+            result = {"tools": tools, "count": len(tools)}
+            if requested_category and not tools:
+                # Don't strand the agent on an unknown category — show valid ones.
+                from sift_core.execute.catalog import list_tools_in_catalog
+
+                categories = sorted(
+                    {t["category"] for t in list_tools_in_catalog() if t.get("category")}
+                )
+                result["info"] = (
+                    f"No tools in category '{requested_category}'."
+                )
+                result["available_categories"] = categories
         elif name == "get_tool_help":
             result = _get_tool_help(str(args.get("tool_name", "")))
             audit.log(
@@ -1106,6 +1138,17 @@ def call_core_tool(
             result = _run_command(args, effective_examiner, audit)
         else:  # pragma: no cover - guarded by _SPECS_BY_NAME
             raise KeyError(name)
-    except (ValueError, OSError, RuntimeError) as exc:
-        result = {"error": str(exc)}
+    except Exception as exc:
+        # The only genuine "unknown tool" signal is the KeyError raised above,
+        # BEFORE this try block, when name is not in _SPECS_BY_NAME. Any error
+        # raised while executing a KNOWN tool (KeyError, TypeError, etc.) is a
+        # tool-execution failure. Convert it to a structured envelope so the
+        # gateway never misreports it as "unknown tool {name}".
+        logger.exception("core tool %s failed", name)
+        result = {
+            "success": False,
+            "tool": name,
+            "data": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     return _json_result(result)

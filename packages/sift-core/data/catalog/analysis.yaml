@@ -17,7 +17,7 @@ tools:
     output_format: text
     timeout_seconds: 300
     interactive: false
-    description: "Pattern scanning and text processing language. RISK: awk system() can execute arbitrary commands — audit logging is the primary control."
+    description: "Pattern scanning and text processing for delimited/structured text. Note: the run_command security policy blocks awk system(), getline, and pipe constructs in the program text, so it cannot be used to escape to a shell."
 
   - name: sed
     binary: sed
