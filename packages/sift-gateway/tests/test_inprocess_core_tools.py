@@ -87,7 +87,7 @@ async def test_core_tools_are_in_process_when_core_backends_disabled(tmp_path, m
     payload = json.loads(result[0].text)
     assert payload["tool"] == "run_command"
     assert payload["success"] is True
-    assert payload["metadata"]["exit_code"] == 0
+    assert payload["data"]["exit_code"] == 0
     assert payload["audit_id"]
 
 
@@ -163,7 +163,7 @@ async def test_run_command_allowlist_mode_permits_configured_command(tmp_path, m
 
     assert payload["tool"] == "run_command"
     assert payload["success"] is True
-    assert payload["metadata"]["exit_code"] == 0
+    assert payload["data"]["exit_code"] == 0
 
 
 async def test_run_command_allowlist_mode_blocks_unlisted_command(tmp_path, monkeypatch):

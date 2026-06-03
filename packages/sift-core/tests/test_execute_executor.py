@@ -146,7 +146,7 @@ def test_large_output_autowrites_under_case_run_commands(tmp_path, monkeypatch):
     output_file = Path(result["output_file"])
     assert output_file.is_file()
     assert output_file.read_text().startswith("A" * 100)
-    assert output_file.parent == case_dir / "agent" / "outputs"
+    assert output_file.parent.parent == case_dir / "agent" / "run_commands"
     assert result["stdout_total_bytes"] > 1000
 
 

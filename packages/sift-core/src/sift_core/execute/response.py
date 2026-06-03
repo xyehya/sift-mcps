@@ -109,6 +109,7 @@ def build_response(
     extractions: list | None = None,
     skip_enrichment: bool = False,
     artifact_context: str | None = None,
+    examiner: str | None = None,
 ) -> dict:
     """Build enriched response envelope with forensic-knowledge context.
 
@@ -130,10 +131,8 @@ def build_response(
         "success": success,
         "tool": tool_name,
         "data": data,
-        "data_provenance": "tool_output_may_contain_untrusted_evidence",
-        "output_format": output_format,
         "audit_id": audit_id,
-        "examiner": resolve_examiner(),
+        "examiner": examiner or resolve_examiner(),
     }
 
     if error:
@@ -186,36 +185,6 @@ def build_response(
                 response["corroboration"] = corroboration
             if cross_mcp_checks:
                 response["cross_mcp_checks"] = cross_mcp_checks
-
-    # Layer 3: related_tools cross-MCP suggestions with decay
-    group = _get_suggestion_group(fk_name, artifact_context)
-    if group:
-        _related_delivery_counts[group] += 1
-        rel_count = _related_delivery_counts[group]
-        if rel_count <= 3 or rel_count % 10 == 0:
-            response["related_tools"] = _RELATED_TOOLS.get(group, [])
-
-    # Discipline reminder (rotates)
-    response["discipline_reminder"] = DISCIPLINE_REMINDERS[
-        call_num % len(DISCIPLINE_REMINDERS)
-    ]
-
-    # Metadata
-    metadata: dict[str, Any] = {}
-    if elapsed_seconds is not None:
-        metadata["elapsed_seconds"] = round(elapsed_seconds, 2)
-    if exit_code is not None:
-        metadata["exit_code"] = exit_code
-        # Look up exit code meaning from FK
-        try:
-            tool_info = loader.get_tool(fk_name)
-            exit_hints = tool_info.get("exit_code_hints") or {} if tool_info else {}
-            if exit_code in exit_hints:
-                metadata["exit_code_meaning"] = exit_hints[exit_code]
-        except Exception as e:
-            logger.debug("FK exit_code_hints lookup failed for %s: %s", fk_name, e)
-    if metadata:
-        response["metadata"] = metadata
 
     return response
 

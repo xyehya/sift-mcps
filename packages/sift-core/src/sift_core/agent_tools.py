@@ -376,12 +376,43 @@ def _case_file_structure() -> dict:
         elif path.is_file():
             files_list.append({"path": rel_path, "size_bytes": path.stat().st_size})
 
-    return {
+    full = {
         "case_id": case_resolved.name,
         "case_dir": str(case_resolved),
         "directories": dirs_list,
         "files": files_list,
     }
+
+    # Save full tree and return a slim summary
+    full_path: str | None = None
+    try:
+        agent_dir = case_resolved / "agent"
+        agent_dir.mkdir(exist_ok=True)
+        out = agent_dir / "case_file_structure.json"
+        out.write_text(json.dumps(full, indent=2), encoding="utf-8")
+        full_path = str(out)
+    except OSError:
+        pass
+
+    # Top-level directory names only (depth-1 children of case_dir)
+    top_dirs = sorted({p.split("/")[0] for p in dirs_list if "/" not in p})
+    # File counts per top-level subtree
+    subtree_counts: dict[str, int] = {}
+    for f in files_list:
+        top = f["path"].split("/")[0]
+        subtree_counts[top] = subtree_counts.get(top, 0) + 1
+
+    slim: dict[str, Any] = {
+        "case_id": case_resolved.name,
+        "case_dir": str(case_resolved),
+        "top_level_dirs": top_dirs,
+        "file_counts_by_subtree": subtree_counts,
+        "total_dirs": len(dirs_list),
+        "total_files": len(files_list),
+    }
+    if full_path:
+        slim["full_tree_path"] = full_path
+    return slim
 
 
 def _evidence_verify() -> dict:
@@ -519,6 +550,8 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             preview_lines=min(int(args.get("preview_lines") or 0), 200),
         )
         elapsed = time.monotonic() - start
+        for _internal in ("stages", "_output_format", "executor", "runtime_user", "output_file", "output_sha256"):
+            exec_result.pop(_internal, None)
         fk_name = get_tool_def(first_binary).knowledge_name if get_tool_def(first_binary) else first_binary
         artifact_hint = _detect_artifact_context([command])
         if exec_result.get("_parsed"):
@@ -541,6 +574,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             extractions=exec_result.get("extractions"),
             skip_enrichment=bool(args.get("skip_enrichment", False)),
             artifact_context=artifact_hint,
+            examiner=examiner,
         )
         if "warnings" in exec_result:
             response["warnings"] = exec_result["warnings"]
@@ -548,8 +582,13 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                 response["agent_action"] = exec_result["agent_action"]
         if "privilege_escalation" in exec_result:
             response["privilege_escalation"] = exec_result["privilege_escalation"]
-        if "stages" in exec_result:
-            response["stages"] = exec_result["stages"]
+        raw_stages = exec_result.get("stages") or []
+        if len(raw_stages) > 1:
+            response["stages"] = [
+                {"binary": s["binary"], "exit_code": s["exit_code"]}
+                for s in raw_stages
+                if "binary" in s
+            ]
         if exec_result.get("output_file"):
             response["full_output_path"] = exec_result["output_file"]
             response["full_output_sha256"] = exec_result.get("output_sha256")
@@ -1010,12 +1049,33 @@ def call_core_tool(
             limit = int(args.get("limit", 20))
             offset = int(args.get("offset", 0))
             findings = manager.get_findings(status or None)
+            page = findings[offset : offset + limit] if limit > 0 else findings
+
+            # Save full findings to agent dir for agent follow-up reads
+            findings_file: str | None = None
+            try:
+                case_dir = get_case_dir()
+                agent_dir = case_dir / "agent"
+                agent_dir.mkdir(exist_ok=True)
+                findings_path = agent_dir / "findings_list.json"
+                findings_path.write_text(
+                    json.dumps({"findings": findings, "total": len(findings)}, indent=2),
+                    encoding="utf-8",
+                )
+                findings_file = str(findings_path)
+            except OSError:
+                pass
+
+            _SUMMARY_KEYS = {"id", "title", "status", "confidence", "host", "type", "staged", "examiner", "created_by", "event_timestamp"}
+            summaries = [{k: v for k, v in f.items() if k in _SUMMARY_KEYS} for f in page]
             result = {
-                "findings": findings[offset : offset + limit] if limit > 0 else findings,
+                "findings": summaries,
                 "total": len(findings),
                 "limit": limit,
                 "offset": offset,
             }
+            if findings_file:
+                result["full_findings_path"] = findings_file
         elif name == "query_case":
             result = _query_case(args, manager)
         elif name == "workflow_status":

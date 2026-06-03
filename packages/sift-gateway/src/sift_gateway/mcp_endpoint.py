@@ -382,9 +382,7 @@ def _append_case_context(contents: list[TextContent], case_dir_str: str, tool_na
         return contents + [
             TextContent(type="text", text=json.dumps({"_case": context}, indent=2))
         ]
-    return contents + [
-        TextContent(type="text", text=json.dumps({"_case_ref": context["id"]}, indent=2))
-    ]
+    return contents
 
 
 def _get_content_length(scope: dict) -> int | None:
@@ -440,6 +438,27 @@ def _env_summary_tools(gateway: Any) -> list[tuple[str, str, dict]]:
     return tools
 
 
+def _slim_tool_list_result(parsed: dict) -> dict:
+    """Replace the full tool list with a category-count summary."""
+    raw = parsed.get("data", {}).get("tools") or parsed.get("tools") or []
+    tools = raw if isinstance(raw, list) else []
+    by_category: dict[str, int] = {}
+    available_count = 0
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        cat = t.get("category") or "uncategorized"
+        by_category[cat] = by_category.get(cat, 0) + 1
+        if t.get("available"):
+            available_count += 1
+    return {
+        "tool_count": len(tools),
+        "available_count": available_count,
+        "by_category": by_category,
+        "note": "Full catalog saved to agent/environment_summary.json",
+    }
+
+
 async def _handle_environment_summary(gateway: Any) -> Sequence[TextContent]:
     """Call health/status tools from every backend and aggregate results."""
     summary: dict = {
@@ -448,6 +467,7 @@ async def _handle_environment_summary(gateway: Any) -> Sequence[TextContent]:
         "degraded": [],
         "unavailable": [],
     }
+    _full_tool_list: list | None = None
 
     for tool_name, backend_name, args in _env_summary_tools(gateway):
         try:
@@ -457,11 +477,21 @@ async def _handle_environment_summary(gateway: Any) -> Sequence[TextContent]:
             )
             # Normalise result to dict
             parsed = _extract_dict_from_tool_result(result) if isinstance(result, list) else result
-            summary["backends"][backend_name] = {
-                "status": "healthy",
-                "tool": tool_name,
-                "result": parsed,
-            }
+            if tool_name == "list_available_tools":
+                _raw = parsed.get("data", {}).get("tools") or parsed.get("tools") or []
+                _full_tool_list = _raw if isinstance(_raw, list) else []
+                slimmed = _slim_tool_list_result(parsed)
+                summary["backends"][backend_name] = {
+                    "status": "healthy",
+                    "tool": tool_name,
+                    "result": slimmed,
+                }
+            else:
+                summary["backends"][backend_name] = {
+                    "status": "healthy",
+                    "tool": tool_name,
+                    "result": parsed,
+                }
         except asyncio.TimeoutError:
             summary["backends"][backend_name] = {"status": "degraded", "error": "timeout"}
             summary["degraded"].append(backend_name)
@@ -474,6 +504,20 @@ async def _handle_environment_summary(gateway: Any) -> Sequence[TextContent]:
         else "degraded" if summary["degraded"]
         else "impaired"
     )
+
+    # Save full tool catalog to agent dir so agent can grep it
+    if _full_tool_list is not None:
+        try:
+            case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
+            if case_dir_str:
+                agent_dir = Path(case_dir_str) / "agent"
+                agent_dir.mkdir(exist_ok=True)
+                (agent_dir / "environment_summary.json").write_text(
+                    json.dumps({"tools": _full_tool_list}, indent=2),
+                    encoding="utf-8",
+                )
+        except OSError:
+            pass
 
     return [TextContent(type="text", text=json.dumps(summary, indent=2, default=str))]
 
