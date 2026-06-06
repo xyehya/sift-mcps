@@ -13,18 +13,19 @@ This workspace exists to keep future Codex runs narrow, resumable, and auditable
 
 - [00_migration_charter.md](00_migration_charter.md) - target architecture, non-negotiables, out-of-scope items, and plane boundaries.
 - [MIGRATION_STATE.md](MIGRATION_STATE.md) - short handoff state that every future migration run must read and update.
-- [01_repo_inventory.md](01_repo_inventory.md) - skeleton for the next inspection-only inventory run.
+- [01_repo_inventory.md](01_repo_inventory.md) - current-state repository inventory from the first inspection-only run.
+- [02_authoritative_domains_and_boundaries.md](02_authoritative_domains_and_boundaries.md) - target authoritative domains, trust boundaries, and compatibility mapping from current file-based authority into Supabase/Postgres.
 
 ## Planned Documents
 
-These are planned but intentionally not created in this run:
+These are planned but intentionally not created yet:
 
-- [02_control_plane_plan.md](02_control_plane_plan.md) - future/deferred: Supabase/Postgres control-plane model and migration sequencing.
-- [03_opensearch_data_plane.md](03_opensearch_data_plane.md) - future/deferred: OpenSearch integration, indexing, query, and derived-data boundaries.
-- [04_gateway_token_policy.md](04_gateway_token_policy.md) - future/deferred: Gateway authorization, MCP/service-token registry, scopes, expiry, revocation, and hashing rules.
-- [05_evidence_audit_migration.md](05_evidence_audit_migration.md) - future/deferred: evidence vault, immutable raw evidence, audit events, approvals, and proof/export preservation.
-- [06_execution_jobs.md](06_execution_jobs.md) - future/deferred: Postgres-backed durable jobs, worker claiming, status, and failure handling.
-- [07_test_acceptance_plan.md](07_test_acceptance_plan.md) - future/deferred: migration tests, security gates, and acceptance scenarios.
+- [03_opensearch_core_integration.md](03_opensearch_core_integration.md) - next recommended: OpenSearch integration as a core SIFT MCP/data-plane service with control-plane-aware indexing and query boundaries.
+- [04_control_plane_plan.md](04_control_plane_plan.md) - future/deferred: Supabase/Postgres control-plane model and migration sequencing.
+- [05_gateway_token_policy.md](05_gateway_token_policy.md) - future/deferred: Gateway authorization, MCP/service-token registry, scopes, expiry, revocation, and hashing rules.
+- [06_evidence_audit_migration.md](06_evidence_audit_migration.md) - future/deferred: evidence vault, immutable raw evidence, audit events, approvals, and proof/export preservation.
+- [07_execution_jobs.md](07_execution_jobs.md) - future/deferred: Postgres-backed durable jobs, worker claiming, status, and failure handling.
+- [08_test_acceptance_plan.md](08_test_acceptance_plan.md) - future/deferred: migration tests, security gates, and acceptance scenarios.
 - [99_migration_roadmap.md](99_migration_roadmap.md) - future/deferred: full roadmap, deliberately postponed until the repo inventory and focused subsystem plans exist.
 
 ## Future Codex Run Protocol
@@ -38,4 +39,4 @@ Every future migration run should:
 5. Keep new docs focused on the current run's objective.
 6. Update [MIGRATION_STATE.md](MIGRATION_STATE.md) at the end with files inspected, decisions, open questions, and the next recommended run.
 
-The next recommended run is to fill [01_repo_inventory.md](01_repo_inventory.md) from repo inspection only.
+The next recommended run is to create [03_opensearch_core_integration.md](03_opensearch_core_integration.md), focused only on mapping current OpenSearch standalone/add-on MCP backend behavior into the target integrated core SIFT MCP and control-plane-aware design.

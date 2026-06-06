@@ -2,9 +2,10 @@
 
 ## Current Objective
 
-Current-state repository inventory completed. The migration workspace now has a
-grounded inventory of frontend, Gateway/backend, MCP, JSON/file state, evidence
-vault, native workflows, OpenSearch, tests, docs, and setup.
+Run 2 migration planning completed. The migration workspace now has a target
+authority and trust-boundary document that maps current file-based authority
+into the Supabase/Postgres control plane, OpenSearch core data plane, immutable
+Evidence Vault, Gateway enforcement layer, and worker execution plane.
 
 ## Decisions Already Made
 
@@ -18,6 +19,10 @@ vault, native workflows, OpenSearch, tests, docs, and setup.
 - OpenSearch is integrated through Gateway policy as a core derived search/data plane, initially by adapting existing OpenSearch code.
 - OpenSearch must not become the authority for cases, tokens, jobs, evidence integrity, or approvals.
 - No Redis/RQ.
+- Frontend UI state is not forensic state authority.
+- Agent-generated findings remain draft/proposed until human approval and are not auto-approved.
+- OpenSearch query and ingest paths must be Gateway-mediated and case-scoped by token/session context.
+- Compatibility with current files should be additive first; file-backed behavior is not removed before DB authority and compatibility exports are verified.
 
 ## Files Created
 
@@ -25,6 +30,7 @@ vault, native workflows, OpenSearch, tests, docs, and setup.
 - `docs/migration/00_migration_charter.md`
 - `docs/migration/MIGRATION_STATE.md`
 - `docs/migration/01_repo_inventory.md`
+- `docs/migration/02_authoritative_domains_and_boundaries.md`
 
 ## Files Inspected
 
@@ -36,6 +42,7 @@ vault, native workflows, OpenSearch, tests, docs, and setup.
 - `docs/migration/00_migration_charter.md`
 - `docs/migration/MIGRATION_STATE.md`
 - `docs/migration/01_repo_inventory.md`
+- `docs/migration/02_authoritative_domains_and_boundaries.md`
 - `pyproject.toml`
 - `configs/gateway.yaml.template`
 - `configs/apparmor/sift-gateway.template`
@@ -55,9 +62,9 @@ vault, native workflows, OpenSearch, tests, docs, and setup.
 - `packages/case-dashboard/src/case_dashboard/session_jwt.py`
 - `packages/case-dashboard/src/case_dashboard/routes.py`
 - `packages/sift-core/src/sift_core/case_io.py`
+- `packages/sift-core/src/sift_core/case_manager.py`
 - `packages/sift-core/src/sift_core/evidence_chain.py`
 - `packages/sift-core/src/sift_core/case_ops.py`
-- `packages/sift-core/src/sift_core/case_manager.py`
 - `packages/sift-core/src/sift_core/evidence_ops.py`
 - `packages/sift-core/src/sift_core/verification.py`
 - `packages/sift-core/src/sift_core/reporting.py`
@@ -65,6 +72,7 @@ vault, native workflows, OpenSearch, tests, docs, and setup.
 - `packages/sift-core/src/sift_core/execute/executor.py`
 - `packages/sift-core/src/sift_core/execute/tools/generic.py`
 - `packages/sift-common/src/sift_common/audit.py`
+- `packages/sift-common/src/sift_common/__init__.py`
 - `packages/sift-gateway/src/sift_gateway/auth.py`
 - `packages/sift-gateway/src/sift_gateway/identity.py`
 - `packages/sift-gateway/src/sift_gateway/token_gen.py`
@@ -93,6 +101,7 @@ vault, native workflows, OpenSearch, tests, docs, and setup.
 - `packages/opensearch-mcp/src/opensearch_mcp/client.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/paths.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/ingest.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/ingest_status.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/tools.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/mappings/*.json`
@@ -101,14 +110,20 @@ vault, native workflows, OpenSearch, tests, docs, and setup.
 ## Open Questions
 
 - What exact Supabase Local deployment shape should this repo target?
-- What are the eventual Postgres schema boundaries for cases, jobs, evidence metadata, audit events, approvals, and token registry state?
-- What OpenSearch index naming, job linkage, and provenance conventions should become canonical?
-- What is the safest migration cutover order from JSON/file authority to Postgres authority?
+- Should active-case state be per human session, per workstation, per Gateway instance, or a combination with explicit precedence?
+- What token hashing strategy should be canonical, including algorithm, optional pepper/KMS use, displayed fingerprints, and default expiry?
+- What is the safest first cutover order: cases/tokens first, evidence/audit first, or OpenSearch/jobs first?
+- How long should generated compatibility files remain supported after Postgres becomes authority?
+- Which external scripts or operator workflows still read `~/.sift/active_case`, `~/.sift/ingest-status`, saved report JSON, or flat case JSON directly?
+- Must evidence manifest/ledger files remain canonical legal artifacts even after Postgres becomes operational authority?
+- What exact worker process model should parser execution target: single Gateway-host worker, multiple local workers, or future distributed workers?
 
 ## Next Recommended Run
 
-Use `docs/migration/01_repo_inventory.md` to start target-state data/control-plane
-planning. Recommended scope: identify authoritative Postgres/Supabase domains
-and boundaries for cases, tokens, evidence metadata, audit, approvals, reports,
-and durable jobs. Do not implement code yet, and do not produce the final
-roadmap until the target-state model is grounded.
+Create `docs/migration/03_opensearch_core_integration.md`. Recommended scope:
+map current OpenSearch standalone/add-on MCP backend behavior to the target
+integrated core SIFT MCP and control-plane-aware design. Focus only on current
+OpenSearch tools, index/query scoping, ingest status to jobs/parser-runs
+mapping, document provenance metadata, OpenSearch index registration, and
+Gateway-mediated authorization. Do not implement code, do not create migrations,
+and do not design the full database schema.
