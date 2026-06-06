@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import logging
 import time
-from pathlib import Path
 
 import anyio
 from mcp.types import TextContent, Tool
@@ -394,8 +393,8 @@ class Gateway:
             self._available_backends.add(name)
 
             # Index manifest-declared UX metadata so the gateway can categorize
-            # tools, recommend phases, build environment_summary, and filter the
-            # agent view without hardcoding any add-on tool name (R-no-hardcoded-names).
+            # tools, recommend phases, and filter the agent view without
+            # hardcoding any add-on tool name (R-no-hardcoded-names).
             if manifest:
                 for t_decl in manifest.get("tools", []):
                     t_meta_name = t_decl.get("name")

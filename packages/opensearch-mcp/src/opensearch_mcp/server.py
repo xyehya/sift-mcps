@@ -94,7 +94,7 @@ def _add_investigation_hints(resp: dict, artifacts: dict) -> None:
     global _hints_delivered
     if _hints_delivered:
         resp["investigation_hints"] = [
-            "MFT/USN/evtx indexed — call suggest_tools for investigation patterns"
+            "MFT/USN/evtx indexed — use get_tool_help for investigation patterns"
         ]
         return
 
@@ -745,7 +745,7 @@ def opensearch_search(
         query: OpenSearch query_string (e.g., 'event.code:4624 AND user.name:admin').
             Quote values with special chars: source.ip:"::1" (IPv6 needs quotes).
         index: Index pattern. Overrides case_id if provided.
-        case_id: Case ID from case_status. If omitted, defaults to the active
+        case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
         limit: Max results (default 50, max 200).
         offset: Skip first N results for pagination (default 0).
@@ -849,7 +849,7 @@ def opensearch_count(
     Args:
         query: OpenSearch query_string (default: all).
         index: Index pattern. Overrides case_id if provided.
-        case_id: Case ID from case_status. If omitted, defaults to the active
+        case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
     """
     index = _resolve_index(index, case_id)
@@ -905,7 +905,7 @@ def opensearch_aggregate(
         field: Field to aggregate on (e.g., 'host.name', 'event.code').
         query: OpenSearch query_string filter (default: all).
         index: Index pattern. Overrides case_id if provided.
-        case_id: Case ID from case_status. If omitted, defaults to the active
+        case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
         limit: Max buckets (default 50, max 500).
     """
@@ -1020,7 +1020,7 @@ def opensearch_timeline(
     Args:
         query: OpenSearch query_string filter.
         index: Index pattern. Overrides case_id if provided.
-        case_id: Case ID from case_status. If omitted, defaults to the active
+        case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
         interval: Histogram bucket size (e.g., '1m', '1h', '1d').
         time_field: Timestamp field (default @timestamp).
@@ -1120,7 +1120,7 @@ def opensearch_field_values(
         field: Field to enumerate (e.g., 'winlog.provider_name').
         query: OpenSearch query_string filter.
         index: Index pattern. Overrides case_id if provided.
-        case_id: Case ID from case_status. If omitted, defaults to the active
+        case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
         limit: Max values (default 50, max 500).
     """
@@ -1321,7 +1321,7 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False) -> 
         needed to determine .keyword suffix requirements in aggregations.
 
     Args:
-        case_id: Case ID from case_status. If omitted, defaults to the active
+        case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
         include_fields: Include field mappings per artifact type (large output).
             Default False to keep response compact.
@@ -1333,7 +1333,7 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False) -> 
         return {
             "error": "No active case.",
             "portal_hint": "Open https://<SIFT_VM>:4508/portal/ and create or select a case.",
-            "next_step": "Call case_status after the examiner activates a portal case.",
+            "next_step": "Call case_info after the examiner activates a portal case.",
         }
 
     client = _get_os()
@@ -1848,7 +1848,7 @@ def opensearch_ingest(
 ) -> dict:
     """Preview or ingest evidence into OpenSearch.
 
-    Call after case_status, evidence_list, and evidence_verify. Use dry_run=True
+    Call after case_info and evidence_info. Use dry_run=True
     first. Case ID is resolved from the active case set in the Examiner Portal;
     no case_id parameter is accepted.
 
@@ -2543,7 +2543,7 @@ def opensearch_ingest_status(case_id: str = "") -> dict:
                     example_type = "amcache"
                     break
             next_steps.append(
-                f"Call suggest_tools(artifact_type='{example_type}') "
+                f"Call get_tool_help(tool_name='{example_type}') "
                 "for deep analysis tools beyond OpenSearch queries"
             )
             s["next_steps"] = next_steps

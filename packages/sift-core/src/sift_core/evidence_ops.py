@@ -142,7 +142,7 @@ def list_evidence_status_data(case_dir) -> dict:
         chain = {
             "status": "unknown",
             "ok_count": 0,
-            "issues": ["Chain status check failed — call evidence_verify for details."],
+            "issues": ["Chain status check failed — call evidence_info for details."],
         }
 
     evidence_dir = case_dir / "evidence"
@@ -189,7 +189,7 @@ def list_evidence_status_data(case_dir) -> dict:
             )
         if has_chain_issues:
             hints.append(
-                "Chain integrity issues detected — call evidence_verify "
+                "Chain integrity issues detected — call evidence_info "
                 "for a full check before escalating to the operator."
             )
         result["examiner_action_hint"] = " ".join(hints)

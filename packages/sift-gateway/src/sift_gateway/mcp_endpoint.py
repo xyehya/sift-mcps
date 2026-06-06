@@ -26,12 +26,15 @@ from sift_common.instructions import GATEWAY as _GATEWAY_INSTRUCTIONS
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from sift_gateway.audit_helpers import _extract_audit_id, _summarize_result, _truncate_params
+from sift_gateway.audit_helpers import (
+    _extract_audit_id,
+    _summarize_result,
+    _truncate_params,
+)
 from sift_gateway.evidence_gate import (
     build_block_response,
     check_evidence_gate,
 )
-from sift_gateway.identity import _hash_token  # re-exported for callers/tests
 from sift_gateway.rate_limit import check_examiner_rate_limit, check_rate_limit
 from sift_gateway.response_guard import (
     cap_tool_result,
@@ -60,7 +63,7 @@ def _build_gateway_instructions(gateway: Any) -> str:
             continue
 
         reqs = manifest.get("capabilities", {}).get("requires", [])
-        unmet = [req for req in reqs if not getattr(gateway, "evaluate_requirement")(req)]
+        unmet = [req for req in reqs if not gateway.evaluate_requirement(req)]
         if unmet:
             addon_lines.append(
                 f"- {backend_name}: configured but currently unavailable "
@@ -107,8 +110,8 @@ def _build_gateway_instructions(gateway: Any) -> str:
         "ADD-ON MANIFEST SUMMARY:\n"
         "This section is generated from loaded sift-backend.json manifests and "
         "current requires[] checks at gateway startup. For live backend health "
-        "and the exact tool surface, call workflow_status, environment_summary, "
-        "capability_guide, and tools/list.\n"
+        "and the exact tool surface, call case_info, capability_guide, "
+        "and tools/list.\n"
         f"{addon_text}"
     )
 
@@ -378,7 +381,7 @@ def _append_case_context(contents: list[TextContent], case_dir_str: str, tool_na
     context = _build_case_context(case_dir_str)
     if context is None:
         return contents
-    if tool_name in ["workflow_status", "case_status", "environment_summary"]:
+    if tool_name in ["case_info"]:
         return contents + [
             TextContent(type="text", text=json.dumps({"_case": context}, indent=2))
         ]
@@ -416,111 +419,6 @@ def _extract_bearer_token(scope: dict) -> str | None:
 # Synthetic gateway tools
 # ---------------------------------------------------------------------------
 
-# In-process core status tools always included in the environment summary.
-# Add-on health tools are discovered from each backend's manifest (a tool
-# declared with ``"health": true``) — the gateway hardcodes no add-on name.
-_CORE_ENV_SUMMARY_TOOLS: list[tuple[str, str, dict]] = [
-    ("case_status", "sift-core", {}),
-    ("evidence_list", "sift-core", {}),
-    ("list_available_tools", "sift-core", {}),
-]
-
-
-def _env_summary_tools(gateway: Any) -> list[tuple[str, str, dict]]:
-    """Core status tools + each available backend's manifest-declared health tool."""
-    tools = list(_CORE_ENV_SUMMARY_TOOLS)
-    meta_index: dict[str, dict] = getattr(gateway, "_tool_manifest_meta", {})
-    for tool_name, meta in meta_index.items():
-        if meta.get("health"):
-            tools.append(
-                (tool_name, meta.get("backend", ""), meta.get("health_args", {}))
-            )
-    return tools
-
-
-def _slim_tool_list_result(parsed: dict) -> dict:
-    """Replace the full tool list with a category-count summary."""
-    raw = parsed.get("data", {}).get("tools") or parsed.get("tools") or []
-    tools = raw if isinstance(raw, list) else []
-    by_category: dict[str, int] = {}
-    available_count = 0
-    for t in tools:
-        if not isinstance(t, dict):
-            continue
-        cat = t.get("category") or "uncategorized"
-        by_category[cat] = by_category.get(cat, 0) + 1
-        if t.get("available"):
-            available_count += 1
-    return {
-        "tool_count": len(tools),
-        "available_count": available_count,
-        "by_category": by_category,
-        "note": "Full catalog saved to agent/environment_summary.json",
-    }
-
-
-async def _handle_environment_summary(gateway: Any) -> Sequence[TextContent]:
-    """Call health/status tools from every backend and aggregate results."""
-    summary: dict = {
-        "platform": "sift-mcps",
-        "backends": {},
-        "degraded": [],
-        "unavailable": [],
-    }
-    _full_tool_list: list | None = None
-
-    for tool_name, backend_name, args in _env_summary_tools(gateway):
-        try:
-            result = await asyncio.wait_for(
-                gateway.call_tool(tool_name, args),
-                timeout=8.0,
-            )
-            # Normalise result to dict
-            parsed = _extract_dict_from_tool_result(result) if isinstance(result, list) else result
-            if tool_name == "list_available_tools":
-                _raw = parsed.get("data", {}).get("tools") or parsed.get("tools") or []
-                _full_tool_list = _raw if isinstance(_raw, list) else []
-                slimmed = _slim_tool_list_result(parsed)
-                summary["backends"][backend_name] = {
-                    "status": "healthy",
-                    "tool": tool_name,
-                    "result": slimmed,
-                }
-            else:
-                summary["backends"][backend_name] = {
-                    "status": "healthy",
-                    "tool": tool_name,
-                    "result": parsed,
-                }
-        except asyncio.TimeoutError:
-            summary["backends"][backend_name] = {"status": "degraded", "error": "timeout"}
-            summary["degraded"].append(backend_name)
-        except Exception as e:
-            summary["backends"][backend_name] = {"status": "unavailable", "error": str(e)[:200]}
-            summary["unavailable"].append(backend_name)
-
-    summary["verdict"] = (
-        "ready" if not summary["unavailable"]
-        else "degraded" if summary["degraded"]
-        else "impaired"
-    )
-
-    # Save full tool catalog to agent dir so agent can grep it
-    if _full_tool_list is not None:
-        try:
-            case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
-            if case_dir_str:
-                agent_dir = Path(case_dir_str) / "agent"
-                agent_dir.mkdir(exist_ok=True)
-                (agent_dir / "environment_summary.json").write_text(
-                    json.dumps({"tools": _full_tool_list}, indent=2),
-                    encoding="utf-8",
-                )
-        except OSError:
-            pass
-
-    return [TextContent(type="text", text=json.dumps(summary, indent=2, default=str))]
-
 
 def _capability_guide(gateway: Any) -> dict:
     """Build a live manifest-derived guide for currently usable add-on tools."""
@@ -531,7 +429,7 @@ def _capability_guide(gateway: Any) -> dict:
         "purpose": (
             "ADD-ON backend capabilities only, from enabled requirement-satisfied "
             "manifests. The core forensic tool catalog is NOT listed here — use "
-            "list_available_tools or environment_summary for that. Use tools/list "
+            "case_info or get_tool_help for core tools. Use tools/list "
             "for exact input schemas before calling a tool."
         ),
         "scope": "add-on backends only",
@@ -550,7 +448,7 @@ def _capability_guide(gateway: Any) -> dict:
             continue
 
         reqs = list(manifest.get("capabilities", {}).get("requires", []))
-        unmet = [req for req in reqs if not getattr(gateway, "evaluate_requirement")(req)]
+        unmet = [req for req in reqs if not gateway.evaluate_requirement(req)]
         if backend_name not in available or unmet:
             guide["unavailable_backends"].append({
                 "backend": backend_name,
@@ -608,8 +506,7 @@ def _capability_guide(gateway: Any) -> dict:
     if not guide["available_backends"]:
         guide["note"] = (
             "No add-on backend is registered — this is the expected default, not "
-            "an error. Core forensic tools are available via run_command; list them "
-            "with list_available_tools or environment_summary."
+            "an error. Core forensic tools are available via run_command and get_tool_help."
         )
     return guide
 
@@ -660,66 +557,34 @@ def create_mcp_server(gateway: Any) -> Server:
     # backend manifest (Phase 6.1) — no add-on tool name appears in core code.
     _CORE_TOOL_CATEGORIES: dict[str, str] = {
         # ── session-start: first calls every session ──
-        "workflow_status": "session-start",
-        "environment_summary": "session-start",
+        "case_info": "session-start",
         "capability_guide": "session-start",
-        "case_status": "session-start",
-        "case_file_structure": "session-start",
-        # ── evidence-survey: inspect evidence before ingest ──
-        "evidence_list": "evidence-survey",
-        "evidence_verify": "evidence-survey",
-        "audit_summary": "evidence-survey",
+        # ── evidence-survey: inspect evidence ──
+        "evidence_info": "evidence-survey",
         # ── detection: forensic tool execution ──
-        "list_available_tools": "detection",
         "get_tool_help": "detection",
-        "check_tools": "detection",
-        "suggest_tools": "detection",
         "run_command": "detection",
         # ── findings: record and review findings ──
         "record_finding": "findings",
         "record_timeline_event": "findings",
         "list_existing_findings": "findings",
-        "query_case": "findings",
         "manage_todo": "findings",
-        "log_reasoning": "findings",
-        "log_external_action": "findings",
-        "record_action": "findings",
-        # Reporting + case-metadata are portal-owned (F-E) and bundle
-        # export/import is dropped from the agent surface (F-C) — not agent tools.
-        # ── admin: maintenance operations ──
-        "backup_case": "admin",
-        "open_case_dashboard": "admin",
     }
 
     # Recommend core/synthetic tools per investigation phase.
     _CORE_TOOL_PHASES: dict[str, str] = {
         # ORIENT: fresh case — understand what we have
-        "workflow_status": "ORIENT",
-        "environment_summary": "ORIENT",
+        "case_info": "ORIENT",
         "capability_guide": "ORIENT",
-        "case_status": "ORIENT",
-        "case_list": "ORIENT",
-        "case_file_structure": "ORIENT",
-        "evidence_list": "ORIENT",
-        "evidence_verify": "ORIENT",
-        "audit_summary": "ORIENT",
+        "evidence_info": "ORIENT",
         # TRIAGE: evidence indexed — start analysis
         "run_command": "TRIAGE",
-        "suggest_tools": "TRIAGE",
-        "list_available_tools": "TRIAGE",
         "get_tool_help": "TRIAGE",
-        "check_tools": "TRIAGE",
         # FINDINGS: stage and review findings
         "record_finding": "FINDINGS",
         "record_timeline_event": "FINDINGS",
         "list_existing_findings": "FINDINGS",
-        "query_case": "FINDINGS",
         "manage_todo": "FINDINGS",
-        "log_reasoning": "FINDINGS",
-        "log_external_action": "FINDINGS",
-        "record_action": "FINDINGS",
-        # REPORTING phase is examiner-driven in the portal (F-E); no agent
-        # report tools remain to recommend here.
     }
 
     @server.list_tools()
@@ -735,16 +600,9 @@ def create_mcp_server(gateway: Any) -> Server:
             t for t in tools
             if t.name not in _AGENT_FILTERED_TOOLS and t.name not in hidden_addon_tools
         ]
-        # Synthetic gateway-level tool — add before annotation loop so meta gets set
-        tools.append(Tool(
-            name="environment_summary",
-            description="Single-call environment overview. Collapses case_status, evidence_list, available core tooling, and the health tool each enabled add-on declares in its manifest into one response. Call this after workflow_status for a complete picture of platform readiness.",
-            inputSchema={"type": "object", "properties": {}},
-            annotations={"readOnlyHint": True},
-        ))
         tools.append(Tool(
             name="capability_guide",
-            description="ADD-ON backends only: manifest-derived guide to currently usable add-on tools, grouped by backend, provides[], category, and recommended phase. Returns empty when no add-on backend is registered — that is expected, NOT an error. For the core forensic tool catalog use list_available_tools or environment_summary.",
+            description="ADD-ON backends only: manifest-derived guide to currently usable add-on tools, grouped by backend, provides[], category, and recommended phase. Returns empty when no add-on backend is registered — that is expected, NOT an error.",
             inputSchema={"type": "object", "properties": {}},
             annotations={"readOnlyHint": True},
         ))
@@ -778,9 +636,8 @@ def create_mcp_server(gateway: Any) -> Server:
 
         try:
             # Evidence chain gate — binary F-A block-all. Applies to EVERY agent
-            # tool, including the synthetic environment_summary: UNSEALED and
-            # every non-OK status block all agent tools until the examiner
-            # re-seals the chain in the portal.
+            # tool: UNSEALED and every non-OK status block all agent tools
+            # until the examiner re-seals the chain in the portal.
             case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
             gate = check_evidence_gate(case_dir_str)
             if gate["blocked"]:
@@ -816,11 +673,6 @@ def create_mcp_server(gateway: Any) -> Server:
                 )
                 return _final_contents
 
-            # Synthetic gateway tool — aggregates backend health. Gated above
-            # like any other agent tool; only reached once the chain is OK.
-            if name == "environment_summary":
-                _final_contents = list(await _handle_environment_summary(gateway))
-                return _final_contents
             if name == "capability_guide":
                 _final_contents = list(await _handle_capability_guide(gateway))
                 return _final_contents

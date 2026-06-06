@@ -6,18 +6,18 @@ this module and exposes the specs on its aggregate /mcp surface.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
-import hashlib
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from sift_common.audit import AuditWriter, resolve_examiner
-from sift_core.case_io import case_audit_dir, get_case_dir, resolve_case_path
+
+from sift_core.case_io import get_case_dir, resolve_case_path
 from sift_core.case_manager import (
     CaseManager,
     build_finding_considerations,
@@ -29,12 +29,7 @@ from sift_core.evidence_ops import list_evidence_status_data
 from sift_core.execute.catalog import get_tool_def
 from sift_core.execute.exceptions import SiftError
 from sift_core.execute.response import build_response
-from sift_core.execute.tools.discovery import (
-    check_tools as _check_tools,
-    get_tool_help as _get_tool_help,
-    list_available_tools as _list_available_tools,
-    suggest_tools as _suggest_tools,
-)
+from sift_core.execute.tools.discovery import get_tool_help as _get_tool_help
 from sift_core.execute.tools.generic import run_command as _execute_command
 
 logger = logging.getLogger(__name__)
@@ -95,78 +90,124 @@ def _schema(properties: dict[str, Any] | None = None, required: list[str] | None
 
 CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
     CoreToolSpec(
-        "case_status",
-        "Get active case status, finding counts, timeline counts, TODO progress, evidence paths, and available platform capabilities.",
+        "case_info",
+        "Essential case overview: status, finding/timeline/todo counts, evidence chain status, "
+        "file structure summary, platform capabilities. Call at session start.",
         _schema(),
         read_only=True,
     ),
     CoreToolSpec(
-        "case_file_structure",
-        "Recursively list files and directories in the active case workspace, excluding integrity records and transient files.",
+        "evidence_info",
+        "Evidence listing with registration, sealing, chain integrity, and manifest verification "
+        "in a single call. Returns sealed evidence and unregistered files with required actions.",
         _schema(),
         read_only=True,
-    ),
-    CoreToolSpec(
-        "evidence_list",
-        "List files in the active case evidence directory with registration, sealing, and chain integrity status.",
-        _schema(),
-        read_only=True,
-    ),
-    CoreToolSpec(
-        "evidence_verify",
-        "Run a fresh integrity status check over registered evidence and the authoritative manifest.",
-        _schema(),
-        read_only=True,
-    ),
-    CoreToolSpec(
-        "record_action",
-        "Record an investigative action and reasoning in the active case record.",
-        _schema(
-            {
-                "description": {"type": "string"},
-                "reasoning": {"type": "string"},
-                "tool": {"type": "string"},
-                "command": {"type": "string"},
-            },
-            ["description", "reasoning"],
-        ),
-    ),
-    CoreToolSpec(
-        "log_reasoning",
-        "Record analytical reasoning to the append-only audit trail.",
-        _schema({"text": {"type": "string"}}, ["text"]),
-    ),
-    CoreToolSpec(
-        "log_external_action",
-        "Record a command executed outside MCP and return an audit_id that can support finding provenance.",
-        _schema(
-            {
-                "command": {"type": "string"},
-                "output_summary": {"type": "string"},
-                "purpose": {"type": "string"},
-                "hook_audit_id": {"type": "string"},
-                "input_files": {"type": "array", "items": {"type": "string"}},
-                "output_files": {"type": "array", "items": {"type": "string"}},
-            },
-            ["command", "output_summary", "purpose"],
-        ),
     ),
     CoreToolSpec(
         "record_finding",
-        "Stage a finding as DRAFT for examiner approval, with enforced validation, provenance, grounding, and considerations.",
+        "Stage a finding as DRAFT for examiner approval. Findings missing required fields or "
+        "provenance (audit_ids) are REJECTED.\n\n"
+        "REQUIRED fields in 'finding': title, type, host, observation, interpretation, confidence, "
+        "confidence_justification.\n"
+        "OPTIONAL fields in 'finding': audit_ids (from tool responses — critical for provenance), "
+        "mitre_ids, iocs, event_type, event_timestamp, artifact_ref, related_findings, affected_account.\n\n"
+        "EXAMPLE: {\"finding\": {\"title\": \"Suspicious PowerShell Execution\", \"type\": \"finding\", "
+        "\"host\": \"WEBSRV01\", \"observation\": \"Encoded PowerShell ran from outlook.exe — EventID 1, "
+        "ParentImage: outlook.exe, Image: powershell.exe\", \"interpretation\": \"Likely initial access "
+        "via phishing attachment executing a download cradle\", \"confidence\": \"HIGH\", "
+        "\"confidence_justification\": \"Corroborated by Sysmon EventID 1 + outbound network connection to "
+        "known-bad IP 10.0.1.50\", \"audit_ids\": [\"run_command-examiner-20260601-001\"], "
+        "\"mitre_ids\": [\"T1059.001\", \"T1204.002\"], \"event_timestamp\": \"2026-06-01T14:30:00Z\"}, "
+        "\"supporting_commands\": [{\"command\": \"cat evidence/events/sysmon.json | jq 'select(.EventID==1)'\", "
+        "\"output_excerpt\": \"EventID: 1, ParentImage: outlook.exe, Image: powershell.exe, "
+        "CommandLine: -EncodedCommand SQBFAFgA...\", \"purpose\": \"Corroborate process creation chain\", "
+        "\"audit_id\": \"run_command-examiner-20260601-002\"}]}",
         _schema(
             {
-                "finding": {"type": "object", "description": "Required fields: title, type, host, observation, interpretation, confidence, confidence_justification"},
-                "supporting_commands": {"type": "array", "items": {"type": "object", "description": "Dict with: command, output_excerpt, purpose, audit_id"}},
-                "artifacts": {"type": "array", "items": {"type": "object", "description": "Dict with: source (evidence path), extraction, content, content_type, purpose, audit_id"}},
+                "finding": {
+                    "type": "object",
+                    "description": "Required: title, type, host, observation, interpretation, confidence, confidence_justification. Optional: audit_ids, mitre_ids, iocs, event_type, event_timestamp, artifact_ref, related_findings, affected_account.",
+                    "properties": {
+                        "title": {"type": "string", "description": "Concise finding title"},
+                        "type": {"type": "string", "enum": ["finding", "attribution", "conclusion", "exclusion"]},
+                        "host": {"type": "string", "description": "Affected hostname"},
+                        "observation": {"type": "string", "description": "Raw evidence observed"},
+                        "interpretation": {"type": "string", "description": "Analytical interpretation of observation"},
+                        "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW", "SPECULATIVE"]},
+                        "confidence_justification": {"type": "string", "description": "Why this confidence level is justified"},
+                        "audit_ids": {"type": "array", "items": {"type": "string"}},
+                        "mitre_ids": {"type": "array", "items": {"type": "string"}},
+                        "iocs": {"type": "array", "items": {"type": "string"}},
+                        "event_type": {"type": "string"},
+                        "event_timestamp": {"type": "string", "description": "ISO 8601 timestamp of the incident event"},
+                        "artifact_ref": {"type": "string"},
+                        "related_findings": {"type": "array", "items": {"type": "string"}},
+                        "affected_account": {"type": "string"},
+                    },
+                    "required": ["title", "type", "host", "observation", "interpretation", "confidence", "confidence_justification"],
+                },
+                "supporting_commands": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "command": {"type": "string"},
+                            "output_excerpt": {"type": "string"},
+                            "purpose": {"type": "string"},
+                            "audit_id": {"type": "string"},
+                        },
+                        "required": ["command", "purpose"],
+                    },
+                    "description": "Shell commands that produced evidence for this finding. Include audit_id from the tool response.",
+                },
+                "artifacts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string", "description": "Evidence path"},
+                            "extraction": {"type": "string", "description": "How the artifact was extracted"},
+                            "content": {"type": "string", "description": "Actual evidence content"},
+                            "content_type": {"type": "string"},
+                            "purpose": {"type": "string"},
+                            "audit_id": {"type": "string"},
+                        },
+                        "required": ["source", "extraction", "content"],
+                    },
+                    "description": "Evidence artifacts. Must include audit_id from tool response.",
+                },
             },
             ["finding"],
         ),
     ),
     CoreToolSpec(
         "record_timeline_event",
-        "Stage a timeline event as DRAFT for examiner approval.",
-        _schema({"event": {"type": "object", "description": "Required fields: title, timestamp, description, host, source"}}, ["event"]),
+        "Stage a timeline event as DRAFT for examiner approval.\n\n"
+        "REQUIRED in 'event': title, timestamp (ISO 8601), description, host, source.\n"
+        "OPTIONAL in 'event': event_type, related_findings, audit_ids, mitre_ids.\n\n"
+        "EXAMPLE: {\"event\": {\"title\": \"Suspicious PowerShell Execution\", "
+        "\"timestamp\": \"2026-06-01T14:30:00Z\", \"description\": \"Encoded PowerShell "
+        "executed from outlook.exe\", \"host\": \"WEBSRV01\", "
+        "\"source\": \"evidence/events/sysmon.json\", \"event_type\": \"execution\", "
+        "\"related_findings\": [\"F-examiner-001\"]}}",
+        _schema({
+            "event": {
+                "type": "object",
+                "description": "Required: title, timestamp, description, host, source. Optional: event_type, related_findings, audit_ids, mitre_ids.",
+                "properties": {
+                    "title": {"type": "string", "description": "Concise event title"},
+                    "timestamp": {"type": "string", "description": "ISO 8601 timestamp of the event"},
+                    "description": {"type": "string", "description": "What occurred"},
+                    "host": {"type": "string", "description": "Host where the event occurred"},
+                    "source": {"type": "string", "description": "Evidence source file or log type"},
+                    "event_type": {"type": "string", "enum": ["execution", "persistence", "lateral", "auth", "network", "other"]},
+                    "related_findings": {"type": "array", "items": {"type": "string"}},
+                    "audit_ids": {"type": "array", "items": {"type": "string"}},
+                    "mitre_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["title", "timestamp", "description", "host", "source"],
+            },
+        }, ["event"]),
     ),
     CoreToolSpec(
         "list_existing_findings",
@@ -178,31 +219,6 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
                 "offset": {"type": "integer", "default": 0},
             }
         ),
-        read_only=True,
-    ),
-    CoreToolSpec(
-        "query_case",
-        "Read case timeline or action records without mutating evidence or findings.",
-        _schema(
-            {
-                "record_type": {"type": "string", "enum": ["timeline", "actions"]},
-                "status": {"type": "string"},
-                "source": {"type": "string"},
-                "examiner": {"type": "string"},
-                "start_date": {"type": "string"},
-                "end_date": {"type": "string"},
-                "event_type": {"type": "string"},
-                "limit": {"type": "integer", "default": 50},
-                "offset": {"type": "integer", "default": 0},
-            },
-            ["record_type"],
-        ),
-        read_only=True,
-    ),
-    CoreToolSpec(
-        "workflow_status",
-        "Detect the current investigation phase and recommend next steps from core case state.",
-        _schema(),
         read_only=True,
     ),
     CoreToolSpec(
@@ -226,65 +242,31 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         ),
     ),
     CoreToolSpec(
-        "list_available_tools",
-        "List forensic tools available on this SIFT workstation, with availability status.",
-        _schema({"category": {"type": "string"}}),
-        read_only=True,
-    ),
-    CoreToolSpec(
         "get_tool_help",
         "Get usage information, common flags, caveats, and field meanings for a cataloged forensic tool.",
         _schema({"tool_name": {"type": "string"}}, ["tool_name"]),
         read_only=True,
     ),
     CoreToolSpec(
-        "check_tools",
-        "Check which forensic tools are installed and available on this system.",
-        _schema({"tool_names": {"type": "array", "items": {"type": "string"}}}),
-        read_only=True,
-    ),
-    CoreToolSpec(
-        "suggest_tools",
-        "Suggest tools for analyzing a specific artifact type using forensic-knowledge.",
-        _schema(
-            {
-                "artifact_type": {"type": "string"},
-                "question": {"type": "string"},
-            },
-            ["artifact_type"],
-        ),
-        read_only=True,
-    ),
-    CoreToolSpec(
         "run_command",
-        "Execute a validated command on this SIFT VM as the low-privilege runtime user. "
-        "Pass a command string; pipes (|), sequencing (&&/||/;), and redirects (>,>>,<,2>&1) are supported. "
-        "Parsed argv stages run directly (shell=False, NOT wrapped in a shell): shells/interpreters "
-        "(sh, bash, python, perl, ruby, node) and awk system()/getline/pipe constructs are blocked by policy — "
-        "call get_tool_help('run_command') for the full policy. Legacy argv arrays are accepted only for simple "
-        "calls without operators. Set preview_lines to cap inline stdout and save_output for large output. "
+        "Execute a validated command on this SIFT VM. Pass a single command string; "
+        "pipes (|), sequencing (&&/||/;), and redirects (>,>>,<,2>&1) are supported. "
+        "Set preview_lines to cap inline stdout and save_output for large output. "
         "Case path jails, audit logging, and provenance hashing are enforced.",
         _schema(
             {
-                "command": {
-                    "oneOf": [
-                        {"type": "string"},
-                        {"type": "array", "items": {"type": "string"}},
-                    ],
-                    "description": "Command to run. Prefer a single string; it may contain pipes, &&/||/;, and redirects. An argv array is accepted only for simple calls without operators.",
-                },
-                "purpose": {"type": "string", "description": "Short reason for this command, recorded in the audit trail. Required."},
+                "command": {"type": "string", "description": "Command to execute. May include pipes, &&/||/;, and redirects."},
+                "purpose": {"type": "string", "description": "Short reason for this command, recorded in the audit trail."},
                 "timeout": {"type": "integer", "default": 0, "description": "Per-command timeout in seconds. 0 uses the platform default."},
-                "save_output": {"type": "boolean", "default": False, "description": "Persist full stdout/stderr to agent/run_commands/ and return the path. Output over the response budget is saved automatically regardless."},
-                "input_files": {"type": "array", "items": {"type": "string"}, "description": "Evidence/input file paths this command reads, for provenance hashing. Pass when the inputs are not obvious from the command."},
-                "working_dir": {"type": "string", "description": "Working directory, relative to the case directory. Must stay within the case jail."},
-                "preview_lines": {"type": "integer", "default": 0, "description": "Cap inline stdout to this many lines (0 = no inline cap). The full output remains available via save_output / full_output_path; stdout_truncated flags when the cap applied."},
-                "skip_enrichment": {"type": "boolean", "default": False, "description": "Skip forensic-knowledge enrichment after the first call to the same tool in a session, to save context."},
+                "save_output": {"type": "boolean", "default": False, "description": "Persist full stdout/stderr to agent/run_commands/."},
+                "input_files": {"type": "array", "items": {"type": "string"}, "description": "Evidence/input file paths this command reads, for provenance hashing."},
+                "working_dir": {"type": "string", "description": "Working directory, relative to the case directory."},
+                "preview_lines": {"type": "integer", "default": 0, "description": "Cap inline stdout to this many lines (0 = no inline cap)."},
+                "skip_enrichment": {"type": "boolean", "default": False, "description": "Skip forensic-knowledge enrichment after the first call."},
             },
             ["command", "purpose"],
         ),
     ),
-
 )
 
 
@@ -364,6 +346,64 @@ def _detect_artifact_context(command: list[str]) -> str | None:
             if keyword in basename:
                 return artifact
     return None
+
+
+def _case_info(manager: CaseManager) -> dict:
+    """Consolidated case overview: status, file structure, evidence chain, capabilities."""
+    case_dir = get_case_dir()
+    status = case_status_data(case_dir)
+    structure = _case_file_structure()
+    caps = build_platform_capabilities()
+
+    chain = chain_status(case_dir)
+    evidence_ok = chain["status"] == ChainStatus.OK
+
+    return {
+        "case_id": status["case_id"],
+        "name": status["name"],
+        "status": status["status"],
+        "examiner": status["examiner"],
+        "case_dir": status["path"],
+        "case_brief": status["case_brief"],
+        "findings": {
+            "total": status["finding_count"],
+            "draft": status["finding_draft"],
+            "approved": status["finding_approved"],
+        },
+        "timeline_events": status["timeline_count"],
+        "todos": {"open": status["todo_open"], "total": status["todo_total"]},
+        "evidence_chain": {
+            "status": chain["status"],
+            "ok": evidence_ok,
+            "issues": chain["issues"],
+            "manifest_version": chain["manifest_version"],
+        },
+        "file_structure": {
+            "top_level_dirs": structure.get("top_level_dirs", []),
+            "total_files": structure.get("total_files", 0),
+            "total_dirs": structure.get("total_dirs", 0),
+            "subtree_counts": structure.get("file_counts_by_subtree", {}),
+        },
+        "platform_capabilities": caps["platform_capabilities"],
+    }
+
+
+def _evidence_info() -> dict:
+    """Consolidated evidence overview: listing + chain verification."""
+    case_dir = get_case_dir()
+    evidence = list_evidence_status_data(case_dir)
+    verify = _evidence_verify()
+
+    return {
+        "chain_status": verify["status"],
+        "ok_count": verify["ok_count"],
+        "issues": verify["issues"],
+        "manifest_version": verify["manifest_version"],
+        "evidence_files": evidence.get("evidence", []),
+        "total_evidence_files": evidence.get("total_evidence_files", 0),
+        "unregistered_files": evidence.get("unregistered_files", []),
+        "requires_examiner_action": evidence.get("requires_examiner_action", False),
+    }
 
 
 def _case_file_structure() -> dict:
@@ -487,7 +527,10 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         )
 
     # Parse command using our split/parse state machines to extract binary and detect inputs
-    from sift_core.execute.security import split_command_by_operators, parse_subcommand_argv_and_redirects
+    from sift_core.execute.security import (
+        parse_subcommand_argv_and_redirects,
+        split_command_by_operators,
+    )
     subcmds = split_command_by_operators(command)
     
     first_binary = ""
@@ -702,137 +745,6 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         return response
 
 
-def _record_action(args: dict, examiner: str, audit: AuditWriter) -> dict:
-    description = str(args.get("description", ""))
-    reasoning = str(args.get("reasoning", ""))
-    tool = str(args.get("tool", ""))
-    command = str(args.get("command", ""))
-    _validate_str_length(description, "description", _MAX_TEXT)
-    _validate_str_length(reasoning, "reasoning", _MAX_TEXT)
-    _validate_str_length(tool, "tool", _MAX_SHORT)
-    _validate_str_length(command, "command", _MAX_TEXT)
-
-    case_dir = get_case_dir()
-    ts = datetime.now(timezone.utc).isoformat()
-    entry: dict = {
-        "ts": ts,
-        "description": description,
-        "reasoning": reasoning,
-        "examiner": examiner,
-        "source": "mcp",
-    }
-    if tool:
-        entry["tool"] = tool
-    if command:
-        entry["command"] = command
-
-    with open(case_dir / "actions.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
-
-    result = {"status": "recorded", "timestamp": ts}
-    if audit.log(
-        tool="record_action",
-        params={"description": description, "reasoning": reasoning},
-        result_summary=result,
-        examiner_override=examiner,
-    ) is None:
-        result["warning"] = "Audit write failed — action not recorded"
-    return result
-
-
-def _log_reasoning(args: dict, examiner: str, audit: AuditWriter) -> dict:
-    text = str(args.get("text", ""))
-    _validate_str_length(text, "text", _MAX_TEXT)
-    result = {"status": "logged"}
-    if audit.log(
-        tool="log_reasoning",
-        params={"text": text},
-        result_summary=result,
-        source="orchestrator",
-        examiner_override=examiner,
-    ) is None:
-        result["status"] = "write_failed"
-        result["warning"] = "Audit write failed — reasoning not recorded"
-    return result
-
-
-def _log_external_action(args: dict, examiner: str, audit: AuditWriter) -> dict:
-    command = str(args.get("command", ""))
-    output_summary = str(args.get("output_summary", ""))
-    purpose = str(args.get("purpose", ""))
-    hook_audit_id = str(args.get("hook_audit_id", ""))
-    input_files = args.get("input_files") or None
-    output_files = args.get("output_files") or None
-    for field, value in (
-        ("command", command),
-        ("output_summary", output_summary),
-        ("purpose", purpose),
-        ("hook_audit_id", hook_audit_id),
-    ):
-        _validate_str_length(value, field, _MAX_TEXT if field in {"command", "output_summary", "purpose"} else _MAX_SHORT)
-
-    source = "orchestrator_voluntary"
-    if hook_audit_id:
-        hook_found = False
-        audit_dir = case_audit_dir(get_case_dir())
-        for hook_file in sorted(audit_dir.glob("*.jsonl")) if audit_dir.is_dir() else []:
-            if hook_found:
-                break
-            try:
-                with open(hook_file, encoding="utf-8") as f:
-                    for line in f:
-                        if hook_audit_id not in line:
-                            continue
-                        try:
-                            entry = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if entry.get("audit_id") == hook_audit_id:
-                            hook_found = True
-                            break
-            except OSError:
-                pass
-        if hook_found:
-            source = "orchestrator_verified"
-
-    audit_id = audit.log(
-        tool="log_external_action",
-        params={
-            "command": command,
-            "output_summary": output_summary,
-            "purpose": purpose,
-            "hook_audit_id": hook_audit_id,
-        },
-        result_summary={
-            "status": "logged",
-            "source": source,
-            "output_files": output_files or [],
-        },
-        source=source,
-        input_files=input_files,
-        examiner_override=examiner,
-    )
-    result = {
-        "status": "logged",
-        "audit_id": audit_id,
-        "source": source,
-        "note": (
-            "orchestrator_verified -- cross-referenced with hook entry"
-            if source == "orchestrator_verified"
-            else "orchestrator_voluntary -- not independently verified"
-        ),
-    }
-    if audit_id is None:
-        result["warning"] = "Audit write failed — action not recorded"
-    if output_files and not input_files:
-        result["provenance_warning"] = (
-            "output_files provided without input_files — provenance chain cannot trace to evidence."
-        )
-    return result
-
-
 def _build_validation_guidance(errors: list[str]) -> list[str]:
     guidance: list[str] = []
     for err in errors:
@@ -888,93 +800,6 @@ def _record_finding(args: dict, examiner: str, manager: CaseManager, audit: Audi
     if result.get("status") == "VALIDATION_FAILED":
         result["guidance"] = _build_validation_guidance(result.get("errors", []))
     return result
-
-
-def _query_case(args: dict, manager: CaseManager) -> dict:
-    record_type = str(args.get("record_type", "")).strip().lower()
-    # Backward compat: normalize singular "action" to "actions"
-    if record_type == "action":
-        record_type = "actions"
-    limit = int(args.get("limit", 50))
-    offset = int(args.get("offset", 0))
-    if record_type == "timeline":
-        events = manager.get_timeline(
-            status=args.get("status") or None,
-            source=args.get("source") or None,
-            examiner=args.get("examiner") or None,
-            start_date=args.get("start_date") or None,
-            end_date=args.get("end_date") or None,
-            event_type=args.get("event_type") or None,
-        )
-        total = len(events)
-        return {
-            "events": events[offset : offset + limit] if limit > 0 else events,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": total > offset + limit,
-        }
-    if record_type == "actions":
-        return {"actions": manager.get_actions(limit=limit), "record_type": "actions", "limit": limit}
-    return {
-        "error": "unsupported_record_type",
-        "message": "record_type must be 'timeline' or 'actions'. Use list_existing_findings for findings.",
-        "supported_record_types": ["timeline", "actions"],
-    }
-
-
-def _workflow_status(manager: CaseManager) -> dict:
-    try:
-        case_dir = manager._require_active_case()
-    except ValueError as exc:
-        return {
-            "phase": "NO_CASE",
-            "case_id": "",
-            "error": str(exc),
-            "next_steps": ["Create or select a case in the Examiner Portal."],
-        }
-    meta = manager._load_case_meta(case_dir)
-    case_id = meta.get("case_id", case_dir.name)
-    chain = chain_status(case_dir)
-    findings = manager._load_findings(case_dir)
-    timeline = manager._load_timeline(case_dir)
-    sealed_count = len((chain.get("files") or [])) if isinstance(chain.get("files"), list) else chain.get("ok_count", 0)
-    draft_count = sum(1 for f in findings if f.get("status") == "DRAFT")
-    approved_count = sum(1 for f in findings if f.get("status") == "APPROVED")
-    status = chain.get("status", ChainStatus.UNSEALED)
-    if status != ChainStatus.OK:
-        phase = "EVIDENCE_BLOCKED"
-        next_steps = [
-            f"Evidence chain status is {str(status).upper()}.",
-            "The examiner must resolve and seal evidence in the portal before agent tools run.",
-        ]
-    elif approved_count:
-        phase = "REPORTING"
-        next_steps = ["Approved findings are ready for examiner-triggered reporting."]
-    elif draft_count:
-        phase = "FINDINGS"
-        next_steps = ["Draft findings are waiting for examiner review."]
-    else:
-        phase = "TRIAGE"
-        next_steps = ["Evidence is sealed. Continue analysis and stage findings as evidence supports them."]
-    return {
-        "phase": phase,
-        "case_id": case_id,
-        "evidence_chain": {
-            "status": status,
-            "issues": chain.get("issues", []),
-            "manifest_version": chain.get("manifest_version", 0),
-        },
-        "evidence_summary": {"sealed_files": sealed_count},
-        "findings_summary": {
-            "total": len(findings),
-            "draft": draft_count,
-            "approved": approved_count,
-            "rejected": sum(1 for f in findings if f.get("status") == "REJECTED"),
-        },
-        "timeline_events": len(timeline),
-        "next_steps": next_steps,
-    }
 
 
 def _manage_todo(args: dict, examiner: str, manager: CaseManager, audit: AuditWriter) -> dict:
@@ -1046,21 +871,10 @@ def call_core_tool(
     audit = audit or AuditWriter(mcp_name="sift-core")
 
     try:
-        if name == "case_status":
-            result = case_status_data(get_case_dir())
-            result.update(build_platform_capabilities())
-        elif name == "case_file_structure":
-            result = _case_file_structure()
-        elif name == "evidence_list":
-            result = list_evidence_status_data(get_case_dir())
-        elif name == "evidence_verify":
-            result = _evidence_verify()
-        elif name == "record_action":
-            result = _record_action(args, effective_examiner, audit)
-        elif name == "log_reasoning":
-            result = _log_reasoning(args, effective_examiner, audit)
-        elif name == "log_external_action":
-            result = _log_external_action(args, effective_examiner, audit)
+        if name == "case_info":
+            result = _case_info(manager)
+        elif name == "evidence_info":
+            result = _evidence_info()
         elif name == "record_finding":
             result = _record_finding(args, effective_examiner, manager, audit)
         elif name == "record_timeline_event":
@@ -1075,7 +889,6 @@ def call_core_tool(
             findings = manager.get_findings(status or None)
             page = findings[offset : offset + limit] if limit > 0 else findings
 
-            # Save full findings to agent dir for agent follow-up reads
             findings_file: str | None = None
             try:
                 case_dir = get_case_dir()
@@ -1100,42 +913,13 @@ def call_core_tool(
             }
             if findings_file:
                 result["full_findings_path"] = findings_file
-        elif name == "query_case":
-            result = _query_case(args, manager)
-        elif name == "workflow_status":
-            result = _workflow_status(manager)
         elif name == "manage_todo":
             result = _manage_todo(args, effective_examiner, manager, audit)
-        elif name == "list_available_tools":
-            requested_category = args.get("category") or None
-            tools = _list_available_tools(category=requested_category)
-            result = {"tools": tools, "count": len(tools)}
-            if requested_category and not tools:
-                # Don't strand the agent on an unknown category — show valid ones.
-                from sift_core.execute.catalog import list_tools_in_catalog
-
-                categories = sorted(
-                    {t["category"] for t in list_tools_in_catalog() if t.get("category")}
-                )
-                result["info"] = (
-                    f"No tools in category '{requested_category}'."
-                )
-                result["available_categories"] = categories
         elif name == "get_tool_help":
             result = _get_tool_help(str(args.get("tool_name", "")))
             audit.log(
                 tool="get_tool_help",
                 params={"tool_name": args.get("tool_name", "")},
-                result_summary=result,
-            )
-        elif name == "check_tools":
-            tool_names = args.get("tool_names")
-            result = _check_tools(tool_names=tool_names if isinstance(tool_names, list) else None)
-        elif name == "suggest_tools":
-            result = _suggest_tools(str(args.get("artifact_type", "")), str(args.get("question", "")))
-            audit.log(
-                tool="suggest_tools",
-                params={"artifact_type": args.get("artifact_type", "")},
                 result_summary=result,
             )
         elif name == "run_command":

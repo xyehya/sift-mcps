@@ -19,10 +19,11 @@ from typing import Any
 
 import yaml
 from sift_common.audit import resolve_examiner
+
 from sift_core.case_io import case_audit_dir, cases_root
 from sift_core.case_ops import build_case_brief
-from sift_core.evidence_ops import list_manifest_evidence_data
 from sift_core.evidence_chain import load_manifest
+from sift_core.evidence_ops import list_manifest_evidence_data
 from sift_core.finding_validation import validate as validate_finding_data
 
 logger = logging.getLogger(__name__)
@@ -106,9 +107,7 @@ def build_platform_capabilities() -> dict:
         guidance.append(f"- {label} add-on available (provides: {prov})")
     guidance.append("")
     guidance.append(
-        "For the core forensic tool catalog use list_available_tools (or "
-        "environment_summary); get_tool_help(tool_name='...') for usage and "
-        "suggest_tools(artifact_type='...') for analysis recommendations. "
+        "For core forensic tool usage use get_tool_help(tool_name='...'). "
         "capability_guide lists ADD-ON backend tools only. Use tools/list for "
         "exact input schemas before calling a tool."
     )
@@ -946,8 +945,8 @@ class CaseManager:
                         "status": "REJECTED",
                         "error": (
                             "Artifact missing audit_id — pass the audit_id "
-                            "from the tool response, or call log_external_action "
-                            "first to record Bash commands."
+                            "from the tool response (use supporting_commands "
+                            "to record Bash commands with audit_ids)."
                         ),
                     }
                 if aid not in eid_set:
@@ -1263,11 +1262,10 @@ class CaseManager:
                         {
                             "source": src,
                             "action": f"evidence_register(path='{case_relative}')",
-                            "hint": (
-                                "If derivative: call log_external_action with "
-                                "input_files=[original evidence] and "
-                                f"output_files=['{src}'] to bridge the gap."
-                            ),
+                        "hint": (
+                            "If derivative: pass supporting_commands with "
+                            "audit_ids linking to the original evidence."
+                        ),
                         }
                     )
             if unregistered_sources:
@@ -1276,8 +1274,8 @@ class CaseManager:
                     "status": "REJECTED",
                     "error": (
                         "Artifact sources not in evidence registry. "
-                        "Register original evidence, or use log_external_action "
-                        "to link derivatives to registered evidence."
+                        "Register original evidence via the portal, or bridge "
+                        "derivatives to registered evidence with supporting_commands."
                     ),
                     "unregistered_sources": unregistered_sources,
                     "finding_held": f"{fid} (not staged -- fix sources and resubmit)",
@@ -1306,10 +1304,10 @@ class CaseManager:
                 }
                 if unresolved:
                     gap["unresolved_input"] = unresolved
-                    gap["fix"] = (
-                        "Call log_external_action with input_files "
-                        f"and output_files=['{unresolved}'], then resubmit"
-                    )
+                gap["fix"] = (
+                    "Link to registered evidence with supporting_commands "
+                    "and resubmit"
+                )
                 provenance_gaps.append(gap)
             if provenance_gaps:
                 sanitized["provenance_gaps"] = provenance_gaps
@@ -1511,8 +1509,8 @@ class CaseManager:
         """Validate and stage timeline event as DRAFT."""
         case_dir = self._require_active_case()
 
-        # Basic validation
-        required = ["timestamp", "description"]
+        # Basic validation — aligned with tool schema (title, timestamp, description, host, source)
+        required = ["title", "timestamp", "description", "host", "source"]
         missing = [k for k in required if not event.get(k)]
         if missing:
             return {
@@ -1695,9 +1693,12 @@ class CaseManager:
 
     def complete_todo(self, todo_id: str, examiner_override: str = "") -> dict:
         """Mark a TODO as completed."""
-        return self.update_todo(
+        result = self.update_todo(
             todo_id, status="completed", examiner_override=examiner_override
         )
+        if result.get("status") == "updated":
+            result["status"] = "completed"
+        return result
 
     # --- Evidence ---
 
