@@ -2,15 +2,16 @@
 
 ## Current Objective
 
-Run 5 migration planning completed. The migration workspace now has a focused
-target execution job model for DB-backed durable jobs, Postgres worker claiming,
-job lifecycle transitions, steps/logs, parser and OpenSearch indexing lineage,
-idempotency, worker runtime assumptions, security/audit requirements, and
-failure/degraded-mode behavior.
+Run 6 migration planning completed. The migration workspace now has integration
+contracts for connecting the DB-backed execution/job model to Gateway REST APIs,
+core SIFT MCP tools, the React + Vite operator portal, OpenSearch indexing and
+search status, evidence vault/integrity workflows, audit events, approval gates,
+worker status, and degraded-mode behavior.
 
-This run stayed documentation-only. It did not design the future job schema,
-database migrations, REST APIs, MCP tools, frontend views, or full execution
-roadmap. It did not introduce Redis/RQ/Celery/Temporal or any external queue.
+This run stayed documentation-only. It did not implement code, create database
+migrations, refactor REST APIs, MCP tools, frontend views, OpenSearch, evidence,
+audit, or worker code, and did not write the final execution roadmap. It did not
+introduce Redis/RQ/Celery/Temporal or any external queue.
 
 ## Decisions Already Made
 
@@ -50,6 +51,21 @@ roadmap. It did not introduce Redis/RQ/Celery/Temporal or any external queue.
 - `docs/migration/03_opensearch_core_integration.md`
 - `docs/migration/04_execution_current_state.md`
 - `docs/migration/05_execution_job_model.md`
+- `docs/migration/06_execution_integration_contracts.md`
+
+## Files Inspected In Run 6
+
+- `docs/migration/MIGRATION_STATE.md`
+- `docs/migration/00_migration_charter.md`
+- `docs/migration/02_authoritative_domains_and_boundaries.md`
+- `docs/migration/03_opensearch_core_integration.md`
+- `docs/migration/04_execution_current_state.md`
+- `docs/migration/05_execution_job_model.md`
+- `docs/migration/README.md`
+
+No implementation code was inspected during run 6. Current repository facts in
+`06_execution_integration_contracts.md` were carried forward from the required
+migration documents.
 
 ## Files Inspected
 
@@ -239,6 +255,44 @@ roadmap. It did not introduce Redis/RQ/Celery/Temporal or any external queue.
   stdout/stderr capture, heartbeat, graceful shutdown, cancellation handling,
   and crash recovery through leases.
 
+## Key Integration Decisions From Run 6
+
+- Gateway REST APIs are the human/operator job surface. They create, list,
+  inspect, cancel, retry, and observe jobs, steps, logs, workers, execution
+  health, and OpenSearch health through Gateway policy.
+- Case authorization for REST job APIs must come from Supabase Auth/RLS plus
+  Gateway policy. The Gateway remains the REST policy enforcement point.
+- The frontend must not directly mutate authoritative job state. It submits
+  actions through Gateway endpoints and reads job/status/health/audit views.
+- Core SIFT MCP tools are the AI-agent/service job surface. Long-running tools
+  enqueue DB-backed jobs and return `job_id`.
+- Target MCP tools include `jobs.enqueue`, `jobs.get`, `jobs.list`,
+  `jobs.tail_logs`, `jobs.cancel`, `jobs.retry`, `evidence.ingest`,
+  `evidence.verify_integrity`, `parsers.list`, `parsers.run`,
+  `opensearch.index_status`, `opensearch.health`, `report.generate`, and
+  `finding.generate`.
+- MCP case context comes from Gateway-validated token/session context, not
+  process environment or legacy active-case pointers. Normal agent tokens cannot
+  pass arbitrary `case_id`, raw OpenSearch DSL, raw index names, or wildcard case
+  patterns.
+- Initial frontend update strategy is polling first, with later SSE/WebSocket or
+  Supabase Realtime as an upgrade path after DB/RLS/Gateway event policy is
+  stable.
+- Evidence vault behavior is preserved. Raw evidence remains immutable while
+  operational metadata, integrity status, job state, and audit linkage move into
+  Postgres over time.
+- OpenSearch indexing jobs link parser runs, parser outputs, ingest batches,
+  index registrations, and OpenSearch documents through Postgres IDs and source
+  hashes. OpenSearch remains derived and non-authoritative.
+- Audit remains mandatory for job lifecycle transitions, parser runs, evidence
+  access/checks, OpenSearch indexing, report/finding generation, human
+  approvals, destructive/final actions, and policy denials.
+- Approval-gated work enters `waiting_human`. Agent-generated findings remain
+  proposed/pending and cannot be auto-approved.
+- Worker health is observed through registration, capabilities, heartbeat,
+  active job, `last_seen_at`, degraded/offline state, health endpoints, and
+  stale-job audit/log behavior.
+
 ## Open Questions
 
 - What exact Supabase Local deployment shape should this repo target?
@@ -270,10 +324,28 @@ roadmap. It did not introduce Redis/RQ/Celery/Temporal or any external queue.
 - Which evidence operations are too expensive to remain synchronous?
 - Which external scripts still consume `~/.sift/ingest-status`,
   `~/.sift/ingest-logs`, active-case pointers, or ingest manifests?
+- What exact human role names and permissions should apply to job creation,
+  retry, cancel, log reads, worker detail, approvals, final export, archive, and
+  destructive cleanup?
+- What exact initial REST response schemas and MCP result schemas should be
+  frozen before implementation?
+- What initial frontend polling intervals should be accepted, and when should
+  SSE/WebSocket or Supabase Realtime become part of the roadmap?
+- Should raw OpenSearch DSL be admin-only forever, or should a constrained
+  normal-agent mode ever exist?
+- Which job/action audit events must be fail-closed if the DB audit writer is
+  unavailable during the transition?
 
 ## Next Recommended Run
 
-Create `docs/migration/06_execution_integration_contracts.md`. Recommended
-scope: Gateway REST job APIs, core SIFT MCP job tools, frontend job/status
-views, and OpenSearch/evidence/audit integration contracts. Do not create
-database migrations or implement code in that run.
+Create `docs/migration/07_execution_roadmap.md`.
+
+Recommended scope:
+
+- migration phases for execution/jobs
+- first execution-focused PR plan
+- rollback strategy
+- tests and acceptance criteria
+
+Keep the next run focused on planning. Do not create database migrations or
+implement code unless a future prompt explicitly authorizes that work.
