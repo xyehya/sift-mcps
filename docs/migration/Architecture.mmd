@@ -1,0 +1,156 @@
+%%{init: {
+  "theme": "base",
+  "themeVariables": {
+    "fontFamily": "Arial, Helvetica, sans-serif",
+    "primaryColor": "#ffffff",
+    "primaryTextColor": "#111111",
+    "primaryBorderColor": "#111111",
+    "lineColor": "#111111",
+    "clusterBkg": "#ffffff",
+    "clusterBorder": "#111111",
+    "edgeLabelBackground": "#ffffff"
+  },
+  "flowchart": {
+    "curve": "linear",
+    "htmlLabels": true,
+    "nodeSpacing": 55,
+    "rankSpacing": 60,
+    "padding": 20
+  }
+}}%%
+
+flowchart TB
+
+  %% =========================================================
+  %% SIFT VM Autonomous DFIR Agent - exact Mermaid replica
+  %% of the provided high-level architecture diagram.
+  %% Note: Mermaid auto-layout is not pixel-perfect, but this
+  %% file preserves the same topology, labels, groupings, and flow.
+  %% =========================================================
+
+  subgraph SYSTEM["SIFT VM Autonomous DFIR Agent (Overall System)"]
+    direction TB
+
+    %% -------------------------
+    %% Top row
+    %% -------------------------
+    subgraph TOP_ROW[" "]
+      direction LR
+
+      Portal("▭<br/><b>Presentation Layer</b><br/>React + Vite Operator Portal<br/><br/>Case lifecycle, findings, timeline,<br/>evidence integrity, MCP token<br/>management")
+
+      TopSpacer1[" "]
+
+      Agents("▭<br/><b>AI Agent Clients</b><br/>Codex / Claude / Local MCP Clients")
+    end
+
+    %% -------------------------
+    %% Gateway / Broker Layer
+    %% -------------------------
+    Gateway("<b>Gateway / Broker Layer</b><br/>Starlette + FastAPI + FastMCP<br/>REST / WebSocket / SSE<br/>Authentication & Authorization<br/>Case-scoped MCP tools<br/>Audit & policy enforcement")
+
+    %% -------------------------
+    %% Middle row: OpenSearch / Case Control / Evidence
+    %% -------------------------
+    subgraph MID_ROW[" "]
+      direction LR
+
+      OpenSearch[("<b>OpenSearch</b><br/>Artifacts, timeline, IOCs,<br/>full-text / vector search")]
+
+      subgraph CASE_CONTROL["Case Control Plane"]
+        direction LR
+
+        Supabase[("<b>Supabase Local</b><br/>Postgres + Auth +<br/>RLS + Realtime + Storage<br/><i>Authoritative case &<br/>workflow state</i>")]
+
+        subgraph CONTROL_BOXES[" "]
+          direction TB
+          TokenRegistry["<b>MCP Token Registry</b>"]
+          AuditEvents["<b>Audit Events</b>"]
+          PipelineState["<b>Jobs / Pipeline State</b>"]
+        end
+
+        Supabase <-.-> TokenRegistry
+        Supabase <-.-> AuditEvents
+        Supabase <-.-> PipelineState
+      end
+
+      Evidence[("<b>Evidence Vault</b><br/>Immutable evidence<br/>files + hashes")]
+    end
+
+    %% -------------------------
+    %% Bottom row: legend / execution / reports
+    %% -------------------------
+    subgraph BOT_ROW[" "]
+      direction LR
+
+      Legend["<b><i>Postgres/Supabase</i></b> = control plane<br/><br/><b><i>OpenSearch</i></b> = search/data plane"]
+
+      subgraph EXECUTION["Execution Plane"]
+        direction TB
+
+        Worker("<b>SIFT VM Worker Runtime</b><br/>Durable jobs from Postgres<br/>Python parsers & native Linux workflows<br/>Ingestion, parsing, normalization,<br/>report generation")
+
+        subgraph EXEC_INTERNALS[" "]
+          direction LR
+          ParserModules["<b>Parser / Workflow Modules</b>"]
+          JobDispatcher["<b>Job Dispatcher</b><br/>DB-backed polling /<br/>locked job claim"]
+        end
+
+        Worker --- ParserModules
+        Worker --- JobDispatcher
+      end
+
+      Reports[("<b>Reports / Exports</b><br/>HTML / PDF /<br/>JSON bundles")]
+    end
+
+    %% -------------------------
+    %% Visible flows from the image
+    %% -------------------------
+    Portal -. "Operator actions /<br/>REST API" .-> Gateway
+    Agents -. "MCP tool calls" .-> Gateway
+
+    Gateway -. "Case lifecycle /<br/>auth / state" .-> Supabase
+    Gateway -. "Search &<br/>retrieval" .-> OpenSearch
+    Gateway -. "Create job /<br/>invoke workflow" .-> Evidence
+
+    Supabase -. "Durable job state" .-> EXECUTION
+    EXECUTION -. "Status, findings,<br/>logs, audit updates" .-> Supabase
+
+    EXECUTION -. "Parsed artifacts /<br/>timeline indexing" .-> OpenSearch
+    EXECUTION -. "Register /<br/>verify evidence" .-> Evidence
+    EXECUTION -. "Generate<br/>reports" .-> Reports
+
+    Reports -. "Review /<br/>download" .-> Portal
+
+    %% -------------------------
+    %% Invisible layout hints
+    %% -------------------------
+    TopSpacer1 ~~~ Gateway
+    OpenSearch ~~~ CASE_CONTROL
+    CASE_CONTROL ~~~ Evidence
+    Legend ~~~ EXECUTION
+    EXECUTION ~~~ Reports
+  end
+
+  %% =========================================================
+  %% Styling
+  %% =========================================================
+  classDef box fill:#ffffff,stroke:#111111,stroke-width:1.4px,color:#111111;
+  classDef db fill:#ffffff,stroke:#111111,stroke-width:1.4px,color:#111111;
+  classDef group fill:#ffffff,stroke:#111111,stroke-width:1.2px,stroke-dasharray: 6 4,color:#111111;
+  classDef outer fill:#ffffff,stroke:#111111,stroke-width:2px,color:#111111;
+  classDef note fill:#ffffff,stroke:#111111,stroke-width:1.2px,stroke-dasharray: 6 4,color:#111111;
+  classDef invisible fill:transparent,stroke:transparent,color:transparent;
+
+  class Portal,Agents,Gateway,TokenRegistry,AuditEvents,PipelineState,Worker,ParserModules,JobDispatcher box;
+  class Supabase,OpenSearch,Evidence,Reports db;
+  class CASE_CONTROL,EXECUTION group;
+  class Legend note;
+  class SYSTEM outer;
+  class TopSpacer1 invisible;
+
+  style TOP_ROW fill:#ffffff,stroke:transparent
+  style MID_ROW fill:#ffffff,stroke:transparent
+  style BOT_ROW fill:#ffffff,stroke:transparent
+  style CONTROL_BOXES fill:#ffffff,stroke:transparent
+  style EXEC_INTERNALS fill:#ffffff,stroke:transparent

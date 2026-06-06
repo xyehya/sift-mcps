@@ -2,16 +2,16 @@
 
 ## Current Objective
 
-Run 6 migration planning completed. The migration workspace now has integration
-contracts for connecting the DB-backed execution/job model to Gateway REST APIs,
-core SIFT MCP tools, the React + Vite operator portal, OpenSearch indexing and
-search status, evidence vault/integrity workflows, audit events, approval gates,
-worker status, and degraded-mode behavior.
+Run 8 migration planning completed. The migration workspace now has a concrete
+Supabase/Postgres control-plane schema design document that translates the
+agreed architecture into practical initial tables, relationships, security/RLS
+guidance, status values, indexes, migration compatibility mapping, first
+schema-focused PR recommendation, and open questions requiring approval.
 
 This run stayed documentation-only. It did not implement code, create database
 migrations, refactor REST APIs, MCP tools, frontend views, OpenSearch, evidence,
-audit, or worker code, and did not write the final execution roadmap. It did not
-introduce Redis/RQ/Celery/Temporal or any external queue.
+audit, parser, report, finding, or worker code. It did not introduce
+Redis/RQ/Celery/Temporal or any external queue.
 
 ## Decisions Already Made
 
@@ -52,6 +52,80 @@ introduce Redis/RQ/Celery/Temporal or any external queue.
 - `docs/migration/04_execution_current_state.md`
 - `docs/migration/05_execution_job_model.md`
 - `docs/migration/06_execution_integration_contracts.md`
+- `docs/migration/07_execution_roadmap.md`
+- `docs/migration/08_control_plane_schema.md`
+
+## Files Inspected In Run 8
+
+- No prior migration or implementation files were reread in run 8. The run used
+  the already-loaded session context from the previous migration documents.
+
+## Key Schema Decisions From Run 8
+
+- Initial schema recommendation is a control-plane layout with Supabase Auth for
+  human users, an `app` schema for core RLS-protected tables, an optional
+  `internal`/`svc` schema for service-only helpers, and optional frontend-safe
+  views. This namespace choice still needs user approval before migration work.
+- Recommended identity model separates human `operator_profiles` from
+  `agents`, `service_identities`, and hash-only `mcp_tokens`.
+- Recommended case model uses UUID DB primary keys plus legacy text
+  compatibility keys such as `case_key`; this needs user approval before
+  migrations.
+- Schema design includes initial tables for cases, memberships, agents,
+  service identities, MCP token registry/scopes, evidence metadata and
+  integrity, audit, approvals, findings/reviews, reports/artifacts, jobs,
+  job attempts/steps/logs, workers, parser runs, parser outputs, ingest
+  batches, OpenSearch index registry, indexing status, and optional document
+  refs.
+- Frontend users should read through RLS and safe views where appropriate, but
+  privileged state mutations should go through Gateway service paths.
+- MCP/agent clients should not receive direct Postgres access; they interact
+  through Gateway-issued, case-scoped, tool-scoped token records.
+- Worker service writes should be limited to claimed jobs and should update
+  job, step, log, parser, output, ingest, indexing, and audit state.
+- First schema-focused PR recommendation is migration infrastructure and schema
+  verification harness if missing, not domain tables yet, because the exact
+  Supabase Local deployment and migration layout remain open.
+- The first overall implementation PR recommendation remains JOB-0 baseline
+  execution smoke-test fixtures and lightweight tests.
+
+## Files Inspected In Run 7
+
+- `docs/migration/MIGRATION_STATE.md`
+- `docs/migration/00_migration_charter.md`
+- `docs/migration/02_authoritative_domains_and_boundaries.md`
+- `docs/migration/03_opensearch_core_integration.md`
+- `docs/migration/04_execution_current_state.md`
+- `docs/migration/05_execution_job_model.md`
+- `docs/migration/06_execution_integration_contracts.md`
+- `docs/migration/README.md`
+
+No implementation code was inspected during run 7. Current repository facts in
+`07_execution_roadmap.md` were carried forward from the required migration
+documents.
+
+## Key Roadmap Decisions From Run 7
+
+- Execution migration should proceed through JOB-0 through JOB-13:
+  baseline tests/fixtures, job interfaces, job schema, repository/service,
+  no-op worker, REST job APIs, MCP job tools, evidence jobs, parser/ingest jobs,
+  OpenSearch indexing status integration, frontend job monitoring,
+  report/finding jobs, file-authority deprecation, and hardening/docs.
+- The first execution-focused PR should be JOB-0 only: additive baseline
+  smoke-test fixtures and lightweight tests for current execution-critical
+  evidence/audit/parser/OpenSearch behavior, with no runtime behavior changes.
+- The second recommended PR should add job domain interface skeletons with no
+  database dependency and no runtime wiring.
+- Real parser conversion should wait until baseline tests, job interfaces,
+  schema, repository/service behavior, and worker claiming are tested.
+- Evidence vault behavior remains protected during early conversion; evidence
+  hash/verify/register jobs are the safest first real workflow conversion after
+  job infrastructure exists.
+- File-backed workflow/status authority should be deprecated only after DB
+  authority, compatibility exports, and migrated readers are validated.
+- Future implementation PRs should be narrow enough for one Codex coding
+  session and should avoid broad refactors until fixtures and baseline tests
+  exist.
 
 ## Files Inspected In Run 6
 
@@ -335,17 +409,35 @@ migration documents.
   normal-agent mode ever exist?
 - Which job/action audit events must be fail-closed if the DB audit writer is
   unavailable during the transition?
+- What exact test layout and package-specific commands should the first
+  baseline execution PR use?
+- Which smoke fixtures can cover parser/ingest behavior without requiring a
+  live OpenSearch instance?
+- What exact Supabase/Postgres table, constraint, index, RLS, and migration
+  layout should be used for jobs, job steps, job logs, workers, parser runs,
+  parser outputs, ingest batches, and OpenSearch indexing status?
+- Should the first schema migration use UUID DB primary keys plus legacy text
+  compatibility keys, or text identifiers as primary keys?
+- Should the initial Supabase tables live in an `app` schema, `public`, or
+  another approved namespace?
+- Which optional schema tables should be first-class from the start:
+  `service_identities`, `evidence_access_events`, `worker_heartbeats`, and
+  `opensearch_document_refs`?
+- Should evidence dedupe enforce unique active `(case_id, sha256)`, or preserve
+  duplicate acquisitions as separate first-class evidence objects?
 
 ## Next Recommended Run
 
-Create `docs/migration/07_execution_roadmap.md`.
+Create `docs/migration/09_first_pr_candidate.md`.
 
 Recommended scope:
 
-- migration phases for execution/jobs
-- first execution-focused PR plan
-- rollback strategy
-- tests and acceptance criteria
+- first implementation PR candidate that is safe for one Codex coding session
+- Phase JOB-0 from `07_execution_roadmap.md`: baseline execution smoke-test
+  fixtures and lightweight tests
+- exact test files, fixtures, package commands, manual validation, rollback,
+  acceptance criteria, and context guardrails
+- inspect only the minimum implementation/test files required for that PR plan
 
-Keep the next run focused on planning. Do not create database migrations or
-implement code unless a future prompt explicitly authorizes that work.
+Keep the next run focused on first-PR planning. Do not implement tests or code
+unless a future prompt explicitly authorizes that work.
