@@ -2,15 +2,15 @@
 
 ## Current Objective
 
-Run 4 migration planning completed. The migration workspace now has a focused
-current-state execution inventory covering portal-triggered operations, Gateway
-REST/MCP dispatch, native `run_command`, forensic MCP workflow/status tools,
-OpenSearch parser and ingest execution, evidence/audit behavior, and scattered
-workflow/status state.
+Run 5 migration planning completed. The migration workspace now has a focused
+target execution job model for DB-backed durable jobs, Postgres worker claiming,
+job lifecycle transitions, steps/logs, parser and OpenSearch indexing lineage,
+idempotency, worker runtime assumptions, security/audit requirements, and
+failure/degraded-mode behavior.
 
 This run stayed documentation-only. It did not design the future job schema,
-REST APIs, MCP tools, execution roadmap, database migrations, or new worker
-technology.
+database migrations, REST APIs, MCP tools, frontend views, or full execution
+roadmap. It did not introduce Redis/RQ/Celery/Temporal or any external queue.
 
 ## Decisions Already Made
 
@@ -31,6 +31,14 @@ technology.
 - Normal agent tokens must not pass arbitrary OpenSearch index names, wildcard case patterns, or raw OpenSearch DSL.
 - OpenSearch degraded mode must be explicit in Gateway health, MCP responses, frontend views, and job/indexing state.
 - Compatibility with current files should be additive first; file-backed behavior is not removed before DB authority and compatibility exports are verified.
+- Gateway/API/MCP creates durable job records in Postgres for long-running work.
+- SIFT workers poll Postgres and atomically claim jobs using DB row-locking semantics.
+- Long-running MCP tools enqueue jobs and return job IDs rather than executing inside request paths.
+- OpenSearch indexing status is recorded in Postgres and OpenSearch remains a derived searchable data plane.
+- Jobs are explicitly case-scoped from Gateway-validated human session or MCP/service-token context, not from `SIFT_CASE_DIR` or legacy active-case pointers.
+- Retry preserves previous attempts, job steps, logs, parser runs, and indexing records.
+- Cancellation is explicit and audited.
+- Approval-gated work enters `waiting_human`; destructive or final actions require human approval.
 
 ## Files Created
 
@@ -41,6 +49,7 @@ technology.
 - `docs/migration/02_authoritative_domains_and_boundaries.md`
 - `docs/migration/03_opensearch_core_integration.md`
 - `docs/migration/04_execution_current_state.md`
+- `docs/migration/05_execution_job_model.md`
 
 ## Files Inspected
 
@@ -55,6 +64,7 @@ technology.
 - `docs/migration/02_authoritative_domains_and_boundaries.md`
 - `docs/migration/03_opensearch_core_integration.md`
 - `docs/migration/04_execution_current_state.md`
+- `docs/migration/05_execution_job_model.md`
 - `pyproject.toml`
 - `configs/gateway.yaml.template`
 - `configs/apparmor/sift-gateway.template`
@@ -198,6 +208,37 @@ technology.
 - Per-backend MCP routes may bypass the aggregate evidence-gate behavior.
 - Report generation uses in-memory in-flight/draft state only.
 
+## Key Job-Model Decisions From Run 5
+
+- Target job statuses are `pending`, `queued`, `running`, `waiting_human`,
+  `succeeded`, `failed`, `retrying`, `cancelled`, `stale`, and `paused`.
+- Job scope includes `case_id`, requester identity fields, creator type,
+  job type, status, priority, idempotency key, JSON spec, timestamps, worker
+  claim/lease fields, heartbeat, attempt counters, cancellation fields, and
+  failure summary.
+- `case_id` must come from Gateway-validated human session or
+  MCP/service-token context, not from process environment or legacy active-case
+  pointers.
+- Workers claim queued jobs from Postgres using an atomic row-locking /
+  `SKIP LOCKED`-style pattern with worker capabilities, priority ordering,
+  case fairness, leases, and heartbeats.
+- Stale jobs are detected through expired leases and recovered through audited
+  retry/requeue/fail/cancel decisions.
+- `job_steps` and `job_logs` are the target observability model; stdout/stderr
+  should be captured with redaction and linked to steps/jobs.
+- Parser runs, parser outputs, ingest batches, and OpenSearch indexing status
+  link back to `case_id`, `job_id`, `job_step_id`, `parser_run_id`, evidence
+  IDs where applicable, parser versions, source hashes, and schema versions.
+- Initial target job types are `evidence_register`, `evidence_hash`,
+  `evidence_verify_integrity`, `evidence_ingest`, `parser_run`,
+  `opensearch_index`, `timeline_build`, `ioc_extract`, `finding_generate`,
+  `report_generate`, `report_export`, `case_archive`,
+  `maintenance_reindex`, and `health_check`.
+- Worker runtime assumes registration, capabilities, parser/command allowlists,
+  no arbitrary shell execution, environment isolation, subprocess timeouts,
+  stdout/stderr capture, heartbeat, graceful shutdown, cancellation handling,
+  and crash recovery through leases.
+
 ## Open Questions
 
 - What exact Supabase Local deployment shape should this repo target?
@@ -215,20 +256,24 @@ technology.
 - Should any normal agent token ever receive constrained raw OpenSearch DSL access, or should raw DSL be admin-only?
 - Which OpenSearch version/profile is canonical: root compose OpenSearch 2.18.0, package compose OpenSearch 3.5.0, or a newly declared target?
 - Is semantic/vector search in the first OpenSearch migration scope, or explicitly deferred?
-- For the execution job model, should the first durable jobs cover only
-  OpenSearch ingest, or also native `run_command`, report generation, and
-  evidence operations?
+- Should the first implementation slice cover only OpenSearch ingest, or also
+  native `run_command`, report generation, and evidence operations?
 - Should short native commands remain synchronous while only long-running parser
   workflows become jobs?
 - Should legacy `~/.sift/ingest-status` continue as a compatibility export once
   Postgres job state exists, and for how long?
 - What cancellation semantics are acceptable for partially indexed OpenSearch
   batches and subprocess trees?
+- Should retry happen at whole-job, host, artifact, parser-run, or indexing
+  batch granularity first?
+- Which report/export workflows should become job-backed first?
+- Which evidence operations are too expensive to remain synchronous?
+- Which external scripts still consume `~/.sift/ingest-status`,
+  `~/.sift/ingest-logs`, active-case pointers, or ingest manifests?
 
 ## Next Recommended Run
 
-Create `docs/migration/05_execution_job_model.md`. Recommended scope: design
-only the target job lifecycle, job claiming strategy, status transitions, worker
-heartbeat/stale job handling, retry/cancel behavior, and no Redis/RQ. Do not
-design the full parser output schema, all REST APIs, all MCP tools, database
-migrations, or the final execution roadmap in that run.
+Create `docs/migration/06_execution_integration_contracts.md`. Recommended
+scope: Gateway REST job APIs, core SIFT MCP job tools, frontend job/status
+views, and OpenSearch/evidence/audit integration contracts. Do not create
+database migrations or implement code in that run.

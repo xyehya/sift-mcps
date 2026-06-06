@@ -17,6 +17,7 @@ This workspace exists to keep future Codex runs narrow, resumable, and auditable
 - [02_authoritative_domains_and_boundaries.md](02_authoritative_domains_and_boundaries.md) - target authoritative domains, trust boundaries, and compatibility mapping from current file-based authority into Supabase/Postgres.
 - [03_opensearch_core_integration.md](03_opensearch_core_integration.md) - OpenSearch integration as a core SIFT MCP/search data-plane service with control-plane-aware indexing and Gateway-mediated query boundaries.
 - [04_execution_current_state.md](04_execution_current_state.md) - current execution, parser/ingest, evidence/audit, and workflow/status inventory grounded in repository evidence.
+- [05_execution_job_model.md](05_execution_job_model.md) - target Postgres-backed durable job model for execution lifecycle, worker claiming, steps/logs, parser/indexing lineage, idempotency, worker assumptions, and degraded behavior.
 
 ## Planned Documents
 
@@ -25,7 +26,6 @@ These are planned but intentionally not created yet:
 - [04_control_plane_plan.md](04_control_plane_plan.md) - future/deferred: Supabase/Postgres control-plane model and migration sequencing.
 - [05_gateway_token_policy.md](05_gateway_token_policy.md) - future/deferred: Gateway authorization, MCP/service-token registry, scopes, expiry, revocation, and hashing rules.
 - [06_evidence_audit_migration.md](06_evidence_audit_migration.md) - future/deferred: evidence vault, immutable raw evidence, audit events, approvals, and proof/export preservation.
-- [05_execution_job_model.md](05_execution_job_model.md) - future/deferred: Postgres-backed durable jobs, worker claiming, status transitions, heartbeat/stale handling, retry, and cancel behavior.
 - [08_test_acceptance_plan.md](08_test_acceptance_plan.md) - future/deferred: migration tests, security gates, and acceptance scenarios.
 - [99_migration_roadmap.md](99_migration_roadmap.md) - future/deferred: full roadmap, deliberately postponed until the repo inventory and focused subsystem plans exist.
 
@@ -40,4 +40,4 @@ Every future migration run should:
 5. Keep new docs focused on the current run's objective.
 6. Update [MIGRATION_STATE.md](MIGRATION_STATE.md) at the end with files inspected, decisions, open questions, and the next recommended run.
 
-The next recommended run is to create [05_execution_job_model.md](05_execution_job_model.md), focused only on DB-backed job lifecycle, claiming, status transitions, heartbeat/stale handling, retry, and cancel behavior without Redis/RQ.
+The next recommended run is to create [06_execution_integration_contracts.md](06_execution_integration_contracts.md), focused only on Gateway REST job APIs, core SIFT MCP job tools, frontend job/status views, and OpenSearch/evidence/audit integration contracts.
