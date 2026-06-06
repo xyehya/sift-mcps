@@ -2,12 +2,15 @@
 
 ## Current Objective
 
-Run 3 migration planning completed. The migration workspace now has a grounded
-OpenSearch core integration design that maps the current optional/add-on
-OpenSearch MCP backend, parser/indexing pipeline, Gateway exposure path, and
-frontend/API assumptions into the target architecture where OpenSearch is a
-core case-scoped search/data plane mediated by Gateway and backed by durable
-Supabase/Postgres control-plane state.
+Run 4 migration planning completed. The migration workspace now has a focused
+current-state execution inventory covering portal-triggered operations, Gateway
+REST/MCP dispatch, native `run_command`, forensic MCP workflow/status tools,
+OpenSearch parser and ingest execution, evidence/audit behavior, and scattered
+workflow/status state.
+
+This run stayed documentation-only. It did not design the future job schema,
+REST APIs, MCP tools, execution roadmap, database migrations, or new worker
+technology.
 
 ## Decisions Already Made
 
@@ -37,6 +40,7 @@ Supabase/Postgres control-plane state.
 - `docs/migration/01_repo_inventory.md`
 - `docs/migration/02_authoritative_domains_and_boundaries.md`
 - `docs/migration/03_opensearch_core_integration.md`
+- `docs/migration/04_execution_current_state.md`
 
 ## Files Inspected
 
@@ -49,6 +53,8 @@ Supabase/Postgres control-plane state.
 - `docs/migration/MIGRATION_STATE.md`
 - `docs/migration/01_repo_inventory.md`
 - `docs/migration/02_authoritative_domains_and_boundaries.md`
+- `docs/migration/03_opensearch_core_integration.md`
+- `docs/migration/04_execution_current_state.md`
 - `pyproject.toml`
 - `configs/gateway.yaml.template`
 - `configs/apparmor/sift-gateway.template`
@@ -113,12 +119,20 @@ Supabase/Postgres control-plane state.
 - `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/ingest_status.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/parse_evtx.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_accesslog.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/parse_csv.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_defender.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/parse_json.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/parse_delimited.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/parse_memory.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/parse_plaso.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_prefetch.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_srum.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_ssh.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_tasks.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_transcripts.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/parse_w3c.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_wer.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/tools.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/mappings/__init__.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/mappings/*.json`
@@ -133,6 +147,56 @@ Supabase/Postgres control-plane state.
 - Current parser documents already include useful partial provenance such as `vhir.source_file`, `vhir.ingest_audit_id`, `vhir.parse_method`, host fields, and `pipeline_version`, but do not yet consistently include the target control-plane IDs.
 - The recommended initial index strategy is per-case logical indexes with Postgres-registered aliases, because the current code already uses case-prefixed indexes. This recommendation still needs user approval before implementation.
 - The safest first OpenSearch implementation slice is additive: add a control-plane-aware OpenSearch service abstraction, case-scope query construction tests, and explicit health/degraded behavior without removing the standalone backend.
+
+## Execution Facts Confirmed From Run 4
+
+- Portal/operator execution is mostly synchronous request/response against
+  file-backed state. Evidence operations, approval commit, report generation,
+  backend/service management, and polling all resolve active case from
+  `SIFT_CASE_DIR`/legacy case resolution rather than durable DB session state.
+- Gateway aggregate MCP calls run an evidence-chain gate before dispatch and
+  write a transport-envelope audit entry. Per-backend MCP endpoints call a
+  single backend directly and have a different policy/audit surface.
+- Native `run_command` is synchronous. It validates command plans, executes
+  shell-free subprocess stages, can save stdout/stderr under case-controlled
+  directories, and writes detailed JSONL audit including input hashes where
+  detectable.
+- OpenSearch ingest is the main long-running execution path. It starts
+  subprocesses with `python -m opensearch_mcp.ingest_cli`, records pid/run_id
+  status under `~/.sift/ingest-status`, writes logs under
+  `~/.sift/ingest-logs`, and indexes derived documents into case-prefixed
+  OpenSearch indices.
+- Parser modules generally write directly to OpenSearch bulk actions and stamp
+  partial provenance fields such as `vhir.source_file`,
+  `vhir.ingest_audit_id`, `vhir.parse_method`, optional `vhir.vss_id`, and
+  `pipeline_version`. Durable DB IDs are not present.
+- Evidence chain authority is currently the manifest/ledger files, with
+  `evidence.json` as compatibility view. Audit and approval records are JSONL
+  under the state-root case record directory by default.
+- Current workflow/status state is scattered across case JSON files,
+  `pending-reviews.json`, in-memory report drafts, `~/.sift/ingest-status`,
+  ingest logs, active-case env/pointers, OpenSearch indices, and frontend cache.
+
+## Execution Risks Discovered From Run 4
+
+- Long-running parsers are not durable DB jobs.
+- Case scope depends on env or active-case pointers.
+- Status is file-based or scattered.
+- Worker crash recovery is local pid-file and `/proc` based; durable ownership,
+  heartbeat, and stale-claim handling are absent.
+- Duplicate ingestion/indexing risk remains because status and idempotency are
+  not control-plane-backed.
+- OpenSearch indexing status can drift from existing indices and cleaned status
+  files.
+- Evidence provenance can disconnect from parser outputs because parser docs and
+  ingest manifests do not carry durable evidence/job/parser IDs.
+- MCP tools may block synchronously, especially native commands and add-on calls.
+- Frontend cannot reliably observe parser/native progress through one
+  authoritative progress model.
+- Audit gaps can occur when parser subprocesses, sidecar writes, or active-case
+  resolution fail outside a durable audit/job transaction.
+- Per-backend MCP routes may bypass the aggregate evidence-gate behavior.
+- Report generation uses in-memory in-flight/draft state only.
 
 ## Open Questions
 
@@ -151,11 +215,20 @@ Supabase/Postgres control-plane state.
 - Should any normal agent token ever receive constrained raw OpenSearch DSL access, or should raw DSL be admin-only?
 - Which OpenSearch version/profile is canonical: root compose OpenSearch 2.18.0, package compose OpenSearch 3.5.0, or a newly declared target?
 - Is semantic/vector search in the first OpenSearch migration scope, or explicitly deferred?
+- For the execution job model, should the first durable jobs cover only
+  OpenSearch ingest, or also native `run_command`, report generation, and
+  evidence operations?
+- Should short native commands remain synchronous while only long-running parser
+  workflows become jobs?
+- Should legacy `~/.sift/ingest-status` continue as a compatibility export once
+  Postgres job state exists, and for how long?
+- What cancellation semantics are acceptable for partially indexed OpenSearch
+  batches and subprocess trees?
 
 ## Next Recommended Run
 
-Create `docs/migration/07_execution_jobs.md`. Recommended scope: design the
-DB-backed jobs and worker dispatcher model needed to make parser execution,
-parser runs, parser outputs, OpenSearch indexing batches, retries, cancellation,
-partial failures, and job/indexing progress durable. Keep the run
-documentation/design only unless implementation is explicitly requested.
+Create `docs/migration/05_execution_job_model.md`. Recommended scope: design
+only the target job lifecycle, job claiming strategy, status transitions, worker
+heartbeat/stale job handling, retry/cancel behavior, and no Redis/RQ. Do not
+design the full parser output schema, all REST APIs, all MCP tools, database
+migrations, or the final execution roadmap in that run.
