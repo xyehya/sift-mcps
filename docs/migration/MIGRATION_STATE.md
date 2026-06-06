@@ -2,10 +2,12 @@
 
 ## Current Objective
 
-Run 2 migration planning completed. The migration workspace now has a target
-authority and trust-boundary document that maps current file-based authority
-into the Supabase/Postgres control plane, OpenSearch core data plane, immutable
-Evidence Vault, Gateway enforcement layer, and worker execution plane.
+Run 3 migration planning completed. The migration workspace now has a grounded
+OpenSearch core integration design that maps the current optional/add-on
+OpenSearch MCP backend, parser/indexing pipeline, Gateway exposure path, and
+frontend/API assumptions into the target architecture where OpenSearch is a
+core case-scoped search/data plane mediated by Gateway and backed by durable
+Supabase/Postgres control-plane state.
 
 ## Decisions Already Made
 
@@ -22,6 +24,9 @@ Evidence Vault, Gateway enforcement layer, and worker execution plane.
 - Frontend UI state is not forensic state authority.
 - Agent-generated findings remain draft/proposed until human approval and are not auto-approved.
 - OpenSearch query and ingest paths must be Gateway-mediated and case-scoped by token/session context.
+- OpenSearch MCP tools should move into the core SIFT MCP namespace rather than remain only optional add-on tools.
+- Normal agent tokens must not pass arbitrary OpenSearch index names, wildcard case patterns, or raw OpenSearch DSL.
+- OpenSearch degraded mode must be explicit in Gateway health, MCP responses, frontend views, and job/indexing state.
 - Compatibility with current files should be additive first; file-backed behavior is not removed before DB authority and compatibility exports are verified.
 
 ## Files Created
@@ -31,6 +36,7 @@ Evidence Vault, Gateway enforcement layer, and worker execution plane.
 - `docs/migration/MIGRATION_STATE.md`
 - `docs/migration/01_repo_inventory.md`
 - `docs/migration/02_authoritative_domains_and_boundaries.md`
+- `docs/migration/03_opensearch_core_integration.md`
 
 ## Files Inspected
 
@@ -98,14 +104,35 @@ Evidence Vault, Gateway enforcement layer, and worker execution plane.
 - `packages/opensearch-mcp/sift-backend.json`
 - `packages/opensearch-mcp/docker/docker-compose.yml`
 - `packages/opensearch-mcp/src/opensearch_mcp/server.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/__main__.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/http_server.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/client.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/paths.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/gateway.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/ingest.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/ingest_status.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_evtx.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_csv.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_json.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_delimited.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_memory.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_plaso.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_w3c.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/tools.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/mappings/__init__.py`
 - `packages/opensearch-mcp/src/opensearch_mcp/mappings/*.json`
 - Targeted `find`, `tree`, and `rg` scans for repo/package structure, frontend API usage, Starlette routes, MCP registration, JSON state, evidence, audit, tokens, OpenSearch, jobs/workflows, tests, docs, setup files, Redis/RQ/Celery, and Supabase/Postgres presence.
+
+## Key OpenSearch Findings From Run 3
+
+- Current OpenSearch is implemented as `opensearch-mcp`, an optional add-on MCP backend with standalone stdio/HTTP/CLI entry points and a `sift-backend.json` manifest.
+- Current query tools validate that index names start with `case-`, but normal search can still accept explicit index names and can fall back to broad `case-*` behavior when no active case is resolved.
+- Current case context comes from `SIFT_CASE_DIR` or `~/.sift/active_case`, not from Postgres/Supabase case membership or Gateway-issued case-scoped token state.
+- Current ingest and indexing are subprocess-driven and tracked through `~/.sift/ingest-status`, ingest logs, and filesystem manifests, not durable database jobs, parser runs, parser outputs, or indexing batches.
+- Current parser documents already include useful partial provenance such as `vhir.source_file`, `vhir.ingest_audit_id`, `vhir.parse_method`, host fields, and `pipeline_version`, but do not yet consistently include the target control-plane IDs.
+- The recommended initial index strategy is per-case logical indexes with Postgres-registered aliases, because the current code already uses case-prefixed indexes. This recommendation still needs user approval before implementation.
+- The safest first OpenSearch implementation slice is additive: add a control-plane-aware OpenSearch service abstraction, case-scope query construction tests, and explicit health/degraded behavior without removing the standalone backend.
 
 ## Open Questions
 
@@ -117,13 +144,18 @@ Evidence Vault, Gateway enforcement layer, and worker execution plane.
 - Which external scripts or operator workflows still read `~/.sift/active_case`, `~/.sift/ingest-status`, saved report JSON, or flat case JSON directly?
 - Must evidence manifest/ledger files remain canonical legal artifacts even after Postgres becomes operational authority?
 - What exact worker process model should parser execution target: single Gateway-host worker, multiple local workers, or future distributed workers?
+- Should the project approve per-case logical indexes as the initial OpenSearch strategy, or target shared indexes with mandatory `case_id` filters from the start?
+- What target index names and aliases should be canonical for artifacts, timeline records, and IOCs?
+- How long should the legacy `case-{case_id}-{artifact_type}-{hostname}` indexes remain queryable?
+- Should per-backend OpenSearch MCP routes become admin-only, disabled by default, or removed after core tools are available?
+- Should any normal agent token ever receive constrained raw OpenSearch DSL access, or should raw DSL be admin-only?
+- Which OpenSearch version/profile is canonical: root compose OpenSearch 2.18.0, package compose OpenSearch 3.5.0, or a newly declared target?
+- Is semantic/vector search in the first OpenSearch migration scope, or explicitly deferred?
 
 ## Next Recommended Run
 
-Create `docs/migration/03_opensearch_core_integration.md`. Recommended scope:
-map current OpenSearch standalone/add-on MCP backend behavior to the target
-integrated core SIFT MCP and control-plane-aware design. Focus only on current
-OpenSearch tools, index/query scoping, ingest status to jobs/parser-runs
-mapping, document provenance metadata, OpenSearch index registration, and
-Gateway-mediated authorization. Do not implement code, do not create migrations,
-and do not design the full database schema.
+Create `docs/migration/07_execution_jobs.md`. Recommended scope: design the
+DB-backed jobs and worker dispatcher model needed to make parser execution,
+parser runs, parser outputs, OpenSearch indexing batches, retries, cancellation,
+partial failures, and job/indexing progress durable. Keep the run
+documentation/design only unless implementation is explicitly requested.
