@@ -27,6 +27,7 @@ All locked decisions live in [00_migration_charter.md](00_migration_charter.md) 
 - [09_identity_auth_cutover.md](09_identity_auth_cutover.md) - the foundation track (cutover order step 1): Supabase Auth, operator profiles, case membership, active-case state, the hash-only MCP/service-token registry, and Gateway propagation. This precedes evidence/jobs/findings work.
 - [10_addon_backend_spec.md](10_addon_backend_spec.md) - target MCP add-on backend contract: core vs add-on, per-tool `case_scoped`, `data_plane` declaration, query-only-by-default with the write-capable exception, the control-plane `mcp_backends` registry, and the OpenCTI/wintriage/RAG reference backends.
 - [11_first_pr_candidate.md](11_first_pr_candidate.md) - first implementation PR candidate: roadmap phase JOB-0 baseline execution smoke tests/fixtures and a small runbook, with no runtime behavior change.
+- [JOB0_baseline_execution_checks.md](JOB0_baseline_execution_checks.md) - targeted commands and no-service assumptions for the additive JOB-0 baseline smoke tests.
 
 ## Document Numbering Note
 
