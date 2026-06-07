@@ -2,10 +2,11 @@
 
 ## Current Objective
 
-Run 13 implemented and committed JOB-0, then created
-`docs/migration/12_pr01.md`, the next implementation PR candidate for Phase
-ID-1: additive control-plane identity foundation schema, schema tests, and a
-short runbook with no runtime wiring.
+Run 14 implemented PR01 Phase ID-1, installed a pinned self-hosted Supabase
+stack on the SIFT VM for migration testing, created the root `AGENTS.md`
+handoff/invariant file, and drafted `docs/migration/13_pr02.md`, the next
+implementation PR candidate for Phase ID-2: DB-first hash-only MCP/service token
+registry validation with legacy `gateway.yaml` fallback.
 
 JOB-0 is complete in commit `c73762c`:
 **Add JOB-0 execution baseline smoke tests**. The committed work added
@@ -14,16 +15,124 @@ index/provenance, and ingest-status behavior, plus
 `docs/migration/JOB0_baseline_execution_checks.md`. Runtime behavior was not
 changed.
 
-The workspace is now handoff-ready for PR01 planning/implementation. The next
-recommended feature-bearing PR is **Phase ID-1: control-plane identity
-foundation schema** from `09_identity_auth_cutover.md`, not JOB-1. PR01 should
-create only the cases/tokens/identity/audit foundation schema and schema tests.
-It must not wire Gateway auth, Supabase Auth runtime behavior, portal auth,
-active-case propagation, workers, job tables, OpenSearch, evidence, audit data
-migration, parser behavior, MCP tools, REST job APIs, or frontend changes.
+PR01 is implemented in the current worktree but not committed unless a later run
+commits it. It added the conventional Supabase migration layout, deterministic
+schema tests, and a PR01 schema-check runbook. Runtime behavior was not changed.
 
-Current worktree note: `docs/migration/12_pr01.md` has been created after the
-JOB-0 commit and is not committed yet unless a later run commits it.
+The workspace is now handoff-ready for PR02 planning/implementation. The next
+recommended feature-bearing PR is **Phase ID-2: token hash registry
+dual-validation** from `09_identity_auth_cutover.md`. PR02 should use the PR01
+schema to validate MCP/service tokens against `app.mcp_tokens` first, with
+legacy `gateway.yaml api_keys` fallback. It must not add Supabase human auth,
+portal login replacement, active-case propagation, evidence gate changes, job
+tables, workers, REST job APIs, MCP job tools, OpenSearch changes, parser
+changes, evidence behavior changes, audit data migration, frontend redesigns, or
+legacy fallback removal.
+
+Current worktree note: `.DS_Store` was already modified and remains unrelated.
+PR01 implementation files, `AGENTS.md`, and `docs/migration/13_pr02.md` are
+uncommitted unless a later run commits them.
+
+## Run 14 - PR01 Implementation, Supabase VM Setup, AGENTS.md, And PR02 Planning
+
+Created:
+
+- `supabase/migrations/202606070101_identity_foundation.sql` - additive PR01
+  `app` schema foundation tables for operator profiles, cases, case members,
+  active-case state, agents, service identities, MCP tokens, token scopes, and
+  audit events.
+- `tests/db/test_pr01_identity_schema.py` - deterministic SQL structure tests
+  for the PR01 schema.
+- `docs/migration/PR01_identity_schema_checks.md` - PR01 schema-check runbook.
+- `AGENTS.md` - root handoff instructions with host/VM workflow, Python/uv
+  invariants, Supabase VM setup, PR01 files, PR02 pointer, and installer
+  follow-up note.
+- `docs/migration/13_pr02.md` - PR02 implementation candidate for Phase ID-2
+  hash-only MCP/service token validation with legacy fallback.
+
+Updated:
+
+- `docs/migration/README.md` - linked PR01 and PR02 docs/runbooks.
+- `docs/migration/MIGRATION_STATE.md` - this handoff update.
+
+SIFT VM setup completed:
+
+- VM: `192.168.122.81`, user `sansforensics`.
+- Supabase installed manually at `/home/sansforensics/supabase-project`.
+- Source sparse clone at `/home/sansforensics/supabase-src-v1.26.05`.
+- Supabase pinned tag: `v1.26.05`.
+- Supabase pinned commit: `23b55d63485e51919d1b4c05b03d33a9edc1f06d`.
+- Supabase public/API URL configured as `http://192.168.122.81:8000`.
+- Secrets generated with pinned Supabase helper scripts
+  `utils/generate-keys.sh` and `utils/add-new-auth-keys.sh`.
+- Pinned Docker layout had no `run.sh`; used `docker compose up -d --wait`.
+- Stack health checked through `docker compose ps`, JWKS, REST `401`, and
+  Postgres `select version()`.
+- Installed Ubuntu `nodejs` package because Supabase's pinned
+  `add-new-auth-keys.sh` requires Node >= 16.
+
+Files inspected in this run:
+
+- `docs/migration/12_pr01.md`
+- `docs/migration/00_migration_charter.md`
+- `docs/migration/09_identity_auth_cutover.md`
+- `docs/migration/08_control_plane_schema.md`
+- `docs/migration/README.md`
+- `docs/migration/MIGRATION_STATE.md`
+- Root `pyproject.toml`
+- Narrow file discovery for existing Supabase/migration/schema/test layout.
+
+Verification run on host with `.venv`:
+
+- `.venv/bin/python -m pytest tests/db/test_pr01_identity_schema.py`
+  - 5 passed.
+- `.venv/bin/python -m pytest tests/db`
+  - 5 passed.
+- `git diff --check`
+  - clean.
+
+Verification run on SIFT VM after rsync to `~/sift-mcps-test`:
+
+- `.venv/bin/python --version`
+  - Python 3.12.3.
+- Post-sync import smoke for `yaml`, `mcp`, `sift_core`, and `sift_gateway`
+  - passed.
+- `.venv/bin/python -m pytest tests/db/test_pr01_identity_schema.py`
+  - 5 passed.
+- `.venv/bin/python -m pytest tests/db`
+  - 5 passed.
+- PR01 migration SQL applied to Supabase Postgres inside `BEGIN`/`ROLLBACK`
+  with `ON_ERROR_STOP=1`
+  - passed.
+
+Deviations and notes:
+
+- No existing Supabase migration/test harness existed before PR01, so PR01 used
+  deterministic SQL-inspection tests plus an optional live Supabase rollback
+  syntax check.
+- The SIFT VM `.python-version` file in the synced repo says `3.11`, but VM
+  testing must force `/usr/bin/python3.12` per the project invariant.
+- A broad `uv sync --all-packages` started pulling large optional GPU/ML
+  packages and was stopped; `uv cache prune` recovered about 3.2 GiB. Use the
+  narrower `uv sync --extra core --group dev --python /usr/bin/python3.12` for
+  Gateway/portal/schema work unless a task really needs all packages.
+- Supabase docs mention `run.sh`, but the pinned `v1.26.05` Docker layout does
+  not include it; use `docker compose`.
+- The root `.DS_Store` modification was pre-existing and intentionally left
+  untouched.
+
+Next recommended run:
+
+- Review and commit the current PR01/docs work if desired.
+- Implement PR02 as described in `docs/migration/13_pr02.md`.
+- Read `AGENTS.md` and `docs/migration/13_pr02.md` first.
+- Inspect only the files listed in PR02 section 4.
+- Use the host repo as source and test on the SIFT VM after rsync.
+- Use `/usr/bin/python3.12` on the VM and set `UV_NO_MANAGED_PYTHON=1` and
+  `UV_PYTHON_DOWNLOADS=never` for `uv sync`.
+- Run targeted token/auth tests, touched auth/token suites if practical,
+  optional rollback-safe Supabase checks, and `git diff --check`.
+  Stop and summarize changed files, tests run, and deviations.
 
 ## Run 13 - JOB-0 Implementation Commit And PR01 Planning
 
