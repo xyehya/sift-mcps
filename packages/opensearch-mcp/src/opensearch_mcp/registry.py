@@ -584,6 +584,27 @@ class ListDetectionsOut(BaseModel):
     )
 
 
+class FixHostMappingIn(BaseModel):
+    raw: str = Field(
+        ..., min_length=1, description="The raw host.name value with the wrong mapping."
+    )
+    new_canonical: str = Field(
+        ..., min_length=1, description="The correct canonical host.id to assign."
+    )
+
+
+class FixHostMappingOut(BaseModel):
+    status: Literal["complete"] = Field(..., description="Correction status.")
+    raw: str = Field(..., description="Raw host.name value corrected.")
+    new_canonical: str = Field(..., description="Canonical host.id assigned.")
+    docs_updated: int | None = Field(None, description="Documents updated by reindex.")
+    dict_path: str | None = Field(None, description="Host dictionary path.")
+    dict_saved: bool = Field(True, description="Whether the host dictionary was saved.")
+    details: dict[str, Any] = Field(
+        default_factory=dict, description="Additional behavior-compatible fields."
+    )
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -1173,6 +1194,56 @@ async def opensearch_case_detections_resource(case_id: str) -> str:
     return _json_from_tool_result(result)
 
 
+async def run_opensearch_fix_host_mapping(params: FixHostMappingIn) -> ToolResult:
+    raw = _legacy_server().opensearch_host_fix(**params.model_dump())
+    raw = _redact_secret_fields(raw)
+    meta = _meta_from_raw(raw)
+    legacy_status = raw.get("status")
+    if raw.get("isError") or "error" in raw:
+        code = (
+            ErrorCode.invalid_input
+            if legacy_status == "rejected" or "InvalidHostnameValue" in str(raw.get("error"))
+            else ErrorCode.upstream_unavailable
+            if legacy_status == "reindex_failed"
+            else ErrorCode.internal
+        )
+        return _tool_error_result(
+            code,
+            str(raw.get("error") or "Host mapping correction failed."),
+            str(
+                raw.get("retry_hint")
+                or raw.get("portal_hint")
+                or "Review the host dictionary and retry with a valid canonical host id."
+            ),
+            retryable=legacy_status == "reindex_failed",
+            details={k: v for k, v in raw.items() if k not in {"error", "isError"}},
+            meta=meta,
+        )
+    details = {
+        key: value
+        for key, value in raw.items()
+        if key
+        not in {
+            "status",
+            "raw",
+            "new_canonical",
+            "docs_updated",
+            "dict_path",
+            "dict_saved",
+        }
+    }
+    out = FixHostMappingOut(
+        status="complete",
+        raw=str(raw.get("raw", params.raw)),
+        new_canonical=str(raw.get("new_canonical", params.new_canonical)),
+        docs_updated=raw.get("docs_updated"),
+        dict_path=raw.get("dict_path"),
+        dict_saved=bool(raw.get("dict_saved", True)),
+        details=details,
+    )
+    return _success_tool_result(out, meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -1233,6 +1304,25 @@ RESOURCE_REGISTRY.append(
         name="opensearch_case_detections",
         title="Case Detection Findings",
         description="Unfiltered resource view of detection findings for case-oriented clients.",
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_fix_host_mapping",
+        fn=run_opensearch_fix_host_mapping,
+        in_model=FixHostMappingIn,
+        out_model=FixHostMappingOut,
+        annotations=_write_annotations("Fix Host ID Mapping", idempotent=True),
+        title="Fix Host ID Mapping",
+        description=(
+            "Correct a wrong host.id mapping in the active case by updating the "
+            "case host dictionary and reindexing docs where host.name equals raw. "
+            "host.name is never changed. Use when ingest applied a wrong canonical "
+            "host id. Example: opensearch_fix_host_mapping(raw='wksn01', "
+            "new_canonical='wksn01')."
+        ),
+        deprecated_aliases=["opensearch_host_fix"],
     )
 )
 

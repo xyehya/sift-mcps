@@ -472,6 +472,209 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Fix Host ID Mapping"
+      },
+      "description": "Correct a wrong host.id mapping in the active case by updating the case host dictionary and reindexing docs where host.name equals raw. host.name is never changed. Use when ingest applied a wrong canonical host id. Example: opensearch_fix_host_mapping(raw='wksn01', new_canonical='wksn01').",
+      "input_schema": {
+        "properties": {
+          "new_canonical": {
+            "description": "The correct canonical host.id to assign.",
+            "minLength": 1,
+            "title": "New Canonical",
+            "type": "string"
+          },
+          "raw": {
+            "description": "The raw host.name value with the wrong mapping.",
+            "minLength": 1,
+            "title": "Raw",
+            "type": "string"
+          }
+        },
+        "required": [
+          "raw",
+          "new_canonical"
+        ],
+        "title": "FixHostMappingIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_fix_host_mapping",
+      "output_schema": {
+        "properties": {
+          "details": {
+            "additionalProperties": true,
+            "description": "Additional behavior-compatible fields.",
+            "title": "Details",
+            "type": "object"
+          },
+          "dict_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Host dictionary path.",
+            "title": "Dict Path"
+          },
+          "dict_saved": {
+            "default": true,
+            "description": "Whether the host dictionary was saved.",
+            "title": "Dict Saved",
+            "type": "boolean"
+          },
+          "docs_updated": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Documents updated by reindex.",
+            "title": "Docs Updated"
+          },
+          "new_canonical": {
+            "description": "Canonical host.id assigned.",
+            "title": "New Canonical",
+            "type": "string"
+          },
+          "raw": {
+            "description": "Raw host.name value corrected.",
+            "title": "Raw",
+            "type": "string"
+          },
+          "status": {
+            "const": "complete",
+            "description": "Correction status.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "raw",
+          "new_canonical"
+        ],
+        "title": "FixHostMappingOut",
+        "type": "object"
+      },
+      "title": "Fix Host ID Mapping"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Fix Host ID Mapping"
+      },
+      "description": "DEPRECATED alias for `opensearch_fix_host_mapping`. Use the canonical name; this alias will be removed after one cutover cycle.\n\nCorrect a wrong host.id mapping in the active case by updating the case host dictionary and reindexing docs where host.name equals raw. host.name is never changed. Use when ingest applied a wrong canonical host id. Example: opensearch_fix_host_mapping(raw='wksn01', new_canonical='wksn01').",
+      "input_schema": {
+        "properties": {
+          "new_canonical": {
+            "description": "The correct canonical host.id to assign.",
+            "minLength": 1,
+            "title": "New Canonical",
+            "type": "string"
+          },
+          "raw": {
+            "description": "The raw host.name value with the wrong mapping.",
+            "minLength": 1,
+            "title": "Raw",
+            "type": "string"
+          }
+        },
+        "required": [
+          "raw",
+          "new_canonical"
+        ],
+        "title": "FixHostMappingIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "opensearch_fix_host_mapping",
+        "deprecated": true
+      },
+      "name": "opensearch_host_fix",
+      "output_schema": {
+        "properties": {
+          "details": {
+            "additionalProperties": true,
+            "description": "Additional behavior-compatible fields.",
+            "title": "Details",
+            "type": "object"
+          },
+          "dict_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Host dictionary path.",
+            "title": "Dict Path"
+          },
+          "dict_saved": {
+            "default": true,
+            "description": "Whether the host dictionary was saved.",
+            "title": "Dict Saved",
+            "type": "boolean"
+          },
+          "docs_updated": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Documents updated by reindex.",
+            "title": "Docs Updated"
+          },
+          "new_canonical": {
+            "description": "Canonical host.id assigned.",
+            "title": "New Canonical",
+            "type": "string"
+          },
+          "raw": {
+            "description": "Raw host.name value corrected.",
+            "title": "Raw",
+            "type": "string"
+          },
+          "status": {
+            "const": "complete",
+            "description": "Correction status.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "raw",
+          "new_canonical"
+        ],
+        "title": "FixHostMappingOut",
+        "type": "object"
+      },
+      "title": "Fix Host ID Mapping"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": true,
         "readOnlyHint": false,
