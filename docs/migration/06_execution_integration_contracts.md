@@ -10,7 +10,7 @@ migrations, or the final execution roadmap.
 > Locked decisions (see `00_migration_charter.md`): ALL REST APIs, MCP tools,
 > and actions go through the Gateway; per-backend `/mcp/{name}` routes are
 > disabled (D2/D3). Case context is the control-plane active case (portal-set,
-> Gateway-propagated, charter D4). v1 is a single local worker with a lean job
+> Gateway-propagated, charter D32). v1 is a single local worker with a lean job
 > schema (D9/D13). OpenSearch is 3.5.0 security-on (D6). Identity/cases/tokens
 > cut over first (D17, `09_identity_auth_cutover.md`). These contracts target
 > the post-foundation state; the foundation track must land before the job APIs

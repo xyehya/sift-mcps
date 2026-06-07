@@ -4,7 +4,7 @@ Status: **Build-ready PR03B / Batch B implementation candidate**.
 Scope: one large target-zone PR, not a discussion note.
 Implements: Phase ID-4 and the active-case parts of ID-5 from
 `09_identity_auth_cutover.md`; carries B-11.
-Locked decisions: D1-D5, D12, D17, D24, D29-D32 in
+Locked decisions: D1-D3, D5, D12, D17, D24, D29-D32 in
 `00_migration_charter.md`.
 
 This candidate replaces active-case authority from env/config/pointer files with
@@ -37,7 +37,7 @@ raise a fork under D29. Do not reintroduce env/pointer authority as a fallback.
 Read in this order before coding:
 
 1. `docs/migration/MIGRATION_STATE.md` - Current Objective and latest Run.
-2. `docs/migration/00_migration_charter.md` - D4, D24, D29-D32.
+2. `docs/migration/00_migration_charter.md` - D24, D29-D32.
 3. `docs/migration/REGISTER.md` - B-11 and carried backlog.
 4. `docs/migration/09_identity_auth_cutover.md` - ID-4/ID-5.
 5. `docs/migration/18_target_architecture_acceleration.md` - Batch B.
@@ -342,7 +342,7 @@ authority requires out-of-scope changes, STOP and raise a fork under D29.
 
 REQUIRED READING (ordered): docs/migration/MIGRATION_STATE.md current objective
 + latest Run; docs/migration/21_pr03b_active_case_db_authority.md; 
-docs/migration/00_migration_charter.md D4/D24/D29-D32; docs/migration/REGISTER.md
+docs/migration/00_migration_charter.md D24/D29-D32; docs/migration/REGISTER.md
 B-11 plus carried backlog; docs/migration/09_identity_auth_cutover.md ID-4/ID-5;
 docs/migration/18_target_architecture_acceleration.md Batch B; 
 docs/migration/20_portal_dashboard_inventory.md; docs/migration/OPERATING_MODEL.md;

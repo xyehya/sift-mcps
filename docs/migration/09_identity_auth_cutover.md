@@ -72,7 +72,7 @@ talks to Supabase or a backend directly for privileged mutation; it calls
 Gateway endpoints (charter D12). RLS is a defense-in-depth boundary behind the
 Gateway, not the primary write path.
 
-## 3. Active-case authority (locked: D4, D32)
+## 3. Active-case authority (locked: D32; D4 superseded)
 
 The current single-active-case behavior is preserved, but its **authority moves
 from files/env into the control plane**:
@@ -300,7 +300,7 @@ the legacy path is explicitly removed.
   service principals (D30); Gateway-only enforcement (D2, D12).
 - Active case portal-set, control-plane authoritative, Gateway-propagated; env/
   config/pointers are not authority and are not generated as active-case exports
-  in PR03B (D4, D32).
+  in PR03B (D32; historical D4 superseded).
 - Hash-only token bridge policy: SHA-256 + server pepper, 16-hex fingerprint,
   default expiries, one-time raw display, dual-validate then sunset legacy
   (historical D8/PR02, superseded in target by D30).

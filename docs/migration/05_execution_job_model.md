@@ -15,7 +15,7 @@ frontend views, code changes, or a full execution roadmap.
 > when a second worker exists (D13). The full status set and job-type list below
 > are the target enumeration; only `health_check` plus the first converted
 > workflow are implemented initially. Case scope for a job is the control-plane
-> **active case** (portal-set, charter D4), recorded immutably on the job row;
+> **active case** (portal-set, charter D32), recorded immutably on the job row;
 > per-backend MCP routes are disabled and all tool calls are Gateway-only
 > (D2/D3). Add `evidence_anchor` to the job types (Solana anchoring retained,
 > D14).
@@ -177,7 +177,7 @@ Target case scope comes from:
 - System policy only for maintenance jobs, with explicit case scope unless the
   maintenance type is intentionally cross-case and admin-only.
 
-Because v1 runs one active case per deployment (D4), the job's `case_id` is the
+Because v1 runs one active case per deployment (D32), the job's `case_id` is the
 active case at enqueue time; switching the active case later does not affect an
 in-flight job.
 

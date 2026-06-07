@@ -23,8 +23,9 @@ pinned Supabase v1.26.05.
 
 Run 30 added `20_portal_dashboard_inventory.md`, the normalized portal/dashboard
 workflow and API inventory. Run 31 reconciled recurring architecture docs and
-created doc 21. D30 remains the target credential model; PR02 hash-only tokens
-remain a transitional compatibility bridge until ID-6.
+created doc 21. Run 32 demoted D4 to a historical pointer so new active-case
+work cites D32 only. D30 remains the target credential model; PR02 hash-only
+tokens remain a transitional compatibility bridge until ID-6.
 
 FastMCP grounding from D27b remains relevant for PR03B: host `.venv` had
 **fastmcp==3.4.2**; `create_proxy` imports from `fastmcp.server`;
@@ -42,6 +43,25 @@ migration. Keep D22/F-11 (`mcp_backends` registry), evidence/audit DB authority
 (Batch C), jobs/workers (Batch E), OpenSearch-core, RAG/skills, and
 findings/timeline/TODO/report data migration separate unless a new candidate doc
 explicitly batches them. Carry B-4/B-11/B-12/B-13/B-15 forward.
+
+## Run 32 — D4 Demotion
+
+Docs-only governance cleanup after Run 31.
+
+Trigger: operator asked to "drop D4 down" after D32 became the active-case
+cutover decision.
+
+Changed:
+- `00_migration_charter.md` now treats **D4** as a historical/superseded pointer
+  and keeps the live active-case rule in **D32**.
+- D32 now explicitly carries the single deployment-scope active-case-v1 rule,
+  portal selection, DB authority, Gateway propagation, no active-case
+  env/config/pointer exports, and no historical data migration.
+- Current recurring docs and PR03B build instructions now cite D32 instead of D4
+  for active-case authority. Historical PR/run documents retain their old D4
+  references as provenance.
+
+Next: unchanged — Build PR03B from doc 21.
 
 ## Run 31 — PR03B Active-Case DB Authority Candidate
 

@@ -190,7 +190,7 @@ preserving compatibility.
 
 | Detail | Design |
 | --- | --- |
-| Purpose | Authoritative current active case for the SIFT VM deployment (charter D4/D32). Replaces `SIFT_CASE_DIR` / `~/.sift/active_case` / `gateway.yaml case.dir` as authority. Operator sets it via the portal; the Gateway reads it and propagates it to backends/APIs/tool calls. D32 supersedes the earlier env/pointer compatibility-export plan: PR03B does not generate active-case exports. |
+| Purpose | Authoritative current active case for the SIFT VM deployment (charter D32; historical D4 superseded). Replaces `SIFT_CASE_DIR` / `~/.sift/active_case` / `gateway.yaml case.dir` as authority. Operator sets it via the portal; the Gateway reads it and propagates it to backends/APIs/tool calls. PR03B does not generate active-case exports. |
 | Key columns | `id uuid`, `scope text`, `active_case_id uuid null`, `set_by_user_id uuid null`, `set_at`, `compat_export_status text`, `updated_at`, `metadata jsonb`. |
 | Primary key | `id`. |
 | Foreign keys | `active_case_id` references `cases(id)`; `set_by_user_id` references `operator_profiles(id)`. |
@@ -201,7 +201,7 @@ preserving compatibility.
 | Who can read | Authorized case members; Gateway/worker service roles. |
 | Who can write | Gateway service path on portal case activation. |
 | Migration source | `SIFT_CASE_DIR`, `gateway.yaml case.dir`, `~/.sift/active_case`, portal case activation (`packages/case-dashboard/src/case_dashboard/routes.py:3598-3717`). |
-| Notes/open questions | None. Locked to one active case per deployment in v1 (D4). |
+| Notes/open questions | None. Locked to one active case per deployment in v1 (D32). |
 
 ### `agents`
 
@@ -1174,7 +1174,7 @@ Follow-up schema table PR candidate, after infrastructure is approved:
   `opensearch_indexes`; the `dfir-case-*-vN` logical-family rename is deferred/
   optional. OpenSearch 3.5.0 security-on (D6). All writers (core + addon +
   enrichment) follow the write contract in `03` §7A.
-- Active case: `active_case_state`, one row per deployment in v1 (D4).
+- Active case: `active_case_state`, one row per deployment in v1 (D32).
 - Retained capabilities: `case_todos`, `iocs`, `evidence_anchors` are first-class
   (D14); `rag_collections`/`rag_documents`/`agent_skills` are first-class
   control-plane scope additions (D15).

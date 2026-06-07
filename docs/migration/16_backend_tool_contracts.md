@@ -138,7 +138,7 @@ REGISTRY: list[ToolDef] = [ ... ]
 
 `case_id` resolution stays behavior-compatible for this stage: opensearch read/write
 tools resolve `case_id` arg → active case (`SIFT_CASE_DIR`). The migration to
-Gateway-propagated active case (D4) and `case_scoped` flags (D22) is a *later* phase;
+Gateway-propagated active case (D32) and `case_scoped` flags (D22) is a *later* phase;
 this revamp does **not** change where case context comes from. opencti/wintriage are
 case-agnostic (`case_scoped=false`) but audited under the active case.
 

@@ -11,7 +11,7 @@ runtime code changes.
 > (Locked)". Key reconciliations for this document: the Gateway is the single
 > boundary and per-backend MCP routes are disabled (D2/D3); active case is
 > portal-set and authoritative in the control plane (`active_case_state`),
-> propagated by the Gateway, with env/pointers as generated exports only (D4);
+> propagated by the Gateway with no active-case env/pointer export bridge (D32);
 > OpenSearch is 3.5.0 with security enabled (D6); identity/cases/tokens cut over
 > first (D17, see `09_identity_auth_cutover.md`). Run 26 / D30 supersedes the
 > older machine-token target: humans, agents, MCP clients, workers, and services
@@ -200,7 +200,7 @@ The target architecture splits authority by plane:
 | Domain | Future authoritative system | Current source/location | Transitional strategy | Long-term target | Main risks |
 | --- | --- | --- | --- | --- | --- |
 | Case lifecycle | Supabase/Postgres | `CASE.yaml`, case directories; portal create/activate (`packages/case-dashboard/src/case_dashboard/routes.py:3726-3888`) | Read files and mirror to Postgres, then create/update in Postgres and export compatibility files | Postgres `cases` domain; files are compatibility/export | Duplicate case IDs, stale `CASE.yaml`, partial create failures |
-| Active case selection | Supabase/Postgres plus Gateway request context | `SIFT_CASE_DIR`, `gateway.yaml case.dir`, `~/.sift/active_case` (`packages/sift-common/src/sift_common/__init__.py:9-32`) | Write active case in Postgres, export env/pointer for legacy tools | Explicit case context per human session/token/job | Cross-case confusion, stale process env |
+| Active case selection | Supabase/Postgres plus Gateway request context | `SIFT_CASE_DIR`, `gateway.yaml case.dir`, `~/.sift/active_case` (`packages/sift-common/src/sift_common/__init__.py:9-32`) | Write active case in Postgres; stale env/config/pointers ignored and not regenerated (D32) | Explicit case context per human session/token/job | Cross-case confusion, stale process env |
 | Case membership/operator authorization | Supabase/Postgres | Current examiner role and local password/session model; no central membership table found in inventory | Introduce DB membership; mirror existing examiner as initial owner/operator | RLS-backed memberships and service-side checks | Over-broad operator access during bridge |
 | Human operator identity | Supabase Auth | Portal HMAC JWT cookie and examiner bearer fallback (`packages/case-dashboard/src/case_dashboard/auth.py:61-131`, `packages/case-dashboard/src/case_dashboard/session_jwt.py:41-110`) | Keep portal auth while adding Supabase Auth path behind Gateway/portal | Supabase Auth users plus RLS | Split session state, migration lockouts |
 | AI agent identity | Supabase/Postgres token/agent registry via Gateway | `api_keys` entries with `role=agent`, `agent_id` (`packages/case-dashboard/src/case_dashboard/routes.py:3160-3172`) | Mirror gateway tokens to DB as disabled/legacy records; issue new DB-backed tokens | Agent registry records linked to service tokens and cases | Token ambiguity, agent impersonation |
@@ -340,8 +340,8 @@ verified.
 | `case_dir/pending-reviews.processing` | Crash recovery lock for review commit | Findings review state/approvals | Keep file-only until review queue moves to DB | Phase 1 keep | DB transactional review commit replaces file lock |
 | `case_dir/reports/{uuid}.json` | Saved report records | Report metadata and export artifacts | Mirror metadata to DB; keep JSON as export artifact | Phase 1 mirror | DB report list/download can render from DB or managed artifact |
 | `gateway.yaml api_keys` | Raw-token-keyed token registry | MCP/service token registry | DB hash registry first; legacy fallback read-only/limited; export only if needed | Phase 1 dual-validate, Phase 2 DB-only | No active legacy tokens; config contains no raw service tokens |
-| `gateway.yaml case.dir` | Active case pointer for Gateway env | Active case state | DB active case/session; export config/env for legacy backends | Phase 1 export | Backends accept explicit case context |
-| `~/.sift/active_case` | Legacy CLI active-case pointer | Active case compatibility | Export from DB active-case selection temporarily | Phase 1 export | CLI/tools read DB or explicit case argument |
+| `gateway.yaml case.dir` | Active case pointer for Gateway env | Active case state | D32/PR03B ignores/removes as authority; no generated active-case config/env export | PR03B | Stale config cannot override DB active case |
+| `~/.sift/active_case` | Legacy CLI active-case pointer | Active case compatibility | D32/PR03B ignores/removes as authority; no generated active-case pointer export | PR03B | Stale pointer cannot override DB active case |
 | `~/.sift/opensearch.yaml` | OpenSearch client credentials | OpenSearch service config/secrets | Keep file-only temporarily; move service config to managed deployment path later | Phase 1 keep | Gateway/OpenSearch service config is centralized and no agents read credentials |
 | `~/.sift/ingest-status/*.json` | Background ingest status | Jobs, job steps, parser runs, indexing status | Read from file and mirror to DB; then DB-write/export | Phase 1 mirror, Phase 2 DB-write/export | CLI/status tools use DB or generated compatibility files |
 | `~/.sift/ingest-logs/*.log` | Ingest log files | Job logs/log artifact refs | Register log metadata in DB; preserve files | Phase 1 register | Retention/export policy exists |
