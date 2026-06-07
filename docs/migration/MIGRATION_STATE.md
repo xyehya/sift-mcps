@@ -41,7 +41,9 @@ tools.
 Run 36 aligned documentation ownership so `MIGRATION_STATE.md` remains the
 single current handoff: entry points and indexes now point here for live status,
 landed specs are labelled historical, and the validator catches the drift
-patterns found in the alignment audit.
+patterns found in the alignment audit. Run 37 installed the short
+`CONVENTIONS.md` contract into the auto-loaded entry points and promoted
+`scripts/validate_docs.py` as the primary docs gate.
 
 **Next:** **Build D22A / Batch H** from
 `docs/migration/22_d22a_mcp_backends_registry.md` (planned in Run 35) once the
@@ -54,6 +56,46 @@ and **B-13** at Land. Keep evidence/audit DB authority (Batch C), jobs/workers
 (Batch E), OpenSearch-core, RAG/skills, and findings/timeline/TODO/report data
 migration separate unless a new candidate doc explicitly batches them. Carry
 B-4/B-12/B-15 forward.
+
+## Run 37 — Documentation Conventions Injection
+
+Documentation/process run. No runtime code, schema migration, package, Docker,
+VM, or service changes.
+
+Trigger: operator provided the short conventions contract and validator and
+asked to inject the conventions at the start of `AGENTS.md` and `CLAUDE.md`,
+update `validate_docs.py`, and test it.
+
+Changed:
+- Added `docs/migration/CONVENTIONS.md` as the short load-bearing documentation
+  convention contract.
+- Injected the same conventions block at the start of `AGENTS.md` and
+  `CLAUDE.md` so auto-loaded agent context starts with the SSOT and validator
+  rules.
+- Added `scripts/validate_docs.py` as the primary documentation validator,
+  preserving the stricter Run 36 checks for open/resolved fork lifecycle,
+  single global bold Next marker, stale next-run section rejection, and volatile
+  charter handoff rejection.
+- Kept `scripts/validate_migration_docs.py` as a compatibility wrapper for
+  historical runbooks and archived build prompts.
+- Updated current process references in `OPERATING_MODEL.md`, `REGISTER.md`,
+  `README.md`, and the active D22A candidate prompt to use
+  `python3 scripts/validate_docs.py`.
+
+Forks/decisions:
+- No new forks or locked decisions.
+
+Verification:
+- `python3 scripts/validate_docs.py` passed.
+- `python3 scripts/validate_migration_docs.py` passed through the compatibility
+  wrapper.
+- `scripts/validate_docs.py` passed as an executable.
+- `python3 -m py_compile scripts/validate_docs.py scripts/validate_migration_docs.py`
+  passed.
+- `git diff --check` passed.
+
+Next: unchanged — operator resolves F-14 + F-15, then Build D22A from doc 22.
+Do not mark F-11 RESOLVED or B-13 DONE until that Build lands.
 
 ## Run 35 — D22A / Batch H `mcp_backends` Registry Candidate
 

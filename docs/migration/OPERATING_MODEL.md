@@ -57,7 +57,7 @@ scope; if the spec is wrong, it goes back to Plan, it is not "fixed" mid-build.
 [ ] /security-review run IF this PR touches auth, tokens, evidence, secrets, or the gateway
 [ ] MIGRATION_STATE Run entry added; forks resolved → D# (charter) or B# (register)
 [ ] Charter unchanged UNLESS a decision was explicitly approved this cycle (no silent decisions)
-[ ] Migration-docs format contract holds: `python3 scripts/validate_migration_docs.py` passes (§8)
+[ ] Migration-docs format contract holds: `python3 scripts/validate_docs.py` passes (§8)
 ```
 
 For runtime-behavior PRs, "tests green" includes the VM verification path in
@@ -159,8 +159,10 @@ that is a decision — update this section, the validator, and the consumer toge
 in the same run; do not let them drift apart silently (same chain-of-custody
 discipline as the golden snapshot).
 
-`scripts/validate_migration_docs.py` is the executable form of this contract. It is
-a Definition-of-Done gate (§3) and must pass before Land.
+`docs/migration/CONVENTIONS.md` is the short contract loaded by agents.
+`scripts/validate_docs.py` is the executable form of this contract. It is a
+Definition-of-Done gate (§3) and must pass before Land. The legacy
+`scripts/validate_migration_docs.py` wrapper remains for historical runbooks.
 
 **`REGISTER.md`**
 - `## Forks (F#)` and `## Backlog (B#)` H2 headers exist verbatim.

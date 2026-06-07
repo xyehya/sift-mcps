@@ -20,7 +20,7 @@ reorder or rename existing ones. Allowed `Status` values: forks `OPEN` |
 | B-n | <deferred work> | F-n / Run <r>   | OPEN|DONE | <phase/date> |
 ```
 
-Run `python3 scripts/validate_migration_docs.py` after editing this file.
+Run `python3 scripts/validate_docs.py` after editing this file.
 
 ---
 

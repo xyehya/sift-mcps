@@ -460,7 +460,7 @@ HARD CONSTRAINTS:
 - Every privileged registry write is audited with the resolved operator principal.
 
 OUTPUT DISCIPLINE: update the golden snapshot/change-map if the tool surface
-moves; run python3 scripts/validate_migration_docs.py and git diff --check;
+moves; run python3 scripts/validate_docs.py and git diff --check;
 host + VM evidence (VM: /usr/bin/python3.12, UV_NO_MANAGED_PYTHON=1,
 UV_PYTHON_DOWNLOADS=never; migration in BEGIN/ROLLBACK on pinned Supabase).
 Run /code-review (always) and /security-review (touches secrets/credentials,

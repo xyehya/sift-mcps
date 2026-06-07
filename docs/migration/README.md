@@ -18,6 +18,7 @@ All locked decisions live in [00_migration_charter.md](00_migration_charter.md) 
 ## Documents
 
 - [Architecture.mmd](Architecture.mmd) - target architecture diagram (overview, not a binding spec).
+- [CONVENTIONS.md](CONVENTIONS.md) - short load-bearing documentation conventions and machine-readable structure contract enforced by `scripts/validate_docs.py`.
 - [00_migration_charter.md](00_migration_charter.md) - target architecture, non-negotiables, **Confirmed Decisions (Locked)**, cutover order, and plane boundaries.
 - [OPERATING_MODEL.md](OPERATING_MODEL.md) - **process of record (D29)**: the Plan→Build→Review→Land→Log loop, Definition of Done, branch/worktree governance, and templates. Every run follows it.
 - [REGISTER.md](REGISTER.md) - open-items register: Forks (F#) awaiting a call and Backlog (B#) deferred work.
