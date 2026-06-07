@@ -480,6 +480,49 @@ class IngestOut(BaseModel):
     )
 
 
+class IngestStatusIn(BaseModel):
+    case_id: str = Field("", description="Filter to this case; default active. '*' for all.")
+
+
+class ChecklistItem(BaseModel):
+    host: str = Field(..., description="Host name.")
+    artifact: str = Field(..., description="Artifact name.")
+    status: Literal["done", "running", "failed", "pending"] = Field(
+        ..., description="Per-artifact status."
+    )
+    detail: str = Field(..., description="Human-readable artifact progress detail.")
+
+
+class IngestRun(BaseModel):
+    case_id: str | None = Field(None, description="Case id.")
+    status: Literal["starting", "running", "complete", "failed", "killed", "unknown"] = Field(
+        ..., description="Run status."
+    )
+    pid: int | None = Field(None, description="Worker process id.")
+    elapsed: str = Field(..., description="Elapsed time display.")
+    total_indexed: int = Field(..., description="Total submitted documents.")
+    bulk_failed: int = Field(..., description="Bulk write failures.")
+    hosts_complete: int = Field(..., description="Completed host count.")
+    hosts_total: int = Field(..., description="Total host count.")
+    artifacts_complete: int = Field(..., description="Completed artifact count.")
+    artifacts_total: int = Field(..., description="Total artifact count.")
+    log_file: str = Field("", description="Run log file.")
+    checklist: list[ChecklistItem] = Field(default_factory=list, description="Progress checklist.")
+    message: str = Field("", description="Operator-facing status message.")
+    halt_reason: str | None = Field(None, description="Structured halt reason when failed.")
+    errors: list[str] = Field(default_factory=list, description="Per-artifact errors.")
+    next_steps: list[str] = Field(default_factory=list, description="Suggested next steps.")
+    warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings.")
+    details: dict[str, Any] = Field(
+        default_factory=dict, description="Additional behavior-compatible fields."
+    )
+
+
+class IngestStatusOut(BaseModel):
+    ingests: list[IngestRun] = Field(..., description="Running or recent ingest/enrich runs.")
+    message: str | None = Field(None, description="Summary message when no runs are present.")
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -933,6 +976,67 @@ async def run_opensearch_ingest(params: IngestIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
+async def run_opensearch_ingest_status(params: IngestStatusIn) -> ToolResult:
+    raw = _legacy_server().opensearch_ingest_status(**params.model_dump())
+    if "error" in raw:
+        return _legacy_error(raw, default_code=ErrorCode.no_active_case)
+    meta = _meta_from_raw(raw)
+    runs: list[IngestRun] = []
+    for item in raw.get("ingests", []):
+        details = {
+            key: value
+            for key, value in item.items()
+            if key
+            not in {
+                "case_id",
+                "status",
+                "pid",
+                "elapsed",
+                "total_indexed",
+                "bulk_failed",
+                "hosts_complete",
+                "hosts_total",
+                "artifacts_complete",
+                "artifacts_total",
+                "log_file",
+                "checklist",
+                "message",
+                "halt_reason",
+                "errors",
+                "next_steps",
+                "warnings",
+            }
+        }
+        runs.append(
+            IngestRun(
+                case_id=item.get("case_id"),
+                status=item.get("status", "unknown"),
+                pid=item.get("pid"),
+                elapsed=str(item.get("elapsed", "")),
+                total_indexed=int(item.get("total_indexed", 0)),
+                bulk_failed=int(item.get("bulk_failed", 0)),
+                hosts_complete=int(item.get("hosts_complete", 0)),
+                hosts_total=int(item.get("hosts_total", 0)),
+                artifacts_complete=int(item.get("artifacts_complete", 0)),
+                artifacts_total=int(item.get("artifacts_total", 0)),
+                log_file=str(item.get("log_file", "")),
+                checklist=[
+                    ChecklistItem.model_validate(check) for check in item.get("checklist", [])
+                ],
+                message=str(item.get("message", "")),
+                halt_reason=item.get("halt_reason"),
+                errors=list(item.get("errors", [])),
+                next_steps=list(item.get("next_steps", [])),
+                warnings=list(item.get("warnings", [])),
+                details=details,
+            )
+        )
+    return _success_tool_result(
+        IngestStatusOut(ingests=runs, message=raw.get("message")),
+        meta,
+    )
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -965,6 +1069,23 @@ REGISTRY.append(
             "population or gauge magnitude before opensearch_search. Do not use "
             "when you need per-value counts; use opensearch_aggregate. Example: "
             "opensearch_count(query='event.code:4624')."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_ingest_status",
+        fn=run_opensearch_ingest_status,
+        in_model=IngestStatusIn,
+        out_model=IngestStatusOut,
+        annotations=_read_annotations("Ingest/Enrichment Progress"),
+        title="Ingest/Enrichment Progress",
+        description=(
+            "Return status for running or recent ingest and enrichment runs. Use to "
+            "poll every roughly 30 seconds while a run is active and present the "
+            "per-host artifact checklist. Default is active case; case_id='*' "
+            "shows all cases. Example: opensearch_ingest_status()."
         ),
     )
 )

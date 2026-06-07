@@ -277,6 +277,246 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Ingest/Enrichment Progress"
+      },
+      "description": "Return status for running or recent ingest and enrichment runs. Use to poll every roughly 30 seconds while a run is active and present the per-host artifact checklist. Default is active case; case_id='*' shows all cases. Example: opensearch_ingest_status().",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Filter to this case; default active. '*' for all.",
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
+        "title": "IngestStatusIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_ingest_status",
+      "output_schema": {
+        "properties": {
+          "ingests": {
+            "description": "Running or recent ingest/enrich runs.",
+            "items": {
+              "properties": {
+                "artifacts_complete": {
+                  "description": "Completed artifact count.",
+                  "title": "Artifacts Complete",
+                  "type": "integer"
+                },
+                "artifacts_total": {
+                  "description": "Total artifact count.",
+                  "title": "Artifacts Total",
+                  "type": "integer"
+                },
+                "bulk_failed": {
+                  "description": "Bulk write failures.",
+                  "title": "Bulk Failed",
+                  "type": "integer"
+                },
+                "case_id": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Case id.",
+                  "title": "Case Id"
+                },
+                "checklist": {
+                  "description": "Progress checklist.",
+                  "items": {
+                    "properties": {
+                      "artifact": {
+                        "description": "Artifact name.",
+                        "title": "Artifact",
+                        "type": "string"
+                      },
+                      "detail": {
+                        "description": "Human-readable artifact progress detail.",
+                        "title": "Detail",
+                        "type": "string"
+                      },
+                      "host": {
+                        "description": "Host name.",
+                        "title": "Host",
+                        "type": "string"
+                      },
+                      "status": {
+                        "description": "Per-artifact status.",
+                        "enum": [
+                          "done",
+                          "running",
+                          "failed",
+                          "pending"
+                        ],
+                        "title": "Status",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "host",
+                      "artifact",
+                      "status",
+                      "detail"
+                    ],
+                    "title": "ChecklistItem",
+                    "type": "object"
+                  },
+                  "title": "Checklist",
+                  "type": "array"
+                },
+                "details": {
+                  "additionalProperties": true,
+                  "description": "Additional behavior-compatible fields.",
+                  "title": "Details",
+                  "type": "object"
+                },
+                "elapsed": {
+                  "description": "Elapsed time display.",
+                  "title": "Elapsed",
+                  "type": "string"
+                },
+                "errors": {
+                  "description": "Per-artifact errors.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Errors",
+                  "type": "array"
+                },
+                "halt_reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Structured halt reason when failed.",
+                  "title": "Halt Reason"
+                },
+                "hosts_complete": {
+                  "description": "Completed host count.",
+                  "title": "Hosts Complete",
+                  "type": "integer"
+                },
+                "hosts_total": {
+                  "description": "Total host count.",
+                  "title": "Hosts Total",
+                  "type": "integer"
+                },
+                "log_file": {
+                  "default": "",
+                  "description": "Run log file.",
+                  "title": "Log File",
+                  "type": "string"
+                },
+                "message": {
+                  "default": "",
+                  "description": "Operator-facing status message.",
+                  "title": "Message",
+                  "type": "string"
+                },
+                "next_steps": {
+                  "description": "Suggested next steps.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Next Steps",
+                  "type": "array"
+                },
+                "pid": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Worker process id.",
+                  "title": "Pid"
+                },
+                "status": {
+                  "description": "Run status.",
+                  "enum": [
+                    "starting",
+                    "running",
+                    "complete",
+                    "failed",
+                    "killed",
+                    "unknown"
+                  ],
+                  "title": "Status",
+                  "type": "string"
+                },
+                "total_indexed": {
+                  "description": "Total submitted documents.",
+                  "title": "Total Indexed",
+                  "type": "integer"
+                },
+                "warnings": {
+                  "description": "Non-fatal warnings.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Warnings",
+                  "type": "array"
+                }
+              },
+              "required": [
+                "status",
+                "elapsed",
+                "total_indexed",
+                "bulk_failed",
+                "hosts_complete",
+                "hosts_total",
+                "artifacts_complete",
+                "artifacts_total"
+              ],
+              "title": "IngestRun",
+              "type": "object"
+            },
+            "title": "Ingests",
+            "type": "array"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Summary message when no runs are present.",
+            "title": "Message"
+          }
+        },
+        "required": [
+          "ingests"
+        ],
+        "title": "IngestStatusOut",
+        "type": "object"
+      },
+      "title": "Ingest/Enrichment Progress"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": true,
         "readOnlyHint": false,
