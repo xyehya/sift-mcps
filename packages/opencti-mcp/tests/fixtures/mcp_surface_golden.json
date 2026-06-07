@@ -1,6 +1,19 @@
 {
   "backend": "opencti-mcp",
-  "prompts": [],
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": "IOC to contextualize: IP, hash, domain, URL, CVE, or MITRE id.\n\nProvide as a JSON string matching the following schema: {\"description\":\"IOC to contextualize: IP, hash, domain, URL, CVE, or MITRE id.\",\"type\":\"string\"}",
+          "name": "ioc",
+          "required": true
+        }
+      ],
+      "description": "Investigation prompt for enriching one observed IOC with OpenCTI lookup, relationships, and report context.",
+      "name": "enrich_ioc",
+      "title": "Enrich IOC"
+    }
+  ],
   "resource_templates": [],
   "resources": [
     {
@@ -11,6 +24,24 @@
       "name": "cti_health",
       "title": "OpenCTI Health",
       "uri": "cti://health"
+    },
+    {
+      "annotations": null,
+      "description": "Enabled OpenCTI enrichment connectors/feeds and active state, refreshed on read.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "cti_connector_catalog",
+      "title": "OpenCTI Connector Catalog",
+      "uri": "cti://catalog/connectors"
+    },
+    {
+      "annotations": null,
+      "description": "Static reference for the 16 searchable OpenCTI entity types and supported filters.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "cti_entity_type_reference",
+      "title": "OpenCTI Entity Type Reference",
+      "uri": "cti://reference/entity-types"
     }
   ],
   "tools": [

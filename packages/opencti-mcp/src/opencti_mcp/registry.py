@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.tools import FunctionTool, ToolResult
@@ -412,6 +412,31 @@ class CtiReportsOut(BaseModel):
     offset: int = Field(0, description="Echoed pagination offset.")
 
 
+class CtiConnector(BaseModel):
+    id: str | None = Field(None, description="OpenCTI connector id.")
+    name: str | None = Field(None, description="Connector/feed name.")
+    scope: list[str] = Field(default_factory=list, description="Connector scopes advertised by OpenCTI.")
+    auto: bool = Field(False, description="True when the connector runs automatically.")
+    active: bool = Field(False, description="True when the connector is active.")
+
+
+class CtiConnectorCatalogOut(BaseModel):
+    configured: bool = Field(..., description="True when this backend had OpenCTI configuration for a live read.")
+    connectors: list[CtiConnector] = Field(default_factory=list, description="Enabled enrichment connectors/feeds returned by OpenCTI.")
+    note: str | None = Field(None, description="Operational note or remediation when the live catalog is unavailable.")
+
+
+class CtiEntityTypeRef(BaseModel):
+    type: CtiEntityType = Field(..., description="Searchable cti_search_entity type value.")
+    client_method: str = Field(..., description="OpenCTI client method used by this backend.")
+    supports_confidence_min: bool = Field(..., description="True when confidence_min is passed to the client method.")
+    supports_full_filters: bool = Field(..., description="True when offset, labels, and created date filters are supported.")
+
+
+class CtiEntityTypeReferenceOut(BaseModel):
+    entity_types: list[CtiEntityTypeRef] = Field(..., description="Searchable OpenCTI entity types and supported filters.")
+
+
 async def cti_get_health(params: CtiHealthIn, ctx: RuntimeContext) -> CtiHealthOut:
     del params
     client = ctx.require_client()
@@ -631,6 +656,64 @@ async def cti_search_reports(
     return CtiReportsOut(results=reports, total=len(reports), offset=params.offset)
 
 
+def enrich_ioc_prompt(
+    ioc: Annotated[str, Field(description="IOC to contextualize: IP, hash, domain, URL, CVE, or MITRE id.")],
+) -> str:
+    return (
+        "Enrich and contextualize this IOC using OpenCTI.\n\n"
+        f"IOC: {ioc}\n\n"
+        "1. Call `cti_get_health()` or read `cti://health` to confirm OpenCTI is available.\n"
+        "2. Call `cti_lookup_ioc(ioc=<IOC>)` and inspect `found`, `indicator`, and related entities.\n"
+        "3. For the strongest related actor, malware, technique, or campaign entity with an id, call "
+        "`cti_get_relationships(entity_id=<id>)` to map adjacent context.\n"
+        "4. Search reports with the top actor, malware, campaign, CVE, or technique name using "
+        "`cti_search_reports(query=<name>)`.\n"
+        "5. Summarize CTI as supporting context only, and tie every conclusion back to observed case evidence."
+    )
+
+
+async def cti_connector_catalog_resource(ctx: RuntimeContext) -> str:
+    if ctx.client is None and ctx.config is None:
+        return CtiConnectorCatalogOut(
+            configured=False,
+            note="OpenCTI is not configured. Set OPENCTI_URL and OPENCTI_TOKEN, then restart opencti-mcp.",
+        ).model_dump_json()
+    try:
+        client = ctx.require_client()
+        raw_connectors = await asyncio.to_thread(client.list_enrichment_connectors)
+    except Exception as exc:
+        fault = _fault_from_exception(exc)
+        return CtiConnectorCatalogOut(
+            configured=True,
+            note=f"{fault.message} Remediation: {fault.remediation}",
+        ).model_dump_json()
+    connectors = [
+        CtiConnector(
+            id=_optional_str(item.get("id")),
+            name=_optional_str(item.get("name")),
+            scope=[str(scope) for scope in _safe_list(item.get("scope"))],
+            auto=bool(item.get("auto", False)),
+            active=bool(item.get("active", False)),
+        )
+        for item in _safe_list(raw_connectors)
+        if isinstance(item, dict)
+    ]
+    return CtiConnectorCatalogOut(configured=True, connectors=connectors).model_dump_json()
+
+
+def cti_entity_type_reference_resource() -> str:
+    refs = [
+        CtiEntityTypeRef(
+            type=CtiEntityType(entity_type),
+            client_method=method,
+            supports_confidence_min=entity_type in _ENTITY_TYPES_WITH_CONFIDENCE,
+            supports_full_filters=entity_type in _ENTITY_TYPES_FULL_FILTERS,
+        )
+        for entity_type, method in sorted(_ENTITY_TYPE_METHODS.items())
+    ]
+    return CtiEntityTypeReferenceOut(entity_types=refs).model_dump_json()
+
+
 REGISTRY: list[ToolDef] = [
     ToolDef(
         name="cti_get_health",
@@ -755,7 +838,14 @@ REGISTRY: list[ToolDef] = [
         ),
     ),
 ]
-PROMPT_REGISTRY: list[PromptDef] = []
+PROMPT_REGISTRY: list[PromptDef] = [
+    PromptDef(
+        name="enrich_ioc",
+        fn=enrich_ioc_prompt,
+        title="Enrich IOC",
+        description="Investigation prompt for enriching one observed IOC with OpenCTI lookup, relationships, and report context.",
+    )
+]
 RESOURCE_REGISTRY: list[ResourceDef] = [
     ResourceDef(
         uri="cti://health",
@@ -767,7 +857,21 @@ RESOURCE_REGISTRY: list[ResourceDef] = [
             "on CTI lookups; the `cti_get_health` tool remains as a deprecated "
             "resource-compatible alias for one cutover cycle."
         ),
-    )
+    ),
+    ResourceDef(
+        uri="cti://catalog/connectors",
+        fn=cti_connector_catalog_resource,
+        name="cti_connector_catalog",
+        title="OpenCTI Connector Catalog",
+        description="Enabled OpenCTI enrichment connectors/feeds and active state, refreshed on read.",
+    ),
+    ResourceDef(
+        uri="cti://reference/entity-types",
+        fn=cti_entity_type_reference_resource,
+        name="cti_entity_type_reference",
+        title="OpenCTI Entity Type Reference",
+        description="Static reference for the 16 searchable OpenCTI entity types and supported filters.",
+    ),
 ]
 
 
