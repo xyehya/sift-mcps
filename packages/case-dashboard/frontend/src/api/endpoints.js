@@ -79,9 +79,9 @@ export const downloadReport = (id) => apiFetch(`/api/reports/${id}/download`)
 // --- Backends & Services ---
 export const getBackends = () => apiFetch('/api/backends')
 export const postRegisterBackend = (body) => apiPost('/api/backends', body)
+export const deleteBackend = (name, body) => apiDelete(`/api/backends/${encodeURIComponent(name)}`, body)
 export const postValidateBackend = (body) => apiPost('/api/backends/validate', body)
 export const postReloadBackends = (body) => apiPost('/api/backends/reload', body)
 export const postStartService = (name, body) => apiPost(`/api/services/${name}/start`, body)
 export const postStopService = (name, body) => apiPost(`/api/services/${name}/stop`, body)
 export const postRestartService = (name, body) => apiPost(`/api/services/${name}/restart`, body)
-

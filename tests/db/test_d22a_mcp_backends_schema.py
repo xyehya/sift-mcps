@@ -6,6 +6,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "supabase" / "migrations" / "202606070500_mcp_backends_registry.sql"
+HARDENING_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "202606080100_mcp_backends_registry_hardening.sql"
+)
 
 
 def _sql() -> str:
@@ -14,6 +20,14 @@ def _sql() -> str:
 
 def _normalized_sql() -> str:
     return re.sub(r"\s+", " ", _sql().lower())
+
+
+def _hardening_sql() -> str:
+    return HARDENING_MIGRATION.read_text(encoding="utf-8")
+
+
+def _normalized_hardening_sql() -> str:
+    return re.sub(r"\s+", " ", _hardening_sql().lower())
 
 
 def _table_block(table: str) -> str:
@@ -102,9 +116,27 @@ def test_mcp_backends_indexes_rls_and_policy() -> None:
 
 
 def test_mcp_backends_v1_does_not_add_health_events_or_vault_secrets() -> None:
-    sql = _normalized_sql()
+    sql = _normalized_sql() + " " + _normalized_hardening_sql()
 
     assert "mcp_backend_health_events" not in sql
     assert "create extension supabase_vault" not in sql
     assert "vault.decrypted_secrets" not in sql
     assert "vault.create_secret" not in sql
+
+
+def test_mcp_backends_hardening_migration_adds_defense_in_depth_checks() -> None:
+    sql = _normalized_hardening_sql()
+
+    assert "create or replace function app.mcp_backend_env_name_is_valid" in sql
+    assert "create or replace function app.jsonb_has_forbidden_key" in sql
+    assert "create or replace function app.mcp_backend_env_refs_are_valid" in sql
+    assert "create or replace function app.mcp_backend_headers_are_valid" in sql
+    assert "mcp_backends_connection_no_nested_raw_secret_keys_check" in sql
+    assert "mcp_backends_connection_credential_refs_valid_check" in sql
+    assert "mcp_backends_connection_transport_shape_check" in sql
+    assert "not valid" in sql
+    assert "connection ? 'command'" in sql
+    assert "connection ? 'url'" in sql
+    assert "authorization" in sql
+    assert "cookie" in sql
+    assert "api[-_]?key" in sql

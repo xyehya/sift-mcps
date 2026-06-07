@@ -1083,6 +1083,66 @@ async def register_backend(request: Request) -> JSONResponse:
     return JSONResponse(response, status_code=status_code)
 
 
+async def unregister_backend(request: Request) -> JSONResponse:
+    """DELETE /api/v1/backends/{name} — remove a backend registry row.
+
+    D34 keeps FastMCP add-on mounts fixed for the current process lifetime, so
+    unregister is a DB/catalog change that requires Gateway restart to apply to
+    the served `/mcp` catalog.
+    """
+    gateway = request.app.state.gateway
+    registry = getattr(gateway, "mcp_backend_registry", None)
+    if registry is None:
+        return JSONResponse(
+            {
+                "unregistered": False,
+                "name": request.path_params["name"],
+                "error": "mcp backend registry unavailable",
+                "restart_required": False,
+            },
+            status_code=503,
+        )
+
+    name = request.path_params["name"]
+    actor = getattr(request.state, "identity", None)
+    try:
+        registry.unregister(name, actor=actor)
+    except Exception as exc:
+        http_status = getattr(exc, "http_status", None)
+        if http_status == 404:
+            return JSONResponse(
+                {"unregistered": False, "name": name, "error": f"Unknown backend: {name}"},
+                status_code=404,
+            )
+        message = str(exc)
+        if any(k in message for k in ("bearer_token", "tls_cert", "env")):
+            message = "Backend credential reference validation failed."
+        if http_status is not None and int(http_status) < 500:
+            return JSONResponse(
+                {"unregistered": False, "name": name, "error": message},
+                status_code=int(http_status),
+            )
+        logger.warning("mcp backend registry unregister failed for %s: %s", name, message)
+        return JSONResponse(
+            {
+                "unregistered": False,
+                "name": name,
+                "error": "mcp backend registry unregister failed",
+            },
+            status_code=503,
+        )
+
+    return JSONResponse(
+        {
+            "unregistered": True,
+            "name": name,
+            "status": "unregistered_pending_restart",
+            "pending_apply": True,
+            "restart_required": True,
+        }
+    )
+
+
 def rest_routes() -> list[Route]:
     """Return REST API v1 routes."""
     return [
@@ -1090,6 +1150,7 @@ def rest_routes() -> list[Route]:
         Route("/api/v1/tools/{tool_name}", call_tool, methods=["POST"]),
         Route("/api/v1/backends", list_backends, methods=["GET"]),
         Route("/api/v1/backends", register_backend, methods=["POST"]),
+        Route("/api/v1/backends/{name}", unregister_backend, methods=["DELETE"]),
         Route("/api/v1/backends/validate", validate_backend, methods=["POST"]),
         Route("/api/v1/backends/reload", reload_backends, methods=["POST"]),
         Route("/api/v1/services", list_services, methods=["GET"]),

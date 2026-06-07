@@ -19,6 +19,7 @@ from sift_gateway.mcp_server import (
     GatewayToolCatalogMiddleware,
     assert_mounted_tool_names,
     expected_mounted_tool_names,
+    _stdio_transport,
 )
 from sift_gateway.rest import rest_routes
 from sift_gateway.server import Gateway
@@ -86,11 +87,16 @@ class _FakeBackend:
 class _FakeRegistry:
     def __init__(self):
         self.registered = []
+        self.unregistered = []
 
     def register(self, *, name, config, manifest, actor=None):
         del actor
         self.registered.append((name, config, manifest))
         return type("Record", (), {"id": f"id-{name}", "name": name})()
+
+    def unregister(self, name, *, actor=None):
+        del actor
+        self.unregistered.append(name)
 
     def list_backends(self):
         return []
@@ -439,6 +445,44 @@ def test_register_route_keeps_gated_backend_unavailable(tmp_path, monkeypatch):
     assert "sample_search" not in gateway._tool_map
     assert "sample-addon" not in gateway._available_backends
     assert gateway.mcp_backend_registry.registered[0][0] == "sample-addon"
+
+
+def test_unregister_route_deletes_registry_row_and_requires_restart():
+    gateway = Gateway({"backends": {}, **_execute_security()})
+    gateway.mcp_backend_registry = _FakeRegistry()
+    client = _rest_client(gateway)
+
+    response = client.delete("/api/v1/backends/sample-addon")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "unregistered": True,
+        "name": "sample-addon",
+        "status": "unregistered_pending_restart",
+        "pending_apply": True,
+        "restart_required": True,
+    }
+    assert gateway.mcp_backend_registry.unregistered == ["sample-addon"]
+
+
+def test_stdio_proxy_env_does_not_inherit_unreferenced_process_secrets(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("SIFT_BACKEND_SECRET", "raw-secret")
+    monkeypatch.setenv("LC_ALL", "C.UTF-8")
+
+    transport = _stdio_transport(
+        {
+            "type": "stdio",
+            "command": "true",
+            "env": {"BACKEND_TOKEN": "resolved-secret"},
+        }
+    )
+
+    assert transport.env["PATH"] == "/usr/bin"
+    assert transport.env["LC_ALL"] == "C.UTF-8"
+    assert transport.env["BACKEND_TOKEN"] == "resolved-secret"
+    assert "SIFT_BACKEND_SECRET" not in transport.env
 
 
 def test_gateway_core_has_no_hardcoded_addon_names():

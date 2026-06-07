@@ -58,6 +58,8 @@ export function apiPatch(path, body) {
   return apiFetch(path, { method: 'PATCH', body: JSON.stringify(body) })
 }
 
-export function apiDelete(path) {
-  return apiFetch(path, { method: 'DELETE' })
+export function apiDelete(path, body) {
+  const opts = { method: 'DELETE' }
+  if (body !== undefined) opts.body = JSON.stringify(body)
+  return apiFetch(path, opts)
 }

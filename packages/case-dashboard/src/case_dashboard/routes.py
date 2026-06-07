@@ -4829,6 +4829,7 @@ def _dashboard_api_routes() -> list[Route]:
         # Phase 6.3: Portal Backends & Services Proxy Routes
         Route("/api/backends", get_backends_route, methods=["GET"]),
         Route("/api/backends", register_backend_route, methods=["POST"]),
+        Route("/api/backends/{name}", unregister_backend_route, methods=["DELETE"]),
         Route("/api/backends/validate", validate_backend_route, methods=["POST"]),
         Route("/api/backends/reload", reload_backends_route, methods=["POST"]),
         Route("/api/services/{name}/start", start_service_route, methods=["POST"]),
@@ -4965,6 +4966,39 @@ async def register_backend_route(request: Request) -> JSONResponse:
     from sift_gateway.rest import register_backend_logic
     response, status_code = await register_backend_logic(gateway, body, actor=actor)
     return JSONResponse(response, status_code=status_code)
+
+
+async def unregister_backend_route(request: Request) -> JSONResponse:
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    origin_err = _verify_origin(request)
+    if origin_err:
+        return origin_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    examiner_name = _resolve_examiner(request)
+    if not examiner_name:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    client_host = request.client.host if request.client else "unknown"
+    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    if challenge_err:
+        return challenge_err
+
+    from sift_gateway.rest import unregister_backend
+
+    request.app.state.gateway = gateway
+    return await unregister_backend(request)
 
 
 async def reload_backends_route(request: Request) -> JSONResponse:

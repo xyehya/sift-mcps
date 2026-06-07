@@ -3,14 +3,16 @@
 ## Current Objective
 
 **D22A / Batch H `mcp_backends` registry is landed** on `revamp/spg-v1`
-(Build Run 38, Land Run 39), from
+(Build Run 38, Land Run 39, hardening Run 40), from
 `docs/migration/22_d22a_mcp_backends_registry.md`. Add-on MCP backend authority
 now lives in Supabase/Postgres `app.mcp_backends`; `gateway.yaml backends` is no
 longer authority, stale YAML backend blocks are ignored, and no control-plane
 DSN means core-only add-ons. Backend connection rows store non-secret metadata
 and env-var credential references only. FastMCP add-on exposure uses
 restart-to-apply; registry state changes immediately and mounted `/mcp` catalog
-changes on Gateway restart. **F-11 is RESOLVED** and **B-13 is DONE**.
+changes on Gateway restart. Run 40 hardened this landed surface with minimal
+stdio add-on env inheritance, DB connection-shape constraints, and
+restart-to-apply unregister. **F-11 is RESOLVED** and **B-13 is DONE**.
 
 Landed foundation: D27b gateway cutover is landed on `revamp/spg-v1` (Runs
 23-24), serving one FastAPI ASGI app with aggregate FastMCP `http_app` at
@@ -36,6 +38,59 @@ metadata + audit DB authority and the DB-backed evidence gate. Keep Batch E
 jobs/workers, OpenSearch-core, RAG/skills, findings/timeline/TODO/report data
 migration, and B-4/B-12/B-15 separate unless a new candidate explicitly scopes
 them.
+
+## Run 40 - D22A Registry Hardening
+
+Post-Land hardening run in worktree
+`/home/yk/AI/SIFTHACK/sift-mcps-d22a-mcp-backends-registry` on branch
+`codex/d22a-mcp-backends-registry`.
+
+Trigger: operator asked to extract the useful deltas from the stale dirty D22A
+draft before deleting the dirty branch/worktree state.
+
+Changed:
+- Reduced stdio add-on proxy environment inheritance to a minimal allowlist
+  (`PATH`, home/user/shell/locale/tmp basics) plus explicit resolved `env_refs`.
+- Added
+  `supabase/migrations/202606080100_mcp_backends_registry_hardening.sql` with
+  DB defense-in-depth checks for nested raw-secret keys, env-ref syntax,
+  secret-bearing HTTP header names, and `stdio`/`http` connection shape drift on
+  future inserts/updates.
+- Added Gateway REST `DELETE /api/v1/backends/{name}` and portal
+  `DELETE /api/backends/{name}` unregister. It deletes the registry row and
+  returns `pending_apply` / `restart_required`; it does not claim to live-unmount
+  the already assembled FastMCP catalog, preserving D34.
+- Added the visible Backends tab Unregister action and rebuilt the checked-in
+  portal v2 static bundle.
+
+Verification:
+- `uv run pytest packages/sift-gateway/tests/test_phase6.py
+  packages/sift-gateway/tests/test_d22a_mcp_backends_registry.py
+  tests/db/test_d22a_mcp_backends_schema.py` passed (30 tests).
+- `uv run pytest packages/sift-gateway/tests` passed (305 tests).
+- `uv run pytest tests/db` passed (29 tests).
+- `uv run pytest packages/sift-core/tests` passed (330 tests).
+- From `packages/case-dashboard`: `uv run pytest tests` passed (310 tests,
+  64 existing Starlette cookie warnings).
+- From `packages/case-dashboard/frontend`: `npm run test` passed (83 tests);
+  `npm run build` passed.
+- From `packages/case-dashboard/frontend`: `npm run lint` still fails on the
+  existing broad frontend lint debt (43 errors / 4 warnings); no BackendsTab
+  rule was reported.
+- Host: `python3 scripts/validate_docs.py` passed; `git diff --check` passed.
+- VM: synced to `~/sift-mcps-test`; `UV_NO_MANAGED_PYTHON=1
+  UV_PYTHON_DOWNLOADS=never ~/.local/bin/uv sync --extra core --group dev
+  --python /usr/bin/python3.12` passed.
+- VM: `.venv/bin/python --version` reported Python 3.12.3; imports for `yaml`,
+  `mcp`, `fastmcp`, `sift_core`, and `sift_gateway` passed.
+- VM: targeted D22A hardening tests passed (30 Gateway/DB tests) and portal
+  backend tests passed (10 tests).
+- VM: prerequisite-inclusive SQL rollback check passed against pinned Supabase:
+  PR01 + PR03A + PR03B + D22A + D22A hardening in one `BEGIN` / `ROLLBACK`.
+- VM: `python3 scripts/validate_docs.py` passed.
+
+Next: Plan EVID-AUD-A / Batch C evidence metadata + audit DB authority from doc
+18 §11/§13.
 
 ## Run 39 - D22A / Batch H Land
 

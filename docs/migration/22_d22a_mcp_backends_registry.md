@@ -1,6 +1,7 @@
 # 22 - D22A / Batch H `mcp_backends` Control-Plane Registry (decision D22)
 
-Status: landed on `revamp/spg-v1` (implementation commit `abf42e0`, Land Run 39)
+Status: landed on `revamp/spg-v1` (implementation commit `abf42e0`, Land Run 39;
+post-Land hardening Run 40)
 Scope fence: see §4
 Decisions referenced: D2, D3, D12, D22, D24, D30, D32, D33, D34; carries
 F-11, B-13; complements B-4.
@@ -13,7 +14,12 @@ is wired in code. It preserves every landed policy guarantee: PR03A Supabase JWT
 identity, PR03B DB active-case authority, B-10 tool authz, B-11 proxy active-case
 handling, D3 no per-backend `/mcp/{name}`, and D24 SIFT-owned policy.
 
-Land Run 39 marks **F-11 RESOLVED** and **B-13 DONE** for this batch.
+Land Run 39 marks **F-11 RESOLVED** and **B-13 DONE** for this batch. Run 40
+adds the post-Land hardening extracted from the stale D22A draft: stdio add-on
+proxies inherit only a minimal allowlisted process environment plus explicit
+credential refs, a follow-up migration adds DB defense-in-depth checks for
+connection JSON, and REST/portal expose unregister as a restart-to-apply
+registry operation.
 
 ## 1. Operator Decisions Locked For This Batch
 
@@ -208,6 +214,11 @@ allowed future reference source only after a separately scoped secret-lifecycle
 design; D22A does not enable Vault or write Vault secrets. This complements
 **B-4**.
 
+Run 40 adds a follow-up migration that enforces the same model in the DB with
+additional checks for nested raw-secret keys, credential-reference env-var
+syntax, secret-bearing HTTP header names, and `stdio`/`http` transport-shape
+drift on future inserts/updates.
+
 ### 5.4 RLS / write model (D12)
 
 - RLS enabled; operators get scoped reads of `app.mcp_backends`
@@ -396,7 +407,12 @@ beyond optional manifest field additions.
   back-compatible).
 - `configs/gateway.yaml.template`: `backends:` block documented as
   non-authoritative/removed; control-plane DSN remains the registry source.
-- Docs/logs: this doc is flipped to landed; Runs 38-39 are logged in
+- Post-Land hardening: `supabase/migrations/202606080100_mcp_backends_registry_hardening.sql`
+  adds DB connection-shape constraints; stdio proxy environment inheritance is
+  reduced to a minimal allowlist plus explicit refs; REST and portal add
+  `DELETE /api/v1/backends/{name}` / `/api/backends/{name}` unregister with
+  restart-to-apply semantics.
+- Docs/logs: this doc is flipped to landed; Runs 38-40 are logged in
   `MIGRATION_STATE.md`; **F-11** is **RESOLVED** and **B-13** is **DONE** at
   Land.
 

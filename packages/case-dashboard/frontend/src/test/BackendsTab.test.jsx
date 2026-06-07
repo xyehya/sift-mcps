@@ -4,6 +4,7 @@ import { getBackends, postValidateBackend, postRegisterBackend, postReloadBacken
 // Mock endpoints to avoid actual API calls during logic testing
 vi.mock('../api/endpoints', () => ({
   getBackends: vi.fn(),
+  deleteBackend: vi.fn(),
   postRegisterBackend: vi.fn(),
   postValidateBackend: vi.fn(),
   postReloadBackends: vi.fn(),

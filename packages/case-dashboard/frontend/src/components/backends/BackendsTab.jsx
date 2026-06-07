@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   getBackends,
+  deleteBackend,
   postRegisterBackend,
   postValidateBackend,
   postReloadBackends,
@@ -229,6 +230,17 @@ export function BackendsTab() {
     })
   }
 
+  function handleUnregister(bName) {
+    openChallenge(`Unregister Backend: ${bName}`, async (challengeParams) => {
+      const res = await deleteBackend(bName, challengeParams)
+      addToast(
+        res.restart_required ? 'Backend unregistered; Gateway restart required' : 'Backend unregistered',
+        res.restart_required ? 'warn' : 'success'
+      )
+      await fetchBackends()
+    })
+  }
+
   const updateEnv = (index, field, val) => {
     const next = [...envList]
     next[index][field] = val
@@ -381,6 +393,13 @@ export function BackendsTab() {
                             style={canRestart ? { background: 'var(--amber-dim)', color: 'var(--amber)', borderColor: 'var(--amber)' } : {}}
                           >
                             Restart
+                          </button>
+                          <button
+                            onClick={() => handleUnregister(b.name)}
+                            className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 transition-opacity"
+                            style={{ background: 'var(--crimson-dim)', color: 'var(--crimson)', borderColor: 'var(--crimson)' }}
+                          >
+                            Unregister
                           </button>
                         </td>
                       </tr>

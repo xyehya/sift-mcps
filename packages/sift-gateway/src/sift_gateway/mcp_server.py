@@ -278,7 +278,7 @@ def _stdio_transport(config: dict) -> StdioTransport:
     command = config.get("command")
     if not command:
         raise ValueError("stdio backend proxy requires command")
-    env = dict(os.environ)
+    env = _stdio_base_env()
     configured_env = config.get("env") or {}
     env.update(configured_env)
     env = {str(k): str(v) for k, v in env.items() if v}
@@ -290,6 +290,29 @@ def _stdio_transport(config: dict) -> StdioTransport:
         cwd=config.get("cwd"),
         keep_alive=False,
     )
+
+
+def _stdio_base_env() -> dict[str, str]:
+    """Return the minimal process environment stdio add-ons need to start."""
+    env: dict[str, str] = {}
+    for key in (
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+    ):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    for key, value in os.environ.items():
+        if key.startswith("LC_") and value:
+            env[key] = value
+    return env
 
 
 def _create_http_proxy(backend_name: str, config: dict) -> FastMCPProxy:

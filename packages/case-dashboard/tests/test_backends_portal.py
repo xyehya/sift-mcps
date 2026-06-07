@@ -64,6 +64,7 @@ class _Registry:
     def __init__(self, records=None):
         self.records = list(records or [])
         self.registered = []
+        self.unregistered = []
 
     def list_backends(self):
         return list(self.records)
@@ -86,6 +87,11 @@ class _Registry:
             if record.name == name:
                 record.health_status = status
                 record.health_detail = detail
+
+    def unregister(self, name, *, actor=None):
+        del actor
+        self.unregistered.append(name)
+        self.records = [record for record in self.records if record.name != name]
 
 
 @pytest.fixture()
@@ -153,6 +159,7 @@ class TestBackendsPortal:
         assert client.post("/api/backends", json={}).status_code == 401
         assert client.post("/api/backends/validate", json={}).status_code == 401
         assert client.post("/api/backends/reload", json={}).status_code == 401
+        assert client.request("DELETE", "/api/backends/test", json={}).status_code == 401
         assert client.post("/api/services/test/start", json={}).status_code == 401
 
     def test_readonly_role_denied_for_mutations(self, client, passwords_dir):
@@ -164,6 +171,7 @@ class TestBackendsPortal:
         assert client.post("/api/backends", json={}).status_code == 403
         assert client.post("/api/backends/validate", json={}).status_code == 403
         assert client.post("/api/backends/reload", json={}).status_code == 403
+        assert client.request("DELETE", "/api/backends/test", json={}).status_code == 403
         assert client.post("/api/services/test/start", json={}).status_code == 403
 
     def test_mutating_requests_reject_missing_origin(self, client, passwords_dir):
@@ -174,6 +182,7 @@ class TestBackendsPortal:
         assert client.post("/api/backends", json={}, headers=headers).status_code == 400
         assert client.post("/api/backends/validate", json={}, headers=headers).status_code == 400
         assert client.post("/api/backends/reload", json={}, headers=headers).status_code == 400
+        assert client.request("DELETE", "/api/backends/test", json={}, headers=headers).status_code == 400
         assert client.post("/api/services/test/start", json={}, headers=headers).status_code == 400
 
         # Wrong Origin header
@@ -213,6 +222,38 @@ class TestBackendsPortal:
         assert resp.status_code == 200
         assert resp.json()["status"] == "current"
         assert resp.json()["authority"] == "app.mcp_backends"
+
+    def test_unregister_route_requires_challenge_and_handles_success(self, client, passwords_dir, mock_gateway):
+        _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+        headers = {"origin": "http://testserver"}
+        mock_gateway.mcp_backend_registry.records = [_RegistryRecord("test-backend")]
+
+        resp = client.request(
+            "DELETE",
+            "/api/backends/test-backend",
+            json={},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert "challenge_id" in resp.json()["error"]
+
+        challenge_id, response = _get_challenge_response(client, passwords_dir)
+        resp = client.request(
+            "DELETE",
+            "/api/backends/test-backend",
+            json={"challenge_id": challenge_id, "response": response},
+            headers=headers,
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "unregistered": True,
+            "name": "test-backend",
+            "status": "unregistered_pending_restart",
+            "pending_apply": True,
+            "restart_required": True,
+        }
+        assert mock_gateway.mcp_backend_registry.unregistered == ["test-backend"]
 
     def test_register_route_requires_challenge_and_handles_success(self, client, passwords_dir, mock_gateway, tmp_path, monkeypatch):
         _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
