@@ -24,7 +24,7 @@ Token can also be provided via:
 
 from __future__ import annotations
 
-import asyncio
+import argparse
 import logging
 import sys
 
@@ -33,11 +33,17 @@ from .config import Config
 from .errors import ConfigurationError
 from .feature_flags import get_feature_flags
 from .oplog import setup_logging
-from .server import OpenCTIMCPServer
+from .registry import create_server
 
 
 def main() -> None:
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="Run the OpenCTI FastMCP backend.")
+    parser.add_argument("--http", action="store_true", help="Run streamable HTTP instead of stdio.")
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host.")
+    parser.add_argument("--port", type=int, default=4626, help="HTTP bind port.")
+    args = parser.parse_args()
+
     # Configure logging (JSON by default, text for development)
     setup_logging("opencti-mcp")
     logger = logging.getLogger("opencti_mcp")
@@ -83,17 +89,17 @@ def main() -> None:
                     "Startup validation had errors - server will start but may have issues"
                 )
 
-        # Create and run server — pass validated client through if we
-        # built one, otherwise let server construct fresh (no startup
-        # validation requested → no _degraded state to preserve).
-        # Conditional kwarg keeps existing call-shape assertions in
-        # lifecycle tests valid; new behavior only fires when
-        # validation actually built a client.
-        if client is not None:
-            server = OpenCTIMCPServer(config, client=client)
+        # Create and run the standalone FastMCP 3 server. Pass the validated client
+        # through when startup validation built one so degraded state is preserved.
+        server = create_server(config=config, client=client)
+        if args.http:
+            server.run(
+                transport="streamable-http",
+                host=args.host,
+                port=args.port,
+            )
         else:
-            server = OpenCTIMCPServer(config)
-        asyncio.run(server.run())
+            server.run(transport="stdio")
 
     except ConfigurationError as e:
         logger.error(f"Configuration error: {e}")
