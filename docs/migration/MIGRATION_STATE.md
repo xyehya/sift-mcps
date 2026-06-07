@@ -2,35 +2,97 @@
 
 ## Current Objective
 
-The **D27b gateway cutover is PLANNED** (Run 22). D27a is landed (`019bc4a`); the
-implementation candidate is `17_gateway_cutover_d27b.md`, grounded in a source read of
-the gateway policy path and in the pinned **fastmcp 3.4.2** API (verified via
-`/prefecthq/fastmcp` v3.2.x docs — the closest published line). The plan re-hosts the
-SIFT policy (evidence gate → response guard → case context → audit envelope) as FastMCP
-Middleware, swaps aggregation to LocalProvider (core) + ProxyProvider (add-ons via
-`create_proxy` + namespaced mount), designs **B-3** (a single `guard_tool_result`
-redacting both `content` and `structured_content`, which are coupled in a FastMCP
-ToolResult; folds **B-6**), removes the policy-bypassing per-backend `/mcp/{name}`
-routes, and defines a policy-parity test suite (the gate is policy parity, not tool
-surface). Seven forks (**F-6…F-12**) are raised in `REGISTER.md` for the operator's call
-before Build.
+The **D27b gateway cutover is in Build** on branch `revamp/gateway-cutover-d27b`
+(Run 23). The gateway now serves one FastAPI ASGI app with the aggregate FastMCP
+`http_app` mounted at `/mcp`; per-backend `/mcp/{name}` routes are removed per D3/F-7.
+Core tools and `capability_guide` are registered as FastMCP local tools, configured
+add-ons are mounted through FastMCP proxy providers, and the SIFT policy is re-hosted
+as FastMCP middleware: evidence gate → response guard (B-3/B-6) → case context →
+audit envelope.
 
-Two source findings anchor the plan: `HttpMCPBackend.call_tool` drops
-`structured_content` today (so B-3 becomes load-bearing the moment the proxy carries
-typed output), and the per-backend `/mcp/{name}` route handler runs **no evidence gate
-and no response guard** — a live policy bypass (D3 says disable).
+Build re-confirmed the installed wheel, not the docs: host `.venv` has
+**fastmcp==3.4.2**; `create_proxy` imports from `fastmcp.server`; `Middleware.on_call_tool`
+fires for mounted proxied tools; and proxied `ToolResult.content`,
+`structured_content`, and `meta` are mutable after `call_next`. The in-memory F-6
+spike is now a parity test. D-2 hardening is implemented for HTTP proxy targets and
+remote manifest fetches (private/link-local egress blocked, no redirect-follow, no
+agent bearer passthrough).
 
-All D27b forks are resolved (F-6 YES/grounded; F-7 drop; F-8 FastAPI; F-9 drop →
-B-10; F-10 retired→core; F-12 keep) except **F-11** (deferred to a later run), and the
-three design decisions are locked (D-1 `TokenVerifier`, D-2 SSRF-in-PR, D-3 unary). The
-plan `17_gateway_cutover_d27b.md` is **design-frozen and ready to Build**.
+Host verification is green in package-compatible chunks: gateway 225 passed;
+case-dashboard 277 passed; sift-core 328 passed; OpenSearch 979 passed / 71 skipped;
+OpenCTI 1 passed; Windows triage 12 passed; forensic-mcp 20 passed; DB schema tests
+5 passed. `git diff --check` and gateway py_compile are clean. VM verification is green:
+the SIFT VM synced with `UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never` and
+`/usr/bin/python3.12`; smoke imports passed; `packages/sift-gateway/tests` passed
+225 tests; and the restarted gateway health endpoint returned `status: ok`.
 
-**Next:** a **Build** session (scoped worktree off `revamp/spg-v1`) implements
-`17_gateway_cutover_d27b.md` — the ready-to-copy build prompt is in §10. The first
-commit is the F-6 in-memory proxy spike (assert middleware wraps proxied tools +
-`structured_content`/`meta` pass-through) before the design is committed. D27b review
-does not start until **B-3** is implemented (charter gate); M2 already made every
-backend tool advertise `anyOf[success, ToolError]` so the guard can validate typed output.
+**Next:** run `/code-review` and `/security-review`, then Land. Mark **B-3** and **B-6**
+DONE only at Land.
+
+## Run 23 — D27b Gateway Cutover Build
+
+Coding run. Branch `revamp/gateway-cutover-d27b`; build commit created on this branch.
+Review remains pending.
+
+Trigger: implement design-frozen `17_gateway_cutover_d27b.md` per the Run 22 build
+prompt, with no scope expansion outside `packages/sift-gateway/**`, its tests,
+`packages/sift-gateway/pyproject.toml`, `uv.lock`, and `docs/migration/**`.
+
+Findings / reconciliations:
+- Installed API confirmed against host `.venv`: `fastmcp==3.4.2`,
+  `mcp==1.27.1`, `fastapi==0.136.1`, `starlette==1.0.1`.
+- `create_proxy` is exported from `fastmcp.server` in the installed wheel. The
+  older `fastmcp.server.proxy` module exists but is deprecated and does not expose
+  the symbol.
+- F-6 empirically grounded in an in-memory proxy spike: parent `on_call_tool`
+  middleware fires for `mount(create_proxy(child), namespace="addon")`, and the
+  parent can mutate proxied `content`, `structured_content`, and `meta` after
+  `call_next`.
+- FastMCP `ProxyClient` forwards incoming HTTP authorization headers by default;
+  the D27b HTTP proxy factory disables forwarding and uses backend-owned auth only,
+  preserving the no-agent-token-passthrough boundary.
+- Current manifests already prefix tool names with their namespace. The FastMCP
+  mount therefore uses `tool_names` to strip the existing prefix before applying
+  `namespace=...`, preserving the landed D27a tool names instead of double-prefixing.
+
+Operator decisions: none. No new forks raised. F-11 remains deferred; B-3/B-6 remain
+OPEN until Land per the operating model.
+
+Files created/changed:
+- `packages/sift-gateway/src/sift_gateway/mcp_server.py` — FastMCP server assembly:
+  local core tools, synthetic capability guide, proxy mounts, namespace preservation,
+  HTTP egress guard/no token passthrough.
+- `packages/sift-gateway/src/sift_gateway/policy_middleware.py` — SIFT policy as
+  FastMCP middleware.
+- `packages/sift-gateway/src/sift_gateway/response_guard.py` — single
+  `guard_tool_result` redacts/caps text and structured content recursively (B-3/B-6).
+- `packages/sift-gateway/src/sift_gateway/mcp_endpoint.py` — raw ASGI MCP connection
+  guard retained; `SiftTokenVerifier(TokenVerifier)` added; low-level MCP server
+  factories removed.
+- `packages/sift-gateway/src/sift_gateway/server.py` — FastAPI app + FastMCP
+  `http_app` mount; per-backend MCP mounts removed.
+- `packages/sift-gateway/src/sift_gateway/backends/__init__.py` — remote manifest
+  SSRF guard/no redirect-follow.
+- `packages/sift-gateway/tests/test_policy_parity_d27b.py` plus updated gateway tests.
+- `packages/sift-gateway/pyproject.toml` / `uv.lock` — `fastapi>=0.136`,
+  `fastmcp>=3`; lock records **fastmcp 3.4.2**.
+- `docs/migration/MIGRATION_STATE.md` and `docs/migration/17_gateway_cutover_d27b.md`
+  — run/status updates.
+
+Verification:
+- Host: `packages/sift-gateway/tests` — 225 passed.
+- Host package chunks: case-dashboard 277 passed; sift-core 328 passed; OpenSearch
+  979 passed / 71 skipped; OpenCTI 1 passed; Windows triage 12 passed; forensic-mcp
+  20 passed; `tests/db` 5 passed.
+- Host hygiene: gateway py_compile clean; `git diff --check` clean.
+- VM: rsynced to `~/sift-mcps-test`; `uv sync --extra core --group dev --python
+  /usr/bin/python3.12` with `UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never`
+  passed; Python 3.12.3 imports (`yaml`, `mcp`, `sift_core`, `sift_gateway`) passed;
+  `packages/sift-gateway/tests` — 225 passed; `systemctl --user restart
+  sift-gateway` plus `https://localhost:4508/api/v1/health` passed (`status: ok`).
+
+Next: `/code-review` and `/security-review`, then Land. B-3/B-6 remain OPEN until
+Land.
 
 ## Run 22 — D27b Gateway Cutover Plan
 

@@ -1,4 +1,4 @@
-"""Gateway class: backend management, tool aggregation, Starlette app."""
+"""Gateway class: backend management, tool aggregation, FastAPI app."""
 
 import asyncio
 import contextlib
@@ -6,6 +6,8 @@ import logging
 import time
 
 import anyio
+from fastapi import FastAPI
+from fastmcp.utilities.lifespan import combine_lifespans
 from mcp.types import TextContent, Tool
 from sift_common.audit import AuditWriter
 from sift_core.agent_tools import (
@@ -13,7 +15,6 @@ from sift_core.agent_tools import (
     core_tool_names,
     core_tool_specs,
 )
-from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import PlainTextResponse
@@ -107,12 +108,8 @@ from sift_gateway.backends import MCPBackend, create_backend
 from sift_gateway.backends.http_backend import HttpMCPBackend
 from sift_gateway.config import apply_case_env, apply_execute_security_env
 from sift_gateway.health import health_routes
-from sift_gateway.mcp_endpoint import (
-    MCPAuthASGIApp,
-    create_backend_mcp_server,
-    create_mcp_server,
-    create_session_manager,
-)
+from sift_gateway.mcp_endpoint import MCPAuthASGIApp
+from sift_gateway.mcp_server import create_gateway_mcp_server
 from sift_gateway.rest import rest_routes
 from sift_gateway.token_registry import create_token_registry
 
@@ -187,40 +184,13 @@ class Gateway:
         return gw_config.get("idle_timeout_seconds", 0)
 
     async def start(self) -> None:
-        """Start all enabled backends and build the tool map.
+        """Build the manifest tool map for the FastMCP gateway.
 
-        When ``lazy_start`` is enabled in gateway config, backends are
-        not started here. They start on first request instead.
+        D27b moves the MCP wire layer to FastMCP proxy providers, so the
+        gateway no longer starts the retired low-level backend sessions during
+        app startup. REST service controls can still start a backend explicitly.
         """
-        if self.lazy_start:
-            logger.info("Lazy start enabled. Backends start on first request.")
-            return
-
-        async def _start_one(name: str, backend) -> None:
-            try:
-                await asyncio.wait_for(backend.start(), timeout=60.0)
-                logger.info("Started backend: %s", name)
-            except asyncio.TimeoutError:
-                logger.error("Backend %s start timed out after 60s", name)
-            except (ConnectionError, OSError) as exc:
-                logger.error("Failed to start backend %s (connection): %s", name, exc)
-            except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
-                logger.error(
-                    "Failed to start backend %s: %s: %s",
-                    name,
-                    type(exc).__name__,
-                    exc,
-                )
-
-        await asyncio.gather(
-            *(_start_one(name, bk) for name, bk in self.backends.items())
-        )
         await self._build_tool_map()
-
-        # Push active case to all started HTTP backends on startup
-        for _name, backend in self.backends.items():
-            if backend.started:
-                await self._notify_backend_case(backend)
 
     async def _notify_backend_case(self, backend) -> None:
         """Best-effort active-case notification for backends that support it.
@@ -809,14 +779,11 @@ class Gateway:
 
         return result
 
-    def create_app(self) -> Starlette:
-        """Build a Starlette application with all routes and middleware.
+    def create_app(self) -> FastAPI:
+        """Build a FastAPI application with all routes and middleware.
 
         The app manages the gateway lifecycle via lifespan events.
         Includes both REST and Streamable HTTP MCP surfaces.
-
-        Each backend gets a dedicated MCP endpoint at ``/mcp/{name}``
-        alongside the aggregate endpoint at ``/mcp``.
         """
         gateway = self
         api_keys = self.config.get("api_keys", {})
@@ -839,36 +806,27 @@ class Gateway:
             gw_conf.get("rate_limit", {}).get("examiner_calls_per_minute", 120)
         )
 
-        # Build aggregate MCP endpoint components
-        mcp_server = create_mcp_server(gateway)
-        session_manager = create_session_manager(mcp_server)
+        # Build aggregate FastMCP endpoint. Per-backend /mcp/{name} routes
+        # are intentionally not mounted (D3/F-7).
+        gateway_mcp = create_gateway_mcp_server(
+            gateway,
+            api_keys=api_keys,
+            token_registry=token_registry,
+            base_url=f"{gateway_base_url}/mcp",
+        )
+        mcp_app = gateway_mcp.http_app(path="/")
         mcp_asgi_app = MCPAuthASGIApp(
-            session_manager,
+            mcp_app,
             api_keys=api_keys,
             allowed_origins=allowed_origins,
             examiner_calls_per_minute=examiner_calls_per_minute,
+            gateway=gateway,
             token_registry=token_registry,
         )
 
-        # Build per-backend MCP endpoints
-        backend_session_managers = []
-        per_backend_routes = []
-        for name in self.backends:
-            b_server = create_backend_mcp_server(gateway, name)
-            b_sm = create_session_manager(b_server)
-            b_asgi = MCPAuthASGIApp(
-                b_sm,
-                api_keys=api_keys,
-                allowed_origins=allowed_origins,
-                examiner_calls_per_minute=examiner_calls_per_minute,
-                token_registry=token_registry,
-            )
-            backend_session_managers.append(b_sm)
-            per_backend_routes.append(Mount(f"/mcp/{name}", app=b_asgi))
-
         @contextlib.asynccontextmanager
-        async def lifespan(app):
-            """Start backends → all MCP session managers → yield → stop."""
+        async def app_lifespan(app):
+            """Start gateway metadata/background tasks around the FastAPI app."""
             import os as _os
             await gateway.start()
             reaper_task = None
@@ -889,25 +847,12 @@ class Gateway:
                 except ImportError:
                     pass
 
-            async with contextlib.AsyncExitStack() as stack:
-                await stack.enter_async_context(session_manager.run())
-                for b_sm in backend_session_managers:
-                    try:
-                        await stack.enter_async_context(b_sm.run())
-                    except (
-                        Exception,
-                        asyncio.CancelledError,
-                        BaseExceptionGroup,
-                    ) as exc:
-                        logger.error(
-                            "Per-backend session manager failed to start: %s", exc
-                        )
-                # Backend loader runs in anyio task group so that
-                # streamablehttp_client cancel scopes are properly managed.
-                async with anyio.create_task_group() as loader_tg:
-                    loader_tg.start_soon(gateway._backend_loader)
-                    yield
-                    loader_tg.cancel_scope.cancel()
+            # Backend loader runs in an anyio task group. It still serves the
+            # REST/join path; MCP proxy mounts are fixed at server startup.
+            async with anyio.create_task_group() as loader_tg:
+                loader_tg.start_soon(gateway._backend_loader)
+                yield
+                loader_tg.cancel_scope.cancel()
             if reaper_task is not None:
                 reaper_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -973,13 +918,11 @@ class Gateway:
         except ImportError:
             pass
 
-        # Per-backend routes BEFORE aggregate (Starlette matches first)
-        routes.extend(per_backend_routes)
         routes.append(Mount("/mcp", app=mcp_asgi_app))
 
-        app = Starlette(
+        app = FastAPI(
             routes=routes,
-            lifespan=lifespan,
+            lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
         )
 
         # Attach gateway to app state so endpoints can access it
@@ -1011,9 +954,8 @@ class Gateway:
             allow_headers=["Authorization", "Content-Type", "MCP-Protocol-Version"],
         )
 
-        # Normalize per-backend MCP paths (must be outermost = added last)
-        backend_paths = frozenset(f"/mcp/{name}" for name in self.backends)
-        app.add_middleware(_NormalizeMCPPath, backend_paths=backend_paths)
+        # Normalize aggregate MCP path (must be outermost = added last)
+        app.add_middleware(_NormalizeMCPPath, backend_paths=frozenset())
 
         # HTTPS enforcement for portal paths (outermost — added after _NormalizeMCPPath)
         app.add_middleware(_PortalHTTPSGuard, tls_configured=tls_configured)

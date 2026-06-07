@@ -81,33 +81,24 @@ async def test_manage_todo_schema_enum_lists_create(tmp_path, monkeypatch):
     assert "create" in json.dumps(payload)
 
 
-# ── Finding 2: suggest_tools artifact resolution ──────────────────────────
+# ── Finding 2: legacy suggest_tools was removed by the core refactor ───────
 
 
-async def test_suggest_tools_resolves_advertised_display_name(tmp_path, monkeypatch):
-    """Exact display names from available_artifacts must resolve to suggestions."""
+async def test_removed_suggest_tools_not_advertised(tmp_path, monkeypatch):
     gateway, _ = _make_gateway(tmp_path, monkeypatch, "SUGGEST-1")
-    for artifact in ("Security Event Log", "RDP Event Logs", "MFT"):
-        payload = await _call(
-            gateway, "suggest_tools", {"artifact_type": artifact}
-        )
-        assert payload.get("suggestions"), f"no suggestions for {artifact!r}: {payload}"
+    tools = {tool.name for tool in await gateway.get_tools_list()}
+    assert "suggest_tools" not in tools
+    assert "get_tool_help" in tools
 
 
-async def test_suggest_tools_miss_lists_canonical_ids(tmp_path, monkeypatch):
-    """A miss should advertise identifiers that the resolver actually accepts."""
+async def test_unknown_removed_suggest_tools_is_unknown(tmp_path, monkeypatch):
     gateway, _ = _make_gateway(tmp_path, monkeypatch, "SUGGEST-2")
-    payload = await _call(
-        gateway, "suggest_tools", {"artifact_type": "no_such_artifact_xyz"}
-    )
-    assert payload["suggestions"] == []
-    advertised = payload["available_artifacts"]
-    assert advertised
-    # Every advertised identifier must itself resolve.
-    sample = advertised[0]
-    key = sample["id"] if isinstance(sample, dict) else sample
-    follow = await _call(gateway, "suggest_tools", {"artifact_type": key})
-    assert follow.get("suggestions"), f"advertised id {key!r} did not resolve: {follow}"
+    try:
+        await _call(gateway, "suggest_tools", {"artifact_type": "no_such_artifact_xyz"})
+    except KeyError as exc:
+        assert "Unknown tool: suggest_tools" in str(exc)
+    else:
+        raise AssertionError("removed suggest_tools unexpectedly resolved")
 
 
 # ── Finding 3: internal errors must not masquerade as "unknown tool" ───────
@@ -220,15 +211,9 @@ async def test_awk_system_escape_blocked(tmp_path, monkeypatch):
 
 async def test_list_available_tools_unknown_category_lists_valid(tmp_path, monkeypatch):
     gateway, _ = _make_gateway(tmp_path, monkeypatch, "CATS")
-    payload = await _call(
-        gateway, "list_available_tools", {"category": "not_a_category_xyz"}
-    )
-    assert payload["count"] == 0
-    assert payload.get("available_categories"), payload
-    # A real category drawn from the list must return tools.
-    real = payload["available_categories"][0]
-    follow = await _call(gateway, "list_available_tools", {"category": real})
-    assert follow["count"] > 0
+    tools = {tool.name for tool in await gateway.get_tools_list()}
+    assert "list_available_tools" not in tools
+    assert {"case_info", "evidence_info", "get_tool_help"}.issubset(tools)
 
 
 # ── Finding 3 (clarity): capability_guide empty state is self-explanatory ──

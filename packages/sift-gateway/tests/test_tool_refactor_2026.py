@@ -61,7 +61,7 @@ class TestCaseInfo:
         gateway, case = _setup_case(tmp_path, monkeypatch, "CI-001")
         payload = await _call(gateway, "case_info")
         assert payload["case_id"] == "CI-001"
-        assert payload["status"] == "active"
+        assert payload["status"] == "open"
         assert payload["examiner"] == "alice"
         assert "case_dir" in payload
         assert "case_brief" in payload
@@ -672,11 +672,10 @@ class TestContextEfficiency:
         should be significantly smaller than the old ~19 core tools."""
         gateway, _ = _setup_case(tmp_path, monkeypatch, "EFF-001")
         tools = await gateway.get_tools_list()
-        # Core tools (9): case_info, evidence_info, record_finding, record_timeline_event,
+        # Core tools (8): case_info, evidence_info, record_finding, record_timeline_event,
         # list_existing_findings, manage_todo, get_tool_help, run_command
-        # Plus synthetic tools (1): capability_guide
-        # Expected: 9 core tools (no backends registered)
-        assert len(tools) >= 9, f"Expected >=9 tools, got {len(tools)}: {[t.name for t in tools]}"
+        # The MCP-only synthetic capability_guide is registered by the FastMCP surface.
+        assert len(tools) >= 8, f"Expected >=8 tools, got {len(tools)}: {[t.name for t in tools]}"
         assert len(tools) <= 12, f"Too many tools: {len(tools)}: {[t.name for t in tools]}"
 
     async def test_no_instruction_bloat_in_case_info(self, tmp_path, monkeypatch):

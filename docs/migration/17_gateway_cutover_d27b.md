@@ -1,6 +1,6 @@
 # 17 — Gateway Cutover (D27b) — implementation candidate
 
-Status: **planned**
+Status: **in-build**
 Scope fence: `packages/sift-gateway/src/sift_gateway/**`,
 `packages/sift-gateway/tests/**`, `packages/sift-gateway/pyproject.toml`, `uv.lock`,
 and this doc set (`docs/migration/**`). **No** edits to `packages/*-mcp/**` (the
@@ -349,7 +349,8 @@ cannot be met, the branch is abandoned (D27b revert plan) — no partial cutover
 
 ## 7. Backlog touched here (carry from REGISTER.md)
 - **B-3** — implemented by §5 (the gate). Mark DONE at Land.
-- **B-6** — `guard_tool_result` single envelope/redaction point (§3.4, §5). DONE.
+- **B-6** — `guard_tool_result` single envelope/redaction point (§3.4, §5).
+  Mark DONE at Land.
 - **B-5** — `opensearch_case_detections_resource` ignores `case_id`: the cutover
   wires session→active-case; fix the resource scoping here or confirm it stays masked
   by D4 single-active-case and re-defer. (Decide in Build; if code lives in

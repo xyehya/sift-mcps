@@ -4,7 +4,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp.types import ListToolsRequest, TextContent
+from fastmcp import FastMCP
+from mcp.types import TextContent
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.testclient import TestClient
@@ -13,9 +14,8 @@ from sift_gateway.backends import load_and_validate_manifest
 from sift_gateway.auth import AuthMiddleware
 from sift_gateway.mcp_endpoint import (
     _capability_guide,
-    _handle_environment_summary,
-    create_mcp_server,
 )
+from sift_gateway.mcp_server import GatewayToolCatalogMiddleware
 from sift_gateway.rest import rest_routes
 from sift_gateway.server import Gateway
 
@@ -72,7 +72,7 @@ class _FakeBackend:
 
     def __init__(self, manifest: dict):
         self.manifest = manifest
-        self.config = {"type": manifest.get("transport", "stdio")}
+        self.config = {"type": manifest.get("transport", "stdio"), "command": "true"}
         self.enabled = True
 
     async def health_check(self):
@@ -241,13 +241,17 @@ def test_opensearch_is_not_reference_but_other_reference_manifests_drive_groundi
 
 def test_tools_list_annotations_derive_from_manifest_metadata():
     gateway = _gateway_with_fake_backends(_manifest())
-    server = create_mcp_server(gateway)
-    handler = server.request_handlers.get(ListToolsRequest)
-    assert handler is not None
+    mcp = FastMCP("test", middleware=[GatewayToolCatalogMiddleware(gateway)])
 
-    result = asyncio.run(handler(ListToolsRequest()))
-    list_result = result.root if hasattr(result, "root") else result
-    tools = {tool.name: tool for tool in list_result.tools}
+    @mcp.tool(name="sample_search")
+    def sample_search():
+        return "ok"
+
+    @mcp.tool(name="sample_hidden")
+    def sample_hidden():
+        return "hidden"
+
+    tools = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
 
     sample = tools["sample_search"]
     assert sample.meta["category"] == "search-analysis"
@@ -255,28 +259,12 @@ def test_tools_list_annotations_derive_from_manifest_metadata():
     assert "sample_hidden" not in tools
 
 
-def test_environment_summary_health_tools_are_manifest_driven():
+def test_capability_guide_health_tools_are_manifest_driven():
     gateway = _gateway_with_fake_backends(_manifest())
-    gateway.call_tool = AsyncMock(
-        side_effect=[
-            [TextContent(type="text", text='{"case": "ok"}')],
-            [TextContent(type="text", text='{"evidence": "ok"}')],
-            [TextContent(type="text", text='{"tools": "ok"}')],
-            [TextContent(type="text", text='{"sample": "healthy"}')],
-        ]
-    )
 
-    contents = asyncio.run(_handle_environment_summary(gateway))
-    summary = json.loads(contents[0].text)
+    guide = _capability_guide(gateway)
 
-    assert [call.args for call in gateway.call_tool.call_args_list] == [
-        ("case_status", {}),
-        ("evidence_list", {}),
-        ("list_available_tools", {}),
-        ("sample_health", {}),
-    ]
-    assert summary["backends"]["sample-addon"]["tool"] == "sample_health"
-    assert summary["backends"]["sample-addon"]["result"] == {"sample": "healthy"}
+    assert guide["available_backends"][0]["health_tool"] == "sample_health"
 
 
 def test_manifest_instructions_path_is_package_local_and_readable(tmp_path):

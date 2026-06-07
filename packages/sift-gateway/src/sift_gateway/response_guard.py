@@ -12,6 +12,7 @@ Default behaviour:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -19,8 +20,14 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+from fastmcp.tools import ToolResult
+from mcp.types import TextContent
 
 logger = logging.getLogger(__name__)
+
+_STRUCTURED_MAX_DEPTH = 64
 
 
 @dataclass(frozen=True)
@@ -151,6 +158,85 @@ def redact_tool_result(text: str, *, override_active: bool = False) -> tuple[str
     return redacted, findings
 
 
+def redact_structured(
+    value: Any,
+    *,
+    override_active: bool = False,
+    _path: str = "$",
+    _depth: int = 0,
+    _max_depth: int = _STRUCTURED_MAX_DEPTH,
+) -> tuple[Any, list[dict]]:
+    """Recursively scan and redact JSON-like structured content values.
+
+    Dict keys are left unchanged to preserve output-schema shape; every nested
+    value is scanned. The depth bound prevents pathological tool output from
+    driving unbounded recursion.
+    """
+    if _depth > _max_depth:
+        return "[SIFT_STRUCTURED_CONTENT_DEPTH_LIMIT]", [
+            {
+                "pattern_name": "Structured Content Depth Limit",
+                "severity": "medium",
+                "char_offset": 0,
+                "path": _path,
+            }
+        ]
+
+    if isinstance(value, dict):
+        output: dict[Any, Any] = {}
+        findings: list[dict] = []
+        for key, child in value.items():
+            child_path = f"{_path}.{key}" if isinstance(key, str) else f"{_path}.*"
+            redacted_child, child_findings = redact_structured(
+                child,
+                override_active=override_active,
+                _path=child_path,
+                _depth=_depth + 1,
+                _max_depth=_max_depth,
+            )
+            output[key] = redacted_child
+            findings.extend(child_findings)
+        return output, findings
+
+    if isinstance(value, list):
+        output_items: list[Any] = []
+        findings = []
+        for index, child in enumerate(value):
+            redacted_child, child_findings = redact_structured(
+                child,
+                override_active=override_active,
+                _path=f"{_path}[{index}]",
+                _depth=_depth + 1,
+                _max_depth=_max_depth,
+            )
+            output_items.append(redacted_child)
+            findings.extend(child_findings)
+        return output_items, findings
+
+    if isinstance(value, tuple):
+        output_items = []
+        findings = []
+        for index, child in enumerate(value):
+            redacted_child, child_findings = redact_structured(
+                child,
+                override_active=override_active,
+                _path=f"{_path}[{index}]",
+                _depth=_depth + 1,
+                _max_depth=_max_depth,
+            )
+            output_items.append(redacted_child)
+            findings.extend(child_findings)
+        return output_items, findings
+
+    if isinstance(value, str):
+        redacted, findings = redact_tool_result(value, override_active=override_active)
+        for finding in findings:
+            finding.setdefault("path", _path)
+        return redacted, findings
+
+    return value, []
+
+
 # ---------------------------------------------------------------------------
 # Central output cap (trust layer) — the single ceiling on bytes any one tool
 # response may deliver to the agent. Applied at the gateway choke point AFTER
@@ -264,3 +350,143 @@ def cap_tool_result(
     if output_file:
         meta["output_file"] = output_file
     return truncated + marker, meta
+
+
+def _content_to_jsonable(content: list[Any]) -> list[Any]:
+    output: list[Any] = []
+    for item in content:
+        if hasattr(item, "model_dump"):
+            output.append(item.model_dump(mode="json", by_alias=True))
+        elif hasattr(item, "__dict__"):
+            output.append(dict(item.__dict__))
+        else:
+            output.append(str(item))
+    return output
+
+
+def _result_to_json_text(result: ToolResult) -> str:
+    return json.dumps(
+        {
+            "content": _content_to_jsonable(list(result.content or [])),
+            "structured_content": result.structured_content,
+            "meta": result.meta,
+            "is_error": result.is_error,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _cap_guarded_result(
+    result: ToolResult,
+    *,
+    max_bytes: int,
+    case_dir: str | None,
+    tool_name: str,
+) -> dict | None:
+    """Cap a redacted ToolResult as one serialized envelope."""
+    full_text = _result_to_json_text(result)
+    original_bytes = len(full_text.encode("utf-8"))
+    if original_bytes <= max_bytes:
+        return None
+
+    output_file: str | None = None
+    if case_dir:
+        output_file, sha = _spill_full_output(full_text, case_dir, tool_name)
+    else:
+        sha = hashlib.sha256(full_text.encode("utf-8", errors="replace")).hexdigest()
+
+    preview_text = ""
+    for item in result.content or []:
+        if isinstance(item, TextContent):
+            preview_text += item.text
+            if len(preview_text.encode("utf-8")) >= max_bytes:
+                break
+    if preview_text:
+        preview_text = preview_text.encode("utf-8")[:max_bytes].decode(
+            "utf-8", errors="ignore"
+        )
+
+    pointer = (
+        f"full redacted output persisted at {output_file}"
+        if output_file
+        else "full redacted output NOT persisted (no active case directory)"
+    )
+    marker = (
+        f"\n\n[OUTPUT CAPPED BY GATEWAY: returned preview of {original_bytes} serialized bytes "
+        f"(cap {max_bytes}). {pointer}; sha256={sha}. "
+        f"Narrow the query or read the persisted file to see the rest.]"
+    )
+    if preview_text:
+        result.content = [TextContent(type="text", text=preview_text + marker)]
+    else:
+        result.content = [TextContent(type="text", text=marker.strip())]
+
+    meta: dict[str, Any] = {
+        "tool": tool_name,
+        "original_bytes": original_bytes,
+        "returned_bytes": len(_result_to_json_text(result).encode("utf-8")),
+        "cap_bytes": max_bytes,
+        "sha256": sha,
+    }
+    if output_file:
+        meta["output_file"] = output_file
+
+    result.structured_content = {
+        "_sift_output_capped": {
+            "original_bytes": meta["original_bytes"],
+            "returned_bytes": meta["returned_bytes"],
+            "cap_bytes": meta["cap_bytes"],
+            "sha256": sha,
+            **({"output_file": output_file} if output_file else {}),
+        }
+    }
+    result.meta = dict(result.meta or {})
+    result.meta["_sift_output_capped"] = result.structured_content["_sift_output_capped"]
+    meta["returned_bytes"] = len(_result_to_json_text(result).encode("utf-8"))
+    return meta
+
+
+def guard_tool_result(
+    result: ToolResult,
+    *,
+    override_active: bool,
+    case_dir: str | None,
+    tool_name: str,
+    cap_bytes: int,
+) -> tuple[ToolResult, list[dict], list[dict]]:
+    """Redact and cap a FastMCP ToolResult at the gateway choke point."""
+    all_findings: list[dict] = []
+
+    guarded_content: list[Any] = []
+    for item in result.content or []:
+        if isinstance(item, TextContent):
+            redacted_text, findings = redact_tool_result(
+                item.text, override_active=override_active
+            )
+            all_findings.extend(findings)
+            guarded_content.append(item.model_copy(update={"text": redacted_text}))
+        else:
+            guarded_content.append(item)
+    result.content = guarded_content
+
+    if result.structured_content is not None:
+        structured, findings = redact_structured(
+            result.structured_content,
+            override_active=override_active,
+        )
+        all_findings.extend(findings)
+        result.structured_content = structured
+
+    cap_events: list[dict] = []
+    cap_meta = _cap_guarded_result(
+        result,
+        max_bytes=cap_bytes,
+        case_dir=case_dir,
+        tool_name=tool_name,
+    )
+    if cap_meta:
+        cap_events.append(cap_meta)
+
+    return result, all_findings, cap_events

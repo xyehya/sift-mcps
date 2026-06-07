@@ -406,8 +406,11 @@ def test_probe_backends_script_offline(tmp_path):
 from types import SimpleNamespace  # noqa: E402
 from unittest.mock import AsyncMock  # noqa: E402
 
-from mcp.types import CallToolRequest, CallToolRequestParams, TextContent  # noqa: E402
+from fastmcp import FastMCP  # noqa: E402
+from mcp.types import TextContent  # noqa: E402
+from fastmcp.tools import ToolResult  # noqa: E402
 from sift_core.evidence_chain import ChainStatus  # noqa: E402
+from sift_gateway.policy_middleware import gateway_policy_middlewares  # noqa: E402
 
 
 def _gate(status):
@@ -431,31 +434,21 @@ def _gate_test_gateway():
 
 
 async def _drive_call_tool(gateway, tool_name, gate_status):
-    """Invoke the gated _call_tool handler registered by create_mcp_server."""
-    from sift_gateway.mcp_endpoint import create_mcp_server
+    """Invoke the gated FastMCP policy path."""
+
+    mcp = FastMCP("test", middleware=gateway_policy_middlewares(gateway))
+
+    @mcp.tool(name=tool_name)
+    async def _synthetic_tool():
+        result = await gateway.call_tool(tool_name, {}, examiner=None)
+        return ToolResult(content=result)
 
     with (
-        patch("sift_gateway.mcp_endpoint.check_evidence_gate", return_value=_gate(gate_status)),
-        patch(
-            "sift_gateway.mcp_endpoint._extract_request_context",
-            return_value={
-                "examiner": "alice", "role": "examiner",
-                "token_id": None, "source_ip": "127.0.0.1", "identity": None,
-            },
-        ),
-        patch("sift_gateway.mcp_endpoint.is_override_active", return_value=False),
-        patch("sift_gateway.mcp_endpoint.redact_tool_result", side_effect=lambda t, **kw: (t, [])),
+        patch("sift_gateway.policy_middleware.check_evidence_gate", return_value=_gate(gate_status)),
+        patch("sift_gateway.policy_middleware.is_override_active", return_value=False),
     ):
-        server = create_mcp_server(gateway)
-        handler = server.request_handlers.get(CallToolRequest)
-        assert handler is not None, "could not locate CallToolRequest handler"
-        req = CallToolRequest(
-            method="tools/call",
-            params=CallToolRequestParams(name=tool_name, arguments={}),
-        )
-        result = await handler(req)
-        call_result = result.root if hasattr(result, "root") else result
-        contents = getattr(call_result, "content", []) or []
+        result = await mcp.call_tool(tool_name, {})
+        contents = getattr(result, "content", []) or []
         return " ".join(tc.text if hasattr(tc, "text") else str(tc) for tc in contents)
 
 

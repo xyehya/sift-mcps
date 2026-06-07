@@ -54,30 +54,25 @@ async def test_core_tools_are_in_process_when_core_backends_disabled(tmp_path, m
 
     tool_names = {tool.name for tool in await gateway.get_tools_list()}
     assert {
-        "case_status",
-        "evidence_list",
+        "case_info",
+        "evidence_info",
         "record_finding",
         "record_timeline_event",
-        "workflow_status",
+        "list_existing_findings",
         "manage_todo",
-        "log_reasoning",
-        "log_external_action",
         "run_command",
-        "list_available_tools",
         "get_tool_help",
-        "check_tools",
-        "suggest_tools",
     }.issubset(tool_names)
 
     tool_map = await gateway.list_tools()
-    assert tool_map["case_status"] == "sift-core"
+    assert tool_map["case_info"] == "sift-core"
     assert tool_map["record_finding"] == "sift-core"
     assert tool_map["run_command"] == "sift-core"
 
-    result = await gateway.call_tool("case_status", {}, examiner="alice")
+    result = await gateway.call_tool("case_info", {}, examiner="alice")
     payload = json.loads(result[0].text)
     assert payload["case_id"] == "CORE-001"
-    assert Path(payload["path"]) == Path(case["case_dir"])
+    assert Path(payload["case_dir"]) == Path(case["case_dir"])
 
     result = await gateway.call_tool(
         "run_command",

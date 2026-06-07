@@ -4,6 +4,8 @@ import json
 import logging
 import os
 import shutil
+import ipaddress
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
 import jsonschema
@@ -18,6 +20,31 @@ logger = logging.getLogger(__name__)
 SCHEMA_PATH = Path(__file__).parent.parent / "sift-backend.schema.json"
 VALID_EVIDENCE_CLASSES = {"read_only", "analysis", "mutating"}
 VALID_PHASES = {"SURVEY", "INGEST", "ANALYZE", "CORRELATE", "FINDING"}
+
+
+def _validate_remote_fetch_url(url: str, *, label: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError(f"{label} must be an http(s) URL with a hostname")
+    try:
+        infos = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError(f"{label} hostname could not be resolved") from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise ValueError(f"{label} resolves to a blocked private/link-local address")
 
 
 def _validate_manifest_instructions(manifest: dict, manifest_path: Path | None) -> None:
@@ -165,7 +192,8 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
             if explicit_path.startswith(("http://", "https://")):
                 import httpx
                 try:
-                    resp = httpx.get(explicit_path, timeout=5.0)
+                    _validate_remote_fetch_url(explicit_path, label="manifest_path")
+                    resp = httpx.get(explicit_path, timeout=5.0, follow_redirects=False)
                     if resp.status_code == 200:
                         manifest_data = resp.json()
                         manifest_source = explicit_path
@@ -189,7 +217,8 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
                 manifest_url = url.rstrip("/") + "/manifest"
                 import httpx
                 try:
-                    resp = httpx.get(manifest_url, timeout=5.0)
+                    _validate_remote_fetch_url(manifest_url, label="backend manifest URL")
+                    resp = httpx.get(manifest_url, timeout=5.0, follow_redirects=False)
                     if resp.status_code == 200:
                         manifest_data = resp.json()
                         manifest_source = manifest_url
