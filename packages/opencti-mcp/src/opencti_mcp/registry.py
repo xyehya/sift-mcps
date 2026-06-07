@@ -39,9 +39,11 @@ from .errors import (
 )
 from .tool_metadata import DEFAULT_METADATA, TOOL_METADATA
 from .validation import (
+    MAX_IOC_LENGTH,
     MAX_QUERY_LENGTH,
     sanitize_for_log,
     validate_date_filter,
+    validate_ioc,
     validate_labels,
     validate_observable_types,
 )
@@ -208,6 +210,7 @@ TOOL_CATALOG_META: dict[str, dict[str, Any]] = {
     ),
     "cti_search_threat_intel": _tool_meta(),
     "cti_search_entity": _tool_meta(),
+    "cti_lookup_ioc": _tool_meta(),
 }
 
 
@@ -271,6 +274,16 @@ class CtiSearchEntityIn(CtiSearchFilters):
     observable_types: list[str] | None = Field(None, description="Only for type='observable': restrict to these OpenCTI observable subtypes.")
 
 
+class CtiLookupIocIn(BaseModel):
+    ioc: str = Field(..., min_length=1, max_length=MAX_IOC_LENGTH, description="IOC value: IP, MD5/SHA1/SHA256 hash, domain, URL, CVE, or MITRE ATT&CK id.")
+
+    @field_validator("ioc")
+    @classmethod
+    def _validate_ioc(cls, value: str) -> str:
+        validate_ioc(value)
+        return value.strip()
+
+
 class CtiEntity(BaseModel):
     id: str | None = Field(None, description="OpenCTI entity id when returned by the platform.")
     entity_type: str | None = Field(None, description="OpenCTI/STIX entity type.")
@@ -295,6 +308,17 @@ class CtiEntitySearchOut(BaseModel):
     results: list[CtiEntity] = Field(..., description="Projected matching OpenCTI entities.")
     total: int = Field(..., description="Number of returned entities.")
     offset: int = Field(0, description="Echoed pagination offset.")
+
+
+class CtiIocContextOut(BaseModel):
+    ioc: str = Field(..., description="Echoed IOC value.")
+    ioc_type: str | None = Field(None, description="Detected IOC type: ipv4, ipv6, hash type, domain, url, cve, mitre, or unknown.")
+    found: bool = Field(..., description="True when OpenCTI returned indicator or observable context.")
+    indicator: CtiEntity | None = Field(None, description="Matched indicator or observable, projected to common entity fields.")
+    related_threat_actors: list[CtiEntity] = Field(default_factory=list, description="Related actors from OpenCTI relationships.")
+    related_malware: list[CtiEntity] = Field(default_factory=list, description="Related malware from OpenCTI relationships.")
+    related_techniques: list[CtiEntity] = Field(default_factory=list, description="Related MITRE techniques or attack patterns.")
+    related_campaigns: list[CtiEntity] = Field(default_factory=list, description="Related campaigns when returned by the platform.")
 
 
 async def cti_get_health(params: CtiHealthIn, ctx: RuntimeContext) -> CtiHealthOut:
@@ -400,6 +424,51 @@ async def cti_search_entity(
     )
 
 
+async def cti_lookup_ioc(
+    params: CtiLookupIocIn,
+    ctx: RuntimeContext,
+) -> CtiIocContextOut:
+    _, ioc_type = validate_ioc(params.ioc)
+    client = ctx.require_client()
+    raw = await asyncio.to_thread(client.get_indicator_context, params.ioc)
+    raw = raw if isinstance(raw, dict) else {"found": False, "ioc": params.ioc}
+    found = bool(raw.get("found"))
+    indicator = None
+    if found:
+        indicator = _shape_entity(
+            {
+                "id": raw.get("id"),
+                "entity_type": raw.get("entity_type") or raw.get("type"),
+                "name": raw.get("name") or raw.get("ioc") or params.ioc,
+                "description": raw.get("description"),
+                "confidence": raw.get("confidence"),
+                "labels": raw.get("labels") or [],
+                "created": raw.get("created"),
+                "source": raw.get("source"),
+                "pattern_type": raw.get("type"),
+            }
+        )
+    return CtiIocContextOut(
+        ioc=params.ioc,
+        ioc_type=ioc_type,
+        found=found,
+        indicator=indicator,
+        related_threat_actors=_shape_related_entities(
+            raw.get("related_threat_actors"),
+            "threat_actor",
+        ),
+        related_malware=_shape_related_entities(raw.get("related_malware"), "malware"),
+        related_techniques=_shape_related_entities(
+            raw.get("mitre_techniques") or raw.get("related_techniques"),
+            "attack_pattern",
+        ),
+        related_campaigns=_shape_related_entities(
+            raw.get("related_campaigns"),
+            "campaign",
+        ),
+    )
+
+
 REGISTRY: list[ToolDef] = [
     ToolDef(
         name="cti_get_health",
@@ -446,6 +515,21 @@ REGISTRY: list[ToolDef] = [
             "infrastructure, incident, observable, sighting, organization, sector, location, "
             "course_of_action, grouping, note. Example: "
             "`cti_search_entity(type='vulnerability', query='CVE-2024')`."
+        ),
+    ),
+    ToolDef(
+        name="cti_lookup_ioc",
+        fn=cti_lookup_ioc,
+        in_model=CtiLookupIocIn,
+        out_model=CtiIocContextOut,
+        annotations=_opencti_annotations("Look Up IOC Context"),
+        title="Look Up IOC Context",
+        description=(
+            "Look up one observed IOC and return OpenCTI context: matched indicator or "
+            "observable plus related actors, malware, techniques, and campaigns. Use for a "
+            "known IOC extracted from case evidence; don't use for broad keyword discovery "
+            "or speculative indicators not observed in evidence. Handles IPs, hashes, "
+            "domains, URLs, CVEs, and MITRE ids. Example: `cti_lookup_ioc(ioc='8.8.8.8')`."
         ),
     ),
 ]
@@ -767,6 +851,16 @@ def _shape_entity(raw: Any) -> CtiEntity:
         modified=_optional_str(raw.get("modified")),
         extra=extra,
     )
+
+
+def _shape_related_entities(raw: Any, entity_type: str) -> list[CtiEntity]:
+    entities = []
+    for item in _safe_list(raw):
+        if isinstance(item, dict):
+            entities.append(_shape_entity(item))
+        else:
+            entities.append(CtiEntity(entity_type=entity_type, name=str(item)))
+    return entities
 
 
 def _optional_str(value: Any) -> str | None:

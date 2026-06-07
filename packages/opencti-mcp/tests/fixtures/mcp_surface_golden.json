@@ -813,6 +813,288 @@
         ]
       },
       "title": "Search Entities by Type"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Look Up IOC Context"
+      },
+      "description": "Look up one observed IOC and return OpenCTI context: matched indicator or observable plus related actors, malware, techniques, and campaigns. Use for a known IOC extracted from case evidence; don't use for broad keyword discovery or speculative indicators not observed in evidence. Handles IPs, hashes, domains, URLs, CVEs, and MITRE ids. Example: `cti_lookup_ioc(ioc='8.8.8.8')`.",
+      "input_schema": {
+        "properties": {
+          "ioc": {
+            "description": "IOC value: IP, MD5/SHA1/SHA256 hash, domain, URL, CVE, or MITRE ATT&CK id.",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Ioc",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ioc"
+        ],
+        "title": "CtiLookupIocIn",
+        "type": "object"
+      },
+      "meta": {
+        "case_scoped": false,
+        "category": "threat-intel",
+        "evidence_class": "read_only",
+        "recommended_phase": "CORRELATE"
+      },
+      "name": "cti_lookup_ioc",
+      "output_schema": {
+        "anyOf": [
+          {
+            "$defs": {
+              "CtiEntity": {
+                "properties": {
+                  "confidence": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI confidence score when available.",
+                    "title": "Confidence"
+                  },
+                  "created": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Created timestamp when available.",
+                    "title": "Created"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Short description, truncated by the client.",
+                    "title": "Description"
+                  },
+                  "entity_type": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI/STIX entity type.",
+                    "title": "Entity Type"
+                  },
+                  "extra": {
+                    "additionalProperties": true,
+                    "description": "Type-specific fields preserved from the OpenCTI client.",
+                    "title": "Extra",
+                    "type": "object"
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI entity id when returned by the platform.",
+                    "title": "Id"
+                  },
+                  "labels": {
+                    "description": "OpenCTI labels attached to the entity.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Labels",
+                    "type": "array"
+                  },
+                  "modified": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Modified timestamp when available.",
+                    "title": "Modified"
+                  },
+                  "name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Primary display name or observable value.",
+                    "title": "Name"
+                  }
+                },
+                "title": "CtiEntity",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "found": {
+                "description": "True when OpenCTI returned indicator or observable context.",
+                "title": "Found",
+                "type": "boolean"
+              },
+              "indicator": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CtiEntity"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Matched indicator or observable, projected to common entity fields."
+              },
+              "ioc": {
+                "description": "Echoed IOC value.",
+                "title": "Ioc",
+                "type": "string"
+              },
+              "ioc_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Detected IOC type: ipv4, ipv6, hash type, domain, url, cve, mitre, or unknown.",
+                "title": "Ioc Type"
+              },
+              "related_campaigns": {
+                "description": "Related campaigns when returned by the platform.",
+                "items": {
+                  "$ref": "#/$defs/CtiEntity"
+                },
+                "title": "Related Campaigns",
+                "type": "array"
+              },
+              "related_malware": {
+                "description": "Related malware from OpenCTI relationships.",
+                "items": {
+                  "$ref": "#/$defs/CtiEntity"
+                },
+                "title": "Related Malware",
+                "type": "array"
+              },
+              "related_techniques": {
+                "description": "Related MITRE techniques or attack patterns.",
+                "items": {
+                  "$ref": "#/$defs/CtiEntity"
+                },
+                "title": "Related Techniques",
+                "type": "array"
+              },
+              "related_threat_actors": {
+                "description": "Related actors from OpenCTI relationships.",
+                "items": {
+                  "$ref": "#/$defs/CtiEntity"
+                },
+                "title": "Related Threat Actors",
+                "type": "array"
+              }
+            },
+            "required": [
+              "ioc",
+              "found"
+            ],
+            "title": "CtiIocContextOut",
+            "type": "object"
+          },
+          {
+            "$defs": {
+              "ErrorCode": {
+                "enum": [
+                  "invalid_input",
+                  "not_found",
+                  "upstream_unavailable",
+                  "upstream_degraded",
+                  "rate_limited",
+                  "not_configured",
+                  "no_active_case",
+                  "capacity_refused",
+                  "internal"
+                ],
+                "title": "ErrorCode",
+                "type": "string"
+              }
+            },
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "$ref": "#/$defs/ErrorCode",
+                "description": "Machine-readable error category."
+              },
+              "message": {
+                "description": "Human-readable, secret-free explanation.",
+                "title": "Message",
+                "type": "string"
+              },
+              "remediation": {
+                "description": "Concrete next step the caller can take.",
+                "title": "Remediation",
+                "type": "string"
+              },
+              "retryable": {
+                "default": false,
+                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
+                "title": "Retryable",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "error",
+              "message",
+              "remediation"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        ]
+      },
+      "title": "Look Up IOC Context"
     }
   ]
 }
