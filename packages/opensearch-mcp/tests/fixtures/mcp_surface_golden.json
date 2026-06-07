@@ -778,6 +778,141 @@
         "idempotentHint": true,
         "openWorldHint": true,
         "readOnlyHint": true,
+        "title": "Inspect Forensic Container"
+      },
+      "description": "Survey a forensic container without mounting it: integrity, size, partitions, and available inspection details. Use before opensearch_ingest; follow with opensearch_ingest(dry_run=True) for the full plan. Example: opensearch_inspect_container(path='evidence/rocba-cdrive.e01').",
+      "input_schema": {
+        "properties": {
+          "path": {
+            "description": "Container path under the active case; bare names resolve to evidence/.",
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "InspectContainerIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_inspect_container",
+      "output_schema": {
+        "properties": {
+          "acquiry_info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "E01 acquisition metadata from ewfinfo.",
+            "title": "Acquiry Info"
+          },
+          "container_type": {
+            "description": "Detected container type.",
+            "enum": [
+              "e01",
+              "raw",
+              "file",
+              "unknown"
+            ],
+            "title": "Container Type",
+            "type": "string"
+          },
+          "hashes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Reported hashes.",
+            "title": "Hashes",
+            "type": "object"
+          },
+          "partitions": {
+            "description": "Detected partitions when available.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Partitions",
+            "type": "array"
+          },
+          "path": {
+            "description": "Original path argument.",
+            "title": "Path",
+            "type": "string"
+          },
+          "raw_info": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Truncated fdisk/img_stat output.",
+            "title": "Raw Info"
+          },
+          "resolved_path": {
+            "description": "Resolved filesystem path.",
+            "title": "Resolved Path",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Container size in bytes if known.",
+            "title": "Size Bytes"
+          },
+          "size_human": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Human-readable container size.",
+            "title": "Size Human"
+          },
+          "tool_available": {
+            "description": "False when no inspection tool is available on the SIFT VM.",
+            "title": "Tool Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "resolved_path",
+          "container_type",
+          "tool_available"
+        ],
+        "title": "InspectContainerOut",
+        "type": "object"
+      },
+      "title": "Inspect Forensic Container"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
         "title": "Case Coverage Summary"
       },
       "description": "Complete coverage overview for a case. Call this first in every indexed session to see hosts, artifact families, doc counts, enrichment state, and coverage_state.gaps with exact commands to fill missing coverage. Example: opensearch_case_summary(case_id='rocba-drive-20260526-1417').",

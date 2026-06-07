@@ -372,6 +372,34 @@ class CaseSummaryOut(BaseModel):
     )
 
 
+class InspectContainerIn(BaseModel):
+    path: str = Field(
+        ...,
+        description="Container path under the active case; bare names resolve to evidence/.",
+    )
+
+
+class InspectContainerOut(BaseModel):
+    path: str = Field(..., description="Original path argument.")
+    resolved_path: str = Field(..., description="Resolved filesystem path.")
+    container_type: Literal["e01", "raw", "file", "unknown"] = Field(
+        ..., description="Detected container type."
+    )
+    tool_available: bool = Field(
+        ..., description="False when no inspection tool is available on the SIFT VM."
+    )
+    size_bytes: int | None = Field(None, description="Container size in bytes if known.")
+    size_human: str | None = Field(None, description="Human-readable container size.")
+    hashes: dict[str, str] = Field(default_factory=dict, description="Reported hashes.")
+    partitions: list[dict[str, Any]] = Field(
+        default_factory=list, description="Detected partitions when available."
+    )
+    acquiry_info: dict[str, Any] | None = Field(
+        None, description="E01 acquisition metadata from ewfinfo."
+    )
+    raw_info: str | None = Field(None, description="Truncated fdisk/img_stat output.")
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -728,6 +756,26 @@ async def opensearch_case_summary_resource(case_id: str) -> str:
     return _json_from_tool_result(result)
 
 
+async def run_opensearch_inspect_container(params: InspectContainerIn) -> ToolResult:
+    raw = _legacy_server().opensearch_inspect_container(**params.model_dump())
+    if "error" in raw:
+        return _legacy_error(raw, default_code=ErrorCode.not_found)
+    meta = _meta_from_raw(raw)
+    out = InspectContainerOut(
+        path=str(raw.get("path", params.path)),
+        resolved_path=str(raw.get("resolved_path", "")),
+        container_type=raw.get("container_type", "unknown"),
+        tool_available=bool(raw.get("tool_available", False)),
+        size_bytes=raw.get("size_bytes"),
+        size_human=raw.get("size_human"),
+        hashes=dict(raw.get("hashes") or {}),
+        partitions=list(raw.get("partitions") or []),
+        acquiry_info=raw.get("acquiry_info") or raw.get("acquiry"),
+        raw_info=raw.get("raw_info"),
+    )
+    return _success_tool_result(out, meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -863,6 +911,24 @@ RESOURCE_REGISTRY.append(
         name="opensearch_cluster_status",
         title="Cluster & Index Status",
         description="Read-only resource view of OpenSearch cluster health and case index counts.",
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_inspect_container",
+        fn=run_opensearch_inspect_container,
+        in_model=InspectContainerIn,
+        out_model=InspectContainerOut,
+        annotations=_read_annotations("Inspect Forensic Container"),
+        title="Inspect Forensic Container",
+        description=(
+            "Survey a forensic container without mounting it: integrity, size, "
+            "partitions, and available inspection details. Use before "
+            "opensearch_ingest; follow with opensearch_ingest(dry_run=True) for "
+            "the full plan. Example: "
+            "opensearch_inspect_container(path='evidence/rocba-cdrive.e01')."
+        ),
     )
 )
 
