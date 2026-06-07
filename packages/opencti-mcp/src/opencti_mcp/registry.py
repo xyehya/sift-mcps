@@ -216,6 +216,7 @@ TOOL_CATALOG_META: dict[str, dict[str, Any]] = {
     "cti_get_recent_indicators": _tool_meta(),
     "cti_get_entity": _tool_meta(),
     "cti_get_relationships": _tool_meta(),
+    "cti_search_reports": _tool_meta(),
 }
 
 
@@ -283,6 +284,11 @@ class CtiSearchEntityIn(CtiSearchFilters):
     query: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH, description="Search term for the selected entity type.")
     limit: int = Field(10, ge=1, le=50, description="Max results for this entity type. Cap 50.")
     observable_types: list[str] | None = Field(None, description="Only for type='observable': restrict to these OpenCTI observable subtypes.")
+
+
+class CtiSearchReportsIn(CtiSearchFilters):
+    query: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH, description="Report search term: campaign, actor, malware, CVE, or technique.")
+    limit: int = Field(10, ge=1, le=50, description="Maximum reports to return. Cap 50.")
 
 
 class CtiLookupIocIn(BaseModel):
@@ -388,6 +394,22 @@ class CtiRelationshipsOut(BaseModel):
     entity_id: str = Field(..., description="Echoed entity UUID.")
     relationships: list[CtiRelationship] = Field(..., description="Projected relationships for the entity.")
     total: int = Field(..., description="Number of relationships returned.")
+
+
+class CtiReport(BaseModel):
+    id: str | None = Field(None, description="OpenCTI report id when available.")
+    name: str | None = Field(None, description="Report title.")
+    published: str | None = Field(None, description="Publication timestamp when available.")
+    description: str | None = Field(None, description="Short report description, truncated by the client.")
+    labels: list[str] = Field(default_factory=list, description="OpenCTI labels attached to the report.")
+    confidence: int | None = Field(None, description="OpenCTI confidence score when available.")
+    object_refs: list[str] = Field(default_factory=list, description="Referenced entity ids when returned by the platform.")
+
+
+class CtiReportsOut(BaseModel):
+    results: list[CtiReport] = Field(..., description="Projected report results.")
+    total: int = Field(..., description="Number of reports returned.")
+    offset: int = Field(0, description="Echoed pagination offset.")
 
 
 async def cti_get_health(params: CtiHealthIn, ctx: RuntimeContext) -> CtiHealthOut:
@@ -590,6 +612,25 @@ async def cti_get_relationships(
     )
 
 
+async def cti_search_reports(
+    params: CtiSearchReportsIn,
+    ctx: RuntimeContext,
+) -> CtiReportsOut:
+    client = ctx.require_client()
+    results = await asyncio.to_thread(
+        client.search_reports,
+        params.query,
+        params.limit,
+        params.offset,
+        params.labels,
+        params.confidence_min,
+        params.created_after,
+        params.created_before,
+    )
+    reports = [_shape_report(item) for item in _safe_list(results)[: params.limit]]
+    return CtiReportsOut(results=reports, total=len(reports), offset=params.offset)
+
+
 REGISTRY: list[ToolDef] = [
     ToolDef(
         name="cti_get_health",
@@ -696,6 +737,21 @@ REGISTRY: list[ToolDef] = [
             "with `direction` and `relationship_types` for narrower pivots. Example: "
             "`cti_get_relationships(entity_id='00000000-0000-4000-8000-000000000000', "
             "relationship_types=['uses'])`."
+        ),
+    ),
+    ToolDef(
+        name="cti_search_reports",
+        fn=cti_search_reports,
+        in_model=CtiSearchReportsIn,
+        out_model=CtiReportsOut,
+        annotations=_opencti_annotations("Search Reports"),
+        title="Search Reports",
+        description=(
+            "Search threat-intel reports by keyword. Reports carry analytical narrative "
+            "that individual IOCs often lack, so use this when attribution, campaign, "
+            "malware, CVE, or technique context matters. Treat report content as context "
+            "and tie conclusions back to case artifacts. Example: "
+            "`cti_search_reports(query='SolarWinds', created_after='2023-01-01')`."
         ),
     ),
 ]
@@ -1048,6 +1104,38 @@ def _shape_relationship(raw: Any, requested_entity_id: str) -> CtiRelationship:
         source=source,
         target=target,
         direction=_optional_str(direction),
+    )
+
+
+def _shape_report(raw: Any) -> CtiReport:
+    if not isinstance(raw, dict):
+        return CtiReport(name=str(raw))
+    labels = raw.get("labels") or raw.get("objectLabel") or []
+    if isinstance(labels, list):
+        shaped_labels = [
+            str(item.get("value") if isinstance(item, dict) else item)
+            for item in labels
+            if item is not None
+        ]
+    else:
+        shaped_labels = [str(labels)]
+    object_refs_raw = raw.get("object_refs") or raw.get("objects") or []
+    object_refs = []
+    for item in _safe_list(object_refs_raw):
+        if isinstance(item, dict):
+            ref_id = item.get("id")
+            if ref_id:
+                object_refs.append(str(ref_id))
+        elif item is not None:
+            object_refs.append(str(item))
+    return CtiReport(
+        id=_optional_str(raw.get("id")),
+        name=_optional_str(raw.get("name")),
+        published=_optional_str(raw.get("published")),
+        description=_optional_str(raw.get("description")),
+        labels=shaped_labels,
+        confidence=_optional_int(raw.get("confidence")),
+        object_refs=object_refs,
     )
 
 

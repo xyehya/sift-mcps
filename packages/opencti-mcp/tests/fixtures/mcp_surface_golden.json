@@ -1906,6 +1906,289 @@
         ]
       },
       "title": "Entity Relationships"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Search Reports"
+      },
+      "description": "Search threat-intel reports by keyword. Reports carry analytical narrative that individual IOCs often lack, so use this when attribution, campaign, malware, CVE, or technique context matters. Treat report content as context and tie conclusions back to case artifacts. Example: `cti_search_reports(query='SolarWinds', created_after='2023-01-01')`.",
+      "input_schema": {
+        "properties": {
+          "confidence_min": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Minimum confidence threshold from 0 to 100.",
+            "title": "Confidence Min"
+          },
+          "created_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ISO-8601 lower bound for entity creation date, e.g. 2024-01-01.",
+            "title": "Created After"
+          },
+          "created_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ISO-8601 upper bound for entity creation date.",
+            "title": "Created Before"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Filter by labels such as ['tlp:amber', 'malicious']; safe characters only.",
+            "title": "Labels"
+          },
+          "limit": {
+            "default": 10,
+            "description": "Maximum reports to return. Cap 50.",
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Pagination offset; cap 500.",
+            "maximum": 500,
+            "minimum": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Report search term: campaign, actor, malware, CVE, or technique.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "CtiSearchReportsIn",
+        "type": "object"
+      },
+      "meta": {
+        "case_scoped": false,
+        "category": "threat-intel",
+        "evidence_class": "read_only",
+        "recommended_phase": "CORRELATE"
+      },
+      "name": "cti_search_reports",
+      "output_schema": {
+        "anyOf": [
+          {
+            "$defs": {
+              "CtiReport": {
+                "properties": {
+                  "confidence": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI confidence score when available.",
+                    "title": "Confidence"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Short report description, truncated by the client.",
+                    "title": "Description"
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI report id when available.",
+                    "title": "Id"
+                  },
+                  "labels": {
+                    "description": "OpenCTI labels attached to the report.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Labels",
+                    "type": "array"
+                  },
+                  "name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Report title.",
+                    "title": "Name"
+                  },
+                  "object_refs": {
+                    "description": "Referenced entity ids when returned by the platform.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Object Refs",
+                    "type": "array"
+                  },
+                  "published": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Publication timestamp when available.",
+                    "title": "Published"
+                  }
+                },
+                "title": "CtiReport",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "offset": {
+                "default": 0,
+                "description": "Echoed pagination offset.",
+                "title": "Offset",
+                "type": "integer"
+              },
+              "results": {
+                "description": "Projected report results.",
+                "items": {
+                  "$ref": "#/$defs/CtiReport"
+                },
+                "title": "Results",
+                "type": "array"
+              },
+              "total": {
+                "description": "Number of reports returned.",
+                "title": "Total",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "results",
+              "total"
+            ],
+            "title": "CtiReportsOut",
+            "type": "object"
+          },
+          {
+            "$defs": {
+              "ErrorCode": {
+                "enum": [
+                  "invalid_input",
+                  "not_found",
+                  "upstream_unavailable",
+                  "upstream_degraded",
+                  "rate_limited",
+                  "not_configured",
+                  "no_active_case",
+                  "capacity_refused",
+                  "internal"
+                ],
+                "title": "ErrorCode",
+                "type": "string"
+              }
+            },
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "$ref": "#/$defs/ErrorCode",
+                "description": "Machine-readable error category."
+              },
+              "message": {
+                "description": "Human-readable, secret-free explanation.",
+                "title": "Message",
+                "type": "string"
+              },
+              "remediation": {
+                "description": "Concrete next step the caller can take.",
+                "title": "Remediation",
+                "type": "string"
+              },
+              "retryable": {
+                "default": false,
+                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
+                "title": "Retryable",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "error",
+              "message",
+              "remediation"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        ]
+      },
+      "title": "Search Reports"
     }
   ]
 }
