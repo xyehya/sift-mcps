@@ -228,6 +228,27 @@ class TimelineOut(BaseModel):
     )
 
 
+class FieldValuesIn(CaseScopedQueryBase):
+    field: str = Field(
+        ...,
+        min_length=1,
+        description="Field to enumerate. CSV/text fields need '.keyword'.",
+    )
+    query: str = Field("*", description="query_string filter to narrow the value set.")
+    limit: int = Field(50, ge=1, le=500, description="Max distinct values. Hard cap 500.")
+
+
+class FieldValue(BaseModel):
+    value: Any = Field(..., description="Distinct field value.")
+    count: int = Field(..., description="Document count for this value.")
+
+
+class FieldValuesOut(BaseModel):
+    field: str = Field(..., description="Field enumerated.")
+    values: list[FieldValue] = Field(..., description="Distinct values with counts.")
+    truncated: bool = Field(..., description="True when more distinct values exist than returned.")
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -459,6 +480,23 @@ async def run_opensearch_timeline(params: TimelineIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
+async def run_opensearch_field_values(params: FieldValuesIn) -> ToolResult:
+    raw = _legacy_server().opensearch_field_values(**params.model_dump())
+    if "error" in raw:
+        return _legacy_error(raw)
+    meta = _meta_from_raw(raw)
+    values = [
+        FieldValue(value=value.get("value"), count=int(value.get("count", 0)))
+        for value in raw.get("values", [])
+    ]
+    out = FieldValuesOut(
+        field=str(raw.get("field", params.field)),
+        values=values,
+        truncated=bool(raw.get("truncated", False)),
+    )
+    return _success_tool_result(out, meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -491,6 +529,23 @@ REGISTRY.append(
             "population or gauge magnitude before opensearch_search. Do not use "
             "when you need per-value counts; use opensearch_aggregate. Example: "
             "opensearch_count(query='event.code:4624')."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_field_values",
+        fn=run_opensearch_field_values,
+        in_model=FieldValuesIn,
+        out_model=FieldValuesOut,
+        annotations=_read_annotations("Field Value Discovery"),
+        title="Field Value Discovery",
+        description=(
+            "Enumerate distinct values of a field with counts before writing "
+            "targeted queries. Use for value discovery such as usernames or "
+            "process names; prefer opensearch_aggregate when ranking matters. "
+            "Example: opensearch_field_values(field='winlog.provider_name')."
         ),
     )
 )
