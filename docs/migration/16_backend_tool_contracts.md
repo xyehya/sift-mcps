@@ -131,7 +131,8 @@ REGISTRY: list[ToolDef] = [ ... ]
 - Existing rich manifest metadata (`when_to_use`, `avoid_when`, `output_notes`,
   `recommended_phase`, `category`) found in `sift-backend.json` folds into the
   `description` and into resource catalogs (§ per backend). The `mcp_backends` registry
-  (D22) supersedes `sift-backend.json` for registration at D27b.
+  (D22) supersedes `sift-backend.json` for registration in a later D22/F-11 phase;
+  D27b intentionally kept `gateway.yaml`/manifest-backed add-on registration.
 
 ### 1.5 Case scoping
 
@@ -153,8 +154,10 @@ in `REGISTER.md` (F-1).
 Six current "tools" are read-only reference/status data with little or no query
 parameterization — i.e. they are **MCP resources** in the FastMCP 3.0 model
 (`@mcp.resource`, doc 14 §2.1), exposable to tool-only clients via `ResourcesAsTools`.
-Modeling them as resources lets `ToolSearch`/context-bloat control (D25) drop them from
-the always-in-context tool catalog while keeping them reachable.
+Modeling them as resources lets future context-bloat controls drop them from
+the always-in-context tool catalog while keeping them reachable. D27b did not
+adopt FastMCP `ToolSearch`; reintroducing it would require a new scoped
+decision.
 
 **Per the operator constraint, this is proposed ADDITIVELY and FLAGGED, not applied:**
 each stays a callable tool (so existing skills/RAG don't break) **and** also gets a
@@ -1306,7 +1309,8 @@ All five forks were decided by the operator in Run 19 and are tracked in `REGIST
 - **F-3 — response-guard scans `structured_content` (§1.1): REQUIRED (security).** Not
   optional — moving typed data into `structured_content` while the gateway guard scans only
   text is a **redaction bypass**. Output models here assume the guard covers
-  `structured_content`. Hard acceptance-gate + `/security-review` checkpoint at D27b → **B-3**.
+  `structured_content`. D27b implemented this via the gateway `guard_tool_result`;
+  **B-3** is DONE as of Run 24.
 - **F-4 — `opensearch_timeline` ceiling (§3.5): ADD, warn-not-truncate.** Cap default ~2000
   (configurable), emit a narrowing advisory; never silently drop buckets (forensic
   no-silent-loss principle).

@@ -7,7 +7,11 @@ This directory is the controlled workspace for migrating SIFT toward the new arc
 - The Gateway/Broker remains the mandatory policy boundary for operators, agents, MCP tools, and workflows.
 - Native SIFT workers perform execution through durable Postgres-backed job state.
 
-This workspace exists to keep future Codex runs narrow, resumable, and auditable. It is documentation-only for now. It must not be used to introduce schemas, code, migrations, Docker changes, or behavioral rewrites unless a future run is explicitly scoped to do that work.
+This workspace exists to keep future Codex runs narrow, resumable, and auditable.
+Files under `docs/migration/` are the governance/documentation control plane for
+the migration. Runtime code, schemas, Docker changes, and behavioral rewrites
+happen only through separately scoped runs that update these docs as part of
+their Definition of Done.
 
 All locked decisions live in [00_migration_charter.md](00_migration_charter.md) under "Confirmed Decisions (Locked)". If any other document conflicts with the charter, the charter wins and the other document must be corrected.
 
@@ -34,7 +38,7 @@ All locked decisions live in [00_migration_charter.md](00_migration_charter.md) 
 - [14_fastmcp3_supabase_integration.md](14_fastmcp3_supabase_integration.md) - FastMCP 3.0 + Supabase + FastAPI consolidation knowledge base and target design (decisions D24-D27): providers/transforms substrate, one ASGI app, own Supabase-JWT verification (FastAPI DI), code-mode excluded. Governs the **gateway cutover (D27b)**.
 - [15_backend_tooling_revamp.md](15_backend_tooling_revamp.md) - backend tooling revamp spec and drift-control contract (decisions D27a/D27b/D28): migrate opensearch/opencti/windows-triage to FastMCP 3.0 **and** redesign every tool to the quality contract (typed Pydantic in/out, prompts, resources, annotations). Dedicated worktree, parallel to PR02, exposure-agnostic authoring, rename change-map.
 - [16_backend_tool_contracts.md](16_backend_tool_contracts.md) - per-tool D28 contracts for all 30 backend tools (16 opensearch / 8 opencti / 6 wintriage), grounded in current `server.py` I/O: typed Pydantic input/output models, full annotations, result shaping/caps, typed error model, ≥1 prompt + ≥1 resource per backend, consolidated rename change-map, and the flagged tool-vs-resource reclassification + write-tool forks. Implements doc 15 §5/§7/§10.
-- [17_gateway_cutover_d27b.md](17_gateway_cutover_d27b.md) - **D27b gateway cutover** implementation candidate (Plan stage): re-host the SIFT policy (evidence gate / response guard / case context / audit envelope) as FastMCP 3.0 Middleware, swap aggregation to LocalProvider (core) + ProxyProvider (add-ons), the **B-3** structured-content redaction design, the policy-parity test strategy, and forks F-6…F-12. Grounded in the gateway source + the pinned fastmcp 3.4.2 API. Implements the design in doc 14.
+- [17_gateway_cutover_d27b.md](17_gateway_cutover_d27b.md) - implemented **D27b gateway cutover** candidate/log: re-hosted the SIFT policy (evidence gate / response guard / case context / audit envelope) as FastMCP 3.0 Middleware, swapped aggregation to local core tools + proxy-mounted add-ons, implemented the **B-3** structured-content redaction design, and removed per-backend `/mcp/{name}` routes. Grounded in the gateway source + the pinned fastmcp 3.4.2 API. Implements the design in doc 14.
 - [JOB0_baseline_execution_checks.md](JOB0_baseline_execution_checks.md) - targeted commands and no-service assumptions for the additive JOB-0 baseline smoke tests.
 - [PR01_identity_schema_checks.md](PR01_identity_schema_checks.md) - commands for running the deterministic PR01 schema checks and optional Supabase syntax validation.
 
@@ -47,12 +51,6 @@ Documents `04`-`06` are the **execution** track
 superseded. Those topics now live in `02`, `08`, and `09`. Do not recreate
 `04_control_plane_plan.md`, `05_gateway_token_policy.md`, or
 `06_evidence_audit_migration.md` - they would collide with existing files.
-
-## Planned Documents
-
-These are planned but intentionally not created yet:
-
-- `12_test_acceptance_plan.md` - future: migration tests, security gates, and acceptance scenarios.
 
 ## Future Codex Run Protocol
 

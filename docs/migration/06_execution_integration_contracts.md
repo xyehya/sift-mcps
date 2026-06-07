@@ -63,11 +63,9 @@ Current facts carried forward:
 - Current Gateway REST v1 exposes tool calls, backend registration/reload,
   service controls, and join-code flows, but no durable execution jobs
   (`packages/sift-gateway/src/sift_gateway/rest.py:1082-1098`).
-- Aggregate MCP calls run an evidence gate and write transport-envelope audit
-  (`packages/sift-gateway/src/sift_gateway/mcp_endpoint.py:637-674`,
-  `packages/sift-gateway/src/sift_gateway/mcp_endpoint.py:841-871`), while the
-  per-backend MCP path has a different policy/audit surface
-  (`packages/sift-gateway/src/sift_gateway/mcp_endpoint.py:898-973`).
+- MCP calls now enter through the D27b aggregate FastMCP `/mcp` policy path; the
+  older per-backend policy/audit mismatch carried forward from pre-D27b docs is
+  historical. Future job tools must plug into the aggregate Gateway policy path.
 - OpenSearch ingest is the main current long-running path. It launches
   `python -m opensearch_mcp.ingest_cli`, records pid/run status under
   `~/.sift/ingest-status`, writes logs under `~/.sift/ingest-logs`, and indexes
@@ -907,9 +905,9 @@ Gateway REST routes:
 
 FastMCP endpoint/tool registration:
 
-- `packages/sift-gateway/src/sift_gateway/mcp_endpoint.py` will need one
-  consistent policy/evidence/audit path for aggregate and any per-backend
-  execution tools.
+- The D27b aggregate FastMCP `/mcp` path is the single MCP policy/evidence/audit
+  path. Future execution tools must register through it; per-backend MCP routes
+  must not be reintroduced.
 - `packages/sift-gateway/src/sift_gateway/server.py` currently routes core
   tools to `sift_core.agent_tools` and add-on tools through backend maps; core
   job/OpenSearch tools will need to fit this policy model.
@@ -1046,14 +1044,8 @@ Config/env handling:
 
 ## 12. Next Recommended Run
 
-Create `docs/migration/07_execution_roadmap.md`.
-
-Recommended scope:
-
-- migration phases for execution/jobs
-- first execution-focused PR plan
-- rollback strategy
-- tests and acceptance criteria
-
-The next run should remain planning-focused unless explicitly authorized to
-implement code or database migrations.
+`07_execution_roadmap.md` exists, and JOB-0, PR01/ID-1, PR02/ID-2, D27a, and
+D27b are complete. The current recommended run is PR03 / Phase ID-3 planning
+for Supabase Auth and case-membership resolution. Execution JOB-* implementation
+remains behind the foundation track unless the operator explicitly
+reprioritizes it.

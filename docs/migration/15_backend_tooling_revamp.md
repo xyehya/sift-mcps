@@ -8,8 +8,8 @@ dedicated worktree that revamps the three backend MCP servers. The charter stays
 canonical; this doc governs the revamp. Runtime code changes happen only in the
 worktree, scoped per §8.
 
-This work runs **in parallel with PR02 (Phase ID-2)** and merges **before** the
-gateway cutover (D27b). It is decoupled from PR02 because it touches only the
+This work ran **in parallel with PR02 (Phase ID-2)** and merged **before** the
+gateway cutover (D27b). It was decoupled from PR02 because it touched only the
 three backend packages (§8) and from the gateway because the gateway↔backend
 boundary is the MCP wire protocol, not a Python API.
 
@@ -58,10 +58,10 @@ Current tool inventory (to be carried forward, possibly renamed per §6):
 
 See `00_migration_charter.md`:
 - **D27a** — backend tooling revamp is a standalone, parallel-safe stage (this
-  doc), running alongside PR02 and merging before the gateway cutover.
-- **D27b** — the gateway cutover is the later stage; it owes **policy parity**
-  only (evidence gate / response guard / audit / active-case), and **consumes the
-  already-revamped backend tool surface** rather than freezing it.
+  doc), which ran alongside PR02 and merged before the gateway cutover.
+- **D27b** — the gateway cutover landed after this stage; it owed **policy parity**
+  only (evidence gate / response guard / audit / active-case), and consumed the
+  already-revamped backend tool surface rather than freezing it.
 - **D28** — the tool-quality contract (§5), exposure-agnostic authoring (§7), and
   the rename/change-map mechanism (§6) are mandatory for every revamped tool.
 
@@ -189,8 +189,8 @@ exposure adapter      ├─ standalone:  FastMCP 3.0 server registers the table
 - **Dependencies:** add `fastmcp>=3` to each backend's `pyproject.toml`; keep
   `mcp` only if still needed transitively. Pin the exact `fastmcp` version and
   record it in MIGRATION_STATE.
-- **Merge order:** this worktree merges into the integration line **before** the
-  gateway cutover PR (D27b) opens.
+- **Merge order:** this worktree merged into the integration line **before** the
+  gateway cutover PR (D27b) opened.
 - **Canonical references:** charter wins on any conflict; this doc governs the
   revamp; the change map + golden snapshot are the surface of record.
 
@@ -243,12 +243,10 @@ touched (§8).
 
 ## 11. Risks / open items
 
-- **Wire-protocol compatibility** with the current gateway client must be
-  verified per backend (stdio + streamable-HTTP), since the gateway is still on
-  the low-level SDK until D27b.
-- **Structured output + the gateway response guard:** confirm the response
-  guard's secret-redaction and size-cap still apply correctly to
-  `structured_content` (not just text) at the gateway. Flag for the D27b cutover.
+- **Wire-protocol compatibility** with the gateway client was verified through
+  D27b policy-parity testing after the Gateway moved off the low-level SDK.
+- **Structured output + the gateway response guard:** resolved by D27b
+  `guard_tool_result`; B-3 is DONE as of Run 24.
 - **Alias lifetime:** decide how long deprecated old names live (one cutover cycle
   proposed); RAG/skills referencing tool names must be updated from the change map.
 - **opensearch write tools vs job model:** `_ingest`/`_enrich_*`/`_host_fix`

@@ -2,12 +2,14 @@
 
 ## Current Objective
 
-The **D27b gateway cutover is landed** on `revamp/spg-v1` (Runs 23–24). The
-gateway now serves one FastAPI ASGI app with the aggregate FastMCP `http_app`
-mounted at `/mcp`; per-backend `/mcp/{name}` routes are removed per D3/F-7. Core
-tools and `capability_guide` are FastMCP local tools, configured add-ons are
-FastMCP proxy mounts, and SIFT policy is re-hosted as FastMCP middleware:
-evidence gate → response guard (B-3/B-6) → case context → audit envelope.
+The **D27b gateway cutover is landed** on `revamp/spg-v1` (Runs 23–24), and Run
+25 completed a documentation/invariant health check across the canonical docs
+and architecture graph. The gateway now serves one FastAPI ASGI app with the
+aggregate FastMCP `http_app` mounted at `/mcp`; per-backend `/mcp/{name}` routes
+are removed per D3/F-7. Core tools and `capability_guide` are FastMCP local
+tools, configured add-ons are FastMCP proxy mounts, and SIFT policy is re-hosted
+as FastMCP middleware: evidence gate → response guard (B-3/B-6) → case context
+→ audit envelope.
 
 The installed wheel was confirmed directly during Build: host `.venv` has
 **fastmcp==3.4.2**; `create_proxy` imports from `fastmcp.server`;
@@ -30,6 +32,81 @@ phase.
 not implement until the candidate doc defines the scope fence, acceptance gates,
 and host→VM test plan. Keep D22/F-11 (`mcp_backends` registry) as a separate
 later phase unless the operator explicitly reprioritizes it.
+
+## Run 25 — Documentation Invariant Health Check
+
+Documentation health-check run. No runtime code changed.
+
+Trigger: operator requested a review of canonical docs and the Mermaid
+architecture graph after noticing `00_migration_charter.md` had drifted from the
+current landed architecture.
+
+Findings / reconciliations:
+- `00_migration_charter.md` now separates target architecture from current
+  landed status. It records JOB-0, PR01/ID-1, PR02/ID-2, D27a, and D27b as done,
+  and explicitly lists pending phases: ID-3, ID-4/ID-5, ID-6, D22/F-11,
+  OpenSearch-core, and RAG-core.
+- Charter Gateway/FastMCP language was tightened: FastMCP providers/transforms
+  do aggregation/namespacing/catalog mechanics only; tool authorization, case
+  authorization, evidence gate, response guard, active-case propagation, and
+  audit remain SIFT-owned.
+- The over-broad "case-scoped MCP tools only" phrasing was corrected. Case-data
+  tools are case-scoped; global/reference add-ons are tool-scoped and audited
+  under the active case.
+- `Architecture.mmd` now shows post-D27b status: one FastAPI + FastMCP Gateway,
+  Supabase human auth pending ID-3, active-case authority pending ID-4/ID-5,
+  add-ons still sourced from `gateway.yaml` until D22/F-11, and OpenSearch as a
+  current compatibility add-on until the later D19 core move.
+- Historical inventory/design docs now carry supersession notes where they
+  describe pre-D27a/D27b facts (`01`, `03`, `04`, `14`). This preserves their
+  evidence trail without letting future agents treat old Starlette/low-level MCP
+  or per-backend-route facts as current.
+- Stale "next run" footers were refreshed in `07`, `08`, `09`, `11`, `12`,
+  `13`, and README; the current next run is PR03 / Phase ID-3 planning.
+- D27b carryovers were normalized in `14`, `15`, and `16`: F-9
+  `Visibility`/`ToolSearch` remains dropped, B-3 is DONE, and `mcp_backends`
+  registry timing is deferred to F-11/D22 rather than D27b.
+
+Subagent checks:
+- Canonical-doc reviewer found stale scoping wording, stale D3 "current handler"
+  phrasing, README/doc-numbering issues, and Operating Model example drift.
+- Mermaid reviewer found OpenSearch current/target ambiguity, over-absolute
+  case-scope labels, active-case edge ambiguity, and a renderer-sensitive edge
+  to a subgraph.
+- Stale-reference scanner found pre-D27b "current state" claims in docs 01/03/04
+  and old next-run pointers in docs 07/08/09/11/12/13.
+- All accepted findings were fixed or intentionally preserved as historical run
+  log/source-reference text.
+
+Files changed:
+- `docs/migration/00_migration_charter.md`
+- `docs/migration/Architecture.mmd`
+- `docs/migration/README.md`
+- `docs/migration/OPERATING_MODEL.md`
+- `docs/migration/01_repo_inventory.md`
+- `docs/migration/02_authoritative_domains_and_boundaries.md`
+- `docs/migration/03_opensearch_core_integration.md`
+- `docs/migration/04_execution_current_state.md`
+- `docs/migration/05_execution_job_model.md`
+- `docs/migration/06_execution_integration_contracts.md`
+- `docs/migration/07_execution_roadmap.md`
+- `docs/migration/08_control_plane_schema.md`
+- `docs/migration/09_identity_auth_cutover.md`
+- `docs/migration/11_first_pr_candidate.md`
+- `docs/migration/12_pr01.md`
+- `docs/migration/13_pr02.md`
+- `docs/migration/14_fastmcp3_supabase_integration.md`
+- `docs/migration/15_backend_tooling_revamp.md`
+- `docs/migration/16_backend_tool_contracts.md`
+
+Verification:
+- `python3 scripts/validate_migration_docs.py` passed.
+- `git diff --check` passed.
+- Semantic scans for stale high-risk strings now only return intentional
+  historical notes, register decisions, or run-log records.
+
+Next: start Plan-stage PR03 / Phase ID-3, unless the operator explicitly
+reprioritizes D22/F-11 or a hardening backlog item.
 
 ## Run 24 — D27b Review, Triage & Land
 

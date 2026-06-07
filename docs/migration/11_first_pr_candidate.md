@@ -2,9 +2,11 @@
 
 Last updated: 2026-06-07.
 
-Scope: planning only. This document defines the first real implementation PR
-candidate after the migration planning docs. It does not implement code, create
-tests, create database migrations, refactor runtime paths, or start the PR.
+Status: implemented. This document is retained as the historical JOB-0
+candidate; do not use it as the next-run pointer.
+
+Scope was planning only. This document defined the first real implementation PR
+candidate after the migration planning docs.
 
 Candidate PR title:
 
@@ -378,10 +380,5 @@ docs/migration/11_first_pr_candidate.md.
 
 ## 14. Next Recommended Run
 
-The next run should be the actual coding implementation of this first PR
-candidate: JOB-0 baseline execution smoke-test fixtures and lightweight tests.
-It should not be another broad planning run.
-
-After JOB-0 lands, the first feature-bearing PR should follow the locked
-cutover order and start the identity foundation with Phase ID-1 in
-`09_identity_auth_cutover.md`. JOB-1 should not precede ID-1.
+JOB-0 is complete. This section is historical; use `MIGRATION_STATE.md` for the
+current objective and next recommended run.

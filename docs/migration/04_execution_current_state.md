@@ -7,6 +7,13 @@ ingestion, evidence operations, audit operations, and workflow/status tracking.
 This document does not design the target job schema, REST APIs, MCP tools, or
 execution roadmap.
 
+Run 25 status note: this is a **pre-D27b execution snapshot**. MCP/Gateway rows
+that mention low-level `create_mcp_server()`, `create_backend_mcp_server()`, or
+per-backend `/mcp/{name}` routes are historical. D27b landed one aggregate
+FastMCP `/mcp` policy path and removed per-backend routes. The execution
+inventory remains useful for file/env authority, synchronous workflows, parser,
+OpenSearch ingest, evidence, and audit grounding.
+
 ## 1. Current Execution Entry Points
 
 ### Frontend/operator portal
@@ -205,14 +212,14 @@ saved as protected JSON files under `case/reports/{uuid}.json`
 | MCP tools may block synchronously. | Core `run_command` waits for native execution; add-on calls use synchronous MCP request/response with 300s timeout in aggregate Gateway path (`packages/sift-core/src/sift_core/execute/tools/generic.py:72-178`, `packages/sift-gateway/src/sift_gateway/server.py:762-787`). | Agent sessions can block on long work; timeout handling is not job-oriented. | Convert long execution to submitted jobs with polling/cancel. | P1 |
 | Frontend cannot reliably observe progress. | Frontend polls case/review/evidence/report files every 15 seconds and has no job-progress endpoint (`packages/case-dashboard/frontend/src/hooks/useDataPolling.js:16-43`). OpenSearch progress is not in portal endpoint wrappers (`packages/case-dashboard/frontend/src/api/endpoints.js:63-77`). | Operators cannot see all parser/native progress from one authoritative surface. | Job/status APIs backed by Postgres. | P1 |
 | Audit gaps during parser execution. | Parent process audits launch, per-artifact parser code audits steps, but status writes and sidecar writes are not themselves DB-audited; `AuditWriter.log()` returns `None` when no active case resolves (`packages/sift-common/src/sift_common/audit.py:262-264`, `packages/opensearch-mcp/src/opensearch_mcp/ingest.py:237-255`). | Parser milestones may be hard to reconstruct when env/case resolution or subprocess audit fails. | Mandatory DB audit events for job lifecycle and parser steps. | P0 |
-| Per-backend MCP can bypass aggregate evidence gate behavior. | Aggregate `create_mcp_server()` checks evidence gate before dispatch; `create_backend_mcp_server()` directly calls backend tools and only does HTTP backend proxy audit (`packages/sift-gateway/src/sift_gateway/mcp_endpoint.py:637-674`, `packages/sift-gateway/src/sift_gateway/mcp_endpoint.py:898-973`). | OpenSearch/backend execution policy may differ depending on endpoint path. | Single Gateway policy path for execution tools or identical gate enforcement. | P1 |
+| Per-backend MCP could bypass aggregate evidence gate behavior. | Historical pre-D27b risk: aggregate `create_mcp_server()` checked the evidence gate before dispatch, while `create_backend_mcp_server()` directly called backend tools. | OpenSearch/backend execution policy could differ depending on endpoint path. | **Resolved by D27b:** one aggregate FastMCP `/mcp` policy path; per-backend routes removed. | done |
 | Report generation has only in-memory in-flight state. | `_IN_FLIGHT_GENERATIONS` prevents duplicate generation only within one process and drafts live in `_PENDING_REPORTS` until saved (`packages/case-dashboard/src/case_dashboard/routes.py:4157-4198`). | Gateway restart loses drafts/in-flight state; no durable progress/errors. | DB report jobs and report metadata. | P2 |
 
 ## 6. Inputs Needed For Next Run
 
-Next run should create `docs/migration/05_execution_job_model.md` and focus
-only on target job lifecycle, claiming strategy, status transitions, worker
-heartbeat/stale job handling, retry/cancel behavior, and no Redis/RQ.
+`docs/migration/05_execution_job_model.md` now exists. The items below are
+historical inputs that informed the execution/job design and still matter when
+execution JOB-* phases resume.
 
 Inputs needed before that run:
 

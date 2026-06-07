@@ -144,7 +144,8 @@ by tooling — obey §8 and run the validator.
 - Running state, run history, current objective, next run → `MIGRATION_STATE.md`.
 - Open forks + backlog → `REGISTER.md`.
 - Host/VM workflow, VM coordinates, Supabase pins → `AGENTS.md`.
-- Per-phase specs → `NN_*.md` (e.g. 14 gateway cutover, 15 backend revamp, 16 tool contracts).
+- Per-phase specs → `NN_*.md` (e.g. 14 FastMCP design KB, 15 backend revamp,
+  16 tool contracts, 17 gateway cutover).
 
 ---
 

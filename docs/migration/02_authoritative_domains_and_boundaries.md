@@ -38,9 +38,10 @@ The target architecture splits authority by plane:
   control-plane paths.
 - Frontend is the operator UI. It may cache UI state and call APIs, but it is
   not forensic state authority.
-- AI agents are controlled clients. They operate through Gateway-mediated,
-  case-scoped MCP tools, and their findings remain draft/proposed until human
-  approval.
+- AI agents are controlled clients. They operate through Gateway-mediated MCP
+  tools only: case-data tools are case-scoped, while global/reference add-ons
+  are tool-scoped and audited under the active case. Agent findings remain
+  draft/proposed until human approval.
 
 ## 2. Current Authority Fragmentation
 

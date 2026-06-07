@@ -1,11 +1,21 @@
 # 14 — FastMCP 3.0 + Supabase Integration (Knowledge Base & Target Design)
 
-Status: **design locked** (decisions D24–D27 in `00_migration_charter.md`).
-This document is the single knowledge base for the FastMCP 3.0 / Supabase /
-FastAPI consolidation. It records the verified framework facts, the current-state
-inventory, the target integration design, the per-package migration surface, and
-the cutover plan. It does not change runtime behavior; it is the spec a future
-scoped coding run implements.
+Status: **design locked**; D27a and D27b are implemented and landed. Remaining
+Supabase/Auth/control-plane phases use this as background, not as a pending
+D27b build prompt.
+
+Run 25 status note: sections that say "current state" are a **pre-D27a/D27b
+snapshot** retained for design history. The current landed state is in
+`00_migration_charter.md` Current Migration Status and `MIGRATION_STATE.md` Runs
+23-24: FastAPI + FastMCP `http_app` is live, D27a backends are standalone
+FastMCP 3.0, D27b removed per-backend MCP routes, add-ons still read from
+`gateway.yaml` until F-11/D22, and per-role `Visibility`/`ToolSearch` was
+dropped in favor of future SIFT-owned per-token tool authorization (B-10).
+
+This document remains the knowledge base for the FastMCP 3.0 / Supabase /
+FastAPI consolidation. It records the verified framework facts, the historical
+pre-cutover inventory, the target integration design, the per-package migration
+surface, and the cutover plan.
 
 All claims about FastMCP 3.0 below are grounded in the official docs; see
 **Sources** at the end. Where the marketing/AI summaries that seeded this work
@@ -70,6 +80,11 @@ inner→outer)
 - **Code Mode** — programmable search/execute over many tools. **Excluded — see
   §3.1.**
 
+Run 25 note: these are framework capabilities, not active D27b decisions.
+F-9 dropped per-case/per-phase/per-role `Visibility` and `ToolSearch` for the
+D27b parity PR. Per-token tool authorization is tracked as B-10 and must remain
+SIFT-owned if implemented.
+
 ### 2.3 Other relevant capabilities
 - **Component versioning** — multiple versions coexist; highest exposed by
   default; clients can request a specific version.
@@ -111,8 +126,10 @@ Implications for SIFT:
   Gateway argv/flex handling (pipe/redirect/stderr not reachable → literal argv →
   context bloat), the `evidence/` write-gap, and the missing OS-level sandbox.
   Those are fixed directly, independently of this migration.
-- The real "too many tool schemas in context" problem is solved by **Tool Search
-  + Visibility** (§2.2), not code-mode.
+- The real "too many tool schemas in context" problem is solved by curated
+  descriptions, manifest-derived `capability_guide`, and future SIFT-owned
+  list/call authorization where needed, not code-mode. Run 22/F-9 dropped
+  `ToolSearch`/`Visibility` from the D27b design.
 
 ### 3.2 `SupabaseProvider` is human-OAuth only — NOT adopted (D26)
 FastMCP's `SupabaseProvider` is a **Remote OAuth** resource-server validator
@@ -134,9 +151,12 @@ Therefore SIFT keeps:
 
 ---
 
-## 4. Current state vs target
+## 4. Pre-D27a/D27b state vs target
 
-### 4.1 What each package uses today (verified by source scan)
+The table below is a historical source scan from before D27a/D27b. It is useful
+for why the cutover happened, but it is no longer the live package state.
+
+### 4.1 What each package used before D27a/D27b (verified by source scan then)
 
 | Package | MCP surface today | Notes |
 | --- | --- | --- |
@@ -152,7 +172,7 @@ on the standalone `fastmcp` package today.** The in-SDK `mcp.server.fastmcp` is
 FastMCP **1.x lineage**, frozen; it has none of the 3.0 providers/transforms.
 Adopting 3.0 is a **net-new dependency**, not an import swap.
 
-### 4.2 Target: the Gateway as one FastAPI app on FastMCP 3.0
+### 4.2 Target implemented by D27b: the Gateway as one FastAPI app on FastMCP 3.0
 
 ```
                  ┌──────────────── one FastAPI ASGI app (single deploy) ────────────────┐
@@ -163,15 +183,14 @@ Adopting 3.0 is a **net-new dependency**, not an import swap.
    (MCP)         │        └─ SIFT policy middleware: evidence gate, response guard,      │
                  │           audit envelope, active-case propagation, authorization      │
                  │        └─ FastMCP 3.0 providers + transforms (aggregation only):      │
-                 │             ProxyProvider(opencti, wintriage)   ← add-on backends     │
-                 │             LocalProvider(core OpenSearch/RAG/findings tools)         │
-                 │             SkillsProvider(agent skills, D15)                         │
-                 │             Namespace · Visibility(per case/phase/role) · ToolSearch  │
+                 │             ProxyProvider(add-ons from gateway.yaml until F-11/D22)   │
+                 │             LocalProvider(core gateway tools)                         │
+                 │             Namespace only unless a later scoped run adds more        │
                  └───────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Policy stays SIFT-owned.** Providers/transforms do aggregation, namespacing,
-  discovery, and visibility. The evidence gate, response redaction, audit
+  and catalog mechanics. The evidence gate, response redaction, audit
   envelope, active-case propagation, and authorization remain explicit
   middleware/checks (today's `evidence_gate.py`, `response_guard.py`,
   `audit_helpers.py`, `auth.py`) — re-hosted as FastMCP middleware / async auth
@@ -179,19 +198,17 @@ Adopting 3.0 is a **net-new dependency**, not an import swap.
 - **Provider mapping.**
   - Core tools (OpenSearch read/status/aggregate per D19, core RAG per D23,
     findings/timeline/IOCs/TODO) → `LocalProvider` (in-process, decorator style).
-  - Add-on backends (`opencti-mcp`, `windows-triage-mcp`) → `ProxyProvider`,
-    replacing `backends/{http,stdio}_backend.py`. Registration is read from the
-    control-plane `mcp_backends` registry (D22), not `gateway.yaml`.
-  - Agent skills (D15) → `SkillsProvider`.
+  - Add-on backends (`opencti-mcp`, `windows-triage-mcp`, and OpenSearch until
+    its later D19 core move) → proxy mounts. D27b kept registration in
+    `gateway.yaml`; the control-plane `mcp_backends` registry is deferred to
+    F-11/D22.
+  - Agent skills (D15) → deferred.
 - **Transform mapping.**
   - `Namespace` enforces the `name_` prefix per backend (formalizes today's
     manual manifest namespace check).
-  - `Visibility` (session-scoped, async auth checks) implements **per-case /
-    per-phase / per-role tool exposure** keyed off the active case + role matrix
-    (`09_identity_auth_cutover.md` §5). This is the tool-layer expression of
-    case-scope.
-  - `ToolSearch` (BM25) controls tool-schema context bloat as the catalog grows
-    (OpenCTI + future add-ons), `always_visible` for the always-on core set.
+  - Per-case/per-phase/per-role `Visibility` and `ToolSearch` were investigated
+    but explicitly dropped for D27b (F-9). Per-token tool authorization is B-10
+    and remains SIFT-owned if implemented later.
 - **`run_command` is unchanged** by this migration (D25): still the hardened,
   allowlisted, audited OS-exec tool; its flakiness is a separate, tracked fix.
 
@@ -235,23 +252,24 @@ MCP wire protocol and backends can move independently. This document (14) govern
 **stage 2 (the gateway)**; `15_backend_tooling_revamp.md` governs **stage 1 (the
 backends)**.
 
-- **Stage 1 — D27a backend revamp** (`15_backend_tooling_revamp.md`): the three
-  backend servers move to FastMCP 3.0 **and** are redesigned to the tool-quality
+- **Stage 1 — D27a backend revamp** (`15_backend_tooling_revamp.md`): done. The three
+  backend servers moved to FastMCP 3.0 **and** were redesigned to the tool-quality
   contract (D28). Dedicated worktree, scoped to `packages/*-mcp/**`, **parallel to
-  PR02**, merges before stage 2. Produces the **new tool-surface golden snapshot +
+  PR02**, merged before stage 2. Produced the **new tool-surface golden snapshot +
   change map**.
-- **Stage 2 — D27b gateway cutover** (this doc): the Gateway moves to FastMCP 3.0
-  as one FastAPI ASGI app, a **single revertable big-bang PR**, **after PR02 and
-  after stage 1**, before the heavier evidence/jobs phases. It **consumes** the
-  revamped backend surface (does not re-freeze it) — add-ons via `ProxyProvider`,
-  opensearch tools in-process via `LocalProvider`.
-- **Stage 2 parity gate = policy parity only:** all ~1146 package tests green +
+- **Stage 2 — D27b gateway cutover** (`17_gateway_cutover_d27b.md`): done. The Gateway
+  moved to FastMCP 3.0 as one FastAPI ASGI app after PR02 and D27a, before the
+  heavier evidence/jobs phases. It consumed the revamped backend surface without
+  re-freezing it; add-ons are proxy-mounted from current `gateway.yaml`
+  configuration until F-11/D22. OpenSearch's final core/in-process move remains
+  a later D19/OpenSearch-core phase.
+- **Stage 2 parity gate = policy parity only:** gateway package tests green +
   a policy-behavior contract test asserting the evidence gate, response-guard
   redaction, audit-envelope shape, and active-case propagation are byte-stable
   across the gateway swap. The **tool surface is intentionally new** (from stage
   1) and is therefore not part of the parity assertion.
-- **Confirm:** structured-output redaction/size-cap coverage in the response guard
-  (it must scan `structured_content`, not only text) — see `15` §11.
+- **Confirmed:** structured-output redaction/size-cap coverage in the response guard
+  scans `structured_content`, not only text (B-3 DONE at Run 24).
 - **Revert plan:** each stage's branch is a clean checkpoint; if its gate cannot be
   met the branch is abandoned and the current stack continues — no partial cutover
   lands in `main`.
@@ -263,17 +281,13 @@ backends)**.
 - **`ProxyProvider` policy coverage:** confirm the evidence gate + response guard
   + audit envelope wrap proxied add-on tools exactly as they wrap in-process core
   tools (the parity contract test must assert this for OpenCTI/wintriage).
-- **Streamable-HTTP session semantics:** verify `mcp.http_app` session handling
-  matches the current `StreamableHTTPSessionManager` behavior the portal/agents
-  rely on (keep-alive, request size cap = 10 MB).
-- **`forensic-mcp` future:** with findings/timeline folding toward core, decide
-  whether it survives as a backend or its tools move to `LocalProvider` during the
-  cutover.
-- **Visibility ↔ active case wiring:** the session-scoped visibility check needs
-  the active case + role at MCP-session establishment; confirm the token/identity
-  context (PR02) exposes that to the async auth check.
-- **Pin discipline:** record the exact `fastmcp` version in the cutover PR and in
-  `MIGRATION_STATE.md`, like every other infra pin.
+- **Streamable-HTTP session semantics:** D27b verified `mcp.http_app` integration
+  and preserved the raw-ASGI request-size/auth guard.
+- **`forensic-mcp` future:** resolved by D27b/F-10; its capabilities are core,
+  not a proxy add-on.
+- **Per-token tool authorization:** tracked as B-10, implemented SIFT-side in a
+  later auth/jobs phase if prioritized.
+- **Pin discipline:** D27b recorded `fastmcp==3.4.2` in `MIGRATION_STATE.md`.
 
 ---
 
@@ -283,14 +297,13 @@ See `00_migration_charter.md` "Confirmed Decisions (Locked)":
 - **D24** — FastMCP 3.0 is the MCP substrate; Gateway = one FastAPI app
   (REST + `mcp.http_app`); providers/transforms for aggregation only; policy stays
   SIFT-owned (reaffirms D2/D3).
-- **D25** — `code-mode` excluded; `run_command` retained; context bloat solved by
-  Tool Search + Visibility.
+- **D25** — `code-mode` excluded; `run_command` retained; context bloat is not
+  solved by FastMCP code-mode. `ToolSearch`/`Visibility` are not active D27b
+  design elements after F-9.
 - **D26** — humans: own Supabase-JWT verify via FastAPI DI; machines: hash-only
   tokens; `SupabaseProvider` OAuth not adopted.
-- **D27 / D27b** — staged cutover; this doc governs **D27b** (the gateway stage):
-  a big-bang, **policy-parity-gated** PR after PR02 and after the backend revamp
-  (**D27a**, governed by `15_backend_tooling_revamp.md`), before evidence/jobs.
-  Tool-quality contract for backends is **D28**.
+- **D27 / D27b** — staged cutover; D27a and D27b are landed. Tool-quality
+  contract for backends is **D28**.
 
 ---
 

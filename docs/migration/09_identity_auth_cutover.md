@@ -206,7 +206,8 @@ the legacy path is explicitly removed.
 ### Phase ID-5 - Move evidence gate + case scope onto control-plane context
 - Switch the aggregate MCP evidence gate and case-scope checks to the
   control-plane active case and token/session case scope (§3 coupling).
-- Disable per-backend `/mcp/{name}` routes.
+- Per-backend `/mcp/{name}` routes were already removed by D27b; ID-5 does not
+  re-open that surface.
 
 ### Phase ID-6 - Sunset legacy auth/token paths
 - After verification, remove the legacy examiner bearer fallback and legacy
@@ -258,6 +259,9 @@ the legacy path is explicitly removed.
 - SSO/external IdP federation beyond Supabase Auth.
 
 ## 12. Next recommended run
-After this track's schema is approved, the first implementation work is roadmap
-phase JOB-0 baseline tests (additive, order-independent), then Phase ID-1 schema
-migration for the foundational identity tables.
+Current status: JOB-0, Phase ID-1 (PR01), and Phase ID-2 (PR02) are done. The
+next recommended run for this foundation track is a **Plan-stage PR03 / Phase
+ID-3** candidate: Supabase Auth for human operators plus
+`operator_profiles`/`case_members` resolution behind the legacy-auth flag.
+Active-case authority/propagation stays deferred to ID-4/ID-5; legacy auth/token
+sunset stays deferred to ID-6.

@@ -1049,9 +1049,9 @@ locks eligible queued rows and updates claim fields inside one transaction.
 
 ## 14. First Schema PR Recommendation
 
-This is the first schema-focused PR recommendation, not the first overall
-implementation PR. The execution roadmap still recommends the first overall PR
-be JOB-0 baseline execution smoke tests and fixtures.
+Historical note: JOB-0 and the first schema-focused PR (PR01 / Phase ID-1) are
+complete. This section is retained to explain the original sequencing logic, not
+to define the current next run.
 
 Recommended first schema-focused PR after schema approval:
 
@@ -1208,17 +1208,10 @@ Follow-up schema table PR candidate, after infrastructure is approved:
 
 ## 16. Next Recommended Run
 
-The identity foundation track is now documented in
-`09_identity_auth_cutover.md` and all blocking schema decisions are locked in
-`00_migration_charter.md`. The next focused run is to plan the first
-implementation PR candidate (`11_first_pr_candidate.md`):
-
-- Plan only the first implementation PR candidate that is safe for one Codex
-  coding session.
-- Use Phase JOB-0 from `07_execution_roadmap.md`: baseline execution
-  smoke-test fixtures and lightweight tests (additive, order-independent).
-- After JOB-0, the first feature-bearing slice is Phase ID-1 (foundational
-  identity schema) per the cutover order.
-- Identify exact test files, fixtures, package commands, and context guardrails
-  after inspecting only the minimum implementation/test files required.
-- Do not implement code in that planning run unless the user explicitly asks.
+PR01 / Phase ID-1 implemented the identity foundation schema from this document,
+and PR02 / Phase ID-2 implemented DB-first hash-only token validation with
+legacy fallback. The next schema/runtime planning target is PR03 / Phase ID-3:
+Supabase Auth for human operators plus `operator_profiles`/`case_members`
+resolution behind the legacy-auth flag. Jobs, evidence metadata, OpenSearch
+index registration, RAG, skills, and remaining control-plane tables stay behind
+the foundation track unless explicitly scoped.

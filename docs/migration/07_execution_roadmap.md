@@ -1385,13 +1385,7 @@ Freezing/deprecating file authority later:
 
 ## 10. Next Recommended Run
 
-The control-plane schema (`08_control_plane_schema.md`) and the identity
-foundation track (`09_identity_auth_cutover.md`) now exist, and all blocking
-decisions are locked in `00_migration_charter.md`.
-
-Next focused run: plan the first implementation PR candidate
-(`11_first_pr_candidate.md`) for roadmap phase JOB-0 (additive baseline
-execution smoke tests/fixtures, no runtime change). After JOB-0, implementation
-follows the cutover order: identity Phase ID-1 schema first, then the execution
-JOB-* phases. Keep planning documentation-only unless a future prompt explicitly
-authorizes code or migrations.
+JOB-0, PR01/ID-1, PR02/ID-2, D27a, and D27b are complete. Execution JOB-* work
+remains behind the foundation track. The current recommended run is PR03 /
+Phase ID-3 planning for Supabase Auth and case-membership resolution, unless the
+operator explicitly reprioritizes execution work.

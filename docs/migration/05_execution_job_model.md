@@ -42,9 +42,10 @@ This design is grounded in the current execution inventory:
   operations, review commits, report generation, and polling resolve active case
   through `_resolve_case_dir()` and legacy active-case state
   (`04_execution_current_state.md`, section 1).
-- Gateway MCP calls are synchronous; aggregate calls run an evidence gate and
-  write transport audit, while per-backend MCP routes have a different
-  policy/audit surface (`04_execution_current_state.md`, section 1).
+- Gateway MCP calls are synchronous from the caller perspective today. D27b
+  normalized MCP exposure to one aggregate FastMCP `/mcp` policy path; the older
+  per-backend route mismatch recorded in `04_execution_current_state.md` is
+  historical.
 - Native `run_command` executes synchronously through shell-free subprocess
   stages and may save stdout/stderr under case-controlled directories
   (`04_execution_current_state.md`, section 1).

@@ -7,6 +7,12 @@ changes, database migrations, OpenSearch refactors, or MCP tool rewrites.
 
 Line references were taken from repository inspection during this planning run.
 
+Run 25 status note: D27b has since removed per-backend MCP routes and landed one
+aggregate FastMCP `/mcp` policy path. Sections labeled "Current gateway
+exposure" below are historical for the pre-D27b Gateway. OpenSearch is still a
+compatibility add-on until the later D19/OpenSearch-core phase retires its
+add-on registration and exposes it as core/in-process tools.
+
 > Locked decisions (see `00_migration_charter.md`): OpenSearch profile is **3.5.0
 > with security enabled** (D6). The root repo `docker-compose.yml` (OpenSearch
 > 2.18.0, security disabled, bound to localhost) is **pre-migration only** and is
@@ -331,6 +337,11 @@ not yet provide a full control-plane link to `case_id`, `evidence_id`, `job_id`,
 
 ### Current gateway exposure
 
+Run 25 update: the bullets in this subsection describe pre-D27b Gateway
+exposure. The current landed Gateway uses one aggregate FastMCP `/mcp` path; it
+does not mount per-backend `/mcp/{name}` routes. OpenSearch may still be
+configured as an add-on, but calls pass through the aggregate policy path.
+
 - Gateway builds a backend map from configured backends and skips disabled
   backends (`packages/sift-gateway/src/sift_gateway/server.py:133-175`).
 - Gateway evaluates backend manifest requirements such as host/port or URL
@@ -418,7 +429,7 @@ OpenSearch as a first-class, case-scoped search/data service.
 | Degraded mode may be unclear when OpenSearch is down. | Gateway can hide/gate add-on tools based on manifest requirements (`packages/sift-gateway/src/sift_gateway/server.py:376-391`) and health becomes `degraded` generically (`packages/sift-gateway/src/sift_gateway/health.py:16-67`). | Operators may see missing tools rather than an explicit search/indexing degradation reason. | Add explicit OpenSearch status in Gateway health, frontend status views, and MCP structured errors. | P1 |
 | MCP Gateway may expose OpenSearch based on availability instead of target policy. | Backend requirements are evaluated from manifest `requires`, and tools are registered from backend availability (`packages/sift-gateway/src/sift_gateway/server.py:260-330`, `packages/sift-gateway/src/sift_gateway/server.py:376-504`). | A policy-critical core service behaves like a plugin. | Treat OpenSearch as a core dependency with degraded-mode policy, not an opportunistic add-on. Per-backend `/mcp/{name}` routes are **disabled** (D3); all OpenSearch tool calls use the single aggregate Gateway policy path. | P1 |
 | Frontend search/timeline behavior may depend on backend assumptions rather than explicit control-plane state. | Timeline and IOC endpoints currently read JSON files, while OpenSearch search is separate (`packages/case-dashboard/src/case_dashboard/routes.py:1660-1673`, `packages/case-dashboard/src/case_dashboard/routes.py:2147-2161`). | UI may present stale or incomplete search/indexing state. | Frontend should combine authorized control-plane reads with Gateway-mediated search results and explicit index status. | P1 |
-| Per-backend MCP routes may bypass aggregate endpoint controls. | Aggregate MCP applies evidence gates and transport audit (`mcp_endpoint.py:624-872`); per-backend route directly calls one backend (`mcp_endpoint.py:876-977`). | Add-on OpenSearch tools can have a different policy/audit surface than aggregate tools. | Restrict or deprecate per-backend OpenSearch exposure; enforce identical policy for all OpenSearch paths. | P1 |
+| Per-backend MCP routes may bypass aggregate endpoint controls. | Historical pre-D27b risk: the old aggregate MCP applied evidence gates and transport audit while the per-backend route directly called one backend. | Add-on OpenSearch tools could have had a different policy/audit surface than aggregate tools. | **Resolved by D27b:** per-backend `/mcp/{name}` routes are removed; all OpenSearch tool calls use the aggregate Gateway policy path. | done |
 | OpenSearch versions/config may diverge. | Root compose uses 2.18.0 with security disabled (`docker-compose.yml:1-35`); package compose uses 3.5.0 and `SIFT_OS_PASSWORD` (`packages/opensearch-mcp/docker/docker-compose.yml:1-17`). | Mappings, APIs, security, and demo setup can behave differently. | **Locked (D6): canonical profile is OpenSearch 3.5.0 with security enabled.** The root 2.18.0/security-disabled compose is pre-migration only and must be aligned to the target as a scoped implementation task. | P1 |
 
 ## 4. Target responsibility boundary
