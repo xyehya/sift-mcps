@@ -142,6 +142,17 @@ def get_case_dir(case_id: str | None = None) -> Path:
             raise CaseError(f"Case not found: {case_id}")
         return case_dir
 
+    try:
+        from sift_core.active_case_context import current_active_case
+
+        ctx = current_active_case()
+        if ctx and ctx.case_dir is not None:
+            if not ctx.case_dir.is_dir():
+                raise CaseError(f"Case artifact directory does not exist: {ctx.case_dir}")
+            return ctx.case_dir
+    except ImportError:  # pragma: no cover - defensive for unusual packaging
+        pass
+
     env_dir = os.environ.get("SIFT_CASE_DIR")
     if env_dir:
         case_dir = Path(env_dir)
@@ -167,10 +178,19 @@ def resolve_case_path(
     root. Bare filenames default to ``case_dir/default_subdir``.
     """
     if case_dir is None:
-        env = os.environ.get("SIFT_CASE_DIR", "").strip()
-        if not env:
+        try:
+            from sift_core.active_case_context import current_active_case
+
+            ctx = current_active_case()
+            case_dir = ctx.case_dir if ctx and ctx.case_dir is not None else None
+        except ImportError:  # pragma: no cover - defensive for unusual packaging
+            case_dir = None
+        if case_dir is None:
+            env = os.environ.get("SIFT_CASE_DIR", "").strip()
+            if env:
+                case_dir = Path(env)
+        if case_dir is None:
             raise ValueError("No active case. Use the Examiner Portal to create a case first.")
-        case_dir = Path(env)
 
     case_root = case_dir.resolve()
     raw_path = "" if path is None else str(path).strip()

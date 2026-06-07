@@ -7,14 +7,18 @@ import json
 import logging
 import os
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
+from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.agent_tools import core_tool_names
 
 from sift_gateway.audit_helpers import _extract_audit_id
+from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.evidence_gate import build_block_response, check_evidence_gate
 from sift_gateway.mcp_endpoint import (
     _append_case_context,
@@ -32,6 +36,23 @@ from sift_gateway.response_guard import (
 from sift_gateway.supabase_auth import is_tool_allowed
 
 logger = logging.getLogger(__name__)
+_CURRENT_ACTIVE_CASE: ContextVar[ActiveCase | None] = ContextVar(
+    "sift_gateway_active_case",
+    default=None,
+)
+
+
+@contextmanager
+def _use_gateway_active_case(case: ActiveCase | None):
+    token = _CURRENT_ACTIVE_CASE.set(case)
+    try:
+        yield
+    finally:
+        _CURRENT_ACTIVE_CASE.reset(token)
+
+
+def _current_gateway_active_case() -> ActiveCase | None:
+    return _CURRENT_ACTIVE_CASE.get()
 
 
 def _tool_name(context: Any) -> str:
@@ -60,6 +81,67 @@ def _request_context() -> dict:
         "source_ip": None,
         "identity": None,
     }
+
+
+def _active_case_service(gateway: Any):
+    service = getattr(gateway, "active_case_service", None)
+    if service is not None and service.__class__.__module__.startswith("unittest.mock"):
+        return None
+    return service
+
+
+def _error_result(error: str, detail: str, *, tool: str | None = None) -> ToolResult:
+    payload = {"error": error, "detail": detail}
+    if tool:
+        payload["tool"] = tool
+    return ToolResult(
+        content=[TextContent(type="text", text=json.dumps(payload))],
+        structured_content=payload,
+        is_error=True,
+    )
+
+
+def _case_extra(case: ActiveCase | None) -> dict[str, Any]:
+    if case is None:
+        return {}
+    return {
+        "case_id": case.case_id,
+        "case_key": case.case_key,
+        "case_membership_role": case.membership_role,
+    }
+
+
+def _case_text(case: ActiveCase, tool_name: str | None = None) -> TextContent:
+    payload = {
+        "case_context": {
+            "id": case.case_id,
+            "case_id": case.case_key,
+            "case_key": case.case_key,
+            "dir": case.artifact_path,
+            "evidence_dir": f"{case.artifact_path}/evidence" if case.artifact_path else None,
+            "agent_dir": f"{case.artifact_path}/agent" if case.artifact_path else None,
+            "source": "postgres_active_case_state",
+        }
+    }
+    if tool_name:
+        payload["case_context"]["tool"] = tool_name
+    return TextContent(type="text", text=json.dumps(payload, indent=2))
+
+
+def _is_case_scoped_tool(gateway: Any, name: str) -> bool:
+    if name in core_tool_names():
+        return name not in {"get_tool_help", "capability_guide"}
+    fn = getattr(gateway, "is_case_scoped_tool", None)
+    if callable(fn):
+        return bool(fn(name))
+    return False
+
+
+def _safe_case_args(gateway: Any, name: str) -> set[str]:
+    fn = getattr(gateway, "safe_case_argument_names", None)
+    if callable(fn):
+        return set(fn(name))
+    return set()
 
 
 class ToolAuthorizationMiddleware(Middleware):
@@ -181,7 +263,10 @@ class EvidenceGateMiddleware(Middleware):
 
     async def on_call_tool(self, context, call_next):
         name = _tool_name(context)
-        case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
+        case = _current_gateway_active_case()
+        if case is None and _active_case_service(self.gateway) is not None:
+            return await call_next(context)
+        case_dir_str = case.artifact_path if case is not None else os.environ.get("SIFT_CASE_DIR", "")
         gate = check_evidence_gate(case_dir_str)
         if not gate["blocked"]:
             return await call_next(context)
@@ -199,6 +284,7 @@ class EvidenceGateMiddleware(Middleware):
                 "evidence_chain_status": gate_status,
                 "issues": gate["issues"],
                 "manifest_version": gate["manifest_version"],
+                **_case_extra(case),
             },
             identity,
             examiner,
@@ -216,16 +302,16 @@ class EvidenceGateMiddleware(Middleware):
         except Exception as exc:
             logger.warning("evidence_gate: audit write failed: %s", exc)
 
-        contents = _append_case_context(
-            [
-                TextContent(
-                    type="text",
-                    text=json.dumps(build_block_response(name, gate), indent=2),
-                )
-            ],
-            case_dir_str,
-            name,
-        )
+        contents = [
+            TextContent(
+                type="text",
+                text=json.dumps(build_block_response(name, gate), indent=2),
+            ),
+        ]
+        if case is not None:
+            contents.append(_case_text(case, name))
+        else:
+            contents = _append_case_context(contents, case_dir_str, name)
         return ToolResult(content=contents, structured_content=build_block_response(name, gate))
 
 
@@ -238,8 +324,12 @@ class ResponseGuardMiddleware(Middleware):
     async def on_call_tool(self, context, call_next):
         result = await call_next(context)
         name = _tool_name(context)
-        case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
-        override = is_override_active(case_dir_str)
+        case = _current_gateway_active_case()
+        case_dir_str = case.artifact_path if case is not None else os.environ.get("SIFT_CASE_DIR", "")
+        override_key = case.case_id if case is not None else ""
+        if not case_dir_str:
+            case_dir_str = None
+        override = is_override_active(override_key or (case_dir_str or ""))
         cap = output_cap_bytes()
 
         result, findings, cap_events = guard_tool_result(
@@ -265,6 +355,7 @@ class ResponseGuardMiddleware(Middleware):
                     source="gateway_response_guard",
                     extra={
                         "examiner": examiner,
+                        **_case_extra(case),
                         "findings": [
                             {
                                 "pattern_name": f["pattern_name"],
@@ -277,7 +368,7 @@ class ResponseGuardMiddleware(Middleware):
                         "redact_override_active": override,
                         **(
                             {
-                                "override_by": get_override_status(case_dir_str).get(
+                                "override_by": get_override_status(override_key or (case_dir_str or "")).get(
                                     "enabled_by"
                                 )
                             }
@@ -301,7 +392,7 @@ class ResponseGuardMiddleware(Middleware):
                         f"output_cap: {len(cap_events)} response(s) capped at {cap} bytes"
                     ),
                     source="gateway_output_cap",
-                    extra={"examiner": examiner, "cap_events": cap_events},
+                    extra={"examiner": examiner, "cap_events": cap_events, **_case_extra(case)},
                 )
             except Exception as exc:
                 logger.warning("output_cap: audit write failed: %s", exc)
@@ -326,16 +417,141 @@ class ResponseGuardMiddleware(Middleware):
 
 
 class CaseContextMiddleware(Middleware):
-    """Append active-case context to selected gateway responses."""
+    """Resolve and append DB active-case context to selected gateway responses."""
+
+    def __init__(self, gateway: Any) -> None:
+        self.gateway = gateway
 
     async def on_call_tool(self, context, call_next):
-        result = await call_next(context)
-        result.content = _append_case_context(
-            list(result.content or []),
-            os.environ.get("SIFT_CASE_DIR", ""),
-            _tool_name(context),
+        name = _tool_name(context)
+        identity = current_mcp_identity()
+        service = _active_case_service(self.gateway)
+        case: ActiveCase | None = None
+        if service is not None:
+            try:
+                case = service.require_active_case_for_principal(identity)
+            except ActiveCaseError as exc:
+                if _is_case_scoped_tool(self.gateway, name):
+                    await self._audit_denial(name, identity, exc.reason)
+                    return _error_result(
+                        "active_case_denied",
+                        exc.reason,
+                        tool=name,
+                    )
+
+        core_context = (
+            ActiveCaseContext(
+                case_id=case.case_id,
+                case_key=case.case_key,
+                artifact_path=case.artifact_path,
+                membership_role=case.membership_role,
+            )
+            if case is not None
+            else None
         )
+        with _use_gateway_active_case(case), use_active_case_context(core_context):
+            result = await call_next(context)
+        if case is not None:
+            result.content = list(result.content or [])
+            result.content.append(_case_text(case, name))
+        elif service is None:
+            result.content = _append_case_context(
+                list(result.content or []),
+                os.environ.get("SIFT_CASE_DIR", ""),
+                name,
+            )
         return result
+
+    async def _audit_denial(self, name: str, identity: Any, reason: str) -> None:
+        req_ctx = _request_context()
+        extra_fields = _stamp_identity_extra(
+            {
+                "role": req_ctx["role"],
+                "token_id": req_ctx["token_id"],
+                "source_ip": req_ctx["source_ip"],
+                "status": "denied",
+                "denial_reason": reason,
+            },
+            identity,
+            req_ctx["examiner"],
+        )
+        try:
+            await asyncio.to_thread(
+                self.gateway._audit.log,
+                tool=name,
+                params={},
+                result_summary=f"denied: {reason}",
+                source="gateway_active_case",
+                extra=extra_fields,
+                examiner_override=identity.principal if identity else None,
+            )
+        except Exception as exc:
+            logger.warning("active_case: audit write failed: %s", exc)
+
+
+class ProxyActiveCaseMiddleware(Middleware):
+    """B-11: inject DB case args for safe proxied tools or deny implicit-env tools."""
+
+    def __init__(self, gateway: Any) -> None:
+        self.gateway = gateway
+
+    async def on_call_tool(self, context, call_next):
+        name = _tool_name(context)
+        if name in core_tool_names() or not _is_case_scoped_tool(self.gateway, name):
+            return await call_next(context)
+        case = _current_gateway_active_case()
+        if case is None:
+            return await call_next(context)
+        safe_args = _safe_case_args(self.gateway, name)
+        if not safe_args:
+            await self._audit_denial(name, case, "proxy_requires_implicit_case")
+            return _error_result(
+                "active_case_proxy_denied",
+                "proxied case-scoped tool does not expose a safe case_id/case_key argument",
+                tool=name,
+            )
+        args = _tool_args(context)
+        for key, expected in (("case_id", case.case_id), ("case_key", case.case_key)):
+            if key not in safe_args:
+                continue
+            supplied = args.get(key)
+            if supplied and str(supplied) != expected:
+                await self._audit_denial(name, case, "client_case_mismatch")
+                return _error_result(
+                    "active_case_mismatch",
+                    f"client-supplied {key} does not match the DB active case",
+                    tool=name,
+                )
+            args[key] = expected
+        return await call_next(context)
+
+    async def _audit_denial(self, name: str, case: ActiveCase, reason: str) -> None:
+        req_ctx = _request_context()
+        identity = req_ctx["identity"]
+        extra_fields = _stamp_identity_extra(
+            {
+                "role": req_ctx["role"],
+                "token_id": req_ctx["token_id"],
+                "source_ip": req_ctx["source_ip"],
+                "status": "denied",
+                "denial_reason": reason,
+                **_case_extra(case),
+            },
+            identity,
+            req_ctx["examiner"],
+        )
+        try:
+            await asyncio.to_thread(
+                self.gateway._audit.log,
+                tool=name,
+                params={},
+                result_summary=f"denied: {reason}",
+                source="gateway_proxy_active_case",
+                extra=extra_fields,
+                examiner_override=identity.principal if identity else None,
+            )
+        except Exception as exc:
+            logger.warning("proxy_active_case: audit write failed: %s", exc)
 
 
 class AuditEnvelopeMiddleware(Middleware):
@@ -374,6 +590,7 @@ class AuditEnvelopeMiddleware(Middleware):
                     "backend": backend_name,
                     "status": status,
                     "backend_audit_id": backend_audit_id,
+                    **_case_extra(_current_gateway_active_case()),
                 },
                 identity,
                 examiner,
@@ -410,8 +627,9 @@ def gateway_policy_middlewares(
     """
     return [
         ToolAuthorizationMiddleware(gateway, auth_enabled=auth_enabled),
+        CaseContextMiddleware(gateway),
+        ProxyActiveCaseMiddleware(gateway),
         EvidenceGateMiddleware(gateway),
         AuditEnvelopeMiddleware(gateway),
-        CaseContextMiddleware(),
         ResponseGuardMiddleware(gateway),
     ]

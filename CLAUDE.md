@@ -158,11 +158,14 @@ pinned GoTrue lacks admin session logout). Run 30 added
 `docs/migration/20_portal_dashboard_inventory.md` as a normalized portal/API
 inventory reference.
 
-Next is **PR03B / Batch B** (active-case DB authority, ID-4) — a Build session
-from `docs/migration/21_pr03b_active_case_db_authority.md`. D32 locks the
-active-case model: Supabase/Postgres `app.active_case_state` wins; no
-active-case env/config/pointer authority or generated exports; no historical
-data migration. Carry B-4/B-11/B-12/B-13/B-15 forward unless a scoped doc closes
-them. Deployment note: the VM systemd `sift-gateway` runs the old tree
+PR03B / Batch B (active-case DB authority, ID-4) is implemented on branch
+`codex/pr03b-active-case-db-authority` from
+`docs/migration/21_pr03b_active_case_db_authority.md`; Land/review it if still
+unmerged. D32 locks the active-case model: Supabase/Postgres
+`app.active_case_state` wins; no active-case env/config/pointer authority or
+generated exports; no historical data migration. Carry B-4/B-12/B-13/B-15
+forward unless a scoped doc closes them; B-11 is implemented by PR03B and should
+be marked DONE only at PR03B Land. Deployment note: the VM systemd
+`sift-gateway` runs the old tree
 (`~/sift-mcps`); production rollout of the new auth code/config/env is the
 installer follow-up, not PR03A.

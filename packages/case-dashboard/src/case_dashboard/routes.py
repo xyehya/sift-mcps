@@ -11,7 +11,6 @@ import secrets
 import tempfile
 import threading
 import time
-import inspect
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -89,6 +88,7 @@ _TOKEN_REGISTRY = None
 # exception carrying int .http_status and str .reason). case_dashboard NEVER
 # imports sift_gateway; all Supabase/principal logic is reached through this.
 _SUPABASE_AUTH = None
+_ACTIVE_CASES = None
 # When false, the legacy PBKDF2 challenge/login, sift_session HMAC cookie, and
 # examiner Bearer fallback are disabled. Defaults to True so existing suites and
 # non-Supabase deployments keep working; the Gateway passes the real flag.
@@ -207,11 +207,18 @@ _ON_CASE_ACTIVATED: Callable[[str], object] | None = None
 
 
 def _resolve_case_dir() -> Path | None:
-    """Resolve case directory per-request.
+    """Resolve the active case artifact directory for legacy file-backed reads."""
+    if _ACTIVE_CASES is not None:
+        try:
+            case = _ACTIVE_CASES.get_active_case()
+            artifact_path = case.as_dict().get("artifact_path")
+            if artifact_path:
+                p = Path(artifact_path)
+                return p if p.is_dir() else None
+        except Exception:
+            return None
 
-    Priority: SIFT_CASE_DIR env var (set via gateway.yaml case.dir).
-    Returns None if no case is active or directory lacks CASE.yaml.
-    """
+    # Legacy fallback for non-PR03B dashboard tests / CLI compatibility only.
     from sift_common import resolve_case_dir
 
     d = resolve_case_dir()
@@ -221,9 +228,16 @@ def _resolve_case_dir() -> Path | None:
     return p if p.is_dir() and (p / "CASE.yaml").exists() else None
 
 
+def _active_case_dir_str() -> str:
+    if _ACTIVE_CASES is None:
+        return os.environ.get("SIFT_CASE_DIR", "")
+    case_dir = _resolve_case_dir()
+    return str(case_dir) if case_dir is not None else ""
+
+
 def _no_case_response() -> JSONResponse:
     return JSONResponse(
-        {"error": "No active case. Set SIFT_CASE_DIR in gateway.yaml case.dir."},
+        {"error": "No active case selected in Postgres active_case_state."},
         status_code=404,
     )
 
@@ -355,6 +369,19 @@ def _require_portal_role(request: Request) -> JSONResponse | None:
             status_code=403,
         )
     return None
+
+
+def _active_case_error_response(exc: Exception, default: int = 500) -> JSONResponse:
+    status = getattr(exc, "http_status", None)
+    if not isinstance(status, int) or status < 400 or status > 599:
+        status = default
+    reason = getattr(exc, "reason", None) or str(exc) or "active_case_error"
+    return JSONResponse({"error": reason}, status_code=status)
+
+
+def _request_principal(request: Request) -> dict | None:
+    principal = getattr(request.state, "principal", None)
+    return principal if isinstance(principal, dict) else None
 
 
 def _check_commit_lockout(examiner: str) -> str | None:
@@ -681,7 +708,7 @@ async def post_evidence_chain_rescan(request: Request) -> JSONResponse:
     if not case_dir:
         return _no_case_response()
 
-    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
+    case_dir_str = _active_case_dir_str()
     if _ON_CHAIN_MUTATION and case_dir_str:
         try:
             _ON_CHAIN_MUTATION(case_dir_str)
@@ -794,7 +821,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         logger.exception("Evidence seal failed")
         return JSONResponse({"error": "Seal failed — check gateway logs"}, status_code=500)
 
-    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
+    case_dir_str = _active_case_dir_str()
     if _ON_CHAIN_MUTATION and case_dir_str:
         try:
             _ON_CHAIN_MUTATION(case_dir_str)
@@ -880,7 +907,7 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
         logger.exception("Evidence ignore failed")
         return JSONResponse({"error": "Ignore failed — check gateway logs"}, status_code=500)
 
-    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
+    case_dir_str = _active_case_dir_str()
     if _ON_CHAIN_MUTATION and case_dir_str:
         try:
             _ON_CHAIN_MUTATION(case_dir_str)
@@ -962,7 +989,7 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
         except OSError as e:
             logger.warning("retire: file unlink failed for %s: %s", abs_path, e)
 
-    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
+    case_dir_str = _active_case_dir_str()
     if _ON_CHAIN_MUTATION and case_dir_str:
         try:
             _ON_CHAIN_MUTATION(case_dir_str)
@@ -1111,7 +1138,7 @@ async def get_response_guard_status(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
+    case_dir_str = _active_case_dir_str()
     if _OVERRIDE_GET_STATUS is None:
         return JSONResponse({"active": False, "seconds_remaining": 0, "enabled_by": None,
                              "warning": "Response guard not wired (non-gateway context)"})
@@ -1127,7 +1154,7 @@ async def post_response_guard_override(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
+    case_dir_str = _active_case_dir_str()
     if not case_dir_str:
         return _no_case_response()
 
@@ -1174,7 +1201,7 @@ async def post_response_guard_override_cancel(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir_str = os.environ.get("SIFT_CASE_DIR", "")
+    case_dir_str = _active_case_dir_str()
     examiner = _resolve_examiner(request)
 
     if _OVERRIDE_CANCEL is None:
@@ -1828,6 +1855,18 @@ async def get_case(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
+    if _ACTIVE_CASES is not None:
+        try:
+            principal = _request_principal(request)
+            require_active = getattr(_ACTIVE_CASES, "require_active_case_for_principal", None)
+            if principal is not None and callable(require_active):
+                case = require_active(principal)
+            else:
+                case = _ACTIVE_CASES.get_active_case(principal)
+            return JSONResponse(case.as_dict())
+        except Exception as exc:
+            return _active_case_error_response(exc)
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1857,9 +1896,6 @@ async def post_case_metadata(request: Request) -> JSONResponse:
     err = _must_reset_check(examiner)
     if err:
         return err
-    case_dir = _resolve_case_dir()
-    if not case_dir:
-        return _no_case_response()
 
     try:
         body = await request.json()
@@ -1867,6 +1903,20 @@ async def post_case_metadata(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
     if not isinstance(body, dict):
         return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
+
+    if _ACTIVE_CASES is not None:
+        try:
+            active = _ACTIVE_CASES.get_active_case(_request_principal(request))
+            updated = _ACTIVE_CASES.update_case_metadata(
+                active.case_id, _request_principal(request), body
+            )
+            return JSONResponse(updated.as_dict())
+        except Exception as exc:
+            return _active_case_error_response(exc)
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
 
     field = body.get("field")
     if not isinstance(field, str) or not field.strip():
@@ -3927,13 +3977,19 @@ def _load_cases_root() -> Path:
 
 
 async def get_cases(request: Request) -> JSONResponse:
-    """GET /portal/api/cases — List all cases under the cases root."""
+    """GET /portal/api/cases — List DB-visible cases."""
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     role_err = _require_portal_role(request)
     if role_err:
         return role_err
+
+    if _ACTIVE_CASES is not None:
+        try:
+            return JSONResponse({"cases": _ACTIVE_CASES.list_cases(_request_principal(request))})
+        except Exception as exc:
+            return _active_case_error_response(exc)
 
     try:
         from sift_core.case_ops import case_list_data
@@ -3947,6 +4003,12 @@ async def get_cases(request: Request) -> JSONResponse:
 
 async def get_case_activate_challenge(request: Request) -> JSONResponse:
     """GET /portal/api/case/activate/challenge — Issue challenge nonce for case activation."""
+    if _ACTIVE_CASES is not None and _SUPABASE_AUTH is not None:
+        role_err = _require_examiner_role(request)
+        if role_err:
+            return role_err
+        return JSONResponse({"required": False, "authority": "postgres"})
+
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
@@ -3999,21 +4061,13 @@ async def get_case_activate_challenge(request: Request) -> JSONResponse:
 
 
 async def post_case_activate(request: Request) -> JSONResponse:
-    """POST /portal/api/case/activate — Activate an existing case with password confirmation."""
+    """POST /portal/api/case/activate — Activate an existing DB case."""
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
-
-    lockout_msg = _check_commit_lockout(f"activate:{examiner}")
-    if lockout_msg:
-        return JSONResponse({"error": lockout_msg}, status_code=429)
-
-    err = _must_reset_check(examiner)
-    if err:
-        return err
 
     try:
         body = await request.json()
@@ -4024,6 +4078,24 @@ async def post_case_activate(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Expected JSON object"}, status_code=400)
 
     case_id = body.get("case_id", "").strip()
+    if _ACTIVE_CASES is not None:
+        case_id = str(body.get("case_id") or body.get("case_key") or "").strip()
+        if not case_id:
+            return JSONResponse({"error": "Missing case_id"}, status_code=400)
+        try:
+            case = _ACTIVE_CASES.set_active_case(case_id, _request_principal(request))
+            return JSONResponse({"ok": True, **case.as_dict()})
+        except Exception as exc:
+            return _active_case_error_response(exc)
+
+    lockout_msg = _check_commit_lockout(f"activate:{examiner}")
+    if lockout_msg:
+        return JSONResponse({"error": lockout_msg}, status_code=429)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
     challenge_id = body.get("challenge_id", "").strip()
     response_hmac = body.get("response", "").strip()
 
@@ -4079,42 +4151,6 @@ async def post_case_activate(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Another case operation is in progress"}, status_code=409)
 
     try:
-        # Update gateway.yaml config atomically if configured
-        if _GATEWAY_CONFIG_PATH is not None:
-            try:
-                with _GATEWAY_CONFIG_LOCK:
-                    _case_config_write(str(real_requested))
-            except Exception as e:
-                logger.error("Failed to update gateway config with case dir: %s", e)
-                return JSONResponse({"error": "Failed to update gateway config"}, status_code=500)
-
-        # Update environment variable in-process
-        os.environ["SIFT_CASE_DIR"] = str(real_requested)
-        os.environ["SIFT_CASES_ROOT"] = str(real_root)
-        try:
-            _write_cli_case_pointer(str(real_requested))
-        except OSError as e:
-            logger.error("Failed to update legacy CLI case pointer: %s", e)
-            return JSONResponse(
-                {"error": "Failed to update legacy CLI case pointer"},
-                status_code=500,
-            )
-
-        if _ON_CASE_ACTIVATED is not None:
-            maybe_awaitable = _ON_CASE_ACTIVATED(str(real_requested))
-            if inspect.isawaitable(maybe_awaitable):
-                await maybe_awaitable
-        else:
-            gateway = _resolve_gateway(request)
-            if gateway:
-                if hasattr(gateway, "config") and isinstance(gateway.config, dict):
-                    if "case" not in gateway.config:
-                        gateway.config["case"] = {}
-                    gateway.config["case"]["dir"] = str(real_requested)
-
-                if hasattr(gateway, "restart_backends"):
-                    await gateway.restart_backends()
-
         return JSONResponse(
             {"ok": True, "case_id": case_id, "case_dir": str(real_requested)}
         )
@@ -4249,46 +4285,25 @@ async def post_case_create(request: Request) -> JSONResponse:
         init_evidence_chain(real_requested)
         case_approvals_path(real_requested).touch(exist_ok=True)
 
-        # Update gateway.yaml config atomically if configured
-        if _GATEWAY_CONFIG_PATH is not None:
+        db_case = None
+        if _ACTIVE_CASES is not None:
             try:
-                with _GATEWAY_CONFIG_LOCK:
-                    _case_config_write(str(real_requested))
-            except Exception as e:
-                logger.error("Failed to update gateway config with case dir: %s", e)
-                return JSONResponse({"error": "Failed to update gateway config"}, status_code=500)
+                db_case = _ACTIVE_CASES.create_case(
+                    {
+                        "case_key": case_id,
+                        "title": title,
+                        "description": description,
+                        "artifact_path": str(real_requested),
+                        "activate": bool(body.get("activate", True)),
+                    },
+                    _request_principal(request),
+                )
+            except Exception as exc:
+                return _active_case_error_response(exc)
 
-        # Update environment variable in-process
-        os.environ["SIFT_CASE_DIR"] = str(real_requested)
-        os.environ["SIFT_CASES_ROOT"] = str(real_root)
-        try:
-            _write_cli_case_pointer(str(real_requested))
-        except OSError as e:
-            logger.error("Failed to update legacy CLI case pointer: %s", e)
-            return JSONResponse(
-                {"error": "Failed to update legacy CLI case pointer"},
-                status_code=500,
-            )
-
-        if _ON_CASE_ACTIVATED is not None:
-            maybe_awaitable = _ON_CASE_ACTIVATED(str(real_requested))
-            if inspect.isawaitable(maybe_awaitable):
-                await maybe_awaitable
-        else:
-            # Restart backends when no explicit parent-gateway callback was wired.
-            gateway = _resolve_gateway(request)
-            if gateway:
-                if hasattr(gateway, "config") and isinstance(gateway.config, dict):
-                    if "case" not in gateway.config:
-                        gateway.config["case"] = {}
-                    gateway.config["case"]["dir"] = str(real_requested)
-
-                if hasattr(gateway, "restart_backends"):
-                    await gateway.restart_backends()
-
-        return JSONResponse(
-            {"ok": True, "case_id": case_id, "case_dir": str(real_requested)}
-        )
+        if db_case is not None:
+            return JSONResponse({"ok": True, **db_case.as_dict()})
+        return JSONResponse({"ok": True, "case_id": case_id, "case_dir": str(real_requested)})
 
     except Exception as e:
         logger.error("Failed to create case: %s", e)
@@ -5127,6 +5142,7 @@ def create_dashboard_v2_app(
     on_override_cancel: Callable[[str], None] | None = None,
     *,
     supabase_auth=None,
+    active_case_service=None,
     legacy_portal_session_enabled: bool = True,
 ) -> Starlette:
     """Create the v2 dashboard sub-app for mounting on the gateway.
@@ -5157,6 +5173,9 @@ def create_dashboard_v2_app(
             exception carrying int .http_status and str .reason). case_dashboard
             never imports sift_gateway; all Supabase/principal logic is reached
             through this object. When None, the portal uses the legacy auth path.
+        active_case_service: PR03B Gateway-injected DB active-case service. When
+            present, case list/create/activate/metadata use Postgres authority
+            and never write active-case env/config/pointer exports.
         legacy_portal_session_enabled: When false, disables the legacy PBKDF2
             challenge/login, the sift_session HMAC cookie, and the examiner Bearer
             fallback. Defaults to True so existing suites and non-Supabase
@@ -5169,7 +5188,7 @@ def create_dashboard_v2_app(
     global _TOKEN_REGISTRY
     global _ON_CHAIN_MUTATION, _OVERRIDE_GET_STATUS, _OVERRIDE_ENABLE, _OVERRIDE_CANCEL
     global _ON_CASE_ACTIVATED
-    global _SUPABASE_AUTH, _LEGACY_PORTAL_SESSION_ENABLED
+    global _SUPABASE_AUTH, _ACTIVE_CASES, _LEGACY_PORTAL_SESSION_ENABLED
     _SESSION_SECRET = session_secret
     _SESSION_MAX_AGE = session_max_age
     _API_KEYS = api_keys if api_keys is not None else {}
@@ -5181,6 +5200,7 @@ def create_dashboard_v2_app(
     _OVERRIDE_ENABLE = on_override_enable
     _OVERRIDE_CANCEL = on_override_cancel
     _SUPABASE_AUTH = supabase_auth
+    _ACTIVE_CASES = active_case_service
     _LEGACY_PORTAL_SESSION_ENABLED = legacy_portal_session_enabled
     routes = _dashboard_api_routes()
     routes.append(Route("/assets/{filename:path}", serve_v2_assets, methods=["GET"]))

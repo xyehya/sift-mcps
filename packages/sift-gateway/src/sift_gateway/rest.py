@@ -242,16 +242,30 @@ async def call_tool(request: Request) -> JSONResponse:
     if not isinstance(arguments, dict):
         return JSONResponse({"error": "arguments must be an object"}, status_code=400)
 
-    if tool_name not in gateway._tool_map:
+    from sift_core.agent_tools import core_tool_names
+
+    if tool_name not in gateway._tool_map and tool_name not in core_tool_names():
         return JSONResponse(
             {"error": f"Tool not found: {tool_name}"},
             status_code=404,
         )
 
     try:
-        result = await gateway.call_tool(
-            tool_name, arguments, examiner=identity.get("examiner")
-        )
+        try:
+            result = await gateway.call_tool(
+                tool_name,
+                arguments,
+                examiner=identity.get("examiner"),
+                identity=getattr(request.state, "identity", None),
+            )
+        except TypeError as exc:
+            if "identity" not in str(exc):
+                raise
+            result = await gateway.call_tool(
+                tool_name,
+                arguments,
+                examiner=identity.get("examiner"),
+            )
         # Serialize content items
         serialized = []
         for item in result:
@@ -265,7 +279,7 @@ async def call_tool(request: Request) -> JSONResponse:
         return JSONResponse(
             {
                 "tool": tool_name,
-                "backend": gateway._tool_map[tool_name],
+                "backend": gateway._tool_map.get(tool_name, "sift-core"),
                 "result": serialized,
             }
         )
@@ -276,6 +290,26 @@ async def call_tool(request: Request) -> JSONResponse:
             status_code=404,
         )
     except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
+        try:
+            from sift_gateway.active_case import ActiveCaseError
+        except Exception:  # pragma: no cover - defensive import fallback
+            ActiveCaseError = ()  # type: ignore[assignment]
+        if isinstance(exc, ActiveCaseError):
+            return JSONResponse(
+                {"error": exc.reason, "tool": tool_name},
+                status_code=exc.http_status,
+            )
+        message = str(exc)
+        if message in {
+            "proxied case-scoped tool does not expose a safe case_id/case_key argument",
+            "client-supplied case_id does not match DB active case",
+            "client-supplied case_key does not match DB active case",
+            "Active case has no artifact path for case-scoped tool",
+        }:
+            return JSONResponse(
+                {"error": message, "tool": tool_name},
+                status_code=403,
+            )
         logger.error(
             "Tool call failed: %s — %s: %s",
             tool_name,

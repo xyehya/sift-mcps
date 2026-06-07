@@ -613,6 +613,19 @@ class CaseManager:
         return resolve_examiner()
 
     def _require_active_case(self) -> Path:
+        try:
+            from sift_core.active_case_context import current_active_case
+
+            ctx = current_active_case()
+            if ctx and ctx.case_dir is not None:
+                case_dir = ctx.case_dir
+                if case_dir.is_dir():
+                    self._active_case_id = ctx.case_key or case_dir.name
+                    self._active_case_path = case_dir
+                    return case_dir
+        except Exception:
+            pass
+
         # Check SIFT_CASE_DIR env var first
         from sift_common import resolve_case_dir as _resolve_case_dir_env
         try:

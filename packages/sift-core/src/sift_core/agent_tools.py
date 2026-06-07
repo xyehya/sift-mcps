@@ -515,7 +515,15 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         if working_dir:
             cwd = str(resolve_case_path(working_dir, default_subdir=""))
         else:
-            cwd = os.environ.get("SIFT_CASE_DIR", "") or None
+            try:
+                from sift_core.active_case_context import current_active_case
+
+                ctx = current_active_case()
+                cwd = str(ctx.case_dir) if ctx and ctx.case_dir is not None else None
+            except ImportError:  # pragma: no cover - defensive for unusual packaging
+                cwd = None
+            if cwd is None:
+                cwd = os.environ.get("SIFT_CASE_DIR", "") or None
     except ValueError:
         return build_response(
             tool_name="run_command",

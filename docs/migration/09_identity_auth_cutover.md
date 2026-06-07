@@ -1,6 +1,6 @@
 # Identity, Auth, and Case-Scope Cutover (Foundation Track)
 
-Last updated: 2026-06-07 (Run 31 D32 active-case cutover update).
+Last updated: 2026-06-07 (Run 33 PR03B active-case DB authority build).
 
 Scope: planning only. This document defines the **foundation track** of the
 migration: identity, authentication, case membership, active-case authority, and
@@ -26,6 +26,12 @@ compatibility-export plan. PR03B goes directly to Postgres active-case authority
 `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and
 `~/.sift/active_case` are not read or generated as active-case authority. No
 historical data migration is part of PR03B.
+
+**Run 33 build update:** PR03B / Batch B is implemented on
+`codex/pr03b-active-case-db-authority`: Gateway REST/MCP, portal case APIs, core
+local tools, and B-11 proxy propagation now use the DB active-case context for
+the scoped request paths. Land/review on `revamp/spg-v1` remains the next
+operator step if the branch has not been merged.
 
 ## 1. Why this is first
 
@@ -316,13 +322,8 @@ the legacy path is explicitly removed.
 - SSO/external IdP federation beyond Supabase Auth.
 
 ## 12. Next recommended run
-Current status: JOB-0, Phase ID-1 (PR01), Phase ID-2 (PR02), D27a, D27b, and
-**Phase ID-3 / PR03A (implemented, Run 28)** — unified Supabase JWT auth for REST
-and MCP, operator/agent/service principal resolution, portal Supabase
-login/session, agent/service JWT issuance, DB-backed tool authorization B-10,
-shared-resolver cleanup B-14; revocation model **D31**) are done. The next
-recommended run for this foundation track is **Build-stage Phase ID-4 / PR03B /
-Batch B** from `21_pr03b_active_case_db_authority.md` (active-case DB authority
-+ Gateway propagation, carrying B-11, no historical data migration).
-Active-case authority/propagation stays deferred to ID-4/ID-5; legacy auth/token
+Current status: JOB-0, Phase ID-1 (PR01), Phase ID-2 (PR02), D27a, D27b,
+**Phase ID-3 / PR03A (implemented, Run 28)**, and **Phase ID-4 / PR03B
+(implemented on branch, Run 33)** are done for their scoped build branches.
+PR03B should be landed/reviewed if still unmerged. Legacy auth/token
 sunset stays deferred to ID-6.

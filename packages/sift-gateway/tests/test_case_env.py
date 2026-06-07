@@ -13,7 +13,7 @@ def _execute_security():
     return {"execute": {"security": {"denied_binaries": ["env"]}}}
 
 
-def test_load_config_sets_case_dir_and_cases_root(tmp_path, monkeypatch):
+def test_load_config_ignores_case_dir_and_sets_cases_root(tmp_path, monkeypatch):
     case_dir = tmp_path / "cases" / "case-one"
     cfg_path = tmp_path / "gateway.yaml"
     cfg_path.write_text(
@@ -26,11 +26,11 @@ def test_load_config_sets_case_dir_and_cases_root(tmp_path, monkeypatch):
 
     load_config(str(cfg_path))
 
-    assert Path(os.environ["SIFT_CASE_DIR"]) == case_dir
+    assert "SIFT_CASE_DIR" not in os.environ
     assert Path(os.environ["SIFT_CASES_ROOT"]) == case_dir.parent
 
 
-def test_load_config_clears_stale_case_dir_when_no_active_case(tmp_path, monkeypatch):
+def test_load_config_does_not_regenerate_or_clear_stale_case_dir(tmp_path, monkeypatch):
     cfg_path = tmp_path / "gateway.yaml"
     cfg_path.write_text(
         yaml.safe_dump({"case": {"root": str(tmp_path / "cases"), "dir": ""}, **_execute_security()}),
@@ -41,18 +41,18 @@ def test_load_config_clears_stale_case_dir_when_no_active_case(tmp_path, monkeyp
 
     load_config(str(cfg_path))
 
-    assert "SIFT_CASE_DIR" not in os.environ
+    assert os.environ["SIFT_CASE_DIR"] == str(tmp_path / "stale")
     assert Path(os.environ["SIFT_CASES_ROOT"]) == tmp_path / "cases"
 
 
-def test_gateway_constructor_applies_case_env(tmp_path, monkeypatch):
+def test_gateway_constructor_does_not_publish_case_dir(tmp_path, monkeypatch):
     case_dir = tmp_path / "cases" / "case-two"
     monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
     monkeypatch.delenv("SIFT_CASES_ROOT", raising=False)
 
     Gateway({"case": {"root": str(case_dir.parent), "dir": str(case_dir)}, "backends": {}, **_execute_security()})
 
-    assert Path(os.environ["SIFT_CASE_DIR"]) == case_dir
+    assert "SIFT_CASE_DIR" not in os.environ
     assert Path(os.environ["SIFT_CASES_ROOT"]) == case_dir.parent
 
 

@@ -2,14 +2,14 @@
 
 ## Current Objective
 
-**PR03B / Batch B is planned and Build-ready** via
-`docs/migration/21_pr03b_active_case_db_authority.md` (Run 31). D32 is now
-locked in the charter: Supabase/Postgres `app.active_case_state` is the only
-active-case authority; `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`,
-`gateway.yaml case.dir`, and `~/.sift/active_case` are not authority and are not
-regenerated as active-case exports; no historical data migration is part of
-PR03B. The next session should be a **Build-stage PR03B** run from doc 21,
-carrying B-11.
+**PR03B / Batch B active-case DB authority is implemented** on branch
+`codex/pr03b-active-case-db-authority` (Run 33), from
+`docs/migration/21_pr03b_active_case_db_authority.md`. Supabase/Postgres
+`app.active_case_state` is now the runtime active-case authority for the scoped
+request paths. `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and
+`~/.sift/active_case` are not regenerated as active-case exports and do not win
+over the DB active case on Gateway/portal/core/FastMCP request paths. No
+historical data migration was added.
 
 Landed foundation: D27b gateway cutover is landed on `revamp/spg-v1` (Runs
 23-24), serving one FastAPI ASGI app with aggregate FastMCP `http_app` at
@@ -24,25 +24,98 @@ pinned Supabase v1.26.05.
 Run 30 added `20_portal_dashboard_inventory.md`, the normalized portal/dashboard
 workflow and API inventory. Run 31 reconciled recurring architecture docs and
 created doc 21. Run 32 demoted D4 to a historical pointer so new active-case
-work cites D32 only. D30 remains the target credential model; PR02 hash-only
-tokens remain a transitional compatibility bridge until ID-6.
+work cites D32 only. Run 33 implemented PR03B. D30 remains the target credential
+model; PR02 hash-only tokens remain a transitional compatibility bridge until
+ID-6.
 
-FastMCP grounding from D27b remains relevant for PR03B: host `.venv` had
-**fastmcp==3.4.2**; `create_proxy` imports from `fastmcp.server`;
-`Middleware.on_call_tool` fires for mounted proxied tools; proxied
-`ToolResult.content`, `structured_content`, and `meta` are mutable after
-`call_next`. B-11 remains OPEN because parent middleware/session state does not
-cross mounted/proxied servers, so PR03B must inject/override safe case args or
-deny case-scoped proxy calls instead of using env.
+FastMCP 3.4.2 grounding was reconfirmed in Run 33 against the installed wheel:
+`create_proxy` imports from `fastmcp.server`; `Middleware.on_call_tool(self,
+context, call_next)` wraps mounted proxied tools; `context.message.arguments`
+can be mutated before `call_next` and those arguments reach the proxied child;
+`MiddlewareContext` is frozen, so PR03B uses a Gateway context variable and core
+active-case context instead of attaching state to the FastMCP context object.
+B-11 is handled by injecting/overriding safe `case_id`/`case_key` arguments or
+returning typed audited denials for implicit-env/filesystem case-scoped proxy
+tools.
 
-**Next:** Build **PR03B / Batch B** from
-`21_pr03b_active_case_db_authority.md`: Postgres active-case authority, portal
-case API turnover, Gateway REST/MCP propagation, core/common active-case
-context, B-11 proxy handling, stale env/config/pointer negative tests, no data
-migration. Keep D22/F-11 (`mcp_backends` registry), evidence/audit DB authority
-(Batch C), jobs/workers (Batch E), OpenSearch-core, RAG/skills, and
+**Next:** review/Land PR03B if this branch has not been merged, then plan the
+next scoped candidate. Keep D22/F-11 (`mcp_backends` registry), evidence/audit
+DB authority (Batch C), jobs/workers (Batch E), OpenSearch-core, RAG/skills, and
 findings/timeline/TODO/report data migration separate unless a new candidate doc
-explicitly batches them. Carry B-4/B-11/B-12/B-13/B-15 forward.
+explicitly batches them. Carry B-4/B-12/B-13/B-15 forward.
+
+## Run 33 — PR03B Active-Case DB Authority Build
+
+Build-stage run on branch `codex/pr03b-active-case-db-authority`, following
+`21_pr03b_active_case_db_authority.md` without redefining scope.
+
+Implemented:
+- Added Gateway `ActiveCaseService` for Postgres `app.active_case_state`,
+  `app.cases`, memberships, DB audit rows, case list/create/activate/metadata,
+  and typed active-case denials.
+- Added `202606070400_active_case_authority.sql` comments/helpers only: no
+  historical import; `app.deployment_active_case` read helper; legacy case path
+  columns documented as artifact references, not active-case authority.
+- Portal case list/create/activate/challenge/current-case/metadata now use the
+  injected DB active-case service when present. Create may still build the
+  artifact directory skeleton, but active-case selection is DB-only and no
+  env/config/pointer export is generated.
+- Gateway REST and FastMCP policy resolve the DB active case for case-scoped
+  operations, enforce membership, feed core local tools through explicit
+  active-case context, and stamp evidence gate, response guard, and audit
+  envelopes with DB `case_id`/`case_key`.
+- B-11 proxy handling implemented: safe proxied case args are injected/overridden
+  from DB context; mismatched client case args and implicit-env/filesystem
+  case-scoped proxy tools return typed audited denials.
+- Core local request paths gained `sift_core.active_case_context`; legacy
+  env/pointer fallback remains only for non-Gateway CLI/test compatibility.
+- `apply_case_env` no longer publishes or clears `SIFT_CASE_DIR`; template
+  `gateway.yaml` no longer declares `case.dir`.
+
+Confirmed before changing code:
+- Installed `fastmcp==3.4.2`.
+- Parent FastMCP middleware wraps mounted `create_proxy(child)` tools.
+- Mutating `context.message.arguments` before proxy dispatch reaches the child
+  tool.
+- `MiddlewareContext` is frozen, so state is carried by Gateway/core contextvars,
+  not by mutating the context object.
+
+Verification:
+- Host: `uv run pytest tests/db` — 24 passed.
+- Host: `uv run pytest packages/sift-gateway/tests` — 293 passed.
+- Host: `uv run pytest packages/case-dashboard/tests` — 309 passed, 64 warnings.
+- Host: `uv run pytest packages/sift-core/tests` — 330 passed.
+- Host: focused post-fix portal/gateway PR03B tests — passed.
+- VM (`192.168.122.81`, `/usr/bin/python3.12`,
+  `UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never`): imports OK with
+  FastMCP 3.4.2.
+- VM Postgres syntax: PR01 + PR03A + PR03B migrations applied inside
+  `BEGIN/ROLLBACK` against pinned Supabase/Postgres — clean, rollback left no
+  schema.
+- VM targeted PR03B suite: 50 gateway/db authz tests, 24 portal tests, and 2 core
+  active-case-context tests passed when split by package.
+- VM broad suites: `packages/sift-gateway/tests` 293 passed;
+  `packages/case-dashboard/tests` 309 passed, 64 warnings;
+  `packages/sift-core/tests` 330 passed.
+- VM two-case stale-authority negative probe: with stale `SIFT_CASE_DIR` and
+  `~/.sift/active_case` pointing at case A, DB active case B was returned by the
+  active-case service and portal `/api/case`, used by core active-case context,
+  and injected into a mounted FastMCP proxy call.
+
+Review:
+- `/code-review` — no blocking findings after the portal active-case metadata
+  read path was tightened to use `require_active_case_for_principal` when a
+  resolved Supabase principal is present.
+- `/security-review` — no blocking findings; no secrets added; DB writes use
+  parameterized SQL; active-case proxy denials reject cross-case arguments before
+  dispatch.
+
+Land notes:
+- B-11 may be marked DONE at PR03B Land. This run implements and verifies it on
+  the branch; do not mark DONE on `revamp/spg-v1` until the PR03B Land commit is
+  accepted there.
+- No installer, Docker, local Supabase state, DB dump, generated active-case
+  export, or `packages/*-mcp/**` change was made.
 
 ## Run 32 — D4 Demotion
 

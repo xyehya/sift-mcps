@@ -13,7 +13,6 @@ gateway:
 
 case:
   root: "${SIFT_CASES_ROOT}"
-  dir: ""
 
 execute:
   # Native Linux user isolation for run_command. The gateway validates the

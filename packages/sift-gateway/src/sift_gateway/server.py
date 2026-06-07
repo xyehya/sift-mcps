@@ -144,6 +144,7 @@ class Gateway:
         # health / health_args / hidden_from_agent / backend). Rebuilt on every
         # _build_tool_map so the gateway never hardcodes add-on tool names.
         self._tool_manifest_meta: dict[str, dict] = {}
+        self.active_case_service = None
 
         # Register declaration-driven providers: grounding reference backends
         # and the available-backend capability summary (both keyed on manifest
@@ -195,10 +196,9 @@ class Gateway:
     async def _notify_backend_case(self, backend) -> None:
         """Best-effort active-case notification for backends that support it.
 
-        Stdio backends inherit SIFT_CASE_DIR from the gateway process, and
-        backends are restarted on portal case changes. HTTP backends may grow a
-        dedicated case notification API later; until then startup must not fail
-        just because there is nothing to notify.
+        PR03B removed active-case env inheritance. HTTP backends may grow a
+        dedicated DB-context notification API later; until then startup must not
+        fail just because there is nothing to notify.
         """
         if not isinstance(backend, HttpMCPBackend):
             return
@@ -381,6 +381,7 @@ class Gateway:
                         "when_to_use": t_decl.get("when_to_use", ""),
                         "avoid_when": t_decl.get("avoid_when", ""),
                         "output_notes": t_decl.get("output_notes", ""),
+                        "case_scoped": t_decl.get("case_scoped"),
                     }
 
             if backend.started:
@@ -623,6 +624,30 @@ class Gateway:
         result.update(self._tool_map)
         return result
 
+    def is_case_scoped_tool(self, tool_name: str) -> bool:
+        """Return whether a mounted/add-on tool requires active-case context."""
+        if tool_name in core_tool_names():
+            return tool_name not in {"get_tool_help", "capability_guide"}
+        meta = self._tool_manifest_meta.get(tool_name, {})
+        if isinstance(meta.get("case_scoped"), bool):
+            return bool(meta["case_scoped"])
+        tool = self._tool_cache.get(tool_name)
+        schema = getattr(tool, "inputSchema", None) if tool else None
+        props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        if any(k in props for k in ("case_id", "case_key", "case_dir")):
+            return True
+        if any(k in props for k in ("path", "evidence_path", "artifact_path", "file_path")):
+            return True
+        category = str(meta.get("category") or "").lower()
+        phase = str(meta.get("recommended_phase") or "").lower()
+        return bool(category or phase) and "reference" not in category
+
+    def safe_case_argument_names(self, tool_name: str) -> set[str]:
+        tool = self._tool_cache.get(tool_name)
+        schema = getattr(tool, "inputSchema", None) if tool else None
+        props = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        return {name for name in ("case_id", "case_key") if name in props}
+
     async def get_tools_list(self) -> list[Tool]:
         """Return MCP ``Tool`` objects for all aggregated tools.
 
@@ -680,7 +705,11 @@ class Gateway:
         return tools
 
     async def call_tool(
-        self, name: str, arguments: dict, examiner: str | None = None
+        self,
+        name: str,
+        arguments: dict,
+        examiner: str | None = None,
+        identity=None,
     ) -> list:
         """Route a tool call to the correct backend.
 
@@ -696,19 +725,44 @@ class Gateway:
             KeyError: If the tool name is not in the tool map.
             RuntimeError: If the backend is not started.
         """
+        active_case = None
+        if self.active_case_service is not None and self.is_case_scoped_tool(name):
+            active_case = self.active_case_service.require_active_case_for_principal(identity)
+            if not active_case.artifact_path:
+                raise RuntimeError("Active case has no artifact path for case-scoped tool")
+
         if name in core_tool_names():
             logger.info(
                 "Routing tool %s -> in-process sift-core (examiner=%s)",
                 name,
                 examiner,
             )
-            text = await asyncio.to_thread(
-                call_core_tool,
-                name,
-                arguments,
-                examiner=examiner,
-                audit=self._audit,
+            from sift_core.active_case_context import (
+                ActiveCaseContext,
+                use_active_case_context,
             )
+
+            context = (
+                ActiveCaseContext(
+                    case_id=active_case.case_id,
+                    case_key=active_case.case_key,
+                    artifact_path=active_case.artifact_path,
+                    membership_role=active_case.membership_role,
+                )
+                if active_case is not None
+                else None
+            )
+
+            def _run_core():
+                with use_active_case_context(context):
+                    return call_core_tool(
+                        name,
+                        arguments,
+                        examiner=examiner,
+                        audit=self._audit,
+                    )
+
+            text = await asyncio.to_thread(_run_core)
             return [TextContent(type="text", text=text)]
 
         if name not in self._tool_map:
@@ -716,6 +770,21 @@ class Gateway:
 
         backend_name = self._tool_map[name]
         backend = self.backends[backend_name]
+
+        if active_case is not None and self.is_case_scoped_tool(name):
+            safe_args = self.safe_case_argument_names(name)
+            if not safe_args:
+                raise RuntimeError(
+                    "proxied case-scoped tool does not expose a safe case_id/case_key argument"
+                )
+            arguments = dict(arguments)
+            for key, expected in (("case_id", active_case.case_id), ("case_key", active_case.case_key)):
+                if key not in safe_args:
+                    continue
+                supplied = arguments.get(key)
+                if supplied and str(supplied) != expected:
+                    raise RuntimeError(f"client-supplied {key} does not match DB active case")
+                arguments[key] = expected
 
         # Lazy recovery — restart backend if it crashed
         if not backend.started:
@@ -789,6 +858,16 @@ class Gateway:
         api_keys = self.config.get("api_keys", {})
         self._api_keys = api_keys
         token_registry = create_token_registry(self.config)
+        from sift_gateway.token_registry import registry_config
+
+        dsn, _ = registry_config(self.config)
+        if dsn:
+            try:
+                from sift_gateway.active_case import ActiveCaseService
+
+                self.active_case_service = ActiveCaseService(dsn, audit=self._audit)
+            except Exception as exc:  # pragma: no cover - defensive startup
+                logger.warning("Active-case service init failed: %s", exc)
 
         # PR03A: build the shared Supabase identity resolver + portal callbacks.
         # Fail-soft: if Supabase is disabled or env/DSN is absent, the gateway
@@ -807,9 +886,6 @@ class Gateway:
                     SupabaseIdentityResolver,
                     SupabasePrincipalRepository,
                 )
-                from sift_gateway.token_registry import registry_config
-
-                dsn, _ = registry_config(self.config)
                 if dsn:
                     sb_client = SupabaseAuthClient(auth_config)
                     repo = SupabasePrincipalRepository(dsn)
@@ -886,18 +962,9 @@ class Gateway:
                 reaper_task = asyncio.create_task(gateway._idle_reaper())
             late_start_task = asyncio.create_task(gateway._late_start_checker())
 
-            # Phase 17d: inotify watcher for real-time evidence cache invalidation
+            # PR03B: no active-case env watcher. Evidence-gate cache invalidation
+            # is driven by DB active-case context and portal mutation callbacks.
             watcher_task = None
-            _case_dir_str = _os.environ.get("SIFT_CASE_DIR", "")
-            if _case_dir_str:
-                try:
-                    from sift_gateway.evidence_gate import invalidate_evidence_cache
-                    from sift_gateway.evidence_watcher import watch_evidence_dir
-                    watcher_task = asyncio.create_task(
-                        watch_evidence_dir(_case_dir_str, invalidate_evidence_cache)
-                    )
-                except ImportError:
-                    pass
 
             # Backend loader runs in an anyio task group. It still serves the
             # REST/join path; MCP proxy mounts are fixed at server startup.
@@ -947,11 +1014,6 @@ class Gateway:
                 get_override_status,
             )
 
-            async def _on_case_activated(case_dir_str: str) -> None:
-                gateway.config.setdefault("case", {})["dir"] = case_dir_str
-                apply_case_env(gateway.config)
-                await gateway.restart_backends()
-
             dashboard_app = create_dashboard_v2_app(
                 session_secret=portal_secret,
                 session_max_age=portal_max_age,
@@ -959,9 +1021,10 @@ class Gateway:
                 gateway_config_path=_gw_config_path,
                 token_registry=token_registry,
                 supabase_auth=supabase_callbacks,
+                active_case_service=self.active_case_service,
                 legacy_portal_session_enabled=auth_config.legacy_portal_session_enabled,
                 on_chain_mutation=invalidate_evidence_cache,
-                on_case_activated=_on_case_activated,
+                on_case_activated=None,
                 on_override_get_status=get_override_status,
                 on_override_enable=enable_override,
                 on_override_cancel=cancel_override,

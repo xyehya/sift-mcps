@@ -170,7 +170,7 @@ def test_portal_case_create_computes_case_id_with_time(client, case_env, passwor
 
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
-    assert cfg["case"]["dir"] == str(expected_dir)
+    assert cfg["case"]["dir"] == ""
 
 
 def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
@@ -224,11 +224,10 @@ def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
 
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
-    assert cfg["case"]["dir"] == str(requested_dir)
+    assert cfg["case"]["dir"] == ""
 
-    assert os.environ.get("SIFT_CASE_DIR") == str(requested_dir)
-    assert os.environ.get("SIFT_CASES_ROOT") == str(case_root)
-    assert (Path.home() / ".sift" / "active_case").read_text().strip() == str(requested_dir)
+    assert os.environ.get("SIFT_CASE_DIR") != str(requested_dir)
+    assert not (Path.home() / ".sift" / "active_case").exists()
 
 
 def test_case_creation_persists_optional_synopsis(client, case_env, passwords_dir, monkeypatch):
@@ -293,7 +292,7 @@ def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_
     })
 
     assert resp.status_code == 200
-    assert activated == [str(requested_dir)]
+    assert activated == []
 
 
 def test_concurrent_case_creation_returns_409(client, case_env, passwords_dir):
@@ -340,6 +339,76 @@ def test_get_case_activate_challenge_requires_password_setup(client, passwords_d
     resp = client.get("/api/case/activate/challenge")
     assert resp.status_code == 403
     assert "No password configured" in resp.json()["error"]
+
+
+def test_supabase_db_case_routes_use_active_case_service(passwords_dir, case_env, tmp_path, monkeypatch):
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    case_root, cfg_path = case_env
+
+    class FakeCase:
+        case_id = "db-uuid-1"
+        case_key = "db-case"
+
+        def as_dict(self):
+            return {
+                "case_id": self.case_id,
+                "case_key": self.case_key,
+                "title": "DB Case",
+                "status": "active",
+                "artifact_path": str(case_root / "db-case"),
+                "case_dir": str(case_root / "db-case"),
+                "metadata": {"severity": "high"},
+            }
+
+    class FakeActiveCases:
+        def __init__(self):
+            self.calls = []
+
+        def list_cases(self, principal):
+            self.calls.append(("list", principal))
+            return [FakeCase().as_dict()]
+
+        def get_active_case(self, principal=None):
+            self.calls.append(("get_active", principal))
+            return FakeCase()
+
+        def set_active_case(self, case_id, principal):
+            self.calls.append(("set", case_id, principal))
+            return FakeCase()
+
+        def update_case_metadata(self, case_id, principal, body):
+            self.calls.append(("metadata", case_id, body))
+            return FakeCase()
+
+        def create_case(self, payload, principal):
+            self.calls.append(("create", payload, principal))
+            return FakeCase()
+
+    active = FakeActiveCases()
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        gateway_config_path=str(cfg_path),
+        supabase_auth=object(),
+        active_case_service=active,
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+
+    assert client.get("/api/case/activate/challenge").json()["required"] is False
+    assert client.get("/api/cases").json()["cases"][0]["case_key"] == "db-case"
+    assert client.get("/api/case").json()["case_key"] == "db-case"
+    assert client.post("/api/case/activate", json={"case_id": "db-case"}).json()["ok"] is True
+    assert client.post("/api/case/metadata", json={"field": "severity", "value": "low"}).status_code == 200
+    assert client.post("/api/case/create", json={"casename": "db-case", "title": "DB Case"}).status_code == 200
+
+    assert ("set", "db-case", None) in active.calls
+    assert any(call[0] == "metadata" for call in active.calls)
+    assert any(call[0] == "create" for call in active.calls)
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+    assert cfg["case"]["dir"] == ""
+    assert not (Path.home() / ".sift" / "active_case").exists()
 
 
 def test_post_case_activate_success(client, case_env, passwords_dir, monkeypatch):
@@ -397,4 +466,4 @@ def test_post_case_activate_success(client, case_env, passwords_dir, monkeypatch
     # Verify gateway config was updated
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
-    assert cfg["case"]["dir"] == str(case_dir)
+    assert cfg["case"]["dir"] == ""

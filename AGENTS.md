@@ -80,16 +80,15 @@ D27a, D27b, and **PR03A / Batch A (unified Supabase JWT identity)** are landed o
 `revamp/spg-v1` (Runs 23-30). PR03A delivered Supabase JWT validation for REST
 and FastMCP `/mcp`, shared Gateway principal resolution, portal Supabase
 login/session, agent/service JWT issuance + revocation (D31), B-10 tool
-authorization, and B-14 duplicate resolver cleanup. Run 29 fixed the portal
-auth-mode blocker; Run 30 added the portal/dashboard inventory reference.
+authorization, and B-14 duplicate resolver cleanup. Run 33 implemented
+**PR03B / Batch B: active-case DB authority** on branch
+`codex/pr03b-active-case-db-authority`.
 
-The next work is **Build-stage PR03B / Batch B: active-case DB authority
-(ID-4/active-case ID-5)** from
-`docs/migration/21_pr03b_active_case_db_authority.md`. D32 locks the model:
+PR03B should be reviewed/landed if still unmerged. D32 locks the model:
 Supabase/Postgres `app.active_case_state` wins; `SIFT_CASE_DIR`,
 `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and `~/.sift/active_case` are not
 authority and are not regenerated as active-case exports; no historical data
-migration is in scope. If a future build discovers an installed API, Supabase
+migration is in scope. If a future run discovers an installed API, Supabase
 behavior, FastMCP proxy behavior, or repo invariant mismatch, **stop and raise a
 fork** - do not improvise (D29).
 
@@ -248,8 +247,8 @@ PR03A is **landed** on `revamp/spg-v1`. Spec + status:
 - `docs/migration/19_pr03_unified_supabase_jwt_identity.md` (status: implemented)
 - `docs/migration/20_portal_dashboard_inventory.md` (reference inventory for
   PR03B portal/API turnover planning; not an implementation candidate)
-- `docs/migration/21_pr03b_active_case_db_authority.md` (Build-ready PR03B
-  candidate; next implementation source of truth)
+- `docs/migration/21_pr03b_active_case_db_authority.md` (implemented PR03B
+  candidate; Land/review source if branch is still unmerged)
 
 It delivered unified Supabase JWT auth, principal mapping, portal Supabase auth,
 agent/service JWT issuance + revocation (D31), and DB-backed MCP tool

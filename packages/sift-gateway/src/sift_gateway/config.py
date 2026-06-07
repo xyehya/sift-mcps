@@ -47,15 +47,17 @@ def _walk_and_interpolate(obj):
 
 
 def apply_case_env(config: dict) -> None:
-    """Apply gateway case config to process env for backend inheritance."""
+    """Apply non-authoritative case-root config to process env.
+
+    PR03B/D32: ``case.dir`` is no longer active-case authority and is never
+    published as ``SIFT_CASE_DIR`` by the Gateway. ``case.root`` may still seed
+    artifact-root behavior for legacy CLI surfaces.
+    """
     case_config = config.get("case", {})
     if not isinstance(case_config, dict):
         case_config = {}
 
-    case_dir = str(case_config.get("dir") or "").strip()
     cases_root = str(case_config.get("root") or "").strip()
-    if not cases_root and case_dir:
-        cases_root = str(Path(case_dir).parent)
     if not cases_root:
         cases_root = (
             os.environ.get("SIFT_CASES_ROOT")
@@ -67,11 +69,9 @@ def apply_case_env(config: dict) -> None:
         os.environ["SIFT_CASES_ROOT"] = cases_root
         logger.debug("SIFT_CASES_ROOT set to %s from gateway config", cases_root)
 
-    if case_dir:
-        os.environ["SIFT_CASE_DIR"] = case_dir
-        logger.debug("SIFT_CASE_DIR set to %s from gateway config", case_dir)
-    else:
-        os.environ.pop("SIFT_CASE_DIR", None)
+    # Do not publish or clear SIFT_CASE_DIR here. PR03B Gateway request paths
+    # use DB active-case context when configured; legacy CLI/test surfaces may
+    # still carry their own env value outside Gateway authority.
 
 
 def apply_execute_security_env(config: dict) -> None:
