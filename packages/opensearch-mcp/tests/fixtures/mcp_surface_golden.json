@@ -277,6 +277,171 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Enrich: Threat Intel (OpenCTI)"
+      },
+      "description": "Extract unique IOCs from indexed docs, optionally look them up in OpenCTI, and stamp matching docs with threat_intel fields. Use dry_run=True to size the work, then dry_run=False to launch the existing async enrichment path. Example: opensearch_enrich_intel(dry_run=True).",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case to enrich; default active.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": true,
+            "description": "Extract and count IOCs without lookup.",
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "force": {
+            "default": false,
+            "description": "Re-enrich already-enriched docs.",
+            "title": "Force",
+            "type": "boolean"
+          }
+        },
+        "title": "EnrichIntelIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_enrich_intel",
+      "output_schema": {
+        "properties": {
+          "case_id": {
+            "description": "Resolved case id.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "domains": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Unique domain indicators in preview.",
+            "title": "Domains"
+          },
+          "hashes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Unique hash indicators in preview.",
+            "title": "Hashes"
+          },
+          "ips": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Unique IP indicators in preview.",
+            "title": "Ips"
+          },
+          "log_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background run log file.",
+            "title": "Log File"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Polling note.",
+            "title": "Note"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background process id.",
+            "title": "Pid"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background run id.",
+            "title": "Run Id"
+          },
+          "status": {
+            "description": "Enrichment response status.",
+            "enum": [
+              "preview",
+              "started"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total_iocs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Total unique IOCs in preview.",
+            "title": "Total Iocs"
+          }
+        },
+        "required": [
+          "status",
+          "case_id"
+        ],
+        "title": "EnrichIntelOut",
+        "type": "object"
+      },
+      "title": "Enrich: Threat Intel (OpenCTI)"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": true,
         "readOnlyHint": true,

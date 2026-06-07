@@ -523,6 +523,25 @@ class IngestStatusOut(BaseModel):
     message: str | None = Field(None, description="Summary message when no runs are present.")
 
 
+class EnrichIntelIn(BaseModel):
+    case_id: str = Field("", description="Case to enrich; default active.")
+    dry_run: bool = Field(True, description="Extract and count IOCs without lookup.")
+    force: bool = Field(False, description="Re-enrich already-enriched docs.")
+
+
+class EnrichIntelOut(BaseModel):
+    status: Literal["preview", "started"] = Field(..., description="Enrichment response status.")
+    case_id: str = Field(..., description="Resolved case id.")
+    ips: int | None = Field(None, description="Unique IP indicators in preview.")
+    hashes: int | None = Field(None, description="Unique hash indicators in preview.")
+    domains: int | None = Field(None, description="Unique domain indicators in preview.")
+    total_iocs: int | None = Field(None, description="Total unique IOCs in preview.")
+    pid: int | None = Field(None, description="Background process id.")
+    run_id: str | None = Field(None, description="Background run id.")
+    log_file: str | None = Field(None, description="Background run log file.")
+    note: str | None = Field(None, description="Polling note.")
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -1037,6 +1056,33 @@ async def run_opensearch_ingest_status(params: IngestStatusIn) -> ToolResult:
     )
 
 
+async def run_opensearch_enrich_intel(params: EnrichIntelIn) -> ToolResult:
+    raw = _legacy_server().opensearch_enrich_intel(**params.model_dump())
+    if "error" in raw:
+        message = str(raw.get("error"))
+        if "No active case" in message:
+            code = ErrorCode.no_active_case
+        elif "Too many concurrent" in message:
+            code = ErrorCode.capacity_refused
+        else:
+            code = ErrorCode.upstream_unavailable
+        return _legacy_error(raw, default_code=code)
+    meta = _meta_from_raw(raw)
+    out = EnrichIntelOut(
+        status=raw.get("status", "preview"),
+        case_id=str(raw.get("case_id", params.case_id)),
+        ips=raw.get("ips"),
+        hashes=raw.get("hashes"),
+        domains=raw.get("domains"),
+        total_iocs=raw.get("total_iocs"),
+        pid=raw.get("pid"),
+        run_id=raw.get("run_id"),
+        log_file=raw.get("log_file"),
+        note=raw.get("note") or raw.get("message"),
+    )
+    return _success_tool_result(out, meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -1069,6 +1115,24 @@ REGISTRY.append(
             "population or gauge magnitude before opensearch_search. Do not use "
             "when you need per-value counts; use opensearch_aggregate. Example: "
             "opensearch_count(query='event.code:4624')."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_enrich_intel",
+        fn=run_opensearch_enrich_intel,
+        in_model=EnrichIntelIn,
+        out_model=EnrichIntelOut,
+        annotations=_write_annotations("Enrich: Threat Intel (OpenCTI)"),
+        title="Enrich: Threat Intel (OpenCTI)",
+        description=(
+            "Extract unique IOCs from indexed docs, optionally look them up in "
+            "OpenCTI, and stamp matching docs with threat_intel fields. Use "
+            "dry_run=True to size the work, then dry_run=False to launch the "
+            "existing async enrichment path. Example: "
+            "opensearch_enrich_intel(dry_run=True)."
         ),
     )
 )
