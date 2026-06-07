@@ -439,6 +439,380 @@
         ]
       },
       "title": "Search All Threat Intel"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Search Entities by Type"
+      },
+      "description": "Search one OpenCTI entity type with a higher per-type cap than broad search. Use for focused questions such as malware linked to an actor, vulnerabilities matching a CVE prefix, or observables of a specific subtype. Valid types: threat_actor, malware, attack_pattern, vulnerability, campaign, tool, infrastructure, incident, observable, sighting, organization, sector, location, course_of_action, grouping, note. Example: `cti_search_entity(type='vulnerability', query='CVE-2024')`.",
+      "input_schema": {
+        "properties": {
+          "confidence_min": {
+            "anyOf": [
+              {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Minimum confidence threshold from 0 to 100.",
+            "title": "Confidence Min"
+          },
+          "created_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ISO-8601 lower bound for entity creation date, e.g. 2024-01-01.",
+            "title": "Created After"
+          },
+          "created_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ISO-8601 upper bound for entity creation date.",
+            "title": "Created Before"
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Filter by labels such as ['tlp:amber', 'malicious']; safe characters only.",
+            "title": "Labels"
+          },
+          "limit": {
+            "default": 10,
+            "description": "Max results for this entity type. Cap 50.",
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "observable_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only for type='observable': restrict to these OpenCTI observable subtypes.",
+            "title": "Observable Types"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Pagination offset; cap 500.",
+            "maximum": 500,
+            "minimum": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Search term for the selected entity type.",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "type": {
+            "description": "Single OpenCTI entity type to search.",
+            "enum": [
+              "threat_actor",
+              "malware",
+              "attack_pattern",
+              "vulnerability",
+              "campaign",
+              "tool",
+              "infrastructure",
+              "incident",
+              "observable",
+              "sighting",
+              "organization",
+              "sector",
+              "location",
+              "course_of_action",
+              "grouping",
+              "note"
+            ],
+            "title": "CtiEntityType",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "query"
+        ],
+        "title": "CtiSearchEntityIn",
+        "type": "object"
+      },
+      "meta": {
+        "case_scoped": false,
+        "category": "threat-intel",
+        "evidence_class": "read_only",
+        "recommended_phase": "CORRELATE"
+      },
+      "name": "cti_search_entity",
+      "output_schema": {
+        "anyOf": [
+          {
+            "$defs": {
+              "CtiEntity": {
+                "properties": {
+                  "confidence": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI confidence score when available.",
+                    "title": "Confidence"
+                  },
+                  "created": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Created timestamp when available.",
+                    "title": "Created"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Short description, truncated by the client.",
+                    "title": "Description"
+                  },
+                  "entity_type": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI/STIX entity type.",
+                    "title": "Entity Type"
+                  },
+                  "extra": {
+                    "additionalProperties": true,
+                    "description": "Type-specific fields preserved from the OpenCTI client.",
+                    "title": "Extra",
+                    "type": "object"
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI entity id when returned by the platform.",
+                    "title": "Id"
+                  },
+                  "labels": {
+                    "description": "OpenCTI labels attached to the entity.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Labels",
+                    "type": "array"
+                  },
+                  "modified": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Modified timestamp when available.",
+                    "title": "Modified"
+                  },
+                  "name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Primary display name or observable value.",
+                    "title": "Name"
+                  }
+                },
+                "title": "CtiEntity",
+                "type": "object"
+              },
+              "CtiEntityType": {
+                "enum": [
+                  "threat_actor",
+                  "malware",
+                  "attack_pattern",
+                  "vulnerability",
+                  "campaign",
+                  "tool",
+                  "infrastructure",
+                  "incident",
+                  "observable",
+                  "sighting",
+                  "organization",
+                  "sector",
+                  "location",
+                  "course_of_action",
+                  "grouping",
+                  "note"
+                ],
+                "title": "CtiEntityType",
+                "type": "string"
+              }
+            },
+            "properties": {
+              "offset": {
+                "default": 0,
+                "description": "Echoed pagination offset.",
+                "title": "Offset",
+                "type": "integer"
+              },
+              "results": {
+                "description": "Projected matching OpenCTI entities.",
+                "items": {
+                  "$ref": "#/$defs/CtiEntity"
+                },
+                "title": "Results",
+                "type": "array"
+              },
+              "total": {
+                "description": "Number of returned entities.",
+                "title": "Total",
+                "type": "integer"
+              },
+              "type": {
+                "$ref": "#/$defs/CtiEntityType",
+                "description": "Entity type searched."
+              }
+            },
+            "required": [
+              "type",
+              "results",
+              "total"
+            ],
+            "title": "CtiEntitySearchOut",
+            "type": "object"
+          },
+          {
+            "$defs": {
+              "ErrorCode": {
+                "enum": [
+                  "invalid_input",
+                  "not_found",
+                  "upstream_unavailable",
+                  "upstream_degraded",
+                  "rate_limited",
+                  "not_configured",
+                  "no_active_case",
+                  "capacity_refused",
+                  "internal"
+                ],
+                "title": "ErrorCode",
+                "type": "string"
+              }
+            },
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "$ref": "#/$defs/ErrorCode",
+                "description": "Machine-readable error category."
+              },
+              "message": {
+                "description": "Human-readable, secret-free explanation.",
+                "title": "Message",
+                "type": "string"
+              },
+              "remediation": {
+                "description": "Concrete next step the caller can take.",
+                "title": "Remediation",
+                "type": "string"
+              },
+              "retryable": {
+                "default": false,
+                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
+                "title": "Retryable",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "error",
+              "message",
+              "remediation"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        ]
+      },
+      "title": "Search Entities by Type"
     }
   ]
 }

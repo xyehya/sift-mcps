@@ -43,6 +43,7 @@ from .validation import (
     sanitize_for_log,
     validate_date_filter,
     validate_labels,
+    validate_observable_types,
 )
 
 
@@ -63,6 +64,43 @@ _ENTITY_TYPE_METHODS = {
     "course_of_action": "search_courses_of_action",
     "grouping": "search_groupings",
     "note": "search_notes",
+}
+
+_ENTITY_TYPES_WITH_CONFIDENCE = frozenset(
+    {"threat_actor", "malware", "campaign", "incident"}
+)
+
+_ENTITY_TYPES_FULL_FILTERS = frozenset(
+    {
+        "threat_actor",
+        "malware",
+        "attack_pattern",
+        "vulnerability",
+        "campaign",
+        "tool",
+        "infrastructure",
+        "incident",
+        "observable",
+    }
+)
+
+_SEARCH_ENTITY_META_KEYS = {
+    "threat_actor": "search_threat_actor",
+    "malware": "search_malware",
+    "attack_pattern": "search_attack_pattern",
+    "vulnerability": "search_vulnerability",
+    "campaign": "search_campaign",
+    "tool": "search_tool",
+    "infrastructure": "search_infrastructure",
+    "incident": "search_incident",
+    "observable": "search_observable",
+    "sighting": "search_sighting",
+    "organization": "search_organization",
+    "sector": "search_sector",
+    "location": "search_location",
+    "course_of_action": "search_course_of_action",
+    "grouping": "search_grouping",
+    "note": "search_note",
 }
 
 
@@ -169,6 +207,7 @@ TOOL_CATALOG_META: dict[str, dict[str, Any]] = {
         health=True,
     ),
     "cti_search_threat_intel": _tool_meta(),
+    "cti_search_entity": _tool_meta(),
 }
 
 
@@ -206,6 +245,32 @@ class CtiSearchThreatIntelIn(CtiSearchFilters):
     limit: int = Field(5, ge=1, le=20, description="Max results per entity type. Cap 20.")
 
 
+class CtiEntityType(str, Enum):
+    threat_actor = "threat_actor"
+    malware = "malware"
+    attack_pattern = "attack_pattern"
+    vulnerability = "vulnerability"
+    campaign = "campaign"
+    tool = "tool"
+    infrastructure = "infrastructure"
+    incident = "incident"
+    observable = "observable"
+    sighting = "sighting"
+    organization = "organization"
+    sector = "sector"
+    location = "location"
+    course_of_action = "course_of_action"
+    grouping = "grouping"
+    note = "note"
+
+
+class CtiSearchEntityIn(CtiSearchFilters):
+    type: CtiEntityType = Field(..., description="Single OpenCTI entity type to search.")
+    query: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH, description="Search term for the selected entity type.")
+    limit: int = Field(10, ge=1, le=50, description="Max results for this entity type. Cap 50.")
+    observable_types: list[str] | None = Field(None, description="Only for type='observable': restrict to these OpenCTI observable subtypes.")
+
+
 class CtiEntity(BaseModel):
     id: str | None = Field(None, description="OpenCTI entity id when returned by the platform.")
     entity_type: str | None = Field(None, description="OpenCTI/STIX entity type.")
@@ -222,6 +287,13 @@ class CtiUnifiedSearchOut(BaseModel):
     query: str = Field(..., description="Echoed search term.")
     results_by_type: dict[str, list[CtiEntity]] = Field(..., description="Projected OpenCTI entities grouped by entity type.")
     total: int = Field(..., description="Total returned entities across all groups.")
+    offset: int = Field(0, description="Echoed pagination offset.")
+
+
+class CtiEntitySearchOut(BaseModel):
+    type: CtiEntityType = Field(..., description="Entity type searched.")
+    results: list[CtiEntity] = Field(..., description="Projected matching OpenCTI entities.")
+    total: int = Field(..., description="Number of returned entities.")
     offset: int = Field(0, description="Echoed pagination offset.")
 
 
@@ -270,6 +342,64 @@ async def cti_search_threat_intel(
     )
 
 
+async def cti_search_entity(
+    params: CtiSearchEntityIn,
+    ctx: RuntimeContext,
+) -> CtiEntitySearchOut:
+    client = ctx.require_client()
+    entity_type = params.type.value
+    method = getattr(client, _ENTITY_TYPE_METHODS[entity_type])
+
+    if entity_type == "observable":
+        extra_types = ctx.config.extra_observable_types if ctx.config else None
+        observable_types = validate_observable_types(
+            params.observable_types,
+            extra_types=extra_types,
+        )
+        results = await asyncio.to_thread(
+            method,
+            params.query,
+            params.limit,
+            params.offset,
+            observable_types,
+            params.labels,
+            params.created_after,
+            params.created_before,
+        )
+    elif entity_type in _ENTITY_TYPES_FULL_FILTERS:
+        if entity_type in _ENTITY_TYPES_WITH_CONFIDENCE:
+            results = await asyncio.to_thread(
+                method,
+                params.query,
+                params.limit,
+                params.offset,
+                params.labels,
+                params.confidence_min,
+                params.created_after,
+                params.created_before,
+            )
+        else:
+            results = await asyncio.to_thread(
+                method,
+                params.query,
+                params.limit,
+                params.offset,
+                params.labels,
+                params.created_after,
+                params.created_before,
+            )
+    else:
+        results = await asyncio.to_thread(method, params.query, params.limit)
+
+    shaped = [_shape_entity(item) for item in _safe_list(results)[: params.limit]]
+    return CtiEntitySearchOut(
+        type=params.type,
+        results=shaped,
+        total=len(shaped),
+        offset=params.offset,
+    )
+
+
 REGISTRY: list[ToolDef] = [
     ToolDef(
         name="cti_get_health",
@@ -299,6 +429,23 @@ REGISTRY: list[ToolDef] = [
             "focused single-type queries; use `cti_search_entity` for that, or "
             "`cti_lookup_ioc` for a known IOC. Example: "
             "`cti_search_threat_intel(query='APT28', confidence_min=60)`."
+        ),
+    ),
+    ToolDef(
+        name="cti_search_entity",
+        fn=cti_search_entity,
+        in_model=CtiSearchEntityIn,
+        out_model=CtiEntitySearchOut,
+        annotations=_opencti_annotations("Search Entities by Type"),
+        title="Search Entities by Type",
+        description=(
+            "Search one OpenCTI entity type with a higher per-type cap than broad search. "
+            "Use for focused questions such as malware linked to an actor, vulnerabilities "
+            "matching a CVE prefix, or observables of a specific subtype. Valid types: "
+            "threat_actor, malware, attack_pattern, vulnerability, campaign, tool, "
+            "infrastructure, incident, observable, sighting, organization, sector, location, "
+            "course_of_action, grouping, note. Example: "
+            "`cti_search_entity(type='vulnerability', query='CVE-2024')`."
         ),
     ),
 ]
@@ -567,7 +714,17 @@ def _audit_meta(
 
 
 def _metadata_for(tool_name: str, params: BaseModel | None) -> dict[str, Any]:
+    if tool_name == "cti_search_entity" and params is not None:
+        raw_type = getattr(params, "type", "")
+        entity_type = raw_type.value if isinstance(raw_type, Enum) else str(raw_type)
+        meta_key = _SEARCH_ENTITY_META_KEYS.get(entity_type)
+        if meta_key:
+            return TOOL_METADATA.get(meta_key, TOOL_METADATA.get(tool_name, DEFAULT_METADATA))
     return TOOL_METADATA.get(tool_name, DEFAULT_METADATA)
+
+
+def _safe_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def _shape_entity(raw: Any) -> CtiEntity:
