@@ -33,6 +33,11 @@ first so the workflow is followed from the opening turn.
   schemas, code, migrations, package/Docker changes, or behavioral rewrites unless the
   current run is explicitly scoped to them.
 - **Log** every run in `MIGRATION_STATE.md` and resolve its forks.
+- **Doc format is a contract.** `REGISTER.md`, `MIGRATION_STATE.md`, and the charter
+  decision table are parsed by tooling (the Mission Control dashboard). Preserve the
+  structures in `OPERATING_MODEL.md` §8; run `python3 scripts/validate_migration_docs.py`
+  before Land (it is a Definition-of-Done gate). Changing a format = update §8, the
+  validator, and the consumer in the same run — no silent drift.
 
 ## Where things are
 
@@ -63,9 +68,10 @@ correctly within one turn.
 5. Name the loop stage out loud (Plan / Build / Review / Land / Log) before doing anything.
 
 ### Pipeline map (update as it moves)
-`JOB-0 ✓ → ID-1/PR01 ✓ → ID-2/PR02 ✓ → D27a backend revamp (operator BUILD) →
-[MY REVIEW + GO] → D27b gateway cutover (MINE) → evidence/audit → jobs/OpenSearch-core →
-findings/RAG/skills.` The cutover order is in the charter; D27a merges before D27b.
+`JOB-0 ✓ → ID-1/PR01 ✓ → ID-2/PR02 ✓ → D27a backend revamp (BUILD Run 20 `c0a040a` ✓;
+REVIEW + REMEDIATE + LAND Run 21 `5ab3df5` ✓, merged to `revamp/spg-v1`) →
+[D27b gateway cutover — MINE, NEXT] → evidence/audit → jobs/OpenSearch-core →
+findings/RAG/skills.` The cutover order is in the charter; D27a merged before D27b.
 
 ### Review → GO procedure (when the operator hands me D27a outputs)
 1. **Scope fence:** `git diff --stat <base>..<branch>` — only `packages/*-mcp/**` touched. Any
@@ -101,10 +107,19 @@ findings/RAG/skills.` The cutover order is in the charter; D27a merges before D2
 - **B-2** remove the 10 legacy wintriage aliases after one cycle; first update the
   `forensic-knowledge` playbook + `tool_metadata.py` `analyze_filename` reference.
 - **B-3** gateway response-guard must scan `structured_content` — **gate for D27b**.
+  (M2 in Run 21 made every tool advertise `anyOf[success, ToolError]`, so the guard can
+  validate typed output against the schema — but the scan/redaction itself is still owed.)
 - **B-4** replace credential-as-tool-arg (`opensearch_ingest.password`) with a named
   control-plane credential — auth/jobs phase.
+- **B-5** `opensearch_case_detections_resource` ignores its `case_id` param — fix at D27b.
+- **B-6** consolidate the duplicate per-registry `ToolResult` envelope builders — do with B-3.
+- **B-7** OpenSearch `ResultMeta` parity (examiner/caveats/interpretation_constraint/audit_warning).
+- **B-8** dedupe the two byte-identical opensearch resources under different URIs.
+- **B-9** D27a robustness nits (error-code substring heuristic; unaudited wintriage generic
+  catch; exact-key-match redactor; per-call `inspect.signature`).
 
 ### My next handoff
-After the operator finishes the three Build sessions and returns the outputs, I: review →
-GO/NO-GO → Land → log Run → then **plan and own D27b** (`14_fastmcp3_supabase_integration.md`),
-whose parity gate is policy-only and which consumes D27a's new tool surface.
+D27a is **landed** (Run 21, merged to `revamp/spg-v1`). Next I **plan and own D27b**
+(`14_fastmcp3_supabase_integration.md`), whose parity gate is policy-only and which consumes
+D27a's new tool surface. I do **not** start D27b review until **B-3** (response-guard scans
+`structured_content`) is implemented; carry B-5…B-9 alongside.

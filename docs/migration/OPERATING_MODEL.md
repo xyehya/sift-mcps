@@ -57,6 +57,7 @@ scope; if the spec is wrong, it goes back to Plan, it is not "fixed" mid-build.
 [ ] /security-review run IF this PR touches auth, tokens, evidence, secrets, or the gateway
 [ ] MIGRATION_STATE Run entry added; forks resolved → D# (charter) or B# (register)
 [ ] Charter unchanged UNLESS a decision was explicitly approved this cycle (no silent decisions)
+[ ] Migration-docs format contract holds: `python3 scripts/validate_migration_docs.py` passes (§8)
 ```
 
 For runtime-behavior PRs, "tests green" includes the VM verification path in
@@ -99,12 +100,16 @@ Files created/changed: …
 Next: …
 ```
 
-### 4.4 Register entry (`REGISTER.md`)
+### 4.4 Register entry (`REGISTER.md`) — markdown tables, fixed columns (see §8)
 ```
-F-<n> | <question> | raised Run <r>, <doc §> | status OPEN|RESOLVED
-      | decision: <call + date> | becomes D-<n> / B-<n> / rejected | affects <D#/doc/snapshot>
-B-<n> | <deferred work> | source F-<n>/Run <r> | status OPEN|DONE | do-by <phase/date>
+| ID  | Question   | Raised           | Status        | Decision (date) | Becomes              | Affects           |
+| F-n | <question> | Run <r>, <doc §> | OPEN|RESOLVED | <call + date>   | D-n / B-n / rejected | <D#/doc/snapshot> |
+
+| ID  | Deferred work   | Source        | Status   | Do-by phase  |
+| B-n | <deferred work> | F-n / Run <r> | OPEN|DONE | <phase/date> |
 ```
+Fork rows = exactly 7 columns; backlog rows = exactly 5. These tables are parsed
+by tooling — obey §8 and run the validator.
 
 ---
 
@@ -140,3 +145,39 @@ B-<n> | <deferred work> | source F-<n>/Run <r> | status OPEN|DONE | do-by <phase
 - Open forks + backlog → `REGISTER.md`.
 - Host/VM workflow, VM coordinates, Supabase pins → `AGENTS.md`.
 - Per-phase specs → `NN_*.md` (e.g. 14 gateway cutover, 15 backend revamp, 16 tool contracts).
+
+---
+
+## 8. Machine-readable conventions (load-bearing)
+
+These three documents are not only read by humans and agents — they are **parsed
+mechanically** by tooling (the Migration Mission Control dashboard, and any future
+status/report generator). The structures below are therefore a **contract**: when a
+run edits these files it must preserve them. If a format genuinely needs to change,
+that is a decision — update this section, the validator, and the consumer together,
+in the same run; do not let them drift apart silently (same chain-of-custody
+discipline as the golden snapshot).
+
+`scripts/validate_migration_docs.py` is the executable form of this contract. It is
+a Definition-of-Done gate (§3) and must pass before Land.
+
+**`REGISTER.md`**
+- `## Forks (F#)` and `## Backlog (B#)` H2 headers exist verbatim.
+- Forks are a markdown table; rows begin `| F-<n> |` with **exactly 7 columns** in
+  order: ID, Question, Raised, Status, Decision (date), Becomes, Affects.
+- Backlog is a markdown table; rows begin `| B-<n> |` with **exactly 5 columns** in
+  order: ID, Deferred work, Source, Status, Do-by phase.
+- `Status` vocabulary: forks ∈ {`OPEN`, `RESOLVED`}; backlog ∈ {`OPEN`, `DONE`}
+  (surrounding `**bold**` allowed). A `RESOLVED` fork has a non-empty Decision.
+- IDs are unique. A fork whose Becomes cites `B-<n>` must have that backlog row.
+- **Append-only columns:** add new columns at the end; never reorder/rename/remove.
+
+**`MIGRATION_STATE.md`**
+- Exactly **one** `## Current Objective` H2.
+- The Current Objective contains a line with **`**Next:**`** — the dashboard and
+  pipeline view derive the current stage from it.
+- Run entries use `## Run <n> — <title>` (en/em-dash or hyphen). Run numbers unique.
+
+**`00_migration_charter.md`**
+- Decisions are a markdown table; rows begin `| D<n> |` (suffixes like `D27a` ok).
+  IDs unique. A `## Cutover Order` section exists.

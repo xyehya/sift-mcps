@@ -1,6 +1,8 @@
 # 15 — Backend Tooling Revamp (opensearch / opencti / windows-triage → FastMCP 3.0 + tool quality)
 
-Status: **design locked** (decisions D27a/D27b/D28 in `00_migration_charter.md`).
+Status: **implemented & landed** in D27a — built Run 20 (`c0a040a`), reviewed +
+remediated + merged into `revamp/spg-v1` Run 21 (`5ab3df5`); see `MIGRATION_STATE.md`.
+(Originally **design locked**; decisions D27a/D27b/D28 in `00_migration_charter.md`.)
 This document is the single source of truth and the drift-control contract for the
 dedicated worktree that revamps the three backend MCP servers. The charter stays
 canonical; this doc governs the revamp. Runtime code changes happen only in the

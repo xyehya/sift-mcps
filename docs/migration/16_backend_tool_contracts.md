@@ -1,6 +1,8 @@
 # 16 — Backend Tool Contracts (per-tool D28 contracts for all 30 backend tools)
 
-Status: **design detail** for stage **D27a** (`15_backend_tooling_revamp.md`). This
+Status: **implemented & landed** in D27a (Run 20 `c0a040a` build; Run 21 `5ab3df5`
+review/remediation/land — see `MIGRATION_STATE.md`). Originally **design detail** for
+stage **D27a** (`15_backend_tooling_revamp.md`). This
 document instantiates the **D28 tool-quality contract** (charter `00_migration_charter.md`)
 for every one of the 30 backend tools individually, so the backend-revamp worktree can
 implement without guessing. It is grounded in the current `server.py` of each backend

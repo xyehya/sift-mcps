@@ -49,6 +49,9 @@ around it. In short:
 - **No silent decisions.** A run that needs to decide something stops and raises a
   fork in `REGISTER.md`; the operator turns it into a D# or B#.
 - **Log** every run in `MIGRATION_STATE.md` and resolve its forks.
+- **Doc format is a contract** (parsed by tooling): keep the structures in
+  `OPERATING_MODEL.md` §8 and run `python3 scripts/validate_migration_docs.py`
+  before Land — it is a Definition-of-Done gate.
 
 ## Mandatory Host/VM Workflow
 

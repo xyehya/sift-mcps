@@ -2,19 +2,84 @@
 
 ## Current Objective
 
-Run 20 (coding/build) completed the **D27a backend tooling revamp** on
-`revamp/backends-mcp3` and collected the three backend worktree branches back into that
-branch. The work is **ready for operator review** and **not landed** into
-`revamp/spg-v1`. FastMCP is pinned by `uv.lock` at **fastmcp 3.4.2**. OpenSearch,
-OpenCTI, and Windows-Triage now expose FastMCP 3 registry-backed surfaces with typed
-models, structured outputs, prompts/resources, golden snapshots, and the resolved
-F-1/F-2/F-4/F-5 behavior. Host and VM targeted tests passed under the required Python
-3.12 VM workflow. No new forks were raised.
+The **D27a backend tooling revamp is reviewed, remediated, and LANDED** into
+`revamp/spg-v1`. Run 20 built it (`c0a040a`); Run 21 reviewed it (`/code-review` +
+`/security-review`), reached a NO-GO on two blockers, fixed them (`5ab3df5`), and
+merged `revamp/backends-mcp3` into `revamp/spg-v1`. FastMCP is pinned by `uv.lock` at
+**fastmcp 3.4.2**. OpenSearch, OpenCTI, and Windows-Triage expose FastMCP 3
+registry-backed surfaces with typed models, structured outputs, prompts/resources,
+golden snapshots, and the resolved F-1/F-2/F-4/F-5 behavior. Host and VM tests pass
+under the Python 3.12 VM workflow (opensearch 979 passed/71 skipped, opencti 1,
+windows 12). The review's deferred findings are tracked as B-5…B-9 in `REGISTER.md`.
 
-**Next:** operator runs `/code-review` on `revamp/backends-mcp3` (and `/security-review`
-because the diff touches response redaction and backend tool write surfaces), reviews the
-golden snapshot diffs, fixes/triages findings, then lands into `revamp/spg-v1` if
-accepted. The Gateway cutover (D27b) follows only after D27a review/land.
+**Next:** plan and own **D27b** — the Gateway cutover (`14_fastmcp3_supabase_integration.md`),
+which consumes D27a's new tool surface. Its parity gate is policy-only, and it must not
+start review until **B-3** (gateway response-guard scans `structured_content`, with size
+cap + secret redaction) is implemented; M2 already made every backend tool advertise
+`anyOf[success, ToolError]` so the guard can validate typed output against the schema.
+
+## Run 21 — D27a Review, Remediation & Land
+
+Review/Land run (Claude delivery-management). Reviewed the Run 20 build
+(`c0a040a`), remediated the blockers (`5ab3df5`), and **landed D27a** into
+`revamp/spg-v1`.
+
+Review performed (`CLAUDE.md` Review→GO procedure):
+- **Scope fence:** `git diff --stat revamp/spg-v1..revamp/backends-mcp3` touched only
+  `packages/{opensearch,opencti,windows-triage}-mcp/**`, `uv.lock`, and this log — clean.
+- **Surface diff:** `contracts.py` byte-identical across the three backends; `server.py`
+  changes are minimal entrypoint wiring; F-1 (resources + deprecated tool aliases),
+  F-2 (10 legacy wintriage aliases), the `opensearch_fix_host_mapping`/`opensearch_host_fix`
+  rename + alias, F-4 (timeline warn-not-truncate), and F-5 (ingest password redaction)
+  all present and matching doc 16.
+- **`/code-review` (high) + `/security-review`** run together (small scope). Findings
+  verified against source, not taken on trust.
+
+Verdict: **NO-GO**, then remediated. Blockers fixed in `5ab3df5`:
+- **M1 (security):** the FastMCP 3 cutover silently dropped DNS-rebinding protection +
+  `allowed_hosts` from `opensearch_mcp/http_server.py` (the in-SDK
+  `transport_security` settings have no standalone-FastMCP-3 equivalent — confirmed
+  against the installed `fastmcp==3.4.2` and context7's prefecthq/fastmcp v3 upgrade
+  guide). Re-established the Host-header allowlist via Starlette `TrustedHostMiddleware`
+  + added regression tests (`test_http_transport_security.py`).
+- **M2 (contract):** opensearch + windows-triage advertised `output_schema` as the bare
+  success model; opencti correctly used `anyOf[success, ToolError]`. Every tool can
+  return `ToolError` in `structured_content`, so the two were brought to parity — a
+  schema-validating client and the D27b response-guard (B-3) would otherwise reject all
+  error results. Regenerated their golden snapshots (output_schema only; tool names +
+  annotations byte-identical, verified).
+- **S1:** `cti_search_entity` now reports the offset actually applied (0) for entity
+  types whose client method takes only `(query, limit)`, instead of echoing a false
+  page number (silent duplicate/missing pagination).
+
+F-5 confirmed **already satisfied**: the legacy `opensearch_ingest` `audit.log` calls
+pass curated param dicts and never the password (used only for the
+`SIFT_ARCHIVE_PASSWORD` subprocess env var); the registry redactor is a defensive belt
+on the result. Secret sweep of all changed files + golden fixtures: clean (no tokens,
+keys, real IPs).
+
+Deferred (triaged to backlog, not blockers) → `REGISTER.md`:
+- **B-5** `opensearch_case_detections_resource` ignores its `case_id` param (S2; masked
+  by D4 single-active-case).
+- **B-6** consolidate the duplicate per-registry `ToolResult` envelope builders (de-risks
+  the B-3 redaction at D27b).
+- **B-7** OpenSearch `ResultMeta` parity with opencti/wintriage.
+- **B-8** dedupe the two byte-identical opensearch resources under different URIs.
+- **B-9** robustness nits (error-code substring heuristic; unaudited wintriage generic
+  catch; exact-key-match redactor; per-call `inspect.signature`).
+
+Verification:
+- Host (py3.11 `.venv`): opensearch 979 passed/71 skipped, opencti 1, windows 12;
+  all three golden snapshots + the 3 new HTTP transport-security tests green.
+- SIFT VM (py3.12, `uv sync --extra standard --group dev`): opensearch 979 passed/71
+  skipped, opencti 1, windows 12 — full host/VM parity.
+- `git diff --check` clean; `python3 scripts/validate_migration_docs.py` passes.
+
+Land: fast-forward merge of `revamp/backends-mcp3` into `revamp/spg-v1` (spg-v1 tip was
+the merge-base, so no divergence). Doc 15/16 statuses flipped to implemented. No new
+forks raised.
+
+**Next:** D27b gateway cutover — see Current Objective.
 
 ## Run 20 — D27a Backend Revamp
 
