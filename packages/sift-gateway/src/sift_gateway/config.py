@@ -118,6 +118,17 @@ def apply_trust_env(config: dict) -> None:
     os.environ[OUTPUT_CAP_ENV] = str(cap_int)
 
 
+def load_auth_config(config: dict):
+    """Parse the ``auth.supabase`` / ``auth.legacy`` block into a SupabaseAuthConfig.
+
+    Env secrets (SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY)
+    are read from the process environment only — never from repo files.
+    """
+    from sift_gateway.supabase_auth import load_supabase_auth_config
+
+    return load_supabase_auth_config(config)
+
+
 def load_config(path: str) -> dict:
     """Load a YAML config file with env var interpolation.
 

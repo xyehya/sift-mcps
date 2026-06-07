@@ -25,6 +25,15 @@ def token_fingerprint(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
 
+def token_digest(token: str) -> str:
+    """Return the full 64-hex SHA-256 digest of a token.
+
+    Used as an internal cache key where the 16-hex fingerprint (64 bits) would be
+    collision-prone. Never store the raw token; the digest is one-way.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def token_hash(token: str, pepper: str) -> str:
     """Return the PR02 peppered registry hash for a token."""
     return hashlib.sha256((pepper + token).encode("utf-8")).hexdigest()

@@ -110,6 +110,26 @@ trust:
   # response budget + disk-spill independently.
   output_cap_bytes: 262144  # 256 KiB
 
+# Unified Supabase JWT identity (PR03A / D30). When auth.supabase.enabled is
+# true the gateway validates Supabase-issued JWTs for REST and FastMCP /mcp
+# through one shared resolver and maps auth.users.id to operator/agent/service
+# principals. The PR02 mcp_tokens registry and the legacy api_keys below are
+# accepted ONLY behind the explicit auth.legacy.* flags (compatibility bridge
+# until the legacy-auth sunset). SUPABASE_URL / SUPABASE_ANON_KEY /
+# SUPABASE_SERVICE_ROLE_KEY are read from the environment only — never stored here.
+auth:
+  supabase:
+    enabled: true
+    url_env: SUPABASE_URL
+    anon_key_env: SUPABASE_ANON_KEY
+    service_role_key_env: SUPABASE_SERVICE_ROLE_KEY
+    validation: user_api
+    principal_cache_ttl_seconds: 30
+  legacy:
+    token_fallback_enabled: true
+    portal_session_enabled: true
+    anonymous_examiner_enabled: false
+
 api_keys:
   ${SIFT_GATEWAY_TOKEN}:
     token_id: "examiner-default"

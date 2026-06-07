@@ -154,7 +154,15 @@ def log_rate_limit_violation(gateway: Any, key: str, client_ip: str, identity: A
 
 
 class SiftTokenVerifier(TokenVerifier):
-    """FastMCP token verifier backed by SIFT hash-only token resolution."""
+    """FastMCP token verifier — Supabase JWT first, PR02 hash-token fallback.
+
+    PR03A (D30): a Supabase-issued JWT is validated through the shared
+    :class:`SupabaseIdentityResolver` and mapped to a SIFT app principal. The
+    legacy PR02 hash-token registry and ``gateway.yaml`` api_keys are accepted
+    only when ``legacy_fallback_enabled`` is true. Identity resolution happens
+    HERE (not in the raw ASGI guard), closing B-14: the normal ``/mcp`` path does
+    exactly one token lookup.
+    """
 
     def __init__(
         self,
@@ -162,25 +170,79 @@ class SiftTokenVerifier(TokenVerifier):
         api_keys: dict[str, dict] | None = None,
         token_registry: Any | None = None,
         base_url: str | None = None,
+        resolver: Any | None = None,
+        legacy_fallback_enabled: bool = True,
     ) -> None:
         super().__init__(base_url=base_url, required_scopes=None)
         self.api_keys = api_keys or {}
         self.token_registry = token_registry
+        self.resolver = resolver
+        self.legacy_fallback_enabled = legacy_fallback_enabled
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        from sift_gateway.identity import resolve_identity
+        identity = None
+        legacy = False
 
-        identity = await asyncio.to_thread(
-            resolve_identity,
-            token,
-            self.api_keys,
-            None,
-            "mcp",
-            self.token_registry,
-        )
+        # 1) Supabase JWT first.
+        if self.resolver is not None:
+            from sift_gateway.supabase_auth import (
+                SupabaseAuthError,
+                SupabaseUnavailableError,
+            )
+
+            try:
+                identity = await self.resolver.resolve(token, auth_surface="mcp")
+            except SupabaseUnavailableError:
+                # B9(a): distinguish an auth-backend outage from a bad token. No
+                # token material in the log. We fall through to legacy/deny.
+                logger.warning(
+                    "MCP verify_token: Supabase auth backend unavailable; "
+                    "falling back to legacy (if enabled) or denying"
+                )
+                identity = None
+            except SupabaseAuthError:
+                # Invalid/expired/unmapped/disabled/ambiguous — normal denial.
+                identity = None
+            except Exception:  # unexpected transport error — deny, no token in log
+                logger.warning("MCP verify_token: unexpected resolver error; denying")
+                identity = None
+
+        # 2) PR02 / legacy fallback only behind the explicit flag.
+        if identity is None and self.legacy_fallback_enabled:
+            from sift_gateway.identity import resolve_identity
+
+            identity = await asyncio.to_thread(
+                resolve_identity,
+                token,
+                self.api_keys,
+                None,
+                "mcp",
+                self.token_registry,
+            )
+            legacy = identity is not None
+
         if identity is None:
             return None
-        scopes = sorted(identity.tool_scopes) if identity.tool_scopes else ["mcp:*"]
+
+        # Readonly principals may not call MCP tools (parity with legacy guard).
+        if getattr(identity, "role", None) == "readonly":
+            return None
+
+        # B-10: a target principal with no active tool scope grants nothing.
+        # Legacy PR02/api_key tokens keep their mcp:* compatibility default only
+        # while the legacy fallback flag is enabled. The default is stamped onto
+        # the identity itself so the SIFT-owned ToolAuthorizationMiddleware (which
+        # reads identity.tool_scopes from the claims) honors it consistently —
+        # AccessToken.scopes alone is a hint, not the policy authority.
+        if not identity.tool_scopes and legacy and self.legacy_fallback_enabled:
+            from dataclasses import replace
+
+            from sift_gateway.supabase_auth import legacy_default_scopes
+
+            identity = replace(identity, tool_scopes=legacy_default_scopes())
+
+        scopes = sorted(identity.tool_scopes) if identity.tool_scopes else []
+
         return AccessToken(
             token=token,
             client_id=identity.token_id or identity.principal,
@@ -204,6 +266,13 @@ def _identity_to_claims(identity: Any) -> dict:
         "case_id": identity.case_id,
         "tool_scopes": sorted(identity.tool_scopes),
         "token_fingerprint": identity.token_fingerprint,
+        "auth_user_id": getattr(identity, "auth_user_id", None),
+        "principal_id": getattr(identity, "principal_id", None),
+        "system_role": getattr(identity, "system_role", None),
+        "case_memberships": [
+            {"case_id": m.case_id, "role": m.role}
+            for m in getattr(identity, "case_memberships", ()) or ()
+        ],
     }
 
 
@@ -213,8 +282,13 @@ def _identity_from_claims(claims: dict | None, *, source_ip: str | None = None):
     data = claims.get("sift_identity") if "sift_identity" in claims else claims
     if not isinstance(data, dict):
         return None
-    from sift_gateway.identity import Identity
+    from sift_gateway.identity import CaseMembership, Identity
 
+    memberships = tuple(
+        CaseMembership(case_id=str(m.get("case_id")), role=str(m.get("role")))
+        for m in (data.get("case_memberships") or [])
+        if isinstance(m, dict) and m.get("case_id") is not None
+    )
     return Identity(
         principal=str(data.get("principal") or "unknown"),
         principal_type=str(data.get("principal_type") or "agent"),
@@ -227,6 +301,10 @@ def _identity_from_claims(claims: dict | None, *, source_ip: str | None = None):
         case_id=data.get("case_id"),
         tool_scopes=frozenset(data.get("tool_scopes") or ()),
         token_fingerprint=data.get("token_fingerprint"),
+        auth_user_id=data.get("auth_user_id"),
+        principal_id=data.get("principal_id"),
+        system_role=data.get("system_role"),
+        case_memberships=memberships,
     )
 
 
@@ -266,12 +344,18 @@ class MCPAuthASGIApp:
         examiner_calls_per_minute: int = 120,
         gateway: Any | None = None,
         token_registry: Any | None = None,
+        verifier_owns_identity: bool = False,
     ):
         self.app = app
         self.api_keys = api_keys or {}
         self.allowed_origins = allowed_origins or set()
         self.gateway = gateway
         self.token_registry = token_registry
+        # B-14: when the FastMCP TokenVerifier owns identity resolution, this raw
+        # ASGI guard keeps ONLY identity-free connection guards (IP rate limit,
+        # body-size cap, Origin allow-list, path normalization) and does NOT
+        # perform a second PR02/Supabase token lookup on the normal path.
+        self.verifier_owns_identity = verifier_owns_identity
         # Initialize the examiner rate limiter singleton with configured limit
         from sift_gateway.rate_limit import get_examiner_rate_limiter
         get_examiner_rate_limiter(limit=examiner_calls_per_minute)
@@ -325,6 +409,14 @@ class MCPAuthASGIApp:
                 resp = JSONResponse({"error": "Forbidden"}, status_code=403)
                 await resp(scope, receive, send)
                 return
+
+        # B-14: when the FastMCP TokenVerifier owns identity, do NOT resolve the
+        # token here. Connection-level guards (IP/body/Origin) already ran above.
+        # Per-principal rate limiting, readonly/scope checks, and identity
+        # resolution happen in the verifier + SIFT policy middleware (post-auth).
+        if self.verifier_owns_identity:
+            await self._delegate(scope, receive, send)
+            return
 
         from sift_gateway.identity import resolve_identity
         if not self.api_keys and self.token_registry is None:

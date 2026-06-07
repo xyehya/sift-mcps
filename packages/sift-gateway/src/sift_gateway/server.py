@@ -790,6 +790,49 @@ class Gateway:
         self._api_keys = api_keys
         token_registry = create_token_registry(self.config)
 
+        # PR03A: build the shared Supabase identity resolver + portal callbacks.
+        # Fail-soft: if Supabase is disabled or env/DSN is absent, the gateway
+        # runs PR02/legacy-only exactly as before.
+        from sift_gateway.config import load_auth_config
+
+        auth_config = load_auth_config(self.config)
+        resolver = None
+        supabase_callbacks = None
+        if auth_config.configured:
+            try:
+                from sift_gateway.supabase_auth import (
+                    AgentServiceIssuance,
+                    SupabaseAuthCallbacks,
+                    SupabaseAuthClient,
+                    SupabaseIdentityResolver,
+                    SupabasePrincipalRepository,
+                )
+                from sift_gateway.token_registry import registry_config
+
+                dsn, _ = registry_config(self.config)
+                if dsn:
+                    sb_client = SupabaseAuthClient(auth_config)
+                    repo = SupabasePrincipalRepository(dsn)
+                    resolver = SupabaseIdentityResolver(
+                        auth_config, client=sb_client, repository=repo
+                    )
+                    issuance = AgentServiceIssuance(
+                        auth_config, sb_client, dsn=dsn, audit=self._audit
+                    )
+                    supabase_callbacks = SupabaseAuthCallbacks(
+                        auth_config, sb_client, repo, resolver,
+                        audit=self._audit, agent_issuance=issuance,
+                    )
+                else:
+                    logger.warning(
+                        "Supabase auth enabled but no control-plane DSN; "
+                        "running PR02/legacy auth only"
+                    )
+            except Exception as exc:  # pragma: no cover - defensive startup
+                logger.warning("Supabase auth init failed (%s); legacy auth only", exc)
+                resolver = None
+                supabase_callbacks = None
+
         # Compute allowed origins for Origin header validation (4c)
         gw_conf = self.config.get("gateway", {})
         host = gw_conf.get("host", "127.0.0.1")
@@ -813,8 +856,16 @@ class Gateway:
             api_keys=api_keys,
             token_registry=token_registry,
             base_url=f"{gateway_base_url}/mcp",
+            resolver=resolver,
+            legacy_fallback_enabled=auth_config.legacy_token_fallback_enabled,
         )
         mcp_app = gateway_mcp.http_app(path="/")
+        # B-14: when a FastMCP verifier owns identity (Supabase resolver and/or
+        # PR02 registry/api_keys), the raw ASGI guard keeps only IP/body/Origin
+        # checks and does NOT re-resolve the token on the normal path.
+        verifier_owns_identity = bool(
+            resolver is not None or api_keys or token_registry is not None
+        )
         mcp_asgi_app = MCPAuthASGIApp(
             mcp_app,
             api_keys=api_keys,
@@ -822,6 +873,7 @@ class Gateway:
             examiner_calls_per_minute=examiner_calls_per_minute,
             gateway=gateway,
             token_registry=token_registry,
+            verifier_owns_identity=verifier_owns_identity,
         )
 
         @contextlib.asynccontextmanager
@@ -906,6 +958,8 @@ class Gateway:
                 api_keys=api_keys,
                 gateway_config_path=_gw_config_path,
                 token_registry=token_registry,
+                supabase_auth=supabase_callbacks,
+                legacy_portal_session_enabled=auth_config.legacy_portal_session_enabled,
                 on_chain_mutation=invalidate_evidence_cache,
                 on_case_activated=_on_case_activated,
                 on_override_get_status=get_override_status,
@@ -936,8 +990,16 @@ class Gateway:
 
         app.add_exception_handler(Exception, _sanitized_error)
 
-        # Add auth middleware (skips /mcp — handled by MCPAuthASGIApp)
-        app.add_middleware(AuthMiddleware, api_keys=api_keys, token_registry=token_registry)
+        # Add auth middleware (skips /mcp — handled by MCPAuthASGIApp).
+        # PR03A: Supabase JWT validated first via the shared resolver; PR02/legacy
+        # api_keys are fallback behind explicit flags in auth_config.
+        app.add_middleware(
+            AuthMiddleware,
+            api_keys=api_keys,
+            token_registry=token_registry,
+            resolver=resolver,
+            auth_config=auth_config,
+        )
 
         # CORS — restrict origins to the gateway's own URL
         gw_cfg = self.config.get("gateway", {})

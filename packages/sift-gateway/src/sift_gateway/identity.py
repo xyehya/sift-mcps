@@ -2,6 +2,15 @@ from dataclasses import dataclass
 import hashlib
 from typing import Any
 
+
+@dataclass(frozen=True)
+class CaseMembership:
+    """An immutable operator case membership (PR03A FROZEN CONTRACT C2)."""
+
+    case_id: str
+    role: str
+
+
 @dataclass(frozen=True)
 class Identity:
     principal: str
@@ -15,6 +24,12 @@ class Identity:
     case_id: str | None = None
     tool_scopes: frozenset[str] = frozenset()
     token_fingerprint: str | None = None
+    # PR03A unified Supabase JWT identity (FROZEN CONTRACT C2 — all additive,
+    # defaulted so existing Identity(...) constructors keep working).
+    auth_user_id: str | None = None
+    principal_id: str | None = None
+    system_role: str | None = None
+    case_memberships: tuple[CaseMembership, ...] = ()
 
 def _hash_token(token: str) -> str:
     """Return a safe token fingerprint (first 16 hex chars of SHA-256). Never stores raw token."""

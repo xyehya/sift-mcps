@@ -76,10 +76,42 @@ class AuthMiddleware(BaseHTTPMiddleware):
     and examiner defaults to "anonymous".
     """
 
-    def __init__(self, app, api_keys: dict | None = None, token_registry=None):
+    def __init__(self, app, api_keys: dict | None = None, token_registry=None,
+                 resolver=None, auth_config=None):
         super().__init__(app)
         self.api_keys = api_keys or {}
         self.token_registry = token_registry
+        # PR03A: shared Supabase identity resolver + parsed auth config.
+        self.resolver = resolver
+        self.auth_config = auth_config
+
+    def _supabase_enabled(self) -> bool:
+        cfg = self.auth_config
+        return bool(self.resolver is not None and cfg is not None and getattr(cfg, "enabled", False))
+
+    def _legacy_token_fallback(self) -> bool:
+        cfg = self.auth_config
+        if cfg is None:
+            return True  # no PR03 config => legacy-only deployment
+        return bool(getattr(cfg, "legacy_token_fallback_enabled", True))
+
+    def _anonymous_examiner_allowed(self) -> bool:
+        cfg = self.auth_config
+        if cfg is None:
+            return True  # preserve pre-PR03 single-user behavior
+        return bool(getattr(cfg, "legacy_anonymous_examiner_enabled", False))
+
+    async def _resolve_supabase(self, token: str, source_ip: str | None):
+        """Return (identity, http_status) — identity or a denial status code."""
+        from sift_gateway.supabase_auth import SupabaseAuthError
+
+        try:
+            identity = await self.resolver.resolve(
+                token, source_ip=source_ip, auth_surface="rest"
+            )
+            return identity, None
+        except SupabaseAuthError as exc:
+            return None, getattr(exc, "http_status", 401)
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -134,15 +166,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.role = None
             return await call_next(request)
 
-        # If no api_keys configured, auth is disabled (single-user mode)
-        if not self.api_keys and self.token_registry is None:
+        source_ip = request.client.host if request.client else "unknown"
+
+        # Anonymous single-user / examiner mode. Only when no credential authority
+        # is configured AND (pre-PR03 deployment OR anonymous_examiner explicitly
+        # enabled). With Supabase enabled this implicit anonymous mode is off.
+        if (
+            not self.api_keys
+            and self.token_registry is None
+            and not self._supabase_enabled()
+            and self._anonymous_examiner_allowed()
+        ):
             from sift_gateway.identity import resolve_identity
-            identity = resolve_identity(None, self.api_keys, source_ip=request.client.host if request.client else "unknown", auth_surface="rest")
-            request.state.identity = identity
-            request.state.examiner = identity.principal
-            request.state.role = identity.role
-            request.state.token_id = identity.token_id
-            request.state.source_ip = identity.source_ip
+            identity = resolve_identity(None, self.api_keys, source_ip=source_ip, auth_surface="rest")
+            self._stamp(request, identity)
             return await call_next(request)
 
         # Extract bearer token
@@ -155,27 +192,56 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         token = auth_header[7:].strip()
 
-        from sift_gateway.identity import resolve_identity
-        identity = resolve_identity(
-            token,
-            self.api_keys,
-            source_ip=request.client.host if request.client else "unknown",
-            auth_surface="rest",
-            token_registry=self.token_registry,
-        )
-        if identity is None:
-            logger.warning("AuthMiddleware: rejected invalid or expired token")
-            return JSONResponse(
-                {"error": "Invalid API key"},
-                status_code=403,
-            )
+        # 1) Supabase JWT first when enabled.
+        if self._supabase_enabled():
+            identity, deny_status = await self._resolve_supabase(token, source_ip)
+            if identity is not None:
+                self._stamp(request, identity)
+                return await call_next(request)
+            # A valid-looking JWT that the resolver mapped to no/disabled principal
+            # yields 403; invalid/expired yields 401. If Supabase rejected it as an
+            # unknown token (401) we still allow the legacy fallback below.
+            if deny_status == 403:
+                logger.warning("AuthMiddleware: Supabase principal denied (403)")
+                return JSONResponse({"error": "Forbidden"}, status_code=403)
+            # B9(b): a 5xx is an auth-backend OUTAGE, not a bad token. Always log
+            # it. When legacy fallback is disabled there is no other authority, so
+            # fail closed as 503 rather than masquerading as a 401/403. When
+            # legacy fallback is enabled the bridge below may still authenticate.
+            if deny_status is not None and deny_status >= 500:
+                logger.warning(
+                    "AuthMiddleware: Supabase auth backend unavailable (status=%s)",
+                    deny_status,
+                )
+                if not self._legacy_token_fallback():
+                    return JSONResponse(
+                        {"error": "Authentication service unavailable"},
+                        status_code=503,
+                    )
 
+        # 2) PR02 token-registry / legacy api_keys fallback only when enabled.
+        if self._legacy_token_fallback() and (self.api_keys or self.token_registry is not None):
+            from sift_gateway.identity import resolve_identity
+            identity = resolve_identity(
+                token,
+                self.api_keys,
+                source_ip=source_ip,
+                auth_surface="rest",
+                token_registry=self.token_registry,
+            )
+            if identity is not None:
+                self._stamp(request, identity)
+                return await call_next(request)
+
+        logger.warning("AuthMiddleware: rejected invalid or expired token")
+        return JSONResponse({"error": "Invalid API key"}, status_code=403)
+
+    def _stamp(self, request: Request, identity) -> None:
         request.state.identity = identity
         request.state.examiner = identity.principal
         request.state.role = identity.role
         request.state.token_id = identity.token_id
         request.state.source_ip = identity.source_ip
-        return await call_next(request)
 
 
 def resolve_examiner(request: Request) -> dict:

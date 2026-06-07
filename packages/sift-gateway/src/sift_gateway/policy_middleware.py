@@ -20,13 +20,16 @@ from sift_gateway.mcp_endpoint import (
     _append_case_context,
     _stamp_identity_extra,
     current_mcp_identity,
+    log_rate_limit_violation,
 )
+from sift_gateway.rate_limit import check_examiner_rate_limit
 from sift_gateway.response_guard import (
     get_override_status,
     guard_tool_result,
     is_override_active,
     output_cap_bytes,
 )
+from sift_gateway.supabase_auth import is_tool_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +60,117 @@ def _request_context() -> dict:
         "source_ip": None,
         "identity": None,
     }
+
+
+class ToolAuthorizationMiddleware(Middleware):
+    """B-10: SIFT-owned per-principal tool authorization for list AND call.
+
+    Uses the single :func:`is_tool_allowed` helper for both ``on_list_tools``
+    (filter advertised tools) and ``on_call_tool`` (reject before dispatch),
+    guaranteeing list/call consistency. Denied calls return a normal MCP error
+    result and are audited WITHOUT invoking the tool (local or proxied). Denied
+    tools are absent from ``list_tools``.
+
+    Authorization is SIFT-owned: it does not delegate to FastMCP require_scopes.
+
+    B6: when auth is configured (``auth_enabled``), a request with no resolvable
+    SIFT identity (e.g. a token whose claims lack ``sift_identity``) FAILS CLOSED
+    — it lists nothing and is denied on call. Only genuine anonymous single-user
+    mode (no verifier/keys/registry) leaves the catalog open.
+    """
+
+    def __init__(self, gateway: Any, *, auth_enabled: bool = False) -> None:
+        self.gateway = gateway
+        self.auth_enabled = auth_enabled
+
+    async def on_list_tools(self, context, call_next):
+        tools = list(await call_next(context))
+        identity = current_mcp_identity()
+        if identity is None:
+            if self.auth_enabled:
+                # B6: auth configured but no identity → advertise nothing.
+                return []
+            # Genuine anonymous single-user mode: leave the catalog as-is.
+            return tools
+        return [tool for tool in tools if is_tool_allowed(identity, tool.name)]
+
+    async def on_call_tool(self, context, call_next):
+        name = _tool_name(context)
+        identity = current_mcp_identity()
+        if identity is None:
+            if not self.auth_enabled:
+                # Genuine anonymous single-user mode.
+                return await call_next(context)
+            # B6: auth configured but no identity → fail closed.
+            return await self._deny(name, identity=None, reason="no_identity")
+
+        # B3: per-principal rate limit. On the verifier-owns-identity path the
+        # raw ASGI guard no longer applies a per-examiner throttle (only IP/body/
+        # Origin remain), so the per-principal limit lives here in SIFT policy
+        # middleware, before tool dispatch.
+        if not check_examiner_rate_limit(identity.principal):
+            source_ip = getattr(identity, "source_ip", None)
+            log_rate_limit_violation(
+                self.gateway,
+                f"examiner:{identity.principal}",
+                source_ip or "unknown",
+                identity,
+            )
+            return self._rate_limited(name)
+
+        if is_tool_allowed(identity, name):
+            return await call_next(context)
+        return await self._deny(name, identity=identity, reason="tool_scope")
+
+    def _rate_limited(self, name: str) -> ToolResult:
+        payload = {
+            "error": "rate_limit_exceeded",
+            "tool": name,
+            "detail": "per-principal MCP rate limit exceeded",
+        }
+        return ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+            is_error=True,
+        )
+
+    async def _deny(self, name: str, *, identity: Any, reason: str) -> ToolResult:
+        # Denied: audit WITHOUT invoking the tool, return a normal MCP error.
+        req_ctx = _request_context()
+        extra_fields = _stamp_identity_extra(
+            {
+                "role": req_ctx["role"],
+                "token_id": req_ctx["token_id"],
+                "source_ip": req_ctx["source_ip"],
+                "status": "denied",
+                "denial_reason": reason,
+            },
+            identity,
+            req_ctx["examiner"],
+        )
+        try:
+            await asyncio.to_thread(
+                self.gateway._audit.log,
+                tool=name,
+                params={},
+                result_summary=f"denied: {reason}",
+                source="gateway_tool_authz",
+                extra=extra_fields,
+                examiner_override=identity.principal if identity else None,
+            )
+        except Exception as exc:
+            logger.warning("tool_authz: audit write failed: %s", exc)
+
+        payload = {
+            "error": "tool_not_authorized",
+            "tool": name,
+            "detail": "principal lacks an active tool scope for this tool",
+        }
+        return ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+            is_error=True,
+        )
 
 
 class EvidenceGateMiddleware(Middleware):
@@ -284,9 +398,18 @@ class AuditEnvelopeMiddleware(Middleware):
         return getattr(self.gateway, "_tool_map", {}).get(tool_name, "unknown")
 
 
-def gateway_policy_middlewares(gateway: Any) -> list[Middleware]:
-    """Return middleware in FastMCP execution order."""
+def gateway_policy_middlewares(
+    gateway: Any, *, auth_enabled: bool = False
+) -> list[Middleware]:
+    """Return middleware in FastMCP execution order.
+
+    ToolAuthorizationMiddleware (B-10) runs first so denied tools are rejected
+    before the evidence gate, audit envelope, and tool dispatch, and filtered
+    out of list_tools. ``auth_enabled`` makes it fail closed when a configured
+    verifier yields no SIFT identity (B6).
+    """
     return [
+        ToolAuthorizationMiddleware(gateway, auth_enabled=auth_enabled),
         EvidenceGateMiddleware(gateway),
         AuditEnvelopeMiddleware(gateway),
         CaseContextMiddleware(),
