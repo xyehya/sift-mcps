@@ -1,7 +1,6 @@
 # 21 - PR03B / Batch B Active-Case DB Authority
 
-Status: **Implemented on branch `codex/pr03b-active-case-db-authority` (Run 33);
-Land/review pending if unmerged**.
+Status: **Landed on `revamp/spg-v1` (Build Run 33, Land Run 34)**.
 Scope: one large target-zone PR, not a discussion note.
 Implements: Phase ID-4 and the active-case parts of ID-5 from
 `09_identity_auth_cutover.md`; carries B-11.

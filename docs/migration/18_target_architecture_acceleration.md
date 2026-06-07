@@ -27,7 +27,7 @@ Active-case env/config/pointer exports are not part of the target after D32.
 | MCP app | FastMCP 3.0 aggregate `/mcp`; local core tools + proxy add-ons | Same substrate; all MCP auth/case/tool policy backed by Supabase authority. |
 | Human auth | PR03A Supabase portal auth landed; legacy portal/session compatibility remains behind flags | Supabase Auth JWT verified by Gateway and protected by RLS. |
 | Agent/MCP auth | PR03A Supabase JWT accepted on REST and FastMCP `/mcp`; PR02 hash-token bridge remains behind flags | Supabase-issued JWTs for portal, agents, MCP clients, workers, and services; legacy token registry sunsets at ID-6. |
-| Active case | PR03B implemented on branch: Gateway/portal/core/FastMCP request paths use DB active-case authority | `app.active_case_state` authority; no active-case env/config/pointer exports per D32. |
+| Active case | PR03B landed: Gateway/portal/core/FastMCP request paths use DB active-case authority | `app.active_case_state` authority; no active-case env/config/pointer exports per D32. |
 | Add-on backend config | `gateway.yaml` | `app.mcp_backends` registry managed from portal. |
 | Audit | File-backed audit paths still exist | `app.audit_events` authority; file exports optional/generated. |
 | Evidence state | Manifest/ledger files authoritative in places | DB metadata/status authority; raw evidence and proof artifacts remain immutable files. |
@@ -302,8 +302,8 @@ flowchart TD
 | --- | --- |
 | Objective | Move active case authority from env/files to Supabase and propagate it through REST, MCP, workers, and proxy mounts. |
 | Likely files | Gateway, portal, `sift-common`, `sift-core`, control-plane migrations/tests, docs. |
-| Major tasks | Implemented on branch Run 33: `active_case_state` service; portal case API DB callbacks; Gateway REST/MCP DB context; no active-case env/config/pointer exports; evidence gate active-case context; FastMCP proxy active-case path (B-11). |
-| VM gates | Passed in Run 33: migration syntax in `BEGIN/ROLLBACK`; Gateway/portal/core suites; stale env/pointer negative with portal and mounted FastMCP proxy seeing DB case. |
+| Major tasks | Landed Runs 33-34: `active_case_state` service; portal case API DB callbacks; Gateway REST/MCP DB context; no active-case env/config/pointer exports; evidence gate active-case context; FastMCP proxy active-case path (B-11). |
+| VM gates | Passed in Run 33 and landed in Run 34: migration syntax in `BEGIN/ROLLBACK`; Gateway/portal/core suites; stale env/pointer negative with portal and mounted FastMCP proxy seeing DB case. |
 | Parallelism | Depends on Batch A for membership; can overlap with Batch H if file fences split. |
 
 ### Batch C - Evidence And Audit DB Authority
@@ -403,13 +403,10 @@ Every batch candidate should add these gates on top of `OPERATING_MODEL.md`:
 
 ## 14. Immediate Recommended Next Runs
 
-1. **Land/review PR03B / Batch B** if
-   `codex/pr03b-active-case-db-authority` is still unmerged; B-11 should be
-   marked DONE only at that Land point.
-2. **Plan D22A / Batch H** - `mcp_backends` control-plane registry and
+1. **Plan D22A / Batch H** - `mcp_backends` control-plane registry and
    `gateway.yaml` backend-authority removal.
-3. **Plan EVID-AUD-A / Batch C** - evidence metadata + audit DB authority.
-4. **Plan JOB-A / Batch E** - durable jobs + worker foundation.
+2. **Plan EVID-AUD-A / Batch C** - evidence metadata + audit DB authority.
+3. **Plan JOB-A / Batch E** - durable jobs + worker foundation.
 
 These planning runs can happen in parallel. Build order should continue with
-Batch B/H, then C/E, then F/G/D, then I.
+Batch H, then C/E, then F/G/D, then I.

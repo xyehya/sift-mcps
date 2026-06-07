@@ -36,25 +36,23 @@ landed implementation is intentionally transitional:
   PR02 / Phase ID-2 hash-only MCP/service token registry with legacy
   `gateway.yaml` fallback, D27a backend FastMCP/tool-contract revamp, D27b
   Gateway FastMCP cutover, and PR03A / Batch A unified Supabase JWT identity
-  for REST and MCP. PR03B / Batch B active-case DB authority is implemented on
-  `codex/pr03b-active-case-db-authority` and awaiting/under Land review. Per
-  D30, PR02 is now a transitional compatibility bridge rather than the final
-  identity target.
+  for REST and MCP, and PR03B / Batch B active-case DB authority. Per D30,
+  PR02 is now a transitional compatibility bridge rather than the final identity
+  target.
 - **Current Gateway substrate:** landed D27b serves one FastAPI ASGI app with
   the aggregate FastMCP `http_app` mounted at `/mcp`; per-backend `/mcp/{name}`
   routes are removed. Core gateway tools are local FastMCP tools; configured
   add-ons are FastMCP proxy mounts. SIFT-owned middleware enforces the evidence
   gate, response guard, case-context injection, and audit envelope.
-- **Still pending:** PR03B Land on `revamp/spg-v1`; full evidence/audit DB
-  authority beyond active-case context (Batch C/ID-5); legacy auth/token-path
-  sunset (ID-6); D22 `mcp_backends` control-plane registry replacing
-  `gateway.yaml` add-on registration (F-11); OpenSearch and RAG final
-  core/control-plane integration (D19/D23).
-- **Next planned session:** Land/review PR03B if still unmerged, then plan the
-  next scoped candidate. Keep historical case data migration, evidence metadata,
-  audit DB authority, jobs/workers, D22 `mcp_backends`, OpenSearch, RAG, and
-  findings/timeline/TODO/report migration out of PR03B unless a new candidate
-  explicitly scopes them.
+- **Still pending:** full evidence/audit DB authority beyond active-case context
+  (Batch C/ID-5); legacy auth/token-path sunset (ID-6); D22 `mcp_backends`
+  control-plane registry replacing `gateway.yaml` add-on registration (F-11);
+  OpenSearch and RAG final core/control-plane integration (D19/D23).
+- **Next planned session:** Plan D22A / Batch H: `mcp_backends` control-plane
+  registry and `gateway.yaml` backend-authority removal, carrying F-11 and
+  B-13. Keep evidence/audit DB authority, jobs/workers, OpenSearch, RAG, and
+  findings/timeline/TODO/report migration in separate scoped candidates unless a
+  future decision explicitly batches them.
 
 ## Plane Boundaries
 
@@ -261,12 +259,12 @@ and findings work should now be authored on the FastMCP 3.0 Gateway substrate.
 
 The planning workspace remains the source for future scoped implementation
 candidates, and the early foundation slices are complete: JOB-0, PR01/ID-1,
-PR02/ID-2, D27a, D27b, and PR03A/Batch A. PR03B/Batch B active-case DB authority
-is implemented on its branch and should be landed/reviewed before the next
-candidate is opened. D22/F-11 (`mcp_backends` registry), evidence/audit DB
-authority, jobs/workers, OpenSearch-core, RAG-core, and
-findings/timeline/TODO/report data migration remain separate later scopes unless
-a candidate doc explicitly batches them.
+PR02/ID-2, D27a, D27b, PR03A/Batch A, and PR03B/Batch B. The next recommended
+planning lane is D22A / Batch H for the `mcp_backends` registry and
+`gateway.yaml` backend-authority removal. Evidence/audit DB authority,
+jobs/workers, OpenSearch-core, RAG-core, and findings/timeline/TODO/report data
+migration remain separate later scopes unless a candidate doc explicitly batches
+them.
 
 ## Out Of Scope Until A Run Is Explicitly Scoped To It
 

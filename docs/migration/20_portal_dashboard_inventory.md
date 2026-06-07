@@ -22,9 +22,9 @@ auth rows to the landed PR03A / Run 29 state on `revamp/spg-v1`.
 - Run 31 locked D32 for PR03B: active case must be Supabase/Postgres
   authoritative, with no active-case env/config/pointer compatibility exports
   and no historical data migration.
-- Run 33 implemented PR03B on branch: case list/create/activate/current-case/
-  metadata routes use the injected DB active-case service in scoped request
-  paths, and stale env/config/pointers do not win over Postgres.
+- Runs 33-34 landed PR03B: case list/create/activate/current-case/metadata
+  routes use the injected DB active-case service in scoped request paths, and
+  stale env/config/pointers do not win over Postgres.
 - Findings, timeline, evidence status, TODOs, reports, backend registry, and
   most audit surfaces remain file/config/process backed and stay in future
   batches.
@@ -33,11 +33,11 @@ auth rows to the landed PR03A / Run 29 state on `revamp/spg-v1`.
 
 | Workflow | Frontend surface | Main API calls | Backend owner | Authority today after PR03A | Target batch |
 | --- | --- | --- | --- | --- | --- |
-| Portal boot/session check | `frontend/src/App.jsx`, `hooks/useDataPolling.js` | `GET /portal/api/auth/me`, then polling reads for case, summary, findings, delta, timeline, evidence, IOCs, TODOs, reports | `case_dashboard.routes`, `PortalSessionMiddleware` | Supabase session-envelope cookie for auth; active case is DB-backed on PR03B branch; broader read data still file backed | PR03A done for auth; PR03B branch for active case; Batch C/D for data authority |
+| Portal boot/session check | `frontend/src/App.jsx`, `hooks/useDataPolling.js` | `GET /portal/api/auth/me`, then polling reads for case, summary, findings, delta, timeline, evidence, IOCs, TODOs, reports | `case_dashboard.routes`, `PortalSessionMiddleware` | Supabase session-envelope cookie for auth; active case is DB-backed after PR03B; broader read data still file backed | PR03A done for auth; PR03B done for active case; Batch C/D for data authority |
 | Login/logout/session refresh | `LoginCard.jsx`, `Header.jsx`, `CommandPalette.jsx` | `POST /auth/login`, `POST /auth/logout`, `POST /auth/refresh`, `GET /auth/me` | Gateway-injected portal auth callbacks | Supabase Auth validates identity; Gateway resolves SIFT principal; portal stores no token material outside signed HttpOnly cookie | PR03A done |
 | Legacy first-time setup/password reset | `LoginCard.jsx` legacy branches | `GET /auth/setup-required`, `POST /auth/setup`, `GET /auth/challenge`, `POST /auth/reset-password` | `case_dashboard.routes` | Disabled in Supabase mode or when legacy portal sessions are disabled; legacy-only compatibility otherwise | PR03A/Run 29 done; remove at legacy sunset |
-| Case list/create/activate | `Header.jsx` case menu | `GET /cases`, `POST /case/create`, `GET /case/activate/challenge`, `POST /case/activate` | `case_dashboard.routes` | DB active-case service on PR03B branch; artifact directories may still be created as storage only | PR03B implemented on branch; Land gate pending if unmerged |
-| Case metadata edit | `CaseBriefCard.jsx` | `GET /case`, `POST /case/metadata` | `case_dashboard.routes`, DB active-case service | DB case row/metadata on PR03B branch; `CASE.yaml` is no longer active-case metadata authority for these routes | PR03B implemented on branch; Batch D handles broader file-backed investigation data |
+| Case list/create/activate | `Header.jsx` case menu | `GET /cases`, `POST /case/create`, `GET /case/activate/challenge`, `POST /case/activate` | `case_dashboard.routes` | DB active-case service after PR03B; artifact directories may still be created as storage only | PR03B done |
+| Case metadata edit | `CaseBriefCard.jsx` | `GET /case`, `POST /case/metadata` | `case_dashboard.routes`, DB active-case service | DB case row/metadata after PR03B; `CASE.yaml` is no longer active-case metadata authority for these routes | PR03B done for active-case metadata; Batch D handles broader file-backed investigation data |
 | Findings/timeline/audit review staging | `FindingsTab.jsx`, `CommandPalette.jsx` | `GET /findings`, `GET /findings/{id}`, `GET /timeline`, `GET /audit/{finding_id}`, `GET/POST/DELETE /delta` | `case_dashboard.routes` | `findings.json`, `timeline.json`, `pending-reviews.json`, approvals JSONL, audit JSONL | Batch D, with DB audit dependencies from Batch C |
 | Commit staged findings | `CommitDrawer.jsx` | `GET /commit/challenge`, `POST /commit` | `case_dashboard.routes` | In-memory commit challenge + legacy password material; writes case-local findings/approvals files | Batch D; challenge model must be reworked for Supabase operators |
 | Evidence inventory and chain operations | `EvidenceTab.jsx`, `StatusBar.jsx` | `GET /evidence`, `GET/POST /evidence/chain/*`, `POST /evidence/{path}/verify` | `case_dashboard.routes`, evidence helpers | Evidence files remain immutable; metadata/status split across manifest, ledger, `evidence.json`, optional Solana env/state | Batch C |
@@ -59,7 +59,7 @@ same route table is still mounted for the legacy `/dashboard` surface, but
 | --- | --- | --- | --- | --- |
 | Supabase portal auth | `/api/auth/login`, `/api/auth/logout`, `/api/auth/refresh`, `/api/auth/me` | Supabase session-envelope cookie, operator-only portal APIs, agent/service denied | Supabase Auth + SIFT app principal mapping | PR03A done |
 | Legacy portal auth compatibility | `/api/auth/setup-required`, `/api/auth/setup`, `/api/auth/challenge`, `/api/auth/reset-password` | Public setup/challenge only when legacy local portal auth is enabled and Supabase callbacks are absent | `/var/lib/sift/passwords`, in-memory challenge pools | Legacy sunset |
-| Cases and active case | `/api/cases`, `/api/case/create`, `/api/case/activate`, `/api/case`, `/api/case/metadata` | Portal role for reads; operator writes; Supabase mode activation has no legacy active-case password challenge | DB active-case service on PR03B branch; no env/config/pointer authority | PR03B implemented on branch; Land gate pending if unmerged |
+| Cases and active case | `/api/cases`, `/api/case/create`, `/api/case/activate`, `/api/case`, `/api/case/metadata` | Portal role for reads; operator writes; Supabase mode activation has no legacy active-case password challenge | DB active-case service after PR03B; no env/config/pointer authority | PR03B done |
 | Findings and review | `/api/findings`, `/api/findings/{id}`, `/api/timeline`, `/api/audit/{finding_id}`, `/api/delta` | Portal reads; operator writes | Case-local JSON/JSONL | Batch D |
 | Evidence | `/api/evidence`, `/api/evidence/chain/*`, `/api/evidence/{path}/verify` | Portal reads; operator challenge for most mutations | Evidence files + manifest/ledger/`evidence.json` | Batch C |
 | TODOs and IOCs | `/api/todos`, `/api/iocs` | Portal reads; operator TODO writes | `todos.json`, `iocs.json` | Batch D |
@@ -126,8 +126,8 @@ management, but they matter for auth and legacy-token sunset.
 | Agent/service token lifecycle | Replaced/adapted to JWT principals | PR03A done |
 | Gateway REST bearer auth | Supabase JWT-first with explicit bridge | PR03A done |
 | FastMCP `/mcp` auth and tool scope | Supabase JWT-first + B-10 list/call auth | PR03A done |
-| Case list/create/activate/active case | Implemented on PR03B branch; D32 says DB wins and stale env/config/pointers are ignored | Land/review PR03B if unmerged |
-| Case metadata | Active-case display/edit authority moved to DB on PR03B branch | Land/review PR03B if unmerged; Batch D for broader investigation data |
+| Case list/create/activate/active case | Implemented by PR03B; D32 says DB wins and stale env/config/pointers are ignored | Done |
+| Case metadata | Active-case display/edit authority moved to DB by PR03B | Done for active-case metadata; Batch D for broader investigation data |
 | Findings/timeline review staging/commit | Replace file authority with DB review tables | Batch D |
 | Audit lookup | Move to DB audit authority | Batch C/D |
 | Evidence status/seal/verify/ignore/retire/anchor | Move metadata/status authority while preserving immutable artifacts | Batch C |

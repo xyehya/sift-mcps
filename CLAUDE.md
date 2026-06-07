@@ -76,8 +76,8 @@ assumptions.
 Run 26 target architecture/D30 done -> Run 27 PR03A candidate done -> Run 28
 PR03A BUILD + Review + VM acceptance done -> Run 29 PR03A portal auth-mode
 remediation + Land -> Run 30 portal/dashboard inventory captured -> Run 31
-PR03B candidate + D32 active-case cutover lock -> PR03B/Batch B active-case DB
-authority Build (ID-4, B-11) or Batch H mcp_backends registry ->
+PR03B candidate + D32 active-case cutover lock -> Runs 33-34 PR03B/Batch B
+active-case DB authority Land (ID-4, B-11 DONE) -> Batch H mcp_backends registry ->
 evidence/audit DB authority -> jobs/OpenSearch-core -> findings/RAG/skills ->
 legacy authority sunset.`
 
@@ -122,7 +122,7 @@ legacy authority sunset.`
   deny agent/service principals unless a scoped doc explicitly allows an
   exception.
 
-### Backlog I must carry into PR03B / later (from REGISTER.md)
+### Backlog I must carry forward (from REGISTER.md)
 - **B-1** remove reclassified tool aliases once skills/RAG use the resource URIs (at/after D27b).
 - **B-2** remove the 10 legacy wintriage aliases after one cycle; first update the
   `forensic-knowledge` playbook + `tool_metadata.py` `analyze_filename` reference.
@@ -140,8 +140,8 @@ legacy authority sunset.`
 - **B-10** DONE at PR03A Land: per-principal tool authorization under D30, with
   `mcp:*`, `tool:<name>`, and `namespace:<prefix>`, SIFT-side list filtering and
   reject-before-call enforcement.
-- **B-11** active-case must reach proxied backends via args/result/shared store,
-  not parent `ctx.set_state`; deferred to Batch B / ID-4/ID-5.
+- **B-11** DONE at PR03B Land: active-case reaches proxied backends through safe
+  `case_id`/`case_key` args or typed audited denial, not parent `ctx.set_state`.
 - **B-12** preserve capped-result `backend_audit_id`; post-D27b gateway hardening.
 - **B-13** proxy namespace/collision assertion; D22/Batch H registry phase.
 - **B-14** DONE at PR03A Land: duplicate MCP token/JWT resolution removed with
@@ -158,14 +158,14 @@ pinned GoTrue lacks admin session logout). Run 30 added
 `docs/migration/20_portal_dashboard_inventory.md` as a normalized portal/API
 inventory reference.
 
-PR03B / Batch B (active-case DB authority, ID-4) is implemented on branch
-`codex/pr03b-active-case-db-authority` from
-`docs/migration/21_pr03b_active_case_db_authority.md`; Land/review it if still
-unmerged. D32 locks the active-case model: Supabase/Postgres
-`app.active_case_state` wins; no active-case env/config/pointer authority or
-generated exports; no historical data migration. Carry B-4/B-12/B-13/B-15
-forward unless a scoped doc closes them; B-11 is implemented by PR03B and should
-be marked DONE only at PR03B Land. Deployment note: the VM systemd
+PR03B / Batch B (active-case DB authority, ID-4) is landed on `revamp/spg-v1`
+from `docs/migration/21_pr03b_active_case_db_authority.md`. D32 locks the
+active-case model: Supabase/Postgres `app.active_case_state` wins; no
+active-case env/config/pointer authority or generated exports; no historical
+data migration. Next recommended work is Plan-stage D22A / Batch H:
+`mcp_backends` control-plane registry and `gateway.yaml` backend-authority
+removal, carrying F-11 and B-13. Carry B-4/B-12/B-13/B-15 forward unless a
+scoped doc closes them. Deployment note: the VM systemd
 `sift-gateway` runs the old tree
 (`~/sift-mcps`); production rollout of the new auth code/config/env is the
 installer follow-up, not PR03A.

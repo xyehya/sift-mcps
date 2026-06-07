@@ -69,28 +69,31 @@ around it. In short:
   - Final target architecture / acceleration plan → `18_target_architecture_acceleration.md`
   - PR03A / Batch A unified JWT implementation candidate/log (landed) →
     `19_pr03_unified_supabase_jwt_identity.md`
-  - Portal/dashboard workflow + API inventory reference for PR03B planning →
+  - Portal/dashboard workflow + API inventory reference →
     `20_portal_dashboard_inventory.md`
-  - PR03B / Batch B active-case DB authority build candidate →
+  - PR03B / Batch B active-case DB authority implementation candidate/log
+    (landed) →
     `21_pr03b_active_case_db_authority.md`
 
 ## Current stage (read MIGRATION_STATE for the live version)
 
-D27a, D27b, and **PR03A / Batch A (unified Supabase JWT identity)** are landed on
-`revamp/spg-v1` (Runs 23-30). PR03A delivered Supabase JWT validation for REST
-and FastMCP `/mcp`, shared Gateway principal resolution, portal Supabase
-login/session, agent/service JWT issuance + revocation (D31), B-10 tool
-authorization, and B-14 duplicate resolver cleanup. Run 33 implemented
-**PR03B / Batch B: active-case DB authority** on branch
-`codex/pr03b-active-case-db-authority`.
+D27a, D27b, **PR03A / Batch A (unified Supabase JWT identity)**, and
+**PR03B / Batch B (active-case DB authority)** are landed on `revamp/spg-v1`
+(Runs 23-34). PR03A delivered Supabase JWT validation for REST and FastMCP
+`/mcp`, shared Gateway principal resolution, portal Supabase login/session,
+agent/service JWT issuance + revocation (D31), B-10 tool authorization, and
+B-14 duplicate resolver cleanup. PR03B delivered DB active-case authority,
+Gateway REST/MCP propagation, portal case API turnover, core active-case
+context, and B-11 proxy active-case propagation.
 
-PR03B should be reviewed/landed if still unmerged. D32 locks the model:
-Supabase/Postgres `app.active_case_state` wins; `SIFT_CASE_DIR`,
-`SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and `~/.sift/active_case` are not
-authority and are not regenerated as active-case exports; no historical data
-migration is in scope. If a future run discovers an installed API, Supabase
-behavior, FastMCP proxy behavior, or repo invariant mismatch, **stop and raise a
-fork** - do not improvise (D29).
+The next recommended work is **Plan-stage D22A / Batch H: `mcp_backends`
+control-plane registry and `gateway.yaml` backend-authority removal**, carrying
+F-11 and B-13. D32 remains locked: Supabase/Postgres `app.active_case_state`
+wins; `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and
+`~/.sift/active_case` are not authority and are not regenerated as active-case
+exports; no historical data migration is in scope. If a future run discovers an
+installed API, Supabase behavior, FastMCP proxy behavior, or repo invariant
+mismatch, **stop and raise a fork** - do not improvise (D29).
 
 ## Mandatory Host/VM Workflow
 
@@ -246,9 +249,9 @@ PR03A is **landed** on `revamp/spg-v1`. Spec + status:
 
 - `docs/migration/19_pr03_unified_supabase_jwt_identity.md` (status: implemented)
 - `docs/migration/20_portal_dashboard_inventory.md` (reference inventory for
-  PR03B portal/API turnover planning; not an implementation candidate)
-- `docs/migration/21_pr03b_active_case_db_authority.md` (implemented PR03B
-  candidate; Land/review source if branch is still unmerged)
+  portal/API turnover; not an implementation candidate)
+- `docs/migration/21_pr03b_active_case_db_authority.md` (landed PR03B
+  candidate)
 
 It delivered unified Supabase JWT auth, principal mapping, portal Supabase auth,
 agent/service JWT issuance + revocation (D31), and DB-backed MCP tool

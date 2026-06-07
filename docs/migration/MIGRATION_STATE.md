@@ -2,14 +2,14 @@
 
 ## Current Objective
 
-**PR03B / Batch B active-case DB authority is implemented** on branch
-`codex/pr03b-active-case-db-authority` (Run 33), from
+**PR03B / Batch B active-case DB authority is landed** on `revamp/spg-v1`
+(Build Run 33, Land Run 34), from
 `docs/migration/21_pr03b_active_case_db_authority.md`. Supabase/Postgres
 `app.active_case_state` is now the runtime active-case authority for the scoped
 request paths. `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and
 `~/.sift/active_case` are not regenerated as active-case exports and do not win
 over the DB active case on Gateway/portal/core/FastMCP request paths. No
-historical data migration was added.
+historical data migration was added. **B-11 is DONE.**
 
 Landed foundation: D27b gateway cutover is landed on `revamp/spg-v1` (Runs
 23-24), serving one FastAPI ASGI app with aggregate FastMCP `http_app` at
@@ -24,9 +24,9 @@ pinned Supabase v1.26.05.
 Run 30 added `20_portal_dashboard_inventory.md`, the normalized portal/dashboard
 workflow and API inventory. Run 31 reconciled recurring architecture docs and
 created doc 21. Run 32 demoted D4 to a historical pointer so new active-case
-work cites D32 only. Run 33 implemented PR03B. D30 remains the target credential
-model; PR02 hash-only tokens remain a transitional compatibility bridge until
-ID-6.
+work cites D32 only. Run 33 implemented PR03B; Run 34 fast-forward landed it on
+`revamp/spg-v1`. D30 remains the target credential model; PR02 hash-only tokens
+remain a transitional compatibility bridge until ID-6.
 
 FastMCP 3.4.2 grounding was reconfirmed in Run 33 against the installed wheel:
 `create_proxy` imports from `fastmcp.server`; `Middleware.on_call_tool(self,
@@ -38,11 +38,37 @@ B-11 is handled by injecting/overriding safe `case_id`/`case_key` arguments or
 returning typed audited denials for implicit-env/filesystem case-scoped proxy
 tools.
 
-**Next:** review/Land PR03B if this branch has not been merged, then plan the
-next scoped candidate. Keep D22/F-11 (`mcp_backends` registry), evidence/audit
-DB authority (Batch C), jobs/workers (Batch E), OpenSearch-core, RAG/skills, and
-findings/timeline/TODO/report data migration separate unless a new candidate doc
-explicitly batches them. Carry B-4/B-12/B-13/B-15 forward.
+**Next:** Plan **D22A / Batch H** for the `mcp_backends` control-plane registry
+and `gateway.yaml` backend-authority removal, carrying F-11 and B-13. Keep
+evidence/audit DB authority (Batch C), jobs/workers (Batch E), OpenSearch-core,
+RAG/skills, and findings/timeline/TODO/report data migration separate unless a
+new candidate doc explicitly batches them. Carry B-4/B-12/B-13/B-15 forward.
+
+## Run 34 — PR03B Land
+
+Land run on `revamp/spg-v1`.
+
+Trigger: operator requested merge and Land-status documentation update after
+Run 33 completed PR03B Build verification.
+
+Changed:
+- Fast-forward merged `codex/pr03b-active-case-db-authority` into
+  `revamp/spg-v1` at commit `fed4ea7` (`Implement PR03B active-case DB
+  authority`).
+- Updated recurring migration docs and handoff files from "implemented on
+  branch / pending Land" to "landed on `revamp/spg-v1`".
+- Marked **B-11 DONE** in `REGISTER.md` because PR03B is now landed.
+
+Verification:
+- Run 33 acceptance evidence remains the Land evidence for the merged commit:
+  host DB/Gateway/portal/core suites passed; VM migration syntax
+  `BEGIN/ROLLBACK`, targeted PR03B suites, broad Gateway/portal/core suites, and
+  two-case stale env/pointer negative passed.
+- Run 34 docs-only gates: `python3 scripts/validate_migration_docs.py` and
+  `git diff --check` passed.
+
+Next: Plan D22A / Batch H (`mcp_backends` registry and `gateway.yaml`
+backend-authority removal), carrying F-11 and B-13.
 
 ## Run 33 — PR03B Active-Case DB Authority Build
 
@@ -111,9 +137,7 @@ Review:
   dispatch.
 
 Land notes:
-- B-11 may be marked DONE at PR03B Land. This run implements and verifies it on
-  the branch; do not mark DONE on `revamp/spg-v1` until the PR03B Land commit is
-  accepted there.
+- Landed by Run 34 on `revamp/spg-v1`; B-11 is DONE.
 - No installer, Docker, local Supabase state, DB dump, generated active-case
   export, or `packages/*-mcp/**` change was made.
 
