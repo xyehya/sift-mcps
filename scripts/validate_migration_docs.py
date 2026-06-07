@@ -111,10 +111,16 @@ def check_register() -> None:
         status = cells[3].upper()
         if status not in FORK_STATUS:
             err(f"REGISTER.md fork {fid}: Status '{cells[3]}' not in {sorted(FORK_STATUS)}")
-        if status == "RESOLVED" and not cells[4].strip():
+        decision = cells[4].strip()
+        becomes = cells[5].strip()
+        if status == "OPEN" and (decision or becomes):
+            err(f"REGISTER.md fork {fid}: OPEN but Decision/Becomes is not empty")
+        if status == "RESOLVED" and not decision:
             err(f"REGISTER.md fork {fid}: RESOLVED but Decision column is empty")
-        if status == "RESOLVED" and not cells[5].strip():
-            warn(f"REGISTER.md fork {fid}: RESOLVED but 'Becomes' is empty")
+        if status == "RESOLVED" and not becomes:
+            err(f"REGISTER.md fork {fid}: RESOLVED but 'Becomes' is empty")
+        if status == "RESOLVED" and not re.search(r"\b(D\d+[a-z]?|B-\d+|rejected)\b", becomes, re.I):
+            err(f"REGISTER.md fork {fid}: RESOLVED Becomes must cite D#, B#, or rejected")
         for m in re.findall(r"B-\d+", cells[5]):
             fork_becomes_b.append(m)
 
@@ -156,6 +162,12 @@ def check_state() -> None:
     if not re.search(r"\*\*Next:?\*\*", obj_block):
         err("MIGRATION_STATE.md: Current Objective has no '**Next:**' line "
             "(the dashboard derives the current stage from it)")
+    next_markers = re.findall(r"\*\*Next:?\*\*", text)
+    if len(next_markers) != 1:
+        err(f"MIGRATION_STATE.md: expected exactly one global '**Next:**' marker, found {len(next_markers)}")
+    if re.search(r"^## Next Recommended Run\s*$", text, re.M):
+        err("MIGRATION_STATE.md: stale standalone '## Next Recommended Run' section is not allowed; "
+            "use '## Current Objective' for live handoff")
 
     runs = re.findall(r"^## Run (\d+)\s*[-–—]\s*.+$", text, re.M)
     if not runs:
@@ -179,6 +191,12 @@ def check_charter() -> None:
         err(f"00_migration_charter.md: duplicate decision ids {sorted(dupes)}")
     if "## Cutover Order" not in text:
         warn("00_migration_charter.md: no '## Cutover Order' section")
+    if "## Current Migration Status" in text:
+        err("00_migration_charter.md: charter must not carry volatile '## Current Migration Status'; "
+            "use MIGRATION_STATE.md")
+    if re.search(r"\bNext planned session\b|\bnext recommended\b", text, re.I):
+        err("00_migration_charter.md: charter must not carry next-session handoff text; "
+            "use MIGRATION_STATE.md")
 
 
 def main() -> int:

@@ -1,13 +1,14 @@
 # 21 - PR03B / Batch B Active-Case DB Authority
 
-Status: **Landed on `revamp/spg-v1` (Build Run 33, Land Run 34)**.
-Scope: one large target-zone PR, not a discussion note.
+Status: **historical landed candidate/log** on `revamp/spg-v1` (Build Run 33,
+Land Run 34). Do not use this as the next build prompt.
+Historical scope fence: one large target-zone PR, not a discussion note.
 Implements: Phase ID-4 and the active-case parts of ID-5 from
 `09_identity_auth_cutover.md`; carries B-11.
 Locked decisions: D1-D3, D5, D12, D17, D24, D29-D32 in
 `00_migration_charter.md`.
 
-This candidate replaces active-case authority from env/config/pointer files with
+This landed candidate replaced active-case authority from env/config/pointer files with
 Supabase/Postgres authority. It intentionally does **not** migrate historical
 case data, findings, timelines, TODOs, evidence metadata, reports, audit logs,
 OpenSearch data, RAG data, or backend registration. Existing case directories,
@@ -330,7 +331,10 @@ The Land commit must update:
 - `docs/migration/REGISTER.md` marking B-11 DONE only at Land
 - `AGENTS.md`, `CLAUDE.md` handoff state
 
-## 15. Ready Build Prompt
+## 15. Archived Ready Build Prompt
+
+This prompt is retained as historical provenance for the landed PR03B build. Do
+not use it as a live next-run handoff.
 
 ```text
 ROLE & MODE: Build-stage coding session for SIFT PR03B / Batch B

@@ -22,8 +22,7 @@
 flowchart TB
 
   %% =========================================================
-  %% SIFT VM Autonomous DFIR Agent - target architecture with current
-  %% post-PR03A migration status and PR03B target called out.
+  %% SIFT VM Autonomous DFIR Agent - target architecture.
   %%
   %% Canonical decisions reflected in this diagram (see
   %% 00_migration_charter.md "Confirmed Decisions (Locked)"):
@@ -49,7 +48,7 @@ flowchart TB
   %% Note: Mermaid auto-layout is not pixel-perfect.
   %% =========================================================
 
-  subgraph SYSTEM["SIFT VM Autonomous DFIR Agent - Target Architecture (Post-PR03A Status)"]
+  subgraph SYSTEM["SIFT VM Autonomous DFIR Agent - Target Architecture"]
     direction TB
 
     %% -------------------------
@@ -58,7 +57,7 @@ flowchart TB
     subgraph CLIENTS[" "]
       direction LR
 
-      Portal("<b>Presentation Layer</b><br/>React + Vite Operator Portal<br/><br/>Case lifecycle, <b>ACTIVE CASE selection</b>,<br/>findings + approvals, timeline, TODOs, IOCs,<br/>evidence integrity, principal/JWT management,<br/>reports, AI-agent activity review<br/><i>Supabase JWT auth landed PR03A</i>")
+      Portal("<b>Presentation Layer</b><br/>React + Vite Operator Portal<br/><br/>Case lifecycle, <b>ACTIVE CASE selection</b>,<br/>findings + approvals, timeline, TODOs, IOCs,<br/>evidence integrity, principal/JWT management,<br/>reports, AI-agent activity review")
 
       Agents("<b>AI Agent Clients</b><br/>Codex / Claude / Local MCP Clients<br/><br/>Supabase JWT target (D30)<br/>Gateway-mediated MCP tools only<br/>case-data tools are case-scoped;<br/>global add-ons are tool-scoped + audited<br/>(no direct backend, no direct OpenSearch)")
     end
@@ -66,7 +65,7 @@ flowchart TB
     %% -------------------------
     %% Gateway - single policy boundary
     %% -------------------------
-    Gateway("<b>Gateway / Broker Layer - SINGLE POLICY BOUNDARY</b><br/>FastAPI + FastMCP 3.0 <b>LANDED D27b</b><br/>(one ASGI app: REST + aggregate mcp.http_app at /mcp)<br/><br/>ALL REST APIs + ALL MCP tool calls + ALL privileged actions<br/>Supabase JWT verification landed PR03A, AuthZ, case scope,<br/>tool scope, evidence gate, audit + policy enforcement,<br/>OpenSearch query mediation<br/><i>policy is SIFT-owned middleware/service logic</i><br/><i>per-backend direct MCP routes REMOVED</i><br/><i>DB active-case propagation pending PR03B/D32</i>")
+    Gateway("<b>Gateway / Broker Layer - SINGLE POLICY BOUNDARY</b><br/>FastAPI + FastMCP 3.0<br/>(one ASGI app: REST + aggregate mcp.http_app at /mcp)<br/><br/>ALL REST APIs + ALL MCP tool calls + ALL privileged actions<br/>Supabase JWT verification, AuthZ, case scope,<br/>tool scope, evidence gate, audit + policy enforcement,<br/>OpenSearch query mediation<br/><i>policy is SIFT-owned middleware/service logic</i><br/><i>per-backend direct MCP routes removed</i><br/><i>DB active-case authority per D32</i>")
 
     %% -------------------------
     %% Control plane (authoritative)
@@ -78,9 +77,9 @@ flowchart TB
 
       subgraph CP_BOXES[" "]
         direction TB
-        B1["<b>Identity + Auth + Case Membership</b><br/><i>Supabase JWT landed PR03A</i>"]
+        B1["<b>Identity + Auth + Case Membership</b><br/><i>Supabase JWT target per D30</i>"]
         B2["<b>Compatibility Token Registry</b> (hash-only)<br/><i>runtime dual-validation done PR02;<br/>bridge until D30/ID-6 sunset</i>"]
-        B3["<b>Active Case State</b> (portal-set)<br/><i>authority/propagation pending PR03B<br/>no env/pointer exports per D32</i>"]
+        B3["<b>Active Case State</b> (portal-set)<br/><i>DB authority; no env/pointer exports per D32</i>"]
         B4["<b>Cases / Findings / Approvals / TODOs / IOCs / Timeline refs</b>"]
         B5["<b>Evidence Metadata + Integrity + Anchoring state</b>"]
         B6["<b>Durable Jobs / Steps / Logs / Pipeline State</b>"]
@@ -142,14 +141,14 @@ flowchart TB
     %% -------------------------
     %% Flows
     %% -------------------------
-    Portal -. "Operator actions / REST API<br/>(target: set DB ACTIVE CASE;<br/>authority pending PR03B/D32)" .-> Gateway
+    Portal -. "Operator actions / REST API<br/>(set DB ACTIVE CASE per D32)" .-> Gateway
     Agents -. "Supabase JWT + MCP tool calls<br/>(ingest / search / query via Gateway only)" .-> Gateway
 
-    Gateway -. "AuthZ, audit,<br/>case + workflow state,<br/><b>ENQUEUE jobs / pipelines</b><br/><i>DB active-case authority pending PR03B</i>" .-> Supabase
+    Gateway -. "AuthZ, audit,<br/>case + workflow state,<br/><b>ENQUEUE jobs / pipelines</b><br/><i>DB active-case authority per D32</i>" .-> Supabase
     Gateway -. "Mediated case-scoped<br/>search & retrieval<br/><i>target core OpenSearch tools</i>" .-> OpenSearch
     Gateway -. "OpenSearch compatibility add-on<br/><i>until D19 core move</i>" .-> OpenSearchCompat
-    Gateway -. "Registered add-on tool calls<br/>query-only, audited under active case<br/><i>current config source: gateway.yaml</i>" .-> OpenCTI
-    Gateway -. "Registered add-on tool calls<br/>query-only, audited under active case<br/><i>current config source: gateway.yaml</i>" .-> WinTriage
+    Gateway -. "Registered add-on tool calls<br/>query-only, audited under active case<br/><i>control-plane registry target per D22</i>" .-> OpenCTI
+    Gateway -. "Registered add-on tool calls<br/>query-only, audited under active case<br/><i>control-plane registry target per D22</i>" .-> WinTriage
     OpenCTI -. "opencti_* indices<br/>(scoped role)" .-> OpenSearch
 
     Supabase == "Workers CLAIM durable jobs<br/>(poll + lease)" ==> EXECUTION

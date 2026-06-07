@@ -1,7 +1,11 @@
 # 19 - PR03A / Batch A - Unified Supabase JWT Identity
 
-Status: **implemented** (Run 28; unit commits A/B/C on `revamp/pr03a-unified-jwt`; host + VM acceptance green; `/code-review` + `/security-review` passed; B-10/B-14 DONE; F-13 → **D31** revocation model). See `MIGRATION_STATE.md` Run 28 for evidence.
-Scope fence: `supabase/migrations/**`, `tests/db/**`,
+Status: **historical landed candidate/log** (implemented Run 28; landed Run 29;
+unit commits A/B/C on `revamp/pr03a-unified-jwt`; host + VM acceptance green;
+`/code-review` + `/security-review` passed; B-10/B-14 DONE; F-13 -> **D31**
+revocation model). See `MIGRATION_STATE.md` Runs 28-29 for evidence. Do not use
+this as the next build prompt.
+Historical scope fence: `supabase/migrations/**`, `tests/db/**`,
 `packages/sift-gateway/src/sift_gateway/**`, `packages/sift-gateway/tests/**`,
 `packages/sift-gateway/pyproject.toml`, `packages/case-dashboard/src/case_dashboard/**`,
 `packages/case-dashboard/tests/**`, `packages/case-dashboard/frontend/src/**`,
@@ -726,7 +730,7 @@ than expanding the PR silently.
 
 ## 13. Register And Documentation Outcomes At Land
 
-If PR03 passes Review/Land:
+Historical PR03A Review/Land handoff:
 
 - Mark B-10 DONE with the PR03 Run/commit.
 - Mark B-14 DONE with the PR03 Run/commit.
@@ -734,11 +738,13 @@ If PR03 passes Review/Land:
   approved scope.
 - Update `09_identity_auth_cutover.md` Phase ID-3 to implemented.
 - Update `18_target_architecture_acceleration.md` Batch A landed-state text.
-- Update `MIGRATION_STATE.md` with host/VM evidence and next recommended build:
-  PR03B / Batch B active-case DB authority, unless the operator chooses Batch H.
-- Update `AGENTS.md` and `CLAUDE.md` if the current-stage handoff changes.
+- Update `MIGRATION_STATE.md` with host/VM evidence and the next action.
+- Update entry-point docs only for stable pointers or operational invariants.
 
-## 14. Ready-To-Copy Build Prompt
+## 14. Archived Ready-To-Copy Build Prompt
+
+This prompt is retained as historical provenance for the landed PR03A build. Do
+not use it as a live next-run handoff.
 
 ```text
 ROLE & MODE: You are a Build-stage coding session for SIFT migration PR03A /

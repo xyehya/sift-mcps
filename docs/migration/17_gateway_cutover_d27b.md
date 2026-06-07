@@ -1,7 +1,8 @@
-# 17 — Gateway Cutover (D27b) — implementation candidate
+# 17 — Gateway Cutover (D27b) — historical implementation candidate/log
 
-Status: **implemented** (build commit `0bb5c5e`; landed Run 24)
-Scope fence: `packages/sift-gateway/src/sift_gateway/**`,
+Status: **implemented and landed** (build commit `0bb5c5e`; landed Run 24).
+Historical landed candidate/log: do not use this as the next build prompt.
+Historical scope fence: `packages/sift-gateway/src/sift_gateway/**`,
 `packages/sift-gateway/tests/**`, `packages/sift-gateway/pyproject.toml`, `uv.lock`,
 and this doc set (`docs/migration/**`). **No** edits to `packages/*-mcp/**` (the
 D27a backend surface is consumed, not re-frozen), `packages/case-dashboard/**` (the
@@ -504,7 +505,10 @@ backlog, not silent):**
   tool must revisit B-3 (chunk-aware redaction) — a build that adds one **stops and
   raises a fork**, it does not stream past the guard.
 
-## 10. Ready-to-copy build prompt
+## 10. Archived ready-to-copy build prompt
+
+This prompt is retained as historical provenance for the landed D27b build. Do
+not use it as a live next-run handoff.
 
 ```
 ROLE & MODE: You are a Build-stage coding session for SIFT migration stage D27b

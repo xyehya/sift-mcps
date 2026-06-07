@@ -3,10 +3,9 @@
 Status: **implemented & landed** in D27a — built Run 20 (`c0a040a`), reviewed +
 remediated + merged into `revamp/spg-v1` Run 21 (`5ab3df5`); see `MIGRATION_STATE.md`.
 (Originally **design locked**; decisions D27a/D27b/D28 in `00_migration_charter.md`.)
-This document is the single source of truth and the drift-control contract for the
-dedicated worktree that revamps the three backend MCP servers. The charter stays
-canonical; this doc governs the revamp. Runtime code changes happen only in the
-worktree, scoped per §8.
+Historical landed candidate/log: do not use this as the next build prompt. It is
+retained as the scope fence, design record, and drift-control contract for the
+D27a backend revamp. The charter stays canonical.
 
 This work ran **in parallel with PR02 (Phase ID-2)** and merged **before** the
 gateway cutover (D27b). It was decoupled from PR02 because it touched only the

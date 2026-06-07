@@ -1,7 +1,5 @@
 # Migration Charter
 
-Last updated: 2026-06-07 (Run 32 D4 demotion).
-
 This charter is the single source of truth for locked migration decisions. Where
 any other document under `docs/migration/` conflicts with the "Confirmed
 Decisions (Locked)" section below, this charter wins and the other document must
@@ -27,34 +25,11 @@ gates.
 The detailed end-state reference and batching plan is
 `18_target_architecture_acceleration.md`.
 
-## Current Migration Status
+## Status Pointer
 
-This charter defines the target architecture and locked decisions. The current
-landed implementation is intentionally transitional:
-
-- **Done:** JOB-0 baseline checks, PR01 / Phase ID-1 identity schema foundation,
-  PR02 / Phase ID-2 hash-only MCP/service token registry with legacy
-  `gateway.yaml` fallback, D27a backend FastMCP/tool-contract revamp, D27b
-  Gateway FastMCP cutover, and PR03A / Batch A unified Supabase JWT identity
-  for REST and MCP, and PR03B / Batch B active-case DB authority. Per D30,
-  PR02 is now a transitional compatibility bridge rather than the final identity
-  target.
-- **Current Gateway substrate:** landed D27b serves one FastAPI ASGI app with
-  the aggregate FastMCP `http_app` mounted at `/mcp`; per-backend `/mcp/{name}`
-  routes are removed. Core gateway tools are local FastMCP tools; configured
-  add-ons are FastMCP proxy mounts. SIFT-owned middleware enforces the evidence
-  gate, response guard, case-context injection, and audit envelope.
-- **Still pending:** full evidence/audit DB authority beyond active-case context
-  (Batch C/ID-5); legacy auth/token-path sunset (ID-6); D22 `mcp_backends`
-  control-plane registry replacing `gateway.yaml` add-on registration (F-11);
-  OpenSearch and RAG final core/control-plane integration (D19/D23).
-- **Next planned session:** Build D22A / Batch H from
-  `22_d22a_mcp_backends_registry.md` (planned Run 35) once the operator resolves
-  forks F-14 (backend credential storage) and F-15 (FastMCP activation): the
-  `mcp_backends` control-plane registry and `gateway.yaml` backend-authority
-  removal, resolving F-11 and B-13 at Land. Keep evidence/audit DB authority,
-  jobs/workers, OpenSearch, RAG, and findings/timeline/TODO/report migration in
-  separate scoped candidates unless a future decision explicitly batches them.
+This charter owns target architecture, locked decisions, non-negotiables, and
+cutover order. Live implementation status, landed run history, the current
+objective, and the next action live in `MIGRATION_STATE.md`.
 
 ## Plane Boundaries
 
@@ -259,15 +234,9 @@ and findings work should now be authored on the FastMCP 3.0 Gateway substrate.
 
 ## Implementation Status
 
-The planning workspace remains the source for future scoped implementation
-candidates, and the early foundation slices are complete: JOB-0, PR01/ID-1,
-PR02/ID-2, D27a, D27b, PR03A/Batch A, and PR03B/Batch B. D22A / Batch H for the
-`mcp_backends` registry and `gateway.yaml` backend-authority removal is planned
-in `22_d22a_mcp_backends_registry.md` (Run 35) and is the next Build lane once
-forks F-14/F-15 are resolved. Evidence/audit DB authority,
-jobs/workers, OpenSearch-core, RAG-core, and findings/timeline/TODO/report data
-migration remain separate later scopes unless a candidate doc explicitly batches
-them.
+Use `MIGRATION_STATE.md` for current implementation status and next-run
+handoff. Future implementation work remains scope-fenced by a candidate doc and
+the cutover order above.
 
 ## Out Of Scope Until A Run Is Explicitly Scoped To It
 

@@ -136,4 +136,5 @@ https://SIFT_VM:4508/portal/
 https://SIFT_VM:4508/mcp
 ```
 
-**547 tests. Zero known chain-of-custody bypasses. One installer.**
+Hackathon snapshot metrics are historical. Use `docs/migration/MIGRATION_STATE.md`
+and phase runbooks for current verification evidence.

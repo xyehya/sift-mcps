@@ -5,12 +5,8 @@ Supabase/Auth/control-plane phases use this as background, not as a pending
 D27b build prompt.
 
 Run 25 status note: sections that say "current state" are a **pre-D27a/D27b
-snapshot** retained for design history. The current landed state is in
-`00_migration_charter.md` Current Migration Status and `MIGRATION_STATE.md` Runs
-23-24: FastAPI + FastMCP `http_app` is live, D27a backends are standalone
-FastMCP 3.0, D27b removed per-backend MCP routes, add-ons still read from
-`gateway.yaml` until F-11/D22, and per-role `Visibility`/`ToolSearch` was
-dropped in favor of future SIFT-owned per-token tool authorization (B-10).
+snapshot** retained for design history. Use `MIGRATION_STATE.md` for live
+landed state and `00_migration_charter.md` for locked FastMCP/Gateway decisions.
 
 This document remains the knowledge base for the FastMCP 3.0 / Supabase /
 FastAPI consolidation. It records the verified framework facts, the historical

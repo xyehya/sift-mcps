@@ -171,14 +171,22 @@ a Definition-of-Done gate (§3) and must pass before Land.
 - `Status` vocabulary: forks ∈ {`OPEN`, `RESOLVED`}; backlog ∈ {`OPEN`, `DONE`}
   (surrounding `**bold**` allowed). A `RESOLVED` fork has a non-empty Decision.
 - IDs are unique. A fork whose Becomes cites `B-<n>` must have that backlog row.
+- An `OPEN` fork has empty Decision and Becomes cells. A `RESOLVED` fork has a
+  non-empty Decision and a Becomes cell that cites a `D#`, `B#`, or `rejected`.
 - **Append-only columns:** add new columns at the end; never reorder/rename/remove.
 
 **`MIGRATION_STATE.md`**
 - Exactly **one** `## Current Objective` H2.
 - The Current Objective contains a line with **`**Next:**`** — the dashboard and
   pipeline view derive the current stage from it.
+- Exactly one global bold **`**Next:**`** marker exists in the file. Historical
+  run entries use plain `Next:` only.
+- A standalone `## Next Recommended Run` section is not allowed; live handoff
+  belongs under `## Current Objective`.
 - Run entries use `## Run <n> — <title>` (en/em-dash or hyphen). Run numbers unique.
 
 **`00_migration_charter.md`**
 - Decisions are a markdown table; rows begin `| D<n> |` (suffixes like `D27a` ok).
   IDs unique. A `## Cutover Order` section exists.
+- The charter does not carry volatile current-status or next-session handoff
+  sections; those belong in `MIGRATION_STATE.md`.

@@ -38,6 +38,11 @@ B-11 is handled by injecting/overriding safe `case_id`/`case_key` arguments or
 returning typed audited denials for implicit-env/filesystem case-scoped proxy
 tools.
 
+Run 36 aligned documentation ownership so `MIGRATION_STATE.md` remains the
+single current handoff: entry points and indexes now point here for live status,
+landed specs are labelled historical, and the validator catches the drift
+patterns found in the alignment audit.
+
 **Next:** **Build D22A / Batch H** from
 `docs/migration/22_d22a_mcp_backends_registry.md` (planned in Run 35) once the
 operator resolves the two blocking forks it raised — **F-14** (backend
@@ -95,7 +100,7 @@ Forks raised (→ REGISTER.md, both OPEN, blocking before Build):
 Updated:
 - `REGISTER.md` — F-14/F-15 added; F-11 annotated as D22A/doc 22 (still OPEN,
   resolve at Land); B-13 scoped into D22A §9 (still OPEN, DONE at Land).
-- `MIGRATION_STATE.md` — this entry + Current Objective `**Next:**`.
+- `MIGRATION_STATE.md` — this entry + Current Objective Next marker.
 - `00_migration_charter.md`, `README.md`, `AGENTS.md`, `CLAUDE.md` — handoff
   points to doc 22 as the next Build source of truth.
 
@@ -107,6 +112,38 @@ Verification:
 
 Next: operator resolves F-14 + F-15, then Build D22A from doc 22. Do not mark
 F-11 RESOLVED or B-13 DONE until that Build lands.
+
+## Run 36 — Documentation SSOT Alignment
+
+Documentation/process alignment run. No runtime code, schema migration, package,
+Docker, installer, VM, or service changes.
+
+Trigger: operator requested a methodology-driven documentation scan/fix/unify
+pass in a separate worktree, without injecting the methodology text into repo
+docs.
+
+Changed:
+- Removed duplicated live status/next-run handoffs from `AGENTS.md`,
+  `CLAUDE.md`, `docs/migration/README.md`, and the charter.
+- Converted the architecture overview back to target-oriented labels and removed
+  stale PR03B-pending text.
+- Marked landed D27/PR03 specs as historical candidate/log documents and
+  archived their build prompts as provenance.
+- Marked the old standalone `MIGRATION_STATE.md` "Next Recommended Run" footer
+  as superseded and kept only one global bold Next marker.
+- Normalized `REGISTER.md` fork lifecycle cells so open forks have empty
+  Decision/Becomes cells and resolved forks point to stable D#/B# outcomes.
+- Updated `OPERATING_MODEL.md` §8 and `scripts/validate_migration_docs.py`
+  together so the new documentation invariants are executable.
+
+Verification:
+- `python3 scripts/validate_migration_docs.py` passed.
+
+Forks/decisions:
+- No new forks or locked decisions.
+
+Next: unchanged — operator resolves F-14 + F-15, then Build D22A from doc 22.
+Do not mark F-11 RESOLVED or B-13 DONE until that Build lands.
 
 ## Run 34 — PR03B Land
 
@@ -880,7 +917,7 @@ Land: fast-forward merge of `revamp/backends-mcp3` into `revamp/spg-v1` (spg-v1 
 the merge-base, so no divergence). Doc 15/16 statuses flipped to implemented. No new
 forks raised.
 
-**Next:** D27b gateway cutover — see Current Objective.
+Next: D27b gateway cutover — see Current Objective.
 
 ## Run 20 — D27a Backend Revamp
 
@@ -1980,7 +2017,12 @@ migration documents.
 - Should evidence dedupe enforce unique active `(case_id, sha256)`, or preserve
   duplicate acquisitions as separate first-class evidence objects?
 
-## Next Recommended Run
+## Superseded Next Recommended Run
+
+Superseded by later Current Objective entries and retained only as historical
+provenance. Read `## Current Objective` for the authoritative current handoff.
+
+Historical text from the earlier handoff:
 
 JOB-0 (commit `c73762c`) and PR01 / Phase ID-1 are done. The next coding run is
 **PR02 / Phase ID-2** - DB-first hash-only MCP/service token registry

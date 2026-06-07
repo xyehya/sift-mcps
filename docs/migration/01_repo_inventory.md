@@ -9,8 +9,8 @@ Run 25 status note: this is a **pre-PR01/PR02/D27a/D27b inventory snapshot**.
 Several Gateway/FastMCP facts below are now historical: the Gateway is no
 longer Starlette/low-level MCP, per-backend `/mcp/{name}` routes are removed,
 and the backend MCP packages have moved to standalone FastMCP 3.0. Use
-`00_migration_charter.md` Current Migration Status and `MIGRATION_STATE.md` for
-current landed architecture.
+`00_migration_charter.md` for locked architecture decisions and
+`MIGRATION_STATE.md` for current landed architecture.
 
 ## Repository Shape
 

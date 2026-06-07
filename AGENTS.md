@@ -62,44 +62,14 @@ around it. In short:
 - Process, Definition of Done, templates → `docs/migration/OPERATING_MODEL.md`
 - Open Forks (F#) + Backlog (B#) → `docs/migration/REGISTER.md`
 - Run history, Current Objective, next run → `docs/migration/MIGRATION_STATE.md`
-- Per-phase specs → `docs/migration/NN_*.md`. Active specs:
-  - D27a backend revamp (landed) → `15_backend_tooling_revamp.md`, `16_backend_tool_contracts.md`
-  - D27b gateway cutover (landed): design KB → `14_fastmcp3_supabase_integration.md`;
-    implemented candidate/log → `17_gateway_cutover_d27b.md`
-  - Final target architecture / acceleration plan → `18_target_architecture_acceleration.md`
-  - PR03A / Batch A unified JWT implementation candidate/log (landed) →
-    `19_pr03_unified_supabase_jwt_identity.md`
-  - Portal/dashboard workflow + API inventory reference →
-    `20_portal_dashboard_inventory.md`
-  - PR03B / Batch B active-case DB authority implementation candidate/log
-    (landed) →
-    `21_pr03b_active_case_db_authority.md`
-  - D22A / Batch H `mcp_backends` registry Build candidate (planned, next Build) →
-    `22_d22a_mcp_backends_registry.md`
+- Per-phase specs and reference inventories → `docs/migration/NN_*.md`; use
+  `docs/migration/README.md` as the index.
 
-## Current stage (read MIGRATION_STATE for the live version)
+## Current stage
 
-D27a, D27b, **PR03A / Batch A (unified Supabase JWT identity)**, and
-**PR03B / Batch B (active-case DB authority)** are landed on `revamp/spg-v1`
-(Runs 23-34). PR03A delivered Supabase JWT validation for REST and FastMCP
-`/mcp`, shared Gateway principal resolution, portal Supabase login/session,
-agent/service JWT issuance + revocation (D31), B-10 tool authorization, and
-B-14 duplicate resolver cleanup. PR03B delivered DB active-case authority,
-Gateway REST/MCP propagation, portal case API turnover, core active-case
-context, and B-11 proxy active-case propagation.
-
-The next recommended work is **Build-stage D22A / Batch H** from
-`22_d22a_mcp_backends_registry.md` (planned Run 35): the `mcp_backends`
-control-plane registry and `gateway.yaml` backend-authority removal, carrying
-F-11 and B-13, **once the operator resolves the two blocking forks it raised —
-F-14 (backend credential storage model) and F-15 (FastMCP activation:
-restart/apply vs live remount)**. D32 remains locked: Supabase/Postgres
-`app.active_case_state` wins; `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`,
-`gateway.yaml case.dir`, and `~/.sift/active_case` are not authority and are not
-regenerated as active-case exports; no historical data migration is in scope. If
-a future run discovers an
-installed API, Supabase behavior, FastMCP proxy behavior, or repo invariant
-mismatch, **stop and raise a fork** - do not improvise (D29).
+Read `docs/migration/MIGRATION_STATE.md` for the live Current Objective, latest
+run, next action, landed history, and carried backlog. Do not copy that state
+into this entry point.
 
 ## Mandatory Host/VM Workflow
 
@@ -215,57 +185,13 @@ sshpass -p 'forensics' ssh -o StrictHostKeyChecking=no sansforensics@192.168.122
   'cd ~/supabase-project && (printf "begin;\n"; cat ~/sift-mcps-test/supabase/migrations/<migration>.sql; printf "\nrollback;\n") | docker compose exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1'
 ```
 
-## Current Migration Files
+## Migration history and runbooks
 
-PR01 added the initial schema/test layout:
-
-- `supabase/migrations/202606070101_identity_foundation.sql`
-- `tests/db/test_pr01_identity_schema.py`
-- `docs/migration/PR01_identity_schema_checks.md`
-- `docs/migration/12_pr01.md`
-
-PR02 implemented Phase ID-2, hash-only MCP/service token registry validation
-with legacy `gateway.yaml` fallback:
-
-- `packages/sift-gateway/src/sift_gateway/token_registry.py`
-- `packages/sift-gateway/src/sift_gateway/token_gen.py`
-- `packages/sift-gateway/src/sift_gateway/{auth.py,identity.py,mcp_endpoint.py,server.py}`
-- `packages/case-dashboard/src/case_dashboard/routes.py`
-- `packages/sift-gateway/tests/test_phase13_auth.py`
-- `packages/case-dashboard/tests/test_token_lifecycle.py`
-- `docs/migration/13_pr02.md`
-- `docs/migration/PR02_token_registry_checks.md`
-
-For PR02 verification, use the runbook in
-`docs/migration/PR02_token_registry_checks.md`. The targeted VM suites that
-passed after rsync were:
-
-```bash
-cd ~/sift-mcps-test
-.venv/bin/python -m pytest packages/sift-gateway/tests/test_phase13_auth.py packages/sift-gateway/tests/test_phase4.py packages/sift-gateway/tests/test_audit_envelope.py packages/sift-gateway/tests/test_portal_agent_block.py
-.venv/bin/python -m pytest packages/case-dashboard/tests/test_token_lifecycle.py packages/case-dashboard/tests/test_session_middleware.py
-```
-
-PR02 did not add Supabase human auth, portal login replacement, active-case
-propagation, evidence gate changes, job tables/workers/APIs/tools, OpenSearch
-changes, parser changes, evidence behavior changes, audit data migration,
-frontend redesigns, or legacy fallback removal.
-
-PR03A is **landed** on `revamp/spg-v1`. Spec + status:
-
-- `docs/migration/19_pr03_unified_supabase_jwt_identity.md` (status: implemented)
-- `docs/migration/20_portal_dashboard_inventory.md` (reference inventory for
-  portal/API turnover; not an implementation candidate)
-- `docs/migration/21_pr03b_active_case_db_authority.md` (landed PR03B
-  candidate)
-
-It delivered unified Supabase JWT auth, principal mapping, portal Supabase auth,
-agent/service JWT issuance + revocation (D31), and DB-backed MCP tool
-authorization (B-10). One operational note for the deployed VM: the systemd
-`sift-gateway` runs from `~/sift-mcps` with config `~/.sift/gateway.yaml`; a
-production rollout of the new auth code + the `auth:` config block + Supabase env
-(`SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY`) is part of the
-installer follow-up below, not PR03A.
+Use `docs/migration/README.md` for the migration document index,
+`docs/migration/MIGRATION_STATE.md` for landed run history and current handoff,
+and the `docs/migration/PR*_checks.md` files for phase-specific verification
+runbooks. Keep phase status and passed-test evidence in the migration docs, not
+in this entry point.
 
 ## Installer Follow-up
 
