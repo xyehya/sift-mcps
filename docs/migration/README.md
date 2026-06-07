@@ -65,12 +65,9 @@ Every future migration run should:
 5. Keep new docs focused on the current run's objective.
 6. Update [MIGRATION_STATE.md](MIGRATION_STATE.md) at the end with files inspected, decisions, open questions, and the next recommended run.
 
-JOB-0 (commit `c73762c`) and PR01 / Phase ID-1 (schema foundation) are done. The
-next recommended run is **PR02 / Phase ID-2** (DB-first token-registry
-dual-validation) per [13_pr02.md](13_pr02.md). After PR02, the **FastMCP 3.0
-framework substrate cutover** (decisions D24-D27, design in
-[14_fastmcp3_supabase_integration.md](14_fastmcp3_supabase_integration.md)) lands
-as a dedicated parity-gated big-bang PR before the heavier evidence/jobs phases.
-The remaining work then follows the cutover order, starting with
-the cases/tokens/identity foundation in
-[09_identity_auth_cutover.md](09_identity_auth_cutover.md).
+JOB-0, PR01 / Phase ID-1, PR02 / Phase ID-2, D27a, and D27b are done. The next
+recommended run is a **Plan-stage PR03 / Phase ID-3** candidate from
+[09_identity_auth_cutover.md](09_identity_auth_cutover.md): Supabase Auth for
+humans plus `operator_profiles` / `case_members` resolution behind the
+legacy-auth flag. Keep D22/F-11 (`mcp_backends` control-plane registry) as a
+separate later phase unless the operator explicitly reprioritizes it.

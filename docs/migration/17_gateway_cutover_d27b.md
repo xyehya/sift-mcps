@@ -1,6 +1,6 @@
 # 17 — Gateway Cutover (D27b) — implementation candidate
 
-Status: **in-build**
+Status: **implemented** (build commit `0bb5c5e`; landed Run 24)
 Scope fence: `packages/sift-gateway/src/sift_gateway/**`,
 `packages/sift-gateway/tests/**`, `packages/sift-gateway/pyproject.toml`, `uv.lock`,
 and this doc set (`docs/migration/**`). **No** edits to `packages/*-mcp/**` (the
@@ -9,10 +9,10 @@ portal stays a mounted sub-app), `supabase/**`, or `packages/sift-core/**`.
 Decisions referenced: **D2, D3, D8, D24, D25, D26, D27, D27b, D28** (charter);
 backlog **B-3, B-5, B-6, B-7** (REGISTER.md).
 
-This is the **Plan-stage** implementation candidate for D27b. The design/knowledge
+This was the **Plan-stage** implementation candidate for D27b. The design/knowledge
 base is `14_fastmcp3_supabase_integration.md`; this doc turns it into a file-by-file
 build plan, a parity-test strategy, the B-3 design, and the forks the operator must
-resolve before Build. **No runtime code is written this session.**
+resolve before Build. Run 23 implemented it; Run 24 reviewed and landed it.
 
 All FastMCP 3.x mechanics below are grounded against the pinned **fastmcp 3.4.2**
 (`uv.lock`) via the `/prefecthq/fastmcp` v3.2.x docs (closest published line); the
@@ -348,9 +348,9 @@ cannot be met, the branch is abandoned (D27b revert plan) — no partial cutover
 ---
 
 ## 7. Backlog touched here (carry from REGISTER.md)
-- **B-3** — implemented by §5 (the gate). Mark DONE at Land.
+- **B-3** — implemented by §5 (the gate). Marked DONE at Run 24 Land.
 - **B-6** — `guard_tool_result` single envelope/redaction point (§3.4, §5).
-  Mark DONE at Land.
+  Marked DONE at Run 24 Land.
 - **B-5** — `opensearch_case_detections_resource` ignores `case_id`: the cutover
   wires session→active-case; fix the resource scoping here or confirm it stays masked
   by D4 single-active-case and re-defer. (Decide in Build; if code lives in
@@ -358,7 +358,7 @@ cannot be met, the branch is abandoned (D27b revert plan) — no partial cutover
   not silently expand scope.)
 - **B-7** — OpenSearch `ResultMeta` parity: only relevant once the single
   `guard_tool_result`/`ResultMeta` point exists; if it requires backend edits it is
-  out of fence → stays B-7.
+  out of fence → stays B-7 (re-deferred at Run 24).
 - **B-1/B-2** — alias removals are explicitly **at/after** D27b and touch
   `packages/*-mcp/**` → out of fence; not done here.
 

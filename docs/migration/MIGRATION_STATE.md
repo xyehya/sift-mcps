@@ -2,32 +2,94 @@
 
 ## Current Objective
 
-The **D27b gateway cutover is in Build** on branch `revamp/gateway-cutover-d27b`
-(Run 23). The gateway now serves one FastAPI ASGI app with the aggregate FastMCP
-`http_app` mounted at `/mcp`; per-backend `/mcp/{name}` routes are removed per D3/F-7.
-Core tools and `capability_guide` are registered as FastMCP local tools, configured
-add-ons are mounted through FastMCP proxy providers, and the SIFT policy is re-hosted
-as FastMCP middleware: evidence gate → response guard (B-3/B-6) → case context →
-audit envelope.
+The **D27b gateway cutover is landed** on `revamp/spg-v1` (Runs 23–24). The
+gateway now serves one FastAPI ASGI app with the aggregate FastMCP `http_app`
+mounted at `/mcp`; per-backend `/mcp/{name}` routes are removed per D3/F-7. Core
+tools and `capability_guide` are FastMCP local tools, configured add-ons are
+FastMCP proxy mounts, and SIFT policy is re-hosted as FastMCP middleware:
+evidence gate → response guard (B-3/B-6) → case context → audit envelope.
 
-Build re-confirmed the installed wheel, not the docs: host `.venv` has
-**fastmcp==3.4.2**; `create_proxy` imports from `fastmcp.server`; `Middleware.on_call_tool`
-fires for mounted proxied tools; and proxied `ToolResult.content`,
-`structured_content`, and `meta` are mutable after `call_next`. The in-memory F-6
-spike is now a parity test. D-2 hardening is implemented for HTTP proxy targets and
-remote manifest fetches (private/link-local egress blocked, no redirect-follow, no
+The installed wheel was confirmed directly during Build: host `.venv` has
+**fastmcp==3.4.2**; `create_proxy` imports from `fastmcp.server`;
+`Middleware.on_call_tool` fires for mounted proxied tools; proxied
+`ToolResult.content`, `structured_content`, and `meta` are mutable after
+`call_next`. D-2 hardening is implemented for HTTP proxy targets and remote
+manifest fetches (private/link-local egress blocked, no redirect-follow, no
 agent bearer passthrough).
 
-Host verification is green in package-compatible chunks: gateway 225 passed;
-case-dashboard 277 passed; sift-core 328 passed; OpenSearch 979 passed / 71 skipped;
-OpenCTI 1 passed; Windows triage 12 passed; forensic-mcp 20 passed; DB schema tests
-5 passed. `git diff --check` and gateway py_compile are clean. VM verification is green:
-the SIFT VM synced with `UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never` and
-`/usr/bin/python3.12`; smoke imports passed; `packages/sift-gateway/tests` passed
-225 tests; and the restarted gateway health endpoint returned `status: ok`.
+Review/security gates passed (Run 24): `/code-review` and `/security-review`
+returned GO. B-3 and B-6 are DONE at Land. Non-blocking review follow-ups were
+triaged to `REGISTER.md`: B-12 capped-result `backend_audit_id`, B-13 proxy
+namespace assertion, B-14 duplicate token resolution, and B-15 DNS-rebinding
+TOCTOU hardening. F-11 remains OPEN for the later D22 `mcp_backends` registry
+phase.
 
-**Next:** run `/code-review` and `/security-review`, then Land. Mark **B-3** and **B-6**
-DONE only at Land.
+**Next:** start a Plan-stage PR03 candidate for Phase ID-3 from
+`09_identity_auth_cutover.md`: Supabase Auth for humans plus
+`operator_profiles`/`case_members` resolution behind the legacy-auth flag. Do
+not implement until the candidate doc defines the scope fence, acceptance gates,
+and host→VM test plan. Keep D22/F-11 (`mcp_backends` registry) as a separate
+later phase unless the operator explicitly reprioritizes it.
+
+## Run 24 — D27b Review, Triage & Land
+
+Review/Land run. No runtime code changed after reviewed build commit `0bb5c5e`
+except migration documentation and register triage.
+
+Trigger: operator routed back the mandatory D27b `/code-review` and
+`/security-review` results for build commit `0bb5c5e`.
+
+Review verdict:
+- **GO** to Land. Scope fence held: `revamp/spg-v1..0bb5c5e` touched only
+  `packages/sift-gateway/**`, `packages/sift-gateway/pyproject.toml`, `uv.lock`,
+  and `docs/migration/**`.
+- `/security-review` passed: no high/medium security blockers; D-1/D-2/D-3 and
+  B-3 policy gates passed.
+- `/code-review` passed with no correctness blocker. B-3/B-6 can be marked DONE
+  at Land.
+- New forks: none. D29 stop condition was not triggered.
+
+Findings triaged:
+- S-1 capped results can lose `gateway_mcp_envelope.backend_audit_id` because
+  the guard replaces content before envelope extraction. Deferred as **B-12**.
+- S-2 `assert_mounted_tool_names` is unused. Deferred as **B-13** for the D22
+  backend-registry phase or a gateway hardening pass.
+- S-3 ASGI wrapper and `SiftTokenVerifier` both resolve identity. Deferred as
+  **B-14**.
+- Security residual: DNS-rebinding TOCTOU remains after resolve-before-connect
+  SSRF checks. Deferred as **B-15**.
+- Nits (double `build_block_response`, unused import) were non-blocking and not
+  registered separately.
+
+Backlog/register updates:
+- **B-3 DONE** — D27b `guard_tool_result` redacts/caps both text and
+  `structured_content`, recursively and after FastMCP proxy pass-through.
+- **B-6 DONE** — gateway now has one agent-facing guard/redaction/cap point.
+- **B-5**, **B-7**, and **B-11** remain OPEN but were re-deferred out of the
+  D27b gateway scope fence.
+
+Verification carried from Build/Review:
+- Host: `packages/sift-gateway/tests` — 225 passed; package-compatible chunks
+  green; `git diff --check` clean; gateway py_compile clean.
+- VM: `uv sync --extra core --group dev --python /usr/bin/python3.12` with
+  `UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never`; Python 3.12.3 imports
+  passed; `packages/sift-gateway/tests` — 225 passed; restarted Gateway health
+  returned `status: ok`.
+- Migration docs validator passed.
+
+Files changed/logged:
+- `docs/migration/17_gateway_cutover_d27b.md` — status flipped to implemented.
+- `docs/migration/REGISTER.md` — B-3/B-6 DONE; B-12…B-15 added; out-of-scope
+  D27a/D27b carryovers re-deferred.
+- `docs/migration/MIGRATION_STATE.md` — this entry + Current Objective.
+- `docs/migration/README.md` — next-run guidance refreshed.
+
+Land: fast-forward `revamp/spg-v1` to the D27b branch after this documentation
+commit. No push performed in this run.
+
+Next: Plan PR03 / Phase ID-3 (Supabase Auth for humans and case-membership
+resolution behind the legacy-auth flag). Keep the next run as a Plan session
+unless the operator supplies an implementation candidate.
 
 ## Run 23 — D27b Gateway Cutover Build
 
