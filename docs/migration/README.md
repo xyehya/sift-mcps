@@ -42,7 +42,8 @@ All locked decisions live in [00_migration_charter.md](00_migration_charter.md) 
 - [18_target_architecture_acceleration.md](18_target_architecture_acceleration.md) - final target-state architecture reference and acceleration batching plan: Supabase JWT principal model for REST/MCP, Gateway policy boundary, data places/enforcers, security zones, file-authority sunset map, missing inputs, and parallel batch plan.
 - [19_pr03_unified_supabase_jwt_identity.md](19_pr03_unified_supabase_jwt_identity.md) - implemented **PR03A / Batch A** candidate/log: Supabase JWT validation for REST and FastMCP `/mcp`, shared Gateway principal resolution, portal Supabase login/session, agent/service JWT issuance, DB-backed tool scopes, B-10 list/call authorization, B-14 resolver cleanup, tests, VM gates, and build prompt.
 - [20_portal_dashboard_inventory.md](20_portal_dashboard_inventory.md) - normalized portal/dashboard workflow and API inventory from the separate read-only portal scan, updated after PR03A landed. Reference for PR03B active-case planning and later portal/data-authority turnover; not an implementation candidate.
-- [21_pr03b_active_case_db_authority.md](21_pr03b_active_case_db_authority.md) - Build-ready **PR03B / Batch B** implementation candidate: Postgres `active_case_state` authority, portal case API turnover, Gateway REST/MCP propagation, B-11 proxy active-case handling, stale env/config/pointer negative tests, no historical data migration, and ready-to-copy build prompt.
+- [21_pr03b_active_case_db_authority.md](21_pr03b_active_case_db_authority.md) - implemented **PR03B / Batch B** candidate/log: Postgres `active_case_state` authority, portal case API turnover, Gateway REST/MCP propagation, B-11 proxy active-case handling, stale env/config/pointer negative tests, no historical data migration, and ready-to-copy build prompt.
+- [22_d22a_mcp_backends_registry.md](22_d22a_mcp_backends_registry.md) - Build-ready **D22A / Batch H** candidate: `app.mcp_backends` control-plane registry (no-raw-secret credential references, health/manifest cache, RLS/D12), DB-authoritative Gateway backend loader (`gateway.yaml` backends removed as authority), portal/REST turnover, FastMCP mount/policy ordering preserved, B-13 resolution, F-11 resolution at Land, VM test plan, scope fence, and ready-to-copy build prompt. Raises forks F-14 (credential storage) and F-15 (activation model).
 - [JOB0_baseline_execution_checks.md](JOB0_baseline_execution_checks.md) - targeted commands and no-service assumptions for the additive JOB-0 baseline smoke tests.
 - [PR01_identity_schema_checks.md](PR01_identity_schema_checks.md) - commands for running the deterministic PR01 schema checks and optional Supabase syntax validation.
 
@@ -68,10 +69,13 @@ Every future migration run should:
 6. Update [MIGRATION_STATE.md](MIGRATION_STATE.md) at the end with files inspected, decisions, open questions, and the next recommended run.
 
 JOB-0, PR01 / Phase ID-1, PR02 / Phase ID-2, D27a, D27b, PR03A / Batch A, and
-the PR03B candidate are done. The next recommended run is **Build-stage PR03B /
-Batch B** from
-[21_pr03b_active_case_db_authority.md](21_pr03b_active_case_db_authority.md):
-Postgres active-case authority and propagation, with D32 forbidding active-case
-env/config/pointer exports and with no historical data migration. Keep D22/F-11
-(`mcp_backends` control-plane registry), evidence/jobs, OpenSearch-core, and
-RAG/skills separate unless a candidate doc explicitly batches them.
+PR03B / Batch B are landed. The next recommended run is **Build-stage D22A /
+Batch H** from
+[22_d22a_mcp_backends_registry.md](22_d22a_mcp_backends_registry.md), once the
+operator resolves forks **F-14** (backend credential storage) and **F-15**
+(FastMCP activation model): move add-on backend registration from `gateway.yaml`
+into the `app.mcp_backends` control-plane registry, make the Gateway loader
+DB-authoritative, turn the portal backend surface over to the DB, and resolve
+F-11 + B-13 at Land. Keep evidence/audit (Batch C), jobs (Batch E),
+OpenSearch-core, and RAG/skills separate unless a candidate doc explicitly
+batches them.

@@ -38,11 +38,75 @@ B-11 is handled by injecting/overriding safe `case_id`/`case_key` arguments or
 returning typed audited denials for implicit-env/filesystem case-scoped proxy
 tools.
 
-**Next:** Plan **D22A / Batch H** for the `mcp_backends` control-plane registry
-and `gateway.yaml` backend-authority removal, carrying F-11 and B-13. Keep
-evidence/audit DB authority (Batch C), jobs/workers (Batch E), OpenSearch-core,
-RAG/skills, and findings/timeline/TODO/report data migration separate unless a
-new candidate doc explicitly batches them. Carry B-4/B-12/B-13/B-15 forward.
+**Next:** **Build D22A / Batch H** from
+`docs/migration/22_d22a_mcp_backends_registry.md` (planned in Run 35) once the
+operator resolves the two blocking forks it raised — **F-14** (backend
+credential storage model) and **F-15** (FastMCP activation: restart/apply vs live
+remount). D22A moves add-on backend registration from `gateway.yaml` into a
+Supabase `app.mcp_backends` registry, makes the Gateway loader DB-authoritative,
+turns the portal backend-management surface over to the DB, and resolves **F-11**
+and **B-13** at Land. Keep evidence/audit DB authority (Batch C), jobs/workers
+(Batch E), OpenSearch-core, RAG/skills, and findings/timeline/TODO/report data
+migration separate unless a new candidate doc explicitly batches them. Carry
+B-4/B-12/B-15 forward.
+
+## Run 35 — D22A / Batch H `mcp_backends` Registry Candidate
+
+Plan-stage run (Claude delivery-management). No runtime code, schema migration,
+lockfile, Docker, VM, or installer changes.
+
+Trigger: operator scoped the next batch — Plan D22A / Batch H so a later Build
+session can move add-on MCP backend registration from `gateway.yaml` into a
+Supabase `app.mcp_backends` control-plane registry, resolve F-11, carry B-13, and
+preserve the landed PR03A/PR03B Gateway policy model.
+
+Grounded current-state (source read at `335cedd`, not memory):
+- `gateway.yaml` is add-on backend authority today: `Gateway.__init__`
+  (`server.py:160`) builds `self.backends` from `config["backends"]`;
+  `register_backend_logic` (`rest.py:1020`) writes new backends into
+  `~/.sift/gateway.yaml` via `_atomic_yaml_write`; `reload_backends` re-reads
+  it; the join/wintools path writes there too. Connection secrets
+  (`bearer_token`/`env`/`tls_cert`) live in that file.
+- FastMCP proxy mounts are fixed at server assembly: `_mount_addon_proxies`
+  (`mcp_server.py:219`) runs once inside `create_gateway_mcp_server`, and
+  `server.py:970` confirms "MCP proxy mounts are fixed at server startup" — a
+  live-registered backend is absent from `/mcp` until restart.
+- `assert_mounted_tool_names` (`mcp_server.py:348`) is defined but unused = B-13.
+- DB plumbing to mirror already exists: `registry_config` DSN feeds
+  `ActiveCaseService` (PR03B) and `PostgresTokenRegistry` (PR02) in `create_app`;
+  migrations in `supabase/migrations/`, DB tests in `tests/db/`.
+
+Added:
+- `docs/migration/22_d22a_mcp_backends_registry.md` — Build-ready D22A / Batch H
+  candidate: `app.mcp_backends` schema (no-raw-secret, credential references,
+  health/manifest cache, RLS/D12 write model); DB-authoritative Gateway loader
+  (gateway.yaml backends ignored as authority; no-DSN ⇒ core-only, no yaml
+  fallback); registry-sourced FastMCP mounts with policy ordering preserved;
+  portal/REST turnover; B-13 resolution (§9); F-11 resolution path (Land only);
+  VM test plan on pinned Supabase + FastMCP 3.4.2; scope fence + out-of-scope
+  list; ready-to-copy Build prompt.
+
+Forks raised (→ REGISTER.md, both OPEN, blocking before Build):
+- **F-14** backend credential storage model (recommended: credential references,
+  not raw secrets, in `app.mcp_backends`; complements B-4).
+- **F-15** activation model (recommended v1: DB authority + restart/explicit-apply
+  rebuild; live dynamic remount only if zero-restart is required now).
+
+Updated:
+- `REGISTER.md` — F-14/F-15 added; F-11 annotated as D22A/doc 22 (still OPEN,
+  resolve at Land); B-13 scoped into D22A §9 (still OPEN, DONE at Land).
+- `MIGRATION_STATE.md` — this entry + Current Objective `**Next:**`.
+- `00_migration_charter.md`, `README.md`, `AGENTS.md`, `CLAUDE.md` — handoff
+  points to doc 22 as the next Build source of truth.
+
+Operator decisions: none yet (F-14/F-15 await the operator). No D# changed.
+
+Verification:
+- `python3 scripts/validate_migration_docs.py` — passed.
+- `git diff --check` — passed.
+
+Next: operator resolves F-14 + F-15, then Build D22A from doc 22. Do not mark
+F-11 RESOLVED or B-13 DONE until that Build lands.
 
 ## Run 34 — PR03B Land
 

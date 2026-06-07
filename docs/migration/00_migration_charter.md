@@ -48,11 +48,13 @@ landed implementation is intentionally transitional:
   (Batch C/ID-5); legacy auth/token-path sunset (ID-6); D22 `mcp_backends`
   control-plane registry replacing `gateway.yaml` add-on registration (F-11);
   OpenSearch and RAG final core/control-plane integration (D19/D23).
-- **Next planned session:** Plan D22A / Batch H: `mcp_backends` control-plane
-  registry and `gateway.yaml` backend-authority removal, carrying F-11 and
-  B-13. Keep evidence/audit DB authority, jobs/workers, OpenSearch, RAG, and
-  findings/timeline/TODO/report migration in separate scoped candidates unless a
-  future decision explicitly batches them.
+- **Next planned session:** Build D22A / Batch H from
+  `22_d22a_mcp_backends_registry.md` (planned Run 35) once the operator resolves
+  forks F-14 (backend credential storage) and F-15 (FastMCP activation): the
+  `mcp_backends` control-plane registry and `gateway.yaml` backend-authority
+  removal, resolving F-11 and B-13 at Land. Keep evidence/audit DB authority,
+  jobs/workers, OpenSearch, RAG, and findings/timeline/TODO/report migration in
+  separate scoped candidates unless a future decision explicitly batches them.
 
 ## Plane Boundaries
 
@@ -259,9 +261,10 @@ and findings work should now be authored on the FastMCP 3.0 Gateway substrate.
 
 The planning workspace remains the source for future scoped implementation
 candidates, and the early foundation slices are complete: JOB-0, PR01/ID-1,
-PR02/ID-2, D27a, D27b, PR03A/Batch A, and PR03B/Batch B. The next recommended
-planning lane is D22A / Batch H for the `mcp_backends` registry and
-`gateway.yaml` backend-authority removal. Evidence/audit DB authority,
+PR02/ID-2, D27a, D27b, PR03A/Batch A, and PR03B/Batch B. D22A / Batch H for the
+`mcp_backends` registry and `gateway.yaml` backend-authority removal is planned
+in `22_d22a_mcp_backends_registry.md` (Run 35) and is the next Build lane once
+forks F-14/F-15 are resolved. Evidence/audit DB authority,
 jobs/workers, OpenSearch-core, RAG-core, and findings/timeline/TODO/report data
 migration remain separate later scopes unless a candidate doc explicitly batches
 them.

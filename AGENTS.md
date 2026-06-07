@@ -74,6 +74,8 @@ around it. In short:
   - PR03B / Batch B active-case DB authority implementation candidate/log
     (landed) →
     `21_pr03b_active_case_db_authority.md`
+  - D22A / Batch H `mcp_backends` registry Build candidate (planned, next Build) →
+    `22_d22a_mcp_backends_registry.md`
 
 ## Current stage (read MIGRATION_STATE for the live version)
 
@@ -86,12 +88,16 @@ B-14 duplicate resolver cleanup. PR03B delivered DB active-case authority,
 Gateway REST/MCP propagation, portal case API turnover, core active-case
 context, and B-11 proxy active-case propagation.
 
-The next recommended work is **Plan-stage D22A / Batch H: `mcp_backends`
-control-plane registry and `gateway.yaml` backend-authority removal**, carrying
-F-11 and B-13. D32 remains locked: Supabase/Postgres `app.active_case_state`
-wins; `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and
-`~/.sift/active_case` are not authority and are not regenerated as active-case
-exports; no historical data migration is in scope. If a future run discovers an
+The next recommended work is **Build-stage D22A / Batch H** from
+`22_d22a_mcp_backends_registry.md` (planned Run 35): the `mcp_backends`
+control-plane registry and `gateway.yaml` backend-authority removal, carrying
+F-11 and B-13, **once the operator resolves the two blocking forks it raised —
+F-14 (backend credential storage model) and F-15 (FastMCP activation:
+restart/apply vs live remount)**. D32 remains locked: Supabase/Postgres
+`app.active_case_state` wins; `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`,
+`gateway.yaml case.dir`, and `~/.sift/active_case` are not authority and are not
+regenerated as active-case exports; no historical data migration is in scope. If
+a future run discovers an
 installed API, Supabase behavior, FastMCP proxy behavior, or repo invariant
 mismatch, **stop and raise a fork** - do not improvise (D29).
 

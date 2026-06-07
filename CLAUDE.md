@@ -52,7 +52,8 @@ first so the workflow is followed from the opening turn.
 - Target architecture / acceleration plan → `18_target_architecture_acceleration.md`
 - PR03A / Batch A unified JWT candidate/log (landed) →
   `19_pr03_unified_supabase_jwt_identity.md`
-- Current Build candidate → `21_pr03b_active_case_db_authority.md`
+- Landed Build candidate (PR03B) → `21_pr03b_active_case_db_authority.md`
+- Next Build candidate (D22A / Batch H) → `22_d22a_mcp_backends_registry.md`
 - Host/VM + Supabase operational details → `AGENTS.md`
 
 ---
@@ -77,9 +78,10 @@ Run 26 target architecture/D30 done -> Run 27 PR03A candidate done -> Run 28
 PR03A BUILD + Review + VM acceptance done -> Run 29 PR03A portal auth-mode
 remediation + Land -> Run 30 portal/dashboard inventory captured -> Run 31
 PR03B candidate + D32 active-case cutover lock -> Runs 33-34 PR03B/Batch B
-active-case DB authority Land (ID-4, B-11 DONE) -> Batch H mcp_backends registry ->
-evidence/audit DB authority -> jobs/OpenSearch-core -> findings/RAG/skills ->
-legacy authority sunset.`
+active-case DB authority Land (ID-4, B-11 DONE) -> Run 35 D22A/Batch H
+mcp_backends registry candidate (doc 22; forks F-14/F-15 open) -> Build D22A
+(resolves F-11, B-13) -> evidence/audit DB authority -> jobs/OpenSearch-core ->
+findings/RAG/skills -> legacy authority sunset.`
 
 ### Historical Review -> GO procedure for PR03A outputs
 1. **Scope fence:** diff against the PR03A base. Allowed paths are exactly those
@@ -162,10 +164,15 @@ PR03B / Batch B (active-case DB authority, ID-4) is landed on `revamp/spg-v1`
 from `docs/migration/21_pr03b_active_case_db_authority.md`. D32 locks the
 active-case model: Supabase/Postgres `app.active_case_state` wins; no
 active-case env/config/pointer authority or generated exports; no historical
-data migration. Next recommended work is Plan-stage D22A / Batch H:
-`mcp_backends` control-plane registry and `gateway.yaml` backend-authority
-removal, carrying F-11 and B-13. Carry B-4/B-12/B-13/B-15 forward unless a
-scoped doc closes them. Deployment note: the VM systemd
+data migration. Run 35 planned **D22A / Batch H** in
+`docs/migration/22_d22a_mcp_backends_registry.md`: move add-on backend
+registration from `gateway.yaml` into the `app.mcp_backends` control-plane
+registry, make the Gateway loader DB-authoritative, turn the portal backend
+surface over to the DB, and resolve F-11 + B-13 at Land. It raised two blocking
+forks for the operator — **F-14** (backend credential storage model) and
+**F-15** (FastMCP activation: restart/apply vs live remount) — that must be
+resolved before that Build. Carry B-4/B-12/B-15 forward (B-13 is scoped into
+D22A) unless a scoped doc closes them. Deployment note: the VM systemd
 `sift-gateway` runs the old tree
 (`~/sift-mcps`); production rollout of the new auth code/config/env is the
 installer follow-up, not PR03A.
