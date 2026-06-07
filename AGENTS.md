@@ -53,6 +53,31 @@ around it. In short:
   `OPERATING_MODEL.md` §8 and run `python3 scripts/validate_migration_docs.py`
   before Land — it is a Definition-of-Done gate.
 
+## Where things are
+
+- Locked decisions (D#) + cutover order → `docs/migration/00_migration_charter.md`
+- Process, Definition of Done, templates → `docs/migration/OPERATING_MODEL.md`
+- Open Forks (F#) + Backlog (B#) → `docs/migration/REGISTER.md`
+- Run history, Current Objective, next run → `docs/migration/MIGRATION_STATE.md`
+- Per-phase specs → `docs/migration/NN_*.md`. Active specs:
+  - D27a backend revamp (landed) → `15_backend_tooling_revamp.md`, `16_backend_tool_contracts.md`
+  - D27b gateway cutover: design KB → `14_fastmcp3_supabase_integration.md`;
+    **implementation candidate (the doc you build from)** → `17_gateway_cutover_d27b.md`
+
+## Current stage (read MIGRATION_STATE for the live version)
+
+The backend revamp (**D27a**) is landed on `revamp/spg-v1`. The next build unit is the
+**D27b gateway cutover**, planned and **design-frozen** in `17_gateway_cutover_d27b.md`:
+all forks resolved (F-11 deferred) and the design decisions (D-1 `TokenVerifier`, D-2
+SSRF-in-PR, D-3 unary results) locked. A coding session implements doc 17 directly —
+its **scope fence, file-by-file plan, B-3 design, parity-test strategy, and a
+ready-to-copy build prompt are in that doc (§3, §5, §6, §8, §10)**. Honor the scope
+fence (`packages/sift-gateway/**` + its tests + `pyproject.toml` + `uv.lock` +
+`docs/migration/**`; nothing in `packages/*-mcp/**`, `case-dashboard`, `supabase`, or
+`sift-core`). The first commit is the F-6 in-memory proxy spike (assert parent
+middleware wraps proxied tools). If the installed `fastmcp` API differs from doc 17 §4,
+**stop and raise a fork** — do not improvise (D29).
+
 ## Mandatory Host/VM Workflow
 
 Code on host, copy changes to VM, test on VM:

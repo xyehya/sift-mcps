@@ -2,21 +2,123 @@
 
 ## Current Objective
 
-The **D27a backend tooling revamp is reviewed, remediated, and LANDED** into
-`revamp/spg-v1`. Run 20 built it (`c0a040a`); Run 21 reviewed it (`/code-review` +
-`/security-review`), reached a NO-GO on two blockers, fixed them (`5ab3df5`), and
-merged `revamp/backends-mcp3` into `revamp/spg-v1`. FastMCP is pinned by `uv.lock` at
-**fastmcp 3.4.2**. OpenSearch, OpenCTI, and Windows-Triage expose FastMCP 3
-registry-backed surfaces with typed models, structured outputs, prompts/resources,
-golden snapshots, and the resolved F-1/F-2/F-4/F-5 behavior. Host and VM tests pass
-under the Python 3.12 VM workflow (opensearch 979 passed/71 skipped, opencti 1,
-windows 12). The review's deferred findings are tracked as B-5…B-9 in `REGISTER.md`.
+The **D27b gateway cutover is PLANNED** (Run 22). D27a is landed (`019bc4a`); the
+implementation candidate is `17_gateway_cutover_d27b.md`, grounded in a source read of
+the gateway policy path and in the pinned **fastmcp 3.4.2** API (verified via
+`/prefecthq/fastmcp` v3.2.x docs — the closest published line). The plan re-hosts the
+SIFT policy (evidence gate → response guard → case context → audit envelope) as FastMCP
+Middleware, swaps aggregation to LocalProvider (core) + ProxyProvider (add-ons via
+`create_proxy` + namespaced mount), designs **B-3** (a single `guard_tool_result`
+redacting both `content` and `structured_content`, which are coupled in a FastMCP
+ToolResult; folds **B-6**), removes the policy-bypassing per-backend `/mcp/{name}`
+routes, and defines a policy-parity test suite (the gate is policy parity, not tool
+surface). Seven forks (**F-6…F-12**) are raised in `REGISTER.md` for the operator's call
+before Build.
 
-**Next:** plan and own **D27b** — the Gateway cutover (`14_fastmcp3_supabase_integration.md`),
-which consumes D27a's new tool surface. Its parity gate is policy-only, and it must not
-start review until **B-3** (gateway response-guard scans `structured_content`, with size
-cap + secret redaction) is implemented; M2 already made every backend tool advertise
-`anyOf[success, ToolError]` so the guard can validate typed output against the schema.
+Two source findings anchor the plan: `HttpMCPBackend.call_tool` drops
+`structured_content` today (so B-3 becomes load-bearing the moment the proxy carries
+typed output), and the per-backend `/mcp/{name}` route handler runs **no evidence gate
+and no response guard** — a live policy bypass (D3 says disable).
+
+All D27b forks are resolved (F-6 YES/grounded; F-7 drop; F-8 FastAPI; F-9 drop →
+B-10; F-10 retired→core; F-12 keep) except **F-11** (deferred to a later run), and the
+three design decisions are locked (D-1 `TokenVerifier`, D-2 SSRF-in-PR, D-3 unary). The
+plan `17_gateway_cutover_d27b.md` is **design-frozen and ready to Build**.
+
+**Next:** a **Build** session (scoped worktree off `revamp/spg-v1`) implements
+`17_gateway_cutover_d27b.md` — the ready-to-copy build prompt is in §10. The first
+commit is the F-6 in-memory proxy spike (assert middleware wraps proxied tools +
+`structured_content`/`meta` pass-through) before the design is committed. D27b review
+does not start until **B-3** is implemented (charter gate); M2 already made every
+backend tool advertise `anyOf[success, ToolError]` so the guard can validate typed output.
+
+## Run 22 — D27b Gateway Cutover Plan
+
+Planning run (Claude delivery-management). No runtime code changed.
+
+Trigger: D27a landed (Run 21, `019bc4a`); plan and own the D27b gateway cutover per
+`14_fastmcp3_supabase_integration.md`, grounded in the actual gateway code and the
+pinned fastmcp 3.4.2 API (no assumptions — operator directive).
+
+Grounding (source read, not memory):
+- Mapped the policy path in `mcp_endpoint.py:create_mcp_server._call_tool` (evidence
+  gate → backend dispatch → response guard redact-then-cap → case context → audit
+  envelope) and the connection-level `MCPAuthASGIApp` (rate-limit, 10 MB cap, Origin,
+  hash-only token via `resolve_identity`, readonly block).
+- **Finding 1:** `HttpMCPBackend.call_tool` returns `result.content` only
+  (`http_backend.py:224`) — `structured_content` is dropped today; B-3 becomes
+  load-bearing exactly when the proxy starts carrying the D27a typed surface.
+- **Finding 2:** the per-backend `/mcp/{name}` handler (`create_backend_mcp_server`)
+  runs no evidence gate and no response guard — a live policy bypass; D3 says disable.
+- **Finding 3:** the human REST `/api/v1/tools` path does not run the response guard;
+  only the agent/MCP path does (asymmetry to freeze or unify — F-12).
+- Gateway pins `mcp>=1.26` but not `fastmcp`; the cutover adds `fastmcp>=3` (3.4.2 is
+  already in `uv.lock` from D27a). The app is Starlette, not FastAPI (F-8).
+
+FastMCP 3.4.2 facts confirmed via `/prefecthq/fastmcp` (recorded in doc 17 §4):
+`mcp.mount(create_proxy(url), namespace=…)`; `mcp.http_app(path=…)` +
+`combine_lifespans`; `Middleware.on_call_tool` reads/mutates `result.structured_content`
+and `result.content` after `call_next` (the B-3 interception point); `ToolResult` uses
+`structured_content` as `content` when content is absent (the coupling hazard);
+`Namespace` transform; tag-based session-scoped `Visibility`; `ToolSearch` `always_visible`.
+
+Operator decisions (same session, after review of the 7 forks):
+- **F-7 → DROP** per-backend `/mcp/{name}` completely (policy bypass). Firmed into
+  charter **D3**.
+- **F-8 → ADOPT FastAPI now** — it is also the entry point for the React operator
+  portal/dashboard (REST + MCP under one ASGI app). **F-8b:** keep the raw-ASGI
+  hash-only token auth wrapper (SSE-safe).
+- **F-9 → DROP** per-case/per-phase/per-role tool exposure (Visibility/ToolSearch not
+  pursued). The one capability worth having — per-agent-token tool authorization for
+  benchmarking/testing tool updates — becomes **B-10** (infra partly exists:
+  `app.mcp_token_scopes` + `Identity.tool_scopes`, but defaults to `mcp:*` and is not
+  enforced per-tool today).
+- **F-10 → RETIRED**; `forensic-mcp` tools/capabilities are core (`LocalProvider`).
+- **F-11 → DEFERRED** to a later run (keep `gateway.yaml`; re-point to `mcp_backends`
+  when that phase lands). Stays OPEN in REGISTER.md.
+- **F-12 → KEEP AS IS**; no redaction for human/examiner output; freeze the asymmetry
+  in a parity test.
+- **F-6 → RESOLVED: YES** (grounded vs fastmcp 3.4.2 docs + official MCP server).
+  Parent `on_call_tool` middleware fires for proxied tools mounted via
+  `mount(create_proxy(...), namespace=…)`; the parent sees+mutates the proxy's
+  `ToolResult` ("parent middleware runs for all requests, including those routed to
+  mounted servers"; server layer applies auth/visibility after the proxy cache). Two
+  caveats carried: **B-11** (session state does not cross the mount boundary —
+  active-case to proxied backends via args/result or shared store) and an in-memory
+  proxy test asserting `structured_content`/`meta` pass-through. Latency ~200–500 ms
+  per proxied call (noted).
+
+Run 22 also ran a security best-practices web-research pass (MCP spec + 2025–2026
+CVEs). It validated the SIFT-owned-policy / dual-principal / no-SupabaseProvider-OAuth
+choices, and surfaced three design decisions — now **locked** (doc 17 §11):
+- **D-1 → Option A:** token auth via a custom `SiftTokenVerifier(TokenVerifier)` over
+  `token_registry` (exposes scopes/claims to the policy middleware; clean home for
+  B-10); connection-level guards (rate-limit/size/Origin/readonly) stay raw-ASGI
+  (SSE-safe). Supersedes F-8b's "keep the whole wrapper".
+- **D-2 → in the D27b PR:** SSRF egress guard on proxied-backend fetches + OAuth-metadata
+  (block private/link-local ranges, no redirect-follow); no agent-token passthrough.
+- **D-3 → ratified:** all gateway tool results are unary; the response guard
+  materializes the full `ToolResult` before redact-then-cap. A future streaming tool
+  must raise a fork.
+New backlog: **B-10** (per-token tool authz, SIFT-enforced), **B-11** (cross-mount
+active-case).
+
+No silent decisions; the FastMCP 3.4.2 facts in doc 17 §4 are re-confirmed at Build
+against the installed wheel.
+
+Files created/changed:
+- `docs/migration/17_gateway_cutover_d27b.md` (new) — D27b implementation candidate:
+  scope fence, file-by-file plan, grounded FastMCP 3.4.2 mechanics, B-3 design,
+  policy-parity test strategy, forks, ready-to-copy build prompt. Updated for the
+  fork resolutions (FastAPI, drop per-backend routes, no Visibility/ToolSearch).
+- `00_migration_charter.md` — **D3** firmed (per-backend routes dropped at D27b).
+- `REGISTER.md` — F-6…F-12 added; F-7/F-8/F-9/F-10/F-12 resolved; F-11 deferred;
+  **B-10** added (per-token tool authz); B-3/B-6 annotated to point at doc 17 §5.
+- `MIGRATION_STATE.md` — this entry + Current Objective.
+- `README.md` — doc 17 listed.
+
+Next: F-6 grounding completes → fold into doc 17 and freeze the design → Build session
+implements doc 17. B-3 must be implemented before D27b review starts.
 
 ## Run 21 — D27a Review, Remediation & Land
 
