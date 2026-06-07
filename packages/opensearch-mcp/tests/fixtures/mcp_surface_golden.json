@@ -277,6 +277,339 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Ingest Evidence into OpenSearch"
+      },
+      "description": "Preview (dry_run=True, default) or run evidence ingest into OpenSearch. Use dry_run=True first, review the plan, then dry_run=False with force=True only for intentional re-ingest. Execution remains behavior-compatible with the current async subprocess path. Example: opensearch_ingest(path='evidence/rocba-cdrive.e01', format='auto', dry_run=True).",
+      "input_schema": {
+        "properties": {
+          "all_logs": {
+            "default": false,
+            "description": "Parse all evtx, not only forensic logs.",
+            "title": "All Logs",
+            "type": "boolean"
+          },
+          "delimiter": {
+            "default": "",
+            "description": "Optional delimiter for delimited input.",
+            "title": "Delimiter",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": true,
+            "description": "Preview without indexing by default.",
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "exclude": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Skip these artifact types.",
+            "title": "Exclude"
+          },
+          "force": {
+            "default": false,
+            "description": "Allow intentional re-ingest when the case already has docs.",
+            "title": "Force",
+            "type": "boolean"
+          },
+          "format": {
+            "default": "auto",
+            "description": "auto=containers/artifact dirs; otherwise choose a specific evidence format.",
+            "enum": [
+              "auto",
+              "json",
+              "delimited",
+              "accesslog",
+              "memory"
+            ],
+            "title": "IngestFormat",
+            "type": "string"
+          },
+          "full": {
+            "default": false,
+            "description": "Include all ingest tiers.",
+            "title": "Full",
+            "type": "boolean"
+          },
+          "hostname": {
+            "default": "",
+            "description": "Source hostname. Required for json/accesslog/memory and most delimited. 'auto' detects from filenames for flat delimited dirs.",
+            "title": "Hostname",
+            "type": "string"
+          },
+          "include": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only these artifact types.",
+            "title": "Include"
+          },
+          "index_suffix": {
+            "default": "",
+            "description": "Optional index suffix.",
+            "title": "Index Suffix",
+            "type": "string"
+          },
+          "no_hayabusa": {
+            "default": false,
+            "description": "Skip Hayabusa Sigma scan.",
+            "title": "No Hayabusa",
+            "type": "boolean"
+          },
+          "password": {
+            "default": "",
+            "description": "Archive/container password. SECRET - redacted from audit/logs/results.",
+            "title": "Password",
+            "type": "string"
+          },
+          "path": {
+            "description": "Evidence path under active case; bare names resolve to evidence/.",
+            "title": "Path",
+            "type": "string"
+          },
+          "plugins": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Memory: run only these plugins.",
+            "title": "Plugins"
+          },
+          "recursive": {
+            "default": false,
+            "description": "Delimited dirs: treat immediate subdirs as hostnames.",
+            "title": "Recursive",
+            "type": "boolean"
+          },
+          "reduced_ids": {
+            "default": false,
+            "description": "Filter to high-value Event IDs.",
+            "title": "Reduced Ids",
+            "type": "boolean"
+          },
+          "source_timezone": {
+            "default": "",
+            "description": "Evidence system local timezone, e.g. Eastern Standard Time.",
+            "title": "Source Timezone",
+            "type": "string"
+          },
+          "tier": {
+            "default": 1,
+            "description": "Memory analysis depth: 1 fast, 3 deep.",
+            "maximum": 3,
+            "minimum": 1,
+            "title": "Tier",
+            "type": "integer"
+          },
+          "time_field": {
+            "default": "",
+            "description": "Optional timestamp field.",
+            "title": "Time Field",
+            "type": "string"
+          },
+          "vss": {
+            "default": false,
+            "description": "Process Volume Shadow Copies.",
+            "title": "Vss",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "IngestIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_ingest",
+      "output_schema": {
+        "properties": {
+          "already_indexed": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Existing index warning, when present.",
+            "title": "Already Indexed"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Resolved active case id.",
+            "title": "Case Id"
+          },
+          "container": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Detected container details.",
+            "title": "Container"
+          },
+          "details": {
+            "additionalProperties": true,
+            "description": "Additional behavior-compatible legacy fields.",
+            "title": "Details",
+            "type": "object"
+          },
+          "log_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background run log file.",
+            "title": "Log File"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Polling or operator note.",
+            "title": "Note"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background process id for started runs.",
+            "title": "Pid"
+          },
+          "plan": {
+            "additionalProperties": true,
+            "description": "Preview plan/details.",
+            "title": "Plan",
+            "type": "object"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background ingest run id.",
+            "title": "Run Id"
+          },
+          "status": {
+            "description": "Ingest response status.",
+            "enum": [
+              "preview",
+              "started",
+              "containers_detected",
+              "multi_started",
+              "already_indexed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "suggested_hostname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Suggested source hostname.",
+            "title": "Suggested Hostname"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Non-fatal warning.",
+            "title": "Warning"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "IngestOut",
+        "type": "object"
+      },
+      "title": "Ingest Evidence into OpenSearch"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": true,
         "openWorldHint": true,
         "readOnlyHint": true,

@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 from collections.abc import Callable
+from enum import Enum
 from typing import Any, Literal
 
 from fastmcp import FastMCP
@@ -400,6 +401,85 @@ class InspectContainerOut(BaseModel):
     raw_info: str | None = Field(None, description="Truncated fdisk/img_stat output.")
 
 
+class IngestFormat(str, Enum):
+    auto = "auto"
+    json = "json"
+    delimited = "delimited"
+    accesslog = "accesslog"
+    memory = "memory"
+
+
+class IngestIn(BaseModel):
+    path: str = Field(
+        ...,
+        description="Evidence path under active case; bare names resolve to evidence/.",
+    )
+    format: IngestFormat = Field(
+        IngestFormat.auto,
+        description="auto=containers/artifact dirs; otherwise choose a specific evidence format.",
+    )
+    hostname: str = Field(
+        "",
+        description=(
+            "Source hostname. Required for json/accesslog/memory and most delimited. "
+            "'auto' detects from filenames for flat delimited dirs."
+        ),
+    )
+    index_suffix: str = Field("", description="Optional index suffix.")
+    time_field: str = Field("", description="Optional timestamp field.")
+    delimiter: str = Field("", description="Optional delimiter for delimited input.")
+    recursive: bool = Field(
+        False, description="Delimited dirs: treat immediate subdirs as hostnames."
+    )
+    include: list[str] | None = Field(None, description="Only these artifact types.")
+    exclude: list[str] | None = Field(None, description="Skip these artifact types.")
+    source_timezone: str = Field(
+        "", description="Evidence system local timezone, e.g. Eastern Standard Time."
+    )
+    all_logs: bool = Field(False, description="Parse all evtx, not only forensic logs.")
+    reduced_ids: bool = Field(False, description="Filter to high-value Event IDs.")
+    full: bool = Field(False, description="Include all ingest tiers.")
+    tier: int = Field(1, ge=1, le=3, description="Memory analysis depth: 1 fast, 3 deep.")
+    plugins: list[str] | None = Field(None, description="Memory: run only these plugins.")
+    dry_run: bool = Field(True, description="Preview without indexing by default.")
+    force: bool = Field(
+        False,
+        description="Allow intentional re-ingest when the case already has docs.",
+    )
+    vss: bool = Field(False, description="Process Volume Shadow Copies.")
+    password: str = Field(
+        "",
+        description="Archive/container password. SECRET - redacted from audit/logs/results.",
+    )
+    no_hayabusa: bool = Field(False, description="Skip Hayabusa Sigma scan.")
+
+
+class IngestOut(BaseModel):
+    status: Literal[
+        "preview",
+        "started",
+        "containers_detected",
+        "multi_started",
+        "already_indexed",
+        "failed",
+    ] = Field(..., description="Ingest response status.")
+    case_id: str | None = Field(None, description="Resolved active case id.")
+    plan: dict[str, Any] = Field(default_factory=dict, description="Preview plan/details.")
+    container: dict[str, Any] | None = Field(None, description="Detected container details.")
+    already_indexed: dict[str, Any] | None = Field(
+        None, description="Existing index warning, when present."
+    )
+    suggested_hostname: str | None = Field(None, description="Suggested source hostname.")
+    warning: str | None = Field(None, description="Non-fatal warning.")
+    pid: int | None = Field(None, description="Background process id for started runs.")
+    run_id: str | None = Field(None, description="Background ingest run id.")
+    log_file: str | None = Field(None, description="Background run log file.")
+    note: str | None = Field(None, description="Polling or operator note.")
+    details: dict[str, Any] = Field(
+        default_factory=dict, description="Additional behavior-compatible legacy fields."
+    )
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -528,6 +608,20 @@ def _timeline_bucket_warning_limit() -> int:
 
 def _json_from_tool_result(result: ToolResult) -> str:
     return _json_text(result.structured_content or {})
+
+
+def _redact_secret_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if key.lower() in {"password", "secret", "token"}:
+                redacted[key] = "[REDACTED]"
+            else:
+                redacted[key] = _redact_secret_fields(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_secret_fields(item) for item in value]
+    return value
 
 
 def _search_hit_from_legacy(hit: dict[str, Any]) -> SearchHit:
@@ -776,6 +870,69 @@ async def run_opensearch_inspect_container(params: InspectContainerIn) -> ToolRe
     return _success_tool_result(out, meta)
 
 
+async def run_opensearch_ingest(params: IngestIn) -> ToolResult:
+    raw = _legacy_server().opensearch_ingest(**params.model_dump(mode="json"))
+    raw = _redact_secret_fields(raw)
+    if "error" in raw and raw.get("status") not in {"failed", "already_indexed"}:
+        message = str(raw.get("error"))
+        if "No active case" in message:
+            code = ErrorCode.no_active_case
+        elif "Path not found" in message or "not found" in message.lower():
+            code = ErrorCode.not_found
+        elif raw.get("error") == "shard_capacity":
+            code = ErrorCode.capacity_refused
+        else:
+            code = ErrorCode.invalid_input
+        return _legacy_error(raw, default_code=code)
+    meta = _meta_from_raw(raw)
+    status = str(raw.get("status", "preview"))
+    if status == "running":
+        status = "started"
+    if status not in {
+        "preview",
+        "started",
+        "containers_detected",
+        "multi_started",
+        "already_indexed",
+        "failed",
+    }:
+        status = "preview"
+    details = {
+        key: value
+        for key, value in raw.items()
+        if key
+        not in {
+            "status",
+            "case_id",
+            "plan",
+            "container",
+            "already_indexed",
+            "suggested_hostname",
+            "warning",
+            "pid",
+            "run_id",
+            "log_file",
+            "message",
+            "note",
+        }
+    }
+    out = IngestOut(
+        status=status,
+        case_id=raw.get("case_id"),
+        plan=dict(raw.get("plan") or {}),
+        container=raw.get("container"),
+        already_indexed=raw.get("already_indexed"),
+        suggested_hostname=raw.get("suggested_hostname"),
+        warning=raw.get("warning"),
+        pid=raw.get("pid"),
+        run_id=raw.get("run_id"),
+        log_file=raw.get("log_file"),
+        note=raw.get("note") or raw.get("message"),
+        details=details,
+    )
+    return _success_tool_result(out, meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -808,6 +965,25 @@ REGISTRY.append(
             "population or gauge magnitude before opensearch_search. Do not use "
             "when you need per-value counts; use opensearch_aggregate. Example: "
             "opensearch_count(query='event.code:4624')."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_ingest",
+        fn=run_opensearch_ingest,
+        in_model=IngestIn,
+        out_model=IngestOut,
+        annotations=_write_annotations("Ingest Evidence into OpenSearch"),
+        title="Ingest Evidence into OpenSearch",
+        description=(
+            "Preview (dry_run=True, default) or run evidence ingest into OpenSearch. "
+            "Use dry_run=True first, review the plan, then dry_run=False with "
+            "force=True only for intentional re-ingest. Execution remains "
+            "behavior-compatible with the current async subprocess path. Example: "
+            "opensearch_ingest(path='evidence/rocba-cdrive.e01', format='auto', "
+            "dry_run=True)."
         ),
     )
 )
