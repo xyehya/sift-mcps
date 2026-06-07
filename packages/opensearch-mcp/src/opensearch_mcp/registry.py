@@ -36,6 +36,7 @@ class ResourceDef(BaseModel, arbitrary_types_allowed=True):
 REGISTRY: list[ToolDef] = []
 PROMPT_REGISTRY: list[PromptDef] = []
 RESOURCE_REGISTRY: list[ResourceDef] = []
+_TOOL_META: dict[str, dict[str, Any]] = {}
 
 
 class Advisory(BaseModel):
@@ -249,6 +250,25 @@ class FieldValuesOut(BaseModel):
     truncated: bool = Field(..., description="True when more distinct values exist than returned.")
 
 
+class StatusIn(BaseModel):
+    pass
+
+
+class IndexInfo(BaseModel):
+    index: str = Field(..., description="Case index name.")
+    docs: int = Field(..., description="Document count for the index.")
+    size: str = Field(..., description="Human store size, e.g. '1.2gb'.")
+    status: str = Field(..., description="Index status reported by cat indices.")
+
+
+class StatusOut(BaseModel):
+    cluster_status: str = Field(
+        ..., description="Cluster health status; single-node yellow may be annotated normal."
+    )
+    indices: list[IndexInfo] = Field(..., description="All case-* indices, sorted by name.")
+    total_indices: int = Field(..., description="Number of case-* indices returned.")
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -375,6 +395,10 @@ def _timeline_bucket_warning_limit() -> int:
     return max(value, 1)
 
 
+def _json_from_tool_result(result: ToolResult) -> str:
+    return _json_text(result.structured_content or {})
+
+
 def _search_hit_from_legacy(hit: dict[str, Any]) -> SearchHit:
     fields = {
         key: value for key, value in hit.items() if key not in {"_id", "_index", "_truncated"}
@@ -497,6 +521,31 @@ async def run_opensearch_field_values(params: FieldValuesIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
+async def run_opensearch_status(_params: StatusIn) -> ToolResult:
+    try:
+        raw = _legacy_server().opensearch_status()
+    except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
+        return _tool_error_result(
+            ErrorCode.upstream_unavailable,
+            f"{type(exc).__name__}: OpenSearch status check failed.",
+            "Check OpenSearch connectivity and credentials, then retry.",
+            retryable=True,
+        )
+    if "error" in raw:
+        return _legacy_error(raw, default_code=ErrorCode.upstream_unavailable)
+    meta = _meta_from_raw(raw)
+    out = StatusOut(
+        cluster_status=str(raw.get("cluster_status", "unknown")),
+        indices=[IndexInfo.model_validate(item) for item in raw.get("indices", [])],
+        total_indices=int(raw.get("total_indices", 0)),
+    )
+    return _success_tool_result(out, meta)
+
+
+async def opensearch_cluster_status_resource() -> str:
+    return _json_from_tool_result(await run_opensearch_status(StatusIn()))
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -603,6 +652,38 @@ REGISTRY.append(
     )
 )
 
+_TOOL_META["opensearch_status"] = {
+    "deprecated": True,
+    "resource_uri": "opensearch://cluster/status",
+    "removal_horizon": "at/after D27b",
+}
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_status",
+        fn=run_opensearch_status,
+        in_model=StatusIn,
+        out_model=StatusOut,
+        annotations=_read_annotations("Cluster & Index Status"),
+        title="Cluster & Index Status",
+        description=(
+            "DEPRECATED tool form; prefer resource opensearch://cluster/status when "
+            "available. Shows cluster health and per-case-index document counts. "
+            "Use to confirm the cluster is reachable and see which cases have data; "
+            "use opensearch_case_summary for one case's artifact and coverage breakdown."
+        ),
+    )
+)
+
+RESOURCE_REGISTRY.append(
+    ResourceDef(
+        uri="opensearch://cluster/status",
+        fn=opensearch_cluster_status_resource,
+        name="opensearch_cluster_status",
+        title="Cluster & Index Status",
+        description="Read-only resource view of OpenSearch cluster health and case index counts.",
+    )
+)
+
 
 def create_server() -> FastMCP:
     """Create the standalone FastMCP server from registry definitions."""
@@ -639,14 +720,14 @@ def _function_tool(
     deprecated_alias_of: str | None = None,
 ) -> FunctionTool:
     description = tool_def.description
-    meta: dict[str, Any] | None = None
+    meta: dict[str, Any] | None = _TOOL_META.get(name)
     if deprecated_alias_of is not None:
         description = (
             f"DEPRECATED alias for `{deprecated_alias_of}`. "
             "Use the canonical name; this alias will be removed after one cutover cycle.\n\n"
             f"{tool_def.description}"
         )
-        meta = {"deprecated": True, "canonical_name": deprecated_alias_of}
+        meta = {**(meta or {}), "deprecated": True, "canonical_name": deprecated_alias_of}
 
     async def invoke(**kwargs: Any) -> ToolResult:
         try:

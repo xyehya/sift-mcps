@@ -2,7 +2,17 @@
   "backend": "opensearch-mcp",
   "prompts": [],
   "resource_templates": [],
-  "resources": [],
+  "resources": [
+    {
+      "annotations": null,
+      "description": "Read-only resource view of OpenSearch cluster health and case index counts.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_cluster_status",
+      "title": "Cluster & Index Status",
+      "uri": "opensearch://cluster/status"
+    }
+  ],
   "tools": [
     {
       "annotations": {
@@ -662,6 +672,86 @@
         "type": "object"
       },
       "title": "Aggregate Field (Top-N)"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Cluster & Index Status"
+      },
+      "description": "DEPRECATED tool form; prefer resource opensearch://cluster/status when available. Shows cluster health and per-case-index document counts. Use to confirm the cluster is reachable and see which cases have data; use opensearch_case_summary for one case's artifact and coverage breakdown.",
+      "input_schema": {
+        "properties": {},
+        "title": "StatusIn",
+        "type": "object"
+      },
+      "meta": {
+        "deprecated": true,
+        "removal_horizon": "at/after D27b",
+        "resource_uri": "opensearch://cluster/status"
+      },
+      "name": "opensearch_status",
+      "output_schema": {
+        "properties": {
+          "cluster_status": {
+            "description": "Cluster health status; single-node yellow may be annotated normal.",
+            "title": "Cluster Status",
+            "type": "string"
+          },
+          "indices": {
+            "description": "All case-* indices, sorted by name.",
+            "items": {
+              "properties": {
+                "docs": {
+                  "description": "Document count for the index.",
+                  "title": "Docs",
+                  "type": "integer"
+                },
+                "index": {
+                  "description": "Case index name.",
+                  "title": "Index",
+                  "type": "string"
+                },
+                "size": {
+                  "description": "Human store size, e.g. '1.2gb'.",
+                  "title": "Size",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "Index status reported by cat indices.",
+                  "title": "Status",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "index",
+                "docs",
+                "size",
+                "status"
+              ],
+              "title": "IndexInfo",
+              "type": "object"
+            },
+            "title": "Indices",
+            "type": "array"
+          },
+          "total_indices": {
+            "description": "Number of case-* indices returned.",
+            "title": "Total Indices",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cluster_status",
+          "indices",
+          "total_indices"
+        ],
+        "title": "StatusOut",
+        "type": "object"
+      },
+      "title": "Cluster & Index Status"
     }
   ]
 }
