@@ -280,6 +280,59 @@
         "idempotentHint": false,
         "openWorldHint": true,
         "readOnlyHint": false,
+        "title": "Enrich: Windows Baseline Triage"
+      },
+      "description": "Check indexed filenames and services against the Windows baseline DB and stamp triage verdict fields. Use after ingest or after a baseline update. This remains behavior-compatible with the current synchronous path. Example: opensearch_enrich_triage().",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case to enrich; default active.",
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
+        "title": "EnrichTriageIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_enrich_triage",
+      "output_schema": {
+        "properties": {
+          "details": {
+            "additionalProperties": true,
+            "description": "Per-artifact enriched counts.",
+            "title": "Details",
+            "type": "object"
+          },
+          "documents_enriched": {
+            "description": "Total documents enriched.",
+            "title": "Documents Enriched",
+            "type": "integer"
+          },
+          "status": {
+            "const": "complete",
+            "description": "Triage enrichment status.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "documents_enriched",
+          "details"
+        ],
+        "title": "EnrichTriageOut",
+        "type": "object"
+      },
+      "title": "Enrich: Windows Baseline Triage"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
         "title": "Enrich: Threat Intel (OpenCTI)"
       },
       "description": "Extract unique IOCs from indexed docs, optionally look them up in OpenCTI, and stamp matching docs with threat_intel fields. Use dry_run=True to size the work, then dry_run=False to launch the existing async enrichment path. Example: opensearch_enrich_intel(dry_run=True).",

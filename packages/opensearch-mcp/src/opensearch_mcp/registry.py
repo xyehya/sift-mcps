@@ -542,6 +542,16 @@ class EnrichIntelOut(BaseModel):
     note: str | None = Field(None, description="Polling note.")
 
 
+class EnrichTriageIn(BaseModel):
+    case_id: str = Field("", description="Case to enrich; default active.")
+
+
+class EnrichTriageOut(BaseModel):
+    status: Literal["complete"] = Field(..., description="Triage enrichment status.")
+    documents_enriched: int = Field(..., description="Total documents enriched.")
+    details: dict[str, Any] = Field(..., description="Per-artifact enriched counts.")
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -1083,6 +1093,24 @@ async def run_opensearch_enrich_intel(params: EnrichIntelIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
+async def run_opensearch_enrich_triage(params: EnrichTriageIn) -> ToolResult:
+    raw = _legacy_server().opensearch_enrich_triage(**params.model_dump())
+    if "error" in raw:
+        default = (
+            ErrorCode.no_active_case
+            if "No active case" in str(raw.get("error"))
+            else ErrorCode.upstream_unavailable
+        )
+        return _legacy_error(raw, default_code=default)
+    meta = _meta_from_raw(raw)
+    out = EnrichTriageOut(
+        status=raw.get("status", "complete"),
+        documents_enriched=int(raw.get("documents_enriched", 0)),
+        details=dict(raw.get("details") or {}),
+    )
+    return _success_tool_result(out, meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -1115,6 +1143,23 @@ REGISTRY.append(
             "population or gauge magnitude before opensearch_search. Do not use "
             "when you need per-value counts; use opensearch_aggregate. Example: "
             "opensearch_count(query='event.code:4624')."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_enrich_triage",
+        fn=run_opensearch_enrich_triage,
+        in_model=EnrichTriageIn,
+        out_model=EnrichTriageOut,
+        annotations=_write_annotations("Enrich: Windows Baseline Triage"),
+        title="Enrich: Windows Baseline Triage",
+        description=(
+            "Check indexed filenames and services against the Windows baseline DB "
+            "and stamp triage verdict fields. Use after ingest or after a baseline "
+            "update. This remains behavior-compatible with the current synchronous "
+            "path. Example: opensearch_enrich_triage()."
         ),
     )
 )
