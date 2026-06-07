@@ -49,7 +49,9 @@ Target direction:
   and no-op workers before converting real parser, evidence, OpenSearch, report,
   or finding workflows.
 - Deprecate file-based workflow authority only after DB-backed equivalents,
-  compatibility exports, tests, and operator workflows are validated.
+  scoped compatibility exports, tests, and operator workflows are validated.
+  Active-case env/config/pointer authority is the D32 exception: PR03B removes
+  it without generating active-case compatibility exports.
 
 ## 2. Migration Principles
 

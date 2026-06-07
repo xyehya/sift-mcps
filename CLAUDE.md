@@ -50,7 +50,9 @@ first so the workflow is followed from the opening turn.
 - Gateway cutover (D27b, landed): design KB → `14_fastmcp3_supabase_integration.md`;
   implemented candidate/log → `17_gateway_cutover_d27b.md`
 - Target architecture / acceleration plan → `18_target_architecture_acceleration.md`
-- Current Build candidate → `19_pr03_unified_supabase_jwt_identity.md`
+- PR03A / Batch A unified JWT candidate/log (landed) →
+  `19_pr03_unified_supabase_jwt_identity.md`
+- Current Build candidate → `21_pr03b_active_case_db_authority.md`
 - Host/VM + Supabase operational details → `AGENTS.md`
 
 ---
@@ -73,8 +75,9 @@ assumptions.
 `JOB-0 done -> PR01/ID-1 done -> PR02/ID-2 done -> D27a done -> D27b done ->
 Run 26 target architecture/D30 done -> Run 27 PR03A candidate done -> Run 28
 PR03A BUILD + Review + VM acceptance done -> Run 29 PR03A portal auth-mode
-remediation + Land -> Run 30 portal/dashboard inventory captured -> PR03B/Batch
-B active-case DB authority (ID-4, B-11) or Batch H mcp_backends registry ->
+remediation + Land -> Run 30 portal/dashboard inventory captured -> Run 31
+PR03B candidate + D32 active-case cutover lock -> PR03B/Batch B active-case DB
+authority Build (ID-4, B-11) or Batch H mcp_backends registry ->
 evidence/audit DB authority -> jobs/OpenSearch-core -> findings/RAG/skills ->
 legacy authority sunset.`
 
@@ -155,10 +158,11 @@ pinned GoTrue lacks admin session logout). Run 30 added
 `docs/migration/20_portal_dashboard_inventory.md` as a normalized portal/API
 inventory reference.
 
-Next is **PR03B / Batch B** (active-case DB authority, ID-4) — a Plan session
-unless the operator supplies a candidate. Ground it in
-`09_identity_auth_cutover.md`, `18_target_architecture_acceleration.md`, and
-`20_portal_dashboard_inventory.md`. Carry B-4/B-11/B-12/B-13/B-15 forward unless
-a scoped doc closes them. Deployment note: the VM systemd `sift-gateway` runs
-the old tree (`~/sift-mcps`); production rollout of the new auth code/config/env
-is the installer follow-up, not PR03A.
+Next is **PR03B / Batch B** (active-case DB authority, ID-4) — a Build session
+from `docs/migration/21_pr03b_active_case_db_authority.md`. D32 locks the
+active-case model: Supabase/Postgres `app.active_case_state` wins; no
+active-case env/config/pointer authority or generated exports; no historical
+data migration. Carry B-4/B-11/B-12/B-13/B-15 forward unless a scoped doc closes
+them. Deployment note: the VM systemd `sift-gateway` runs the old tree
+(`~/sift-mcps`); production rollout of the new auth code/config/env is the
+installer follow-up, not PR03A.

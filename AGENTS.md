@@ -71,6 +71,8 @@ around it. In short:
     `19_pr03_unified_supabase_jwt_identity.md`
   - Portal/dashboard workflow + API inventory reference for PR03B planning →
     `20_portal_dashboard_inventory.md`
+  - PR03B / Batch B active-case DB authority build candidate →
+    `21_pr03b_active_case_db_authority.md`
 
 ## Current stage (read MIGRATION_STATE for the live version)
 
@@ -81,13 +83,15 @@ login/session, agent/service JWT issuance + revocation (D31), B-10 tool
 authorization, and B-14 duplicate resolver cleanup. Run 29 fixed the portal
 auth-mode blocker; Run 30 added the portal/dashboard inventory reference.
 
-The next work is **Plan-stage PR03B / Batch B: active-case DB authority (ID-4)**.
-Ground it in `09_identity_auth_cutover.md`,
-`18_target_architecture_acceleration.md`, `20_portal_dashboard_inventory.md`, and
-`MIGRATION_STATE.md`. Do not run a Build session for PR03B until a scoped
-candidate doc exists. If a future build discovers an installed API, Supabase
-behavior, or repo invariant mismatch, **stop and raise a fork** - do not
-improvise (D29).
+The next work is **Build-stage PR03B / Batch B: active-case DB authority
+(ID-4/active-case ID-5)** from
+`docs/migration/21_pr03b_active_case_db_authority.md`. D32 locks the model:
+Supabase/Postgres `app.active_case_state` wins; `SIFT_CASE_DIR`,
+`SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and `~/.sift/active_case` are not
+authority and are not regenerated as active-case exports; no historical data
+migration is in scope. If a future build discovers an installed API, Supabase
+behavior, FastMCP proxy behavior, or repo invariant mismatch, **stop and raise a
+fork** - do not improvise (D29).
 
 ## Mandatory Host/VM Workflow
 
@@ -244,6 +248,8 @@ PR03A is **landed** on `revamp/spg-v1`. Spec + status:
 - `docs/migration/19_pr03_unified_supabase_jwt_identity.md` (status: implemented)
 - `docs/migration/20_portal_dashboard_inventory.md` (reference inventory for
   PR03B portal/API turnover planning; not an implementation candidate)
+- `docs/migration/21_pr03b_active_case_db_authority.md` (Build-ready PR03B
+  candidate; next implementation source of truth)
 
 It delivered unified Supabase JWT auth, principal mapping, portal Supabase auth,
 agent/service JWT issuance + revocation (D31), and DB-backed MCP tool

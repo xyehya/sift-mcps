@@ -1,6 +1,6 @@
 # Migration Charter
 
-Last updated: 2026-06-07 (Run 27 PR03A candidate).
+Last updated: 2026-06-07 (Run 31 PR03B active-case candidate).
 
 This charter is the single source of truth for locked migration decisions. Where
 any other document under `docs/migration/` conflicts with the "Confirmed
@@ -34,28 +34,25 @@ landed implementation is intentionally transitional:
 
 - **Done:** JOB-0 baseline checks, PR01 / Phase ID-1 identity schema foundation,
   PR02 / Phase ID-2 hash-only MCP/service token registry with legacy
-  `gateway.yaml` fallback, D27a backend FastMCP/tool-contract revamp, and D27b
-  Gateway FastMCP cutover. Per D30, PR02 is now a transitional compatibility
-  bridge rather than the final identity target.
+  `gateway.yaml` fallback, D27a backend FastMCP/tool-contract revamp, D27b
+  Gateway FastMCP cutover, and PR03A / Batch A unified Supabase JWT identity
+  for REST and MCP. Per D30, PR02 is now a transitional compatibility bridge
+  rather than the final identity target.
 - **Current Gateway substrate:** landed D27b serves one FastAPI ASGI app with
   the aggregate FastMCP `http_app` mounted at `/mcp`; per-backend `/mcp/{name}`
   routes are removed. Core gateway tools are local FastMCP tools; configured
   add-ons are FastMCP proxy mounts. SIFT-owned middleware enforces the evidence
   gate, response guard, case-context injection, and audit envelope.
-- **Still pending:** unified Supabase JWT authentication for human operators,
-  agents, MCP clients, workers, and services (D30 / accelerated Phase ID-3);
-  case-membership/principal resolution; control-plane active-case authority and
-  propagation (ID-4/ID-5); evidence-gate case resolution from control-plane
-  context (ID-5); legacy auth/token-path sunset (ID-6); D22 `mcp_backends`
+- **Still pending:** control-plane active-case authority and propagation
+  (ID-4/ID-5 / D32); evidence-gate case resolution from control-plane context
+  (ID-5); legacy auth/token-path sunset (ID-6); D22 `mcp_backends`
   control-plane registry replacing `gateway.yaml` add-on registration (F-11);
   OpenSearch and RAG final core/control-plane integration (D19/D23).
-- **Next planned session:** Build-stage PR03A / Batch A from
-  `19_pr03_unified_supabase_jwt_identity.md`: unified Supabase JWT
-  authentication and principal resolution for REST and MCP, portal Supabase
-  login/session, agent/service JWT issuance, B-10 tool authorization, and B-14
-  resolver cleanup, with PR02 token-registry compatibility explicitly scoped.
-  Do not treat D22/F-11 or active-case propagation as implicitly in scope for
-  that run.
+- **Next planned session:** Build-stage PR03B / Batch B from
+  `21_pr03b_active_case_db_authority.md`: Postgres active-case authority,
+  portal case API turnover, Gateway REST/MCP propagation, B-11 proxy
+  propagation, and stale env/config/pointer rejection. No historical data
+  migration and no active-case compatibility exports are in scope for that run.
 
 ## Plane Boundaries
 
@@ -195,7 +192,7 @@ needing user approval" / "Open Questions" entries scattered across docs 02-08.
 | D1 | Control-plane authority | Supabase Local / Postgres is authoritative for everything listed under Control Plane above. |
 | D2 | Gateway boundary | Single mandatory boundary. ALL REST APIs, MCP tools, and privileged actions go through the Gateway. |
 | D3 | Per-backend MCP routes | **Dropped.** Only the aggregate Gateway policy path (`/mcp`) serves MCP tool calls. The per-backend `/mcp/{name}` routes were **removed at the D27b gateway cutover** (confirmed Run 22, F-7): the pre-D27b handler (`create_backend_mcp_server`) ran **no evidence gate and no response guard**, so the routes were a live policy bypass, not just a hardening nicety. All agents/clients use the aggregate `/mcp`. |
-| D4 | Active case | **One operator, one active case at a time.** Other cases may exist but only one is marked active. The operator selects it in the portal; it is authoritative in the control plane (`active_case_state`); the Gateway propagates it to backends/APIs/tools. Legacy `SIFT_CASE_DIR` / `~/.sift/active_case` become generated compatibility exports during transition, never authority. (`active_case_state.scope` leaves room for per-operator active case later without a schema change.) |
+| D4 | Active case | **One operator, one active case at a time.** Other cases may exist but only one is marked active. The operator selects it in the portal; it is authoritative in the control plane (`active_case_state`); the Gateway propagates it to backends/APIs/tools. Legacy `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and `~/.sift/active_case` are never authority. D32 supersedes the earlier generated-compatibility-export transition plan for active case: PR03B drops active-case env/config/pointer authority instead of generating it. (`active_case_state.scope` leaves room for per-operator active case later without a schema change.) |
 | D5 | Long-running work | Enqueues durable control-plane jobs/pipelines and returns a job ID. Never a direct job/invoke to the Evidence Vault. Workers claim jobs (poll + `SKIP LOCKED`); the control plane never pushes. |
 | D6 | OpenSearch profile | OpenSearch 3.5.0, security enabled, Gateway-mediated and case-scoped. Root repo `docker-compose.yml` (2.18.0, security disabled) is pre-migration only. |
 | D7 | Supabase deployment | Local Supabase on the network-restricted (non-air-gapped) SIFT VM. Offline-only constraints are out of scope. |
@@ -225,6 +222,7 @@ needing user approval" / "Open Questions" entries scattered across docs 02-08.
 | D29 | Operating model = process of record | Development and governance follow `OPERATING_MODEL.md`: the **Plan → Build → Review → Land → Log** loop, the Definition of Done, scope-fenced worktrees, and `/code-review` (always) + `/security-review` (auth/tokens/evidence/secrets/Gateway). Open decisions are tracked as **Forks (F#)** and deferred work as **Backlog (B#)** in `REGISTER.md`; a fork resolves into a charter Decision (D#) or a B#. **No run invents or silently changes a decision** — it stops and raises a fork. Locked 2026-06-07 (Run 19). |
 | D30 | Unified Supabase JWT principal model | **Final target:** humans, AI agents, MCP clients, workers, and services authenticate with Supabase-issued JWTs. The operator/portal may create agent/service principals and issue Supabase sessions/JWTs for them; those JWTs are acceptable on both REST and the FastMCP `/mcp` endpoint. The Gateway verifies JWTs with SIFT-owned FastAPI dependencies and FastMCP `TokenVerifier` subclasses (FastMCP 3.4.2 API), resolves the JWT subject to application principal/membership/tool-scope rows, and enforces SIFT policy. PR02's hash-only `mcp_tokens` registry and legacy `gateway.yaml` fallback become a transitional compatibility path and/or non-secret issuance/provenance metadata until ID-6 removes raw-token authority. Locked by operator 2026-06-07 (Run 26). Full target and batching plan: `18_target_architecture_acceleration.md`. |
 | D31 | Agent/service revocation model (pinned Supabase v1.26.05) | The pinned Supabase **v1.26.05** GoTrue does **not** expose per-user admin session logout (`POST /auth/v1/admin/users/{id}/logout` → 404, confirmed live on the VM — fork **F-13**). Principal revocation therefore: (1) marks the app principal `status='revoked'` (and its tool-scope rows); (2) **DELETEs** the Supabase auth user (`DELETE /auth/v1/admin/users/{id}` → 200, idempotent on 404) — invalidating refresh tokens, blocking re-login, and causing GoTrue to reject the user's still-unexpired access JWT immediately on the next `/auth/v1/user` validation; (3) proactively invalidates the Gateway resolver's positive-identity cache for that `auth_user_id` (belt-and-suspenders within the ≤`principal_cache_ttl_seconds`/30s window). A later Supabase upgrade exposing admin session logout may add it additively. Locked by operator 2026-06-07 (Run 28, resolving F-13). |
+| D32 | Active-case cutover model | PR03B / Batch B goes directly to the target active-case model: Supabase/Postgres `app.active_case_state` is the only active-case authority; `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and `~/.sift/active_case` are dropped/ignored as active-case authority and are **not** regenerated as compatibility exports. No historical data migration is part of this cutover. Existing memory images, disk images, case directories, and other forensic files may remain on disk and be referenced by DB case rows as artifact/data locations, but they do not decide the active case. Stale env/config/pointer values must be negative-tested. Locked by operator 2026-06-07 (Run 31). |
 
 ## Cutover Order
 
@@ -245,7 +243,9 @@ job carries identity and case context that does not exist yet:
    Gateway-mediated search plane. See `05`-`08`.
 4. **Findings / TODOs / IOCs / timeline / reports / RAG / skills.** Move
    remaining file-backed investigation state and the new control-plane scope
-   additions onto DB authority with compatibility exports.
+   additions onto DB authority. Export/sync bridges are added only when a future
+   candidate explicitly scopes them; active-case env/pointer exports are not
+   part of the target after D32.
 
 Baseline protective tests (roadmap phase JOB-0) are additive and may be written
 in parallel at any time; they do not depend on the cutover order.
@@ -258,14 +258,15 @@ and findings work should now be authored on the FastMCP 3.0 Gateway substrate.
 ## Implementation Status
 
 The planning workspace remains the source for future scoped implementation
-candidates, but several early slices are now complete: JOB-0, PR01/ID-1,
-PR02/ID-2, D27a, D27b, and the PR03A candidate plan. The next recommended run
-is the **Build-stage PR03A / Batch A** implementation from
-`19_pr03_unified_supabase_jwt_identity.md` for unified Supabase JWT
-authentication and principal resolution across REST and MCP. D22/F-11
-(`mcp_backends` registry), ID-4/ID-5 active-case authority/propagation, and
-OpenSearch-core/RAG-core moves remain separate later scopes unless a candidate
-doc explicitly batches them.
+candidates, and the early foundation slices are complete: JOB-0, PR01/ID-1,
+PR02/ID-2, D27a, D27b, and PR03A/Batch A. The next recommended run is the
+**Build-stage PR03B / Batch B** implementation from
+`21_pr03b_active_case_db_authority.md` for Postgres active-case authority,
+Gateway REST/MCP propagation, portal case API turnover, and B-11 proxy
+propagation. D22/F-11 (`mcp_backends` registry), evidence/audit DB authority,
+jobs/workers, OpenSearch-core, RAG-core, and findings/timeline/TODO/report data
+migration remain separate later scopes unless a candidate doc explicitly batches
+them.
 
 ## Out Of Scope Until A Run Is Explicitly Scoped To It
 

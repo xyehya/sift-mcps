@@ -358,7 +358,7 @@ verified.
 | FastMCP aggregator | Tool registry, token/session context, case policy, evidence gate state, backend manifests | MCP transport audit envelope, policy-denied audit events | Bypassing Gateway policy, accepting direct unscoped OpenSearch index patterns, allowing raw tool backends to self-authorize | Current aggregator already gates evidence and writes envelope audit (`packages/sift-gateway/src/sift_gateway/mcp_endpoint.py:637-675`, `packages/sift-gateway/src/sift_gateway/mcp_endpoint.py:841-872`) |
 | Auth/policy wrapper | Supabase Auth claims for humans, token registry records for agents/services, case memberships, tool scopes | Authorization decisions as auditable events or denials | Storing raw tokens, trusting frontend-provided case scope, trusting OpenSearch index names as authorization | Current auth is role-based over raw `api_keys`; future adds DB case/tool scope |
 | Token registry service | Postgres token hashes, scopes, expiry/revocation, agent records | Token hash records, rotation/revocation metadata, last-use metadata, audit events | Raw token persistence, Supabase user-session issuance for agents | Current token routes write `gateway.yaml`; replace with DB-backed issuance and compatibility fallback |
-| Case service | Cases, active-case records, memberships, compatibility file metadata | Case lifecycle, active case/session context, compatibility exports | Evidence file mutation, OpenSearch document writes, token validation | Current case creation writes directories and config/env pointers; future creates DB case first and exports files |
+| Case service | Cases, active-case records, memberships, compatibility file metadata | Case lifecycle, active case/session context, explicit non-active-case exports when scoped | Evidence file mutation, OpenSearch document writes, token validation | Current case creation writes directories and config/env pointers; D32/PR03B changes active case to DB authority with no active-case env/pointer export |
 | Evidence service | Evidence metadata, integrity status, vault refs, manifest/ledger artifacts | Metadata rows, integrity status/events, compatibility manifest/export, audit events | Making raw evidence mutable, hiding ledger provenance, allowing unregistered evidence use | Preserve evidence-chain invariants and immutable raw evidence behavior |
 | Audit service | Audit events, actor identities, token/job/case references | Append-only audit events, JSONL export during bridge | Best-effort-only audit for privileged actions, mutable audit rows without history | Current AuditWriter is conceptually strong but filesystem-backed |
 | Job service | Jobs, job steps, parser runs, worker leases, logs | Durable job state, leases, retries, cancellation, completion | Redis/RQ authority, local PID files as source of truth | No Redis/RQ; OpenSearch status files become compatibility exports |
@@ -373,7 +373,7 @@ verified.
 | --- | --- | --- | --- | --- |
 | Raw MCP token leakage | `gateway.yaml api_keys` are keyed by raw token strings (`configs/gateway.yaml.template:113-138`) | Introduce DB hash registry and legacy-token sunset; never mirror raw tokens into DB | Hash-only token storage, one-time raw display, audit token use | P0 |
 | Cross-case access by AI agents | Case scope is inherited from env/pointers rather than token-bound case claims | Add explicit case_id to token records and Gateway request context before broad rollout | Gateway enforces token case scope and service-side authorization | P0 |
-| Active-case confusion from env/legacy pointers | `SIFT_CASE_DIR`, `gateway.yaml case.dir`, and `~/.sift/active_case` can diverge | DB active-case authority; export compatibility pointers from DB only | Explicit case context per session/token/job | P0 |
+| Active-case confusion from env/legacy pointers | `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and `~/.sift/active_case` can diverge | D32/PR03B: DB active-case authority; stale env/config/pointers ignored and not regenerated | Explicit case context per session/token/job | P0 |
 | OpenSearch cross-case search | Current validation blocks non-`case-*` indexes but can still allow broad `case-*` patterns | Gateway rewrites/filters index patterns by authorized case | OpenSearch tools never receive unscoped agent-supplied index patterns | P0 |
 | Loss of evidence integrity provenance | Manifest/ledger are strong but outside DB authority | Mirror manifest/ledger events and preserve proof artifacts | DB integrity events linked to immutable ledger exports | P0 |
 | Audit gaps during migration | Audit JSONL write can be skipped when no active case resolves (`packages/sift-common/src/sift_common/audit.py:262-264`) | Dual-write audit to DB and JSONL, fail closed for privileged actions where required | Postgres append-only audit with required actor/case/action refs | P0 |
@@ -401,8 +401,9 @@ routes disabled; evidence vault stays immutable.
 - Supabase Local deployment shape: local Supabase on the network-restricted
   (non-air-gapped) SIFT VM (D7).
 - Active-case state: one active case per SIFT VM deployment, set in the portal,
-  authoritative in `active_case_state`, propagated by the Gateway; env/pointers
-  are generated compatibility exports (D4).
+  authoritative in `active_case_state`, propagated by the Gateway; D32 supersedes
+  the earlier env/pointer export transition, so PR03B ignores/removes active-case
+  env/config/pointer authority and does not regenerate it.
 - Token hash strategy: SHA-256 + server pepper, 16-hex fingerprint, default
   expiries, one-time raw display, dual-validate then sunset legacy; KMS deferred
   (D8, `09_identity_auth_cutover.md` §4).

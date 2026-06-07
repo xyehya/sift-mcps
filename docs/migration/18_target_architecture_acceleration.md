@@ -3,7 +3,7 @@
 Status: reference architecture / acceleration plan.
 Scope: documentation only. This file does not implement runtime behavior, schema
 migrations, installer changes, VM changes, or code changes.
-Decisions referenced: D1-D30 in `00_migration_charter.md`.
+Decisions referenced: D1-D32 in `00_migration_charter.md`.
 
 This document is the migration's **target-state architecture reference** and
 **batching plan**. It exists to keep future Plan/Build sessions pointed at the
@@ -16,8 +16,8 @@ dependency map, missing inputs, and parallelization strategy.
 SIFT becomes a Supabase-centered DFIR control plane with a FastAPI + FastMCP
 Gateway as the single policy/orchestration boundary, SIFT VM workers as the
 execution plane, OpenSearch as a secured derived search plane, and the filesystem
-reduced to immutable evidence/artifact storage plus generated compatibility
-exports.
+reduced to immutable evidence/artifact storage plus explicitly scoped exports.
+Active-case env/config/pointer exports are not part of the target after D32.
 
 ## 2. Landed State vs Target State
 
@@ -25,9 +25,9 @@ exports.
 | --- | --- | --- |
 | HTTP app | FastAPI app landed by D27b | Same; becomes the durable REST/policy host for all privileged operations. |
 | MCP app | FastMCP 3.0 aggregate `/mcp`; local core tools + proxy add-ons | Same substrate; all MCP auth/case/tool policy backed by Supabase authority. |
-| Human auth | Legacy portal/session auth still present | Supabase Auth JWT verified by Gateway and protected by RLS. |
-| Agent/MCP auth | PR02 hash-only token registry + legacy fallback; D27b `SiftTokenVerifier` | **D30 target:** Supabase-issued JWTs for portal, agents, MCP clients, workers, and services; legacy token registry becomes a compatibility bridge until sunset. |
-| Active case | Legacy env/config/pointer compatibility | `app.active_case_state` authority; env/pointers generated only for old tools. |
+| Human auth | PR03A Supabase portal auth landed; legacy portal/session compatibility remains behind flags | Supabase Auth JWT verified by Gateway and protected by RLS. |
+| Agent/MCP auth | PR03A Supabase JWT accepted on REST and FastMCP `/mcp`; PR02 hash-token bridge remains behind flags | Supabase-issued JWTs for portal, agents, MCP clients, workers, and services; legacy token registry sunsets at ID-6. |
+| Active case | Legacy env/config/pointer authority still pending PR03B | `app.active_case_state` authority; no active-case env/config/pointer exports per D32. |
 | Add-on backend config | `gateway.yaml` | `app.mcp_backends` registry managed from portal. |
 | Audit | File-backed audit paths still exist | `app.audit_events` authority; file exports optional/generated. |
 | Evidence state | Manifest/ledger files authoritative in places | DB metadata/status authority; raw evidence and proof artifacts remain immutable files. |
@@ -73,7 +73,7 @@ flowchart TD
     Evidence["Raw evidence vault\nimmutable acquisitions"]
     Proofs["Ledger/proof exports\nSolana anchors, manifests"]
     Spills["Large output/report exports\nDB-referenced artifacts"]
-    Compat["Generated compatibility exports\nSIFT_CASE_DIR, active_case pointer,\nlegacy JSON only while needed"]
+    Exports["Explicit exports only\nreports/large outputs/legacy JSON when scoped\nno active-case env or pointer target"]
   end
 
   Portal --> Auth
@@ -96,7 +96,7 @@ flowchart TD
   Policy --> Evidence
   Policy --> Proofs
   Policy --> Spills
-  Policy --> Compat
+  Policy --> Exports
 
   Worker --> PG
   Worker --> Tools
@@ -180,7 +180,7 @@ or table; the required semantics are:
 | Evidence vault filesystem | Artifact authority only | Raw acquired evidence | Evidence immutability checks + Gateway policy | Workers, forensic tools | Files remain because forensic evidence is a binary artifact, not relational state. |
 | Ledger/proof files | Artifact authority only | Exported manifests, Solana proof artifacts | Evidence/proof workflow + DB references | Portal, audit, export | DB records status and linkage. |
 | Gateway process memory | No | Request context, auth cache, FastMCP session state | Gateway | Current request only | Never durable authority. |
-| Generated env/pointer files | No | `SIFT_CASE_DIR`, active-case pointer, legacy exports | Gateway/worker exporters | Old tools during migration | Removal condition must be recorded per export. |
+| Explicit export files | No | Reports, large output spills, legacy JSON exports only when scoped | Gateway/worker exporters | Operators, old tools during scoped sunset windows | D32 forbids active-case env/config/pointer exports as a target bridge. |
 | `gateway.yaml` | No in target | Local bootstrap only | Installer/config loader | Gateway startup | Backend registry and raw tokens move out. |
 
 ## 6. Data Receivers And Enforcers
@@ -204,7 +204,7 @@ or table; the required semantics are:
 | Z2 Supabase | Auth + Postgres + RLS + pgvector | Identity/control-plane authority | Replacing Gateway-specific evidence/tool policy with RLS alone |
 | Z3 Workers | SIFT VM execution | Claimed jobs, native tool execution, derived writes | Inventing case scope, accepting direct agent commands |
 | Z4 Derived data | OpenSearch/OpenCTI | Rebuildable search/intel data | Case permission, token validity, evidence integrity, final findings authority |
-| Z5 Files/artifacts | Evidence vault/exports | Immutable or generated artifacts | Active governance/provenance authority except raw evidence bytes |
+| Z5 Files/artifacts | Evidence vault/exports | Immutable artifacts and explicitly scoped exports | Active governance/provenance authority except raw evidence bytes |
 
 ## 8. Gateway Final Responsibilities
 
@@ -230,8 +230,8 @@ more explicit:
 | --- | --- | --- | --- |
 | `gateway.yaml api_keys` | Supabase JWT principals; optional non-secret issuance metadata | PR02 token registry fallback | D30 auth lands and no clients use legacy tokens. |
 | `gateway.yaml backends` | `app.mcp_backends` | Loader reads both, DB first | D22/F-11 lands and portal manages backends. |
-| `gateway.yaml case.dir` | `app.active_case_state` | Generated config/env export | All backends accept Gateway/DB case context. |
-| `~/.sift/active_case` | `app.active_case_state` | Generated pointer export | Old CLIs no longer read it as authority. |
+| `gateway.yaml case.dir` | `app.active_case_state` | No active-case bridge after D32; PR03B ignores/removes it as authority | PR03B lands and stale config cannot override DB. |
+| `~/.sift/active_case` | `app.active_case_state` | No active-case bridge after D32; PR03B ignores/removes it as authority | PR03B lands and stale pointer cannot override DB. |
 | `findings.json` | `app.findings` | Import/export sync | Portal and tools read DB only. |
 | `timeline.json` | `app.timeline_events` | Import/export sync | Portal and tools read DB only. |
 | TODO files | `app.todos` | Import/export sync | Portal/tools read DB only. |
@@ -244,11 +244,11 @@ more explicit:
 
 | Input needed | Why it is needed | Owning batch |
 | --- | --- | --- |
-| Supabase JWT verification method for local VM | Decide JWKS/local JWT secret/Auth API validation path, issuer, audience, cache policy | Batch A |
-| Agent JWT issuance flow | Portal/admin flow for creating agent principals and issuing sessions/JWTs | Batch A |
-| Principal mapping schema | Human/agent/service/workers must resolve from JWT subject to app roles/scopes | Batch A |
-| RLS policy matrix | Direct Supabase REST depends on safe row policies | Batch A/B |
-| Active-case DB API | Portal activation and Gateway request context need one authoritative read/write path | Batch B |
+| Supabase JWT verification method for local VM | Resolved by PR03A: Supabase Auth API validation (`/auth/v1/user`) against pinned v1.26.05 | Done |
+| Agent JWT issuance flow | Resolved by PR03A portal principal issuance/revocation flow (D31) | Done |
+| Principal mapping schema | Resolved by PR03A principal view/resolver for operator/agent/service mappings | Done |
+| RLS policy matrix | Initial PR03A RLS added; later direct-read policies remain per-batch | Batch B+ |
+| Active-case DB API | Portal activation and Gateway request context need one authoritative read/write path; D32 says DB wins and no active-case exports | Batch B / doc 21 |
 | Evidence metadata schema gap analysis | File manifest/ledger fields must map into DB without losing forensic provenance | Batch C |
 | Legacy JSON/file path inventory | Findings/timeline/TODO/report importers need exact source paths and ownership | Batch D |
 | Job type/step enum freeze | Workers and Gateway need stable durable job contracts | Batch E |
@@ -279,8 +279,8 @@ flowchart TD
 
 ### Batch A - Unified Supabase JWT Identity
 
-> **Status: IMPLEMENTED (Run 28)** on branch `revamp/pr03a-unified-jwt`, awaiting
-> Land into `revamp/spg-v1`. Delivered per `19_pr03_unified_supabase_jwt_identity.md`:
+> **Status: LANDED (Runs 28-29)** on `revamp/spg-v1`. Delivered per
+> `19_pr03_unified_supabase_jwt_identity.md`:
 > shared `SupabaseIdentityResolver` for REST + FastMCP `/mcp`, operator/agent/service
 > principal mapping, portal Supabase login/session, agent/service JWT issuance,
 > B-10 tool authorization, B-14 resolver cleanup. JWT verification method =
@@ -301,9 +301,9 @@ flowchart TD
 | Field | Value |
 | --- | --- |
 | Objective | Move active case authority from env/files to Supabase and propagate it through REST, MCP, workers, and proxy mounts. |
-| Likely files | Gateway, portal, control-plane migrations, tests, docs. |
-| Major tasks | `active_case_state` API; portal activation writes DB; Gateway request context reads DB; compatibility exports; evidence gate and FastMCP proxy active-case path (B-11). |
-| VM gates | Switch cases in portal; MCP `case_info` and proxied add-on see same case; env/pointer generated from DB; stale env cannot override DB. |
+| Likely files | Gateway, portal, `sift-common`, `sift-core`, control-plane migrations/tests, docs. |
+| Major tasks | `active_case_state` API; portal activation writes DB; Gateway request context reads DB; no active-case env/config/pointer exports; evidence gate active-case context; FastMCP proxy active-case path (B-11). |
+| VM gates | Switch cases in portal; MCP `case_info` and proxied add-on policy see same DB case; stale env/config/pointer cannot override DB; no writes to `gateway.yaml case.dir` or `~/.sift/active_case`. |
 | Parallelism | Depends on Batch A for membership; can overlap with Batch H if file fences split. |
 
 ### Batch C - Evidence And Audit DB Authority
@@ -373,7 +373,7 @@ flowchart TD
 | Objective | Remove old authority paths once DB-backed replacements are live. |
 | Likely files | Gateway, portal, packages using JSON/file state, installer, tests, docs. |
 | Major tasks | Disable legacy token fallback; delete raw config keys; remove read-authority from env/pointers/JSON; keep explicit export commands; installer reproducibility. |
-| VM gates | Fresh VM install has no raw tokens/config authority; old case migrates; compatibility exports regenerate from DB only. |
+| VM gates | Fresh VM install has no raw tokens/config authority; old case can be explicitly registered/tested without bulk migration; active-case env/pointer exports are absent. |
 | Parallelism | Final convergence batch; depends on A-H landing. |
 
 ## 12. Worktree Parallelization Rules
@@ -382,8 +382,8 @@ Use the operating model unchanged, but prefer these lanes:
 
 | Lane | Good parallel scope | Avoid overlap with |
 | --- | --- | --- |
-| Identity lane | Batch A candidate/spec and implementation | Any other batch touching Gateway auth middleware/resolver. |
-| Active-case lane | Batch B planning while Batch A builds | Gateway identity files until Batch A lands. |
+| Identity lane | Legacy auth sunset and PR03A follow-up hardening | Any batch touching Gateway auth middleware/resolver. |
+| Active-case lane | Batch B implementation from doc 21 | Gateway identity files unless directly needed for case membership/context. |
 | Registry lane | Batch H schema/portal planning | Gateway backend loader if Batch B also touches it. |
 | Evidence/audit lane | Batch C mapping/importer planning | Gateway evidence gate implementation until Batch B lands. |
 | Jobs lane | Batch E schema/worker planning | OpenSearch ingest implementation until job contracts freeze. |
@@ -403,17 +403,14 @@ Every batch candidate should add these gates on top of `OPERATING_MODEL.md`:
 
 ## 14. Immediate Recommended Next Runs
 
-1. **Build PR03A / Batch A** - implement
-   `19_pr03_unified_supabase_jwt_identity.md`: unified Supabase JWT auth
-   resolver for REST and MCP, principal mapping, portal Supabase auth,
-   agent/service JWT issuance, tool authorization, and compatibility strategy
-   for PR02 token registry.
-2. **Plan PR03B / Batch B** - active-case authority and propagation, including
-   B-11.
-3. **Plan D22A / Batch H** - `mcp_backends` control-plane registry and
+1. **Build PR03B / Batch B** - implement
+   `21_pr03b_active_case_db_authority.md`: Postgres active-case authority,
+   portal case API turnover, Gateway REST/MCP propagation, and B-11 proxy
+   propagation with no historical data migration.
+2. **Plan D22A / Batch H** - `mcp_backends` control-plane registry and
    `gateway.yaml` backend-authority removal.
-4. **Plan EVID-AUD-A / Batch C** - evidence metadata + audit DB authority.
-5. **Plan JOB-A / Batch E** - durable jobs + worker foundation.
+3. **Plan EVID-AUD-A / Batch C** - evidence metadata + audit DB authority.
+4. **Plan JOB-A / Batch E** - durable jobs + worker foundation.
 
-These planning runs can happen in parallel. Build order should start with Batch
-A, then Batch B/H, then C/E, then F/G/D, then I.
+These planning runs can happen in parallel. Build order should continue with
+Batch B/H, then C/E, then F/G/D, then I.

@@ -1,6 +1,6 @@
 # Identity, Auth, and Case-Scope Cutover (Foundation Track)
 
-Last updated: 2026-06-07 (Run 26 D30 target-auth update).
+Last updated: 2026-06-07 (Run 31 D32 active-case cutover update).
 
 Scope: planning only. This document defines the **foundation track** of the
 migration: identity, authentication, case membership, active-case authority, and
@@ -20,6 +20,12 @@ The final target is Supabase-issued JWTs for humans, AI agents, MCP clients,
 workers, and services. PR02's hash-only `mcp_tokens` registry remains landed and
 useful as a compatibility bridge/provenance surface, but it is no longer the
 final credential model.
+
+**Run 31 active-case update:** D32 supersedes the earlier active-case
+compatibility-export plan. PR03B goes directly to Postgres active-case authority:
+`SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and
+`~/.sift/active_case` are not read or generated as active-case authority. No
+historical data migration is part of PR03B.
 
 ## 1. Why this is first
 
@@ -66,7 +72,7 @@ talks to Supabase or a backend directly for privileged mutation; it calls
 Gateway endpoints (charter D12). RLS is a defense-in-depth boundary behind the
 Gateway, not the primary write path.
 
-## 3. Active-case authority (locked: D4)
+## 3. Active-case authority (locked: D4, D32)
 
 The current single-active-case behavior is preserved, but its **authority moves
 from files/env into the control plane**:
@@ -78,10 +84,12 @@ from files/env into the control plane**:
   deployment, matching today's single `~/.sift/active_case` behavior.
 - The Gateway reads the control-plane active case and **propagates** it to every
   backend, REST handler, and MCP tool call as request context.
-- Legacy `SIFT_CASE_DIR`, `gateway.yaml case.dir`, and `~/.sift/active_case` are
-  **generated compatibility exports** produced from control-plane authority
-  during transition, for backends/CLIs that still read them. They are never the
-  source of truth.
+- Legacy `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and
+  `~/.sift/active_case` are not active-case authority and are not generated as
+  active-case compatibility exports by PR03B. Stale values must be ignored.
+- Existing case directories and forensic artifacts may remain on disk and may be
+  referenced by DB case rows as artifact paths. They do not decide the active
+  case, and PR03B does not bulk-import historical file-backed state.
 - Durable jobs record the active `case_id` immutably on the job row at creation
   time. A long-running job is unaffected if the operator later switches the
   active case.
@@ -238,8 +246,9 @@ the legacy path is explicitly removed.
 
 ### Phase ID-4 - Control-plane active case + propagation
 - Write active case to the control plane on portal activation; Gateway reads it
-  and propagates request context; generate `SIFT_CASE_DIR`/`~/.sift/active_case`
-  as compatibility exports from DB authority.
+  and propagates request context; ignore/remove active-case env/config/pointer
+  authority. Per D32, do not generate `SIFT_CASE_DIR`, `gateway.yaml case.dir`,
+  or `~/.sift/active_case` as active-case exports.
 
 ### Phase ID-5 - Move evidence gate + case scope onto control-plane context
 - Switch the aggregate MCP evidence gate and case-scope checks to the
@@ -261,7 +270,7 @@ the legacy path is explicitly removed.
 | `gateway.yaml api_keys` (raw-keyed) | Token registry | Supabase Auth JWT principals; PR02 `mcp_tokens` only as bridge/provenance | Dual-validate only while explicitly enabled | No active legacy tokens; no raw service tokens in config |
 | PR02 `mcp_tokens` hash registry | Transitional MCP/service token registry | Supabase JWT principal model (D30) | Keep fallback during cutover | REST and MCP JWT path verified; clients migrated |
 | Portal HMAC `sift_session` JWT + examiner bearer | Human auth | Supabase Auth + `operator_profiles` + `case_members` | Keep behind config flag during cutover | Supabase Auth verified end-to-end |
-| `SIFT_CASE_DIR` / `gateway.yaml case.dir` / `~/.sift/active_case` | Active case | Control-plane active-case state | DB authority + generated env/pointer exports | Backends accept Gateway-propagated case context |
+| `SIFT_CASE_DIR` / `SIFT_CASES_ROOT` / `gateway.yaml case.dir` / `~/.sift/active_case` | Active case | Control-plane active-case state | None for active-case authority in PR03B; stale values are ignored/removed | PR03B lands and tests prove DB active case wins |
 | Empty `api_keys` anonymous examiner | Single-user mode | Explicit local-dev flag only | Retain for dev | Off in target deployment |
 
 ## 10. Tests and acceptance
@@ -273,9 +282,9 @@ the legacy path is explicitly removed.
   validates then is removable.
 - Identity: case scope and tool scopes resolved from membership/principal rows;
   normal agent principal cannot pass arbitrary `case_id`; cross-case denial.
-- Active case: portal sets it; Gateway propagates it; jobs snapshot it; env/pointer
-  exports are generated, not read as authority; evidence gate checks the same case
-  the call runs against.
+- Active case: portal sets it; Gateway propagates it; jobs snapshot it; stale
+  env/config/pointer values are ignored and not regenerated; evidence gate checks
+  the same DB active case the call runs against.
 - Membership/roles: role matrix (§5) enforced; approval/destructive actions require
   `lead`/`owner`/`admin`; agents cannot approve their own findings.
 - Auth: Supabase JWT accepted; legacy flag path works during cutover and is
@@ -290,7 +299,8 @@ the legacy path is explicitly removed.
 - Unified Supabase JWT principal model for human, agent, MCP client, worker, and
   service principals (D30); Gateway-only enforcement (D2, D12).
 - Active case portal-set, control-plane authoritative, Gateway-propagated; env/
-  pointers are generated exports (D4).
+  config/pointers are not authority and are not generated as active-case exports
+  in PR03B (D4, D32).
 - Hash-only token bridge policy: SHA-256 + server pepper, 16-hex fingerprint,
   default expiries, one-time raw display, dual-validate then sunset legacy
   (historical D8/PR02, superseded in target by D30).
@@ -307,11 +317,12 @@ the legacy path is explicitly removed.
 
 ## 12. Next recommended run
 Current status: JOB-0, Phase ID-1 (PR01), Phase ID-2 (PR02), D27a, D27b, and
-**Phase ID-3 / PR03A (implemented, Run 28** — unified Supabase JWT auth for REST
+**Phase ID-3 / PR03A (implemented, Run 28)** — unified Supabase JWT auth for REST
 and MCP, operator/agent/service principal resolution, portal Supabase
 login/session, agent/service JWT issuance, DB-backed tool authorization B-10,
 shared-resolver cleanup B-14; revocation model **D31**) are done. The next
-recommended run for this foundation track is **Phase ID-4 / PR03B / Batch B**
-(active-case DB authority + Gateway propagation, carrying B-11).
+recommended run for this foundation track is **Build-stage Phase ID-4 / PR03B /
+Batch B** from `21_pr03b_active_case_db_authority.md` (active-case DB authority
++ Gateway propagation, carrying B-11, no historical data migration).
 Active-case authority/propagation stays deferred to ID-4/ID-5; legacy auth/token
 sunset stays deferred to ID-6.

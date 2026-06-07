@@ -190,7 +190,7 @@ preserving compatibility.
 
 | Detail | Design |
 | --- | --- |
-| Purpose | Authoritative current active case for the SIFT VM deployment (charter D4). Replaces `SIFT_CASE_DIR` / `~/.sift/active_case` / `gateway.yaml case.dir` as authority. Operator sets it via the portal; the Gateway reads it and propagates it to backends/APIs/tool calls and generates legacy env/pointer compatibility exports. |
+| Purpose | Authoritative current active case for the SIFT VM deployment (charter D4/D32). Replaces `SIFT_CASE_DIR` / `~/.sift/active_case` / `gateway.yaml case.dir` as authority. Operator sets it via the portal; the Gateway reads it and propagates it to backends/APIs/tool calls. D32 supersedes the earlier env/pointer compatibility-export plan: PR03B does not generate active-case exports. |
 | Key columns | `id uuid`, `scope text`, `active_case_id uuid null`, `set_by_user_id uuid null`, `set_at`, `compat_export_status text`, `updated_at`, `metadata jsonb`. |
 | Primary key | `id`. |
 | Foreign keys | `active_case_id` references `cases(id)`; `set_by_user_id` references `operator_profiles(id)`. |
@@ -911,7 +911,7 @@ here; they are post-foundation work but are not vague "future" items.
 | `/var/lib/sift/<case>/audit/*.jsonl` | Audit logs today | `audit_events`, optional exports | DB audit first when available, JSONL export during bridge | Audit service phase | JSONL consumers migrated and export verified | Audit gaps or duplicates |
 | `/var/lib/sift/<case>/approvals.jsonl` and pending review files | Approval and review state | `approval_requests`, `approval_decisions`, `finding_reviews` | Import/mirror, then DB transactional review/approval | Approval/review phase | Portal review commit uses DB | Approval mismatch |
 | `~/.sift/gateway.yaml api_keys` | Raw-token-keyed token registry | `agents`, `service_identities`, `mcp_tokens`, `mcp_token_scopes` | DB hash registry first, legacy fallback read-only/limited during cutover | Auth/token phase | No active legacy raw tokens | Raw token leakage |
-| `gateway.yaml case.dir`, `SIFT_CASE_DIR`, `~/.sift/active_case` | Active case selection | `active_case_state` (+ `cases`, `case_members`) | Control-plane active case set via portal; Gateway propagates and generates env/pointer compatibility exports | Cutover step 1 (identity), see `09` | Backends accept Gateway-propagated case context | Cross-case confusion |
+| `gateway.yaml case.dir`, `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `~/.sift/active_case` | Active case selection | `active_case_state` (+ `cases`, `case_members`) | Control-plane active case set via portal; Gateway propagates DB context. Per D32, no active-case env/pointer/config export bridge. | PR03B / Batch B, see `21` | Stale env/config/pointer values cannot override DB active case | Cross-case confusion |
 | `case/agent` Solana proof / evidence verify-state files | Evidence anchoring proof | `evidence_anchors` | Mirror anchor proofs to DB, run anchoring as approval-gated `evidence_anchor` job | Evidence phase | Anchoring proof recorded in DB + proof export | Lost anchor provenance |
 | `forensic-rag-mcp` Chroma index / knowledge corpora | RAG knowledge (in-memory/add-on) | `rag_collections`, `rag_documents` | Centralize into control plane (pgvector), Gateway-mediated retrieval | Post-foundation (D15) | RAG served from control plane | Stale/duplicate knowledge |
 | Operator playbooks / skill docs (new) | Agent skill retrieval (new) | `agent_skills` | Curate operator skills into control plane; agents retrieve via Gateway tools | Post-foundation (D15) | Skills served from control plane | n/a (net-new) |
@@ -1193,7 +1193,8 @@ Follow-up schema table PR candidate, after infrastructure is approved:
   approvals, and destructive/export/archive actions; confirm during JOB-7.
 - pgvector availability in the chosen Supabase Local image (for `rag_documents.embedding`).
 - How long compatibility exports remain after DB authority - default 1 release
-  cycle past parity; revisit per surface.
+  cycle past parity for non-active-case surfaces; D32 removes active-case
+  env/config/pointer exports from the target.
 - `evidence_access_events` and `opensearch_document_refs` remain optional/deferred
   (defer unless a query need appears); `audit_events` covers access initially.
 

@@ -2,59 +2,89 @@
 
 ## Current Objective
 
-**PR03A / Batch A (unified Supabase JWT identity) is landed** on
-`revamp/spg-v1` (Runs 28-29). Run 28 implemented the three unit commits
-(schema / gateway / portal), passed host + VM acceptance, passed `/code-review`
-and `/security-review`, marked **B-10** and **B-14** DONE, and confirmed live VM
-Supabase v1.26.05 JWT validation, agent/service issuance, and revocation. The
-one fork surfaced during live acceptance (**F-13**: pinned GoTrue lacks admin
-session logout) resolved into charter **D31** (revoke = DELETE auth user +
-app-revoke + resolver cache invalidate). Run 29 remediated the final
-review-found portal auth-mode blocker before Land: Supabase/disabled-legacy mode
-now suppresses legacy PBKDF2 setup/challenge/reset endpoints and cannot route a
-fresh Supabase-only portal into local password setup. Run 30 added the normalized
-portal/dashboard workflow and API inventory from the separate read-only portal
-scan as `20_portal_dashboard_inventory.md`.
+**PR03B / Batch B is planned and Build-ready** via
+`docs/migration/21_pr03b_active_case_db_authority.md` (Run 31). D32 is now
+locked in the charter: Supabase/Postgres `app.active_case_state` is the only
+active-case authority; `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`,
+`gateway.yaml case.dir`, and `~/.sift/active_case` are not authority and are not
+regenerated as active-case exports; no historical data migration is part of
+PR03B. The next session should be a **Build-stage PR03B** run from doc 21,
+carrying B-11.
 
-Prior context — the **D27b gateway cutover is landed** on `revamp/spg-v1`
-(Runs 23-24), Run 25 completed a documentation/invariant health check, Run 26
-added the final target architecture / acceleration plan plus locked identity
-target D30, and Run 27 created the Build-ready PR03A / Batch A candidate:
-`19_pr03_unified_supabase_jwt_identity.md`.
-The gateway now serves one FastAPI ASGI app with the
-aggregate FastMCP `http_app` mounted at `/mcp`; per-backend `/mcp/{name}` routes
-are removed per D3/F-7. Core tools and `capability_guide` are FastMCP local
-tools, configured add-ons are FastMCP proxy mounts, and SIFT policy is re-hosted
-as FastMCP middleware: evidence gate → response guard (B-3/B-6) → case context
-→ audit envelope.
+Landed foundation: D27b gateway cutover is landed on `revamp/spg-v1` (Runs
+23-24), serving one FastAPI ASGI app with aggregate FastMCP `http_app` at
+`/mcp`; per-backend `/mcp/{name}` routes are removed per D3/F-7. SIFT policy is
+FastMCP middleware: evidence gate -> response guard (B-3/B-6) -> case context ->
+audit envelope. PR03A / Batch A unified Supabase JWT identity is landed
+(Runs 28-29): REST and FastMCP `/mcp` accept Supabase JWTs through the shared
+resolver, portal Supabase login/session works, agent/service JWT issuance and
+revocation are implemented, B-10 and B-14 are DONE, and D31 locks revocation for
+pinned Supabase v1.26.05.
 
-The installed wheel was confirmed directly during Build: host `.venv` has
+Run 30 added `20_portal_dashboard_inventory.md`, the normalized portal/dashboard
+workflow and API inventory. Run 31 reconciled recurring architecture docs and
+created doc 21. D30 remains the target credential model; PR02 hash-only tokens
+remain a transitional compatibility bridge until ID-6.
+
+FastMCP grounding from D27b remains relevant for PR03B: host `.venv` had
 **fastmcp==3.4.2**; `create_proxy` imports from `fastmcp.server`;
 `Middleware.on_call_tool` fires for mounted proxied tools; proxied
 `ToolResult.content`, `structured_content`, and `meta` are mutable after
-`call_next`. D-2 hardening is implemented for HTTP proxy targets and remote
-manifest fetches (private/link-local egress blocked, no redirect-follow, no
-agent bearer passthrough).
+`call_next`. B-11 remains OPEN because parent middleware/session state does not
+cross mounted/proxied servers, so PR03B must inject/override safe case args or
+deny case-scoped proxy calls instead of using env.
 
-D30 supersedes the previous final-auth split in D8/D26: the final target is now
-Supabase-issued JWTs for humans, AI agents, MCP clients, workers, and services
-on REST and FastMCP `/mcp`. PR02's hash-only token registry remains landed, but
-is now a transitional compatibility bridge and/or non-secret provenance surface
-until ID-6 removes raw-token authority.
-
-Review/security gates passed (Run 24): `/code-review` and `/security-review`
-returned GO. B-3 and B-6 are DONE at Land. Non-blocking review follow-ups were
-triaged to `REGISTER.md`: B-12 capped-result `backend_audit_id`, B-13 proxy
-namespace assertion, B-14 duplicate token resolution, and B-15 DNS-rebinding
-TOCTOU hardening. F-11 remains OPEN for the later D22 `mcp_backends` registry
-phase.
-
-**Next:** Plan **PR03B / Batch B** (active-case DB authority, ID-4, carrying
-B-11) using `09_identity_auth_cutover.md`, `18_target_architecture_acceleration.md`,
-and `20_portal_dashboard_inventory.md` as grounding — or Batch H
-(`mcp_backends` registry, D22/F-11) if reprioritized. Keep evidence/jobs
-(Batch C), OpenSearch-core, and RAG batches separate unless a new candidate doc
+**Next:** Build **PR03B / Batch B** from
+`21_pr03b_active_case_db_authority.md`: Postgres active-case authority, portal
+case API turnover, Gateway REST/MCP propagation, core/common active-case
+context, B-11 proxy handling, stale env/config/pointer negative tests, no data
+migration. Keep D22/F-11 (`mcp_backends` registry), evidence/audit DB authority
+(Batch C), jobs/workers (Batch E), OpenSearch-core, RAG/skills, and
+findings/timeline/TODO/report data migration separate unless a new candidate doc
 explicitly batches them. Carry B-4/B-11/B-12/B-13/B-15 forward.
+
+## Run 31 — PR03B Active-Case DB Authority Candidate
+
+Docs-only Plan run. No runtime code, schema migration, lockfile, Docker, VM, or
+installer changes.
+
+Trigger: operator locked the next-batch direction: go full scope on active-case
+authority, do **not** do historical data migration, and make
+Supabase/Postgres active case win while dropping env/pointer/file active-case
+authority.
+
+Decisions:
+- Added charter **D32**: PR03B / Batch B goes directly to Postgres
+  `app.active_case_state` authority. `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`,
+  `gateway.yaml case.dir`, and `~/.sift/active_case` are ignored/dropped as
+  active-case authority and are not generated as compatibility exports. Existing
+  memory/disk images and case directories remain artifact/data locations only.
+- No historical data migration is part of PR03B. Tests may create DB case rows
+  pointing at temporary or operator-provided artifact directories.
+
+Added:
+- `docs/migration/21_pr03b_active_case_db_authority.md` - Build-ready PR03B /
+  Batch B candidate and ready prompt. Scope covers Gateway, portal,
+  `sift-common`, `sift-core`, DB migration/tests, docs, and handoff files; it
+  excludes `packages/*-mcp/**` unless a fork is raised and resolved first.
+
+Updated:
+- `00_migration_charter.md` - PR03A status corrected to landed, D32 added,
+  PR03B set as next build.
+- `09_identity_auth_cutover.md` - ID-4/ID-5 active-case plan updated to D32
+  (no active-case env/config/pointer exports).
+- `18_target_architecture_acceleration.md` and `Architecture.mmd` - PR03A
+  marked landed, Batch B / D32 target updated.
+- `20_portal_dashboard_inventory.md` - portal active-case rows now point to
+  doc 21 and D32.
+- `02_authoritative_domains_and_boundaries.md`, `05_execution_job_model.md`,
+  `07_execution_roadmap.md`, and `08_control_plane_schema.md` - older planning
+  references now defer to D32 for active-case exports.
+- `REGISTER.md` - B-11 remains OPEN but now names doc 21 and forbids env as the
+  proxy active-case bridge.
+- `README.md`, `AGENTS.md`, `CLAUDE.md` - current handoff points to doc 21.
+
+Next: Build PR03B from doc 21.
 
 ## Run 30 — Portal/Dashboard Inventory Capture
 

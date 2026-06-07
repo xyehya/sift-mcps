@@ -159,14 +159,13 @@ Every job is explicitly scoped. Minimum target job fields:
 
 `case_id` must not be read from process environment, `SIFT_CASE_DIR`, or
 `~/.sift/active_case` **files/env as authority** in the target model. Those
-remain only as generated compatibility exports (charter D4). The authoritative
-active case lives in the control plane (`active_case_state`), is set by the
-operator in the portal, and is propagated by the Gateway. The current system
-uses env/pointer mechanisms for portal, Gateway, MCP backends, audit, and
-OpenSearch active-case resolution (`04_execution_current_state.md`, sections 1
-and 4); that is acceptable as legacy compatibility but unsafe as authority
-because jobs can outlive request processes and subprocesses inherit environment
-accidentally.
+are not generated as active-case exports after D32. The authoritative active
+case lives in the control plane (`active_case_state`), is set by the operator in
+the portal, and is propagated by the Gateway. The current system uses
+env/pointer mechanisms for portal, Gateway, MCP backends, audit, and OpenSearch
+active-case resolution (`04_execution_current_state.md`, sections 1 and 4);
+D32/PR03B removes that authority because jobs can outlive request processes and
+subprocesses inherit environment accidentally.
 
 Target case scope comes from:
 
