@@ -12,18 +12,24 @@ class Identity:
     role: str
     source_ip: str | None
     auth_surface: str  # "mcp" | "portal" | "rest"
+    case_id: str | None = None
+    tool_scopes: frozenset[str] = frozenset()
+    token_fingerprint: str | None = None
 
 def _hash_token(token: str) -> str:
     """Return a safe token fingerprint (first 16 hex chars of SHA-256). Never stores raw token."""
-    return hashlib.sha256(token.encode()).hexdigest()[:16]
+    from sift_gateway.token_gen import token_fingerprint
+
+    return token_fingerprint(token)
 
 def resolve_identity(
     token: str | None,
     api_keys: dict[str, dict[str, Any]],
     source_ip: str | None = None,
-    auth_surface: str = "mcp"
+    auth_surface: str = "mcp",
+    token_registry: Any | None = None,
 ) -> Identity | None:
-    if not api_keys:
+    if not api_keys and token_registry is None:
         return Identity(
             principal="anonymous",
             principal_type="user",
@@ -36,6 +42,23 @@ def resolve_identity(
         )
     if token is None:
         return None
+
+    if token_registry is not None:
+        record = token_registry.lookup_token(token)
+        if record is not None:
+            return Identity(
+                principal=record.principal,
+                principal_type=record.principal_type,
+                token_id=record.id,
+                agent_id=record.agent_id,
+                created_by=record.created_by,
+                role=record.role,
+                source_ip=source_ip,
+                auth_surface=auth_surface,
+                case_id=record.case_id,
+                tool_scopes=record.scopes,
+                token_fingerprint=record.token_fingerprint,
+            )
 
     from sift_gateway.auth import verify_api_key
     key_info = verify_api_key(token, api_keys)

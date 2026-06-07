@@ -150,9 +150,32 @@ PR01 added the initial schema/test layout:
 - `docs/migration/PR01_identity_schema_checks.md`
 - `docs/migration/12_pr01.md`
 
-PR02 planning is expected to start from `docs/migration/13_pr02.md` and the
-next pending phase in `docs/migration/09_identity_auth_cutover.md`: Phase ID-2,
-hash-only MCP token registry validation with legacy `gateway.yaml` fallback.
+PR02 implemented Phase ID-2, hash-only MCP/service token registry validation
+with legacy `gateway.yaml` fallback:
+
+- `packages/sift-gateway/src/sift_gateway/token_registry.py`
+- `packages/sift-gateway/src/sift_gateway/token_gen.py`
+- `packages/sift-gateway/src/sift_gateway/{auth.py,identity.py,mcp_endpoint.py,server.py}`
+- `packages/case-dashboard/src/case_dashboard/routes.py`
+- `packages/sift-gateway/tests/test_phase13_auth.py`
+- `packages/case-dashboard/tests/test_token_lifecycle.py`
+- `docs/migration/13_pr02.md`
+- `docs/migration/PR02_token_registry_checks.md`
+
+For PR02 verification, use the runbook in
+`docs/migration/PR02_token_registry_checks.md`. The targeted VM suites that
+passed after rsync were:
+
+```bash
+cd ~/sift-mcps-test
+.venv/bin/python -m pytest packages/sift-gateway/tests/test_phase13_auth.py packages/sift-gateway/tests/test_phase4.py packages/sift-gateway/tests/test_audit_envelope.py packages/sift-gateway/tests/test_portal_agent_block.py
+.venv/bin/python -m pytest packages/case-dashboard/tests/test_token_lifecycle.py packages/case-dashboard/tests/test_session_middleware.py
+```
+
+PR02 did not add Supabase human auth, portal login replacement, active-case
+propagation, evidence gate changes, job tables/workers/APIs/tools, OpenSearch
+changes, parser changes, evidence behavior changes, audit data migration,
+frontend redesigns, or legacy fallback removal.
 
 ## Installer Follow-up
 

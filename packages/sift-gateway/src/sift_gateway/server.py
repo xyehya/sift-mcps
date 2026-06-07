@@ -114,6 +114,7 @@ from sift_gateway.mcp_endpoint import (
     create_session_manager,
 )
 from sift_gateway.rest import rest_routes
+from sift_gateway.token_registry import create_token_registry
 
 logger = logging.getLogger(__name__)
 
@@ -820,6 +821,7 @@ class Gateway:
         gateway = self
         api_keys = self.config.get("api_keys", {})
         self._api_keys = api_keys
+        token_registry = create_token_registry(self.config)
 
         # Compute allowed origins for Origin header validation (4c)
         gw_conf = self.config.get("gateway", {})
@@ -845,6 +847,7 @@ class Gateway:
             api_keys=api_keys,
             allowed_origins=allowed_origins,
             examiner_calls_per_minute=examiner_calls_per_minute,
+            token_registry=token_registry,
         )
 
         # Build per-backend MCP endpoints
@@ -858,6 +861,7 @@ class Gateway:
                 api_keys=api_keys,
                 allowed_origins=allowed_origins,
                 examiner_calls_per_minute=examiner_calls_per_minute,
+                token_registry=token_registry,
             )
             backend_session_managers.append(b_sm)
             per_backend_routes.append(Mount(f"/mcp/{name}", app=b_asgi))
@@ -956,6 +960,7 @@ class Gateway:
                 session_max_age=portal_max_age,
                 api_keys=api_keys,
                 gateway_config_path=_gw_config_path,
+                token_registry=token_registry,
                 on_chain_mutation=invalidate_evidence_cache,
                 on_case_activated=_on_case_activated,
                 on_override_get_status=get_override_status,
@@ -989,7 +994,7 @@ class Gateway:
         app.add_exception_handler(Exception, _sanitized_error)
 
         # Add auth middleware (skips /mcp — handled by MCPAuthASGIApp)
-        app.add_middleware(AuthMiddleware, api_keys=api_keys)
+        app.add_middleware(AuthMiddleware, api_keys=api_keys, token_registry=token_registry)
 
         # CORS — restrict origins to the gateway's own URL
         gw_cfg = self.config.get("gateway", {})

@@ -2,6 +2,32 @@
 
 ## Current Objective
 
+Run 17 implemented **PR02 Phase ID-2**: DB-first hash-only MCP/service token
+registry validation with legacy `gateway.yaml api_keys` fallback, plus narrowly
+scoped portal token lifecycle writes to the DB registry. The implementation adds
+the token hash/fingerprint helpers, a small Postgres token-registry helper,
+Gateway REST/MCP DB-first identity resolution, portal create/rotate/revoke/
+reactivate DB writes, targeted tests, the `psycopg[binary]` dependency, and
+`docs/migration/PR02_token_registry_checks.md`. Host and SIFT VM targeted tests
+passed under the required VM Python 3.12 workflow. PR02 did **not** add Supabase
+human auth, portal login replacement, active-case propagation, evidence/job/
+worker/OpenSearch/parser/frontend changes, audit data migration, or legacy
+fallback removal.
+
+Run 16 (planning) orchestrated the **backend tooling revamp** and **staged the
+FastMCP cutover**. The single big-bang framing is superseded: stage **D27a**
+revamps the three backend MCP servers (opensearch/opencti/windows-triage) to
+FastMCP 3.0 **and** redesigns every tool to a quality contract (**D28**) in a
+**dedicated worktree, parallel to PR02**, merging before stage **D27b** (the
+gateway cutover). Grounding audit confirmed the need: 0 output schemas, 0 prompts,
+0 resources, 0 Pydantic input models across all three backends (16/8/6 tools).
+Spec: `docs/migration/15_backend_tooling_revamp.md`. Operator forks: combined
+per-tool (one commit/tool), renames allowed via change map + aliases, all three
+backends with opensearch authored exposure-agnostic. No runtime code changed in
+Run 16. Run 17 subsequently implemented PR02; the backend worktree (D27a) can
+start in parallel with later foundation work, and D27b follows after PR02 and
+D27a.
+
 Run 15 (planning) locked the **FastMCP 3.0 + Supabase + FastAPI consolidation**:
 decisions **D24-D27** in `00_migration_charter.md` and the full design in
 `docs/migration/14_fastmcp3_supabase_integration.md`. Summary: the Gateway is
@@ -11,8 +37,8 @@ do aggregation only; `code-mode` is **excluded** (run_command retained);
 human auth = **own Supabase-JWT verify via FastAPI DI** (no SupabaseProvider OAuth);
 machines stay hash-only. Rollout = **big-bang, parity-gated, revertable**, sequenced
 **after PR02 (Phase ID-2)** and before evidence/jobs. No runtime code changed in
-Run 15 (docs/decisions only). **Next coding run is still PR02**, then the FastMCP
-cutover.
+Run 15 (docs/decisions only). Run 17 subsequently implemented PR02; the FastMCP
+staged cutover remains later work.
 
 Run 14 implemented PR01 Phase ID-1, installed a pinned self-hosted Supabase
 stack on the SIFT VM for migration testing, created the root `AGENTS.md`
@@ -31,19 +57,120 @@ PR01 is implemented in the current worktree but not committed unless a later run
 commits it. It added the conventional Supabase migration layout, deterministic
 schema tests, and a PR01 schema-check runbook. Runtime behavior was not changed.
 
-The workspace is now handoff-ready for PR02 planning/implementation. The next
-recommended feature-bearing PR is **Phase ID-2: token hash registry
-dual-validation** from `09_identity_auth_cutover.md`. PR02 should use the PR01
-schema to validate MCP/service tokens against `app.mcp_tokens` first, with
-legacy `gateway.yaml api_keys` fallback. It must not add Supabase human auth,
-portal login replacement, active-case propagation, evidence gate changes, job
-tables, workers, REST job APIs, MCP job tools, OpenSearch changes, parser
-changes, evidence behavior changes, audit data migration, frontend redesigns, or
-legacy fallback removal.
+The workspace now has PR02 implemented and VM-tested in the current worktree,
+but not committed unless a later run commits it. The backend tooling revamp
+worktree plan from Run 16 remains available to run in parallel with later
+foundation work; D27b still follows after PR02 and D27a.
 
 Current worktree note: `.DS_Store` was already modified and remains unrelated.
-PR01 implementation files, `AGENTS.md`, and `docs/migration/13_pr02.md` are
-uncommitted unless a later run commits them.
+PR01/PR02 implementation files and migration docs are uncommitted unless a later
+run commits them.
+
+## Run 17 - PR02 Token Registry Implementation
+
+Implementation run for Phase ID-2. Runtime behavior changed only for DB-backed
+MCP/service token validation and portal token lifecycle writes; legacy raw
+`gateway.yaml api_keys` validation remains as fallback.
+
+Implemented:
+
+- `packages/sift-gateway/src/sift_gateway/token_registry.py` - small
+  Postgres-backed token registry for `app.mcp_tokens` and
+  `app.mcp_token_scopes`; validates active, unexpired, unrevoked, scoped rows;
+  updates `last_used_at` on accepted DB tokens; supports narrow create/rotate/
+  revoke/reactivate lifecycle writes.
+- `packages/sift-gateway/src/sift_gateway/token_gen.py` - locked PR02 helpers:
+  `token_hash = sha256(server_pepper || token)` and
+  `token_fingerprint = first 16 hex chars of sha256(token)`.
+- `packages/sift-gateway/src/sift_gateway/{auth.py,identity.py,mcp_endpoint.py,server.py}`
+  - DB-first identity resolution for REST and MCP, with legacy config fallback.
+- `packages/case-dashboard/src/case_dashboard/routes.py` - token list uses DB
+  registry when configured; create/rotate/revoke/reactivate write DB records and
+  return raw token material exactly once; no new raw token writes to
+  `gateway.yaml`.
+- `packages/sift-gateway/pyproject.toml` and `uv.lock` - added
+  `psycopg[binary]` for VM Postgres access.
+- `packages/sift-gateway/tests/test_phase13_auth.py` - deterministic tests for
+  hash/fingerprint policy, DB-first validation, fail-closed rows, and legacy
+  fallback.
+- `packages/case-dashboard/tests/test_token_lifecycle.py` - deterministic fake
+  registry tests for hash-only lifecycle writes and no raw-token persistence.
+- `docs/migration/PR02_token_registry_checks.md` - PR02 test/runbook.
+
+Host verification:
+
+- `.venv/bin/python -m pytest packages/sift-gateway/tests/test_phase13_auth.py packages/sift-gateway/tests/test_phase4.py packages/sift-gateway/tests/test_audit_envelope.py packages/sift-gateway/tests/test_portal_agent_block.py`
+  - 51 passed.
+- `.venv/bin/python -m pytest packages/case-dashboard/tests/test_token_lifecycle.py packages/case-dashboard/tests/test_session_middleware.py`
+  - 27 passed.
+- `git diff --check`
+  - clean.
+
+SIFT VM verification after `rsync` to `~/sift-mcps-test`:
+
+- `UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never ~/.local/bin/uv sync --extra core --group dev --python /usr/bin/python3.12`
+  - passed; installed `psycopg==3.3.4` and `psycopg-binary==3.3.4`.
+- `.venv/bin/python --version`
+  - Python 3.12.3.
+- Post-sync import smoke for `yaml`, `mcp`, `sift_core`, and `sift_gateway`
+  - passed.
+- `.venv/bin/python -m pytest packages/sift-gateway/tests/test_phase13_auth.py packages/sift-gateway/tests/test_phase4.py packages/sift-gateway/tests/test_audit_envelope.py packages/sift-gateway/tests/test_portal_agent_block.py`
+  - 51 passed.
+- `.venv/bin/python -m pytest packages/case-dashboard/tests/test_token_lifecycle.py packages/case-dashboard/tests/test_session_middleware.py`
+  - 27 passed.
+- PR01 migration SQL applied to Supabase Postgres inside `BEGIN`/`ROLLBACK`
+  with `ON_ERROR_STOP=1`
+  - passed.
+
+Deviations and notes:
+
+- No PR02 schema migration was added; PR01 already had the required
+  `app.mcp_tokens` and `app.mcp_token_scopes` surfaces.
+- DB audit event writes were not added in PR02; only `last_used_at` is updated
+  on successful DB-token validation.
+- Supabase human auth, portal login replacement, active-case propagation,
+  evidence gates, job tables/workers/APIs/tools, OpenSearch, parser behavior,
+  evidence behavior, frontend redesign, audit data migration, and legacy
+  fallback removal remain out of scope and untouched.
+
+## Run 16 - Backend Tooling Revamp Orchestration + Staged Cutover (D27a/D27b/D28)
+
+Planning/decision run. No runtime code changed.
+
+Trigger: operator chose to do PR02 now and, in parallel, revamp the three backend
+MCP servers to FastMCP 3.0 — not a version bump, but a tool-quality redesign,
+because the currently exposed tools perform poorly (weak definitions, no schemas,
+no prompts, no multi-request/advanced features).
+
+Grounding audit (`server.py` per backend): tools 16/8/6; **0 output schemas, 0
+prompts, 0 resources, 0 Pydantic input models, 0 arg-level Field descriptions**
+across all three. Confirmed the bottleneck is tool quality, not framework version.
+
+Key reconciliation: the original D27 "single big-bang PR (gateway + backends)" is
+**split**. Backends ↔ gateway is the MCP wire protocol, so backends move
+independently → safe to run a backend worktree in parallel with PR02. D27's parity
+gate is split into **policy parity** (frozen, owned by D27b) and **tool surface**
+(intentionally re-baselined by D27a).
+
+Operator forks (via questions): combined per-tool (one commit/tool guardrail);
+renames allowed via change map + deprecated aliases; all three backends, opensearch
+authored exposure-agnostic.
+
+Files created/changed in Run 16:
+
+- `docs/migration/15_backend_tooling_revamp.md` (new) - revamp spec + drift-control
+  contract + ready-to-copy worktree coding prompt.
+- `00_migration_charter.md` - revised D27 to staged; added D27a, D27b, D28; updated
+  the Cutover Order FastMCP note.
+- `14_fastmcp3_supabase_integration.md` - §6 cutover plan reframed to the two
+  stages (this doc governs D27b); §8 decisions updated.
+- `README.md` - added doc 15; clarified doc 14 governs D27b.
+- `MIGRATION_STATE.md` - this section + Current Objective.
+
+Worktree governance recorded in doc 15 §8: branch off the same base as PR02,
+scope-fenced to `packages/{opensearch,opencti,windows-triage}-mcp/**` + the change
+map only (no gateway/supabase/shared edits → zero overlap with PR02), merge before
+D27b, pin the `fastmcp` version.
 
 ## Run 15 - FastMCP 3.0 + Supabase Consolidation Decision (D24-D27)
 
@@ -869,10 +996,13 @@ human auth, portal login replacement, active-case propagation, evidence-gate
 changes, job/worker tables, REST job APIs, MCP job tools, OpenSearch/parser
 changes, audit data migration, frontend redesigns, or legacy fallback removal.
 
-After PR02, the **FastMCP 3.0 framework-substrate cutover** (decisions D24-D27;
-design + cutover plan in `docs/migration/14_fastmcp3_supabase_integration.md`)
-lands as a dedicated, parity-gated, single revertable big-bang PR **before** the
-heavier evidence/jobs phases:
+In parallel with PR02, the **backend tooling revamp (D27a)** may start in a
+dedicated worktree per `docs/migration/15_backend_tooling_revamp.md` (scope-fenced
+to `packages/*-mcp/**`, no overlap with PR02). After **both** PR02 and D27a land,
+the **gateway cutover (D27b)** (design in
+`docs/migration/14_fastmcp3_supabase_integration.md`) lands as a dedicated,
+**policy-parity-gated**, single revertable big-bang PR **before** the heavier
+evidence/jobs phases:
 
 - Migrate the Gateway to FastMCP 3.0 as one FastAPI ASGI app (REST via FastAPI DI
   + MCP via `mcp.http_app`); replace `server.py`/`backends/*.py` aggregation with

@@ -227,27 +227,34 @@ pulled in-process later.
 
 ---
 
-## 6. Cutover plan (D27)
+## 6. Cutover plan — staged (D27 → D27a + D27b)
 
-- **Style: big-bang, single revertable PR** covering the Gateway + the three
-  FastMCP backends together. Add-on backends fronted by `ProxyProvider` change
-  little.
-- **Parity gate (must pass before merge):**
-  1. All existing package suites (~1146 tests) green on the FastMCP-3.0 branch.
-  2. A new **MCP-surface contract test**: tool names, namespaces, and input
-     schemas are byte-stable across the swap; and the evidence-gate block,
-     response-guard redaction, audit-envelope shape, and active-case propagation
-     behave identically (golden tests over `mcp_endpoint` behavior).
-- **Sequencing (recommended placement):** land the framework cutover as a
-  dedicated **foundation-substrate PR after the in-flight PR02 (Phase ID-2)** and
-  **before** the heavier evidence/jobs/findings phases (cutover steps 2–4), so all
-  durable-job / OpenSearch-core / findings work is authored natively on FastMCP
-  3.0 instead of ported twice. PR02 (token-registry dual-validation) is largely
-  framework-independent and can land first on the current stack without rework.
-  This insertion is a recommendation; the operator confirms it before scheduling.
-- **Revert plan:** the branch is a clean checkpoint; if the parity gate cannot be
-  met, the branch is abandoned and the current `mcp`-SDK gateway continues — no
-  partial cutover lingers in `main`.
+The original "single big-bang PR (gateway + backends together)" framing is
+**superseded** by a two-stage plan, because the gateway↔backend boundary is the
+MCP wire protocol and backends can move independently. This document (14) governs
+**stage 2 (the gateway)**; `15_backend_tooling_revamp.md` governs **stage 1 (the
+backends)**.
+
+- **Stage 1 — D27a backend revamp** (`15_backend_tooling_revamp.md`): the three
+  backend servers move to FastMCP 3.0 **and** are redesigned to the tool-quality
+  contract (D28). Dedicated worktree, scoped to `packages/*-mcp/**`, **parallel to
+  PR02**, merges before stage 2. Produces the **new tool-surface golden snapshot +
+  change map**.
+- **Stage 2 — D27b gateway cutover** (this doc): the Gateway moves to FastMCP 3.0
+  as one FastAPI ASGI app, a **single revertable big-bang PR**, **after PR02 and
+  after stage 1**, before the heavier evidence/jobs phases. It **consumes** the
+  revamped backend surface (does not re-freeze it) — add-ons via `ProxyProvider`,
+  opensearch tools in-process via `LocalProvider`.
+- **Stage 2 parity gate = policy parity only:** all ~1146 package tests green +
+  a policy-behavior contract test asserting the evidence gate, response-guard
+  redaction, audit-envelope shape, and active-case propagation are byte-stable
+  across the gateway swap. The **tool surface is intentionally new** (from stage
+  1) and is therefore not part of the parity assertion.
+- **Confirm:** structured-output redaction/size-cap coverage in the response guard
+  (it must scan `structured_content`, not only text) — see `15` §11.
+- **Revert plan:** each stage's branch is a clean checkpoint; if its gate cannot be
+  met the branch is abandoned and the current stack continues — no partial cutover
+  lands in `main`.
 
 ---
 
@@ -280,8 +287,10 @@ See `00_migration_charter.md` "Confirmed Decisions (Locked)":
   Tool Search + Visibility.
 - **D26** — humans: own Supabase-JWT verify via FastAPI DI; machines: hash-only
   tokens; `SupabaseProvider` OAuth not adopted.
-- **D27** — big-bang, parity-gated cutover; sequenced after PR02, before
-  evidence/jobs.
+- **D27 / D27b** — staged cutover; this doc governs **D27b** (the gateway stage):
+  a big-bang, **policy-parity-gated** PR after PR02 and after the backend revamp
+  (**D27a**, governed by `15_backend_tooling_revamp.md`), before evidence/jobs.
+  Tool-quality contract for backends is **D28**.
 
 ---
 

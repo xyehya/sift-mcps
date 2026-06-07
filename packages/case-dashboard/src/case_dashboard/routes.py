@@ -76,6 +76,7 @@ _API_KEYS: dict = {}
 # Needed for token lifecycle endpoints that must persist changes to gateway.yaml.
 _GATEWAY_CONFIG_PATH: Path | None = None
 _GATEWAY_CONFIG_LOCK = threading.Lock()
+_TOKEN_REGISTRY = None
 
 # Max delta file size (1 MB)
 _MAX_DELTA_SIZE = 1_048_576
@@ -3066,6 +3067,14 @@ async def list_tokens(request: Request) -> JSONResponse:
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
 
+    if _TOKEN_REGISTRY is not None:
+        try:
+            tokens = _TOKEN_REGISTRY.list_tokens()
+        except Exception as e:
+            logger.error("Failed to list DB-backed tokens: %s", e)
+            return JSONResponse({"error": "Failed to list tokens"}, status_code=500)
+        return JSONResponse({"tokens": tokens, "count": len(tokens)})
+
     tokens = []
     for raw_token, info in _API_KEYS.items():
         if not isinstance(info, dict):
@@ -3133,67 +3142,52 @@ async def create_token(request: Request) -> JSONResponse:
         except ValueError:
             return JSONResponse({"error": "expires_at must be an ISO datetime"}, status_code=400)
 
-    # Ensure agent_id is not already active (non-revoked)
-    for info in _API_KEYS.values():
-        if (
-            isinstance(info, dict)
-            and info.get("agent_id") == agent_id
-            and not info.get("revoked_at")
-        ):
-            return JSONResponse(
-                {"error": f"Active token already exists for agent_id '{agent_id}'"},
-                status_code=409,
-            )
-
-    if _GATEWAY_CONFIG_PATH is None:
+    if _TOKEN_REGISTRY is None:
         return JSONResponse(
-            {"error": "Token management unavailable: gateway config path not set"},
+            {"error": "Token management unavailable: token registry not configured"},
             status_code=503,
         )
 
     from sift_gateway.token_gen import generate_service_token
 
     raw_token = generate_service_token()
-    token_id = f"svc-{agent_id}-{secrets.token_hex(4)}"
     now_iso = _iso_now()
 
-    key_info: dict = {
-        "token_id": token_id,
-        "examiner": agent_id,  # used by auth middleware for audit identity
-        "agent_id": agent_id,
-        "role": token_role,
-        "label": label,
-        "created_by": examiner,
-        "created_at": now_iso,
-        "expires_at": expires_at,
-        "revoked_at": None,
-        "last_used_at": None,
-        "last_used_ip": None,
-    }
-
     try:
-        with _GATEWAY_CONFIG_LOCK:
-            _token_config_write({raw_token: key_info})
-    except (OSError, RuntimeError) as e:
-        logger.error("Failed to write token to gateway config: %s", e)
+        record = _TOKEN_REGISTRY.create_token(
+            raw_token=raw_token,
+            agent_id=agent_id,
+            label=label,
+            role=token_role,
+            created_by=examiner,
+            expires_at=expires_at,
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    except Exception as e:
+        logger.error("Failed to write token to DB registry: %s", e)
         return JSONResponse(
             {"error": "Failed to persist token — check gateway logs"},
             status_code=500,
         )
 
     logger.info(
-        "Service token created: token_id=%s agent_id=%s by=%s", token_id, agent_id, examiner
+        "Service token created: token_id=%s agent_id=%s by=%s",
+        record.id,
+        agent_id,
+        examiner,
     )
     return JSONResponse(
         {
             "ok": True,
             "token": raw_token,  # returned exactly once
-            "token_id": token_id,
+            "token_id": record.id,
+            "token_fingerprint": record.token_fingerprint,
             "agent_id": agent_id,
             "role": token_role,
             "label": label,
             "created_at": now_iso,
-            "expires_at": expires_at,
+            "expires_at": record.expires_at.isoformat(),
         },
         status_code=201,
     )
@@ -3216,50 +3210,27 @@ async def revoke_token(request: Request) -> JSONResponse:
     if must_err:
         return must_err
 
-    if _GATEWAY_CONFIG_PATH is None:
+    if _TOKEN_REGISTRY is None:
         return JSONResponse(
-            {"error": "Token management unavailable: gateway config path not set"},
+            {"error": "Token management unavailable: token registry not configured"},
             status_code=503,
         )
 
     token_id = request.path_params["token_id"]
 
-    # Find the matching raw token
-    found_raw: str | None = None
-    found_info: dict | None = None
-    for raw_token, info in _API_KEYS.items():
-        if isinstance(info, dict) and info.get("token_id") == token_id:
-            found_raw = raw_token
-            found_info = dict(info)
-            break
-
-    if found_raw is None:
-        return JSONResponse({"error": "Token not found"}, status_code=404)
-
-    if found_info.get("revoked_at"):
-        return JSONResponse({"error": "Token already revoked"}, status_code=409)
-
-    # Guard: do not allow revoking examiner (gateway) tokens from this endpoint
-    if found_info.get("role") == "examiner":
-        return JSONResponse(
-            {"error": "Cannot revoke examiner tokens via this endpoint"},
-            status_code=403,
-        )
-
-    found_info["revoked_at"] = _iso_now()
-
     try:
-        with _GATEWAY_CONFIG_LOCK:
-            _token_config_write({found_raw: found_info})
-    except (OSError, RuntimeError) as e:
+        revoked_at = _TOKEN_REGISTRY.revoke_token(token_id, revoked_by=examiner)
+    except Exception as e:
         logger.error("Failed to revoke token %s: %s", token_id, e)
         return JSONResponse(
             {"error": "Failed to revoke token — check gateway logs"},
             status_code=500,
         )
+    if revoked_at is None:
+        return JSONResponse({"error": "Token not found or already revoked"}, status_code=404)
 
     logger.info("Service token revoked: token_id=%s by=%s", token_id, examiner)
-    return JSONResponse({"ok": True, "token_id": token_id, "revoked_at": found_info["revoked_at"]})
+    return JSONResponse({"ok": True, "token_id": token_id, "revoked_at": revoked_at})
 
 
 async def rotate_token(request: Request) -> JSONResponse:
@@ -3279,74 +3250,38 @@ async def rotate_token(request: Request) -> JSONResponse:
     if must_err:
         return must_err
 
-    if _GATEWAY_CONFIG_PATH is None:
+    if _TOKEN_REGISTRY is None:
         return JSONResponse(
-            {"error": "Token management unavailable: gateway config path not set"},
+            {"error": "Token management unavailable: token registry not configured"},
             status_code=503,
         )
 
     token_id = request.path_params["token_id"]
 
-    # Find old token
-    found_raw: str | None = None
-    found_info: dict | None = None
-    for raw_token, info in _API_KEYS.items():
-        if isinstance(info, dict) and info.get("token_id") == token_id:
-            found_raw = raw_token
-            found_info = dict(info)
-            break
-
-    if found_raw is None:
-        return JSONResponse({"error": "Token not found"}, status_code=404)
-
-    if found_info.get("revoked_at"):
-        return JSONResponse({"error": "Cannot rotate an already-revoked token"}, status_code=409)
-
-    if found_info.get("role") == "examiner":
-        return JSONResponse(
-            {"error": "Cannot rotate examiner tokens via this endpoint"},
-            status_code=403,
-        )
-
     from sift_gateway.token_gen import generate_service_token
 
     now_iso = _iso_now()
-
-    # Build revoked copy of old entry
-    revoked_info = {**found_info, "revoked_at": now_iso}
-
-    # Build new token with inherited metadata
     new_raw_token = generate_service_token()
-    new_token_id = f"svc-{found_info.get('agent_id', 'unknown')}-{secrets.token_hex(4)}"
-    new_info: dict = {
-        "token_id": new_token_id,
-        "examiner": found_info.get("examiner", found_info.get("agent_id", "unknown")),
-        "agent_id": found_info.get("agent_id"),
-        "role": found_info.get("role", "agent"),
-        "label": found_info.get("label", ""),
-        "created_by": examiner,
-        "created_at": now_iso,
-        "expires_at": found_info.get("expires_at"),
-        "revoked_at": None,
-        "last_used_at": None,
-        "last_used_ip": None,
-    }
 
     try:
-        with _GATEWAY_CONFIG_LOCK:
-            # Both writes in the same lock: revoke old + create new atomically on disk
-            _token_config_write({found_raw: revoked_info, new_raw_token: new_info})
-    except (OSError, RuntimeError) as e:
+        record = _TOKEN_REGISTRY.rotate_token(
+            token_id,
+            new_raw_token=new_raw_token,
+            rotated_by=examiner,
+        )
+    except Exception as e:
         logger.error("Failed to rotate token %s: %s", token_id, e)
         return JSONResponse(
             {"error": "Failed to rotate token — check gateway logs"},
             status_code=500,
         )
+    if record is None:
+        return JSONResponse({"error": "Token not found or already revoked"}, status_code=404)
 
     logger.info(
         "Service token rotated: old_token_id=%s new_token_id=%s by=%s",
         token_id,
-        new_token_id,
+        record.id,
         examiner,
     )
     return JSONResponse(
@@ -3354,12 +3289,13 @@ async def rotate_token(request: Request) -> JSONResponse:
             "ok": True,
             "revoked_token_id": token_id,
             "token": new_raw_token,  # returned exactly once
-            "token_id": new_token_id,
-            "agent_id": new_info.get("agent_id"),
-            "role": new_info.get("role"),
-            "label": new_info.get("label"),
+            "token_id": record.id,
+            "token_fingerprint": record.token_fingerprint,
+            "agent_id": record.agent_id,
+            "role": record.role,
+            "label": record.label,
             "created_at": now_iso,
-            "expires_at": new_info.get("expires_at"),
+            "expires_at": record.expires_at.isoformat(),
         },
         status_code=201,
     )
@@ -3378,40 +3314,24 @@ async def reactivate_token(request: Request) -> JSONResponse:
     if must_err:
         return must_err
 
-    if _GATEWAY_CONFIG_PATH is None:
+    if _TOKEN_REGISTRY is None:
         return JSONResponse(
-            {"error": "Token management unavailable: gateway config path not set"},
+            {"error": "Token management unavailable: token registry not configured"},
             status_code=503,
         )
 
     token_id = request.path_params["token_id"]
 
-    # Find the matching raw token
-    found_raw: str | None = None
-    found_info: dict | None = None
-    for raw_token, info in _API_KEYS.items():
-        if isinstance(info, dict) and info.get("token_id") == token_id:
-            found_raw = raw_token
-            found_info = dict(info)
-            break
-
-    if found_raw is None:
-        return JSONResponse({"error": "Token not found"}, status_code=404)
-
-    if not found_info.get("revoked_at"):
-        return JSONResponse({"error": "Token is not revoked (already active)"}, status_code=409)
-
-    found_info["revoked_at"] = None
-
     try:
-        with _GATEWAY_CONFIG_LOCK:
-            _token_config_write({found_raw: found_info})
-    except (OSError, RuntimeError) as e:
+        changed = _TOKEN_REGISTRY.reactivate_token(token_id)
+    except Exception as e:
         logger.error("Failed to reactivate token %s: %s", token_id, e)
         return JSONResponse(
             {"error": "Failed to reactivate token — check gateway logs"},
             status_code=500,
         )
+    if not changed:
+        return JSONResponse({"error": "Token not found or already active"}, status_code=404)
 
     logger.info("Service token reactivated: token_id=%s by=%s", token_id, examiner)
     return JSONResponse({"ok": True, "token_id": token_id})
@@ -4707,6 +4627,7 @@ def create_dashboard_v2_app(
     session_max_age: int = 28800,
     api_keys: dict | None = None,
     gateway_config_path: str | None = None,
+    token_registry=None,
     on_chain_mutation: Callable[[str], None] | None = None,
     on_case_activated: Callable[[str], object] | None = None,
     on_override_get_status: Callable[[str], dict] | None = None,
@@ -4721,8 +4642,10 @@ def create_dashboard_v2_app(
         api_keys: Reference to the live gateway api_keys dict. Token lifecycle
             endpoints mutate this dict in place so changes are immediately
             honoured by the auth middleware without a restart.
-        gateway_config_path: Absolute path to gateway.yaml. Required for
-            token lifecycle endpoints; if absent they return 503.
+        gateway_config_path: Absolute path to gateway.yaml for legacy case
+            activation writes.
+        token_registry: DB-backed hash-only MCP/service token registry. Required
+            for token lifecycle writes in PR02.
         on_chain_mutation: Called with case_dir_str after every evidence chain
             seal or ignore. The gateway passes invalidate_evidence_cache so the
             30s TTL cache is dropped immediately on portal seal.
@@ -4737,12 +4660,14 @@ def create_dashboard_v2_app(
     from case_dashboard.auth import PortalSessionMiddleware
 
     global _SESSION_SECRET, _SESSION_MAX_AGE, _API_KEYS, _GATEWAY_CONFIG_PATH
+    global _TOKEN_REGISTRY
     global _ON_CHAIN_MUTATION, _OVERRIDE_GET_STATUS, _OVERRIDE_ENABLE, _OVERRIDE_CANCEL
     global _ON_CASE_ACTIVATED
     _SESSION_SECRET = session_secret
     _SESSION_MAX_AGE = session_max_age
     _API_KEYS = api_keys if api_keys is not None else {}
     _GATEWAY_CONFIG_PATH = Path(gateway_config_path) if gateway_config_path else None
+    _TOKEN_REGISTRY = token_registry
     _ON_CHAIN_MUTATION = on_chain_mutation
     _ON_CASE_ACTIVATED = on_case_activated
     _OVERRIDE_GET_STATUS = on_override_get_status

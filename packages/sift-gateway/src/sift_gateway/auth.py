@@ -76,9 +76,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
     and examiner defaults to "anonymous".
     """
 
-    def __init__(self, app, api_keys: dict | None = None):
+    def __init__(self, app, api_keys: dict | None = None, token_registry=None):
         super().__init__(app)
         self.api_keys = api_keys or {}
+        self.token_registry = token_registry
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -134,7 +135,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # If no api_keys configured, auth is disabled (single-user mode)
-        if not self.api_keys:
+        if not self.api_keys and self.token_registry is None:
             from sift_gateway.identity import resolve_identity
             identity = resolve_identity(None, self.api_keys, source_ip=request.client.host if request.client else "unknown", auth_surface="rest")
             request.state.identity = identity
@@ -155,7 +156,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         token = auth_header[7:].strip()
 
         from sift_gateway.identity import resolve_identity
-        identity = resolve_identity(token, self.api_keys, source_ip=request.client.host if request.client else "unknown", auth_surface="rest")
+        identity = resolve_identity(
+            token,
+            self.api_keys,
+            source_ip=request.client.host if request.client else "unknown",
+            auth_surface="rest",
+            token_registry=self.token_registry,
+        )
         if identity is None:
             logger.warning("AuthMiddleware: rejected invalid or expired token")
             return JSONResponse(

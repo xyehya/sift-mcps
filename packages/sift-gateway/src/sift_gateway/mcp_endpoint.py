@@ -54,6 +54,13 @@ _LAST_429_AUDIT: dict[str, float] = {}
 _429_AUDIT_INTERVAL = 5.0  # limit to one audit log entry per 5 seconds per key/IP
 
 
+def _hash_token(token: str) -> str:
+    """Compatibility wrapper for the shared non-secret token fingerprint."""
+    from sift_gateway.token_gen import token_fingerprint
+
+    return token_fingerprint(token)
+
+
 def _build_gateway_instructions(gateway: Any) -> str:
     """Compose aggregate /mcp instructions from core policy + add-on manifests."""
     addon_lines: list[str] = []
@@ -188,11 +195,13 @@ class MCPAuthASGIApp:
         allowed_origins: set[str] | None = None,
         examiner_calls_per_minute: int = 120,
         gateway: Any | None = None,
+        token_registry: Any | None = None,
     ):
         self.session_manager = session_manager
         self.api_keys = api_keys or {}
         self.allowed_origins = allowed_origins or set()
         self.gateway = gateway
+        self.token_registry = token_registry
         # Initialize the examiner rate limiter singleton with configured limit
         from sift_gateway.rate_limit import get_examiner_rate_limiter
         get_examiner_rate_limiter(limit=examiner_calls_per_minute)
@@ -248,7 +257,7 @@ class MCPAuthASGIApp:
                 return
 
         from sift_gateway.identity import resolve_identity
-        if not self.api_keys:
+        if not self.api_keys and self.token_registry is None:
             # No keys configured — single-user / anonymous mode
             identity = resolve_identity(None, self.api_keys, source_ip=client_ip, auth_surface="mcp")
             scope["state"]["identity"] = identity
@@ -274,7 +283,13 @@ class MCPAuthASGIApp:
             await resp(scope, receive, send)
             return
 
-        identity = resolve_identity(token, self.api_keys, source_ip=client_ip, auth_surface="mcp")
+        identity = resolve_identity(
+            token,
+            self.api_keys,
+            source_ip=client_ip,
+            auth_surface="mcp",
+            token_registry=self.token_registry,
+        )
         if identity is None:
             logger.warning("MCP endpoint: rejected invalid or expired token")
             resp = JSONResponse({"error": "Invalid API key"}, status_code=403)
