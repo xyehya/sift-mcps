@@ -1335,6 +1335,241 @@
         ]
       },
       "title": "Recent Indicators"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Get Entity by ID"
+      },
+      "description": "Return full details for one OpenCTI entity UUID, including projected common fields and type-specific extras. Use after a search returns an entity id that needs expansion; the UUID comes from search-result `id`. Example: `cti_get_entity(entity_id='00000000-0000-4000-8000-000000000000')`.",
+      "input_schema": {
+        "properties": {
+          "entity_id": {
+            "description": "OpenCTI entity UUID from a search result; validated before dispatch.",
+            "title": "Entity Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_id"
+        ],
+        "title": "CtiGetEntityIn",
+        "type": "object"
+      },
+      "meta": {
+        "case_scoped": false,
+        "category": "threat-intel",
+        "evidence_class": "read_only",
+        "recommended_phase": "CORRELATE"
+      },
+      "name": "cti_get_entity",
+      "output_schema": {
+        "anyOf": [
+          {
+            "$defs": {
+              "CtiEntity": {
+                "properties": {
+                  "confidence": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI confidence score when available.",
+                    "title": "Confidence"
+                  },
+                  "created": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Created timestamp when available.",
+                    "title": "Created"
+                  },
+                  "description": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Short description, truncated by the client.",
+                    "title": "Description"
+                  },
+                  "entity_type": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI/STIX entity type.",
+                    "title": "Entity Type"
+                  },
+                  "extra": {
+                    "additionalProperties": true,
+                    "description": "Type-specific fields preserved from the OpenCTI client.",
+                    "title": "Extra",
+                    "type": "object"
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "OpenCTI entity id when returned by the platform.",
+                    "title": "Id"
+                  },
+                  "labels": {
+                    "description": "OpenCTI labels attached to the entity.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Labels",
+                    "type": "array"
+                  },
+                  "modified": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Modified timestamp when available.",
+                    "title": "Modified"
+                  },
+                  "name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Primary display name or observable value.",
+                    "title": "Name"
+                  }
+                },
+                "title": "CtiEntity",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "entity": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CtiEntity"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Projected entity details, or null when not found."
+              },
+              "entity_id": {
+                "description": "Echoed entity UUID.",
+                "title": "Entity Id",
+                "type": "string"
+              },
+              "found": {
+                "description": "True when the entity id exists in OpenCTI.",
+                "title": "Found",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "found",
+              "entity_id"
+            ],
+            "title": "CtiGetEntityOut",
+            "type": "object"
+          },
+          {
+            "$defs": {
+              "ErrorCode": {
+                "enum": [
+                  "invalid_input",
+                  "not_found",
+                  "upstream_unavailable",
+                  "upstream_degraded",
+                  "rate_limited",
+                  "not_configured",
+                  "no_active_case",
+                  "capacity_refused",
+                  "internal"
+                ],
+                "title": "ErrorCode",
+                "type": "string"
+              }
+            },
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "$ref": "#/$defs/ErrorCode",
+                "description": "Machine-readable error category."
+              },
+              "message": {
+                "description": "Human-readable, secret-free explanation.",
+                "title": "Message",
+                "type": "string"
+              },
+              "remediation": {
+                "description": "Concrete next step the caller can take.",
+                "title": "Remediation",
+                "type": "string"
+              },
+              "retryable": {
+                "default": false,
+                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
+                "title": "Retryable",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "error",
+              "message",
+              "remediation"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        ]
+      },
+      "title": "Get Entity by ID"
     }
   ]
 }

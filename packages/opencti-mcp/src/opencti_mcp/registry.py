@@ -46,6 +46,7 @@ from .validation import (
     validate_ioc,
     validate_labels,
     validate_observable_types,
+    validate_uuid,
 )
 
 
@@ -212,6 +213,7 @@ TOOL_CATALOG_META: dict[str, dict[str, Any]] = {
     "cti_search_entity": _tool_meta(),
     "cti_lookup_ioc": _tool_meta(),
     "cti_get_recent_indicators": _tool_meta(),
+    "cti_get_entity": _tool_meta(),
 }
 
 
@@ -290,6 +292,15 @@ class CtiRecentIndicatorsIn(BaseModel):
     limit: int = Field(20, ge=1, le=100, description="Maximum recent indicators to return. Cap 100.")
 
 
+class CtiGetEntityIn(BaseModel):
+    entity_id: str = Field(..., description="OpenCTI entity UUID from a search result; validated before dispatch.")
+
+    @field_validator("entity_id")
+    @classmethod
+    def _validate_entity_id(cls, value: str) -> str:
+        return validate_uuid(value, "entity_id")
+
+
 class CtiEntity(BaseModel):
     id: str | None = Field(None, description="OpenCTI entity id when returned by the platform.")
     entity_type: str | None = Field(None, description="OpenCTI/STIX entity type.")
@@ -331,6 +342,12 @@ class CtiRecentIndicatorsOut(BaseModel):
     days: int = Field(..., description="Echoed look-back window in days.")
     results: list[CtiEntity] = Field(..., description="Recently created OpenCTI indicators.")
     total: int = Field(..., description="Number of indicators returned.")
+
+
+class CtiGetEntityOut(BaseModel):
+    found: bool = Field(..., description="True when the entity id exists in OpenCTI.")
+    entity_id: str = Field(..., description="Echoed entity UUID.")
+    entity: CtiEntity | None = Field(None, description="Projected entity details, or null when not found.")
 
 
 async def cti_get_health(params: CtiHealthIn, ctx: RuntimeContext) -> CtiHealthOut:
@@ -495,6 +512,21 @@ async def cti_get_recent_indicators(
     return CtiRecentIndicatorsOut(days=params.days, results=shaped, total=len(shaped))
 
 
+async def cti_get_entity(
+    params: CtiGetEntityIn,
+    ctx: RuntimeContext,
+) -> CtiGetEntityOut:
+    client = ctx.require_client()
+    result = await asyncio.to_thread(client.get_entity, params.entity_id)
+    if result is None:
+        return CtiGetEntityOut(found=False, entity_id=params.entity_id, entity=None)
+    return CtiGetEntityOut(
+        found=True,
+        entity_id=params.entity_id,
+        entity=_shape_entity(result),
+    )
+
+
 REGISTRY: list[ToolDef] = [
     ToolDef(
         name="cti_get_health",
@@ -571,6 +603,20 @@ REGISTRY: list[ToolDef] = [
             "fresh intel relevant to an ongoing case has landed. Don't bulk-pivot on "
             "recent indicators without a case-specific hypothesis or observed overlap. "
             "Example: `cti_get_recent_indicators(days=14)`."
+        ),
+    ),
+    ToolDef(
+        name="cti_get_entity",
+        fn=cti_get_entity,
+        in_model=CtiGetEntityIn,
+        out_model=CtiGetEntityOut,
+        annotations=_opencti_annotations("Get Entity by ID"),
+        title="Get Entity by ID",
+        description=(
+            "Return full details for one OpenCTI entity UUID, including projected common "
+            "fields and type-specific extras. Use after a search returns an entity id "
+            "that needs expansion; the UUID comes from search-result `id`. Example: "
+            "`cti_get_entity(entity_id='00000000-0000-4000-8000-000000000000')`."
         ),
     ),
 ]
