@@ -295,6 +295,83 @@ class ShardStatusOut(BaseModel):
     )
 
 
+class CaseSummaryIn(BaseModel):
+    case_id: str = Field("", description="Case id; empty resolves to active case.")
+    include_fields: bool = Field(
+        False,
+        description=(
+            "Include per-artifact field-type mappings; large output needed to decide "
+            "'.keyword' suffixes."
+        ),
+    )
+
+
+class ArtifactCoverage(BaseModel):
+    docs: int = Field(..., description="Document count for the artifact family.")
+    hosts: list[str] = Field(default_factory=list, description="Hosts with this artifact.")
+    indices: list[str] = Field(default_factory=list, description="Concrete indices merged.")
+
+
+class CoverageGap(BaseModel):
+    coverage_gap: str = Field(..., description="Missing coverage or enrichment.")
+    when_to_run: str = Field(..., description="When this gap should be filled.")
+    command: str = Field(..., description="Exact ingest/enrich call to fill the gap.")
+    next_mcp_step: str = Field(..., description="Next MCP step after filling the gap.")
+    warning: str | None = Field(None, description="Non-fatal warning about the gap.")
+    output_path: str | None = Field(None, description="Expected output path if applicable.")
+
+
+class CoverageState(BaseModel):
+    disk_artifacts: dict[str, Literal["indexed", "not_run", "not_available"]] = Field(
+        default_factory=dict,
+        description="Expected disk artifact coverage state.",
+    )
+    memory: dict[str, Any] = Field(
+        default_factory=dict,
+        description="{tier_run, plugins_run, plugins_not_run}.",
+    )
+    enrichment: dict[str, Literal["done", "not_run"]] = Field(
+        default_factory=dict,
+        description="Triage and threat-intel enrichment state.",
+    )
+    gaps: list[CoverageGap] = Field(default_factory=list, description="Actionable gaps.")
+    filesystem_meta_path: str | None = Field(
+        None,
+        description="Most recent filesystem metadata sidecar path, relative to case dir.",
+    )
+
+
+class CaseSummaryOut(BaseModel):
+    case_id: str = Field(..., description="Resolved case id.")
+    hosts: list[str] = Field(default_factory=list, description="Indexed hosts.")
+    artifacts: dict[str, ArtifactCoverage] = Field(
+        default_factory=dict,
+        description="Artifact coverage keyed by artifact family.",
+    )
+    total_docs: int = Field(..., description="Total case document count.")
+    time_range: dict[str, str] = Field(
+        default_factory=dict,
+        description="{earliest, latest} ISO-8601.",
+    )
+    enrichment: dict[str, Any] = Field(
+        default_factory=dict,
+        description="{triage:{checked,suspicious}, threat_intel:{checked,malicious}}.",
+    )
+    coverage_state: CoverageState = Field(..., description="Coverage and gap state.")
+    fields_per_type: dict[str, list[dict[str, Any]]] | None = Field(
+        None,
+        description="Optional capped field mappings per artifact type.",
+    )
+    investigation_hints: list[str] = Field(
+        default_factory=list,
+        description="Compact investigation hints for indexed artifacts.",
+    )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal sub-query failures.",
+    )
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -604,6 +681,53 @@ async def opensearch_cluster_shards_resource() -> str:
     return _json_from_tool_result(await run_opensearch_shard_status(ShardStatusIn()))
 
 
+def _coverage_state_from_raw(raw: dict[str, Any]) -> CoverageState:
+    state = raw.get("coverage_state") or {}
+    return CoverageState(
+        disk_artifacts=state.get("disk_artifacts") or {},
+        memory=state.get("memory") or {},
+        enrichment=state.get("enrichment") or {},
+        gaps=[CoverageGap.model_validate(gap) for gap in state.get("gaps", [])],
+        filesystem_meta_path=state.get("filesystem_meta_path"),
+    )
+
+
+async def run_opensearch_case_summary(params: CaseSummaryIn) -> ToolResult:
+    raw = _legacy_server().opensearch_case_summary(**params.model_dump())
+    if "error" in raw:
+        default = (
+            ErrorCode.no_active_case
+            if "active case" in str(raw.get("error"))
+            else ErrorCode.not_found
+        )
+        return _legacy_error(raw, default_code=default)
+    meta = _meta_from_raw(raw)
+    fields_per_type = raw.get("fields_per_type")
+    out = CaseSummaryOut(
+        case_id=str(raw.get("case_id", params.case_id)),
+        hosts=list(raw.get("hosts", [])),
+        artifacts={
+            key: ArtifactCoverage.model_validate(value)
+            for key, value in (raw.get("artifacts") or {}).items()
+        },
+        total_docs=int(raw.get("total_docs", 0)),
+        time_range=dict(raw.get("time_range") or {}),
+        enrichment=dict(raw.get("enrichment") or {}),
+        coverage_state=_coverage_state_from_raw(raw),
+        fields_per_type=fields_per_type,
+        investigation_hints=list(raw.get("investigation_hints", [])),
+        warnings=list(raw.get("warnings", [])),
+    )
+    return _success_tool_result(out, meta)
+
+
+async def opensearch_case_summary_resource(case_id: str) -> str:
+    result = await run_opensearch_case_summary(
+        CaseSummaryIn(case_id=case_id, include_fields=False)
+    )
+    return _json_from_tool_result(result)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -739,6 +863,34 @@ RESOURCE_REGISTRY.append(
         name="opensearch_cluster_status",
         title="Cluster & Index Status",
         description="Read-only resource view of OpenSearch cluster health and case index counts.",
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_case_summary",
+        fn=run_opensearch_case_summary,
+        in_model=CaseSummaryIn,
+        out_model=CaseSummaryOut,
+        annotations=_read_annotations("Case Coverage Summary"),
+        title="Case Coverage Summary",
+        description=(
+            "Complete coverage overview for a case. Call this first in every "
+            "indexed session to see hosts, artifact families, doc counts, "
+            "enrichment state, and coverage_state.gaps with exact commands to "
+            "fill missing coverage. Example: "
+            "opensearch_case_summary(case_id='rocba-drive-20260526-1417')."
+        ),
+    )
+)
+
+RESOURCE_REGISTRY.append(
+    ResourceDef(
+        uri="opensearch://case/{case_id}/summary",
+        fn=opensearch_case_summary_resource,
+        name="opensearch_case_summary",
+        title="Case Coverage Summary",
+        description="Parameterized resource view of a case coverage summary.",
     )
 )
 

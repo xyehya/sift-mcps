@@ -1,7 +1,17 @@
 {
   "backend": "opensearch-mcp",
   "prompts": [],
-  "resource_templates": [],
+  "resource_templates": [
+    {
+      "annotations": null,
+      "description": "Parameterized resource view of a case coverage summary.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_case_summary",
+      "title": "Case Coverage Summary",
+      "uri_template": "opensearch://case/{case_id}/summary"
+    }
+  ],
   "resources": [
     {
       "annotations": null,
@@ -761,6 +771,265 @@
         "type": "object"
       },
       "title": "Cluster & Index Status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Case Coverage Summary"
+      },
+      "description": "Complete coverage overview for a case. Call this first in every indexed session to see hosts, artifact families, doc counts, enrichment state, and coverage_state.gaps with exact commands to fill missing coverage. Example: opensearch_case_summary(case_id='rocba-drive-20260526-1417').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id; empty resolves to active case.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "include_fields": {
+            "default": false,
+            "description": "Include per-artifact field-type mappings; large output needed to decide '.keyword' suffixes.",
+            "title": "Include Fields",
+            "type": "boolean"
+          }
+        },
+        "title": "CaseSummaryIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_case_summary",
+      "output_schema": {
+        "properties": {
+          "artifacts": {
+            "additionalProperties": {
+              "properties": {
+                "docs": {
+                  "description": "Document count for the artifact family.",
+                  "title": "Docs",
+                  "type": "integer"
+                },
+                "hosts": {
+                  "description": "Hosts with this artifact.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Hosts",
+                  "type": "array"
+                },
+                "indices": {
+                  "description": "Concrete indices merged.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Indices",
+                  "type": "array"
+                }
+              },
+              "required": [
+                "docs"
+              ],
+              "title": "ArtifactCoverage",
+              "type": "object"
+            },
+            "description": "Artifact coverage keyed by artifact family.",
+            "title": "Artifacts",
+            "type": "object"
+          },
+          "case_id": {
+            "description": "Resolved case id.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "coverage_state": {
+            "description": "Coverage and gap state.",
+            "properties": {
+              "disk_artifacts": {
+                "additionalProperties": {
+                  "enum": [
+                    "indexed",
+                    "not_run",
+                    "not_available"
+                  ],
+                  "type": "string"
+                },
+                "description": "Expected disk artifact coverage state.",
+                "title": "Disk Artifacts",
+                "type": "object"
+              },
+              "enrichment": {
+                "additionalProperties": {
+                  "enum": [
+                    "done",
+                    "not_run"
+                  ],
+                  "type": "string"
+                },
+                "description": "Triage and threat-intel enrichment state.",
+                "title": "Enrichment",
+                "type": "object"
+              },
+              "filesystem_meta_path": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Most recent filesystem metadata sidecar path, relative to case dir.",
+                "title": "Filesystem Meta Path"
+              },
+              "gaps": {
+                "description": "Actionable gaps.",
+                "items": {
+                  "properties": {
+                    "command": {
+                      "description": "Exact ingest/enrich call to fill the gap.",
+                      "title": "Command",
+                      "type": "string"
+                    },
+                    "coverage_gap": {
+                      "description": "Missing coverage or enrichment.",
+                      "title": "Coverage Gap",
+                      "type": "string"
+                    },
+                    "next_mcp_step": {
+                      "description": "Next MCP step after filling the gap.",
+                      "title": "Next Mcp Step",
+                      "type": "string"
+                    },
+                    "output_path": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Expected output path if applicable.",
+                      "title": "Output Path"
+                    },
+                    "warning": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Non-fatal warning about the gap.",
+                      "title": "Warning"
+                    },
+                    "when_to_run": {
+                      "description": "When this gap should be filled.",
+                      "title": "When To Run",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "coverage_gap",
+                    "when_to_run",
+                    "command",
+                    "next_mcp_step"
+                  ],
+                  "title": "CoverageGap",
+                  "type": "object"
+                },
+                "title": "Gaps",
+                "type": "array"
+              },
+              "memory": {
+                "additionalProperties": true,
+                "description": "{tier_run, plugins_run, plugins_not_run}.",
+                "title": "Memory",
+                "type": "object"
+              }
+            },
+            "title": "CoverageState",
+            "type": "object"
+          },
+          "enrichment": {
+            "additionalProperties": true,
+            "description": "{triage:{checked,suspicious}, threat_intel:{checked,malicious}}.",
+            "title": "Enrichment",
+            "type": "object"
+          },
+          "fields_per_type": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional capped field mappings per artifact type.",
+            "title": "Fields Per Type"
+          },
+          "hosts": {
+            "description": "Indexed hosts.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Hosts",
+            "type": "array"
+          },
+          "investigation_hints": {
+            "description": "Compact investigation hints for indexed artifacts.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Investigation Hints",
+            "type": "array"
+          },
+          "time_range": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "{earliest, latest} ISO-8601.",
+            "title": "Time Range",
+            "type": "object"
+          },
+          "total_docs": {
+            "description": "Total case document count.",
+            "title": "Total Docs",
+            "type": "integer"
+          },
+          "warnings": {
+            "description": "Non-fatal sub-query failures.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "case_id",
+          "total_docs",
+          "coverage_state"
+        ],
+        "title": "CaseSummaryOut",
+        "type": "object"
+      },
+      "title": "Case Coverage Summary"
     },
     {
       "annotations": {
