@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 from collections.abc import Callable
 from enum import Enum
 from typing import Any, Literal
@@ -1194,6 +1195,132 @@ async def opensearch_case_detections_resource(case_id: str) -> str:
     return _json_from_tool_result(result)
 
 
+def triage_host_prompt(host: str, case_id: str = "") -> str:
+    case_arg = f", case_id={case_id!r}" if case_id else ""
+    return (
+        f"Triage host {host!r}. Start with "
+        f"opensearch_case_summary(case_id={case_id!r}) if case_id is known, then "
+        f"opensearch_aggregate(field='event.code', query='host.name:{host}'{case_arg}), "
+        f"opensearch_timeline(query='host.name:{host}'{case_arg}), and targeted "
+        "opensearch_search calls for event.code:4624, event.code:4688, and "
+        "event.code:7045 in the spike windows. Treat Shimcache/Amcache as file "
+        "presence only, not execution."
+    )
+
+
+def build_timeline_prompt(query: str, case_id: str = "", interval: str = "1h") -> str:
+    case_arg = f", case_id={case_id!r}" if case_id else ""
+    return (
+        f"Build an investigative timeline for query {query!r}. First call "
+        f"opensearch_timeline(query={query!r}, interval={interval!r}{case_arg}). "
+        "Identify spike windows, then call opensearch_search with time_from/time_to "
+        "for each spike and summarize the event families, hosts, and users involved."
+    )
+
+
+def ioc_sweep_prompt(case_id: str = "") -> str:
+    case_arg = f"case_id={case_id!r}, " if case_id else ""
+    return (
+        "Sweep this case for known-bad IOCs. Start with "
+        f"opensearch_enrich_intel({case_arg}dry_run=True) to size the IOC corpus. "
+        "If appropriate, run the enrichment asynchronously, poll "
+        "opensearch_ingest_status, then search for "
+        "threat_intel.verdict:MALICIOUS and review opensearch_list_detections."
+    )
+
+
+async def opensearch_index_catalog_resource() -> str:
+    return _json_from_tool_result(await run_opensearch_status(StatusIn()))
+
+
+def _flatten_mapping_props(props: dict[str, Any], prefix: str = "") -> list[dict[str, str]]:
+    fields: list[dict[str, str]] = []
+    for key, value in props.items():
+        full = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict) and "properties" in value:
+            fields.extend(_flatten_mapping_props(value["properties"], full))
+        elif isinstance(value, dict):
+            fields.append({"field": full, "type": str(value.get("type", "object"))})
+        else:
+            fields.append({"field": full, "type": "unknown"})
+    return fields
+
+
+async def opensearch_field_catalog_resource(artifact_type: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", artifact_type):
+        return _json_text(
+            {
+                "artifact_type": artifact_type,
+                "fields": [],
+                "error": "artifact_type contains unsupported characters.",
+            }
+        )
+    try:
+        client = _legacy_server()._get_os()
+        indices = client.cat.indices(
+            index=f"case-*-{artifact_type}-*",
+            format="json",
+            h="index",
+        )
+        first = next((item.get("index") for item in indices or [] if item.get("index")), None)
+        if not first:
+            return _json_text({"artifact_type": artifact_type, "fields": [], "total_fields": 0})
+        mapping = client.indices.get_mapping(index=first)
+        props = mapping.get(first, {}).get("mappings", {}).get("properties", {})
+        fields = sorted(_flatten_mapping_props(props), key=lambda item: item["field"])[:500]
+        return _json_text(
+            {
+                "artifact_type": artifact_type,
+                "sample_index": first,
+                "fields": fields,
+                "total_fields": len(fields),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - resource returns JSON diagnostics
+        return _json_text(
+            {
+                "artifact_type": artifact_type,
+                "fields": [],
+                "error": f"{type(exc).__name__}: field catalog unavailable.",
+            }
+        )
+
+
+async def opensearch_detection_catalog_resource() -> str:
+    try:
+        client = _legacy_server()._get_os()
+        response = client.transport.perform_request(
+            "GET",
+            "/_plugins/_security_analytics/detectors/_search",
+            params={"size": 1000},
+        )
+        detectors = response.get("detectors") or response.get("hits", {}).get("hits", [])
+        by_type: dict[str, int] = {}
+        for detector in detectors:
+            source = detector.get("_source", detector) if isinstance(detector, dict) else {}
+            dtype = str(source.get("detector_type") or source.get("detectorType") or "unknown")
+            by_type[dtype] = by_type.get(dtype, 0) + 1
+        return _json_text(
+            {
+                "total_detectors": len(detectors),
+                "detectors_by_type": by_type,
+                "hayabusa_note": "Hayabusa alerts use case-*-hayabusa-* when available.",
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - Sigma is often unavailable on OpenSearch 3.5
+        return _json_text(
+            {
+                "total_detectors": 0,
+                "detectors_by_type": {},
+                "hayabusa_note": (
+                    "Security Analytics detector catalog unavailable; query "
+                    "case-*-hayabusa-* for Hayabusa alerts when evtx ingest ran."
+                ),
+                "error": f"{type(exc).__name__}: detection catalog unavailable.",
+            }
+        )
+
+
 async def run_opensearch_fix_host_mapping(params: FixHostMappingIn) -> ToolResult:
     raw = _legacy_server().opensearch_host_fix(**params.model_dump())
     raw = _redact_secret_fields(raw)
@@ -1305,6 +1432,55 @@ RESOURCE_REGISTRY.append(
         title="Case Detection Findings",
         description="Unfiltered resource view of detection findings for case-oriented clients.",
     )
+)
+
+PROMPT_REGISTRY.extend(
+    [
+        PromptDef(
+            name="triage_host",
+            fn=triage_host_prompt,
+            title="Triage Host",
+            description="Compose a host-triage workflow from OpenSearch tools.",
+        ),
+        PromptDef(
+            name="build_timeline",
+            fn=build_timeline_prompt,
+            title="Build Timeline",
+            description="Compose a timeline-first workflow and guided searches for spike windows.",
+        ),
+        PromptDef(
+            name="ioc_sweep",
+            fn=ioc_sweep_prompt,
+            title="IOC Sweep",
+            description="Compose an IOC enrichment and malicious-indicator review workflow.",
+        ),
+    ]
+)
+
+RESOURCE_REGISTRY.extend(
+    [
+        ResourceDef(
+            uri="opensearch://catalog/indices",
+            fn=opensearch_index_catalog_resource,
+            name="opensearch_index_catalog",
+            title="Index Catalog",
+            description="Read-only catalog of case-* indices and document counts.",
+        ),
+        ResourceDef(
+            uri="opensearch://catalog/fields/{artifact_type}",
+            fn=opensearch_field_catalog_resource,
+            name="opensearch_field_catalog",
+            title="Field Mapping Dictionary",
+            description="Flattened field-to-type mapping for an artifact type.",
+        ),
+        ResourceDef(
+            uri="opensearch://catalog/detections",
+            fn=opensearch_detection_catalog_resource,
+            name="opensearch_detection_catalog",
+            title="Detection Rule Catalog",
+            description="Installed Sigma detector counts, with Hayabusa fallback guidance.",
+        ),
+    ]
 )
 
 REGISTRY.append(

@@ -1,6 +1,58 @@
 {
   "backend": "opensearch-mcp",
-  "prompts": [],
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "host",
+          "required": true
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "case_id",
+          "required": false
+        }
+      ],
+      "description": "Compose a host-triage workflow from OpenSearch tools.",
+      "name": "triage_host",
+      "title": "Triage Host"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "query",
+          "required": true
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "case_id",
+          "required": false
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "interval",
+          "required": false
+        }
+      ],
+      "description": "Compose a timeline-first workflow and guided searches for spike windows.",
+      "name": "build_timeline",
+      "title": "Build Timeline"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "case_id",
+          "required": false
+        }
+      ],
+      "description": "Compose an IOC enrichment and malicious-indicator review workflow.",
+      "name": "ioc_sweep",
+      "title": "IOC Sweep"
+    }
+  ],
   "resource_templates": [
     {
       "annotations": null,
@@ -13,6 +65,15 @@
     },
     {
       "annotations": null,
+      "description": "Flattened field-to-type mapping for an artifact type.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_field_catalog",
+      "title": "Field Mapping Dictionary",
+      "uri_template": "opensearch://catalog/fields/{artifact_type}"
+    },
+    {
+      "annotations": null,
       "description": "Parameterized resource view of a case coverage summary.",
       "meta": null,
       "mime_type": "application/json",
@@ -22,6 +83,24 @@
     }
   ],
   "resources": [
+    {
+      "annotations": null,
+      "description": "Read-only catalog of case-* indices and document counts.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_index_catalog",
+      "title": "Index Catalog",
+      "uri": "opensearch://catalog/indices"
+    },
+    {
+      "annotations": null,
+      "description": "Installed Sigma detector counts, with Hayabusa fallback guidance.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_detection_catalog",
+      "title": "Detection Rule Catalog",
+      "uri": "opensearch://catalog/detections"
+    },
     {
       "annotations": null,
       "description": "Read-only resource view of OpenSearch cluster health and case index counts.",
