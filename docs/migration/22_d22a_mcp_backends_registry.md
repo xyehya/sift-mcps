@@ -1,6 +1,6 @@
 # 22 - D22A / Batch H `mcp_backends` Control-Plane Registry (decision D22)
 
-Status: implemented on build branch `codex/d22a-mcp-backends-registry` (not landed)
+Status: landed on `revamp/spg-v1` (implementation commit `abf42e0`, Land Run 39)
 Scope fence: see §4
 Decisions referenced: D2, D3, D12, D22, D24, D30, D32, D33, D34; carries
 F-11, B-13; complements B-4.
@@ -13,8 +13,7 @@ is wired in code. It preserves every landed policy guarantee: PR03A Supabase JWT
 identity, PR03B DB active-case authority, B-10 tool authz, B-11 proxy active-case
 handling, D3 no per-backend `/mcp/{name}`, and D24 SIFT-owned policy.
 
-This branch is not Land yet: **F-11** and **B-13** are marked resolved/done only
-after the D22A commit lands on `revamp/spg-v1`.
+Land Run 39 marks **F-11 RESOLVED** and **B-13 DONE** for this batch.
 
 ## 1. Operator Decisions Locked For This Batch
 
@@ -308,14 +307,15 @@ Wire `assert_mounted_tool_names` (`mcp_server.py:348`) at server assembly, after
 DB-registry manifests (post-rename, matching `_tool_rename_map`). On mismatch it
 raises and the startup fails loudly. If the Build instead chooses DB/manifest
 validation as the single guard, it must delete the dead function and document why
-in the doc/log. Either way **B-13 is marked DONE only at Land**.
+in the doc/log. D22A wired the startup assertion; **B-13 was marked DONE at
+Land Run 39**.
 
 ## 10. F-11 Resolution
 
 F-11 ("D27b reads add-ons from `gateway.yaml`; confirm it is in scope, not a
 silent dependency") is resolved by this batch moving that authority into
-`app.mcp_backends`. **Mark F-11 RESOLVED in `REGISTER.md` only at Land**, citing
-the landed migration + loader, not at Plan time.
+`app.mcp_backends`. **F-11 was marked RESOLVED in `REGISTER.md` at Land Run 39**,
+citing the landed migration + loader.
 
 ## 11. Audit, Identity, Active-Case Invariants (must not regress)
 
@@ -371,7 +371,7 @@ Host (`.venv`) and VM (`/usr/bin/python3.12`, `UV_NO_MANAGED_PYTHON=1`,
 - **F-15 - activation model. RESOLVED by D34.** FastMCP proxy mounts are fixed at
   server assembly today; D22A uses restart-to-apply and a portal/API
   `pending_apply` state, not live dynamic remount.
-- **B-13** is resolved by §9 but only marked DONE at Land.
+- **B-13** is resolved by §9 and marked DONE at Land Run 39.
 - Carried unchanged: **B-4** (credential-as-arg; F-14 is adjacent),
   **B-12** (capped-result `backend_audit_id`), **B-15** (DNS-rebinding TOCTOU on
   proxied/remote-manifest fetches - relevant because the registry stores remote
@@ -396,9 +396,9 @@ beyond optional manifest field additions.
   back-compatible).
 - `configs/gateway.yaml.template`: `backends:` block documented as
   non-authoritative/removed; control-plane DSN remains the registry source.
-- Docs/logs: this doc is flipped to implemented for the Build branch; Run 38 is
-  logged in `MIGRATION_STATE.md`; mark **F-11 RESOLVED** and **B-13 DONE** only
-  at Land.
+- Docs/logs: this doc is flipped to landed; Runs 38-39 are logged in
+  `MIGRATION_STATE.md`; **F-11** is **RESOLVED** and **B-13** is **DONE** at
+  Land.
 
 ## 15. Ready-to-copy Build Prompt
 

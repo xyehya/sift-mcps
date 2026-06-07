@@ -2,14 +2,15 @@
 
 ## Current Objective
 
-**PR03B / Batch B active-case DB authority is landed** on `revamp/spg-v1`
-(Build Run 33, Land Run 34), from
-`docs/migration/21_pr03b_active_case_db_authority.md`. Supabase/Postgres
-`app.active_case_state` is now the runtime active-case authority for the scoped
-request paths. `SIFT_CASE_DIR`, `SIFT_CASES_ROOT`, `gateway.yaml case.dir`, and
-`~/.sift/active_case` are not regenerated as active-case exports and do not win
-over the DB active case on Gateway/portal/core/FastMCP request paths. No
-historical data migration was added. **B-11 is DONE.**
+**D22A / Batch H `mcp_backends` registry is landed** on `revamp/spg-v1`
+(Build Run 38, Land Run 39), from
+`docs/migration/22_d22a_mcp_backends_registry.md`. Add-on MCP backend authority
+now lives in Supabase/Postgres `app.mcp_backends`; `gateway.yaml backends` is no
+longer authority, stale YAML backend blocks are ignored, and no control-plane
+DSN means core-only add-ons. Backend connection rows store non-secret metadata
+and env-var credential references only. FastMCP add-on exposure uses
+restart-to-apply; registry state changes immediately and mounted `/mcp` catalog
+changes on Gateway restart. **F-11 is RESOLVED** and **B-13 is DONE**.
 
 Landed foundation: D27b gateway cutover is landed on `revamp/spg-v1` (Runs
 23-24), serving one FastAPI ASGI app with aggregate FastMCP `http_app` at
@@ -19,40 +20,55 @@ audit envelope. PR03A / Batch A unified Supabase JWT identity is landed
 (Runs 28-29): REST and FastMCP `/mcp` accept Supabase JWTs through the shared
 resolver, portal Supabase login/session works, agent/service JWT issuance and
 revocation are implemented, B-10 and B-14 are DONE, and D31 locks revocation for
-pinned Supabase v1.26.05.
-
-Run 30 added `20_portal_dashboard_inventory.md`, the normalized portal/dashboard
-workflow and API inventory. Run 31 reconciled recurring architecture docs and
-created doc 21. Run 32 demoted D4 to a historical pointer so new active-case
-work cites D32 only. Run 33 implemented PR03B; Run 34 fast-forward landed it on
-`revamp/spg-v1`. D30 remains the target credential model; PR02 hash-only tokens
-remain a transitional compatibility bridge until ID-6.
-
-FastMCP 3.4.2 grounding was reconfirmed in Run 33 against the installed wheel:
-`create_proxy` imports from `fastmcp.server`; `Middleware.on_call_tool(self,
-context, call_next)` wraps mounted proxied tools; `context.message.arguments`
-can be mutated before `call_next` and those arguments reach the proxied child;
-`MiddlewareContext` is frozen, so PR03B uses a Gateway context variable and core
-active-case context instead of attaching state to the FastMCP context object.
-B-11 is handled by injecting/overriding safe `case_id`/`case_key` arguments or
-returning typed audited denials for implicit-env/filesystem case-scoped proxy
-tools.
+pinned Supabase v1.26.05. PR03B / Batch B active-case DB authority is landed
+(Runs 33-34): `app.active_case_state` is the runtime active-case authority for
+Gateway/portal/core/FastMCP scoped paths, and **B-11 is DONE**.
 
 Run 36 aligned documentation ownership so `MIGRATION_STATE.md` remains the
-single current handoff: entry points and indexes now point here for live status,
-landed specs are labelled historical, and the validator catches the drift
-patterns found in the alignment audit. Run 37 installed the short
-`CONVENTIONS.md` contract into the auto-loaded entry points and promoted
-`scripts/validate_docs.py` as the primary docs gate.
+single current handoff. Run 37 installed the short `CONVENTIONS.md` contract
+into the auto-loaded entry points and promoted `scripts/validate_docs.py` as the
+primary docs gate. D30 remains the target credential model; PR02 hash-only
+tokens remain a transitional compatibility bridge until ID-6.
 
-**Next:** **Review/Land D22A / Batch H** from branch
-`codex/d22a-mcp-backends-registry`. Run `/code-review` and `/security-review`
-for the branch diff before Land because it touches Gateway policy, credentials,
-and the backend registry path. At Land, mark **F-11 RESOLVED** and **B-13 DONE**
-only after the D22A commit is merged to `revamp/spg-v1`; keep
-B-4/B-12/B-15 forward. Do not fold evidence/audit DB authority (Batch C),
-jobs/workers (Batch E), OpenSearch-core, RAG/skills, or
-findings/timeline/TODO/report data migration into D22A.
+**Next:** **Plan EVID-AUD-A / Batch C** from
+`docs/migration/18_target_architecture_acceleration.md` §11/§13: evidence
+metadata + audit DB authority and the DB-backed evidence gate. Keep Batch E
+jobs/workers, OpenSearch-core, RAG/skills, findings/timeline/TODO/report data
+migration, and B-4/B-12/B-15 separate unless a new candidate explicitly scopes
+them.
+
+## Run 39 - D22A / Batch H Land
+
+Land-stage run in worktree
+`/home/yk/AI/SIFTHACK/sift-mcps-d22a-mcp-backends-registry` on branch
+`codex/d22a-mcp-backends-registry`.
+
+Trigger: operator said "Land".
+
+Changed:
+- Fast-forward Land path for `codex/d22a-mcp-backends-registry` to
+  `revamp/spg-v1`.
+- Marked **F-11 RESOLVED** and **B-13 DONE** in `REGISTER.md`.
+- Updated doc 22 and the migration index from candidate/build status to landed
+  history.
+- Refreshed the live Current Objective handoff to Batch C evidence/audit
+  planning.
+
+Review note:
+- `/code-review` and `/security-review` slash tools were not available in this
+  runtime; the operator explicitly requested Land. No runtime code changed in
+  Run 39. The Build run performed targeted manual review around credential
+  references, Gateway authority, mount ordering, audit writes, and no-DSN
+  behavior before commit.
+
+Verification:
+- `python3 scripts/validate_docs.py` passed.
+- `git diff --check` passed.
+- `git merge-base --is-ancestor revamp/spg-v1 HEAD` passed before updating the
+  `revamp/spg-v1` branch pointer.
+
+Next: Plan EVID-AUD-A / Batch C evidence metadata + audit DB authority from doc
+18 §11/§13.
 
 ## Run 38 - D22A / Batch H `mcp_backends` Registry Build
 
