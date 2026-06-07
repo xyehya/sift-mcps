@@ -2,24 +2,107 @@
 
 ## Current Objective
 
-Run 12 created `docs/migration/11_first_pr_candidate.md`, the concrete first
-implementation PR candidate for roadmap phase JOB-0: additive baseline execution
-smoke-test fixtures, lightweight tests, and a short runbook with no runtime
-behavior change.
+Run 13 implemented and committed JOB-0, then created
+`docs/migration/12_pr01.md`, the next implementation PR candidate for Phase
+ID-1: additive control-plane identity foundation schema, schema tests, and a
+short runbook with no runtime wiring.
 
-The workspace is now handoff-ready for the actual JOB-0 coding PR. The first PR
-decision is locked for implementation: **add baseline execution smoke-test
-fixtures and lightweight tests for current execution-critical paths, without
-changing runtime behavior**. This comes before schema migrations, workers, job
-APIs, parser conversion, OpenSearch refactors, or Supabase/Postgres-backed
-execution. Per charter D17, JOB-0 is additive and order-independent; the first
-feature-bearing PR after JOB-0 is the identity foundation, Phase ID-1 in
-`09_identity_auth_cutover.md`, not JOB-1.
+JOB-0 is complete in commit `c73762c`:
+**Add JOB-0 execution baseline smoke tests**. The committed work added
+deterministic baseline tests for current evidence, audit, OpenSearch
+index/provenance, and ingest-status behavior, plus
+`docs/migration/JOB0_baseline_execution_checks.md`. Runtime behavior was not
+changed.
 
-This run stayed documentation-only. It did not implement code, create tests,
-create database migrations, refactor REST APIs, MCP tools, frontend views,
-OpenSearch, evidence, audit, parser, report, finding, or worker code. It did
-not introduce Redis/RQ/Celery/Temporal or any external queue.
+The workspace is now handoff-ready for PR01 planning/implementation. The next
+recommended feature-bearing PR is **Phase ID-1: control-plane identity
+foundation schema** from `09_identity_auth_cutover.md`, not JOB-1. PR01 should
+create only the cases/tokens/identity/audit foundation schema and schema tests.
+It must not wire Gateway auth, Supabase Auth runtime behavior, portal auth,
+active-case propagation, workers, job tables, OpenSearch, evidence, audit data
+migration, parser behavior, MCP tools, REST job APIs, or frontend changes.
+
+Current worktree note: `docs/migration/12_pr01.md` has been created after the
+JOB-0 commit and is not committed yet unless a later run commits it.
+
+## Run 13 - JOB-0 Implementation Commit And PR01 Planning
+
+Committed:
+
+- `c73762c Add JOB-0 execution baseline smoke tests`
+
+JOB-0 files committed:
+
+- `packages/sift-core/tests/test_core_execution_baseline_smoke.py` - evidence
+  seal/status and audit JSONL append baseline tests using temp paths.
+- `packages/opensearch-mcp/tests/test_opensearch_execution_baseline_smoke.py` -
+  OpenSearch index/provenance action-shape and ingest-status metadata tests
+  without live OpenSearch.
+- `docs/migration/JOB0_baseline_execution_checks.md` - `.venv`-based runbook for
+  targeted JOB-0 baseline checks and touched package suites.
+- `docs/migration/README.md` - link to the JOB-0 runbook.
+
+Created after the commit:
+
+- `docs/migration/12_pr01.md` - PR01 implementation candidate, replicating the
+  structure of `11_first_pr_candidate.md`, for Phase ID-1 identity foundation
+  schema only.
+
+Files inspected in this run:
+
+- `docs/migration/11_first_pr_candidate.md`
+- `docs/migration/README.md`
+- `packages/sift-core/pyproject.toml`
+- `packages/sift-common/pyproject.toml`
+- `packages/opensearch-mcp/pyproject.toml`
+- `packages/sift-core/src/sift_core/evidence_chain.py`
+- `packages/sift-common/src/sift_common/audit.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/paths.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/parse_json.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/ingest_status.py`
+- Existing adjacent tests under `packages/sift-core/tests/` and
+  `packages/opensearch-mcp/tests/` listed in doc 11 as needed.
+- `docs/migration/00_migration_charter.md`
+- `docs/migration/08_control_plane_schema.md`
+- `docs/migration/09_identity_auth_cutover.md`
+
+Verification run with `.venv`:
+
+- `PYTHONPATH=packages/sift-core/src:packages/sift-common/src .venv/bin/python -m pytest packages/sift-core/tests/test_core_execution_baseline_smoke.py`
+  - 2 passed.
+- `PYTHONPATH=packages/opensearch-mcp/src:packages/opensearch-mcp/tests:packages/sift-core/src:packages/sift-common/src .venv/bin/python -m pytest packages/opensearch-mcp/tests/test_opensearch_execution_baseline_smoke.py`
+  - 2 passed.
+- `PYTHONPATH=packages/opensearch-mcp/src:packages/opensearch-mcp/tests:packages/sift-core/src:packages/sift-common/src .venv/bin/python -m pytest --import-mode=importlib packages/sift-core/tests/test_core_execution_baseline_smoke.py packages/opensearch-mcp/tests/test_opensearch_execution_baseline_smoke.py`
+  - 4 passed.
+- `PYTHONPATH=packages/sift-core/src:packages/sift-common/src .venv/bin/python -m pytest packages/sift-core/tests`
+  - 328 passed.
+- `PYTHONPATH=packages/opensearch-mcp/src:packages/opensearch-mcp/tests:packages/sift-core/src:packages/sift-common/src .venv/bin/python -m pytest packages/opensearch-mcp/tests`
+  - 975 passed, 71 skipped.
+- `git diff --check`
+  - clean.
+
+Deviations and notes:
+
+- JOB-0 test files use package-specific filenames to avoid pytest module-name
+  collisions when both package test paths are collected together.
+- The audit baseline asserts current JSONL append/shape behavior only. It does
+  not assert secret redaction because current `AuditWriter` writes `params` as
+  supplied; changing that would be runtime behavior.
+- The runbook uses `.venv/bin/python` per the repository environment.
+- `docs/migration/12_pr01.md` is planning-only and not part of commit `c73762c`.
+
+Next recommended run:
+
+- Commit `docs/migration/12_pr01.md` if the PR01 candidate should be preserved
+  before implementation.
+- Then implement PR01 as described in `docs/migration/12_pr01.md`.
+- Inspect only the files listed in that document's repository discovery section.
+- Add the Phase ID-1 control-plane identity schema, deterministic schema tests,
+  and a short PR01 schema-check runbook.
+- Use `.venv` for Python test commands.
+- Run targeted schema tests, the touched schema suite if practical, and
+  `git diff --check`.
+- Stop and summarize changed files, tests run, and deviations.
 
 ## Run 12 - First PR Candidate Planning (JOB-0)
 
