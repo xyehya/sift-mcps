@@ -2517,6 +2517,133 @@
         "type": "object"
       },
       "title": "Check Registry Baseline"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Named Pipe"
+      },
+      "description": "Check a named pipe against known Windows pipes and known C2 pipe patterns such as Cobalt Strike or Metasploit. SUSPICIOUS means a known C2-pattern match; EXPECTED means a standard Windows pipe; UNKNOWN is neutral when neither catalog matches. Use when named pipe artifacts appear in Sysmon, EDR, process, or memory evidence. Example: `wintriage_check_pipe(pipe_name='\\\\\\\\.\\\\pipe\\\\msagent_12')`.",
+      "input_schema": {
+        "properties": {
+          "pipe_name": {
+            "description": "Named pipe (with or without \\\\.\\pipe\\ prefix; normalized before lookup).",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Pipe Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pipe_name"
+        ],
+        "title": "CheckPipeIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "wintriage_check_pipe",
+      "output_schema": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Pipe context from the local baseline database.",
+            "title": "Description"
+          },
+          "is_suspicious": {
+            "default": false,
+            "description": "True when the pipe matches a known C2 pipe pattern.",
+            "title": "Is Suspicious",
+            "type": "boolean"
+          },
+          "is_windows_pipe": {
+            "default": false,
+            "description": "True when the pipe is a known standard Windows pipe.",
+            "title": "Is Windows Pipe",
+            "type": "boolean"
+          },
+          "malware_family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Malware family associated with suspicious matches.",
+            "title": "Malware Family"
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Windows protocol associated with expected pipe matches.",
+            "title": "Protocol"
+          },
+          "service_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Windows service associated with expected pipe matches.",
+            "title": "Service Name"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "C2 tool or framework name for suspicious matches.",
+            "title": "Tool Name"
+          },
+          "verdict": {
+            "description": "Named-pipe baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict"
+        ],
+        "title": "CheckPipeOut",
+        "type": "object"
+      },
+      "title": "Check Named Pipe"
     }
   ]
 }

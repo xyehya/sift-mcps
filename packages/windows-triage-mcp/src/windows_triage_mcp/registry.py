@@ -474,6 +474,49 @@ class CheckRegistryOut(VerdictOut):
     )
 
 
+class CheckPipeIn(BaseModel):
+    pipe_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description=(
+            "Named pipe (with or without \\\\.\\pipe\\ prefix; normalized before lookup)."
+        ),
+    )
+
+    @field_validator("pipe_name")
+    @classmethod
+    def _reject_null_bytes(cls, value: str) -> str:
+        if "\x00" in value:
+            raise ValueError("null bytes are not allowed")
+        return value
+
+
+class CheckPipeOut(BaseModel):
+    verdict: Verdict = Field(..., description="Named-pipe baseline verdict.")
+    is_suspicious: bool = Field(
+        False, description="True when the pipe matches a known C2 pipe pattern."
+    )
+    is_windows_pipe: bool = Field(
+        False, description="True when the pipe is a known standard Windows pipe."
+    )
+    tool_name: str | None = Field(
+        None, description="C2 tool or framework name for suspicious matches."
+    )
+    malware_family: str | None = Field(
+        None, description="Malware family associated with suspicious matches."
+    )
+    description: str | None = Field(
+        None, description="Pipe context from the local baseline database."
+    )
+    protocol: str | None = Field(
+        None, description="Windows protocol associated with expected pipe matches."
+    )
+    service_name: str | None = Field(
+        None, description="Windows service associated with expected pipe matches."
+    )
+
+
 REGISTRY: list[ToolDef] = []
 ALIAS_REGISTRY: dict[str, list[ToolAliasDef]] = {}
 PROMPT_REGISTRY: list[PromptDef] = []
@@ -1189,6 +1232,82 @@ async def wintriage_check_registry(
         )
 
 
+async def wintriage_check_pipe(
+    params: CheckPipeIn, context: dict[str, Any] | None = None
+) -> ToolResult:
+    runtime = get_runtime()
+    tool_name = (context or {}).get("tool_name", "wintriage_check_pipe")
+    raw_args = params.model_dump(mode="json", exclude_none=True)
+    audit_id = runtime._audit._next_audit_id()
+    start = time.monotonic()
+    try:
+        raw = await runtime._check_pipe(params.pipe_name)
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(runtime, tool_name, raw_args, raw, audit_id, elapsed_ms)
+        if "error" in raw:
+            return _legacy_error_result(raw, meta)
+        out = CheckPipeOut(
+            verdict=Verdict(raw.get("verdict", "UNKNOWN")),
+            is_suspicious=bool(raw.get("is_suspicious", False)),
+            is_windows_pipe=bool(raw.get("is_windows_pipe", False)),
+            tool_name=raw.get("tool_name"),
+            malware_family=raw.get("malware_family"),
+            description=raw.get("description"),
+            protocol=raw.get("protocol"),
+            service_name=raw.get("service_name"),
+        )
+        return _model_result(out, meta)
+    except TriageValidationError as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "validation_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.invalid_input,
+            str(exc),
+            "Correct the named-pipe value and retry.",
+            meta=meta,
+        )
+    except DatabaseError:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "database_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.upstream_degraded,
+            "A baseline database error occurred.",
+            "Check the local Windows triage database installation and retry.",
+            retryable=True,
+            meta=meta,
+        )
+    except WindowsTriageError as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "server_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.internal,
+            str(exc),
+            "Check backend logs for details, then retry.",
+            meta=meta,
+        )
+
+
 def _check_file_alias(params: BaseModel) -> CheckArtifactIn:
     alias = CheckFileAliasIn.model_validate(params)
     return CheckArtifactIn(
@@ -1329,6 +1448,25 @@ REGISTRY.append(
             "the local registry baseline is not evidence of malice. Example: "
             "`wintriage_check_registry(key_path='SOFTWARE\\\\Microsoft\\\\Windows"
             "\\\\CurrentVersion\\\\Run')`."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="wintriage_check_pipe",
+        fn=wintriage_check_pipe,
+        in_model=CheckPipeIn,
+        out_model=CheckPipeOut,
+        annotations=_annotation("Check Named Pipe"),
+        title="Check Named Pipe",
+        description=(
+            "Check a named pipe against known Windows pipes and known C2 pipe "
+            "patterns such as Cobalt Strike or Metasploit. SUSPICIOUS means a "
+            "known C2-pattern match; EXPECTED means a standard Windows pipe; "
+            "UNKNOWN is neutral when neither catalog matches. Use when named "
+            "pipe artifacts appear in Sysmon, EDR, process, or memory evidence. "
+            "Example: `wintriage_check_pipe(pipe_name='\\\\\\\\.\\\\pipe\\\\msagent_12')`."
         ),
     )
 )
