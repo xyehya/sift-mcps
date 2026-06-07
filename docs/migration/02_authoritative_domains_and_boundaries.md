@@ -13,7 +13,10 @@ runtime code changes.
 > portal-set and authoritative in the control plane (`active_case_state`),
 > propagated by the Gateway, with env/pointers as generated exports only (D4);
 > OpenSearch is 3.5.0 with security enabled (D6); identity/cases/tokens cut over
-> first (D17, see `09_identity_auth_cutover.md`). Where this document's
+> first (D17, see `09_identity_auth_cutover.md`). Run 26 / D30 supersedes the
+> older machine-token target: humans, agents, MCP clients, workers, and services
+> use Supabase-issued JWTs in the final architecture, with PR02 hash-only tokens
+> retained only as a compatibility bridge. Where this document's
 > Section 9 "Decisions needing user approval" overlaps these, the charter wins.
 
 ## 1. Executive Summary
@@ -31,7 +34,7 @@ The target architecture splits authority by plane:
   stays immutable; Postgres stores metadata, hashes, integrity status, and
   references.
 - Gateway is the policy, authentication, authorization, routing, and MCP broker.
-  It validates human sessions or MCP/service tokens, applies case/tool scope,
+  It validates Supabase JWTs in the final target, applies case/tool scope,
   routes to MCP tools and services, and writes privileged audit events.
 - Workers are the execution plane. They claim durable work, run native SIFT and
   parser workflows, emit logs/status, and write results through authorized
@@ -222,16 +225,17 @@ The target architecture splits authority by plane:
 | Frontend UI state | Browser/local UI store only | Zustand store (`packages/case-dashboard/frontend/src/store/useStore.js:1-70`) | Keep UI-only state in frontend; fetch authority from APIs | UI cache only | Frontend encodes stale authority |
 | Native workflow execution state | Supabase/Postgres for state; workers/filesystem for execution artifacts | Native executor, case output dirs, OpenSearch subprocesses (`packages/sift-core/src/sift_core/execute/executor.py:122-205`, `packages/opensearch-mcp/src/opensearch_mcp/server.py:2941-3165`) | Wrap current execution with DB job records | Worker execution plane with DB state | Stranded outputs, retries causing duplicates |
 
-## 4. Human Auth Versus MCP/Service-Token Authority
+## 4. Supabase JWT Auth And Transitional MCP/Service-Token Authority
 
-- Supabase Auth is for human operators.
-- MCP/service tokens are for AI agents, MCP clients, workers, and service automation.
-- MCP/service tokens are not Supabase user sessions.
-- MCP/service tokens are issued by the Gateway and stored only as hashes in Postgres.
+- D30 final target: Supabase Auth/JWT is for human operators, AI agents, MCP
+  clients, workers, and service automation.
+- PR02 MCP/service tokens are transitional compatibility credentials, not the
+  final target. They remain hash-only while enabled and are sunset at ID-6 or
+  converted to non-secret issuance/provenance metadata.
 - The Gateway is the enforcement point.
-- Postgres/Supabase is the registry and authority.
+- Postgres/Supabase is the principal, membership, scope, and audit authority.
 - RLS protects human/operator-facing data paths.
-- Service-side authorization protects MCP/worker paths.
+- Gateway service-side authorization protects MCP/worker paths.
 - Every privileged action must create an audit event.
 
 The target model intentionally separates human operator identity from
@@ -385,11 +389,12 @@ verified.
 
 See `00_migration_charter.md` "Confirmed Decisions (Locked)" D1-D17 for the
 authoritative list. In summary: no Redis/RQ; Supabase/Postgres is authority;
-OpenSearch is core search/data plane (3.5.0, security on); hash-only DB tokens;
-frontend is not authority and never talks to a backend/OpenSearch directly;
-agent findings are not auto-approved; humans use Supabase Auth + RLS; agents/
-services use Gateway-issued tokens; the Gateway is the single enforcement point
-with per-backend MCP routes disabled; evidence vault stays immutable.
+OpenSearch is core search/data plane (3.5.0, security on); Supabase JWT is the
+final credential for humans, agents, MCP clients, workers, and services (D30);
+PR02 hash-only DB tokens are a compatibility bridge; frontend is not authority
+and never talks to a backend/OpenSearch directly; agent findings are not
+auto-approved; the Gateway is the single enforcement point with per-backend MCP
+routes disabled; evidence vault stays immutable.
 
 ### Decisions previously open here, now locked (charter)
 

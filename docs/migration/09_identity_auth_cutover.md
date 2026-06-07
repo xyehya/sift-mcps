@@ -1,10 +1,10 @@
 # Identity, Auth, and Case-Scope Cutover (Foundation Track)
 
-Last updated: 2026-06-07.
+Last updated: 2026-06-07 (Run 26 D30 target-auth update).
 
 Scope: planning only. This document defines the **foundation track** of the
 migration: identity, authentication, case membership, active-case authority, and
-the MCP/service-token registry. It is cutover-order step 1 in
+the transitional MCP/service-token registry. It is cutover-order step 1 in
 `00_migration_charter.md` ("Cutover Order") and is a prerequisite for the
 evidence, jobs, OpenSearch, findings, reports, RAG, and skills work, because
 every case-scoped table and every durable job carries identity and case context
@@ -15,6 +15,12 @@ runtime behavior. It defines the target model, locks the previously-open
 identity decisions, and gives a phased, additive cutover plan. All locked
 decisions trace to `00_migration_charter.md` "Confirmed Decisions (Locked)".
 
+**Run 26 target update:** D30 supersedes the earlier target-auth split in D8/D26.
+The final target is Supabase-issued JWTs for humans, AI agents, MCP clients,
+workers, and services. PR02's hash-only `mcp_tokens` registry remains landed and
+useful as a compatibility bridge/provenance surface, but it is no longer the
+final credential model.
+
 ## 1. Why this is first
 
 The execution docs (`05`-`08`) assume that:
@@ -22,7 +28,8 @@ The execution docs (`05`-`08`) assume that:
 - Every job has `case_id`, `requested_by_user_id`, and `requested_by_token_id`
   sourced from "Gateway-validated session/token context".
 - Case scope comes from authenticated identity, not from process environment.
-- Tokens are hash-only, case-scoped, tool-scoped registry records.
+- Principals authenticate with Supabase JWTs and resolve to case/tool scope in
+  the control plane.
 
 None of those primitives exist yet. Today:
 
@@ -46,13 +53,13 @@ Building case-scoped job APIs on this is unsafe. Foundation first.
 
 ## 2. Target identity model
 
-Two distinct principal classes, one enforcement point.
+One credential family, one enforcement point.
 
 | Principal class | Who | Credential | Validated by | Notes |
 | --- | --- | --- | --- | --- |
-| Human operator | Examiners/analysts using the portal | Supabase Auth session (JWT) | Gateway verifies Supabase session; RLS scopes reads | Mapped to `operator_profiles`; case access via `case_members`. |
-| AI agent / MCP client | Codex/Claude/local MCP clients | Gateway-issued, hash-only MCP token | Gateway validates against `mcp_tokens` + `mcp_token_scopes` | Never a Supabase user session; case- and tool-scoped. |
-| Worker / service | SIFT VM worker runtime, Gateway-internal services | Service token + `service_identities`/`workers` row | Gateway/worker service role | Inherits `case_id` from claimed job; never invents case scope. |
+| Human operator | Examiners/analysts using the portal | Supabase Auth JWT | Gateway verifies JWT; RLS scopes reads | Mapped to `operator_profiles`; case access via `case_members`. |
+| AI agent / MCP client | Codex/Claude/local MCP clients | Supabase-issued JWT for an agent principal | FastMCP `TokenVerifier` + Gateway policy | Operator/portal may issue an agent JWT; case/tool scope resolves from DB rows, not arbitrary claims. |
+| Worker / service | SIFT VM worker runtime, Gateway-internal services | Supabase-issued JWT for a service/worker principal | Gateway/worker service resolver | Inherits `case_id` from claimed job; never invents case scope. |
 
 The Gateway remains the single policy boundary (charter D2). The browser never
 talks to Supabase or a backend directly for privileged mutation; it calls
@@ -78,9 +85,9 @@ from files/env into the control plane**:
 - Durable jobs record the active `case_id` immutably on the job row at creation
   time. A long-running job is unaffected if the operator later switches the
   active case.
-- For agent/MCP tokens, the operative case is the control-plane active case, and
-  the Gateway additionally verifies the token is authorized for that case before
-  dispatch. Normal agent tokens cannot pass an arbitrary `case_id`.
+- For agent/MCP JWTs, the operative case is the control-plane active case, and
+  the Gateway additionally verifies the resolved principal is authorized for that
+  case before dispatch. Normal agent principals cannot pass an arbitrary `case_id`.
 
 ### Coupling: the evidence gate must move with active case
 
@@ -92,10 +99,29 @@ must switch in lockstep, or the gate could check a different case than the call
 runs against. This is an explicit, in-scope step of this track (phase ID-5), not
 a later cleanup.
 
-## 4. MCP/service-token registry (locked: D8)
+## 4. Supabase JWT principal model + transitional token bridge (D30)
 
-Tokens become hash-only registry records. Locked initial policy (configurable
-later via Gateway config, but these are the defaults to implement):
+The final credential is a Supabase-issued JWT. The Gateway validates the JWT,
+then resolves the JWT subject into application principal/membership/scope rows.
+For FastMCP 3.4.2 this is implemented through a SIFT-owned `TokenVerifier`
+subclass, not the older `BearerAuthProvider` tutorial API.
+
+Required target behavior:
+
+| Aspect | Target value |
+| --- | --- |
+| Credential material | Supabase Auth access token / JWT for human, agent, worker, or service principal. |
+| Validation | Verify issuer, audience, signature, expiry, and subject against local Supabase Auth metadata/JWKS or the local Supabase Auth API. |
+| Principal mapping | JWT `sub` resolves to `operator_profiles`, `agents`, `service_identities`, `workers`, or a unified principal view/table. |
+| Scope | Case membership and tool/action scope come from DB rows resolved by the Gateway, not from untrusted client-supplied arguments. |
+| Revocation/expiry | Supabase session/token validity plus app-level disabled/revoked principal flags fail closed. |
+| Audit correlation | Audit rows carry JWT subject, app principal id/type, active case, tool/action, source IP, and optional compatibility fingerprint. |
+| Legacy bridge | PR02 `mcp_tokens` and legacy `gateway.yaml api_keys` remain only during cutover. |
+
+### Historical PR02 hash-token bridge
+
+PR02 implemented hash-only registry records. That remains correct for the
+transition window and for legacy clients that cannot yet use Supabase JWTs:
 
 | Aspect | Locked initial value |
 | --- | --- |
@@ -108,18 +134,16 @@ later via Gateway config, but these are the defaults to implement):
 | Scope | Required `case_id` (or explicit multi-case admin scope) plus tool/action scopes in `mcp_token_scopes`. A token with no scope can do nothing. |
 | Last use | `last_used_at` and `last_used_audit_event_id` updated on validation. |
 
-This supersedes the prior open questions on hash algorithm, pepper/KMS use,
-fingerprint format, and default expiry. KMS-backed hashing is explicitly
-deferred; the pepper-in-secret approach is the v1 target.
+This superseded the earlier open questions on hash algorithm, pepper/KMS use,
+fingerprint format, and default expiry for the PR02 bridge. KMS-backed hashing
+remains deferred. Under D30, this registry is not the final credential authority.
 
 ### Legacy token fallback during cutover
 
-During the cutover window the Gateway dual-validates: DB hash registry first,
-then the legacy `gateway.yaml api_keys` map (read-only). Legacy raw tokens are
-migrated as **disabled/legacy** records (fingerprint + metadata only; the raw
-secret is not copied into the DB), and operators re-issue DB-backed tokens. The
-legacy path is removed once no active legacy tokens remain and the config holds
-no raw service tokens (charter compatibility condition).
+During the cutover window the Gateway may dual-validate: Supabase JWT first,
+then PR02 hash-token registry, then the legacy `gateway.yaml api_keys` map only
+while explicitly enabled. The legacy path is removed once target JWT principals
+are verified and no active clients depend on raw or PR02 tokens.
 
 ## 5. Case membership and roles (locked role set)
 
@@ -140,15 +164,18 @@ Approval-gated and destructive actions (charter rules) require `lead`/`owner`
 
 ## 6. Human auth integration
 
-- Supabase Auth becomes the human identity provider. `operator_profiles.auth_user_id`
-  links to `auth.users(id)`.
-- The Gateway/portal verifies the Supabase session and resolves the operator
-  profile and case memberships, replacing the bespoke examiner model over time.
+- Supabase Auth becomes the identity provider for humans and target machine/agent
+  principals. `operator_profiles.auth_user_id` links humans to `auth.users(id)`;
+  agent/service/worker principal rows also need a Supabase Auth subject mapping.
+- The Gateway/portal verifies the Supabase session and resolves the operator or
+  agent/service profile and case memberships, replacing the bespoke examiner and
+  PR02 token model over time.
 - Legacy portal auth (HMAC `sift_session` JWT + examiner bearer fallback) keeps
   working behind a config flag during cutover so operators are never locked out
   (`packages/case-dashboard/src/case_dashboard/auth.py:61-131`). It is sunset
-  after Supabase Auth is verified end-to-end. Agent tokens remain rejected on
-  the portal surface throughout.
+  after Supabase Auth is verified end-to-end. Agent JWTs may authenticate to MCP;
+  portal access for agent principals remains policy-denied unless explicitly
+  allowed for an admin/debug workflow.
 - Single-user/anonymous-examiner mode (empty `api_keys`) is retained only as a
   local-dev convenience and must be off in the target deployment.
 
@@ -156,10 +183,14 @@ Approval-gated and destructive actions (charter rules) require `lead`/`owner`
 
 The Gateway gains, additively:
 
-- Supabase session verification for human REST/portal requests.
-- DB-backed MCP/service token validation (hash lookup) with legacy fallback.
+- Shared Supabase JWT verification for REST/portal requests and MCP `/mcp`.
+- DB-backed app-principal resolution from the JWT subject, including
+  operator/agent/service/worker type, disabled/revoked flags, memberships, and
+  tool/action scopes.
+- Transitional DB-backed MCP/service token validation (hash lookup) with legacy
+  fallback only while explicitly enabled.
 - `Identity` extended with case scope and tool scopes resolved from
-  membership/token records (today `Identity` carries no case scope,
+  membership/principal records (today `Identity` carries no case scope,
   `packages/sift-gateway/src/sift_gateway/identity.py:5-18`).
 - Active-case resolution from the control plane plus propagation to backends and
   tool calls, replacing env/pointer reads as authority.
@@ -186,17 +217,20 @@ the legacy path is explicitly removed.
   `mcp_tokens`, `mcp_token_scopes`, `audit_events`, and active-case state.
 - Schema only; no runtime wiring. RLS policies for human reads.
 
-### Phase ID-2 - Token hash registry (dual-validate)
-- Implement hash-only token validation (§4) in the Gateway with legacy
-  `gateway.yaml` fallback. Migrate existing tokens to disabled/legacy records.
-- Portal token lifecycle (create/rotate/revoke/reactivate) writes DB records and
-  returns the raw token once, replacing `gateway.yaml` writes
-  (`packages/case-dashboard/src/case_dashboard/routes.py:3060-3345`).
+### Phase ID-2 - Token hash registry (dual-validate, landed bridge)
+- Implemented hash-only token validation (§4 historical bridge) in the Gateway
+  with legacy `gateway.yaml` fallback. Portal token lifecycle writes DB records
+  and returns the raw token once.
+- Under D30 this phase is retained as compatibility/provenance, not the final
+  auth target.
 
-### Phase ID-3 - Supabase Auth for humans + memberships
-- Add Supabase session verification and operator-profile/membership resolution
-  behind the legacy-auth config flag. Map the current examiner as an initial
+### Phase ID-3 / PR03A - Unified Supabase JWT auth + memberships
+- Add Supabase JWT verification and operator/agent/service principal resolution
+  behind a legacy-auth config flag. Map the current examiner as an initial
   `owner`/`admin`.
+- Accept Supabase JWTs on REST and FastMCP `/mcp` via shared Gateway auth logic
+  and a FastMCP 3.4.2 `TokenVerifier`.
+- Keep PR02 token-registry fallback only as an explicit bridge until ID-6.
 
 ### Phase ID-4 - Control-plane active case + propagation
 - Write active case to the control plane on portal activation; Gateway reads it
@@ -211,42 +245,51 @@ the legacy path is explicitly removed.
 
 ### Phase ID-6 - Sunset legacy auth/token paths
 - After verification, remove the legacy examiner bearer fallback and legacy
-  `gateway.yaml api_keys` validation; ensure config holds no raw service tokens.
+  `gateway.yaml api_keys` validation; remove or disable PR02 token auth as a
+  credential authority unless explicitly retained as non-secret issuance/audit
+  metadata; ensure config holds no raw service tokens.
 - Keep single-user/anonymous mode only as an explicit local-dev flag.
 
 ## 9. Compatibility and migration mapping
 
 | Current source | Current role | Future authority | Bridge | Removal condition |
 | --- | --- | --- | --- | --- |
-| `gateway.yaml api_keys` (raw-keyed) | Token registry | `mcp_tokens` + `mcp_token_scopes` (hash-only) | Dual-validate, migrate as disabled/legacy records | No active legacy tokens; no raw service tokens in config |
+| `gateway.yaml api_keys` (raw-keyed) | Token registry | Supabase Auth JWT principals; PR02 `mcp_tokens` only as bridge/provenance | Dual-validate only while explicitly enabled | No active legacy tokens; no raw service tokens in config |
+| PR02 `mcp_tokens` hash registry | Transitional MCP/service token registry | Supabase JWT principal model (D30) | Keep fallback during cutover | REST and MCP JWT path verified; clients migrated |
 | Portal HMAC `sift_session` JWT + examiner bearer | Human auth | Supabase Auth + `operator_profiles` + `case_members` | Keep behind config flag during cutover | Supabase Auth verified end-to-end |
 | `SIFT_CASE_DIR` / `gateway.yaml case.dir` / `~/.sift/active_case` | Active case | Control-plane active-case state | DB authority + generated env/pointer exports | Backends accept Gateway-propagated case context |
 | Empty `api_keys` anonymous examiner | Single-user mode | Explicit local-dev flag only | Retain for dev | Off in target deployment |
 
 ## 10. Tests and acceptance
 
-- Token: hash lookup matches; raw token never stored; expiry/revocation fail
-  closed; fingerprint is non-secret; legacy fallback validates then is removable.
-- Identity: case scope and tool scopes resolved from membership/token; normal
-  agent token cannot pass arbitrary `case_id`; cross-case denial.
+- JWT auth: valid Supabase JWT accepted on REST and MCP; invalid/expired/wrong
+  audience tokens rejected; JWT subject resolves to an app principal.
+- Token bridge: hash lookup matches while enabled; raw token never stored;
+  expiry/revocation fail closed; fingerprint is non-secret; legacy fallback
+  validates then is removable.
+- Identity: case scope and tool scopes resolved from membership/principal rows;
+  normal agent principal cannot pass arbitrary `case_id`; cross-case denial.
 - Active case: portal sets it; Gateway propagates it; jobs snapshot it; env/pointer
   exports are generated, not read as authority; evidence gate checks the same case
   the call runs against.
 - Membership/roles: role matrix (§5) enforced; approval/destructive actions require
   `lead`/`owner`/`admin`; agents cannot approve their own findings.
-- Auth: Supabase session accepted; legacy flag path works during cutover and is
-  removable; agent tokens rejected on the portal surface.
+- Auth: Supabase JWT accepted; legacy flag path works during cutover and is
+  removable; agent principals are accepted on MCP but rejected from portal
+  operator workflows unless explicitly authorized.
 - Audit: token validation, denials, membership changes, and active-case changes
   are audited.
 
 ## 11. Decisions
 
 ### Locked (resolved here and in the charter)
-- Two principal classes; Gateway-only enforcement (D2, D8, D12).
+- Unified Supabase JWT principal model for human, agent, MCP client, worker, and
+  service principals (D30); Gateway-only enforcement (D2, D12).
 - Active case portal-set, control-plane authoritative, Gateway-propagated; env/
   pointers are generated exports (D4).
-- Hash-only token policy: SHA-256 + server pepper, 16-hex fingerprint, default
-  expiries, one-time raw display, dual-validate then sunset legacy (D8).
+- Hash-only token bridge policy: SHA-256 + server pepper, 16-hex fingerprint,
+  default expiries, one-time raw display, dual-validate then sunset legacy
+  (historical D8/PR02, superseded in target by D30).
 - Role set: `readonly`, `operator`, `lead`, `owner`, `admin`, with the §5
   permission matrix.
 - Legacy examiner bearer + HMAC JWT retained behind a config flag during cutover,
@@ -259,9 +302,9 @@ the legacy path is explicitly removed.
 - SSO/external IdP federation beyond Supabase Auth.
 
 ## 12. Next recommended run
-Current status: JOB-0, Phase ID-1 (PR01), and Phase ID-2 (PR02) are done. The
-next recommended run for this foundation track is a **Plan-stage PR03 / Phase
-ID-3** candidate: Supabase Auth for human operators plus
-`operator_profiles`/`case_members` resolution behind the legacy-auth flag.
-Active-case authority/propagation stays deferred to ID-4/ID-5; legacy auth/token
-sunset stays deferred to ID-6.
+Current status: JOB-0, Phase ID-1 (PR01), Phase ID-2 (PR02), D27a, and D27b are
+done. The next recommended run for this foundation track is a **Plan-stage
+PR03A / Batch A** candidate: unified Supabase JWT authentication for REST and
+MCP plus operator/agent/service principal and membership resolution behind the
+legacy-auth flag. Active-case authority/propagation stays deferred to ID-4/ID-5;
+legacy auth/token sunset stays deferred to ID-6.

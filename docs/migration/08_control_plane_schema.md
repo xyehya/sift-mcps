@@ -27,6 +27,10 @@ relevant locks for this document:
   index registry and indexing-status tables.
 - D14/D15: TODOs, IOCs, evidence anchoring, RAG collections, and agent skills are
   first-class tables, not deferred or hand-waved.
+- D30: Supabase-issued JWTs are the final credential for humans, AI agents, MCP
+  clients, workers, and services. Existing `mcp_tokens`/`mcp_token_scopes`
+  schema from PR01/PR02 remains a transitional compatibility bridge and/or
+  non-secret issuance/provenance surface until ID-6.
 
 Where a row below still says "needs approval", it is now superseded by the
 charter lock; the charter wins.
@@ -52,12 +56,12 @@ Target responsibilities:
   metadata, hashes, provenance, integrity status, and references, not mutable
   raw evidence blobs.
 - The Gateway enforces policy and writes authoritative state through service
-  paths. It validates human session context or Gateway-issued service/MCP
-  tokens before mutating privileged state.
+  paths. In the final target it validates Supabase JWTs for human, agent, MCP,
+  worker, and service principals before mutating privileged state.
 - Frontend human access uses Supabase Auth and RLS where appropriate, plus
   Gateway REST APIs for privileged or policy-heavy actions.
-- MCP/service clients use Gateway-issued token registry records, not normal
-  Supabase user sessions.
+- MCP/service clients use Supabase JWTs in the final target; PR02
+  Gateway-issued token registry records are a cutover bridge.
 - Workers claim durable jobs from Postgres and write execution state, parser
   lineage, indexing status, logs, and audit events back to Postgres.
 - The initial schema should be additive and migration-friendly. Current files,
@@ -68,7 +72,9 @@ Target responsibilities:
 
 - Additive before destructive.
 - Preserve existing file and evidence behavior during transition.
-- Store no plaintext MCP/service tokens.
+- Store no plaintext MCP/service tokens while the PR02 bridge exists; target
+  credentials are Supabase JWT sessions, with app principal/scope metadata in
+  Postgres.
 - Keep frontend UI state out of forensic authority.
 - Keep OpenSearch out of case, job, evidence, approval, and audit authority.
 - Put `case_id` on every case-scoped table.
@@ -934,9 +940,9 @@ Initial RLS/security strategy:
 - Worker service role writes are limited by service code to claimed jobs.
   Workers do not decide case authorization; they inherit `case_id` from the
   claimed job.
-- MCP/agent access is through Gateway only. MCP tokens are validated against
-  `mcp_tokens` and `mcp_token_scopes`; agents do not use Supabase Auth user
-  sessions.
+- MCP/agent access is through Gateway only. In the final target, MCP/agent JWTs
+  resolve to app principal/scope rows; `mcp_tokens` and `mcp_token_scopes` are
+  compatibility bridge tables while enabled.
 
 Protection notes:
 
@@ -1210,8 +1216,9 @@ Follow-up schema table PR candidate, after infrastructure is approved:
 
 PR01 / Phase ID-1 implemented the identity foundation schema from this document,
 and PR02 / Phase ID-2 implemented DB-first hash-only token validation with
-legacy fallback. The next schema/runtime planning target is PR03 / Phase ID-3:
-Supabase Auth for human operators plus `operator_profiles`/`case_members`
-resolution behind the legacy-auth flag. Jobs, evidence metadata, OpenSearch
-index registration, RAG, skills, and remaining control-plane tables stay behind
-the foundation track unless explicitly scoped.
+legacy fallback as a bridge. The next schema/runtime planning target is PR03A /
+Batch A: unified Supabase JWT authentication for REST and MCP plus
+operator/agent/service principal and membership resolution behind the
+legacy-auth flag. Jobs, evidence metadata, OpenSearch index registration, RAG,
+skills, and remaining control-plane tables stay behind the foundation track
+unless explicitly scoped.

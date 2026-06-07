@@ -39,12 +39,13 @@ remains as the in-process implementation.
 The Gateway, backed by the control plane, owns all of this so add-ons never
 re-implement or bypass it:
 
-- Authentication and **token validation** (hash-only registry).
+- Authentication and **principal validation** (D30 Supabase JWT target; PR02
+  hash-token registry only as compatibility bridge while enabled).
 - **Case authorization** for case-scoped tools; **active-case** context injection
   for audit on every call.
 - **Evidence gate** for case-scoped, non-read-only tools.
 - **Audit envelope** for every tool call (identity, case, tool, status, backend).
-- **Tool-scope** enforcement from the token's scopes.
+- **Tool-scope** enforcement from the resolved principal's scopes.
 - Single policy path only: per-backend `/mcp/{name}` routes are disabled (D3).
 - Rate limiting / response policy.
 

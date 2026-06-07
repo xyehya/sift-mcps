@@ -14,6 +14,12 @@ base is `14_fastmcp3_supabase_integration.md`; this doc turns it into a file-by-
 build plan, a parity-test strategy, the B-3 design, and the forks the operator must
 resolve before Build. Run 23 implemented it; Run 24 reviewed and landed it.
 
+Run 26 / D30 supersedes the final identity target that existed when this D27b
+spec was built. D27b correctly implemented the then-scoped hash-token
+FastMCP verifier and PR02 compatibility path. Future auth work targets
+Supabase-issued JWTs for REST and MCP, with PR02 hash-token validation retained
+only as an explicit compatibility bridge.
+
 All FastMCP 3.x mechanics below are grounded against the pinned **fastmcp 3.4.2**
 (`uv.lock`) via the `/prefecthq/fastmcp` v3.2.x docs (closest published line); the
 exact API symbols are confirmed in §4 and must be re-confirmed against the installed

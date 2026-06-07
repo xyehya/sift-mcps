@@ -1,6 +1,6 @@
 # Migration Charter
 
-Last updated: 2026-06-07 (Run 25 health check).
+Last updated: 2026-06-07 (Run 26 target architecture acceleration).
 
 This charter is the single source of truth for locked migration decisions. Where
 any other document under `docs/migration/` conflicts with the "Confirmed
@@ -18,8 +18,14 @@ The target architecture is a SIFT VM Autonomous DFIR Agent system with four clea
 
 AI agents and MCP clients interact only through Gateway-mediated MCP tools.
 Case-data tools are case-scoped; global/reference add-ons are tool-scoped and
-audited under the active case. Agents must not bypass Gateway policy, Postgres
-authorization, evidence controls, or approval gates.
+audited under the active case. In the final target (D30), humans, agents, MCP
+clients, workers, and services authenticate with Supabase-issued JWTs; the
+Gateway then applies SIFT-owned case/tool/evidence/audit policy. Agents must not
+bypass Gateway policy, Postgres authorization, evidence controls, or approval
+gates.
+
+The detailed end-state reference and batching plan is
+`18_target_architecture_acceleration.md`.
 
 ## Current Migration Status
 
@@ -29,20 +35,25 @@ landed implementation is intentionally transitional:
 - **Done:** JOB-0 baseline checks, PR01 / Phase ID-1 identity schema foundation,
   PR02 / Phase ID-2 hash-only MCP/service token registry with legacy
   `gateway.yaml` fallback, D27a backend FastMCP/tool-contract revamp, and D27b
-  Gateway FastMCP cutover.
+  Gateway FastMCP cutover. Per D30, PR02 is now a transitional compatibility
+  bridge rather than the final identity target.
 - **Current Gateway substrate:** landed D27b serves one FastAPI ASGI app with
   the aggregate FastMCP `http_app` mounted at `/mcp`; per-backend `/mcp/{name}`
   routes are removed. Core gateway tools are local FastMCP tools; configured
   add-ons are FastMCP proxy mounts. SIFT-owned middleware enforces the evidence
   gate, response guard, case-context injection, and audit envelope.
-- **Still pending:** Supabase Auth for human operators and case-membership
-  resolution (Phase ID-3); control-plane active-case authority and propagation
-  (ID-4/ID-5); evidence-gate case resolution from control-plane context (ID-5);
-  legacy auth/token-path sunset (ID-6); D22 `mcp_backends` control-plane
-  registry replacing `gateway.yaml` add-on registration (F-11); OpenSearch and
-  RAG final core/control-plane integration (D19/D23).
-- **Next planned session:** Plan-stage PR03 / Phase ID-3. Do not treat D22/F-11
-  or active-case propagation as implicitly in scope for that run.
+- **Still pending:** unified Supabase JWT authentication for human operators,
+  agents, MCP clients, workers, and services (D30 / accelerated Phase ID-3);
+  case-membership/principal resolution; control-plane active-case authority and
+  propagation (ID-4/ID-5); evidence-gate case resolution from control-plane
+  context (ID-5); legacy auth/token-path sunset (ID-6); D22 `mcp_backends`
+  control-plane registry replacing `gateway.yaml` add-on registration (F-11);
+  OpenSearch and RAG final core/control-plane integration (D19/D23).
+- **Next planned session:** Plan-stage PR03A / Batch A from
+  `18_target_architecture_acceleration.md`: unified Supabase JWT authentication
+  and principal resolution for REST and MCP, with PR02 token-registry
+  compatibility explicitly scoped. Do not treat D22/F-11 or active-case
+  propagation as implicitly in scope for that run.
 
 ## Plane Boundaries
 
@@ -153,9 +164,13 @@ policy.
 - Durable job state must go through Postgres/Supabase.
 - Gateway/Broker is FastAPI + FastMCP 3.0 (D24); the policy boundary is SIFT-owned, not delegated to the framework.
 - AI agents interact through Gateway-mediated MCP tools only. Case-data tools are case-scoped; global/reference add-ons are tool-scoped and audited under the active case. Agents must not bypass Gateway policy or Postgres authorization.
-- MCP tokens are case-scoped, tool-scoped, expiring, revocable, and stored only as hashes.
+- Target authentication is Supabase JWT for humans, AI agents, MCP clients,
+  workers, and backend services (D30). Legacy Gateway-issued hash-only MCP/service
+  tokens are a transitional compatibility path until explicitly sunset.
 - Human operators authenticate through Supabase Auth and RLS.
-- AI agents, MCP clients, workers, and backend services use Gateway-issued service/MCP tokens validated against the Postgres token registry.
+- AI agents, MCP clients, workers, and backend services authenticate with
+  Supabase-issued JWTs in the final target; Gateway validates the JWT, resolves
+  the application principal, and enforces case/tool/evidence/audit policy.
 - Raw evidence remains immutable.
 - Agent-generated findings are proposed or draft state until human approval.
 - Agent-generated findings must not be auto-approved.
@@ -182,7 +197,7 @@ needing user approval" / "Open Questions" entries scattered across docs 02-08.
 | D5 | Long-running work | Enqueues durable control-plane jobs/pipelines and returns a job ID. Never a direct job/invoke to the Evidence Vault. Workers claim jobs (poll + `SKIP LOCKED`); the control plane never pushes. |
 | D6 | OpenSearch profile | OpenSearch 3.5.0, security enabled, Gateway-mediated and case-scoped. Root repo `docker-compose.yml` (2.18.0, security disabled) is pre-migration only. |
 | D7 | Supabase deployment | Local Supabase on the network-restricted (non-air-gapped) SIFT VM. Offline-only constraints are out of scope. |
-| D8 | Identity model | Humans authenticate via Supabase Auth + RLS. AI agents, MCP clients, workers, and backend services use Gateway-issued, hash-only, case-scoped, tool-scoped, expiring, revocable MCP/service tokens validated against the Postgres registry. |
+| D8 | Identity model (superseded in target by D30) | Historical/transition value implemented by PR02: humans authenticate via Supabase Auth + RLS, while AI agents, MCP clients, workers, and backend services use Gateway-issued, hash-only, case-scoped, tool-scoped, expiring, revocable MCP/service tokens validated against the Postgres registry. **D30 supersedes the final target:** Supabase-issued JWTs become the credential for all external principal classes; the hash-token registry remains a compatibility bridge until ID-6. |
 | D9 | Worker topology v1 | Single local worker on the SIFT VM, extensible to multiple local workers later. No multi-worker fairness machinery required in v1. |
 | D10 | Key strategy | New DB records use UUID primary keys plus explicit legacy text keys (e.g. `case_key`, `legacy_case_id`). |
 | D11 | Schema namespace | Tables live in an `app` schema with RLS, plus an `internal`/`svc` schema for service-only helpers. |
@@ -200,24 +215,26 @@ needing user approval" / "Open Questions" entries scattered across docs 02-08.
 | D23 | RAG folds into core | The RAG capability is no longer a standalone add-on backend. Its vector store moves to **Supabase (pgvector; `rag_collections`/`rag_documents`)** and retrieval is exposed as a **core, control-plane-backed** tool. `forensic-rag-mcp`'s Chroma store is migrated; the package is retired or reduced to a thin core retrieval path. `windows-triage-mcp` remains a minimal query-only add-on (local baseline-DB package). |
 | D24 | MCP framework: FastMCP 3.0 substrate | The Gateway and the FastMCP-style backends migrate to **standalone FastMCP 3.0** (`pip install fastmcp` / `import fastmcp`), replacing the low-level `mcp.server.lowlevel.Server` gateway plumbing and the in-SDK `mcp.server.fastmcp` (1.x) backends. The Gateway becomes **one FastAPI ASGI app** serving (a) the portal REST API and (b) the MCP endpoint via `mcp.http_app(...)` with combined lifespans. FastMCP 3.0 **providers** (`ProxyProvider`/`LocalProvider`; future providers only when separately scoped) and minimal transforms such as `Namespace` provide aggregation and namespacing **only**. **This is an implementation-substrate change: the Gateway remains the single policy boundary (D2/D3). The evidence gate, response guard, audit envelope, active-case propagation, and authorization remain SIFT-owned middleware/service logic, never delegated to the framework.** Per-case/per-phase/per-role `Visibility` and `ToolSearch` were explicitly dropped for D27b (F-9); per-token tool authorization remains a SIFT-owned backlog item (B-10). Full design: `14_fastmcp3_supabase_integration.md` plus D27b implementation doc `17_gateway_cutover_d27b.md`. |
 | D25 | code-mode excluded; run_command retained | FastMCP `code-mode` is **out of scope**: it is an experimental token-optimization layer that executes arbitrary LLM-generated Python and is explicitly *not* suited to strict, pre-audited command boundaries. It does **not** replace `run_command` and does **not** fix its known flakiness (Gateway argv/flex handling, `evidence/` write-gap, missing OS-level sandbox), which are fixed directly. `run_command` remains the hardened, allowlisted, audited OS-exec boundary. Tool-schema/context bloat is handled by curated tool descriptions, the manifest-derived `capability_guide`, and future SIFT-owned list/call authorization where needed; `ToolSearch`/`Visibility` are not active D27b design elements and require a new scoped decision if revived. |
-| D26 | Human auth = own Supabase-JWT verify (FastAPI DI) | Human/operator auth verifies **Supabase JWTs directly via FastAPI dependency injection** on REST routes. FastMCP's `SupabaseProvider` remote-OAuth is **not adopted** (RFC 8707 resource-indicator/audience-binding gap; self-hosted consent-UI burden). Machine/agent/worker/service principals remain **hash-only** Gateway-issued tokens validated against the Postgres registry (reaffirms D8). Gateway-side authorization (active case, case membership, tool scope, evidence gate) is mandatory for every principal and is never delegated to an OAuth audience. |
+| D26 | Human auth = own Supabase-JWT verify (superseded in target by D30) | Historical D27b/ID planning value: human/operator auth verifies **Supabase JWTs directly via FastAPI dependency injection** on REST routes; machine/agent/worker/service principals remained hash-only Gateway-issued tokens. **D30 supersedes the target-auth split:** REST and MCP both accept Supabase-issued JWTs through SIFT-owned FastAPI/FastMCP verifier code. FastMCP's `SupabaseProvider` remote-OAuth remains **not adopted**; Gateway-side authorization (active case, case membership, tool scope, evidence gate) is mandatory for every principal and is never delegated to an OAuth audience. |
 | D27 | FastMCP cutover — staged (supersedes the original single-PR framing) | The migration is **two stages**, not one PR. Stage **D27a** revamps the backends; stage **D27b** cuts over the gateway. Rationale: the gateway↔backend boundary is the MCP wire protocol, so backends can move to 3.0 independently, de-risking the gateway PR. |
 | D27a | Backend tooling revamp (stage 1, parallel-safe) | **Done (Run 21).** The three backend MCP servers (`opensearch-mcp`, `opencti-mcp`, `windows-triage-mcp`) migrated to **standalone FastMCP 3.0** and were redesigned to the tool-quality contract (D28). The work was scoped to `packages/*-mcp/**`, merged before D27b, and preserved rename/change-map discipline. OpenSearch was authored **exposure-agnostic** (function + Pydantic models + registration table) so its later in-process/core move (D19) reuses the definitions. Full spec: `15_backend_tooling_revamp.md`. |
 | D27b | Gateway cutover (stage 2, after PR02 + after D27a) | **Done (Runs 23-24).** The Gateway moved to FastMCP 3.0 as one FastAPI ASGI app (D24), a single cleanly-revertable big-bang PR. Parity gate was **policy parity only**: the evidence gate, response guard, audit envelope, and active-case compatibility behavior had to remain stable across the substrate swap. The tool surface was not re-frozen; D27b consumed the D27a backend surface. Current landed shape: core gateway tools through local FastMCP tools, add-ons through FastMCP proxy mounts from existing `gateway.yaml` configuration, and per-backend `/mcp/{name}` routes removed. The OpenSearch final in-process/core move remains a later D19/OpenSearch-core phase, not a D27b side effect. |
 | D28 | Tool-quality contract + exposure-agnostic authoring | Every revamped backend tool must meet a written contract: typed **Pydantic input model** with per-arg `Field` descriptions + constraints; **structured output** via `ToolResult` (no untyped blobs); complete **annotations** (`readOnly/destructive/idempotent/openWorld` + title); task-oriented **description** with when-to-use + example; **result shaping** (projection/pagination/size caps); typed **error model**; plus ≥1 **prompt** and ≥1 **resource** per backend. Tools are authored **exposure-agnostic** (pure function + models + registration table + thin adapter) so the same definitions serve a standalone server or an in-process LocalProvider. This contract is the drift-control backbone; a tool that does not meet it is not "done." Full spec: `15_backend_tooling_revamp.md` §5, §7. |
 | D29 | Operating model = process of record | Development and governance follow `OPERATING_MODEL.md`: the **Plan → Build → Review → Land → Log** loop, the Definition of Done, scope-fenced worktrees, and `/code-review` (always) + `/security-review` (auth/tokens/evidence/secrets/Gateway). Open decisions are tracked as **Forks (F#)** and deferred work as **Backlog (B#)** in `REGISTER.md`; a fork resolves into a charter Decision (D#) or a B#. **No run invents or silently changes a decision** — it stops and raises a fork. Locked 2026-06-07 (Run 19). |
+| D30 | Unified Supabase JWT principal model | **Final target:** humans, AI agents, MCP clients, workers, and services authenticate with Supabase-issued JWTs. The operator/portal may create agent/service principals and issue Supabase sessions/JWTs for them; those JWTs are acceptable on both REST and the FastMCP `/mcp` endpoint. The Gateway verifies JWTs with SIFT-owned FastAPI dependencies and FastMCP `TokenVerifier` subclasses (FastMCP 3.4.2 API), resolves the JWT subject to application principal/membership/tool-scope rows, and enforces SIFT policy. PR02's hash-only `mcp_tokens` registry and legacy `gateway.yaml` fallback become a transitional compatibility path and/or non-secret issuance/provenance metadata until ID-6 removes raw-token authority. Locked by operator 2026-06-07 (Run 26). Full target and batching plan: `18_target_architecture_acceleration.md`. |
 
 ## Cutover Order
 
 The migration proceeds foundation-first because every case-scoped table and every
 job carries identity and case context that does not exist yet:
 
-1. **Cases / tokens / identity (foundation).** Supabase Auth, `operator_profiles`,
-   `cases`, `case_members`, active-case state, the hash-only `mcp_tokens`
-   registry with scopes, agents/service identities, and `audit_events`. The
-   Gateway begins validating Supabase sessions and DB-backed tokens and
-   propagating the control-plane active case. See
-   `09_identity_auth_cutover.md`.
+1. **Cases / identity / JWT principals (foundation).** Supabase Auth,
+   `operator_profiles`, agent/service/worker principal mappings, `cases`,
+   `case_members`, active-case state, compatibility `mcp_tokens`/scope metadata,
+   and `audit_events`. The Gateway validates Supabase JWTs for REST and MCP,
+   resolves application principals, and propagates the control-plane active case.
+   See `09_identity_auth_cutover.md` and
+   `18_target_architecture_acceleration.md`.
 2. **Evidence + audit metadata.** Mirror manifest/ledger/audit into the control
    plane while preserving immutable files and proof artifacts.
 3. **Jobs / pipelines / OpenSearch integration.** Durable jobs, worker runtime,
@@ -239,12 +256,12 @@ and findings work should now be authored on the FastMCP 3.0 Gateway substrate.
 
 The planning workspace remains the source for future scoped implementation
 candidates, but several early slices are now complete: JOB-0, PR01/ID-1,
-PR02/ID-2, D27a, and D27b. The next recommended run is a **Plan-stage PR03 /
-Phase ID-3** candidate for Supabase Auth human sessions and
-`operator_profiles`/`case_members` resolution behind the legacy-auth flag
-(`09_identity_auth_cutover.md`). D22/F-11 (`mcp_backends` registry), ID-4/ID-5
+PR02/ID-2, D27a, and D27b. The next recommended run is a **Plan-stage PR03A /
+Batch A** candidate for unified Supabase JWT authentication and principal
+resolution across REST and MCP (`18_target_architecture_acceleration.md`,
+`09_identity_auth_cutover.md`). D22/F-11 (`mcp_backends` registry), ID-4/ID-5
 active-case authority/propagation, and OpenSearch-core/RAG-core moves remain
-separate later scopes.
+separate later scopes unless a candidate doc explicitly batches them.
 
 ## Out Of Scope Until A Run Is Explicitly Scoped To It
 

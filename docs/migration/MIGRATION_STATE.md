@@ -2,9 +2,10 @@
 
 ## Current Objective
 
-The **D27b gateway cutover is landed** on `revamp/spg-v1` (Runs 23–24), and Run
-25 completed a documentation/invariant health check across the canonical docs
-and architecture graph. The gateway now serves one FastAPI ASGI app with the
+The **D27b gateway cutover is landed** on `revamp/spg-v1` (Runs 23–24), Run
+25 completed a documentation/invariant health check, and Run 26 added the final
+target architecture / acceleration plan plus a new locked identity target (D30).
+The gateway now serves one FastAPI ASGI app with the
 aggregate FastMCP `http_app` mounted at `/mcp`; per-backend `/mcp/{name}` routes
 are removed per D3/F-7. Core tools and `capability_guide` are FastMCP local
 tools, configured add-ons are FastMCP proxy mounts, and SIFT policy is re-hosted
@@ -19,6 +20,12 @@ The installed wheel was confirmed directly during Build: host `.venv` has
 manifest fetches (private/link-local egress blocked, no redirect-follow, no
 agent bearer passthrough).
 
+D30 supersedes the previous final-auth split in D8/D26: the final target is now
+Supabase-issued JWTs for humans, AI agents, MCP clients, workers, and services
+on REST and FastMCP `/mcp`. PR02's hash-only token registry remains landed, but
+is now a transitional compatibility bridge and/or non-secret provenance surface
+until ID-6 removes raw-token authority.
+
 Review/security gates passed (Run 24): `/code-review` and `/security-review`
 returned GO. B-3 and B-6 are DONE at Land. Non-blocking review follow-ups were
 triaged to `REGISTER.md`: B-12 capped-result `backend_audit_id`, B-13 proxy
@@ -26,12 +33,56 @@ namespace assertion, B-14 duplicate token resolution, and B-15 DNS-rebinding
 TOCTOU hardening. F-11 remains OPEN for the later D22 `mcp_backends` registry
 phase.
 
-**Next:** start a Plan-stage PR03 candidate for Phase ID-3 from
-`09_identity_auth_cutover.md`: Supabase Auth for humans plus
-`operator_profiles`/`case_members` resolution behind the legacy-auth flag. Do
-not implement until the candidate doc defines the scope fence, acceptance gates,
-and host→VM test plan. Keep D22/F-11 (`mcp_backends` registry) as a separate
-later phase unless the operator explicitly reprioritizes it.
+**Next:** start a Plan-stage PR03A / Batch A candidate from
+`18_target_architecture_acceleration.md` and `09_identity_auth_cutover.md`:
+unified Supabase JWT authentication for REST and FastMCP `/mcp`, plus
+operator/agent/service/worker principal and membership resolution behind the
+legacy-auth flag. Do not implement until the candidate doc defines the scope
+fence, acceptance gates, and host→VM test plan. Keep D22/F-11 (`mcp_backends`
+registry), ID-4/ID-5 active-case propagation, and the evidence/jobs/OpenSearch
+batches separate unless the operator explicitly batches them in a candidate doc.
+
+## Run 26 — Target Architecture & Acceleration Plan
+
+Documentation / architecture run. No runtime code changed.
+
+Trigger: operator clarified the desired end state: Supabase and FastAPI/FastMCP
+are meant to simplify the architecture by moving file/env/json governance into a
+central Supabase control plane, and the final auth target should accept
+Supabase-issued JWTs for both humans and AI/MCP principals.
+
+Findings / reconciliations:
+- Added `18_target_architecture_acceleration.md` as the target-state reference
+  and acceleration batching plan. It documents the final architecture, data
+  places, data receivers/enforcers, security zones, Gateway final
+  responsibilities, file-authority sunset map, missing inputs, VM gates, and
+  parallel batches.
+- Locked new charter decision **D30**: humans, AI agents, MCP clients, workers,
+  and services authenticate with Supabase-issued JWTs. The Gateway validates
+  those JWTs through SIFT-owned FastAPI dependencies and FastMCP 3.4.2
+  `TokenVerifier` code, resolves application principals/memberships/scopes, and
+  enforces SIFT policy.
+- Marked D8/D26 as historical/transition values superseded in target by D30.
+  PR02's hash-only `mcp_tokens` registry remains landed and useful as a
+  compatibility bridge/provenance surface, but it is no longer the final
+  credential target.
+- Updated `09_identity_auth_cutover.md` so PR03A / Batch A targets unified
+  Supabase JWT auth for REST and MCP, not only human portal auth.
+- Updated `REGISTER.md` B-10/B-14 language to track per-principal tool
+  authorization and shared JWT resolver cleanup under D30.
+
+Files changed:
+- `docs/migration/18_target_architecture_acceleration.md`
+- `docs/migration/00_migration_charter.md`
+- `docs/migration/09_identity_auth_cutover.md`
+- `docs/migration/README.md`
+- `docs/migration/OPERATING_MODEL.md`
+- `docs/migration/REGISTER.md`
+- `docs/migration/MIGRATION_STATE.md`
+
+Next: Plan PR03A / Batch A. The candidate should define exact schema changes,
+JWT verification method, principal mapping, legacy-token compatibility behavior,
+and host→VM Supabase/FastMCP acceptance gates.
 
 ## Run 25 — Documentation Invariant Health Check
 

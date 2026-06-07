@@ -1045,7 +1045,7 @@ Config/env handling:
 ## 12. Next Recommended Run
 
 `07_execution_roadmap.md` exists, and JOB-0, PR01/ID-1, PR02/ID-2, D27a, and
-D27b are complete. The current recommended run is PR03 / Phase ID-3 planning
-for Supabase Auth and case-membership resolution. Execution JOB-* implementation
-remains behind the foundation track unless the operator explicitly
-reprioritizes it.
+D27b are complete. The current recommended run is PR03A / Batch A planning for
+unified Supabase JWT authentication on REST and MCP plus principal/membership
+resolution. Execution JOB-* implementation remains behind the foundation track
+unless the operator explicitly reprioritizes it.

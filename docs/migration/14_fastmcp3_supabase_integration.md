@@ -131,7 +131,15 @@ Implications for SIFT:
   list/call authorization where needed, not code-mode. Run 22/F-9 dropped
   `ToolSearch`/`Visibility` from the D27b design.
 
-### 3.2 `SupabaseProvider` is human-OAuth only — NOT adopted (D26)
+### 3.2 Supabase JWT target (D26 superseded by D30)
+
+Run 26 / D30 supersedes the earlier target-auth split. The final target now
+accepts Supabase-issued JWTs for humans, AI agents, MCP clients, workers, and
+services on both REST and FastMCP `/mcp`. The Gateway still uses SIFT-owned
+verification and policy code; PR02 hash-only Gateway tokens remain a
+compatibility bridge until sunset. See `18_target_architecture_acceleration.md`.
+
+Historical D26 note: `SupabaseProvider` is human-OAuth only — NOT adopted.
 FastMCP's `SupabaseProvider` is a **Remote OAuth** resource-server validator
 (browser flow → Supabase → a consent UI you must self-host). Two blocking caveats:
 - *"Supabase Auth does not currently support RFC 8707 resource indicators, so
@@ -140,7 +148,7 @@ FastMCP's `SupabaseProvider` is a **Remote OAuth** resource-server validator
 - The integration says **nothing** about service/machine/non-interactive
   principals; a headless agent cannot perform the browser flow.
 
-Therefore SIFT keeps:
+The historical D26 split was:
 - **Humans/portal** → verify Supabase JWTs directly via **FastAPI dependency
   injection** on REST routes (supabase-py + DI). No SupabaseProvider, no
   self-hosted consent UI.
@@ -148,6 +156,9 @@ Therefore SIFT keeps:
   against the Postgres registry (reaffirms D8).
 - Gateway-side authorization (active case, case membership, tool scope) stays
   mandatory regardless of token type — never delegated to an OAuth audience.
+
+The current D30 target keeps the SIFT-owned verifier/policy stance but uses
+Supabase-issued JWTs for all principal classes.
 
 ---
 
@@ -176,10 +187,10 @@ Adopting 3.0 is a **net-new dependency**, not an import swap.
 
 ```
                  ┌──────────────── one FastAPI ASGI app (single deploy) ────────────────┐
-   Portal  ──►   │  REST  /api/v1/*        Supabase-JWT verify via FastAPI DI (humans)   │
+   Portal  ──►   │  REST  /api/v1/*        Supabase-JWT verify via FastAPI DI            │
    (React)       │  REST  /portal/*        + secure headers, HTTPS guard, CSP            │
                  │                                                                       │
-   Agents  ──►   │  MCP   mcp.http_app("/mcp")   hash-only token auth (machines)         │
+   Agents  ──►   │  MCP   mcp.http_app("/mcp")   Supabase-JWT target; PR02 bridge        │
    (MCP)         │        └─ SIFT policy middleware: evidence gate, response guard,      │
                  │           audit envelope, active-case propagation, authorization      │
                  │        └─ FastMCP 3.0 providers + transforms (aggregation only):      │
@@ -212,13 +223,13 @@ Adopting 3.0 is a **net-new dependency**, not an import swap.
 - **`run_command` is unchanged** by this migration (D25): still the hardened,
   allowlisted, audited OS-exec tool; its flakiness is a separate, tracked fix.
 
-### 4.3 Auth model (target)
+### 4.3 Auth model (target after D30)
 
 | Principal | Mechanism | Where |
 | --- | --- | --- |
 | Human operator | Supabase JWT, verified via **FastAPI DI** on REST routes | portal/REST |
-| AI agent / MCP client | **hash-only** Gateway-issued token, Postgres registry (D8) | MCP endpoint |
-| Worker / service | hash-only service token (D8) | internal |
+| AI agent / MCP client | Supabase JWT in the final target; PR02 hash-token bridge during cutover | MCP endpoint |
+| Worker / service | Supabase JWT in the final target; PR02 hash-token bridge during cutover | internal |
 
 Authorization (active case, case membership, tool scope, evidence gate) is applied
 **after** authentication, by the Gateway, for every principal. No OAuth audience is
@@ -285,8 +296,8 @@ backends)**.
   and preserved the raw-ASGI request-size/auth guard.
 - **`forensic-mcp` future:** resolved by D27b/F-10; its capabilities are core,
   not a proxy add-on.
-- **Per-token tool authorization:** tracked as B-10, implemented SIFT-side in a
-  later auth/jobs phase if prioritized.
+- **Per-principal tool authorization:** tracked as B-10, implemented SIFT-side in
+  a later auth/jobs phase if prioritized.
 - **Pin discipline:** D27b recorded `fastmcp==3.4.2` in `MIGRATION_STATE.md`.
 
 ---
@@ -300,8 +311,10 @@ See `00_migration_charter.md` "Confirmed Decisions (Locked)":
 - **D25** — `code-mode` excluded; `run_command` retained; context bloat is not
   solved by FastMCP code-mode. `ToolSearch`/`Visibility` are not active D27b
   design elements after F-9.
-- **D26** — humans: own Supabase-JWT verify via FastAPI DI; machines: hash-only
-  tokens; `SupabaseProvider` OAuth not adopted.
+- **D26** — historical split: humans used own Supabase-JWT verify via FastAPI DI;
+  machines used hash-only tokens; `SupabaseProvider` OAuth not adopted.
+- **D30** — final target: Supabase-issued JWTs for humans, agents, MCP clients,
+  workers, and services; Gateway remains the SIFT-owned policy boundary.
 - **D27 / D27b** — staged cutover; D27a and D27b are landed. Tool-quality
   contract for backends is **D28**.
 
