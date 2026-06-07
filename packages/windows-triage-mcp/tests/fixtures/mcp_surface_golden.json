@@ -1,0 +1,7 @@
+{
+  "backend": "windows-triage-mcp",
+  "prompts": [],
+  "resource_templates": [],
+  "resources": [],
+  "tools": []
+}

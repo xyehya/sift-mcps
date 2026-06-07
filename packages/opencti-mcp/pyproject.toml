@@ -24,6 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "fastmcp>=3",
     "mcp>=1.26",
     # Floor only. pycti major must match the operator's OpenCTI server
     # major, which is environment-specific and cannot be encoded here

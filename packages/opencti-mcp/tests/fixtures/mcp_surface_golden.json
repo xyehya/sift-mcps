@@ -1,0 +1,7 @@
+{
+  "backend": "opencti-mcp",
+  "prompts": [],
+  "resource_templates": [],
+  "resources": [],
+  "tools": []
+}

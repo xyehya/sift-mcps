@@ -9,6 +9,7 @@ description = "OpenSearch MCP server for forensic evidence indexing and querying
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
+    "fastmcp>=3",
     "opensearch-py>=2.4",
     "evtx>=0.8",
     "mcp>=1.26",
