@@ -2,7 +2,38 @@
 
 ## Current Objective
 
-Run 17 implemented **PR02 Phase ID-2**: DB-first hash-only MCP/service token
+Run 19 (planning/governance) **resolved the five doc-16 forks** and **established the
+operating model**. F-1 approved (status/catalog tools → resources, additive, +B-1); F-2
+keep the 10 legacy wintriage names as deprecated aliases one cycle, not drop (grep found
+`analyze_filename` referenced in a forensic-knowledge playbook + `tool_metadata.py`, so a
+drop would break a skill; +B-2); F-3 the gateway response-guard must scan
+`structured_content` = security-required (+B-3); F-4 timeline cap ~2000, warn-not-truncate;
+F-5 redact `opensearch_ingest.password` (+B-4, credential-as-arg redesign deferred).
+New governance: **`OPERATING_MODEL.md`** (Plan→Build→Review→Land→Log loop, Definition of
+Done, templates) and **`REGISTER.md`** (F#/B# tracker, seeded F-1..F-5 + B-1..B-4),
+referenced as must-follow in `AGENTS.md` and the new root **`CLAUDE.md`**; charter **D29**
+locks the operating model as process of record. No runtime code changed in Run 19.
+
+**Next:** doc 16 is final. Stand up the **D27a backend-revamp worktree** (off
+`revamp/spg-v1`, scope-fenced to `packages/*-mcp/**`) per `15_backend_tooling_revamp.md`
+§12 + the doc-16 contracts, one commit per tool under the Definition of Done. PR02/Phase
+ID-2 already landed (Run 17); the gateway cutover (D27b) follows D27a.
+
+Run 18 (planning) produced **`docs/migration/16_backend_tool_contracts.md`** — the
+per-tool **D28** contract for **all 30 backend tools** (16 opensearch / 8 opencti / 6
+wintriage), grounded in the current `server.py` I/O of each backend. Each tool now has a
+concrete contract block (current→proposed name, full annotations, typed Pydantic
+input/output models, result shaping/caps, task-oriented description, typed error model),
+plus ≥1 prompt + ≥1 resource per backend, a consolidated rename change-map, and the
+**flagged** tool-vs-resource reclassification. This makes the D27a worktree implementable
+without guessing. **No runtime code, schema, version, or manifest changed.** The D5
+write-tool guardrail held (`opensearch_ingest`/`_enrich_intel`/`_enrich_triage`/`_host_fix`
+stay `readOnlyHint=false`, execution not redesigned). Forks surfaced for the operator:
+F-1 (tool→resource reclassification), F-2 (legacy wintriage aliases), F-3 (response-guard
+vs structured_content, owed to D27b), F-4 (timeline bucket ceiling), F-5 (ingest password
+redaction). See the Run 18 section below.
+
+Previously, Run 17 implemented **PR02 Phase ID-2**: DB-first hash-only MCP/service token
 registry validation with legacy `gateway.yaml api_keys` fallback, plus narrowly
 scoped portal token lifecycle writes to the DB registry. The implementation adds
 the token hash/fingerprint helpers, a small Postgres token-registry helper,
@@ -65,6 +96,110 @@ foundation work; D27b still follows after PR02 and D27a.
 Current worktree note: `.DS_Store` was already modified and remains unrelated.
 PR01/PR02 implementation files and migration docs are uncommitted unless a later
 run commits them.
+
+## Run 19 - Fork Resolution + Operating Model / Governance (D29)
+
+Planning/governance run. No runtime code changed.
+
+Resolved the five forks raised in Run 18 (doc 16 §7), grounding F-1/F-2 in repo greps:
+
+- **F-1** tool→resource reclassification: **APPROVED additively** — 4 strong candidates
+  (`opensearch_status`, `opensearch_shard_status`, `cti_get_health`,
+  `wintriage_server_status`) become resources with the tool kept as a deprecated alias;
+  2 query-shaped (`opensearch_list_detections`, `opensearch_case_summary`) stay tools +
+  optional resource view. Alias removal horizon → B-1.
+- **F-2** legacy wintriage aliases: **KEEP as deprecated aliases one cycle, not drop.**
+  Grep: zero internal refs to the 10 legacy names except `analyze_filename`, used as a
+  tool in `packages/forensic-knowledge/.../suspicious_execution.yaml` and `tool_metadata.py`
+  — drop would break it. Removal + playbook update → B-2. (Count confirmed: 10.)
+- **F-3** response-guard must scan `structured_content` (not just text): **REQUIRED,
+  security** (text-only scan = redaction bypass). D27b gate + `/security-review` → B-3.
+- **F-4** `opensearch_timeline` ceiling: cap ~2000 configurable, **warn-not-truncate**.
+- **F-5** `opensearch_ingest.password`: **redact** in audit/logs/`ToolResult`;
+  credential-as-arg redesign → B-4.
+
+Established the development governance:
+
+- `docs/migration/OPERATING_MODEL.md` (new) — Plan→Build→Review→Land→Log loop, branch/
+  worktree governance, Definition of Done, templates (candidate doc, build prompt, run-log,
+  register entry), decision/fork lifecycle, review policy.
+- `docs/migration/REGISTER.md` (new) — F#/B# register, seeded with F-1..F-5 (resolved) and
+  B-1..B-4 (open).
+- `00_migration_charter.md` — added **D29** (operating model = process of record).
+- `AGENTS.md` — new "Development Workflow (MUST FOLLOW)" section pointing at the operating
+  model; root **`CLAUDE.md`** (new) mirrors it as the Claude-session entry point.
+- `16_backend_tool_contracts.md` — §2/§6/§7 updated to RESOLVED; F-2 alias action set.
+- `README.md` — added the two governance docs.
+
+Config note: set `.claude/settings.json` `worktree.bgIsolation: none` so this background
+session could edit the shared `revamp/spg-v1` checkout in place (the planning docs must
+live on the integration branch, not an isolated worktree). Operator can revert if undesired.
+
+## Run 18 - Per-Tool Backend Contracts (doc 16, D28 made concrete)
+
+Planning/documentation run. No runtime code changed. (Doc numbering and run numbering
+are separate: this is **doc 16, Run 18**. The prior PR02 implementation run is Run 17.)
+
+Objective: turn doc 15 §10's high-level redesign notes into a zero-ambiguity per-tool
+contract table the D27a worktree can implement directly.
+
+Files read (grounding):
+
+- `docs/migration/MIGRATION_STATE.md`, `15_backend_tooling_revamp.md` (whole),
+  `00_migration_charter.md` (D19/D20/D22/D23/D24/D27a/b/D28 + D2/D3/D5),
+  `14_fastmcp3_supabase_integration.md` (FastMCP 3.0 primitives), `README.md`.
+- Source of truth for tool I/O:
+  `packages/opensearch-mcp/src/opensearch_mcp/server.py` (verified **16** `@server.tool`
+  decorators — module docstring says "17" but only 16 exist),
+  `packages/opencti-mcp/src/opencti_mcp/server.py` (8 tools, low-level Server),
+  `packages/windows-triage-mcp/src/windows_triage_mcp/server.py` (6 listed tools **+ 10
+  unlisted legacy dispatch aliases**: check_file/check_hash/analyze_filename/check_lolbin/
+  check_hijackable_dll/check_service/check_scheduled_task/check_autorun/get_db_stats/
+  get_health).
+- `packages/{opencti,windows-triage}-mcp/sift-backend.json` (existing per-tool
+  `when_to_use`/`avoid_when`/`output_notes`/`recommended_phase`/`category`/`health`
+  metadata folded into descriptions/resource catalogs).
+
+Files created/changed:
+
+- `docs/migration/16_backend_tool_contracts.md` (new) — 30 contract blocks grouped by
+  backend; shared conventions (envelope→`ToolResult.meta`, typed `ToolError`/`ErrorCode`,
+  annotation defaults, exposure-agnostic registration table); the flagged tool-vs-resource
+  reclassification (§2); ≥1 prompt + ≥1 resource per backend; consolidated rename
+  change-map (§6); forks (§7).
+- `15_backend_tooling_revamp.md` — §10 pointer to doc 16.
+- `README.md` — doc 16 added to Documents.
+- `MIGRATION_STATE.md` — this section + Current Objective.
+
+Inventory verified against source: opensearch 16, opencti 8, wintriage 6 = **30**. Counts
+match doc 15.
+
+Key contract decisions recorded in doc 16 (not charter-level; surfaced as proposals):
+
+- One rename: `opensearch_host_fix` → `opensearch_fix_host_mapping` (deprecated alias kept).
+  All other 29 public names kept.
+- Result-shaping caps fixed per tool: search limit≤200/offset≤10000/500-char field
+  truncation + `_SEARCH_EXCLUDE_FIELDS` projection; aggregate/field_values buckets≤500;
+  list_detections≤500; cti per-type≤20 (unified) / ≤50 (entity/reports) / ≤100 (recent) /
+  offset≤500; wintriage registry os_versions/values≤10.
+- Write tools annotated `readOnlyHint=false` with per-tool destructive/idempotent hints;
+  D5 execution behavior explicitly **not** redesigned.
+
+Flagged forks needing operator confirmation (see doc 16 §7):
+
+- **F-1** tool→resource reclassification (opensearch_status, opensearch_shard_status,
+  cti_get_health, wintriage_server_status strong; list_detections/case_summary
+  medium/weak) — proposed additively (resource + deprecated tool alias), not applied.
+- **F-2** the 10 unlisted legacy wintriage aliases — formalize as deprecated aliases or
+  drop (grep skills/RAG/configs first).
+- **F-3** response-guard must scan `structured_content` (owed to D27b; shape decided in
+  doc 16 §1.1).
+- **F-4** `opensearch_timeline` bucket ceiling (proposed ~2000 + warn, not truncate).
+- **F-5** `opensearch_ingest.password` redaction in audit/guard.
+
+Next run: operator resolves F-1..F-5 (especially F-1, which changes the D27a golden
+snapshot), then the D27a worktree implements doc 16 per the doc 15 §4 one-commit-per-tool
+method.
 
 ## Run 17 - PR02 Token Registry Implementation
 

@@ -213,6 +213,12 @@ touched (§8).
 
 ## 10. Per-backend redesign notes
 
+> **Per-tool contracts:** the concrete, zero-ambiguity D28 contract block for every one of
+> the 30 tools (typed in/out Pydantic, annotations, result shaping, error model, prompts,
+> resources, rename change-map, and flagged forks) lives in
+> [`16_backend_tool_contracts.md`](16_backend_tool_contracts.md). The notes below are the
+> seeds doc 16 expands.
+
 - **opensearch (16 tools).** Highest leverage. Priorities: structured outputs +
   result shaping on `opensearch_search`/`_timeline`/`_aggregate`/`_field_values`
   (untyped blobs today); typed inputs with `Field` descriptions on query params;

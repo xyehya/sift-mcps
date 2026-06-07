@@ -15,6 +15,8 @@ All locked decisions live in [00_migration_charter.md](00_migration_charter.md) 
 
 - [Architecture.mmd](Architecture.mmd) - target architecture diagram (overview, not a binding spec).
 - [00_migration_charter.md](00_migration_charter.md) - target architecture, non-negotiables, **Confirmed Decisions (Locked)**, cutover order, and plane boundaries.
+- [OPERATING_MODEL.md](OPERATING_MODEL.md) - **process of record (D29)**: the Plan→Build→Review→Land→Log loop, Definition of Done, branch/worktree governance, and templates. Every run follows it.
+- [REGISTER.md](REGISTER.md) - open-items register: Forks (F#) awaiting a call and Backlog (B#) deferred work.
 - [MIGRATION_STATE.md](MIGRATION_STATE.md) - short handoff state that every future migration run must read and update.
 - [01_repo_inventory.md](01_repo_inventory.md) - current-state repository inventory from the first inspection-only run.
 - [02_authoritative_domains_and_boundaries.md](02_authoritative_domains_and_boundaries.md) - target authoritative domains, trust boundaries, and compatibility mapping from current file-based authority into Supabase/Postgres.
@@ -31,6 +33,7 @@ All locked decisions live in [00_migration_charter.md](00_migration_charter.md) 
 - [13_pr02.md](13_pr02.md) - PR02 implementation candidate: Phase ID-2 DB-first hash-only MCP/service token validation with legacy `gateway.yaml` fallback.
 - [14_fastmcp3_supabase_integration.md](14_fastmcp3_supabase_integration.md) - FastMCP 3.0 + Supabase + FastAPI consolidation knowledge base and target design (decisions D24-D27): providers/transforms substrate, one ASGI app, own Supabase-JWT verification (FastAPI DI), code-mode excluded. Governs the **gateway cutover (D27b)**.
 - [15_backend_tooling_revamp.md](15_backend_tooling_revamp.md) - backend tooling revamp spec and drift-control contract (decisions D27a/D27b/D28): migrate opensearch/opencti/windows-triage to FastMCP 3.0 **and** redesign every tool to the quality contract (typed Pydantic in/out, prompts, resources, annotations). Dedicated worktree, parallel to PR02, exposure-agnostic authoring, rename change-map.
+- [16_backend_tool_contracts.md](16_backend_tool_contracts.md) - per-tool D28 contracts for all 30 backend tools (16 opensearch / 8 opencti / 6 wintriage), grounded in current `server.py` I/O: typed Pydantic input/output models, full annotations, result shaping/caps, typed error model, ≥1 prompt + ≥1 resource per backend, consolidated rename change-map, and the flagged tool-vs-resource reclassification + write-tool forks. Implements doc 15 §5/§7/§10.
 - [JOB0_baseline_execution_checks.md](JOB0_baseline_execution_checks.md) - targeted commands and no-service assumptions for the additive JOB-0 baseline smoke tests.
 - [PR01_identity_schema_checks.md](PR01_identity_schema_checks.md) - commands for running the deterministic PR01 schema checks and optional Supabase syntax validation.
 

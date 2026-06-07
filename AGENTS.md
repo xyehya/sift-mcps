@@ -28,6 +28,28 @@ Locked migration decisions and cutover order are in
 `docs/migration/00_migration_charter.md`. Current handoff state is in
 `docs/migration/MIGRATION_STATE.md`.
 
+## Development Workflow (MUST FOLLOW)
+
+All work on this migration follows the operating model in
+`docs/migration/OPERATING_MODEL.md` (charter decision **D29**). Do not freelance
+around it. In short:
+
+- **Loop:** Plan → Build → Review → Land → Log. Plan and Build are separate
+  sessions; a build session must not redefine its own scope.
+- **Three canonical sources, never contradicted silently:**
+  `00_migration_charter.md` (locked Decisions D#), `OPERATING_MODEL.md` (process),
+  `REGISTER.md` (open Forks F# + Backlog B#).
+- **Scope fence:** every build run touches only the paths its candidate doc
+  declares. Parallel work units must have zero file overlap.
+- **One worktree per work unit**, branched off `revamp/spg-v1`; one commit per unit;
+  update the golden snapshot / change-map.
+- **Definition of Done** (OPERATING_MODEL §3) gates every PR. `/code-review` always;
+  `/security-review` whenever the diff touches auth, tokens, evidence, secrets, or
+  the Gateway.
+- **No silent decisions.** A run that needs to decide something stops and raises a
+  fork in `REGISTER.md`; the operator turns it into a D# or B#.
+- **Log** every run in `MIGRATION_STATE.md` and resolve its forks.
+
 ## Mandatory Host/VM Workflow
 
 Code on host, copy changes to VM, test on VM:
