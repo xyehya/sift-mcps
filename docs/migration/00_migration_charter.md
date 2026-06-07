@@ -1,6 +1,6 @@
 # Migration Charter
 
-Last updated: 2026-06-07 (Run 26 target architecture acceleration).
+Last updated: 2026-06-07 (Run 27 PR03A candidate).
 
 This charter is the single source of truth for locked migration decisions. Where
 any other document under `docs/migration/` conflicts with the "Confirmed
@@ -49,11 +49,13 @@ landed implementation is intentionally transitional:
   context (ID-5); legacy auth/token-path sunset (ID-6); D22 `mcp_backends`
   control-plane registry replacing `gateway.yaml` add-on registration (F-11);
   OpenSearch and RAG final core/control-plane integration (D19/D23).
-- **Next planned session:** Plan-stage PR03A / Batch A from
-  `18_target_architecture_acceleration.md`: unified Supabase JWT authentication
-  and principal resolution for REST and MCP, with PR02 token-registry
-  compatibility explicitly scoped. Do not treat D22/F-11 or active-case
-  propagation as implicitly in scope for that run.
+- **Next planned session:** Build-stage PR03A / Batch A from
+  `19_pr03_unified_supabase_jwt_identity.md`: unified Supabase JWT
+  authentication and principal resolution for REST and MCP, portal Supabase
+  login/session, agent/service JWT issuance, B-10 tool authorization, and B-14
+  resolver cleanup, with PR02 token-registry compatibility explicitly scoped.
+  Do not treat D22/F-11 or active-case propagation as implicitly in scope for
+  that run.
 
 ## Plane Boundaries
 
@@ -256,12 +258,13 @@ and findings work should now be authored on the FastMCP 3.0 Gateway substrate.
 
 The planning workspace remains the source for future scoped implementation
 candidates, but several early slices are now complete: JOB-0, PR01/ID-1,
-PR02/ID-2, D27a, and D27b. The next recommended run is a **Plan-stage PR03A /
-Batch A** candidate for unified Supabase JWT authentication and principal
-resolution across REST and MCP (`18_target_architecture_acceleration.md`,
-`09_identity_auth_cutover.md`). D22/F-11 (`mcp_backends` registry), ID-4/ID-5
-active-case authority/propagation, and OpenSearch-core/RAG-core moves remain
-separate later scopes unless a candidate doc explicitly batches them.
+PR02/ID-2, D27a, D27b, and the PR03A candidate plan. The next recommended run
+is the **Build-stage PR03A / Batch A** implementation from
+`19_pr03_unified_supabase_jwt_identity.md` for unified Supabase JWT
+authentication and principal resolution across REST and MCP. D22/F-11
+(`mcp_backends` registry), ID-4/ID-5 active-case authority/propagation, and
+OpenSearch-core/RAG-core moves remain separate later scopes unless a candidate
+doc explicitly batches them.
 
 ## Out Of Scope Until A Run Is Explicitly Scoped To It
 

@@ -164,9 +164,10 @@ Approval-gated and destructive actions (charter rules) require `lead`/`owner`
 
 ## 6. Human auth integration
 
-- Supabase Auth becomes the identity provider for humans and target machine/agent
-  principals. `operator_profiles.auth_user_id` links humans to `auth.users(id)`;
-  agent/service/worker principal rows also need a Supabase Auth subject mapping.
+- Supabase Auth becomes the identity provider for humans, agents/MCP clients,
+  workers, and services. `operator_profiles.auth_user_id` links humans to
+  `auth.users(id)`; agent/service/worker principal rows also need a Supabase
+  Auth subject mapping.
 - The Gateway/portal verifies the Supabase session and resolves the operator or
   agent/service profile and case memberships, replacing the bespoke examiner and
   PR02 token model over time.
@@ -225,11 +226,14 @@ the legacy path is explicitly removed.
   auth target.
 
 ### Phase ID-3 / PR03A - Unified Supabase JWT auth + memberships
+- Build from `19_pr03_unified_supabase_jwt_identity.md`.
 - Add Supabase JWT verification and operator/agent/service principal resolution
-  behind a legacy-auth config flag. Map the current examiner as an initial
-  `owner`/`admin`.
+  behind explicit legacy-auth flags. Seed/bootstrap the first mapped operator
+  through VM/admin setup; do not auto-provision arbitrary JWTs as operators.
 - Accept Supabase JWTs on REST and FastMCP `/mcp` via shared Gateway auth logic
   and a FastMCP 3.4.2 `TokenVerifier`.
+- Add portal Supabase login/session, agent/service JWT issuance, DB-backed tool
+  scopes, B-10 list/call authorization, and B-14 shared resolver cleanup.
 - Keep PR02 token-registry fallback only as an explicit bridge until ID-6.
 
 ### Phase ID-4 - Control-plane active case + propagation
@@ -302,9 +306,11 @@ the legacy path is explicitly removed.
 - SSO/external IdP federation beyond Supabase Auth.
 
 ## 12. Next recommended run
-Current status: JOB-0, Phase ID-1 (PR01), Phase ID-2 (PR02), D27a, and D27b are
-done. The next recommended run for this foundation track is a **Plan-stage
-PR03A / Batch A** candidate: unified Supabase JWT authentication for REST and
-MCP plus operator/agent/service principal and membership resolution behind the
-legacy-auth flag. Active-case authority/propagation stays deferred to ID-4/ID-5;
-legacy auth/token sunset stays deferred to ID-6.
+Current status: JOB-0, Phase ID-1 (PR01), Phase ID-2 (PR02), D27a, D27b, and
+the PR03A candidate plan are done. The next recommended run for this foundation
+track is the **Build-stage PR03A / Batch A** implementation from
+`19_pr03_unified_supabase_jwt_identity.md`: unified Supabase JWT authentication
+for REST and MCP, operator/agent/service principal resolution, portal Supabase
+login/session, agent/service JWT issuance, and DB-backed tool authorization.
+Active-case authority/propagation stays deferred to ID-4/ID-5; legacy auth/token
+sunset stays deferred to ID-6.

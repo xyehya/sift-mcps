@@ -2,9 +2,11 @@
 
 ## Current Objective
 
-The **D27b gateway cutover is landed** on `revamp/spg-v1` (Runs 23–24), Run
-25 completed a documentation/invariant health check, and Run 26 added the final
-target architecture / acceleration plan plus a new locked identity target (D30).
+The **D27b gateway cutover is landed** on `revamp/spg-v1` (Runs 23-24), Run
+25 completed a documentation/invariant health check, Run 26 added the final
+target architecture / acceleration plan plus locked identity target D30, and
+Run 27 created the Build-ready **PR03A / Batch A** candidate:
+`19_pr03_unified_supabase_jwt_identity.md`.
 The gateway now serves one FastAPI ASGI app with the
 aggregate FastMCP `http_app` mounted at `/mcp`; per-backend `/mcp/{name}` routes
 are removed per D3/F-7. Core tools and `capability_guide` are FastMCP local
@@ -33,14 +35,60 @@ namespace assertion, B-14 duplicate token resolution, and B-15 DNS-rebinding
 TOCTOU hardening. F-11 remains OPEN for the later D22 `mcp_backends` registry
 phase.
 
-**Next:** start a Plan-stage PR03A / Batch A candidate from
-`18_target_architecture_acceleration.md` and `09_identity_auth_cutover.md`:
-unified Supabase JWT authentication for REST and FastMCP `/mcp`, plus
-operator/agent/service/worker principal and membership resolution behind the
-legacy-auth flag. Do not implement until the candidate doc defines the scope
-fence, acceptance gates, and host→VM test plan. Keep D22/F-11 (`mcp_backends`
-registry), ID-4/ID-5 active-case propagation, and the evidence/jobs/OpenSearch
-batches separate unless the operator explicitly batches them in a candidate doc.
+**Next:** start a Build-stage PR03A / Batch A coding session from
+`19_pr03_unified_supabase_jwt_identity.md`: unified Supabase JWT authentication
+for REST and FastMCP `/mcp`, operator/agent/service principal resolution,
+portal Supabase login/session, agent/service JWT issuance, B-10 tool
+authorization, and B-14 shared resolver cleanup. The candidate doc owns the
+scope fence, acceptance gates, and host-to-VM test plan. Keep D22/F-11
+(`mcp_backends` registry), ID-4/ID-5 active-case propagation, evidence/jobs,
+OpenSearch, and RAG batches separate unless a new candidate doc explicitly
+batches them.
+
+## Run 27 - PR03A Unified Supabase JWT Candidate
+
+Plan-stage candidate run. No runtime code changed.
+
+Trigger: operator asked to create a heavy PR03 work package and hand over a
+ready prompt for the coding agent, with `AGENTS.md` / `CLAUDE.md` refreshed if
+needed.
+
+Findings / reconciliations:
+- Added `19_pr03_unified_supabase_jwt_identity.md` as the Build-ready PR03A /
+  Batch A implementation candidate. It scopes a large target-zone move:
+  Supabase Auth API validation for REST and FastMCP `/mcp`, shared Gateway
+  principal resolution, operator/agent/service mappings, portal Supabase
+  login/session, agent/service JWT issuance, DB-backed MCP tool scopes, B-10
+  list/call authorization, and B-14 duplicate MCP token/JWT lookup cleanup.
+- Kept active-case DB authority, evidence DB authority, jobs/workers,
+  OpenSearch core, RAG, and `mcp_backends` registry out of PR03A. Those remain
+  Batch B/C/E/F/G/H work per `18_target_architecture_acceleration.md`.
+- Chose Supabase Auth API validation (`/auth/v1/user`) for PR03 so no JWT
+  signing secret or dummy key enters repo/config. The Build session must
+  re-confirm the pinned VM Supabase `v1.26.05` Auth/Admin endpoints and the
+  installed FastMCP 3.4.2 auth/list middleware API before coding; API mismatch
+  is a D29 stop-and-fork condition.
+- Updated standing handoff docs so future sessions no longer start from stale
+  D27b or pre-D30 machine-token language.
+
+Files changed:
+- `docs/migration/19_pr03_unified_supabase_jwt_identity.md`
+- `docs/migration/MIGRATION_STATE.md`
+- `docs/migration/README.md`
+- `docs/migration/09_identity_auth_cutover.md`
+- `docs/migration/18_target_architecture_acceleration.md`
+- `docs/migration/00_migration_charter.md`
+- `docs/migration/REGISTER.md`
+- `AGENTS.md`
+- `CLAUDE.md`
+
+Verification:
+- `python3 scripts/validate_migration_docs.py` passed.
+- `git diff --check` passed.
+
+Next: run the Build-stage PR03A prompt from doc 19. Review gates are
+`/code-review` and `/security-review` because PR03A touches auth, tokens,
+portal sessions, MCP, secrets handling, and Gateway policy.
 
 ## Run 26 — Target Architecture & Acceleration Plan
 

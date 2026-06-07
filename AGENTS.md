@@ -16,10 +16,13 @@ The migration moves SIFT from file/env authority toward a Gateway-mediated
 control-plane architecture:
 
 - Supabase Local/Postgres is the authoritative control plane for cases,
-  identity, MCP/service tokens, jobs, audit, evidence metadata, findings,
-  reports, RAG, and skills.
+  identity/JWT principal mappings, transitional MCP/service tokens, jobs, audit,
+  evidence metadata, findings, reports, RAG, and skills.
 - The Gateway remains the mandatory policy boundary for REST, portal, MCP tools,
   token validation, authorization, audit, and active-case propagation.
+- Per D30, the final credential target is Supabase-issued JWTs for humans,
+  agents/MCP clients, workers, and services. PR02 hash-only MCP/service tokens
+  remain only as an explicit compatibility bridge until the legacy auth sunset.
 - OpenSearch remains the derived search/data plane, not authority for case
   permissions, token validity, evidence integrity, jobs, or audit.
 - SIFT VM workers execute durable jobs claimed from Postgres.
@@ -61,22 +64,32 @@ around it. In short:
 - Run history, Current Objective, next run → `docs/migration/MIGRATION_STATE.md`
 - Per-phase specs → `docs/migration/NN_*.md`. Active specs:
   - D27a backend revamp (landed) → `15_backend_tooling_revamp.md`, `16_backend_tool_contracts.md`
-  - D27b gateway cutover: design KB → `14_fastmcp3_supabase_integration.md`;
-    **implementation candidate (the doc you build from)** → `17_gateway_cutover_d27b.md`
+  - D27b gateway cutover (landed): design KB → `14_fastmcp3_supabase_integration.md`;
+    implemented candidate/log → `17_gateway_cutover_d27b.md`
+  - Final target architecture / acceleration plan → `18_target_architecture_acceleration.md`
+  - **PR03A / Batch A implementation candidate (the doc you build from next)** →
+    `19_pr03_unified_supabase_jwt_identity.md`
 
 ## Current stage (read MIGRATION_STATE for the live version)
 
-The backend revamp (**D27a**) is landed on `revamp/spg-v1`. The next build unit is the
-**D27b gateway cutover**, planned and **design-frozen** in `17_gateway_cutover_d27b.md`:
-all forks resolved (F-11 deferred) and the design decisions (D-1 `TokenVerifier`, D-2
-SSRF-in-PR, D-3 unary results) locked. A coding session implements doc 17 directly —
-its **scope fence, file-by-file plan, B-3 design, parity-test strategy, and a
-ready-to-copy build prompt are in that doc (§3, §5, §6, §8, §10)**. Honor the scope
-fence (`packages/sift-gateway/**` + its tests + `pyproject.toml` + `uv.lock` +
-`docs/migration/**`; nothing in `packages/*-mcp/**`, `case-dashboard`, `supabase`, or
-`sift-core`). The first commit is the F-6 in-memory proxy spike (assert parent
-middleware wraps proxied tools). If the installed `fastmcp` API differs from doc 17 §4,
-**stop and raise a fork** — do not improvise (D29).
+D27a and D27b are landed on `revamp/spg-v1`. The next build unit is
+**PR03A / Batch A: unified Supabase JWT identity**, planned and scoped in
+`19_pr03_unified_supabase_jwt_identity.md`.
+
+A coding session implements doc 19 directly. Its scope fence covers Supabase
+migration/tests, Gateway auth/MCP policy, case-dashboard portal auth/UI, config,
+docs, `AGENTS.md`, `CLAUDE.md`, and lockfiles if dependencies change. It
+explicitly excludes `packages/*-mcp/**`, `packages/sift-core/**`,
+`packages/sift-common/**`, OpenSearch runtime/config, evidence behavior,
+jobs/workers, installer scripts, Docker/Supabase local state, DB dumps, and
+unrelated config.
+
+Doc 19 targets Supabase JWT validation for REST and FastMCP `/mcp`, shared
+Gateway principal resolution, portal Supabase login/session, agent/service JWT
+issuance, B-10 tool authorization, and B-14 duplicate resolver cleanup. If the
+installed `fastmcp` 3.4.2 auth/list middleware API or the pinned Supabase
+`v1.26.05` Auth/Admin API differs from doc 19, **stop and raise a fork** - do
+not improvise (D29).
 
 ## Mandatory Host/VM Workflow
 
@@ -135,6 +148,7 @@ cd ~/sift-mcps-test
 .venv/bin/python - <<'PY'
 import yaml
 import mcp
+import fastmcp
 import sift_core
 import sift_gateway
 print("imports_ok")
@@ -227,6 +241,14 @@ propagation, evidence gate changes, job tables/workers/APIs/tools, OpenSearch
 changes, parser changes, evidence behavior changes, audit data migration,
 frontend redesigns, or legacy fallback removal.
 
+PR03A is planned but not implemented. The candidate is:
+
+- `docs/migration/19_pr03_unified_supabase_jwt_identity.md`
+
+It is the next Build-stage source of truth for unified Supabase JWT auth,
+principal mapping, portal Supabase auth, agent/service JWT issuance, and
+DB-backed MCP tool authorization.
+
 ## Installer Follow-up
 
 After all required VM packages and services have been installed and tested
@@ -239,7 +261,8 @@ these invariants in the installer:
 - `UV_PYTHON_DOWNLOADS=never`.
 - Venv integrity check: rebuild on Python-version mismatch; repair broken
   imports with `uv sync`.
-- Post-sync smoke imports for `yaml`, `mcp`, `sift_core`, and `sift_gateway`.
+- Post-sync smoke imports for `yaml`, `mcp`, `fastmcp`, `sift_core`, and
+  `sift_gateway`.
 - Do not hand-roll Supabase secrets or JWT keys; use pinned Supabase helper
   scripts.
 

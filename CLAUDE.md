@@ -45,21 +45,22 @@ first so the workflow is followed from the opening turn.
 - Process, Definition of Done, templates → `OPERATING_MODEL.md`
 - Open forks + backlog → `REGISTER.md`
 - Run history, current objective, next run → `MIGRATION_STATE.md`
-- Gateway cutover (D27b): design KB → `14_fastmcp3_supabase_integration.md`;
-  **implementation candidate (design-frozen, Build-ready)** → `17_gateway_cutover_d27b.md`
 - Backend revamp (D27a) spec + per-tool contracts → `15_backend_tooling_revamp.md`,
   `16_backend_tool_contracts.md`
+- Gateway cutover (D27b, landed): design KB → `14_fastmcp3_supabase_integration.md`;
+  implemented candidate/log → `17_gateway_cutover_d27b.md`
+- Target architecture / acceleration plan → `18_target_architecture_acceleration.md`
+- Current Build candidate → `19_pr03_unified_supabase_jwt_identity.md`
 - Host/VM + Supabase operational details → `AGENTS.md`
 
 ---
 
 ## Claude's Delivery-Management Playbook (Claude-only)
 
-This section is mine. The operator runs **Build** sessions (the Codex orchestrator + its
-subagents create worktrees and implement); I run **Plan**, **Review/GO**, **Land**, and I
-own the gateway cutover (**D27b**) and integration. The operator hands me build outputs in a
-fresh session; I take over from there. This playbook lets me re-enter cold and act
-correctly within one turn.
+This section is mine. The operator can hand me Build outputs in a fresh session;
+I run Plan, Review/GO, Land, Log, and doc reconciliation under D29. This
+playbook lets me re-enter cold without reviving stale D27b or pre-D30
+assumptions.
 
 ### Catch-up ritual (every session, before acting)
 1. `git log --oneline -8` and `git status -s` — what landed, what's dirty, which branch.
@@ -69,75 +70,84 @@ correctly within one turn.
 5. Name the loop stage out loud (Plan / Build / Review / Land / Log) before doing anything.
 
 ### Pipeline map (update as it moves)
-`JOB-0 ✓ → ID-1/PR01 ✓ → ID-2/PR02 ✓ → D27a backend revamp (BUILD Run 20 `c0a404a` ✓;
-REVIEW + REMEDIATE + LAND Run 21 `5ab3df5` ✓, merged to `revamp/spg-v1`) →
-D27b gateway cutover (PLAN Run 22 ✓ — doc 17 design-frozen; all forks resolved [F-11
-deferred]; D-1/D-2/D-3 locked) → [D27b BUILD — NEXT, coding agent] → D27b REVIEW/LAND —
-MINE → evidence/audit → jobs/OpenSearch-core → findings/RAG/skills.` The cutover order is
-in the charter; D27a merged before D27b.
+`JOB-0 done -> PR01/ID-1 done -> PR02/ID-2 done -> D27a done -> D27b done ->
+Run 26 target architecture/D30 done -> Run 27 PR03A candidate done -> PR03A
+BUILD NEXT -> PR03A Review/Land -> PR03B active-case DB authority or Batch H
+mcp_backends registry -> evidence/audit DB authority -> jobs/OpenSearch-core ->
+findings/RAG/skills -> legacy authority sunset.`
 
-### Review → GO procedure (when the operator hands me D27a outputs)
-1. **Scope fence:** `git diff --stat <base>..<branch>` — only `packages/*-mcp/**` touched. Any
-   stray path = NO-GO until explained.
-2. **Surface diff:** read the golden-snapshot diff + the change-map. Every rename has a
-   deprecated alias; the F-1 resources + aliases and the F-2 legacy aliases are present.
-3. **`/code-review`** the collected diff. Triage: fix-now vs new B#.
-4. **`/security-review`** — mandatory here. Specifically check: F-5 `password` redaction at the
-   tool boundary; that output models don't leak secrets into `structured_content` (B-3 is the
-   gateway-side guard, owed at D27b — confirm it's still tracked, not silently assumed done);
-   no tokens/evidence/secrets in fixtures or snapshots.
-5. **Contract conformance:** spot-check tool blocks against `16_backend_tool_contracts.md` §5
-   (typed in/out, annotations, result shaping, error model); ≥1 prompt + ≥1 resource per
-   backend; D5 write-tools still `readOnlyHint=false` with execution unchanged.
-6. **Tests:** green on host AND on the VM (AGENTS.md path). No green VM run = NO-GO.
-7. **Decide.** GO → I Land (merge `revamp/backends-mcp3` into `revamp/spg-v1`), add the Run
-   entry, close F#/B# that are done, flip doc statuses to "implemented in <commit>". NO-GO →
-   I write precise, file/line remediation back for a follow-up Build session; nothing merges.
+### Review -> GO procedure for PR03A outputs
+1. **Scope fence:** diff against the PR03A base. Allowed paths are exactly those
+   in `19_pr03_unified_supabase_jwt_identity.md`. Any `packages/*-mcp/**`,
+   `sift-core`, evidence, jobs/workers, OpenSearch runtime/config, installer,
+   Docker/Supabase state, or unrelated config path is NO-GO unless doc 19 was
+   formally amended before Build.
+2. **API grounding:** confirm the build recorded FastMCP 3.4.2 auth/list
+   middleware facts and pinned Supabase v1.26.05 Auth/Admin endpoint facts. Any
+   mismatch without a fork is NO-GO.
+3. **`/code-review`:** prioritize correctness, rollback safety, broken auth
+   behavior, missing tests, and stale legacy defaults.
+4. **`/security-review`:** mandatory. Check Supabase JWT validation, session
+   cookies, refresh handling, service-role use, agent JWT issuance, no token
+   logging/storage, legacy fallback flags, portal agent denial, MCP policy
+   ordering, B-10 list/call consistency, and B-14 duplicate-resolution cleanup.
+5. **Schema/RLS:** verify the migration is additive, syntax-checked on the VM,
+   and does not grant broad direct writes. Browser direct writes remain narrow
+   and explicit per D12.
+6. **Tests:** host and VM evidence are required. No VM run with
+   `/usr/bin/python3.12`, `UV_NO_MANAGED_PYTHON=1`, and
+   `UV_PYTHON_DOWNLOADS=never` means NO-GO.
+7. **Decide:** GO means mark B-10/B-14 DONE at Land, log the Run, and update
+   doc 19/09/18 state. NO-GO means return concrete remediation; do not merge.
 
 ### Invariants I enforce on every review/decision
 - Charter wins; **no silent decisions** — if a build made one, it's a finding.
 - Gateway is the policy boundary; FastMCP is substrate only (D24). Policy (evidence gate,
   response guard, audit, active-case, authz) is never delegated to the framework.
-- Principal separation: machines = hash-only tokens; humans = Supabase-JWT via FastAPI DI
-  (D26). No human JWT ever handed to an agent.
+- D30 wins over the old D26 split: humans, agents/MCP clients, workers, and
+  services authenticate with Supabase-issued JWTs in the final target. PR02
+  hash-only tokens are a bridge only while explicitly enabled.
+- Supabase Auth proves identity; SIFT Gateway resolves app principals and
+  enforces case/tool/evidence/audit policy.
 - D5 write-tool guardrail; evidence immutability; agent findings stay proposed until approved.
-- No secrets/tokens in repo files, fixtures, or snapshots.
-- The structured_content redaction (B-3) is a **hard gate at D27b** — I do not start D27b
-  review without it.
+- No raw JWTs, refresh tokens, PR02 tokens, temporary passwords, Supabase anon
+  keys, service-role keys, evidence secrets, or credentials in repo files,
+  fixtures, snapshots, logs, audit payloads, or docs.
+- Agent/service JWTs can authenticate to `/mcp`; normal portal operator APIs
+  deny agent/service principals unless a scoped doc explicitly allows an
+  exception.
 
-### Backlog I must carry into D27b / later (from REGISTER.md)
+### Backlog I must carry into PR03A / later (from REGISTER.md)
 - **B-1** remove reclassified tool aliases once skills/RAG use the resource URIs (at/after D27b).
 - **B-2** remove the 10 legacy wintriage aliases after one cycle; first update the
   `forensic-knowledge` playbook + `tool_metadata.py` `analyze_filename` reference.
-- **B-3** gateway response-guard must scan `structured_content` — **gate for D27b**.
-  **Designed in doc 17 §5** (single `guard_tool_result` redacting both `content` and
-  `structured_content`, recursive over nested JSON, bounded depth, no external `$ref`).
-  M2 (Run 21) gave the typed `anyOf[success, ToolError]` schema; the scan/redaction is
-  owed at D27b Build.
+- **B-3** DONE at D27b Land: gateway response guard scans `structured_content`.
 - **B-4** replace credential-as-tool-arg (`opensearch_ingest.password`) with a named
   control-plane credential — auth/jobs phase.
-- **B-5** `opensearch_case_detections_resource` ignores its `case_id` param — D27b do-by,
-  but the code is in `packages/opensearch-mcp/**` (**out of the D27b gateway scope fence**)
-  → either keep masked by D4 and re-defer, or a separate backend touch.
-- **B-6** consolidate the duplicate per-registry `ToolResult` envelope builders — folded
-  into the doc 17 §5 single `guard_tool_result` point at the gateway.
+- **B-5** `opensearch_case_detections_resource` ignores its `case_id` param; out
+  of PR03A.
+- **B-6** DONE at D27b Land: gateway `guard_tool_result` is the agent-facing
+  redaction/cap point.
 - **B-7** OpenSearch `ResultMeta` parity (examiner/caveats/interpretation_constraint/audit_warning).
 - **B-8** dedupe the two byte-identical opensearch resources under different URIs.
 - **B-9** D27a robustness nits (error-code substring heuristic; unaudited wintriage generic
   catch; exact-key-match redactor; per-call `inspect.signature`).
-- **B-10** per-agent-token **tool authorization** (restrict which tools a token may
-  list/call, for benchmarking) — SIFT-enforced in `on_call_tool` (reject before
-  `call_next`) + list filtering; infra exists (`mcp_token_scopes`/`Identity.tool_scopes`,
-  defaults `mcp:*`, unenforced). Auth/jobs phase.
-- **B-11** active-case must reach **proxied** backends via args/result/shared store, not
-  parent `ctx.set_state` (FastMCP state does not cross the mount boundary) — D27b Build.
+- **B-10** PR03A target: per-principal tool authorization under D30, with
+  `mcp:*`, `tool:<name>`, and `namespace:<prefix>`, SIFT-side list filtering and
+  reject-before-call enforcement. Mark DONE only at PR03A Land.
+- **B-11** active-case must reach proxied backends via args/result/shared store,
+  not parent `ctx.set_state`; deferred to Batch B / ID-4/ID-5.
+- **B-12** preserve capped-result `backend_audit_id`; post-D27b gateway hardening.
+- **B-13** proxy namespace/collision assertion; D22/Batch H registry phase.
+- **B-14** PR03A target: remove duplicate MCP token/JWT resolution with one
+  shared Supabase resolver and identity-free raw ASGI connection guards. Mark
+  DONE only at PR03A Land.
+- **B-15** DNS-rebinding TOCTOU hardening; network hardening phase.
 
 ### My next handoff
-D27b is **planned and design-frozen** (Run 22, `17_gateway_cutover_d27b.md`): all forks
-resolved (F-6 YES/grounded vs fastmcp 3.4.2; F-7 drop per-backend routes → charter D3;
-F-8 FastAPI; F-9 drop → B-10; F-10 retired→core; F-12 keep) except **F-11** (deferred);
-design decisions **D-1** (`SiftTokenVerifier`), **D-2** (SSRF egress in-PR), **D-3** (unary
-results) locked. **Next is a Build session** (coding agent, scoped worktree off
-`revamp/spg-v1`) implementing doc 17 — build prompt in doc 17 §10; first commit is the
-F-6 in-memory proxy spike. **I (Claude) own the D27b Review/GO + Land**, and I do **not**
-start D27b review until **B-3** is implemented. Carry B-5…B-11.
+PR03A is planned in `19_pr03_unified_supabase_jwt_identity.md`. Next is a
+Build-stage coding session from that doc. The build prompt is in doc 19 §14.
+I review the resulting diff against doc 19, then Land/Log only after
+`/code-review`, `/security-review`, host tests, VM tests, migration doc
+validation, and Gateway health all pass. Carry B-4/B-11/B-12/B-13/B-15 forward
+unless a scoped doc explicitly closes them.

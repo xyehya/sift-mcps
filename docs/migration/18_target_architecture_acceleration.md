@@ -285,7 +285,7 @@ flowchart TD
 | Likely files | `supabase/migrations/**`, `packages/sift-gateway/**`, `packages/case-dashboard/**`, tests, docs. |
 | Major tasks | Shared JWT resolver; FastAPI dependency; FastMCP `TokenVerifier`; principal mapping; agent/service issuance UX/API; RLS policies; compatibility with PR02 token registry behind flag. |
 | VM gates | Supabase running; create human + agent principal; JWT works against REST and `/mcp`; invalid/expired JWT rejected; legacy fallback still gated until ID-6. |
-| Parallelism | Blocks most later implementation. Can be planned with Batch H/C/E in parallel. |
+| Parallelism | Blocks most later implementation. Build from `19_pr03_unified_supabase_jwt_identity.md`; Batch H/C/E planning can continue in parallel with zero file overlap. |
 
 ### Batch B - Active Case Control Plane
 
@@ -394,8 +394,11 @@ Every batch candidate should add these gates on top of `OPERATING_MODEL.md`:
 
 ## 14. Immediate Recommended Next Runs
 
-1. **Plan PR03A / Batch A** - unified Supabase JWT auth resolver for REST and
-   MCP, principal mapping, and compatibility strategy for PR02 token registry.
+1. **Build PR03A / Batch A** - implement
+   `19_pr03_unified_supabase_jwt_identity.md`: unified Supabase JWT auth
+   resolver for REST and MCP, principal mapping, portal Supabase auth,
+   agent/service JWT issuance, tool authorization, and compatibility strategy
+   for PR02 token registry.
 2. **Plan PR03B / Batch B** - active-case authority and propagation, including
    B-11.
 3. **Plan D22A / Batch H** - `mcp_backends` control-plane registry and
