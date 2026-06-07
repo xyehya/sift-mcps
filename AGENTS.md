@@ -67,33 +67,27 @@ around it. In short:
   - D27b gateway cutover (landed): design KB → `14_fastmcp3_supabase_integration.md`;
     implemented candidate/log → `17_gateway_cutover_d27b.md`
   - Final target architecture / acceleration plan → `18_target_architecture_acceleration.md`
-  - **PR03A / Batch A implementation candidate (the doc you build from next)** →
+  - PR03A / Batch A unified JWT implementation candidate/log (landed) →
     `19_pr03_unified_supabase_jwt_identity.md`
+  - Portal/dashboard workflow + API inventory reference for PR03B planning →
+    `20_portal_dashboard_inventory.md`
 
 ## Current stage (read MIGRATION_STATE for the live version)
 
-D27a and D27b are landed on `revamp/spg-v1`. **PR03A / Batch A (unified Supabase
-JWT identity) is implemented (Run 28)** on branch `revamp/pr03a-unified-jwt` —
-host + VM acceptance green, `/code-review` + `/security-review` passed, B-10/B-14
-DONE, revocation model locked as **D31** — awaiting operator Land/merge into
-`revamp/spg-v1`. The next build unit is **PR03B / Batch B: active-case DB
-authority (ID-4)**. See `19_pr03_unified_supabase_jwt_identity.md` and
-`MIGRATION_STATE.md` Run 28.
+D27a, D27b, and **PR03A / Batch A (unified Supabase JWT identity)** are landed on
+`revamp/spg-v1` (Runs 23-30). PR03A delivered Supabase JWT validation for REST
+and FastMCP `/mcp`, shared Gateway principal resolution, portal Supabase
+login/session, agent/service JWT issuance + revocation (D31), B-10 tool
+authorization, and B-14 duplicate resolver cleanup. Run 29 fixed the portal
+auth-mode blocker; Run 30 added the portal/dashboard inventory reference.
 
-A coding session implements doc 19 directly. Its scope fence covers Supabase
-migration/tests, Gateway auth/MCP policy, case-dashboard portal auth/UI, config,
-docs, `AGENTS.md`, `CLAUDE.md`, and lockfiles if dependencies change. It
-explicitly excludes `packages/*-mcp/**`, `packages/sift-core/**`,
-`packages/sift-common/**`, OpenSearch runtime/config, evidence behavior,
-jobs/workers, installer scripts, Docker/Supabase local state, DB dumps, and
-unrelated config.
-
-Doc 19 targets Supabase JWT validation for REST and FastMCP `/mcp`, shared
-Gateway principal resolution, portal Supabase login/session, agent/service JWT
-issuance, B-10 tool authorization, and B-14 duplicate resolver cleanup. If the
-installed `fastmcp` 3.4.2 auth/list middleware API or the pinned Supabase
-`v1.26.05` Auth/Admin API differs from doc 19, **stop and raise a fork** - do
-not improvise (D29).
+The next work is **Plan-stage PR03B / Batch B: active-case DB authority (ID-4)**.
+Ground it in `09_identity_auth_cutover.md`,
+`18_target_architecture_acceleration.md`, `20_portal_dashboard_inventory.md`, and
+`MIGRATION_STATE.md`. Do not run a Build session for PR03B until a scoped
+candidate doc exists. If a future build discovers an installed API, Supabase
+behavior, or repo invariant mismatch, **stop and raise a fork** - do not
+improvise (D29).
 
 ## Mandatory Host/VM Workflow
 
@@ -245,10 +239,11 @@ propagation, evidence gate changes, job tables/workers/APIs/tools, OpenSearch
 changes, parser changes, evidence behavior changes, audit data migration,
 frontend redesigns, or legacy fallback removal.
 
-PR03A is **implemented (Run 28)** on branch `revamp/pr03a-unified-jwt`, awaiting
-Land. Spec + status:
+PR03A is **landed** on `revamp/spg-v1`. Spec + status:
 
 - `docs/migration/19_pr03_unified_supabase_jwt_identity.md` (status: implemented)
+- `docs/migration/20_portal_dashboard_inventory.md` (reference inventory for
+  PR03B portal/API turnover planning; not an implementation candidate)
 
 It delivered unified Supabase JWT auth, principal mapping, portal Supabase auth,
 agent/service JWT issuance + revocation (D31), and DB-backed MCP tool

@@ -12,7 +12,9 @@ session logout) resolved into charter **D31** (revoke = DELETE auth user +
 app-revoke + resolver cache invalidate). Run 29 remediated the final
 review-found portal auth-mode blocker before Land: Supabase/disabled-legacy mode
 now suppresses legacy PBKDF2 setup/challenge/reset endpoints and cannot route a
-fresh Supabase-only portal into local password setup.
+fresh Supabase-only portal into local password setup. Run 30 added the normalized
+portal/dashboard workflow and API inventory from the separate read-only portal
+scan as `20_portal_dashboard_inventory.md`.
 
 Prior context — the **D27b gateway cutover is landed** on `revamp/spg-v1`
 (Runs 23-24), Run 25 completed a documentation/invariant health check, Run 26
@@ -48,9 +50,39 @@ TOCTOU hardening. F-11 remains OPEN for the later D22 `mcp_backends` registry
 phase.
 
 **Next:** Plan **PR03B / Batch B** (active-case DB authority, ID-4, carrying
-B-11) — or Batch H (`mcp_backends` registry, D22/F-11) if reprioritized. Keep
-evidence/jobs (Batch C), OpenSearch-core, and RAG batches separate unless a new
-candidate doc explicitly batches them. Carry B-4/B-11/B-12/B-13/B-15 forward.
+B-11) using `09_identity_auth_cutover.md`, `18_target_architecture_acceleration.md`,
+and `20_portal_dashboard_inventory.md` as grounding — or Batch H
+(`mcp_backends` registry, D22/F-11) if reprioritized. Keep evidence/jobs
+(Batch C), OpenSearch-core, and RAG batches separate unless a new candidate doc
+explicitly batches them. Carry B-4/B-11/B-12/B-13/B-15 forward.
+
+## Run 30 — Portal/Dashboard Inventory Capture
+
+Docs-only grounding run after PR03A Land.
+
+Trigger: operator confirmed the separate portal-inventory worker was
+read-only/output-only and pasted its report back into this session. The report
+had not been saved to the migration docs.
+
+Added:
+- `docs/migration/20_portal_dashboard_inventory.md` — normalized portal/dashboard
+  workflow, API, frontend component, backend authority, turnover, risk, and open
+  question map. It preserves the separate worker's inventory while removing stale
+  old-worktree absolute paths and updating auth rows to the landed PR03A / Run 29
+  state.
+- `docs/migration/README.md` — index entry for doc 20 and next-run guidance
+  refreshed from PR03A Build to PR03B Plan.
+- `AGENTS.md` and `CLAUDE.md` — handoff state corrected from "PR03A awaiting
+  Land" to "PR03A landed"; doc 20 added as PR03B portal/API grounding.
+
+Important boundary: doc 20 is a **reference inventory, not an implementation
+candidate**. A future PR03B build still needs a scoped candidate doc before code
+or schema changes.
+
+Verification:
+- `python3 scripts/validate_migration_docs.py` — passed.
+
+Next: Plan PR03B / Batch B from doc 9 + doc 18 + doc 20, carrying B-11.
 
 ## Run 29 — PR03A Portal Auth-Mode Remediation & Land
 

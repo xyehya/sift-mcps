@@ -72,13 +72,13 @@ assumptions.
 ### Pipeline map (update as it moves)
 `JOB-0 done -> PR01/ID-1 done -> PR02/ID-2 done -> D27a done -> D27b done ->
 Run 26 target architecture/D30 done -> Run 27 PR03A candidate done -> Run 28
-PR03A BUILD + Review + VM acceptance done (B-10/B-14 DONE, F-13->D31; on branch
-revamp/pr03a-unified-jwt awaiting operator Land) -> PR03B/Batch B active-case DB
-authority (ID-4, B-11) or Batch H mcp_backends registry -> evidence/audit DB
-authority -> jobs/OpenSearch-core -> findings/RAG/skills -> legacy authority
-sunset.`
+PR03A BUILD + Review + VM acceptance done -> Run 29 PR03A portal auth-mode
+remediation + Land -> Run 30 portal/dashboard inventory captured -> PR03B/Batch
+B active-case DB authority (ID-4, B-11) or Batch H mcp_backends registry ->
+evidence/audit DB authority -> jobs/OpenSearch-core -> findings/RAG/skills ->
+legacy authority sunset.`
 
-### Review -> GO procedure for PR03A outputs
+### Historical Review -> GO procedure for PR03A outputs
 1. **Scope fence:** diff against the PR03A base. Allowed paths are exactly those
    in `19_pr03_unified_supabase_jwt_identity.md`. Any `packages/*-mcp/**`,
    `sift-core`, evidence, jobs/workers, OpenSearch runtime/config, installer,
@@ -119,7 +119,7 @@ sunset.`
   deny agent/service principals unless a scoped doc explicitly allows an
   exception.
 
-### Backlog I must carry into PR03A / later (from REGISTER.md)
+### Backlog I must carry into PR03B / later (from REGISTER.md)
 - **B-1** remove reclassified tool aliases once skills/RAG use the resource URIs (at/after D27b).
 - **B-2** remove the 10 legacy wintriage aliases after one cycle; first update the
   `forensic-knowledge` playbook + `tool_metadata.py` `analyze_filename` reference.
@@ -134,30 +134,31 @@ sunset.`
 - **B-8** dedupe the two byte-identical opensearch resources under different URIs.
 - **B-9** D27a robustness nits (error-code substring heuristic; unaudited wintriage generic
   catch; exact-key-match redactor; per-call `inspect.signature`).
-- **B-10** PR03A target: per-principal tool authorization under D30, with
+- **B-10** DONE at PR03A Land: per-principal tool authorization under D30, with
   `mcp:*`, `tool:<name>`, and `namespace:<prefix>`, SIFT-side list filtering and
-  reject-before-call enforcement. Mark DONE only at PR03A Land.
+  reject-before-call enforcement.
 - **B-11** active-case must reach proxied backends via args/result/shared store,
   not parent `ctx.set_state`; deferred to Batch B / ID-4/ID-5.
 - **B-12** preserve capped-result `backend_audit_id`; post-D27b gateway hardening.
 - **B-13** proxy namespace/collision assertion; D22/Batch H registry phase.
-- **B-14** PR03A target: remove duplicate MCP token/JWT resolution with one
-  shared Supabase resolver and identity-free raw ASGI connection guards. Mark
-  DONE only at PR03A Land.
+- **B-14** DONE at PR03A Land: duplicate MCP token/JWT resolution removed with
+  one shared Supabase resolver and identity-free raw ASGI connection guards.
 - **B-15** DNS-rebinding TOCTOU hardening; network hardening phase.
 
 ### My next handoff
-PR03A is **implemented (Run 28)** on branch `revamp/pr03a-unified-jwt` (3 unit
-commits: schema / gateway / portal + a Log commit), awaiting operator Land/merge
-into `revamp/spg-v1`. All gates passed: `/code-review` (NO-GO → 10 findings
-remediated), `/security-review` (clean), host tests (db 20 / gateway 286 /
-case-dashboard 306 / frontend 83), VM tests (same), live Supabase v1.26.05
-acceptance, and `validate_migration_docs.py`. B-10 and B-14 are DONE; F-13
-resolved into **D31** (revocation = DELETE auth user + app-revoke + resolver
-cache invalidate, since pinned GoTrue lacks admin session logout). Next is
-**PR03B / Batch B** (active-case DB authority, ID-4) — a Plan session unless the
-operator supplies a candidate, or Batch H (`mcp_backends`/D22/F-11) if
-reprioritized. Carry B-4/B-11/B-12/B-13/B-15 forward unless a scoped doc closes
-them. Deployment note: the VM systemd `sift-gateway` runs the old tree
-(`~/sift-mcps`); production rollout of the new auth code/config/env is the
-installer follow-up, not PR03A.
+PR03A is **landed** on `revamp/spg-v1` (Runs 28-29). All gates passed:
+`/code-review` (NO-GO -> 10 findings remediated), `/security-review` (clean),
+host tests, VM tests, live Supabase v1.26.05 acceptance, and
+`validate_migration_docs.py`. B-10 and B-14 are DONE; F-13 resolved into **D31**
+(revocation = DELETE auth user + app-revoke + resolver cache invalidate, since
+pinned GoTrue lacks admin session logout). Run 30 added
+`docs/migration/20_portal_dashboard_inventory.md` as a normalized portal/API
+inventory reference.
+
+Next is **PR03B / Batch B** (active-case DB authority, ID-4) — a Plan session
+unless the operator supplies a candidate. Ground it in
+`09_identity_auth_cutover.md`, `18_target_architecture_acceleration.md`, and
+`20_portal_dashboard_inventory.md`. Carry B-4/B-11/B-12/B-13/B-15 forward unless
+a scoped doc closes them. Deployment note: the VM systemd `sift-gateway` runs
+the old tree (`~/sift-mcps`); production rollout of the new auth code/config/env
+is the installer follow-up, not PR03A.
