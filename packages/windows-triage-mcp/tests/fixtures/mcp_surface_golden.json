@@ -3,5 +3,1200 @@
   "prompts": [],
   "resource_templates": [],
   "resources": [],
-  "tools": []
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Windows Artifact"
+      },
+      "description": "Validate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
+      "input_schema": {
+        "properties": {
+          "hash": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional file hash when type='file' (baseline mismatch check).",
+            "title": "Hash"
+          },
+          "os_version": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional OS filter for type='file' (e.g. Win10_21H2_Pro).",
+            "title": "Os Version"
+          },
+          "type": {
+            "description": "file=path baseline (+optional hash); hash=LOLDrivers vulnerable-driver lookup; filename=deception heuristics; lolbin=LOLBin context; dll=hijackability.",
+            "enum": [
+              "file",
+              "hash",
+              "filename",
+              "lolbin",
+              "dll"
+            ],
+            "title": "ArtifactType",
+            "type": "string"
+          },
+          "value": {
+            "description": "file=Windows path; hash=MD5/SHA1/SHA256; filename/lolbin=filename; dll=DLL name. No null bytes; length-capped per type.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "title": "CheckArtifactIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "wintriage_check_artifact",
+      "output_schema": {
+        "properties": {
+          "artifact_type": {
+            "description": "Artifact subtype checked.",
+            "enum": [
+              "file",
+              "hash",
+              "filename",
+              "lolbin",
+              "dll"
+            ],
+            "title": "ArtifactType",
+            "type": "string"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "filename_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': filename exists anywhere in the baseline.",
+            "title": "Filename In Baseline"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "is_lolbin": {
+            "default": false,
+            "description": "True when the filename is a known living-off-the-land binary.",
+            "title": "Is Lolbin",
+            "type": "boolean"
+          },
+          "is_system_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': path is under a Windows system directory.",
+            "title": "Is System Path"
+          },
+          "lolbin_functions": {
+            "description": "LOLBAS abuse functions when known.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lolbin Functions",
+            "type": "array"
+          },
+          "path_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': exact path exists in the baseline.",
+            "title": "Path In Baseline"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "subtype_data": {
+            "additionalProperties": true,
+            "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
+            "title": "Subtype Data",
+            "type": "object"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "artifact_type"
+        ],
+        "title": "CheckArtifactOut",
+        "type": "object"
+      },
+      "title": "Check Windows Artifact"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Windows Artifact"
+      },
+      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_file(path, hash, os_version)` calls to `wintriage_check_artifact(type='file', value=path, ...)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
+      "input_schema": {
+        "properties": {
+          "hash": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Deprecated alias argument: optional file hash.",
+            "title": "Hash"
+          },
+          "os_version": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Deprecated alias argument: optional OS filter.",
+            "title": "Os Version"
+          },
+          "path": {
+            "description": "Deprecated alias argument: Windows file path.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "CheckFileAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_check_artifact",
+        "deprecated": true
+      },
+      "name": "check_file",
+      "output_schema": {
+        "properties": {
+          "artifact_type": {
+            "description": "Artifact subtype checked.",
+            "enum": [
+              "file",
+              "hash",
+              "filename",
+              "lolbin",
+              "dll"
+            ],
+            "title": "ArtifactType",
+            "type": "string"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "filename_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': filename exists anywhere in the baseline.",
+            "title": "Filename In Baseline"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "is_lolbin": {
+            "default": false,
+            "description": "True when the filename is a known living-off-the-land binary.",
+            "title": "Is Lolbin",
+            "type": "boolean"
+          },
+          "is_system_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': path is under a Windows system directory.",
+            "title": "Is System Path"
+          },
+          "lolbin_functions": {
+            "description": "LOLBAS abuse functions when known.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lolbin Functions",
+            "type": "array"
+          },
+          "path_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': exact path exists in the baseline.",
+            "title": "Path In Baseline"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "subtype_data": {
+            "additionalProperties": true,
+            "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
+            "title": "Subtype Data",
+            "type": "object"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "artifact_type"
+        ],
+        "title": "CheckArtifactOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Check File"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Windows Artifact"
+      },
+      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_hash(hash)` calls to `wintriage_check_artifact(type='hash', value=hash)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
+      "input_schema": {
+        "properties": {
+          "hash": {
+            "description": "Deprecated alias argument: MD5, SHA1, or SHA256 hash.",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "hash"
+        ],
+        "title": "CheckHashAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_check_artifact",
+        "deprecated": true
+      },
+      "name": "check_hash",
+      "output_schema": {
+        "properties": {
+          "artifact_type": {
+            "description": "Artifact subtype checked.",
+            "enum": [
+              "file",
+              "hash",
+              "filename",
+              "lolbin",
+              "dll"
+            ],
+            "title": "ArtifactType",
+            "type": "string"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "filename_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': filename exists anywhere in the baseline.",
+            "title": "Filename In Baseline"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "is_lolbin": {
+            "default": false,
+            "description": "True when the filename is a known living-off-the-land binary.",
+            "title": "Is Lolbin",
+            "type": "boolean"
+          },
+          "is_system_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': path is under a Windows system directory.",
+            "title": "Is System Path"
+          },
+          "lolbin_functions": {
+            "description": "LOLBAS abuse functions when known.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lolbin Functions",
+            "type": "array"
+          },
+          "path_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': exact path exists in the baseline.",
+            "title": "Path In Baseline"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "subtype_data": {
+            "additionalProperties": true,
+            "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
+            "title": "Subtype Data",
+            "type": "object"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "artifact_type"
+        ],
+        "title": "CheckArtifactOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Check Hash"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Windows Artifact"
+      },
+      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `analyze_filename(filename)` calls to `wintriage_check_artifact(type='filename', value=filename)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
+      "input_schema": {
+        "properties": {
+          "filename": {
+            "description": "Deprecated alias argument: filename to analyze.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename"
+        ],
+        "title": "FilenameAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_check_artifact",
+        "deprecated": true
+      },
+      "name": "analyze_filename",
+      "output_schema": {
+        "properties": {
+          "artifact_type": {
+            "description": "Artifact subtype checked.",
+            "enum": [
+              "file",
+              "hash",
+              "filename",
+              "lolbin",
+              "dll"
+            ],
+            "title": "ArtifactType",
+            "type": "string"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "filename_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': filename exists anywhere in the baseline.",
+            "title": "Filename In Baseline"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "is_lolbin": {
+            "default": false,
+            "description": "True when the filename is a known living-off-the-land binary.",
+            "title": "Is Lolbin",
+            "type": "boolean"
+          },
+          "is_system_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': path is under a Windows system directory.",
+            "title": "Is System Path"
+          },
+          "lolbin_functions": {
+            "description": "LOLBAS abuse functions when known.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lolbin Functions",
+            "type": "array"
+          },
+          "path_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': exact path exists in the baseline.",
+            "title": "Path In Baseline"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "subtype_data": {
+            "additionalProperties": true,
+            "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
+            "title": "Subtype Data",
+            "type": "object"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "artifact_type"
+        ],
+        "title": "CheckArtifactOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Analyze Filename"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Windows Artifact"
+      },
+      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_lolbin(filename)` calls to `wintriage_check_artifact(type='lolbin', value=filename)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
+      "input_schema": {
+        "properties": {
+          "filename": {
+            "description": "Deprecated alias argument: filename to analyze.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename"
+        ],
+        "title": "FilenameAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_check_artifact",
+        "deprecated": true
+      },
+      "name": "check_lolbin",
+      "output_schema": {
+        "properties": {
+          "artifact_type": {
+            "description": "Artifact subtype checked.",
+            "enum": [
+              "file",
+              "hash",
+              "filename",
+              "lolbin",
+              "dll"
+            ],
+            "title": "ArtifactType",
+            "type": "string"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "filename_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': filename exists anywhere in the baseline.",
+            "title": "Filename In Baseline"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "is_lolbin": {
+            "default": false,
+            "description": "True when the filename is a known living-off-the-land binary.",
+            "title": "Is Lolbin",
+            "type": "boolean"
+          },
+          "is_system_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': path is under a Windows system directory.",
+            "title": "Is System Path"
+          },
+          "lolbin_functions": {
+            "description": "LOLBAS abuse functions when known.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lolbin Functions",
+            "type": "array"
+          },
+          "path_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': exact path exists in the baseline.",
+            "title": "Path In Baseline"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "subtype_data": {
+            "additionalProperties": true,
+            "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
+            "title": "Subtype Data",
+            "type": "object"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "artifact_type"
+        ],
+        "title": "CheckArtifactOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Check LOLBin"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Windows Artifact"
+      },
+      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_hijackable_dll(dll_name)` calls to `wintriage_check_artifact(type='dll', value=dll_name)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
+      "input_schema": {
+        "properties": {
+          "dll_name": {
+            "description": "Deprecated alias argument: DLL name to check.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Dll Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dll_name"
+        ],
+        "title": "DllAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_check_artifact",
+        "deprecated": true
+      },
+      "name": "check_hijackable_dll",
+      "output_schema": {
+        "properties": {
+          "artifact_type": {
+            "description": "Artifact subtype checked.",
+            "enum": [
+              "file",
+              "hash",
+              "filename",
+              "lolbin",
+              "dll"
+            ],
+            "title": "ArtifactType",
+            "type": "string"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "filename_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': filename exists anywhere in the baseline.",
+            "title": "Filename In Baseline"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "is_lolbin": {
+            "default": false,
+            "description": "True when the filename is a known living-off-the-land binary.",
+            "title": "Is Lolbin",
+            "type": "boolean"
+          },
+          "is_system_path": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': path is under a Windows system directory.",
+            "title": "Is System Path"
+          },
+          "lolbin_functions": {
+            "description": "LOLBAS abuse functions when known.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Lolbin Functions",
+            "type": "array"
+          },
+          "path_in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "For type='file': exact path exists in the baseline.",
+            "title": "Path In Baseline"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "subtype_data": {
+            "additionalProperties": true,
+            "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
+            "title": "Subtype Data",
+            "type": "object"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "artifact_type"
+        ],
+        "title": "CheckArtifactOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Check Hijackable DLL"
+    }
+  ]
 }
