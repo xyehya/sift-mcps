@@ -8,12 +8,19 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.tools import FunctionTool, ToolResult
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError as PydanticValidationError,
+    ValidationInfo,
+    field_validator,
+)
 from sift_common.instructions import OPENCTI as _INSTRUCTIONS
 
 from .audit import AuditWriter, resolve_examiner
@@ -31,7 +38,32 @@ from .errors import (
     VersionMismatchError,
 )
 from .tool_metadata import DEFAULT_METADATA, TOOL_METADATA
-from .validation import sanitize_for_log
+from .validation import (
+    MAX_QUERY_LENGTH,
+    sanitize_for_log,
+    validate_date_filter,
+    validate_labels,
+)
+
+
+_ENTITY_TYPE_METHODS = {
+    "threat_actor": "search_threat_actors",
+    "malware": "search_malware",
+    "attack_pattern": "search_attack_patterns",
+    "vulnerability": "search_vulnerabilities",
+    "campaign": "search_campaigns",
+    "tool": "search_tools",
+    "infrastructure": "search_infrastructure",
+    "incident": "search_incidents",
+    "observable": "search_observables",
+    "sighting": "search_sightings",
+    "organization": "search_organizations",
+    "sector": "search_sectors",
+    "location": "search_locations",
+    "course_of_action": "search_courses_of_action",
+    "grouping": "search_groupings",
+    "note": "search_notes",
+}
 
 
 class PromptDef(BaseModel, arbitrary_types_allowed=True):
@@ -135,7 +167,8 @@ TOOL_CATALOG_META: dict[str, dict[str, Any]] = {
         resource_uri="cti://health",
         deprecated=True,
         health=True,
-    )
+    ),
+    "cti_search_threat_intel": _tool_meta(),
 }
 
 
@@ -146,6 +179,50 @@ class CtiHealthIn(BaseModel):
 class CtiHealthOut(BaseModel):
     status: Literal["healthy", "unavailable"] = Field(..., description="OpenCTI API health state.")
     opencti_available: bool = Field(..., description="True when the OpenCTI API answered the health probe.")
+
+
+class CtiSearchFilters(BaseModel):
+    limit: int = Field(..., description="Per-tool result limit; concrete default and cap are set by each tool.")
+    offset: int = Field(0, ge=0, le=500, description="Pagination offset; cap 500.")
+    labels: list[str] | None = Field(None, description="Filter by labels such as ['tlp:amber', 'malicious']; safe characters only.")
+    confidence_min: int | None = Field(None, ge=0, le=100, description="Minimum confidence threshold from 0 to 100.")
+    created_after: str | None = Field(None, description="ISO-8601 lower bound for entity creation date, e.g. 2024-01-01.")
+    created_before: str | None = Field(None, description="ISO-8601 upper bound for entity creation date.")
+
+    @field_validator("labels")
+    @classmethod
+    def _validate_labels(cls, value: list[str] | None) -> list[str] | None:
+        labels = validate_labels(value) if value else None
+        return labels or None
+
+    @field_validator("created_after", "created_before")
+    @classmethod
+    def _validate_date(cls, value: str | None, info: ValidationInfo) -> str | None:
+        return validate_date_filter(value, info.field_name)
+
+
+class CtiSearchThreatIntelIn(CtiSearchFilters):
+    query: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH, description="Search term: IOC, actor, malware, CVE, campaign, or other CTI keyword.")
+    limit: int = Field(5, ge=1, le=20, description="Max results per entity type. Cap 20.")
+
+
+class CtiEntity(BaseModel):
+    id: str | None = Field(None, description="OpenCTI entity id when returned by the platform.")
+    entity_type: str | None = Field(None, description="OpenCTI/STIX entity type.")
+    name: str | None = Field(None, description="Primary display name or observable value.")
+    description: str | None = Field(None, description="Short description, truncated by the client.")
+    confidence: int | None = Field(None, description="OpenCTI confidence score when available.")
+    labels: list[str] = Field(default_factory=list, description="OpenCTI labels attached to the entity.")
+    created: str | None = Field(None, description="Created timestamp when available.")
+    modified: str | None = Field(None, description="Modified timestamp when available.")
+    extra: dict[str, Any] = Field(default_factory=dict, description="Type-specific fields preserved from the OpenCTI client.")
+
+
+class CtiUnifiedSearchOut(BaseModel):
+    query: str = Field(..., description="Echoed search term.")
+    results_by_type: dict[str, list[CtiEntity]] = Field(..., description="Projected OpenCTI entities grouped by entity type.")
+    total: int = Field(..., description="Total returned entities across all groups.")
+    offset: int = Field(0, description="Echoed pagination offset.")
 
 
 async def cti_get_health(params: CtiHealthIn, ctx: RuntimeContext) -> CtiHealthOut:
@@ -163,6 +240,36 @@ async def cti_health_resource(ctx: RuntimeContext) -> str:
     return result.model_dump_json()
 
 
+async def cti_search_threat_intel(
+    params: CtiSearchThreatIntelIn,
+    ctx: RuntimeContext,
+) -> CtiUnifiedSearchOut:
+    client = ctx.require_client()
+    raw = await asyncio.to_thread(
+        client.unified_search,
+        params.query,
+        params.limit,
+        params.offset,
+        params.labels,
+        params.confidence_min,
+        params.created_after,
+        params.created_before,
+    )
+    groups: dict[str, list[CtiEntity]] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if key == "query" or not isinstance(value, list):
+                continue
+            groups[key] = [_shape_entity(item) for item in value[: params.limit]]
+    total = sum(len(items) for items in groups.values())
+    return CtiUnifiedSearchOut(
+        query=params.query,
+        results_by_type=groups,
+        total=total,
+        offset=params.offset,
+    )
+
+
 REGISTRY: list[ToolDef] = [
     ToolDef(
         name="cti_get_health",
@@ -177,7 +284,23 @@ REGISTRY: list[ToolDef] = [
             "source is reachable. This is a deprecated tool-form alias for the "
             "`cti://health` resource for one cutover cycle. Example: `cti_get_health()`."
         ),
-    )
+    ),
+    ToolDef(
+        name="cti_search_threat_intel",
+        fn=cti_search_threat_intel,
+        in_model=CtiSearchThreatIntelIn,
+        out_model=CtiUnifiedSearchOut,
+        annotations=_opencti_annotations("Search All Threat Intel"),
+        title="Search All Threat Intel",
+        description=(
+            "Broad search across all OpenCTI entity types: indicators, actors, malware, "
+            "techniques, CVEs, reports, and related CTI records. Use for discovery from a "
+            "keyword, malware family, actor, CVE, campaign, or IOC-like term. Don't use for "
+            "focused single-type queries; use `cti_search_entity` for that, or "
+            "`cti_lookup_ioc` for a known IOC. Example: "
+            "`cti_search_threat_intel(query='APT28', confidence_min=60)`."
+        ),
+    ),
 ]
 PROMPT_REGISTRY: list[PromptDef] = []
 RESOURCE_REGISTRY: list[ResourceDef] = [
@@ -445,6 +568,64 @@ def _audit_meta(
 
 def _metadata_for(tool_name: str, params: BaseModel | None) -> dict[str, Any]:
     return TOOL_METADATA.get(tool_name, DEFAULT_METADATA)
+
+
+def _shape_entity(raw: Any) -> CtiEntity:
+    if not isinstance(raw, dict):
+        return CtiEntity(name=str(raw), extra={"raw": raw})
+    labels = raw.get("labels") or raw.get("objectLabel") or []
+    if isinstance(labels, list):
+        shaped_labels = [
+            str(item.get("value") if isinstance(item, dict) else item)
+            for item in labels
+            if item is not None
+        ]
+    else:
+        shaped_labels = [str(labels)]
+    core_keys = {
+        "id",
+        "entity_type",
+        "type",
+        "name",
+        "value",
+        "observable_value",
+        "description",
+        "confidence",
+        "labels",
+        "objectLabel",
+        "created",
+        "modified",
+    }
+    extra = {key: value for key, value in raw.items() if key not in core_keys}
+    return CtiEntity(
+        id=_optional_str(raw.get("id")),
+        entity_type=_optional_str(raw.get("entity_type") or raw.get("type")),
+        name=_optional_str(
+            raw.get("name") or raw.get("observable_value") or raw.get("value")
+        ),
+        description=_optional_str(raw.get("description")),
+        confidence=_optional_int(raw.get("confidence")),
+        labels=shaped_labels,
+        created=_optional_str(raw.get("created")),
+        modified=_optional_str(raw.get("modified")),
+        extra=extra,
+    )
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _audit_summary(result: Any) -> Any:
