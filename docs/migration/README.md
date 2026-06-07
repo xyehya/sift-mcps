@@ -26,6 +26,7 @@ All locked decisions live in [00_migration_charter.md](00_migration_charter.md) 
 - [08_control_plane_schema.md](08_control_plane_schema.md) - practical initial Supabase/Postgres control-plane schema design for identity, authorization, evidence, audit, approvals, findings, TODOs, IOCs, reports, jobs, workers, parser lineage, OpenSearch indexing status, RAG/skills, and compatibility mapping.
 - [09_identity_auth_cutover.md](09_identity_auth_cutover.md) - the foundation track (cutover order step 1): Supabase Auth, operator profiles, case membership, active-case state, the hash-only MCP/service-token registry, and Gateway propagation. This precedes evidence/jobs/findings work.
 - [10_addon_backend_spec.md](10_addon_backend_spec.md) - target MCP add-on backend contract: core vs add-on, per-tool `case_scoped`, `data_plane` declaration, query-only-by-default with the write-capable exception, the control-plane `mcp_backends` registry, and the OpenCTI/wintriage/RAG reference backends.
+- [11_first_pr_candidate.md](11_first_pr_candidate.md) - first implementation PR candidate: roadmap phase JOB-0 baseline execution smoke tests/fixtures and a small runbook, with no runtime behavior change.
 
 ## Document Numbering Note
 
@@ -41,7 +42,6 @@ superseded. Those topics now live in `02`, `08`, and `09`. Do not recreate
 
 These are planned but intentionally not created yet:
 
-- `11_first_pr_candidate.md` - future: first implementation PR candidate (roadmap phase JOB-0 baseline smoke tests), planned only when a session is scoped to it.
 - `12_test_acceptance_plan.md` - future: migration tests, security gates, and acceptance scenarios.
 
 ## Future Codex Run Protocol
@@ -55,9 +55,9 @@ Every future migration run should:
 5. Keep new docs focused on the current run's objective.
 6. Update [MIGRATION_STATE.md](MIGRATION_STATE.md) at the end with files inspected, decisions, open questions, and the next recommended run.
 
-The next recommended run is the first implementation PR candidate planning
-(`11_first_pr_candidate.md`), focused only on roadmap phase JOB-0 baseline
-execution smoke-test fixtures and lightweight tests. The first feature-bearing
-implementation then follows the cutover order, starting with the
-cases/tokens/identity foundation in
+The next recommended run is the actual JOB-0 implementation PR: additive
+baseline execution smoke-test fixtures, lightweight tests, and a short runbook
+following [11_first_pr_candidate.md](11_first_pr_candidate.md). The first
+feature-bearing implementation then follows the cutover order, starting with
+the cases/tokens/identity foundation in
 [09_identity_auth_cutover.md](09_identity_auth_cutover.md).

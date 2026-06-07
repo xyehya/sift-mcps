@@ -2,23 +2,82 @@
 
 ## Current Objective
 
-Run 9 completed a decision-locking and reconciliation pass across the whole
-workspace. All previously-open blocking decisions are now locked in
-`00_migration_charter.md` "Confirmed Decisions (Locked)" (D1-D17); the
-architecture diagram was corrected; a new identity/auth foundation track
-(`09_identity_auth_cutover.md`) was created as cutover step 1; the schema doc was
-made lean (job core) and gained TODO/IOC/RAG/skills/anchoring/active-case tables;
-and every doc's "decisions needing approval"/"open questions" sections were
-reconciled to the locks or marked explicitly non-blocking with defaults.
+Run 12 created `docs/migration/11_first_pr_candidate.md`, the concrete first
+implementation PR candidate for roadmap phase JOB-0: additive baseline execution
+smoke-test fixtures, lightweight tests, and a short runbook with no runtime
+behavior change.
 
-The workspace is now handoff-ready: a new session can proceed to plan/implement
-the first PR candidate (JOB-0 baseline tests), then the identity foundation
-(Phase ID-1), per the cutover order.
+The workspace is now handoff-ready for the actual JOB-0 coding PR. The first PR
+decision is locked for implementation: **add baseline execution smoke-test
+fixtures and lightweight tests for current execution-critical paths, without
+changing runtime behavior**. This comes before schema migrations, workers, job
+APIs, parser conversion, OpenSearch refactors, or Supabase/Postgres-backed
+execution. Per charter D17, JOB-0 is additive and order-independent; the first
+feature-bearing PR after JOB-0 is the identity foundation, Phase ID-1 in
+`09_identity_auth_cutover.md`, not JOB-1.
 
-This run stayed documentation-only. It did not implement code, create database
-migrations, refactor REST APIs, MCP tools, frontend views, OpenSearch, evidence,
-audit, parser, report, finding, or worker code. It did not introduce
-Redis/RQ/Celery/Temporal or any external queue.
+This run stayed documentation-only. It did not implement code, create tests,
+create database migrations, refactor REST APIs, MCP tools, frontend views,
+OpenSearch, evidence, audit, parser, report, finding, or worker code. It did
+not introduce Redis/RQ/Celery/Temporal or any external queue.
+
+## Run 12 - First PR Candidate Planning (JOB-0)
+
+Created:
+
+- `docs/migration/11_first_pr_candidate.md` - concrete first implementation PR
+  candidate for JOB-0 baseline execution smoke tests/fixtures/docs.
+
+Updated:
+
+- `docs/migration/MIGRATION_STATE.md` - current handoff state for the next run.
+- `docs/migration/README.md` - moved doc 11 from "Planned Documents" to
+  "Documents" and updated the next recommended run.
+
+Files inspected in this run:
+
+- `docs/migration/MIGRATION_STATE.md`
+- `docs/migration/00_migration_charter.md`
+- `docs/migration/04_execution_current_state.md`
+- `docs/migration/07_execution_roadmap.md`
+- `docs/migration/08_control_plane_schema.md`
+- `docs/migration/09_identity_auth_cutover.md` (skimmed for cutover order)
+- `docs/migration/README.md`
+
+Narrow repository path discovery was also run to identify existing package
+manifests and test directories. No production modules were opened.
+
+First PR decision:
+
+- First implementation PR is JOB-0 only.
+- Scope is test/fixture/docs focused.
+- No runtime behavior change.
+- No schema migrations.
+- No Supabase/Postgres dependency.
+- No worker/job implementation.
+- No frontend/MCP/REST/OpenSearch refactor.
+
+Open questions for the JOB-0 coding run:
+
+- Exact package test commands and dependency runner.
+- Whether new smoke tests should live in new files or extend existing package
+  tests.
+- Exact `AuditWriter.log` JSONL field names to assert.
+- Exact `build_index_name()` sanitization output for mixed-case and symbol-rich
+  inputs.
+- The smallest parser path that exposes provenance/action shaping without a
+  live OpenSearch instance.
+- Whether ingest-status or ingest-manifest smoke coverage is cheaper and safer
+  than parser-output smoke coverage.
+
+Next recommended run:
+
+- Implement the JOB-0 coding PR described in
+  `docs/migration/11_first_pr_candidate.md`.
+- Inspect only the files listed in that document's repository discovery section.
+- Add 2-4 deterministic baseline smoke tests/fixtures and a short runbook.
+- Run targeted tests and `git diff --check`.
+- Stop and summarize changed files, tests run, and deviations.
 
 ## Run 9 - Locked Decisions And Reconciliation
 
@@ -554,24 +613,23 @@ migration documents.
 
 ## Next Recommended Run
 
-Plan the first implementation PR candidate: `docs/migration/11_first_pr_candidate.md`.
+The first-PR candidate is now planned in `docs/migration/11_first_pr_candidate.md`.
+The next run is the **actual JOB-0 coding implementation** - this is a coding
+session, not another planning run.
 
-Required reading before that run: `00_migration_charter.md` (Confirmed Decisions
-+ Cutover Order), then `09_identity_auth_cutover.md`, then
-`07_execution_roadmap.md`.
+Required reading before that run: `docs/migration/11_first_pr_candidate.md`
+(scope source), then only the files listed in its section 4 as needed to confirm
+test layout, commands, and helper behavior. Use the ready-to-copy coding prompt
+in section 12 of that document.
 
-Recommended scope:
+Scope of the coding run:
 
-- First implementation PR candidate that is safe for one Codex coding session.
-- Phase JOB-0 from `07_execution_roadmap.md`: additive baseline execution
-  smoke-test fixtures and lightweight tests (order-independent, no runtime
-  change).
-- Exact test files, fixtures, package commands, manual validation, rollback,
-  acceptance criteria, and context guardrails.
-- Inspect only the minimum implementation/test files required for that PR plan.
+- JOB-0 only: additive baseline execution smoke tests/fixtures + a short runbook,
+  no runtime behavior change (see `11_first_pr_candidate.md` sections 3, 5, 7).
+- 2-4 deterministic tests using temp dirs; no live OpenSearch, no real forensic
+  samples, no real evidence paths.
+- Run targeted tests + `git diff --check`; stop and summarize.
 
-After JOB-0, the first feature-bearing implementation is the identity foundation
-(Phase ID-1 schema in `09_identity_auth_cutover.md`), per the cutover order.
-
-Keep the next run focused on first-PR planning. Do not implement tests or code
-unless a future prompt explicitly authorizes that work.
+After JOB-0 lands, the first feature-bearing implementation is the identity
+foundation (Phase ID-1 schema in `09_identity_auth_cutover.md`), per the cutover
+order. JOB-1 should not precede ID-1.
