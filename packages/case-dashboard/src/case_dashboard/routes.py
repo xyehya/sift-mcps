@@ -94,6 +94,15 @@ _SUPABASE_AUTH = None
 # non-Supabase deployments keep working; the Gateway passes the real flag.
 _LEGACY_PORTAL_SESSION_ENABLED: bool = True
 
+
+def _legacy_password_auth_disabled() -> bool:
+    """True when local PBKDF2 setup/challenge/reset endpoints must not run."""
+    return _SUPABASE_AUTH is not None or not _LEGACY_PORTAL_SESSION_ENABLED
+
+
+def _legacy_password_auth_disabled_response() -> JSONResponse:
+    return JSONResponse({"error": "Legacy portal password auth disabled"}, status_code=403)
+
 # Max delta file size (1 MB)
 _MAX_DELTA_SIZE = 1_048_576
 
@@ -2593,6 +2602,9 @@ async def post_commit(request: Request) -> JSONResponse:
 
 async def get_auth_setup_required(request: Request) -> JSONResponse:
     """No auth required. Returns whether first-time password setup is needed."""
+    if _legacy_password_auth_disabled():
+        return JSONResponse({"required": False, "setup_required": False})
+
     try:
         has_any = _PASSWORDS_DIR.is_dir() and any(_PASSWORDS_DIR.glob("*.json"))
     except OSError:
@@ -2603,6 +2615,9 @@ async def get_auth_setup_required(request: Request) -> JSONResponse:
 
 async def post_auth_setup(request: Request) -> JSONResponse:
     """Create the first examiner account. Only available when no passwords exist."""
+    if _legacy_password_auth_disabled():
+        return _legacy_password_auth_disabled_response()
+
     try:
         already_set_up = _PASSWORDS_DIR.is_dir() and any(_PASSWORDS_DIR.glob("*.json"))
     except OSError:
@@ -2647,6 +2662,9 @@ async def post_auth_setup(request: Request) -> JSONResponse:
 
 async def get_auth_challenge(request: Request) -> JSONResponse:
     """Issue a login challenge nonce. Always returns 200 (R3: no user enumeration)."""
+    if _legacy_password_auth_disabled():
+        return _legacy_password_auth_disabled_response()
+
     examiner = str(request.query_params.get("examiner", "")).strip()
     if not examiner or not _EXAMINER_RE.match(examiner):
         return JSONResponse({"error": "Invalid examiner name"}, status_code=400)
@@ -2988,6 +3006,9 @@ async def post_auth_login(request: Request) -> JSONResponse:
 
 async def post_auth_reset_password(request: Request) -> JSONResponse:
     """Reset password via login challenge + new password. Clears must_reset_password."""
+    if _legacy_password_auth_disabled():
+        return _legacy_password_auth_disabled_response()
+
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)

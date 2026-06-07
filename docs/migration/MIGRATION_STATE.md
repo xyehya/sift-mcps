@@ -2,15 +2,17 @@
 
 ## Current Objective
 
-**PR03A / Batch A (unified Supabase JWT identity) is implemented and
-acceptance-green** (Run 28) on branch `revamp/pr03a-unified-jwt` — three unit
-commits (schema / gateway / portal), host + VM tests green, `/code-review` and
-`/security-review` passed, **B-10** and **B-14** DONE, and live VM acceptance
-against the pinned Supabase v1.26.05 confirmed JWT validation, agent/service
-issuance, and revocation. The one fork surfaced during live acceptance (**F-13**:
-pinned GoTrue lacks admin session logout) resolved into charter **D31** (revoke =
-DELETE auth user + app-revoke + resolver cache invalidate). Awaiting operator
-Land/merge into `revamp/spg-v1`.
+**PR03A / Batch A (unified Supabase JWT identity) is landed** on
+`revamp/spg-v1` (Runs 28-29). Run 28 implemented the three unit commits
+(schema / gateway / portal), passed host + VM acceptance, passed `/code-review`
+and `/security-review`, marked **B-10** and **B-14** DONE, and confirmed live VM
+Supabase v1.26.05 JWT validation, agent/service issuance, and revocation. The
+one fork surfaced during live acceptance (**F-13**: pinned GoTrue lacks admin
+session logout) resolved into charter **D31** (revoke = DELETE auth user +
+app-revoke + resolver cache invalidate). Run 29 remediated the final
+review-found portal auth-mode blocker before Land: Supabase/disabled-legacy mode
+now suppresses legacy PBKDF2 setup/challenge/reset endpoints and cannot route a
+fresh Supabase-only portal into local password setup.
 
 Prior context — the **D27b gateway cutover is landed** on `revamp/spg-v1`
 (Runs 23-24), Run 25 completed a documentation/invariant health check, Run 26
@@ -45,12 +47,60 @@ namespace assertion, B-14 duplicate token resolution, and B-15 DNS-rebinding
 TOCTOU hardening. F-11 remains OPEN for the later D22 `mcp_backends` registry
 phase.
 
-**Next:** operator Lands PR03A (merge `revamp/pr03a-unified-jwt` →
-`revamp/spg-v1`), then Plan the next batch: **PR03B / Batch B** (active-case DB
-authority, ID-4, carrying B-11) — or Batch H (`mcp_backends` registry, D22/F-11)
-if reprioritized. Keep evidence/jobs (Batch C), OpenSearch-core, and RAG
-batches separate unless a new candidate doc explicitly batches them. Carry
-B-4/B-11/B-12/B-13/B-15 forward.
+**Next:** Plan **PR03B / Batch B** (active-case DB authority, ID-4, carrying
+B-11) — or Batch H (`mcp_backends` registry, D22/F-11) if reprioritized. Keep
+evidence/jobs (Batch C), OpenSearch-core, and RAG batches separate unless a new
+candidate doc explicitly batches them. Carry B-4/B-11/B-12/B-13/B-15 forward.
+
+## Run 29 — PR03A Portal Auth-Mode Remediation & Land
+
+Review-remediation/Land run on branch `revamp/pr03a-unified-jwt`, following the
+Run 28 acceptance handoff. Runtime scope stayed inside doc 19's PR03A fence:
+`packages/case-dashboard/**`, `packages/sift-gateway/**` comment/doc drift, and
+`docs/migration/**`.
+
+Trigger: secondary review found that `LoginCard` still queried
+`/api/auth/setup-required` before Supabase login, while the backend endpoint only
+looked for legacy password JSON. On a fresh Supabase-only deployment with no
+legacy password files, the portal could enter the old unauthenticated local
+password setup flow. The same review also found that the legacy setup/challenge/
+reset endpoints ignored `legacy_portal_session_enabled=False`.
+
+Remediation:
+- `case_dashboard.routes` now treats local PBKDF2 setup/challenge/reset password
+  auth as disabled whenever Supabase auth callbacks are injected or
+  `legacy_portal_session_enabled=False`.
+- `/api/auth/setup-required` returns `required=false` in Supabase/disabled-legacy
+  mode so a fresh Supabase-only portal starts at email/password login, not local
+  password setup.
+- `/api/auth/setup`, `/api/auth/challenge`, and `/api/auth/reset-password` fail
+  closed with 403 in that mode.
+- `sift_gateway.supabase_auth` comment drift corrected: pinned Supabase
+  v1.26.05 does not expose admin per-user logout; D31 revocation uses DELETE-user
+  + app revoke + resolver cache invalidation.
+
+Verification:
+- `uv run pytest packages/case-dashboard/tests/test_pr03_supabase_portal_auth.py`
+  — 31 passed.
+- `uv run pytest packages/case-dashboard/tests/test_auth_endpoints.py` — 36
+  passed.
+- `uv run pytest packages/case-dashboard/tests` — 308 passed.
+- `uv run pytest packages/sift-gateway/tests/test_pr03_supabase_jwt_auth.py packages/sift-gateway/tests/test_pr03_tool_authorization.py`
+  — 61 passed.
+- `uv run python -m py_compile packages/case-dashboard/src/case_dashboard/routes.py packages/sift-gateway/src/sift_gateway/supabase_auth.py`
+  — passed.
+- `python3 scripts/validate_migration_docs.py` — passed.
+- Authored-source `git diff --check` — passed; generated Vite bundle whitespace
+  remains the accepted Run 28 generated-asset exception.
+- SIFT VM (`192.168.122.81`, Python 3.12.3 test venv): copied the four changed
+  files to `~/sift-mcps-test`; `packages/case-dashboard/tests/test_pr03_supabase_portal_auth.py`
+  + `test_auth_endpoints.py` — 67 passed; PR03A gateway auth/authorization tests
+  — 61 passed; changed-file `py_compile` and migration docs validator passed.
+
+Land: fast-forward merge of `revamp/pr03a-unified-jwt` into `revamp/spg-v1`.
+No push performed.
+
+Next: Plan PR03B / Batch B (active-case DB authority, ID-4), carrying B-11.
 
 ## Run 28 — PR03A / Batch A Unified Supabase JWT Build, Review & VM Acceptance
 

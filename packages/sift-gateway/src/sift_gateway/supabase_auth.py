@@ -261,9 +261,11 @@ class SupabaseAuthClient:
       - ``POST /auth/v1/token?grant_type=password``  (operator/agent login)
       - ``POST /auth/v1/token?grant_type=refresh_token``
       - ``POST /auth/v1/admin/users``                (Admin: create user)
-      - ``POST /auth/v1/admin/users/{id}/logout``    (Admin: revoke sessions)
       - ``DELETE /auth/v1/admin/users/{id}``         (Admin: delete user)
       - ``PUT  /auth/v1/admin/users/{id}``           (Admin: update/disable)
+
+    D31 records that pinned Supabase v1.26.05 does not expose per-user admin
+    session logout; revocation deletes the auth user instead.
     """
 
     def __init__(self, config: SupabaseAuthConfig, *, client: httpx.AsyncClient | None = None) -> None:

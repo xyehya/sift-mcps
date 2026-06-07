@@ -7,6 +7,7 @@ Covers doc 19 §4.4, §4.5 (portal half), §7, and §9 portal bullet:
   - logout clears the cookie and calls the logout callback
   - agent/service principals are denied on normal portal operator APIs
   - legacy session accepted only when the legacy flag is enabled
+  - legacy PBKDF2 setup/challenge/reset endpoints fail closed in Supabase mode
   - agent JWT/session create returns token material once and stores no raw token
   - revoke disables the app principal and calls the supplied revoke callback
 
@@ -227,6 +228,64 @@ class TestLogin:
 
     def test_login_missing_fields_400(self, client):
         assert client.post("/api/auth/login", json={"email": "x"}).status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# legacy password auth suppression
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyPasswordAuthSuppression:
+    def test_supabase_mode_skips_legacy_first_run_setup_even_bridge_enabled(
+        self, fake_auth, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(routes_mod, "_PASSWORDS_DIR", tmp_path / "passwords")
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET,
+            session_max_age=28800,
+            supabase_auth=fake_auth,
+            legacy_portal_session_enabled=True,
+        )
+        client = TestClient(app, raise_server_exceptions=True)
+
+        resp = client.get("/api/auth/setup-required")
+        assert resp.status_code == 200
+        assert resp.json() == {"required": False, "setup_required": False}
+
+        setup = client.post(
+            "/api/auth/setup", json={"examiner": "alice", "password": "securepass1"}
+        )
+        assert setup.status_code == 403
+        assert client.get("/api/auth/challenge?examiner=alice").status_code == 403
+        assert client.post(
+            "/api/auth/reset-password",
+            json={"challenge_id": "x", "response": "y", "new_password": "securepass2"},
+        ).status_code == 403
+
+    def test_legacy_password_endpoints_fail_closed_when_legacy_disabled(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(routes_mod, "_PASSWORDS_DIR", tmp_path / "passwords")
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET,
+            session_max_age=28800,
+            supabase_auth=None,
+            legacy_portal_session_enabled=False,
+        )
+        client = TestClient(app, raise_server_exceptions=True)
+
+        setup_required = client.get("/api/auth/setup-required")
+        assert setup_required.status_code == 200
+        assert setup_required.json() == {"required": False, "setup_required": False}
+
+        assert client.post(
+            "/api/auth/setup", json={"examiner": "alice", "password": "securepass1"}
+        ).status_code == 403
+        assert client.get("/api/auth/challenge?examiner=alice").status_code == 403
+        assert client.post(
+            "/api/auth/reset-password",
+            json={"challenge_id": "x", "response": "y", "new_password": "securepass2"},
+        ).status_code == 403
 
 
 # ---------------------------------------------------------------------------
