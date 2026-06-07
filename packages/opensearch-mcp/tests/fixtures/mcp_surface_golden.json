@@ -251,6 +251,81 @@
         "idempotentHint": true,
         "openWorldHint": true,
         "readOnlyHint": true,
+        "title": "Get Full Document"
+      },
+      "description": "Fetch one complete document by _id with every field and no truncation. Use after opensearch_search when a compact hit needs inspection. The index must be exact, not a wildcard. Example: opensearch_get_event(event_id='abc123', index='case-rocba-drive-20260526-1417-evtx-srl-forge').",
+      "input_schema": {
+        "properties": {
+          "event_id": {
+            "description": "Document _id from a search hit.",
+            "minLength": 1,
+            "title": "Event Id",
+            "type": "string"
+          },
+          "index": {
+            "description": "Exact case-* index name from the search hit; patterns are rejected.",
+            "title": "Index",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "index"
+        ],
+        "title": "GetEventIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_get_event",
+      "output_schema": {
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Projected _source fields after compact-mode shaping.",
+            "title": "Fields",
+            "type": "object"
+          },
+          "id": {
+            "description": "Document _id.",
+            "title": "Id",
+            "type": "string"
+          },
+          "index": {
+            "description": "Concrete index the hit came from.",
+            "title": "Index",
+            "type": "string"
+          },
+          "note": {
+            "default": "Full document - no truncation",
+            "description": "Full document fetch note.",
+            "title": "Note",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "Field names whose values were truncated to the size ceiling.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Truncated",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "index",
+          "fields"
+        ],
+        "title": "GetEventOut",
+        "type": "object"
+      },
+      "title": "Get Full Document"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
         "title": "Aggregate Field (Top-N)"
       },
       "description": "Group by a field for top-N frequency analysis such as event codes, users, hosts, or process names. Use for distributions. Do not use when you want individual documents; use opensearch_search. Example: opensearch_aggregate(field='event.code').",

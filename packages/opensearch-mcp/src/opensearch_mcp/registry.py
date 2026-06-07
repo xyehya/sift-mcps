@@ -179,6 +179,27 @@ class AggregateOut(BaseModel):
     truncated: bool = Field(..., description="True when bucket count hit the limit.")
 
 
+class GetEventIn(BaseModel):
+    event_id: str = Field(..., min_length=1, description="Document _id from a search hit.")
+    index: str = Field(
+        ...,
+        description="Exact case-* index name from the search hit; patterns are rejected.",
+    )
+
+    @field_validator("index")
+    @classmethod
+    def _validate_exact_case_index(cls, value: str) -> str:
+        if not value.startswith("case-"):
+            raise ValueError("index must start with 'case-'")
+        if "*" in value or "," in value:
+            raise ValueError("index must be an exact index name, not a pattern")
+        return value
+
+
+class GetEventOut(SearchHit):
+    note: str = Field("Full document - no truncation", description="Full document fetch note.")
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -348,6 +369,31 @@ async def run_opensearch_aggregate(params: AggregateIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
+async def run_opensearch_get_event(params: GetEventIn) -> ToolResult:
+    try:
+        raw = _legacy_server().opensearch_get_event(**params.model_dump())
+    except Exception as exc:  # noqa: BLE001 - sanitized typed error for MCP clients
+        message = f"{type(exc).__name__}: document lookup failed."
+        code = ErrorCode.not_found if "not" in type(exc).__name__.lower() else ErrorCode.internal
+        return _tool_error_result(
+            code,
+            message,
+            "Confirm event_id and exact case-* index from opensearch_search, then retry.",
+        )
+    if "error" in raw:
+        return _legacy_error(raw)
+    meta = _meta_from_raw(raw)
+    fields = {key: value for key, value in raw.items() if key not in {"_id", "_index", "_note"}}
+    out = GetEventOut(
+        id=str(raw.get("_id", params.event_id)),
+        index=str(raw.get("_index", params.index)),
+        fields=fields,
+        truncated=[],
+        note=str(raw.get("_note", "Full document - no truncation")),
+    )
+    return _success_tool_result(out, meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -380,6 +426,24 @@ REGISTRY.append(
             "population or gauge magnitude before opensearch_search. Do not use "
             "when you need per-value counts; use opensearch_aggregate. Example: "
             "opensearch_count(query='event.code:4624')."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_get_event",
+        fn=run_opensearch_get_event,
+        in_model=GetEventIn,
+        out_model=GetEventOut,
+        annotations=_read_annotations("Get Full Document"),
+        title="Get Full Document",
+        description=(
+            "Fetch one complete document by _id with every field and no truncation. "
+            "Use after opensearch_search when a compact hit needs inspection. "
+            "The index must be exact, not a wildcard. Example: "
+            "opensearch_get_event(event_id='abc123', "
+            "index='case-rocba-drive-20260526-1417-evtx-srl-forge')."
         ),
     )
 )
