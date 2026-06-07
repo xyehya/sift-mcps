@@ -2,6 +2,127 @@
   "backend": "opencti-mcp",
   "prompts": [],
   "resource_templates": [],
-  "resources": [],
-  "tools": []
+  "resources": [
+    {
+      "annotations": null,
+      "description": "Read-only OpenCTI connectivity and API health resource. Use before relying on CTI lookups; the `cti_get_health` tool remains as a deprecated resource-compatible alias for one cutover cycle.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "cti_health",
+      "title": "OpenCTI Health",
+      "uri": "cti://health"
+    }
+  ],
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "OpenCTI Health"
+      },
+      "description": "Check OpenCTI connectivity and API health before relying on CTI lookups. Use at the start of an intel-dependent step to verify the threat-intel source is reachable. This is a deprecated tool-form alias for the `cti://health` resource for one cutover cycle. Example: `cti_get_health()`.",
+      "input_schema": {
+        "description": "No-argument health check input.",
+        "properties": {},
+        "title": "CtiHealthIn",
+        "type": "object"
+      },
+      "meta": {
+        "case_scoped": false,
+        "category": "threat-intel",
+        "deprecated": true,
+        "deprecation_reason": "Resource-compatible tool alias kept for one cutover cycle.",
+        "evidence_class": "read_only",
+        "health": true,
+        "recommended_phase": "SURVEY",
+        "resource_uri": "cti://health"
+      },
+      "name": "cti_get_health",
+      "output_schema": {
+        "anyOf": [
+          {
+            "properties": {
+              "opencti_available": {
+                "description": "True when the OpenCTI API answered the health probe.",
+                "title": "Opencti Available",
+                "type": "boolean"
+              },
+              "status": {
+                "description": "OpenCTI API health state.",
+                "enum": [
+                  "healthy",
+                  "unavailable"
+                ],
+                "title": "Status",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "opencti_available"
+            ],
+            "title": "CtiHealthOut",
+            "type": "object"
+          },
+          {
+            "$defs": {
+              "ErrorCode": {
+                "enum": [
+                  "invalid_input",
+                  "not_found",
+                  "upstream_unavailable",
+                  "upstream_degraded",
+                  "rate_limited",
+                  "not_configured",
+                  "no_active_case",
+                  "capacity_refused",
+                  "internal"
+                ],
+                "title": "ErrorCode",
+                "type": "string"
+              }
+            },
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "$ref": "#/$defs/ErrorCode",
+                "description": "Machine-readable error category."
+              },
+              "message": {
+                "description": "Human-readable, secret-free explanation.",
+                "title": "Message",
+                "type": "string"
+              },
+              "remediation": {
+                "description": "Concrete next step the caller can take.",
+                "title": "Remediation",
+                "type": "string"
+              },
+              "retryable": {
+                "default": false,
+                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
+                "title": "Retryable",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "error",
+              "message",
+              "remediation"
+            ],
+            "title": "ToolError",
+            "type": "object"
+          }
+        ]
+      },
+      "title": "OpenCTI Health"
+    }
+  ]
 }
