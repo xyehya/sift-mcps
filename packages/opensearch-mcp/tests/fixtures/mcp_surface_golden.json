@@ -1,7 +1,2560 @@
 {
   "backend": "opensearch-mcp",
-  "prompts": [],
-  "resource_templates": [],
-  "resources": [],
-  "tools": []
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "host",
+          "required": true
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "case_id",
+          "required": false
+        }
+      ],
+      "description": "Compose a host-triage workflow from OpenSearch tools.",
+      "name": "triage_host",
+      "title": "Triage Host"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "query",
+          "required": true
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "case_id",
+          "required": false
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "interval",
+          "required": false
+        }
+      ],
+      "description": "Compose a timeline-first workflow and guided searches for spike windows.",
+      "name": "build_timeline",
+      "title": "Build Timeline"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "case_id",
+          "required": false
+        }
+      ],
+      "description": "Compose an IOC enrichment and malicious-indicator review workflow.",
+      "name": "ioc_sweep",
+      "title": "IOC Sweep"
+    }
+  ],
+  "resource_templates": [
+    {
+      "annotations": null,
+      "description": "Unfiltered resource view of detection findings for case-oriented clients.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_case_detections",
+      "title": "Case Detection Findings",
+      "uri_template": "opensearch://case/{case_id}/detections"
+    },
+    {
+      "annotations": null,
+      "description": "Flattened field-to-type mapping for an artifact type.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_field_catalog",
+      "title": "Field Mapping Dictionary",
+      "uri_template": "opensearch://catalog/fields/{artifact_type}"
+    },
+    {
+      "annotations": null,
+      "description": "Parameterized resource view of a case coverage summary.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_case_summary",
+      "title": "Case Coverage Summary",
+      "uri_template": "opensearch://case/{case_id}/summary"
+    }
+  ],
+  "resources": [
+    {
+      "annotations": null,
+      "description": "Read-only catalog of case-* indices and document counts.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_index_catalog",
+      "title": "Index Catalog",
+      "uri": "opensearch://catalog/indices"
+    },
+    {
+      "annotations": null,
+      "description": "Installed Sigma detector counts, with Hayabusa fallback guidance.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_detection_catalog",
+      "title": "Detection Rule Catalog",
+      "uri": "opensearch://catalog/detections"
+    },
+    {
+      "annotations": null,
+      "description": "Read-only resource view of OpenSearch cluster health and case index counts.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_cluster_status",
+      "title": "Cluster & Index Status",
+      "uri": "opensearch://cluster/status"
+    },
+    {
+      "annotations": null,
+      "description": "Read-only resource view of OpenSearch shard usage and capacity headroom.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_cluster_shards",
+      "title": "Shard Capacity",
+      "uri": "opensearch://cluster/shards"
+    }
+  ],
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Search Evidence"
+      },
+      "description": "Search indexed evidence with query_string syntax. Use for targeted lookups by indicator, user, IP, hash, or field value. Do not use for frequency counts (use opensearch_aggregate) or activity spikes (use opensearch_timeline); for one full document use opensearch_get_event. Example: opensearch_search(query='event.code:4688 AND process.name:*powershell*', case_id='rocba-drive-20260526-1417').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "compact": {
+            "default": true,
+            "description": "True excludes bloat fields and truncates values to 500 chars. Set False for full docs (prefer opensearch_get_event for one doc).",
+            "title": "Compact",
+            "type": "boolean"
+          },
+          "index": {
+            "default": "",
+            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "title": "Index",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Max hits to return. Hard cap 200.",
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Pagination offset; capped at OpenSearch max_result_window (10000).",
+            "maximum": 10000,
+            "minimum": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "query": {
+            "description": "OpenSearch query_string. Include file extensions ('svchost.exe' not 'svchost'); quote special chars (source.ip:\"::1\").",
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "sort": {
+            "default": "@timestamp:desc",
+            "description": "Sort as 'field:asc|desc'. Defaults to newest-first.",
+            "title": "Sort",
+            "type": "string"
+          },
+          "time_from": {
+            "default": "",
+            "description": "ISO-8601 lower bound on @timestamp (inclusive).",
+            "title": "Time From",
+            "type": "string"
+          },
+          "time_to": {
+            "default": "",
+            "description": "ISO-8601 upper bound on @timestamp (inclusive).",
+            "title": "Time To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SearchIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_search",
+      "output_schema": {
+        "properties": {
+          "advisories": {
+            "description": "Optional field-mapping/empty-result/pagination hints.",
+            "items": {
+              "properties": {
+                "kind": {
+                  "description": "Machine-readable advisory category.",
+                  "enum": [
+                    "field_mapping",
+                    "execution_evidence",
+                    "pagination",
+                    "empty_result"
+                  ],
+                  "title": "Kind",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "Human-readable advisory text.",
+                  "title": "Text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "title": "Advisory",
+              "type": "object"
+            },
+            "title": "Advisories",
+            "type": "array"
+          },
+          "compact": {
+            "description": "Whether compact projection was applied.",
+            "title": "Compact",
+            "type": "boolean"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Echoed pagination offset.",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "results": {
+            "description": "Matching documents, projected.",
+            "items": {
+              "properties": {
+                "fields": {
+                  "additionalProperties": true,
+                  "description": "Projected _source fields after compact-mode shaping.",
+                  "title": "Fields",
+                  "type": "object"
+                },
+                "id": {
+                  "description": "Document _id.",
+                  "title": "Id",
+                  "type": "string"
+                },
+                "index": {
+                  "description": "Concrete index the hit came from.",
+                  "title": "Index",
+                  "type": "string"
+                },
+                "truncated": {
+                  "description": "Field names whose values were truncated to the size ceiling.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Truncated",
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "index",
+                "fields"
+              ],
+              "title": "SearchHit",
+              "type": "object"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "returned": {
+            "description": "Number of hits in results.",
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Total matching docs (see total_capped).",
+            "title": "Total",
+            "type": "integer"
+          },
+          "total_capped": {
+            "default": false,
+            "description": "True when total is a lower bound (relation gte); call count for exact.",
+            "title": "Total Capped",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "total",
+          "returned",
+          "compact",
+          "results"
+        ],
+        "title": "SearchOut",
+        "type": "object"
+      },
+      "title": "Search Evidence"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Count Documents"
+      },
+      "description": "Return an exact match count without documents. Use to verify index population or gauge magnitude before opensearch_search. Do not use when you need per-value counts; use opensearch_aggregate. Example: opensearch_count(query='event.code:4624').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "index": {
+            "default": "",
+            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "title": "Index",
+            "type": "string"
+          },
+          "query": {
+            "default": "*",
+            "description": "query_string filter; default '*' counts all docs in scope.",
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "title": "CountIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_count",
+      "output_schema": {
+        "properties": {
+          "count": {
+            "description": "Exact document count for the query in scope.",
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "CountOut",
+        "type": "object"
+      },
+      "title": "Count Documents"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Security Analytics Detections"
+      },
+      "description": "List Security Analytics detection findings, or suggest a Hayabusa query when Sigma is unavailable or empty. Use to triage rule-based detections; severity filtering is applied behavior-compatibly. Example: opensearch_list_detections(severity='high').",
+      "input_schema": {
+        "properties": {
+          "detector_type": {
+            "default": "",
+            "description": "Detector type filter; empty returns all.",
+            "title": "Detector Type",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Max findings. Hard cap 500.",
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Pagination start.",
+            "minimum": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "severity": {
+            "default": "",
+            "description": "Severity filter; empty returns all severities.",
+            "enum": [
+              "",
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "title": "ListDetectionsIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_list_detections",
+      "output_schema": {
+        "properties": {
+          "findings": {
+            "description": "Detection findings.",
+            "items": {
+              "properties": {
+                "id": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Finding id.",
+                  "title": "Id"
+                },
+                "index": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Source index.",
+                  "title": "Index"
+                },
+                "matched_docs": {
+                  "description": "Related document count.",
+                  "title": "Matched Docs",
+                  "type": "integer"
+                },
+                "rules": {
+                  "description": "Matched rules.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Detection rule name.",
+                        "title": "Name"
+                      },
+                      "tags": {
+                        "description": "Rule tags.",
+                        "items": {
+                          "type": "string"
+                        },
+                        "title": "Tags",
+                        "type": "array"
+                      }
+                    },
+                    "title": "DetectionRuleRef",
+                    "type": "object"
+                  },
+                  "title": "Rules",
+                  "type": "array"
+                },
+                "timestamp": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Finding timestamp.",
+                  "title": "Timestamp"
+                }
+              },
+              "required": [
+                "matched_docs"
+              ],
+              "title": "Detection",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "offset": {
+            "description": "Pagination offset.",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "returned": {
+            "description": "Findings returned after filtering.",
+            "title": "Returned",
+            "type": "integer"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Hayabusa fallback query when Sigma is unavailable or empty.",
+            "title": "Suggestion"
+          },
+          "total": {
+            "description": "Total findings reported by upstream.",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "findings",
+          "total",
+          "returned",
+          "offset"
+        ],
+        "title": "ListDetectionsOut",
+        "type": "object"
+      },
+      "title": "Security Analytics Detections"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Fix Host ID Mapping"
+      },
+      "description": "Correct a wrong host.id mapping in the active case by updating the case host dictionary and reindexing docs where host.name equals raw. host.name is never changed. Use when ingest applied a wrong canonical host id. Example: opensearch_fix_host_mapping(raw='wksn01', new_canonical='wksn01').",
+      "input_schema": {
+        "properties": {
+          "new_canonical": {
+            "description": "The correct canonical host.id to assign.",
+            "minLength": 1,
+            "title": "New Canonical",
+            "type": "string"
+          },
+          "raw": {
+            "description": "The raw host.name value with the wrong mapping.",
+            "minLength": 1,
+            "title": "Raw",
+            "type": "string"
+          }
+        },
+        "required": [
+          "raw",
+          "new_canonical"
+        ],
+        "title": "FixHostMappingIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_fix_host_mapping",
+      "output_schema": {
+        "properties": {
+          "details": {
+            "additionalProperties": true,
+            "description": "Additional behavior-compatible fields.",
+            "title": "Details",
+            "type": "object"
+          },
+          "dict_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Host dictionary path.",
+            "title": "Dict Path"
+          },
+          "dict_saved": {
+            "default": true,
+            "description": "Whether the host dictionary was saved.",
+            "title": "Dict Saved",
+            "type": "boolean"
+          },
+          "docs_updated": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Documents updated by reindex.",
+            "title": "Docs Updated"
+          },
+          "new_canonical": {
+            "description": "Canonical host.id assigned.",
+            "title": "New Canonical",
+            "type": "string"
+          },
+          "raw": {
+            "description": "Raw host.name value corrected.",
+            "title": "Raw",
+            "type": "string"
+          },
+          "status": {
+            "const": "complete",
+            "description": "Correction status.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "raw",
+          "new_canonical"
+        ],
+        "title": "FixHostMappingOut",
+        "type": "object"
+      },
+      "title": "Fix Host ID Mapping"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Fix Host ID Mapping"
+      },
+      "description": "DEPRECATED alias for `opensearch_fix_host_mapping`. Use the canonical name; this alias will be removed after one cutover cycle.\n\nCorrect a wrong host.id mapping in the active case by updating the case host dictionary and reindexing docs where host.name equals raw. host.name is never changed. Use when ingest applied a wrong canonical host id. Example: opensearch_fix_host_mapping(raw='wksn01', new_canonical='wksn01').",
+      "input_schema": {
+        "properties": {
+          "new_canonical": {
+            "description": "The correct canonical host.id to assign.",
+            "minLength": 1,
+            "title": "New Canonical",
+            "type": "string"
+          },
+          "raw": {
+            "description": "The raw host.name value with the wrong mapping.",
+            "minLength": 1,
+            "title": "Raw",
+            "type": "string"
+          }
+        },
+        "required": [
+          "raw",
+          "new_canonical"
+        ],
+        "title": "FixHostMappingIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "opensearch_fix_host_mapping",
+        "deprecated": true
+      },
+      "name": "opensearch_host_fix",
+      "output_schema": {
+        "properties": {
+          "details": {
+            "additionalProperties": true,
+            "description": "Additional behavior-compatible fields.",
+            "title": "Details",
+            "type": "object"
+          },
+          "dict_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Host dictionary path.",
+            "title": "Dict Path"
+          },
+          "dict_saved": {
+            "default": true,
+            "description": "Whether the host dictionary was saved.",
+            "title": "Dict Saved",
+            "type": "boolean"
+          },
+          "docs_updated": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Documents updated by reindex.",
+            "title": "Docs Updated"
+          },
+          "new_canonical": {
+            "description": "Canonical host.id assigned.",
+            "title": "New Canonical",
+            "type": "string"
+          },
+          "raw": {
+            "description": "Raw host.name value corrected.",
+            "title": "Raw",
+            "type": "string"
+          },
+          "status": {
+            "const": "complete",
+            "description": "Correction status.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "raw",
+          "new_canonical"
+        ],
+        "title": "FixHostMappingOut",
+        "type": "object"
+      },
+      "title": "Fix Host ID Mapping"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Enrich: Windows Baseline Triage"
+      },
+      "description": "Check indexed filenames and services against the Windows baseline DB and stamp triage verdict fields. Use after ingest or after a baseline update. This remains behavior-compatible with the current synchronous path. Example: opensearch_enrich_triage().",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case to enrich; default active.",
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
+        "title": "EnrichTriageIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_enrich_triage",
+      "output_schema": {
+        "properties": {
+          "details": {
+            "additionalProperties": true,
+            "description": "Per-artifact enriched counts.",
+            "title": "Details",
+            "type": "object"
+          },
+          "documents_enriched": {
+            "description": "Total documents enriched.",
+            "title": "Documents Enriched",
+            "type": "integer"
+          },
+          "status": {
+            "const": "complete",
+            "description": "Triage enrichment status.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "documents_enriched",
+          "details"
+        ],
+        "title": "EnrichTriageOut",
+        "type": "object"
+      },
+      "title": "Enrich: Windows Baseline Triage"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Enrich: Threat Intel (OpenCTI)"
+      },
+      "description": "Extract unique IOCs from indexed docs, optionally look them up in OpenCTI, and stamp matching docs with threat_intel fields. Use dry_run=True to size the work, then dry_run=False to launch the existing async enrichment path. Example: opensearch_enrich_intel(dry_run=True).",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case to enrich; default active.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": true,
+            "description": "Extract and count IOCs without lookup.",
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "force": {
+            "default": false,
+            "description": "Re-enrich already-enriched docs.",
+            "title": "Force",
+            "type": "boolean"
+          }
+        },
+        "title": "EnrichIntelIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_enrich_intel",
+      "output_schema": {
+        "properties": {
+          "case_id": {
+            "description": "Resolved case id.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "domains": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Unique domain indicators in preview.",
+            "title": "Domains"
+          },
+          "hashes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Unique hash indicators in preview.",
+            "title": "Hashes"
+          },
+          "ips": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Unique IP indicators in preview.",
+            "title": "Ips"
+          },
+          "log_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background run log file.",
+            "title": "Log File"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Polling note.",
+            "title": "Note"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background process id.",
+            "title": "Pid"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background run id.",
+            "title": "Run Id"
+          },
+          "status": {
+            "description": "Enrichment response status.",
+            "enum": [
+              "preview",
+              "started"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "total_iocs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Total unique IOCs in preview.",
+            "title": "Total Iocs"
+          }
+        },
+        "required": [
+          "status",
+          "case_id"
+        ],
+        "title": "EnrichIntelOut",
+        "type": "object"
+      },
+      "title": "Enrich: Threat Intel (OpenCTI)"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Ingest/Enrichment Progress"
+      },
+      "description": "Return status for running or recent ingest and enrichment runs. Use to poll every roughly 30 seconds while a run is active and present the per-host artifact checklist. Default is active case; case_id='*' shows all cases. Example: opensearch_ingest_status().",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Filter to this case; default active. '*' for all.",
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
+        "title": "IngestStatusIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_ingest_status",
+      "output_schema": {
+        "properties": {
+          "ingests": {
+            "description": "Running or recent ingest/enrich runs.",
+            "items": {
+              "properties": {
+                "artifacts_complete": {
+                  "description": "Completed artifact count.",
+                  "title": "Artifacts Complete",
+                  "type": "integer"
+                },
+                "artifacts_total": {
+                  "description": "Total artifact count.",
+                  "title": "Artifacts Total",
+                  "type": "integer"
+                },
+                "bulk_failed": {
+                  "description": "Bulk write failures.",
+                  "title": "Bulk Failed",
+                  "type": "integer"
+                },
+                "case_id": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Case id.",
+                  "title": "Case Id"
+                },
+                "checklist": {
+                  "description": "Progress checklist.",
+                  "items": {
+                    "properties": {
+                      "artifact": {
+                        "description": "Artifact name.",
+                        "title": "Artifact",
+                        "type": "string"
+                      },
+                      "detail": {
+                        "description": "Human-readable artifact progress detail.",
+                        "title": "Detail",
+                        "type": "string"
+                      },
+                      "host": {
+                        "description": "Host name.",
+                        "title": "Host",
+                        "type": "string"
+                      },
+                      "status": {
+                        "description": "Per-artifact status.",
+                        "enum": [
+                          "done",
+                          "running",
+                          "failed",
+                          "pending"
+                        ],
+                        "title": "Status",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "host",
+                      "artifact",
+                      "status",
+                      "detail"
+                    ],
+                    "title": "ChecklistItem",
+                    "type": "object"
+                  },
+                  "title": "Checklist",
+                  "type": "array"
+                },
+                "details": {
+                  "additionalProperties": true,
+                  "description": "Additional behavior-compatible fields.",
+                  "title": "Details",
+                  "type": "object"
+                },
+                "elapsed": {
+                  "description": "Elapsed time display.",
+                  "title": "Elapsed",
+                  "type": "string"
+                },
+                "errors": {
+                  "description": "Per-artifact errors.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Errors",
+                  "type": "array"
+                },
+                "halt_reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Structured halt reason when failed.",
+                  "title": "Halt Reason"
+                },
+                "hosts_complete": {
+                  "description": "Completed host count.",
+                  "title": "Hosts Complete",
+                  "type": "integer"
+                },
+                "hosts_total": {
+                  "description": "Total host count.",
+                  "title": "Hosts Total",
+                  "type": "integer"
+                },
+                "log_file": {
+                  "default": "",
+                  "description": "Run log file.",
+                  "title": "Log File",
+                  "type": "string"
+                },
+                "message": {
+                  "default": "",
+                  "description": "Operator-facing status message.",
+                  "title": "Message",
+                  "type": "string"
+                },
+                "next_steps": {
+                  "description": "Suggested next steps.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Next Steps",
+                  "type": "array"
+                },
+                "pid": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Worker process id.",
+                  "title": "Pid"
+                },
+                "status": {
+                  "description": "Run status.",
+                  "enum": [
+                    "starting",
+                    "running",
+                    "complete",
+                    "failed",
+                    "killed",
+                    "unknown"
+                  ],
+                  "title": "Status",
+                  "type": "string"
+                },
+                "total_indexed": {
+                  "description": "Total submitted documents.",
+                  "title": "Total Indexed",
+                  "type": "integer"
+                },
+                "warnings": {
+                  "description": "Non-fatal warnings.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Warnings",
+                  "type": "array"
+                }
+              },
+              "required": [
+                "status",
+                "elapsed",
+                "total_indexed",
+                "bulk_failed",
+                "hosts_complete",
+                "hosts_total",
+                "artifacts_complete",
+                "artifacts_total"
+              ],
+              "title": "IngestRun",
+              "type": "object"
+            },
+            "title": "Ingests",
+            "type": "array"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Summary message when no runs are present.",
+            "title": "Message"
+          }
+        },
+        "required": [
+          "ingests"
+        ],
+        "title": "IngestStatusOut",
+        "type": "object"
+      },
+      "title": "Ingest/Enrichment Progress"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false,
+        "title": "Ingest Evidence into OpenSearch"
+      },
+      "description": "Preview (dry_run=True, default) or run evidence ingest into OpenSearch. Use dry_run=True first, review the plan, then dry_run=False with force=True only for intentional re-ingest. Execution remains behavior-compatible with the current async subprocess path. Example: opensearch_ingest(path='evidence/rocba-cdrive.e01', format='auto', dry_run=True).",
+      "input_schema": {
+        "properties": {
+          "all_logs": {
+            "default": false,
+            "description": "Parse all evtx, not only forensic logs.",
+            "title": "All Logs",
+            "type": "boolean"
+          },
+          "delimiter": {
+            "default": "",
+            "description": "Optional delimiter for delimited input.",
+            "title": "Delimiter",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": true,
+            "description": "Preview without indexing by default.",
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "exclude": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Skip these artifact types.",
+            "title": "Exclude"
+          },
+          "force": {
+            "default": false,
+            "description": "Allow intentional re-ingest when the case already has docs.",
+            "title": "Force",
+            "type": "boolean"
+          },
+          "format": {
+            "default": "auto",
+            "description": "auto=containers/artifact dirs; otherwise choose a specific evidence format.",
+            "enum": [
+              "auto",
+              "json",
+              "delimited",
+              "accesslog",
+              "memory"
+            ],
+            "title": "IngestFormat",
+            "type": "string"
+          },
+          "full": {
+            "default": false,
+            "description": "Include all ingest tiers.",
+            "title": "Full",
+            "type": "boolean"
+          },
+          "hostname": {
+            "default": "",
+            "description": "Source hostname. Required for json/accesslog/memory and most delimited. 'auto' detects from filenames for flat delimited dirs.",
+            "title": "Hostname",
+            "type": "string"
+          },
+          "include": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only these artifact types.",
+            "title": "Include"
+          },
+          "index_suffix": {
+            "default": "",
+            "description": "Optional index suffix.",
+            "title": "Index Suffix",
+            "type": "string"
+          },
+          "no_hayabusa": {
+            "default": false,
+            "description": "Skip Hayabusa Sigma scan.",
+            "title": "No Hayabusa",
+            "type": "boolean"
+          },
+          "password": {
+            "default": "",
+            "description": "Archive/container password. SECRET - redacted from audit/logs/results.",
+            "title": "Password",
+            "type": "string"
+          },
+          "path": {
+            "description": "Evidence path under active case; bare names resolve to evidence/.",
+            "title": "Path",
+            "type": "string"
+          },
+          "plugins": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Memory: run only these plugins.",
+            "title": "Plugins"
+          },
+          "recursive": {
+            "default": false,
+            "description": "Delimited dirs: treat immediate subdirs as hostnames.",
+            "title": "Recursive",
+            "type": "boolean"
+          },
+          "reduced_ids": {
+            "default": false,
+            "description": "Filter to high-value Event IDs.",
+            "title": "Reduced Ids",
+            "type": "boolean"
+          },
+          "source_timezone": {
+            "default": "",
+            "description": "Evidence system local timezone, e.g. Eastern Standard Time.",
+            "title": "Source Timezone",
+            "type": "string"
+          },
+          "tier": {
+            "default": 1,
+            "description": "Memory analysis depth: 1 fast, 3 deep.",
+            "maximum": 3,
+            "minimum": 1,
+            "title": "Tier",
+            "type": "integer"
+          },
+          "time_field": {
+            "default": "",
+            "description": "Optional timestamp field.",
+            "title": "Time Field",
+            "type": "string"
+          },
+          "vss": {
+            "default": false,
+            "description": "Process Volume Shadow Copies.",
+            "title": "Vss",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "IngestIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_ingest",
+      "output_schema": {
+        "properties": {
+          "already_indexed": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Existing index warning, when present.",
+            "title": "Already Indexed"
+          },
+          "case_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Resolved active case id.",
+            "title": "Case Id"
+          },
+          "container": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Detected container details.",
+            "title": "Container"
+          },
+          "details": {
+            "additionalProperties": true,
+            "description": "Additional behavior-compatible legacy fields.",
+            "title": "Details",
+            "type": "object"
+          },
+          "log_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background run log file.",
+            "title": "Log File"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Polling or operator note.",
+            "title": "Note"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background process id for started runs.",
+            "title": "Pid"
+          },
+          "plan": {
+            "additionalProperties": true,
+            "description": "Preview plan/details.",
+            "title": "Plan",
+            "type": "object"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Background ingest run id.",
+            "title": "Run Id"
+          },
+          "status": {
+            "description": "Ingest response status.",
+            "enum": [
+              "preview",
+              "started",
+              "containers_detected",
+              "multi_started",
+              "already_indexed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "suggested_hostname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Suggested source hostname.",
+            "title": "Suggested Hostname"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Non-fatal warning.",
+            "title": "Warning"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "IngestOut",
+        "type": "object"
+      },
+      "title": "Ingest Evidence into OpenSearch"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Field Value Discovery"
+      },
+      "description": "Enumerate distinct values of a field with counts before writing targeted queries. Use for value discovery such as usernames or process names; prefer opensearch_aggregate when ranking matters. Example: opensearch_field_values(field='winlog.provider_name').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "field": {
+            "description": "Field to enumerate. CSV/text fields need '.keyword'.",
+            "minLength": 1,
+            "title": "Field",
+            "type": "string"
+          },
+          "index": {
+            "default": "",
+            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "title": "Index",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Max distinct values. Hard cap 500.",
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "default": "*",
+            "description": "query_string filter to narrow the value set.",
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "title": "FieldValuesIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_field_values",
+      "output_schema": {
+        "properties": {
+          "field": {
+            "description": "Field enumerated.",
+            "title": "Field",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "True when more distinct values exist than returned.",
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "values": {
+            "description": "Distinct values with counts.",
+            "items": {
+              "properties": {
+                "count": {
+                  "description": "Document count for this value.",
+                  "title": "Count",
+                  "type": "integer"
+                },
+                "value": {
+                  "description": "Distinct field value.",
+                  "title": "Value"
+                }
+              },
+              "required": [
+                "value",
+                "count"
+              ],
+              "title": "FieldValue",
+              "type": "object"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "field",
+          "values",
+          "truncated"
+        ],
+        "title": "FieldValuesOut",
+        "type": "object"
+      },
+      "title": "Field Value Discovery"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Event Timeline (Histogram)"
+      },
+      "description": "Build a date histogram of event counts to find activity bursts before drilling in. Use to locate spikes, then scope opensearch_search with time_from/time_to. Buckets are warned at the configured ceiling and never silently truncated. Example: opensearch_timeline(query='event.code:4688', interval='1h').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "index": {
+            "default": "",
+            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "title": "Index",
+            "type": "string"
+          },
+          "interval": {
+            "default": "1h",
+            "description": "Bucket size: Ns/Nm/Nh/Nd (e.g. 30m, 1h, 1d).",
+            "pattern": "^\\d+[smhd]$",
+            "title": "Interval",
+            "type": "string"
+          },
+          "query": {
+            "default": "*",
+            "description": "query_string filter.",
+            "title": "Query",
+            "type": "string"
+          },
+          "time_field": {
+            "default": "@timestamp",
+            "description": "Date field to bucket on.",
+            "title": "Time Field",
+            "type": "string"
+          },
+          "time_from": {
+            "default": "",
+            "description": "ISO-8601 lower bound.",
+            "title": "Time From",
+            "type": "string"
+          },
+          "time_to": {
+            "default": "",
+            "description": "ISO-8601 upper bound.",
+            "title": "Time To",
+            "type": "string"
+          }
+        },
+        "title": "TimelineIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_timeline",
+      "output_schema": {
+        "properties": {
+          "advisories": {
+            "description": "Optional narrowing advisory for very large histograms.",
+            "items": {
+              "properties": {
+                "kind": {
+                  "description": "Machine-readable advisory category.",
+                  "enum": [
+                    "field_mapping",
+                    "execution_evidence",
+                    "pagination",
+                    "empty_result"
+                  ],
+                  "title": "Kind",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "Human-readable advisory text.",
+                  "title": "Text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "title": "Advisory",
+              "type": "object"
+            },
+            "title": "Advisories",
+            "type": "array"
+          },
+          "buckets": {
+            "description": "Sparse date histogram buckets.",
+            "items": {
+              "properties": {
+                "count": {
+                  "description": "Document count in this time bucket.",
+                  "title": "Count",
+                  "type": "integer"
+                },
+                "time": {
+                  "description": "Bucket start (ISO-8601).",
+                  "title": "Time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "time",
+                "count"
+              ],
+              "title": "TimeBucket",
+              "type": "object"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "interval": {
+            "description": "Histogram interval used.",
+            "title": "Interval",
+            "type": "string"
+          },
+          "total_docs": {
+            "description": "Docs matching query before bucketing.",
+            "title": "Total Docs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_docs",
+          "interval",
+          "buckets"
+        ],
+        "title": "TimelineOut",
+        "type": "object"
+      },
+      "title": "Event Timeline (Histogram)"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Get Full Document"
+      },
+      "description": "Fetch one complete document by _id with every field and no truncation. Use after opensearch_search when a compact hit needs inspection. The index must be exact, not a wildcard. Example: opensearch_get_event(event_id='abc123', index='case-rocba-drive-20260526-1417-evtx-srl-forge').",
+      "input_schema": {
+        "properties": {
+          "event_id": {
+            "description": "Document _id from a search hit.",
+            "minLength": 1,
+            "title": "Event Id",
+            "type": "string"
+          },
+          "index": {
+            "description": "Exact case-* index name from the search hit; patterns are rejected.",
+            "title": "Index",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "index"
+        ],
+        "title": "GetEventIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_get_event",
+      "output_schema": {
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Projected _source fields after compact-mode shaping.",
+            "title": "Fields",
+            "type": "object"
+          },
+          "id": {
+            "description": "Document _id.",
+            "title": "Id",
+            "type": "string"
+          },
+          "index": {
+            "description": "Concrete index the hit came from.",
+            "title": "Index",
+            "type": "string"
+          },
+          "note": {
+            "default": "Full document - no truncation",
+            "description": "Full document fetch note.",
+            "title": "Note",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "Field names whose values were truncated to the size ceiling.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Truncated",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "index",
+          "fields"
+        ],
+        "title": "GetEventOut",
+        "type": "object"
+      },
+      "title": "Get Full Document"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Aggregate Field (Top-N)"
+      },
+      "description": "Group by a field for top-N frequency analysis such as event codes, users, hosts, or process names. Use for distributions. Do not use when you want individual documents; use opensearch_search. Example: opensearch_aggregate(field='event.code').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "field": {
+            "description": "Field to group by. CSV/registry text fields need '.keyword' (e.g. 'Path.keyword'); evtx fields like event.code are already keyword.",
+            "minLength": 1,
+            "title": "Field",
+            "type": "string"
+          },
+          "index": {
+            "default": "",
+            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "title": "Index",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Max buckets. Hard cap 500.",
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "default": "*",
+            "description": "query_string filter applied before aggregation.",
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "title": "AggregateIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_aggregate",
+      "output_schema": {
+        "properties": {
+          "buckets": {
+            "description": "Top-N buckets for the requested field.",
+            "items": {
+              "properties": {
+                "count": {
+                  "description": "Doc count for the value.",
+                  "title": "Count",
+                  "type": "integer"
+                },
+                "key": {
+                  "description": "Bucket value.",
+                  "title": "Key"
+                }
+              },
+              "required": [
+                "key",
+                "count"
+              ],
+              "title": "Bucket",
+              "type": "object"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "field": {
+            "description": "Field grouped by this aggregation.",
+            "title": "Field",
+            "type": "string"
+          },
+          "total_docs": {
+            "description": "Docs matching query before bucketing.",
+            "title": "Total Docs",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "True when bucket count hit the limit.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "total_docs",
+          "buckets",
+          "truncated"
+        ],
+        "title": "AggregateOut",
+        "type": "object"
+      },
+      "title": "Aggregate Field (Top-N)"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Cluster & Index Status"
+      },
+      "description": "DEPRECATED tool form; prefer resource opensearch://cluster/status when available. Shows cluster health and per-case-index document counts. Use to confirm the cluster is reachable and see which cases have data; use opensearch_case_summary for one case's artifact and coverage breakdown.",
+      "input_schema": {
+        "properties": {},
+        "title": "StatusIn",
+        "type": "object"
+      },
+      "meta": {
+        "deprecated": true,
+        "removal_horizon": "at/after D27b",
+        "resource_uri": "opensearch://cluster/status"
+      },
+      "name": "opensearch_status",
+      "output_schema": {
+        "properties": {
+          "cluster_status": {
+            "description": "Cluster health status; single-node yellow may be annotated normal.",
+            "title": "Cluster Status",
+            "type": "string"
+          },
+          "indices": {
+            "description": "All case-* indices, sorted by name.",
+            "items": {
+              "properties": {
+                "docs": {
+                  "description": "Document count for the index.",
+                  "title": "Docs",
+                  "type": "integer"
+                },
+                "index": {
+                  "description": "Case index name.",
+                  "title": "Index",
+                  "type": "string"
+                },
+                "size": {
+                  "description": "Human store size, e.g. '1.2gb'.",
+                  "title": "Size",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "Index status reported by cat indices.",
+                  "title": "Status",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "index",
+                "docs",
+                "size",
+                "status"
+              ],
+              "title": "IndexInfo",
+              "type": "object"
+            },
+            "title": "Indices",
+            "type": "array"
+          },
+          "total_indices": {
+            "description": "Number of case-* indices returned.",
+            "title": "Total Indices",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cluster_status",
+          "indices",
+          "total_indices"
+        ],
+        "title": "StatusOut",
+        "type": "object"
+      },
+      "title": "Cluster & Index Status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Inspect Forensic Container"
+      },
+      "description": "Survey a forensic container without mounting it: integrity, size, partitions, and available inspection details. Use before opensearch_ingest; follow with opensearch_ingest(dry_run=True) for the full plan. Example: opensearch_inspect_container(path='evidence/rocba-cdrive.e01').",
+      "input_schema": {
+        "properties": {
+          "path": {
+            "description": "Container path under the active case; bare names resolve to evidence/.",
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "InspectContainerIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_inspect_container",
+      "output_schema": {
+        "properties": {
+          "acquiry_info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "E01 acquisition metadata from ewfinfo.",
+            "title": "Acquiry Info"
+          },
+          "container_type": {
+            "description": "Detected container type.",
+            "enum": [
+              "e01",
+              "raw",
+              "file",
+              "unknown"
+            ],
+            "title": "Container Type",
+            "type": "string"
+          },
+          "hashes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Reported hashes.",
+            "title": "Hashes",
+            "type": "object"
+          },
+          "partitions": {
+            "description": "Detected partitions when available.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Partitions",
+            "type": "array"
+          },
+          "path": {
+            "description": "Original path argument.",
+            "title": "Path",
+            "type": "string"
+          },
+          "raw_info": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Truncated fdisk/img_stat output.",
+            "title": "Raw Info"
+          },
+          "resolved_path": {
+            "description": "Resolved filesystem path.",
+            "title": "Resolved Path",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Container size in bytes if known.",
+            "title": "Size Bytes"
+          },
+          "size_human": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Human-readable container size.",
+            "title": "Size Human"
+          },
+          "tool_available": {
+            "description": "False when no inspection tool is available on the SIFT VM.",
+            "title": "Tool Available",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "resolved_path",
+          "container_type",
+          "tool_available"
+        ],
+        "title": "InspectContainerOut",
+        "type": "object"
+      },
+      "title": "Inspect Forensic Container"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Case Coverage Summary"
+      },
+      "description": "Complete coverage overview for a case. Call this first in every indexed session to see hosts, artifact families, doc counts, enrichment state, and coverage_state.gaps with exact commands to fill missing coverage. Example: opensearch_case_summary(case_id='rocba-drive-20260526-1417').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id; empty resolves to active case.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "include_fields": {
+            "default": false,
+            "description": "Include per-artifact field-type mappings; large output needed to decide '.keyword' suffixes.",
+            "title": "Include Fields",
+            "type": "boolean"
+          }
+        },
+        "title": "CaseSummaryIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_case_summary",
+      "output_schema": {
+        "properties": {
+          "artifacts": {
+            "additionalProperties": {
+              "properties": {
+                "docs": {
+                  "description": "Document count for the artifact family.",
+                  "title": "Docs",
+                  "type": "integer"
+                },
+                "hosts": {
+                  "description": "Hosts with this artifact.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Hosts",
+                  "type": "array"
+                },
+                "indices": {
+                  "description": "Concrete indices merged.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Indices",
+                  "type": "array"
+                }
+              },
+              "required": [
+                "docs"
+              ],
+              "title": "ArtifactCoverage",
+              "type": "object"
+            },
+            "description": "Artifact coverage keyed by artifact family.",
+            "title": "Artifacts",
+            "type": "object"
+          },
+          "case_id": {
+            "description": "Resolved case id.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "coverage_state": {
+            "description": "Coverage and gap state.",
+            "properties": {
+              "disk_artifacts": {
+                "additionalProperties": {
+                  "enum": [
+                    "indexed",
+                    "not_run",
+                    "not_available"
+                  ],
+                  "type": "string"
+                },
+                "description": "Expected disk artifact coverage state.",
+                "title": "Disk Artifacts",
+                "type": "object"
+              },
+              "enrichment": {
+                "additionalProperties": {
+                  "enum": [
+                    "done",
+                    "not_run"
+                  ],
+                  "type": "string"
+                },
+                "description": "Triage and threat-intel enrichment state.",
+                "title": "Enrichment",
+                "type": "object"
+              },
+              "filesystem_meta_path": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Most recent filesystem metadata sidecar path, relative to case dir.",
+                "title": "Filesystem Meta Path"
+              },
+              "gaps": {
+                "description": "Actionable gaps.",
+                "items": {
+                  "properties": {
+                    "command": {
+                      "description": "Exact ingest/enrich call to fill the gap.",
+                      "title": "Command",
+                      "type": "string"
+                    },
+                    "coverage_gap": {
+                      "description": "Missing coverage or enrichment.",
+                      "title": "Coverage Gap",
+                      "type": "string"
+                    },
+                    "next_mcp_step": {
+                      "description": "Next MCP step after filling the gap.",
+                      "title": "Next Mcp Step",
+                      "type": "string"
+                    },
+                    "output_path": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Expected output path if applicable.",
+                      "title": "Output Path"
+                    },
+                    "warning": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Non-fatal warning about the gap.",
+                      "title": "Warning"
+                    },
+                    "when_to_run": {
+                      "description": "When this gap should be filled.",
+                      "title": "When To Run",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "coverage_gap",
+                    "when_to_run",
+                    "command",
+                    "next_mcp_step"
+                  ],
+                  "title": "CoverageGap",
+                  "type": "object"
+                },
+                "title": "Gaps",
+                "type": "array"
+              },
+              "memory": {
+                "additionalProperties": true,
+                "description": "{tier_run, plugins_run, plugins_not_run}.",
+                "title": "Memory",
+                "type": "object"
+              }
+            },
+            "title": "CoverageState",
+            "type": "object"
+          },
+          "enrichment": {
+            "additionalProperties": true,
+            "description": "{triage:{checked,suspicious}, threat_intel:{checked,malicious}}.",
+            "title": "Enrichment",
+            "type": "object"
+          },
+          "fields_per_type": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional capped field mappings per artifact type.",
+            "title": "Fields Per Type"
+          },
+          "hosts": {
+            "description": "Indexed hosts.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Hosts",
+            "type": "array"
+          },
+          "investigation_hints": {
+            "description": "Compact investigation hints for indexed artifacts.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Investigation Hints",
+            "type": "array"
+          },
+          "time_range": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "{earliest, latest} ISO-8601.",
+            "title": "Time Range",
+            "type": "object"
+          },
+          "total_docs": {
+            "description": "Total case document count.",
+            "title": "Total Docs",
+            "type": "integer"
+          },
+          "warnings": {
+            "description": "Non-fatal sub-query failures.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "case_id",
+          "total_docs",
+          "coverage_state"
+        ],
+        "title": "CaseSummaryOut",
+        "type": "object"
+      },
+      "title": "Case Coverage Summary"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Shard Capacity"
+      },
+      "description": "DEPRECATED tool form; prefer resource opensearch://cluster/shards when available. Reports shard usage and capacity headroom. Use before large ingests because a full disk image can add many shards.",
+      "input_schema": {
+        "properties": {},
+        "title": "ShardStatusIn",
+        "type": "object"
+      },
+      "meta": {
+        "deprecated": true,
+        "removal_horizon": "at/after D27b",
+        "resource_uri": "opensearch://cluster/shards"
+      },
+      "name": "opensearch_shard_status",
+      "output_schema": {
+        "properties": {
+          "current_shards": {
+            "description": "Current shard count.",
+            "title": "Current Shards",
+            "type": "integer"
+          },
+          "data_nodes": {
+            "description": "Number of data nodes.",
+            "title": "Data Nodes",
+            "type": "integer"
+          },
+          "headroom_pct": {
+            "description": "Remaining shard capacity percentage.",
+            "title": "Headroom Pct",
+            "type": "number"
+          },
+          "max_shards_per_node": {
+            "description": "Configured max shards per data node.",
+            "title": "Max Shards Per Node",
+            "type": "integer"
+          },
+          "max_total": {
+            "description": "Maximum total shards across data nodes.",
+            "title": "Max Total",
+            "type": "integer"
+          },
+          "status": {
+            "description": "ok>=10%, warning>=2%, critical<2% headroom.",
+            "enum": [
+              "ok",
+              "warning",
+              "critical"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "top_indices_by_shard_count": {
+            "description": "Top visible indices by shard count.",
+            "items": {
+              "properties": {
+                "doc_count": {
+                  "description": "Document count.",
+                  "title": "Doc Count",
+                  "type": "integer"
+                },
+                "index": {
+                  "description": "Index name.",
+                  "title": "Index",
+                  "type": "string"
+                },
+                "primary_shards": {
+                  "description": "Primary shard count.",
+                  "title": "Primary Shards",
+                  "type": "integer"
+                },
+                "replica_shards": {
+                  "description": "Replica shard count.",
+                  "title": "Replica Shards",
+                  "type": "integer"
+                },
+                "size": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Human store size if reported.",
+                  "title": "Size"
+                }
+              },
+              "required": [
+                "index",
+                "primary_shards",
+                "replica_shards",
+                "doc_count"
+              ],
+              "title": "TopIndexShards",
+              "type": "object"
+            },
+            "title": "Top Indices By Shard Count",
+            "type": "array"
+          }
+        },
+        "required": [
+          "current_shards",
+          "max_shards_per_node",
+          "data_nodes",
+          "max_total",
+          "headroom_pct",
+          "status",
+          "top_indices_by_shard_count"
+        ],
+        "title": "ShardStatusOut",
+        "type": "object"
+      },
+      "title": "Shard Capacity"
+    }
+  ]
 }
