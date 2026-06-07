@@ -489,6 +489,7 @@ async def cti_search_entity(
     client = ctx.require_client()
     entity_type = params.type.value
     method = getattr(client, _ENTITY_TYPE_METHODS[entity_type])
+    applied_offset = params.offset
 
     if entity_type == "observable":
         extra_types = ctx.config.extra_observable_types if ctx.config else None
@@ -529,6 +530,11 @@ async def cti_search_entity(
                 params.created_before,
             )
     else:
+        # These entity client methods take only (query, limit) — offset is not
+        # supported, so report the offset actually applied (0) rather than
+        # echoing the requested value, which would falsely imply page N and
+        # cause silent duplicate/missing results during pagination.
+        applied_offset = 0
         results = await asyncio.to_thread(method, params.query, params.limit)
 
     shaped = [_shape_entity(item) for item in _safe_list(results)[: params.limit]]
@@ -536,7 +542,7 @@ async def cti_search_entity(
         type=params.type,
         results=shaped,
         total=len(shaped),
-        offset=params.offset,
+        offset=applied_offset,
     )
 
 

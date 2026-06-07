@@ -622,6 +622,22 @@ def register_all(mcp: FastMCP) -> None:
         )(resource_def.fn)
 
 
+def _output_schema(out_model: type[BaseModel]) -> dict[str, Any]:
+    """Advertised output schema: the success model OR a structured ToolError.
+
+    Every tool can return ``ToolError`` in ``structured_content`` on the error
+    path, so the declared schema must admit both shapes; a schema-validating
+    client (and the D27b gateway response-guard) otherwise rejects error
+    results as schema-violating.
+    """
+    return {
+        "anyOf": [
+            out_model.model_json_schema(),
+            ToolError.model_json_schema(),
+        ]
+    }
+
+
 def _function_tool(
     tool_def: ToolDef,
     name: str,
@@ -679,7 +695,7 @@ def _function_tool(
         fn=invoke,
         return_type=ToolResult,
         parameters=in_model.model_json_schema(),
-        output_schema=tool_def.out_model.model_json_schema(),
+        output_schema=_output_schema(tool_def.out_model),
         annotations=tool_def.annotations,
         meta=meta,
         run_in_thread=False,
