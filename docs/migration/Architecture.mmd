@@ -61,7 +61,7 @@ flowchart TB
     %% -------------------------
     %% Gateway - single policy boundary
     %% -------------------------
-    Gateway("<b>Gateway / Broker Layer - SINGLE POLICY BOUNDARY</b><br/>Starlette + FastAPI + FastMCP<br/><br/>ALL REST APIs + ALL MCP tool calls + ALL privileged actions<br/>AuthN / AuthZ, case scope, tool scope, evidence gate,<br/>audit + policy enforcement, OpenSearch query mediation,<br/>ACTIVE CASE propagation to backends/tools<br/><i>per-backend direct MCP routes DISABLED</i>")
+    Gateway("<b>Gateway / Broker Layer - SINGLE POLICY BOUNDARY</b><br/>FastAPI + FastMCP 3.0 (one ASGI app: REST + mcp.http_app)<br/><br/>ALL REST APIs + ALL MCP tool calls + ALL privileged actions<br/>AuthN / AuthZ, case scope, tool scope, evidence gate,<br/>audit + policy enforcement, OpenSearch query mediation,<br/>ACTIVE CASE propagation to backends/tools<br/><i>providers/transforms = aggregation only; policy is SIFT-owned</i><br/><i>per-backend direct MCP routes DISABLED</i>")
 
     %% -------------------------
     %% Control plane (authoritative)

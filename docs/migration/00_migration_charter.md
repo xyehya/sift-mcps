@@ -12,7 +12,7 @@ be corrected.
 The target architecture is a SIFT VM Autonomous DFIR Agent system with four clear boundaries:
 
 - Presentation layer: React + Vite operator portal for case lifecycle, findings, timeline, evidence integrity, and MCP token management.
-- Gateway/Broker layer: Starlette + FastAPI + FastMCP for REST, WebSocket/SSE where needed, MCP tool mediation, authentication, authorization, audit, and policy enforcement.
+- Gateway/Broker layer: **FastAPI + FastMCP 3.0** (one ASGI app: REST via FastAPI, MCP via `mcp.http_app`) for REST, WebSocket/SSE where needed, MCP tool mediation, authentication, authorization, audit, and policy enforcement. FastMCP 3.0 providers/transforms handle aggregation/namespacing/discovery/scoping; the policy logic stays SIFT-owned. See D24 and `14_fastmcp3_supabase_integration.md`.
 - Case control plane: Supabase Local/Postgres as the authoritative store for case and workflow state.
 - Execution and data planes: SIFT VM workers execute durable jobs from Postgres, while OpenSearch stores derived searchable artifacts, timelines, IOCs, full-text data, and vector-search data.
 
@@ -96,9 +96,12 @@ There is no Redis/RQ job authority. Durable job state must go through Postgres/S
 
 ### Gateway/Broker Layer
 
-The Gateway/Broker remains Starlette + FastAPI + FastMCP and is the **single,
+The Gateway/Broker is **FastAPI + FastMCP 3.0** (one ASGI app: REST via FastAPI
+dependency injection, MCP via `mcp.http_app`; D24) and is the **single,
 mandatory** policy boundary. ALL REST APIs, ALL MCP tool calls, and ALL
-privileged actions go through the Gateway. There is no compliant path that
+privileged actions go through the Gateway. FastMCP 3.0 providers/transforms do
+aggregation only; the evidence gate, response guard, audit envelope,
+active-case propagation, and authorization remain SIFT-owned middleware. There is no compliant path that
 reaches a backend, OpenSearch, evidence, or the control plane without passing
 Gateway policy.
 
@@ -124,7 +127,7 @@ Gateway policy.
 - Current JSON/file-based state migrates gradually and must not remain the long-term authority.
 - No Redis/RQ.
 - Durable job state must go through Postgres/Supabase.
-- Gateway/Broker remains Starlette + FastAPI + FastMCP.
+- Gateway/Broker is FastAPI + FastMCP 3.0 (D24); the policy boundary is SIFT-owned, not delegated to the framework.
 - AI agents interact through case-scoped MCP tools and must not bypass Gateway policy or Postgres authorization.
 - MCP tokens are case-scoped, tool-scoped, expiring, revocable, and stored only as hashes.
 - Human operators authenticate through Supabase Auth and RLS.
@@ -171,6 +174,10 @@ needing user approval" / "Open Questions" entries scattered across docs 02-08.
 | D22 | Add-on MCP backend spec direction | The Gateway is the single enforcement point; per-backend MCP routes disabled (D3). Add-on backends are **query-only/read-only by default**; a write-capable add-on must declare it and obey the §7A write contract + control-plane registration. The manifest gains a per-tool **`case_scoped`** flag (global add-on tools like OpenCTI/wintriage queries are case-agnostic but still audited under the active case) and a backend **data-plane dependency** declaration. **Backend registration moves from `gateway.yaml` into a control-plane `mcp_backends` registry**, managed/monitored from the portal. Full spec: `10_addon_backend_spec.md`. |
 | D23 | RAG folds into core | The RAG capability is no longer a standalone add-on backend. Its vector store moves to **Supabase (pgvector; `rag_collections`/`rag_documents`)** and retrieval is exposed as a **core, control-plane-backed** tool. `forensic-rag-mcp`'s Chroma store is migrated; the package is retired or reduced to a thin core retrieval path. `windows-triage-mcp` remains a minimal query-only add-on (local baseline-DB package). |
 | D18 | OpenSearch write contract + index naming | **Reuse the existing, working ingestion model**; do not refactor parsers/enrichments. v1 keeps the current index naming `case-{case_id}-{artifact_type}-{hostname}` (already case-prefixed, already template-backed and auto-created on first bulk write), the shared `flush_bulk` writer, the host auto-discovery preflight, and the `vhir.*`/`host.*`/`pipeline_version` provenance stamping. The control plane **registers** these indices in `opensearch_indexes` (discovery/registration, not renaming). The logical-family rename (`dfir-case-{case_id}-{artifacts\|timeline\|iocs}-vN` + aliases) is a **deferred, optional** evolution, not required for v1. **Any writer** (core worker, addon MCP backend such as a future OpenCTI/Hayabusa enrichment, or future addon) must conform additively to the shared write contract in `03` §7A: case-scoped name via `build_index_name()`, mandatory provenance/metadata, registration of new indices/batches, and `case_id` taken from job/active-case context - without a full refactor of the working backend. Data-plane writes (workers/enrichments) write to OpenSearch directly under an authorized job; the Gateway-only rule (D2) governs the control/tool-call boundary, not internal execution-plane bulk writes. |
+| D24 | MCP framework: FastMCP 3.0 substrate | The Gateway and the FastMCP-style backends migrate to **standalone FastMCP 3.0** (`pip install fastmcp` / `import fastmcp`), replacing the low-level `mcp.server.lowlevel.Server` gateway plumbing and the in-SDK `mcp.server.fastmcp` (1.x) backends. The Gateway becomes **one FastAPI ASGI app** serving (a) the portal REST API and (b) the MCP endpoint via `mcp.http_app(...)` with combined lifespans. FastMCP 3.0 **providers** (`ProxyProvider`/`LocalProvider`/`OpenAPIProvider`/`SkillsProvider`) + **transforms** (`Namespace`, `Visibility`, `ToolTransform`, `ToolSearch`, `Resources`/`PromptsAsTools`) provide aggregation/namespacing/discovery/scoping **only**. **This is an implementation-substrate change: the Gateway remains the single policy boundary (D2/D3). The evidence gate, response guard, audit envelope, active-case propagation, and authorization remain SIFT-owned middleware/async-auth checks, never delegated to the framework.** Session-scoped `Visibility` keyed off active case + role (`09` §5) is the tool-layer expression of case scope. Full design: `14_fastmcp3_supabase_integration.md`. |
+| D25 | code-mode excluded; run_command retained | FastMCP `code-mode` is **out of scope**: it is an experimental token-optimization layer that executes arbitrary LLM-generated Python and is explicitly *not* suited to strict, pre-audited command boundaries. It does **not** replace `run_command` and does **not** fix its known flakiness (Gateway argv/flex handling, `evidence/` write-gap, missing OS-level sandbox), which are fixed directly. `run_command` remains the hardened, allowlisted, audited OS-exec boundary. Tool-schema **context bloat** is handled by **`ToolSearch` + `Visibility`**, not code-mode. |
+| D26 | Human auth = own Supabase-JWT verify (FastAPI DI) | Human/operator auth verifies **Supabase JWTs directly via FastAPI dependency injection** on REST routes. FastMCP's `SupabaseProvider` remote-OAuth is **not adopted** (RFC 8707 resource-indicator/audience-binding gap; self-hosted consent-UI burden). Machine/agent/worker/service principals remain **hash-only** Gateway-issued tokens validated against the Postgres registry (reaffirms D8). Gateway-side authorization (active case, case membership, tool scope, evidence gate) is mandatory for every principal and is never delegated to an OAuth audience. |
+| D27 | FastMCP cutover style + parity gate | The framework migration is a **single, cleanly-revertable big-bang cutover PR** (Gateway + the three FastMCP backends together), **gated by a behavior-parity suite** that must pass before merge: the existing package suites (~1146 tests) **plus** an MCP-surface contract test asserting tool names/namespaces/schemas are byte-stable and the evidence-gate/response-guard/audit-envelope/active-case behavior is unchanged across the swap. **Sequencing:** lands as a dedicated foundation-substrate PR **after the in-flight PR02 (Phase ID-2)** and **before** the heavier evidence/jobs phases, so later durable-job/OpenSearch-core/findings work is authored natively on 3.0 rather than ported twice. Backends carry breaking-change shims (`FASTMCP_DECORATOR_MODE`, `await ctx.get_state`, `list_tools()`). If the parity gate cannot be met, the branch is abandoned — no partial cutover lands in `main`. |
 
 ## Cutover Order
 
@@ -194,6 +201,13 @@ job carries identity and case context that does not exist yet:
 
 Baseline protective tests (roadmap phase JOB-0) are additive and may be written
 in parallel at any time; they do not depend on the cutover order.
+
+**FastMCP 3.0 framework substrate (D24/D27)** is inserted as a dedicated
+foundation-substrate PR **after the in-flight PR02 (Phase ID-2)** and **before**
+evidence/jobs (steps 2–3), so all later durable-job, OpenSearch-core, and
+findings work is authored natively on FastMCP 3.0 instead of ported twice. It is
+a single, parity-gated, revertable big-bang cutover. See
+`14_fastmcp3_supabase_integration.md` §6.
 
 ## Planning Status
 

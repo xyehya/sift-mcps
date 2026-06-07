@@ -2,6 +2,18 @@
 
 ## Current Objective
 
+Run 15 (planning) locked the **FastMCP 3.0 + Supabase + FastAPI consolidation**:
+decisions **D24-D27** in `00_migration_charter.md` and the full design in
+`docs/migration/14_fastmcp3_supabase_integration.md`. Summary: the Gateway is
+**retained as the single policy boundary** but re-implemented on **standalone
+FastMCP 3.0** as one FastAPI ASGI app (REST + `mcp.http_app`); providers/transforms
+do aggregation only; `code-mode` is **excluded** (run_command retained);
+human auth = **own Supabase-JWT verify via FastAPI DI** (no SupabaseProvider OAuth);
+machines stay hash-only. Rollout = **big-bang, parity-gated, revertable**, sequenced
+**after PR02 (Phase ID-2)** and before evidence/jobs. No runtime code changed in
+Run 15 (docs/decisions only). **Next coding run is still PR02**, then the FastMCP
+cutover.
+
 Run 14 implemented PR01 Phase ID-1, installed a pinned self-hosted Supabase
 stack on the SIFT VM for migration testing, created the root `AGENTS.md`
 handoff/invariant file, and drafted `docs/migration/13_pr02.md`, the next
@@ -32,6 +44,50 @@ legacy fallback removal.
 Current worktree note: `.DS_Store` was already modified and remains unrelated.
 PR01 implementation files, `AGENTS.md`, and `docs/migration/13_pr02.md` are
 uncommitted unless a later run commits them.
+
+## Run 15 - FastMCP 3.0 + Supabase Consolidation Decision (D24-D27)
+
+Planning/decision run. No runtime code changed.
+
+Trigger: operator researched FastMCP 3.0 (providers/transforms/code-mode/
+SupabaseProvider) and proposed dropping the bespoke Gateway to simplify. The run
+verified the actual framework facts against the official docs and the repo.
+
+Findings that shaped the decision:
+
+- The repo is **not** on standalone FastMCP. Gateway uses low-level
+  `mcp.server.lowlevel.Server`; `opensearch-mcp`/`forensic-rag-mcp`/`forensic-mcp`
+  use **in-SDK FastMCP 1.x** (`mcp.server.fastmcp`); `opencti-mcp`/
+  `windows-triage-mcp` use low-level `mcp.server.Server`. Standalone FastMCP 3.0
+  is a net-new dependency, not an import swap.
+- The Gateway is the **policy boundary**, not just an aggregator (evidence gate,
+  response guard, audit envelope, active-case propagation, hash-token registry,
+  REST admin surface). FastMCP 3.0 replaces aggregation internals only.
+- `code-mode` runs arbitrary LLM-generated Python in a sandbox and is explicitly
+  unsuited to pre-audited command boundaries; it does **not** replace or fix
+  `run_command`. Excluded.
+- `SupabaseProvider` is human-OAuth only (RFC 8707 audience gap; self-hosted
+  consent UI), no machine-principal story. Not adopted.
+
+Operator decisions (via questions): keep run_command / drop code-mode;
+**big-bang** cutover; **own Supabase-JWT verify (FastAPI DI)** for humans.
+
+Files created/changed in Run 15:
+
+- `docs/migration/14_fastmcp3_supabase_integration.md` (new) - KB + target design.
+- `00_migration_charter.md` - added D24-D27; updated Target Architecture +
+  Gateway/Broker text + Non-Negotiable line to "FastAPI + FastMCP 3.0"; added the
+  framework-substrate insertion note to "Cutover Order".
+- `Architecture.mmd` - Gateway label updated to FastAPI + FastMCP 3.0; note that
+  providers/transforms are aggregation only and policy is SIFT-owned.
+- `README.md` - added doc 14; refreshed "next recommended run" footer.
+- `MIGRATION_STATE.md` - this section + Current Objective + Next Recommended Run.
+
+Open items for the cutover PR (see doc 14 §7): ProxyProvider must carry the
+evidence-gate/response-guard/audit wrap for proxied add-ons; verify
+`mcp.http_app` session semantics vs current `StreamableHTTPSessionManager`;
+decide `forensic-mcp`'s fate; wire session-scoped Visibility to active case+role;
+pin the exact `fastmcp` version.
 
 ## Run 14 - PR01 Implementation, Supabase VM Setup, AGENTS.md, And PR02 Planning
 
@@ -805,23 +861,29 @@ migration documents.
 
 ## Next Recommended Run
 
-The first-PR candidate is now planned in `docs/migration/11_first_pr_candidate.md`.
-The next run is the **actual JOB-0 coding implementation** - this is a coding
-session, not another planning run.
+JOB-0 (commit `c73762c`) and PR01 / Phase ID-1 are done. The next coding run is
+**PR02 / Phase ID-2** - DB-first hash-only MCP/service token registry
+dual-validation against `app.mcp_tokens` with legacy `gateway.yaml api_keys`
+fallback. Scope source: `docs/migration/13_pr02.md`. It must not add Supabase
+human auth, portal login replacement, active-case propagation, evidence-gate
+changes, job/worker tables, REST job APIs, MCP job tools, OpenSearch/parser
+changes, audit data migration, frontend redesigns, or legacy fallback removal.
 
-Required reading before that run: `docs/migration/11_first_pr_candidate.md`
-(scope source), then only the files listed in its section 4 as needed to confirm
-test layout, commands, and helper behavior. Use the ready-to-copy coding prompt
-in section 12 of that document.
+After PR02, the **FastMCP 3.0 framework-substrate cutover** (decisions D24-D27;
+design + cutover plan in `docs/migration/14_fastmcp3_supabase_integration.md`)
+lands as a dedicated, parity-gated, single revertable big-bang PR **before** the
+heavier evidence/jobs phases:
 
-Scope of the coding run:
+- Migrate the Gateway to FastMCP 3.0 as one FastAPI ASGI app (REST via FastAPI DI
+  + MCP via `mcp.http_app`); replace `server.py`/`backends/*.py` aggregation with
+  providers/transforms; re-host the policy middleware (evidence gate, response
+  guard, audit, active-case, authorization) - never delegated to the framework.
+- Migrate the three in-SDK FastMCP-1.x backends to standalone 3.0 (decorator
+  mode, `await ctx.get_state`, `list_tools()`).
+- **Parity gate before merge:** all ~1146 package tests green on the branch +
+  a new MCP-surface contract test (tool names/namespaces/schemas byte-stable;
+  evidence-gate/response-guard/audit/active-case behavior unchanged).
+- `code-mode` is out of scope (D25); `run_command` unchanged.
 
-- JOB-0 only: additive baseline execution smoke tests/fixtures + a short runbook,
-  no runtime behavior change (see `11_first_pr_candidate.md` sections 3, 5, 7).
-- 2-4 deterministic tests using temp dirs; no live OpenSearch, no real forensic
-  samples, no real evidence paths.
-- Run targeted tests + `git diff --check`; stop and summarize.
-
-After JOB-0 lands, the first feature-bearing implementation is the identity
-foundation (Phase ID-1 schema in `09_identity_auth_cutover.md`), per the cutover
-order. JOB-1 should not precede ID-1.
+The remaining cutover (evidence/audit, jobs/OpenSearch-core, findings/RAG/skills)
+then follows the charter "Cutover Order", authored natively on FastMCP 3.0.

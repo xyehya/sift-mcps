@@ -29,6 +29,7 @@ All locked decisions live in [00_migration_charter.md](00_migration_charter.md) 
 - [11_first_pr_candidate.md](11_first_pr_candidate.md) - first implementation PR candidate: roadmap phase JOB-0 baseline execution smoke tests/fixtures and a small runbook, with no runtime behavior change.
 - [12_pr01.md](12_pr01.md) - PR01 implementation candidate: Phase ID-1 control-plane identity foundation schema, schema tests, and runbook only.
 - [13_pr02.md](13_pr02.md) - PR02 implementation candidate: Phase ID-2 DB-first hash-only MCP/service token validation with legacy `gateway.yaml` fallback.
+- [14_fastmcp3_supabase_integration.md](14_fastmcp3_supabase_integration.md) - FastMCP 3.0 + Supabase + FastAPI consolidation knowledge base and target design (decisions D24-D27): providers/transforms substrate, one ASGI app, own Supabase-JWT verification (FastAPI DI), code-mode excluded, big-bang parity-gated cutover sequenced after PR02.
 - [JOB0_baseline_execution_checks.md](JOB0_baseline_execution_checks.md) - targeted commands and no-service assumptions for the additive JOB-0 baseline smoke tests.
 - [PR01_identity_schema_checks.md](PR01_identity_schema_checks.md) - commands for running the deterministic PR01 schema checks and optional Supabase syntax validation.
 
@@ -59,9 +60,12 @@ Every future migration run should:
 5. Keep new docs focused on the current run's objective.
 6. Update [MIGRATION_STATE.md](MIGRATION_STATE.md) at the end with files inspected, decisions, open questions, and the next recommended run.
 
-The next recommended run is the actual JOB-0 implementation PR: additive
-baseline execution smoke-test fixtures, lightweight tests, and a short runbook
-following [11_first_pr_candidate.md](11_first_pr_candidate.md). The first
-feature-bearing implementation then follows the cutover order, starting with
+JOB-0 (commit `c73762c`) and PR01 / Phase ID-1 (schema foundation) are done. The
+next recommended run is **PR02 / Phase ID-2** (DB-first token-registry
+dual-validation) per [13_pr02.md](13_pr02.md). After PR02, the **FastMCP 3.0
+framework substrate cutover** (decisions D24-D27, design in
+[14_fastmcp3_supabase_integration.md](14_fastmcp3_supabase_integration.md)) lands
+as a dedicated parity-gated big-bang PR before the heavier evidence/jobs phases.
+The remaining work then follows the cutover order, starting with
 the cases/tokens/identity foundation in
 [09_identity_auth_cutover.md](09_identity_auth_cutover.md).
