@@ -211,6 +211,7 @@ TOOL_CATALOG_META: dict[str, dict[str, Any]] = {
     "cti_search_threat_intel": _tool_meta(),
     "cti_search_entity": _tool_meta(),
     "cti_lookup_ioc": _tool_meta(),
+    "cti_get_recent_indicators": _tool_meta(),
 }
 
 
@@ -284,6 +285,11 @@ class CtiLookupIocIn(BaseModel):
         return value.strip()
 
 
+class CtiRecentIndicatorsIn(BaseModel):
+    days: int = Field(7, ge=1, le=90, description="Look-back window in days. Cap 90.")
+    limit: int = Field(20, ge=1, le=100, description="Maximum recent indicators to return. Cap 100.")
+
+
 class CtiEntity(BaseModel):
     id: str | None = Field(None, description="OpenCTI entity id when returned by the platform.")
     entity_type: str | None = Field(None, description="OpenCTI/STIX entity type.")
@@ -319,6 +325,12 @@ class CtiIocContextOut(BaseModel):
     related_malware: list[CtiEntity] = Field(default_factory=list, description="Related malware from OpenCTI relationships.")
     related_techniques: list[CtiEntity] = Field(default_factory=list, description="Related MITRE techniques or attack patterns.")
     related_campaigns: list[CtiEntity] = Field(default_factory=list, description="Related campaigns when returned by the platform.")
+
+
+class CtiRecentIndicatorsOut(BaseModel):
+    days: int = Field(..., description="Echoed look-back window in days.")
+    results: list[CtiEntity] = Field(..., description="Recently created OpenCTI indicators.")
+    total: int = Field(..., description="Number of indicators returned.")
 
 
 async def cti_get_health(params: CtiHealthIn, ctx: RuntimeContext) -> CtiHealthOut:
@@ -469,6 +481,20 @@ async def cti_lookup_ioc(
     )
 
 
+async def cti_get_recent_indicators(
+    params: CtiRecentIndicatorsIn,
+    ctx: RuntimeContext,
+) -> CtiRecentIndicatorsOut:
+    client = ctx.require_client()
+    results = await asyncio.to_thread(
+        client.get_recent_indicators,
+        params.days,
+        params.limit,
+    )
+    shaped = [_shape_entity(item) for item in _safe_list(results)[: params.limit]]
+    return CtiRecentIndicatorsOut(days=params.days, results=shaped, total=len(shaped))
+
+
 REGISTRY: list[ToolDef] = [
     ToolDef(
         name="cti_get_health",
@@ -530,6 +556,21 @@ REGISTRY: list[ToolDef] = [
             "known IOC extracted from case evidence; don't use for broad keyword discovery "
             "or speculative indicators not observed in evidence. Handles IPs, hashes, "
             "domains, URLs, CVEs, and MITRE ids. Example: `cti_lookup_ioc(ioc='8.8.8.8')`."
+        ),
+    ),
+    ToolDef(
+        name="cti_get_recent_indicators",
+        fn=cti_get_recent_indicators,
+        in_model=CtiRecentIndicatorsIn,
+        out_model=CtiRecentIndicatorsOut,
+        annotations=_opencti_annotations("Recent Indicators"),
+        title="Recent Indicators",
+        description=(
+            "Return recently added OpenCTI indicators from a bounded look-back window. "
+            "Use for situational awareness during active response or to check whether "
+            "fresh intel relevant to an ongoing case has landed. Don't bulk-pivot on "
+            "recent indicators without a case-specific hypothesis or observed overlap. "
+            "Example: `cti_get_recent_indicators(days=14)`."
         ),
     ),
 ]
