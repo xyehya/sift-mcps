@@ -226,6 +226,55 @@ class DllAliasIn(BaseModel):
         return value
 
 
+class CheckProcessTreeIn(BaseModel):
+    process_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=4096,
+        description="Child process name (e.g. 'cmd.exe').",
+    )
+    parent_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=4096,
+        description="Parent process name (e.g. 'winword.exe').",
+    )
+    path: str | None = Field(
+        None,
+        max_length=4096,
+        description="Optional executable path for tighter matching.",
+    )
+    user: str | None = Field(
+        None,
+        max_length=256,
+        description="Optional user context (SYSTEM vs user).",
+    )
+
+    @field_validator("process_name", "parent_name", "path", "user")
+    @classmethod
+    def _reject_null_bytes(cls, value: str | None) -> str | None:
+        if value is not None and "\x00" in value:
+            raise ValueError("null bytes are not allowed")
+        return value
+
+
+class CheckProcessTreeOut(VerdictOut):
+    in_expectations_db: bool = Field(
+        ..., description="True when the child process exists in the local expectations DB."
+    )
+    expected_parents: list[str] = Field(
+        default_factory=list,
+        description="Known-good parent process names for this child process.",
+    )
+    suspicious_parents: list[str] = Field(
+        default_factory=list,
+        description="Known suspicious parent names for this child process.",
+    )
+    user_context: dict[str, Any] | None = Field(
+        None, description="User-context validation details when user was provided."
+    )
+
+
 REGISTRY: list[ToolDef] = []
 ALIAS_REGISTRY: dict[str, list[ToolAliasDef]] = {}
 PROMPT_REGISTRY: list[PromptDef] = []
@@ -660,6 +709,87 @@ def _model_result(out: BaseModel, meta: ResultMeta) -> ToolResult:
     )
 
 
+async def wintriage_check_process_tree(
+    params: CheckProcessTreeIn, context: dict[str, Any] | None = None
+) -> ToolResult:
+    runtime = get_runtime()
+    tool_name = (context or {}).get("tool_name", "wintriage_check_process_tree")
+    raw_args = params.model_dump(mode="json", exclude_none=True)
+    audit_id = runtime._audit._next_audit_id()
+    start = time.monotonic()
+    try:
+        raw = await runtime._check_process_tree(
+            params.process_name,
+            params.parent_name,
+            params.path,
+            params.user,
+        )
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(runtime, tool_name, raw_args, raw, audit_id, elapsed_ms)
+        if "error" in raw:
+            return _legacy_error_result(raw, meta)
+        out = CheckProcessTreeOut(
+            verdict=Verdict(raw.get("verdict", "UNKNOWN")),
+            reasons=list(raw.get("reasons", [])),
+            confidence=raw.get("confidence", "low"),
+            findings=_findings(raw.get("findings", [])),
+            in_expectations_db=bool(raw.get("in_expectations_db", False)),
+            expected_parents=list(raw.get("expected_parents", []) or []),
+            suspicious_parents=list(raw.get("suspicious_parents", []) or []),
+            user_context=raw.get("user_context"),
+        )
+        return _model_result(out, meta)
+    except TriageValidationError as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "validation_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.invalid_input,
+            str(exc),
+            "Correct the process, parent, path, or user argument and retry.",
+            meta=meta,
+        )
+    except DatabaseError:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "database_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.upstream_degraded,
+            "A baseline database error occurred.",
+            "Check the local Windows triage database installation and retry.",
+            retryable=True,
+            meta=meta,
+        )
+    except WindowsTriageError as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "server_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.internal,
+            str(exc),
+            "Check backend logs for details, then retry.",
+            meta=meta,
+        )
+
+
 def _check_file_alias(params: BaseModel) -> CheckArtifactIn:
     alias = CheckFileAliasIn.model_validate(params)
     return CheckArtifactIn(
@@ -707,6 +837,28 @@ REGISTRY.append(
             "`wintriage_check_artifact(type='file', "
             "value='C:\\\\Windows\\\\System32\\\\svchost.exe', "
             "os_version='Win10_21H2_Pro')`."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="wintriage_check_process_tree",
+        fn=wintriage_check_process_tree,
+        in_model=CheckProcessTreeIn,
+        out_model=CheckProcessTreeOut,
+        annotations=_annotation("Check Process Tree"),
+        title="Check Process Tree",
+        description=(
+            "Validate a parent-to-child Windows process relationship against the "
+            "local process-tree baseline. It checks never-spawns rules for "
+            "injection targets, suspicious-parent blacklists such as Office or "
+            "browsers spawning shells, and valid-parent allowlists such as "
+            "`svchost.exe` descending from `services.exe`. Use on process-creation "
+            "evidence. UNKNOWN is neutral when the process is not in the local "
+            "expectations DB. Example: "
+            "`wintriage_check_process_tree(process_name='cmd.exe', "
+            "parent_name='winword.exe')`."
         ),
     )
 )

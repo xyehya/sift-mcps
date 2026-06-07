@@ -1197,6 +1197,191 @@
         "type": "object"
       },
       "title": "Deprecated: Check Hijackable DLL"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Process Tree"
+      },
+      "description": "Validate a parent-to-child Windows process relationship against the local process-tree baseline. It checks never-spawns rules for injection targets, suspicious-parent blacklists such as Office or browsers spawning shells, and valid-parent allowlists such as `svchost.exe` descending from `services.exe`. Use on process-creation evidence. UNKNOWN is neutral when the process is not in the local expectations DB. Example: `wintriage_check_process_tree(process_name='cmd.exe', parent_name='winword.exe')`.",
+      "input_schema": {
+        "properties": {
+          "parent_name": {
+            "description": "Parent process name (e.g. 'winword.exe').",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Parent Name",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional executable path for tighter matching.",
+            "title": "Path"
+          },
+          "process_name": {
+            "description": "Child process name (e.g. 'cmd.exe').",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Process Name",
+            "type": "string"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional user context (SYSTEM vs user).",
+            "title": "User"
+          }
+        },
+        "required": [
+          "process_name",
+          "parent_name"
+        ],
+        "title": "CheckProcessTreeIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "wintriage_check_process_tree",
+      "output_schema": {
+        "properties": {
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "expected_parents": {
+            "description": "Known-good parent process names for this child process.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Expected Parents",
+            "type": "array"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "in_expectations_db": {
+            "description": "True when the child process exists in the local expectations DB.",
+            "title": "In Expectations Db",
+            "type": "boolean"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "suspicious_parents": {
+            "description": "Known suspicious parent names for this child process.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Suspicious Parents",
+            "type": "array"
+          },
+          "user_context": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "User-context validation details when user was provided.",
+            "title": "User Context"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "in_expectations_db"
+        ],
+        "title": "CheckProcessTreeOut",
+        "type": "object"
+      },
+      "title": "Check Process Tree"
     }
   ]
 }
