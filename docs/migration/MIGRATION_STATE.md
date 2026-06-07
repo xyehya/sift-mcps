@@ -2,10 +2,20 @@
 
 ## Current Objective
 
-The **D27b gateway cutover is landed** on `revamp/spg-v1` (Runs 23-24), Run
-25 completed a documentation/invariant health check, Run 26 added the final
-target architecture / acceleration plan plus locked identity target D30, and
-Run 27 created the Build-ready **PR03A / Batch A** candidate:
+**PR03A / Batch A (unified Supabase JWT identity) is implemented and
+acceptance-green** (Run 28) on branch `revamp/pr03a-unified-jwt` — three unit
+commits (schema / gateway / portal), host + VM tests green, `/code-review` and
+`/security-review` passed, **B-10** and **B-14** DONE, and live VM acceptance
+against the pinned Supabase v1.26.05 confirmed JWT validation, agent/service
+issuance, and revocation. The one fork surfaced during live acceptance (**F-13**:
+pinned GoTrue lacks admin session logout) resolved into charter **D31** (revoke =
+DELETE auth user + app-revoke + resolver cache invalidate). Awaiting operator
+Land/merge into `revamp/spg-v1`.
+
+Prior context — the **D27b gateway cutover is landed** on `revamp/spg-v1`
+(Runs 23-24), Run 25 completed a documentation/invariant health check, Run 26
+added the final target architecture / acceleration plan plus locked identity
+target D30, and Run 27 created the Build-ready PR03A / Batch A candidate:
 `19_pr03_unified_supabase_jwt_identity.md`.
 The gateway now serves one FastAPI ASGI app with the
 aggregate FastMCP `http_app` mounted at `/mcp`; per-backend `/mcp/{name}` routes
@@ -35,15 +45,111 @@ namespace assertion, B-14 duplicate token resolution, and B-15 DNS-rebinding
 TOCTOU hardening. F-11 remains OPEN for the later D22 `mcp_backends` registry
 phase.
 
-**Next:** start a Build-stage PR03A / Batch A coding session from
-`19_pr03_unified_supabase_jwt_identity.md`: unified Supabase JWT authentication
-for REST and FastMCP `/mcp`, operator/agent/service principal resolution,
-portal Supabase login/session, agent/service JWT issuance, B-10 tool
-authorization, and B-14 shared resolver cleanup. The candidate doc owns the
-scope fence, acceptance gates, and host-to-VM test plan. Keep D22/F-11
-(`mcp_backends` registry), ID-4/ID-5 active-case propagation, evidence/jobs,
-OpenSearch, and RAG batches separate unless a new candidate doc explicitly
-batches them.
+**Next:** operator Lands PR03A (merge `revamp/pr03a-unified-jwt` →
+`revamp/spg-v1`), then Plan the next batch: **PR03B / Batch B** (active-case DB
+authority, ID-4, carrying B-11) — or Batch H (`mcp_backends` registry, D22/F-11)
+if reprioritized. Keep evidence/jobs (Batch C), OpenSearch-core, and RAG
+batches separate unless a new candidate doc explicitly batches them. Carry
+B-4/B-11/B-12/B-13/B-15 forward.
+
+## Run 28 — PR03A / Batch A Unified Supabase JWT Build, Review & VM Acceptance
+
+Coding + review + VM-acceptance run, orchestrated as a 3-agent team (Opus 4.8;
+schema / gateway / portal) on branch `revamp/pr03a-unified-jwt` off
+`revamp/spg-v1`. Three unit commits; one revertable PR.
+
+Trigger: operator handed off the doc 19 §14 Build prompt and asked to orchestrate
+it as an agent team, with all forks escalated (no assumptions).
+
+Scope (doc 19 fence held; `git diff --stat revamp/spg-v1..HEAD` touched only
+`supabase/migrations/**`, `tests/db/**`, `packages/sift-gateway/**`,
+`packages/case-dashboard/**`, `configs/gateway.yaml.template`):
+- **Unit A** — `supabase/migrations/202606070300_unified_jwt_principals.sql`
+  (additive): `agents/service_identities.auth_user_id` → `auth.users`,
+  `operator_profiles.system_role` (+check), `app.principal_tool_scopes`
+  (`mcp:*`/`tool:<name>`/`namespace:<prefix>` grammar, exactly-one-principal +
+  active-uniqueness), `app.principal_identities` view (`security_invoker=true`),
+  minimal Supabase-JWT operator read RLS (+`agents_owner_select`), `mcp_tokens`
+  comment. RLS policies are forward-looking (no `grant ... to authenticated` in
+  PR03 — Gateway reads via superuser DSN; browser reads go through the Gateway).
+- **Unit B** — `sift_gateway.supabase_auth` (config, typed denials, Auth/Admin
+  client, read-only principal repo, shared `SupabaseIdentityResolver`, portal
+  callbacks, agent/service issuance, `is_tool_allowed`); additive `Identity`
+  fields; REST `AuthMiddleware` + FastMCP `SiftTokenVerifier` Supabase-first with
+  PR02/api_keys fallback behind explicit `auth.legacy.*` flags (401 vs 403);
+  **B-14** (raw ASGI keeps identity-free guards only, single verifier lookup);
+  **B-10** (`ToolAuthorizationMiddleware`: one `is_tool_allowed` for both
+  `on_list_tools` and `on_call_tool`, reject-before-dispatch, fail-closed on no
+  identity when auth configured); per-principal rate limit moved into policy
+  middleware; audit carries fingerprint only. `configs/gateway.yaml.template`
+  `auth.*` block.
+- **Unit C** — portal Supabase login/session: signed session-envelope cookie
+  (Secure/HttpOnly/SameSite, absolute 12h lifetime), `PortalSessionMiddleware`
+  via injected callbacks (no `sift_gateway` import), `/api/auth/login|logout|
+  refresh|me` + principal `create|list|revoke`, `_require_operator`
+  deny-by-default; LoginCard email/password, SettingsTab agent/service
+  JWT-session UI (PR02 marked legacy; token shown once, never localStorage).
+
+Review (mandatory gates, both run):
+- `/code-review` (high, multi-angle) → **NO-GO**, 10 findings → all remediated:
+  list_principals auth-bypass (operator-only), multi-principal ambiguity
+  (fail-closed), dropped per-principal rate limit (restored in middleware),
+  revoke no-op/false-audit, case-scoped scopes loaded globally (→ global-only at
+  PR03, case scopes deferred to B-11), fail-open authz on None identity
+  (fail-closed when auth on), 64-bit cache-key (→ full digest), Supabase-outage
+  fail-posture (log + 503 when legacy off), RLS view `security_invoker` + dead
+  agent-owner branch. (Refuted as design/spec: coalesce uuid-collision index,
+  case-lead read breadth per §5.5, `system_role` default per §5.2.)
+- `/security-review` → **clean**; SQL-injection ruled out (dynamic identifiers
+  allowlisted, values parameterized); surfaced one functional gap
+  (`list_principals` callback missing) → added.
+
+Operator decisions / forks (→ D# / B#):
+- **F-13 → D31** (operator, 2026-06-07): pinned Supabase **v1.26.05** GoTrue has
+  no admin per-user session logout (`POST /admin/users/{id}/logout` → 404,
+  confirmed live). Revocation = DELETE the auth user (`DELETE /admin/users/{id}`
+  → 200, idempotent on 404) + mark app principal revoked + invalidate resolver
+  cache for the `auth_user_id`. Live VM probe confirmed: after revoke the stale
+  access JWT is rejected immediately (`invalid_token`), re-revoke idempotent.
+- **B-10 DONE**, **B-14 DONE** (review/security gates passed).
+- Carried OPEN: B-4, B-11 (case-scoped tool scopes wait here), B-12, B-13, B-15.
+
+Dependency pins: no new runtime deps (httpx 0.28.1 / psycopg 3.3.4 already
+present); no `uv.lock` change.
+
+Host evidence (py3.11 `.venv`): `tests/db` 20; `packages/sift-gateway/tests`
+286; `packages/case-dashboard/tests` 306; frontend `vitest` 83 + `vite build`
+clean; `py_compile` clean; `python3 scripts/validate_migration_docs.py` OK;
+scope-fence `git diff --check` clean.
+
+SIFT VM evidence (`192.168.122.81`, `/usr/bin/python3.12`,
+`UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never uv sync --extra core --group
+dev`): imports OK (`fastmcp 3.4.2`); PR01+PR03 migration applied inside
+`BEGIN/ROLLBACK` on the live Supabase Postgres — clean, nothing left behind;
+`tests/db` 20, `packages/sift-gateway/tests` 286 (incl. `create_app` boot),
+`packages/case-dashboard/tests` 306; live `SupabaseAuthClient` against pinned
+v1.26.05 — admin-create, password-grant, JWT validation, and D31 revoke all
+confirmed (self-cleaning throwaway users). The deployed systemd `sift-gateway`
+runs from `~/sift-mcps` (not the test tree), so new-code runtime is validated via
+the test-tree suites + live Supabase probes; a production deploy is the separate
+installer follow-up.
+
+Files: `supabase/migrations/202606070300_unified_jwt_principals.sql`;
+`tests/db/test_pr03_unified_jwt_schema.py`;
+`packages/sift-gateway/src/sift_gateway/{supabase_auth,auth,identity,mcp_endpoint,mcp_server,policy_middleware,config,server,token_gen}.py`;
+`packages/sift-gateway/tests/{test_pr03_supabase_jwt_auth,test_pr03_tool_authorization}.py`;
+`configs/gateway.yaml.template`;
+`packages/case-dashboard/src/case_dashboard/{auth,routes,session_jwt}.py`;
+`packages/case-dashboard/frontend/src/**` (LoginCard, SettingsTab, endpoints, build);
+`packages/case-dashboard/tests/test_pr03_supabase_portal_auth.py`;
+`docs/migration/{00_migration_charter,09_identity_auth_cutover,18_target_architecture_acceleration,19_pr03_unified_supabase_jwt_identity,REGISTER,MIGRATION_STATE}.md`;
+`AGENTS.md`; `CLAUDE.md`.
+
+Land: operator merges `revamp/pr03a-unified-jwt` → `revamp/spg-v1` (3 unit
+commits + this Log commit; one revertable PR). No push performed in this run.
+
+Next: see Current Objective — Land PR03A, then PR03B / Batch B (active-case DB
+authority, ID-4).
 
 ## Run 27 - PR03A Unified Supabase JWT Candidate
 

@@ -1,6 +1,6 @@
 # 19 - PR03A / Batch A - Unified Supabase JWT Identity
 
-Status: **implementation candidate** (Plan-stage; Build-ready after operator handoff).
+Status: **implemented** (Run 28; unit commits A/B/C on `revamp/pr03a-unified-jwt`; host + VM acceptance green; `/code-review` + `/security-review` passed; B-10/B-14 DONE; F-13 → **D31** revocation model). See `MIGRATION_STATE.md` Run 28 for evidence.
 Scope fence: `supabase/migrations/**`, `tests/db/**`,
 `packages/sift-gateway/src/sift_gateway/**`, `packages/sift-gateway/tests/**`,
 `packages/sift-gateway/pyproject.toml`, `packages/case-dashboard/src/case_dashboard/**`,

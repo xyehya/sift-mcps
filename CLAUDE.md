@@ -71,10 +71,12 @@ assumptions.
 
 ### Pipeline map (update as it moves)
 `JOB-0 done -> PR01/ID-1 done -> PR02/ID-2 done -> D27a done -> D27b done ->
-Run 26 target architecture/D30 done -> Run 27 PR03A candidate done -> PR03A
-BUILD NEXT -> PR03A Review/Land -> PR03B active-case DB authority or Batch H
-mcp_backends registry -> evidence/audit DB authority -> jobs/OpenSearch-core ->
-findings/RAG/skills -> legacy authority sunset.`
+Run 26 target architecture/D30 done -> Run 27 PR03A candidate done -> Run 28
+PR03A BUILD + Review + VM acceptance done (B-10/B-14 DONE, F-13->D31; on branch
+revamp/pr03a-unified-jwt awaiting operator Land) -> PR03B/Batch B active-case DB
+authority (ID-4, B-11) or Batch H mcp_backends registry -> evidence/audit DB
+authority -> jobs/OpenSearch-core -> findings/RAG/skills -> legacy authority
+sunset.`
 
 ### Review -> GO procedure for PR03A outputs
 1. **Scope fence:** diff against the PR03A base. Allowed paths are exactly those
@@ -145,9 +147,17 @@ findings/RAG/skills -> legacy authority sunset.`
 - **B-15** DNS-rebinding TOCTOU hardening; network hardening phase.
 
 ### My next handoff
-PR03A is planned in `19_pr03_unified_supabase_jwt_identity.md`. Next is a
-Build-stage coding session from that doc. The build prompt is in doc 19 §14.
-I review the resulting diff against doc 19, then Land/Log only after
-`/code-review`, `/security-review`, host tests, VM tests, migration doc
-validation, and Gateway health all pass. Carry B-4/B-11/B-12/B-13/B-15 forward
-unless a scoped doc explicitly closes them.
+PR03A is **implemented (Run 28)** on branch `revamp/pr03a-unified-jwt` (3 unit
+commits: schema / gateway / portal + a Log commit), awaiting operator Land/merge
+into `revamp/spg-v1`. All gates passed: `/code-review` (NO-GO → 10 findings
+remediated), `/security-review` (clean), host tests (db 20 / gateway 286 /
+case-dashboard 306 / frontend 83), VM tests (same), live Supabase v1.26.05
+acceptance, and `validate_migration_docs.py`. B-10 and B-14 are DONE; F-13
+resolved into **D31** (revocation = DELETE auth user + app-revoke + resolver
+cache invalidate, since pinned GoTrue lacks admin session logout). Next is
+**PR03B / Batch B** (active-case DB authority, ID-4) — a Plan session unless the
+operator supplies a candidate, or Batch H (`mcp_backends`/D22/F-11) if
+reprioritized. Carry B-4/B-11/B-12/B-13/B-15 forward unless a scoped doc closes
+them. Deployment note: the VM systemd `sift-gateway` runs the old tree
+(`~/sift-mcps`); production rollout of the new auth code/config/env is the
+installer follow-up, not PR03A.

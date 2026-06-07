@@ -72,9 +72,13 @@ around it. In short:
 
 ## Current stage (read MIGRATION_STATE for the live version)
 
-D27a and D27b are landed on `revamp/spg-v1`. The next build unit is
-**PR03A / Batch A: unified Supabase JWT identity**, planned and scoped in
-`19_pr03_unified_supabase_jwt_identity.md`.
+D27a and D27b are landed on `revamp/spg-v1`. **PR03A / Batch A (unified Supabase
+JWT identity) is implemented (Run 28)** on branch `revamp/pr03a-unified-jwt` —
+host + VM acceptance green, `/code-review` + `/security-review` passed, B-10/B-14
+DONE, revocation model locked as **D31** — awaiting operator Land/merge into
+`revamp/spg-v1`. The next build unit is **PR03B / Batch B: active-case DB
+authority (ID-4)**. See `19_pr03_unified_supabase_jwt_identity.md` and
+`MIGRATION_STATE.md` Run 28.
 
 A coding session implements doc 19 directly. Its scope fence covers Supabase
 migration/tests, Gateway auth/MCP policy, case-dashboard portal auth/UI, config,
@@ -241,13 +245,18 @@ propagation, evidence gate changes, job tables/workers/APIs/tools, OpenSearch
 changes, parser changes, evidence behavior changes, audit data migration,
 frontend redesigns, or legacy fallback removal.
 
-PR03A is planned but not implemented. The candidate is:
+PR03A is **implemented (Run 28)** on branch `revamp/pr03a-unified-jwt`, awaiting
+Land. Spec + status:
 
-- `docs/migration/19_pr03_unified_supabase_jwt_identity.md`
+- `docs/migration/19_pr03_unified_supabase_jwt_identity.md` (status: implemented)
 
-It is the next Build-stage source of truth for unified Supabase JWT auth,
-principal mapping, portal Supabase auth, agent/service JWT issuance, and
-DB-backed MCP tool authorization.
+It delivered unified Supabase JWT auth, principal mapping, portal Supabase auth,
+agent/service JWT issuance + revocation (D31), and DB-backed MCP tool
+authorization (B-10). One operational note for the deployed VM: the systemd
+`sift-gateway` runs from `~/sift-mcps` with config `~/.sift/gateway.yaml`; a
+production rollout of the new auth code + the `auth:` config block + Supabase env
+(`SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY`) is part of the
+installer follow-up below, not PR03A.
 
 ## Installer Follow-up
 

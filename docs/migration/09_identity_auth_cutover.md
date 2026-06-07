@@ -225,7 +225,7 @@ the legacy path is explicitly removed.
 - Under D30 this phase is retained as compatibility/provenance, not the final
   auth target.
 
-### Phase ID-3 / PR03A - Unified Supabase JWT auth + memberships
+### Phase ID-3 / PR03A - Unified Supabase JWT auth + memberships  (IMPLEMENTED — Run 28)
 - Build from `19_pr03_unified_supabase_jwt_identity.md`.
 - Add Supabase JWT verification and operator/agent/service principal resolution
   behind explicit legacy-auth flags. Seed/bootstrap the first mapped operator
@@ -307,10 +307,11 @@ the legacy path is explicitly removed.
 
 ## 12. Next recommended run
 Current status: JOB-0, Phase ID-1 (PR01), Phase ID-2 (PR02), D27a, D27b, and
-the PR03A candidate plan are done. The next recommended run for this foundation
-track is the **Build-stage PR03A / Batch A** implementation from
-`19_pr03_unified_supabase_jwt_identity.md`: unified Supabase JWT authentication
-for REST and MCP, operator/agent/service principal resolution, portal Supabase
-login/session, agent/service JWT issuance, and DB-backed tool authorization.
+**Phase ID-3 / PR03A (implemented, Run 28** — unified Supabase JWT auth for REST
+and MCP, operator/agent/service principal resolution, portal Supabase
+login/session, agent/service JWT issuance, DB-backed tool authorization B-10,
+shared-resolver cleanup B-14; revocation model **D31**) are done. The next
+recommended run for this foundation track is **Phase ID-4 / PR03B / Batch B**
+(active-case DB authority + Gateway propagation, carrying B-11).
 Active-case authority/propagation stays deferred to ID-4/ID-5; legacy auth/token
 sunset stays deferred to ID-6.

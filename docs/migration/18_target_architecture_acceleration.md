@@ -279,6 +279,15 @@ flowchart TD
 
 ### Batch A - Unified Supabase JWT Identity
 
+> **Status: IMPLEMENTED (Run 28)** on branch `revamp/pr03a-unified-jwt`, awaiting
+> Land into `revamp/spg-v1`. Delivered per `19_pr03_unified_supabase_jwt_identity.md`:
+> shared `SupabaseIdentityResolver` for REST + FastMCP `/mcp`, operator/agent/service
+> principal mapping, portal Supabase login/session, agent/service JWT issuance,
+> B-10 tool authorization, B-14 resolver cleanup. JWT verification method =
+> Supabase Auth API validation (`/auth/v1/user`); revocation model locked as **D31**
+> (DELETE auth user + app-revoke + cache invalidate, since pinned v1.26.05 lacks
+> admin session logout). Host + VM acceptance green.
+
 | Field | Value |
 | --- | --- |
 | Objective | Replace the target identity model with Supabase JWT validation for humans, agents, MCP clients, workers, and services. |
