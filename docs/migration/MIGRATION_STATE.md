@@ -2,100 +2,93 @@
 
 ## Current Objective
 
-Run 19 (planning/governance) **resolved the five doc-16 forks** and **established the
-operating model**. F-1 approved (status/catalog tools → resources, additive, +B-1); F-2
-keep the 10 legacy wintriage names as deprecated aliases one cycle, not drop (grep found
-`analyze_filename` referenced in a forensic-knowledge playbook + `tool_metadata.py`, so a
-drop would break a skill; +B-2); F-3 the gateway response-guard must scan
-`structured_content` = security-required (+B-3); F-4 timeline cap ~2000, warn-not-truncate;
-F-5 redact `opensearch_ingest.password` (+B-4, credential-as-arg redesign deferred).
-New governance: **`OPERATING_MODEL.md`** (Plan→Build→Review→Land→Log loop, Definition of
-Done, templates) and **`REGISTER.md`** (F#/B# tracker, seeded F-1..F-5 + B-1..B-4),
-referenced as must-follow in `AGENTS.md` and the new root **`CLAUDE.md`**; charter **D29**
-locks the operating model as process of record. No runtime code changed in Run 19.
+Run 20 (coding/build) completed the **D27a backend tooling revamp** on
+`revamp/backends-mcp3` and collected the three backend worktree branches back into that
+branch. The work is **ready for operator review** and **not landed** into
+`revamp/spg-v1`. FastMCP is pinned by `uv.lock` at **fastmcp 3.4.2**. OpenSearch,
+OpenCTI, and Windows-Triage now expose FastMCP 3 registry-backed surfaces with typed
+models, structured outputs, prompts/resources, golden snapshots, and the resolved
+F-1/F-2/F-4/F-5 behavior. Host and VM targeted tests passed under the required Python
+3.12 VM workflow. No new forks were raised.
 
-**Next:** doc 16 is final. Stand up the **D27a backend-revamp worktree** (off
-`revamp/spg-v1`, scope-fenced to `packages/*-mcp/**`) per `15_backend_tooling_revamp.md`
-§12 + the doc-16 contracts, one commit per tool under the Definition of Done. PR02/Phase
-ID-2 already landed (Run 17); the gateway cutover (D27b) follows D27a.
+**Next:** operator runs `/code-review` on `revamp/backends-mcp3` (and `/security-review`
+because the diff touches response redaction and backend tool write surfaces), reviews the
+golden snapshot diffs, fixes/triages findings, then lands into `revamp/spg-v1` if
+accepted. The Gateway cutover (D27b) follows only after D27a review/land.
 
-Run 18 (planning) produced **`docs/migration/16_backend_tool_contracts.md`** — the
-per-tool **D28** contract for **all 30 backend tools** (16 opensearch / 8 opencti / 6
-wintriage), grounded in the current `server.py` I/O of each backend. Each tool now has a
-concrete contract block (current→proposed name, full annotations, typed Pydantic
-input/output models, result shaping/caps, task-oriented description, typed error model),
-plus ≥1 prompt + ≥1 resource per backend, a consolidated rename change-map, and the
-**flagged** tool-vs-resource reclassification. This makes the D27a worktree implementable
-without guessing. **No runtime code, schema, version, or manifest changed.** The D5
-write-tool guardrail held (`opensearch_ingest`/`_enrich_intel`/`_enrich_triage`/`_host_fix`
-stay `readOnlyHint=false`, execution not redesigned). Forks surfaced for the operator:
-F-1 (tool→resource reclassification), F-2 (legacy wintriage aliases), F-3 (response-guard
-vs structured_content, owed to D27b), F-4 (timeline bucket ceiling), F-5 (ingest password
-redaction). See the Run 18 section below.
+## Run 20 — D27a Backend Revamp
 
-Previously, Run 17 implemented **PR02 Phase ID-2**: DB-first hash-only MCP/service token
-registry validation with legacy `gateway.yaml api_keys` fallback, plus narrowly
-scoped portal token lifecycle writes to the DB registry. The implementation adds
-the token hash/fingerprint helpers, a small Postgres token-registry helper,
-Gateway REST/MCP DB-first identity resolution, portal create/rotate/revoke/
-reactivate DB writes, targeted tests, the `psycopg[binary]` dependency, and
-`docs/migration/PR02_token_registry_checks.md`. Host and SIFT VM targeted tests
-passed under the required VM Python 3.12 workflow. PR02 did **not** add Supabase
-human auth, portal login replacement, active-case propagation, evidence/job/
-worker/OpenSearch/parser/frontend changes, audit data migration, or legacy
-fallback removal.
+Coding/build run. Collected branch commit `a2cc404` on `revamp/backends-mcp3`
+before this log entry; review/land intentionally not run.
 
-Run 16 (planning) orchestrated the **backend tooling revamp** and **staged the
-FastMCP cutover**. The single big-bang framing is superseded: stage **D27a**
-revamps the three backend MCP servers (opensearch/opencti/windows-triage) to
-FastMCP 3.0 **and** redesigns every tool to a quality contract (**D28**) in a
-**dedicated worktree, parallel to PR02**, merging before stage **D27b** (the
-gateway cutover). Grounding audit confirmed the need: 0 output schemas, 0 prompts,
-0 resources, 0 Pydantic input models across all three backends (16/8/6 tools).
-Spec: `docs/migration/15_backend_tooling_revamp.md`. Operator forks: combined
-per-tool (one commit/tool), renames allowed via change map + aliases, all three
-backends with opensearch authored exposure-agnostic. No runtime code changed in
-Run 16. Run 17 subsequently implemented PR02; the backend worktree (D27a) can
-start in parallel with later foundation work, and D27b follows after PR02 and
-D27a.
+Trigger: implement stage D27a/D28 backend tooling revamp per docs 15/16 after Run 19
+resolved F-1..F-5.
 
-Run 15 (planning) locked the **FastMCP 3.0 + Supabase + FastAPI consolidation**:
-decisions **D24-D27** in `00_migration_charter.md` and the full design in
-`docs/migration/14_fastmcp3_supabase_integration.md`. Summary: the Gateway is
-**retained as the single policy boundary** but re-implemented on **standalone
-FastMCP 3.0** as one FastAPI ASGI app (REST + `mcp.http_app`); providers/transforms
-do aggregation only; `code-mode` is **excluded** (run_command retained);
-human auth = **own Supabase-JWT verify via FastAPI DI** (no SupabaseProvider OAuth);
-machines stay hash-only. Rollout = **big-bang, parity-gated, revertable**, sequenced
-**after PR02 (Phase ID-2)** and before evidence/jobs. No runtime code changed in
-Run 15 (docs/decisions only). Run 17 subsequently implemented PR02; the FastMCP
-staged cutover remains later work.
+Findings / reconciliations:
+- Created foundation branch `revamp/backends-mcp3` off `revamp/spg-v1` and pinned
+  `fastmcp==3.4.2` in `uv.lock` (`fastmcp>=3` added to all three backend pyprojects).
+- Added byte-identical doc-16 shared conventions (`ResultMeta`, `ErrorCode`,
+  `ToolError`, `ToolDef`) to each backend package, plus per-backend registry adapters and
+  golden MCP-surface snapshot tests/fixtures.
+- Created worktrees/branches:
+  `../sift-mcps-os` → `revamp/backends-mcp3-opensearch`,
+  `../sift-mcps-cti` → `revamp/backends-mcp3-opencti`,
+  `../sift-mcps-win` → `revamp/backends-mcp3-wintriage`.
+- Collected the three backend branches back into `revamp/backends-mcp3`; did not merge
+  into `revamp/spg-v1`.
+- F-1 implemented additively: OpenSearch status/shards, OpenCTI health, and Windows
+  status are resources with tool forms retained; OpenSearch case summary/detections keep
+  tool form with resource/template views.
+- F-2 implemented: all 10 legacy Windows triage aliases retained as deprecated aliases.
+- F-4 implemented: OpenSearch timeline has a configurable bucket ceiling and advisory.
+- F-5 implemented: OpenSearch ingest password is redacted at the tool boundary.
+- D5 guardrail held: OpenSearch ingest/enrich/fix-host mapping remain behavior-compatible
+  write tools (`readOnlyHint=false`); no durable-job redesign was introduced.
 
-Run 14 implemented PR01 Phase ID-1, installed a pinned self-hosted Supabase
-stack on the SIFT VM for migration testing, created the root `AGENTS.md`
-handoff/invariant file, and drafted `docs/migration/13_pr02.md`, the next
-implementation PR candidate for Phase ID-2: DB-first hash-only MCP/service token
-registry validation with legacy `gateway.yaml` fallback.
+Operator decisions: none in this run; no new forks raised.
 
-JOB-0 is complete in commit `c73762c`:
-**Add JOB-0 execution baseline smoke tests**. The committed work added
-deterministic baseline tests for current evidence, audit, OpenSearch
-index/provenance, and ingest-status behavior, plus
-`docs/migration/JOB0_baseline_execution_checks.md`. Runtime behavior was not
-changed.
+Files created/changed:
+- `packages/opensearch-mcp/**`: 16 revamped tools + deprecated `opensearch_host_fix`
+  alias, 3 prompts, 4 resources, 3 resource templates, registry entrypoint wiring, golden
+  snapshot.
+- `packages/opencti-mcp/**`: 8 revamped tools, `enrich_ioc` prompt, 3 resources,
+  registry entrypoint wiring, golden snapshot.
+- `packages/windows-triage-mcp/**`: 6 revamped public tools, 10 deprecated aliases, 2
+  prompts, 2 resources, 1 resource template, registry entrypoint wiring, golden snapshot.
+- `uv.lock` and the three backend `pyproject.toml` files: FastMCP 3 dependency/pin.
+- `docs/migration/MIGRATION_STATE.md`: this draft Run 20 log entry.
 
-PR01 is implemented in the current worktree but not committed unless a later run
-commits it. It added the conventional Supabase migration layout, deterministic
-schema tests, and a PR01 schema-check runbook. Runtime behavior was not changed.
+Snapshot / surface status:
+- OpenSearch: 17 tools (16 canonical + deprecated `opensearch_host_fix`), 3 prompts,
+  4 resources, 3 resource templates.
+- OpenCTI: 8 tools, 1 prompt, 3 resources.
+- Windows-Triage: 16 tools (6 canonical + 10 deprecated aliases), 2 prompts, 2 resources,
+  1 resource template.
+- Golden snapshots committed for all three backends.
 
-The workspace now has PR02 implemented and VM-tested in the current worktree,
-but not committed unless a later run commits it. The backend tooling revamp
-worktree plan from Run 16 remains available to run in parallel with later
-foundation work; D27b still follows after PR02 and D27a.
+Host verification:
+- `git diff --check` — clean.
+- Shared convention files byte-identical across all three backends.
+- OpenSearch targeted host suite: 200 passed.
+- OpenCTI host package tests: 1 passed.
+- Windows-Triage host package tests: 12 passed.
+- Integrated surface smoke: OpenSearch 17/3/4/3, OpenCTI 8/1/3/0, Windows 16/2/2/1
+  (tools/prompts/resources/resource_templates).
 
-Current worktree note: `.DS_Store` was already modified and remains unrelated.
-PR01/PR02 implementation files and migration docs are uncommitted unless a later
-run commits them.
+SIFT VM verification:
+- `sshpass` rsync to `~/sift-mcps-test` completed.
+- `UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never ~/.local/bin/uv sync --extra standard
+  --group dev --python /usr/bin/python3.12` — passed.
+- VM import smoke under Python 3.12.3: `yaml`, `mcp`, `fastmcp`, `sift_core`,
+  `sift_gateway`, and all three backend registries imported; `fastmcp 3.4.2`.
+- OpenSearch targeted VM suite: 200 passed with test HOME isolated from the VM's live
+  active-case pointer.
+- OpenCTI VM package tests: 1 passed.
+- Windows-Triage VM package tests: 12 passed.
+- VM integrated surface smoke: OpenSearch 17/3/4/3, OpenCTI 8/1/3/0, Windows 16/2/2/1.
+
+Next: operator review of `revamp/backends-mcp3`; do not treat this as landed until review
+passes and the operator merges it into `revamp/spg-v1`.
 
 ## Run 19 - Fork Resolution + Operating Model / Governance (D29)
 
