@@ -143,6 +143,17 @@ class SearchOut(BaseModel):
     )
 
 
+class CountIn(CaseScopedQueryBase):
+    query: str = Field(
+        "*",
+        description="query_string filter; default '*' counts all docs in scope.",
+    )
+
+
+class CountOut(BaseModel):
+    count: int = Field(..., description="Exact document count for the query in scope.")
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -290,6 +301,14 @@ async def run_opensearch_search(params: SearchIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
+async def run_opensearch_count(params: CountIn) -> ToolResult:
+    raw = _legacy_server().opensearch_count(**params.model_dump())
+    if "error" in raw:
+        return _legacy_error(raw)
+    meta = _meta_from_raw(raw)
+    return _success_tool_result(CountOut(count=int(raw.get("count", 0))), meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -305,6 +324,23 @@ REGISTRY.append(
             "opensearch_timeline); for one full document use opensearch_get_event. "
             "Example: opensearch_search(query='event.code:4688 AND "
             "process.name:*powershell*', case_id='rocba-drive-20260526-1417')."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_count",
+        fn=run_opensearch_count,
+        in_model=CountIn,
+        out_model=CountOut,
+        annotations=_read_annotations("Count Documents"),
+        title="Count Documents",
+        description=(
+            "Return an exact match count without documents. Use to verify index "
+            "population or gauge magnitude before opensearch_search. Do not use "
+            "when you need per-value counts; use opensearch_aggregate. Example: "
+            "opensearch_count(query='event.code:4624')."
         ),
     )
 )

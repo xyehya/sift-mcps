@@ -193,6 +193,57 @@
         "type": "object"
       },
       "title": "Search Evidence"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Count Documents"
+      },
+      "description": "Return an exact match count without documents. Use to verify index population or gauge magnitude before opensearch_search. Do not use when you need per-value counts; use opensearch_aggregate. Example: opensearch_count(query='event.code:4624').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "index": {
+            "default": "",
+            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "title": "Index",
+            "type": "string"
+          },
+          "query": {
+            "default": "*",
+            "description": "query_string filter; default '*' counts all docs in scope.",
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "title": "CountIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_count",
+      "output_schema": {
+        "properties": {
+          "count": {
+            "description": "Exact document count for the query in scope.",
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "title": "CountOut",
+        "type": "object"
+      },
+      "title": "Count Documents"
     }
   ]
 }
