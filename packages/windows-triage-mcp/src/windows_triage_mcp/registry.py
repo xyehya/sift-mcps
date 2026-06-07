@@ -1423,6 +1423,113 @@ async def wintriage_baseline_catalog_resource() -> dict[str, Any]:
     return (await runtime._get_db_stats()).copy()
 
 
+async def wintriage_known_good_reference_resource(kind: str) -> dict[str, Any]:
+    normalized = kind.strip().lower()
+    if normalized not in {"services", "pipes", "lolbins"}:
+        return {
+            "kind": normalized,
+            "available": False,
+            "error": "unsupported_kind",
+            "supported_kinds": ["services", "pipes", "lolbins"],
+        }
+
+    runtime = get_runtime()
+    try:
+        if normalized == "services":
+            conn = runtime.known_good_db.connect()
+            rows = conn.execute(
+                """
+                SELECT service_name_lower, display_name, binary_path_pattern, os_versions
+                FROM baseline_services
+                ORDER BY service_name_lower
+                LIMIT 25
+                """
+            ).fetchall()
+            entries = [
+                {
+                    "service_name": row["service_name_lower"],
+                    "display_name": row["display_name"],
+                    "binary_path_pattern": row["binary_path_pattern"],
+                    "os_versions": row["os_versions"],
+                }
+                for row in rows
+            ]
+        elif normalized == "pipes":
+            conn = runtime.context_db.connect()
+            rows = conn.execute(
+                """
+                SELECT pipe_name, protocol, service_name, description
+                FROM windows_named_pipes
+                ORDER BY pipe_name
+                LIMIT 25
+                """
+            ).fetchall()
+            entries = [dict(row) for row in rows]
+        else:
+            conn = runtime.context_db.connect()
+            rows = conn.execute(
+                """
+                SELECT filename_lower, name, description, functions, mitre_techniques
+                FROM lolbins
+                ORDER BY filename_lower
+                LIMIT 25
+                """
+            ).fetchall()
+            entries = [dict(row) for row in rows]
+        return {
+            "kind": normalized,
+            "available": True,
+            "limit": 25,
+            "entries": entries,
+        }
+    except Exception as exc:
+        return {
+            "kind": normalized,
+            "available": False,
+            "error": type(exc).__name__,
+            "message": "Reference data could not be read from the local baseline DB.",
+        }
+
+
+def triage_process_tree_prompt(
+    process_name: str,
+    parent_name: str,
+    path: str = "",
+    user: str = "",
+) -> str:
+    return (
+        "Triage this Windows process relationship using the local baseline tools.\n"
+        f"1. Call wintriage_check_process_tree(process_name={process_name!r}, "
+        f"parent_name={parent_name!r}, path={path!r}, user={user!r}).\n"
+        "2. If the child or parent name is a LOLBin or notable system binary, call "
+        "wintriage_check_artifact(type='lolbin', value=<name>) and, when a full path "
+        "is available, wintriage_check_artifact(type='file', value=<path>).\n"
+        "3. Summarize the baseline verdict, concrete suspicious findings, and what "
+        "case evidence would corroborate or reduce the concern. Treat UNKNOWN as neutral."
+    )
+
+
+def baseline_compare_prompt(
+    os_version: str,
+    observed_services: str = "",
+    observed_tasks: str = "",
+    observed_autoruns: str = "",
+) -> str:
+    return (
+        "Compare observed Windows persistence artifacts against the local baselines.\n"
+        f"OS version: {os_version!r}\n"
+        f"Observed services: {observed_services!r}\n"
+        f"Observed scheduled tasks: {observed_tasks!r}\n"
+        f"Observed autoruns: {observed_autoruns!r}\n"
+        "For each service, call wintriage_check_system(type='service', name=<service>, "
+        f"os_version={os_version!r}) and check referenced binaries with "
+        "wintriage_check_artifact(type='file', value=<binary>, os_version=<os>). "
+        "For tasks and autoruns, call the matching wintriage_check_system subtype. "
+        "Group results into expected, suspicious, and neutral UNKNOWN items; UNKNOWN "
+        "requires context and does not prove persistence is malicious."
+    )
+
+
 def _server_status_out(raw: dict[str, Any]) -> ServerStatusOut:
     health = raw.get("health")
     db_stats = raw.get("db_stats")
@@ -1643,6 +1750,38 @@ RESOURCE_REGISTRY.extend(
             description=(
                 "Read-only coverage counts for known_good.db, context.db, and the "
                 "optional known_good_registry.db."
+            ),
+        ),
+        ResourceDef(
+            uri="wintriage://reference/known-good/{kind}",
+            fn=wintriage_known_good_reference_resource,
+            name="wintriage_known_good_reference",
+            title="Windows Triage Known-Good Reference",
+            description=(
+                "Bounded read-only reference entries for kind=services, pipes, or lolbins."
+            ),
+        ),
+    ]
+)
+
+PROMPT_REGISTRY.extend(
+    [
+        PromptDef(
+            name="triage_process_tree",
+            fn=triage_process_tree_prompt,
+            title="Triage Process Tree",
+            description=(
+                "Guide a process parent-child investigation using process-tree and "
+                "artifact baseline checks."
+            ),
+        ),
+        PromptDef(
+            name="baseline_compare",
+            fn=baseline_compare_prompt,
+            title="Baseline Compare",
+            description=(
+                "Guide comparison of observed services, scheduled tasks, and autoruns "
+                "against OS-version baselines."
             ),
         ),
     ]

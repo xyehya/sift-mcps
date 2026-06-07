@@ -1,7 +1,72 @@
 {
   "backend": "windows-triage-mcp",
-  "prompts": [],
-  "resource_templates": [],
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "process_name",
+          "required": true
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "parent_name",
+          "required": true
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "path",
+          "required": false
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "user",
+          "required": false
+        }
+      ],
+      "description": "Guide a process parent-child investigation using process-tree and artifact baseline checks.",
+      "name": "triage_process_tree",
+      "title": "Triage Process Tree"
+    },
+    {
+      "arguments": [
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "os_version",
+          "required": true
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "observed_services",
+          "required": false
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "observed_tasks",
+          "required": false
+        },
+        {
+          "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+          "name": "observed_autoruns",
+          "required": false
+        }
+      ],
+      "description": "Guide comparison of observed services, scheduled tasks, and autoruns against OS-version baselines.",
+      "name": "baseline_compare",
+      "title": "Baseline Compare"
+    }
+  ],
+  "resource_templates": [
+    {
+      "annotations": null,
+      "description": "Bounded read-only reference entries for kind=services, pipes, or lolbins.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "wintriage_known_good_reference",
+      "title": "Windows Triage Known-Good Reference",
+      "uri_template": "wintriage://reference/known-good/{kind}"
+    }
+  ],
   "resources": [
     {
       "annotations": null,
