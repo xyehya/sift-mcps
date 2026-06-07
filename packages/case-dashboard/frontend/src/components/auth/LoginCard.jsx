@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import {
   getChallenge,
   getMe,
-  postLogin,
+  postSupabaseLogin,
   postResetPassword,
   getSetupRequired,
   postSetup,
@@ -111,7 +111,7 @@ function ResetPasswordForm({ examiner, currentPassword, onDone }) {
 
 export function LoginCard({ onLogin }) {
   const [phase, setPhase] = useState('checking')
-  const [examiner, setExaminer] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
@@ -122,21 +122,21 @@ export function LoginCard({ onLogin }) {
       .catch(() => setPhase('login'))
   }, [])
 
+  // PR03A — email/password Supabase login. The server validates the password
+  // against Supabase Auth and sets a signed, HttpOnly session cookie. The
+  // browser never receives, displays, or stores any JWT or refresh token.
   async function handleLogin(e) {
     e.preventDefault()
     setLoading(true)
     setErr('')
     try {
-      const challenge = await getChallenge(examiner)
-      const response = await computeChallengeResponse(password, challenge)
-      const result = await postLogin({ challenge_id: challenge.challenge_id, examiner, response })
-      if (!result) { setErr('Authentication failed. Check your examiner ID and password.'); return }
+      const result = await postSupabaseLogin({ email, password })
+      if (!result) { setErr('Authentication failed. Check your email and password.'); return }
       if (result?.error) { setErr(result.error); return }
-      if (result?.must_reset) { setPhase('reset'); return }
       onLogin(result)
     } catch (ex) {
       console.error('Login failed:', ex)
-      setErr('Authentication failed. Check your examiner ID and password.')
+      setErr('Authentication failed. Check your email and password.')
     } finally {
       setLoading(false)
     }
@@ -150,16 +150,16 @@ export function LoginCard({ onLogin }) {
         {phase === 'setup' ? (
           <SetupForm onDone={() => setPhase('login')} />
         ) : phase === 'reset' ? (
-          <ResetPasswordForm examiner={examiner} currentPassword={password} onDone={onLogin} />
+          <ResetPasswordForm examiner={email} currentPassword={password} onDone={onLogin} />
         ) : (
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <p className="font-mono text-cyan text-xs tracking-widest uppercase mb-2">sift-mcps</p>
               <h1 className="font-display font-extrabold text-2xl text-text-bright">Examiner Portal</h1>
-              <p className="text-text-muted text-xs mt-1">Authenticate to access the investigation workspace.</p>
+              <p className="text-text-muted text-xs mt-1">Sign in with your Supabase email and password.</p>
             </div>
             {err && <p className="text-crimson text-xs">{err}</p>}
-            <Input label="Examiner ID" value={examiner} onChange={setExaminer} autoComplete="username" />
+            <Input label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" />
             <Input label="Password" type="password" value={password} onChange={setPassword} autoComplete="current-password" />
             <button type="submit" disabled={loading} className="w-full py-2 rounded bg-cyan text-bg-base font-sans font-semibold text-sm hover:opacity-90 transition-opacity disabled:opacity-50">
               {loading ? 'Authenticating…' : 'Sign in'}

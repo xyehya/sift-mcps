@@ -1,0 +1,672 @@
+"""PR03A — portal Supabase JWT identity tests (Unit C).
+
+Covers doc 19 §4.4, §4.5 (portal half), §7, and §9 portal bullet:
+  - login calls the supplied Supabase callback and sets a Secure/HttpOnly cookie
+  - /api/auth/me returns the operator profile + memberships (no token material)
+  - expired access token refreshes or fails closed based on callback result
+  - logout clears the cookie and calls the logout callback
+  - agent/service principals are denied on normal portal operator APIs
+  - legacy session accepted only when the legacy flag is enabled
+  - agent JWT/session create returns token material once and stores no raw token
+  - revoke disables the app principal and calls the supplied revoke callback
+
+A FAKE supabase_auth object implements the C3 contract — no live network. The
+fake returns PLAIN DICTS and raises PortalAuthError(http_status, reason) where
+the contract requires it.
+"""
+
+from __future__ import annotations
+
+import secrets
+
+import pytest
+from starlette.testclient import TestClient
+
+import case_dashboard.routes as routes_mod
+from case_dashboard.routes import create_dashboard_v2_app
+from case_dashboard.session_jwt import (
+    SESSION_ENVELOPE_COOKIE_NAME,
+    COOKIE_NAME,
+    generate_jwt,
+    generate_session_envelope,
+)
+
+_SECRET = secrets.token_hex(32)
+
+_OPERATOR = {
+    "principal_type": "operator",
+    "principal_id": "op-1",
+    "auth_user_id": "auth-user-op-1",
+    "display_name": "alice",
+    "email": "alice@example.com",
+    "system_role": "owner",
+    "status": "active",
+    "case_memberships": [{"case_id": "case-1", "role": "lead"}],
+}
+
+_AGENT = {
+    "principal_type": "agent",
+    "principal_id": "agent-1",
+    "auth_user_id": "auth-user-agent-1",
+    "display_name": "hermes",
+    "email": None,
+    "system_role": None,
+    "status": "active",
+    "case_memberships": [],
+}
+
+
+class PortalAuthError(Exception):
+    """Mirror of the Gateway's denial exception (carries http_status + reason)."""
+
+    def __init__(self, http_status: int, reason: str):
+        super().__init__(reason)
+        self.http_status = http_status
+        self.reason = reason
+
+
+class FakeSupabaseAuth:
+    """In-memory C3 callback implementation. Records calls; never touches network."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+        self.tokens_issued: list[dict] = []
+        self.revoked: list[tuple] = []
+        self.logged_out: list[str] = []
+        # Map access_token -> principal dict for resolve().
+        self._resolvable: dict[str, dict] = {}
+        # Map refresh_token -> refreshed login dict for refresh().
+        self._refreshable: dict[str, dict] = {}
+        self._counter = 0
+        self.fail_login_for: set[str] = set()
+        self.deny_kinds_as_403 = True
+
+    # --- C3 methods -------------------------------------------------------
+
+    async def login(self, email, password, source_ip):
+        self.calls.append(("login", email, source_ip))
+        if email in self.fail_login_for or password == "wrong":
+            raise PortalAuthError(401, "Invalid credentials")
+        if email == "agent@example.com":
+            raise PortalAuthError(403, "Agent principals may not use the portal")
+        at = "access-" + secrets.token_hex(8)
+        rt = "refresh-" + secrets.token_hex(8)
+        self._resolvable[at] = _OPERATOR
+        return {
+            "access_token": at,
+            "refresh_token": rt,
+            "expires_at": 9999999999,
+            "sub": _OPERATOR["auth_user_id"],
+            "fingerprint": "fp-" + secrets.token_hex(4),
+            "principal": _OPERATOR,
+        }
+
+    async def resolve(self, access_token, source_ip):
+        self.calls.append(("resolve", access_token[:8], source_ip))
+        return self._resolvable.get(access_token)
+
+    async def refresh(self, refresh_token, source_ip):
+        self.calls.append(("refresh", refresh_token[:8], source_ip))
+        return self._refreshable.get(refresh_token)
+
+    async def issue_principal(
+        self, creator, kind, display_name, system_role, tool_scopes, case_id, source_ip
+    ):
+        self.calls.append(("issue_principal", kind, display_name, source_ip))
+        self._counter += 1
+        result = {
+            "principal_type": kind,
+            "principal_id": f"{kind}-{self._counter}",
+            "auth_user_id": f"auth-{kind}-{self._counter}",
+            "access_token": "issued-access-" + secrets.token_hex(8),
+            "refresh_token": "issued-refresh-" + secrets.token_hex(8),
+            "expires_at": 9999999999,
+            "fingerprint": "fp-" + secrets.token_hex(4),
+            "display_name": display_name,
+        }
+        self.tokens_issued.append(result)
+        return result
+
+    async def revoke_principal(self, creator, principal_type, principal_id, source_ip):
+        self.calls.append(("revoke_principal", principal_type, principal_id, source_ip))
+        self.revoked.append((principal_type, principal_id))
+        return None
+
+    async def logout(self, access_token, source_ip):
+        self.calls.append(("logout", access_token[:8], source_ip))
+        self.logged_out.append(access_token)
+        return None
+
+    async def list_principals(self, creator, source_ip):
+        self.calls.append(("list_principals", source_ip))
+        # Deliberately include token-ish keys to prove the route strips them.
+        return [
+            {
+                "principal_type": "agent",
+                "principal_id": "agent-1",
+                "display_name": "hermes",
+                "status": "active",
+                "access_token": "LEAK-SHOULD-BE-STRIPPED",
+            }
+        ]
+
+
+@pytest.fixture()
+def fake_auth():
+    return FakeSupabaseAuth()
+
+
+@pytest.fixture()
+def app(fake_auth):
+    return create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        supabase_auth=fake_auth,
+        legacy_portal_session_enabled=False,
+    )
+
+
+@pytest.fixture()
+def client(app):
+    return TestClient(app, raise_server_exceptions=True)
+
+
+def _envelope_for(result: dict) -> str:
+    return generate_session_envelope(
+        access_token=result["access_token"],
+        refresh_token=result["refresh_token"],
+        expires_at=result["expires_at"],
+        sub=result["sub"],
+        fingerprint=result["fingerprint"],
+        secret=_SECRET,
+    )
+
+
+# ---------------------------------------------------------------------------
+# login
+# ---------------------------------------------------------------------------
+
+
+class TestLogin:
+    def test_login_calls_callback_and_sets_secure_httponly_cookie(self, client, fake_auth):
+        resp = client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "pw"}
+        )
+        assert resp.status_code == 200
+        assert ("login", "alice@example.com", "testclient") in [
+            c for c in fake_auth.calls if c[0] == "login"
+        ]
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert SESSION_ENVELOPE_COOKIE_NAME in set_cookie
+        assert "httponly" in set_cookie.lower()
+        assert "secure" in set_cookie.lower()
+        assert "samesite" in set_cookie.lower()
+
+    def test_login_response_carries_no_token_material(self, client, fake_auth):
+        resp = client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "pw"}
+        )
+        body = resp.text
+        assert "access-" not in body
+        assert "refresh-" not in body
+        data = resp.json()
+        assert "access_token" not in data
+        assert "refresh_token" not in data
+
+    def test_login_wrong_password_maps_to_401(self, client):
+        resp = client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "wrong"}
+        )
+        assert resp.status_code == 401
+
+    def test_login_agent_principal_denied_403(self, client):
+        resp = client.post(
+            "/api/auth/login", json={"email": "agent@example.com", "password": "pw"}
+        )
+        assert resp.status_code == 403
+
+    def test_login_missing_fields_400(self, client):
+        assert client.post("/api/auth/login", json={"email": "x"}).status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# me + middleware resolve
+# ---------------------------------------------------------------------------
+
+
+class TestMe:
+    def test_me_returns_operator_profile_and_memberships(self, client):
+        login = client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "pw"}
+        )
+        cookie = login.cookies[SESSION_ENVELOPE_COOKIE_NAME]
+        resp = client.get("/api/auth/me", cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["principal_type"] == "operator"
+        assert data["display_name"] == "alice"
+        assert data["system_role"] == "owner"
+        assert data["case_memberships"] == [{"case_id": "case-1", "role": "lead"}]
+        # No token material anywhere.
+        assert "access_token" not in data and "refresh_token" not in data
+
+    def test_me_without_session_401(self, client):
+        assert client.get("/api/auth/me").status_code == 401
+
+    def test_expired_access_token_refreshes_and_rotates_cookie(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        # Build an envelope whose access token does NOT resolve, but whose refresh
+        # token DOES refresh into a fresh, resolvable operator session.
+        stale_at = "stale-access"
+        good_at = "fresh-access"
+        rt = "good-refresh"
+        fake_auth._resolvable[good_at] = _OPERATOR
+        fake_auth._refreshable[rt] = {
+            "access_token": good_at,
+            "refresh_token": "rotated-refresh",
+            "expires_at": 9999999999,
+            "sub": _OPERATOR["auth_user_id"],
+            "fingerprint": "fp-new",
+            "principal": _OPERATOR,
+        }
+        envelope = generate_session_envelope(
+            access_token=stale_at,
+            refresh_token=rt,
+            expires_at=1,
+            sub=_OPERATOR["auth_user_id"],
+            fingerprint="fp-old",
+            secret=_SECRET,
+        )
+        resp = client.get(
+            "/api/auth/me", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["principal_type"] == "operator"
+        # Cookie was rotated.
+        assert SESSION_ENVELOPE_COOKIE_NAME in resp.headers.get("set-cookie", "")
+        assert any(c[0] == "refresh" for c in fake_auth.calls)
+
+    def test_expired_with_no_refresh_fails_closed_and_clears_cookie(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        envelope = generate_session_envelope(
+            access_token="dead-access",
+            refresh_token="dead-refresh",  # not in _refreshable
+            expires_at=1,
+            sub="x",
+            fingerprint="fp",
+            secret=_SECRET,
+        )
+        resp = client.get(
+            "/api/auth/me", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        assert resp.status_code == 401
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert SESSION_ENVELOPE_COOKIE_NAME in set_cookie
+        assert "max-age=0" in set_cookie.lower()
+
+
+# ---------------------------------------------------------------------------
+# logout
+# ---------------------------------------------------------------------------
+
+
+class TestLogout:
+    def test_logout_clears_cookie_and_calls_callback(self, client, fake_auth):
+        login = client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "pw"}
+        )
+        cookie = login.cookies[SESSION_ENVELOPE_COOKIE_NAME]
+        resp = client.post(
+            "/api/auth/logout", cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie}
+        )
+        assert resp.status_code == 200
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert SESSION_ENVELOPE_COOKIE_NAME in set_cookie
+        assert "max-age=0" in set_cookie.lower()
+        assert len(fake_auth.logged_out) == 1
+
+
+# ---------------------------------------------------------------------------
+# agent/service denied on operator APIs
+# ---------------------------------------------------------------------------
+
+
+class TestAgentDenied:
+    def test_agent_principal_denied_on_me(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        at = "agent-access"
+        fake_auth._resolvable[at] = _AGENT
+        envelope = generate_session_envelope(
+            access_token=at,
+            refresh_token="agent-refresh",
+            expires_at=9999999999,
+            sub=_AGENT["auth_user_id"],
+            fingerprint="fp",
+            secret=_SECRET,
+        )
+        resp = client.get(
+            "/api/auth/me", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        # Resolved agent => examiner/role are None => operator API denies.
+        assert resp.status_code == 401
+
+    def test_agent_principal_denied_on_findings(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        at = "agent-access-2"
+        fake_auth._resolvable[at] = _AGENT
+        envelope = generate_session_envelope(
+            access_token=at,
+            refresh_token="agent-refresh-2",
+            expires_at=9999999999,
+            sub=_AGENT["auth_user_id"],
+            fingerprint="fp",
+            secret=_SECRET,
+        )
+        resp = client.get(
+            "/api/findings", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# legacy session only when enabled
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyFlag:
+    def test_legacy_cookie_rejected_when_flag_disabled(self, client):
+        # app fixture has legacy_portal_session_enabled=False.
+        token = generate_jwt("alice", "examiner", _SECRET)
+        resp = client.get("/api/auth/me", cookies={COOKIE_NAME: token})
+        assert resp.status_code == 401
+
+    def test_legacy_cookie_accepted_when_flag_enabled(self, fake_auth):
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET,
+            session_max_age=28800,
+            supabase_auth=fake_auth,
+            legacy_portal_session_enabled=True,
+        )
+        client = TestClient(app, raise_server_exceptions=True)
+        token = generate_jwt("alice", "examiner", _SECRET)
+        resp = client.get("/api/auth/me", cookies={COOKIE_NAME: token})
+        assert resp.status_code == 200
+        assert resp.json()["examiner"] == "alice"
+
+
+# ---------------------------------------------------------------------------
+# principal create / revoke / list
+# ---------------------------------------------------------------------------
+
+
+class TestPrincipalLifecycle:
+    def _operator_cookie(self, client):
+        login = client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "pw"}
+        )
+        return login.cookies[SESSION_ENVELOPE_COOKIE_NAME]
+
+    def test_create_returns_token_once_and_stores_no_raw_token(self, client, fake_auth):
+        cookie = self._operator_cookie(client)
+        resp = client.post(
+            "/api/auth/principals",
+            json={"kind": "agent", "display_name": "Scanner agent", "tool_scopes": ["mcp:*"]},
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        # Token material present exactly here, with non-recoverable warning.
+        assert data["access_token"].startswith("issued-access-")
+        assert data["refresh_token"].startswith("issued-refresh-")
+        assert "cannot be recovered" in data["warning"].lower()
+        # The portal stores nothing: no module-level cache of raw tokens.
+        assert not hasattr(routes_mod, "_ISSUED_TOKENS")
+
+    def test_create_requires_owner_admin(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        # Resolve a non-owner operator (system_role=operator) via envelope.
+        plain_op = dict(_OPERATOR, system_role="operator", principal_id="op-2")
+        at = "plain-op-access"
+        fake_auth._resolvable[at] = plain_op
+        envelope = generate_session_envelope(
+            access_token=at, refresh_token="r", expires_at=9999999999,
+            sub="x", fingerprint="fp", secret=_SECRET,
+        )
+        resp = client.post(
+            "/api/auth/principals",
+            json={"kind": "agent", "display_name": "x"},
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope},
+        )
+        assert resp.status_code == 403
+
+    def test_create_validates_kind(self, client):
+        cookie = self._operator_cookie(client)
+        resp = client.post(
+            "/api/auth/principals",
+            json={"kind": "robot", "display_name": "x"},
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
+        )
+        assert resp.status_code == 400
+
+    def test_revoke_calls_callback_and_disables_principal(self, client, fake_auth):
+        cookie = self._operator_cookie(client)
+        resp = client.delete(
+            "/api/auth/principals/agent/agent-9",
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
+        )
+        assert resp.status_code == 200
+        assert ("agent", "agent-9") in fake_auth.revoked
+
+    def test_list_strips_token_material(self, client, fake_auth):
+        cookie = self._operator_cookie(client)
+        resp = client.get(
+            "/api/auth/principals",
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
+        )
+        assert resp.status_code == 200
+        assert "LEAK-SHOULD-BE-STRIPPED" not in resp.text
+        items = resp.json()["principals"]
+        assert items[0]["principal_id"] == "agent-1"
+        assert "access_token" not in items[0]
+
+
+# ---------------------------------------------------------------------------
+# refresh endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshEndpoint:
+    def test_explicit_refresh_rotates_cookie(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        rt = "explicit-refresh"
+        fake_auth._refreshable[rt] = {
+            "access_token": "new-access",
+            "refresh_token": "newer-refresh",
+            "expires_at": 9999999999,
+            "sub": _OPERATOR["auth_user_id"],
+            "fingerprint": "fp-x",
+            "principal": _OPERATOR,
+        }
+        fake_auth._resolvable["new-access"] = _OPERATOR
+        envelope = generate_session_envelope(
+            access_token="old-access", refresh_token=rt, expires_at=1,
+            sub=_OPERATOR["auth_user_id"], fingerprint="fp", secret=_SECRET,
+        )
+        resp = client.post(
+            "/api/auth/refresh", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        assert resp.status_code == 200
+        assert SESSION_ENVELOPE_COOKIE_NAME in resp.headers.get("set-cookie", "")
+        # No token material in body.
+        assert "new-access" not in resp.text
+
+    def test_refresh_without_cookie_401(self, client):
+        assert client.post("/api/auth/refresh").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# C1 (HIGH) — agent/service principals denied on operator portal APIs even with
+# a valid Supabase JWT in the session-envelope cookie. Principal-truthiness is
+# never treated as authorization.
+# ---------------------------------------------------------------------------
+
+
+class TestC1OperatorOnlyEnforcement:
+    def _agent_envelope(self, fake_auth):
+        at = "c1-agent-access"
+        fake_auth._resolvable[at] = _AGENT
+        return generate_session_envelope(
+            access_token=at,
+            refresh_token="c1-agent-refresh",
+            expires_at=9999999999,
+            sub=_AGENT["auth_user_id"],
+            fingerprint="fp",
+            secret=_SECRET,
+        )
+
+    def test_agent_jwt_cannot_enumerate_principal_roster(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        envelope = self._agent_envelope(fake_auth)
+        resp = client.get(
+            "/api/auth/principals", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        assert resp.status_code == 403
+        # The roster must NOT leak even partially.
+        assert "agent-1" not in resp.text
+        # The list callback must never have been invoked.
+        assert not any(c[0] == "list_principals" for c in fake_auth.calls)
+
+    def test_agent_jwt_cannot_create_principal(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        envelope = self._agent_envelope(fake_auth)
+        resp = client.post(
+            "/api/auth/principals",
+            json={"kind": "agent", "display_name": "x"},
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope},
+        )
+        assert resp.status_code == 403
+        assert not any(c[0] == "issue_principal" for c in fake_auth.calls)
+
+    def test_agent_jwt_cannot_revoke_principal(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        envelope = self._agent_envelope(fake_auth)
+        resp = client.delete(
+            "/api/auth/principals/agent/agent-9",
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope},
+        )
+        assert resp.status_code == 403
+        assert fake_auth.revoked == []
+
+    def test_operator_can_still_list(self, client):
+        login = client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "pw"}
+        )
+        cookie = login.cookies[SESSION_ENVELOPE_COOKIE_NAME]
+        resp = client.get(
+            "/api/auth/principals", cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie}
+        )
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# C10 (MED-LO) — fail-closed/scoping gaps on refresh + absolute envelope cap.
+# ---------------------------------------------------------------------------
+
+
+class TestC10RefreshHardening:
+    def test_refresh_callback_raises_clears_cookie(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+
+        async def _boom(refresh_token, source_ip):
+            raise PortalAuthError(401, "revoked")
+
+        fake_auth.refresh = _boom  # type: ignore[assignment]
+        envelope = generate_session_envelope(
+            access_token="x", refresh_token="dead", expires_at=1,
+            sub="s", fingerprint="fp", secret=_SECRET,
+        )
+        resp = client.post(
+            "/api/auth/refresh", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        assert resp.status_code == 401
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert SESSION_ENVELOPE_COOKIE_NAME in set_cookie
+        assert "max-age=0" in set_cookie.lower()
+
+    def test_non_operator_refresh_denied_and_cookie_cleared(self, app, fake_auth):
+        client = TestClient(app, raise_server_exceptions=True)
+        rt = "agent-refresh-c10"
+        fake_auth._refreshable[rt] = {
+            "access_token": "agent-new-access",
+            "refresh_token": "agent-newer-refresh",
+            "expires_at": 9999999999,
+            "sub": _AGENT["auth_user_id"],
+            "fingerprint": "fp",
+            "principal": _AGENT,  # non-operator
+        }
+        envelope = generate_session_envelope(
+            access_token="agent-old", refresh_token=rt, expires_at=1,
+            sub=_AGENT["auth_user_id"], fingerprint="fp", secret=_SECRET,
+        )
+        resp = client.post(
+            "/api/auth/refresh", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        assert resp.status_code == 401
+        assert "max-age=0" in resp.headers.get("set-cookie", "").lower()
+
+    def test_envelope_older_than_absolute_cap_is_rejected(self, app, fake_auth):
+        from case_dashboard.session_jwt import (
+            ABSOLUTE_ENVELOPE_LIFETIME_SECONDS,
+            verify_session_envelope,
+        )
+        import time as _time
+
+        client = TestClient(app, raise_server_exceptions=True)
+        at = "old-but-resolvable"
+        fake_auth._resolvable[at] = _OPERATOR
+        # Stamp issued_at older than the absolute cap.
+        old_eiat = int(_time.time()) - ABSOLUTE_ENVELOPE_LIFETIME_SECONDS - 10
+        envelope = generate_session_envelope(
+            access_token=at, refresh_token="r", expires_at=9999999999,
+            sub=_OPERATOR["auth_user_id"], fingerprint="fp", secret=_SECRET,
+            issued_at=old_eiat,
+        )
+        # Direct verifier rejects it outright.
+        assert verify_session_envelope(envelope, _SECRET) is None
+        # And the middleware treats it as no session -> /api/auth/me is 401.
+        resp = client.get(
+            "/api/auth/me", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        assert resp.status_code == 401
+
+    def test_rotation_preserves_original_issued_at(self, app, fake_auth):
+        """A refresh must NOT reset eiat — the absolute cap survives rotation."""
+        from case_dashboard.session_jwt import verify_session_envelope
+        import time as _time
+
+        client = TestClient(app, raise_server_exceptions=True)
+        rt = "rotate-preserve-rt"
+        fake_auth._refreshable[rt] = {
+            "access_token": "rot-access",
+            "refresh_token": "rot-newer-refresh",
+            "expires_at": 9999999999,
+            "sub": _OPERATOR["auth_user_id"],
+            "fingerprint": "fp-r",
+            "principal": _OPERATOR,
+        }
+        fake_auth._resolvable["rot-access"] = _OPERATOR
+        original_eiat = int(_time.time()) - 1000
+        envelope = generate_session_envelope(
+            access_token="rot-old", refresh_token=rt, expires_at=1,
+            sub=_OPERATOR["auth_user_id"], fingerprint="fp", secret=_SECRET,
+            issued_at=original_eiat,
+        )
+        resp = client.post(
+            "/api/auth/refresh", cookies={SESSION_ENVELOPE_COOKIE_NAME: envelope}
+        )
+        assert resp.status_code == 200
+        # Extract the rotated cookie and confirm eiat was carried forward.
+        rotated = client.cookies.get(SESSION_ENVELOPE_COOKIE_NAME)
+        payload = verify_session_envelope(rotated, _SECRET)
+        assert payload is not None
+        assert payload["eiat"] == original_eiat

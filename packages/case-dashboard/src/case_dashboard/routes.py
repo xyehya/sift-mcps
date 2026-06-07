@@ -57,9 +57,14 @@ from case_dashboard.session_jwt import (
     COOKIE_NAME,
     COOKIE_PATH,
     COOKIE_SAME_SITE,
+    SESSION_ENVELOPE_COOKIE_NAME,
+    SESSION_ENVELOPE_COOKIE_PATH,
+    SESSION_ENVELOPE_COOKIE_SAME_SITE,
     generate_jwt,
     verify_jwt,
     revoke_jti,
+    generate_session_envelope,
+    verify_session_envelope,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +82,17 @@ _API_KEYS: dict = {}
 _GATEWAY_CONFIG_PATH: Path | None = None
 _GATEWAY_CONFIG_LOCK = threading.Lock()
 _TOKEN_REGISTRY = None
+
+# PR03A — Gateway-injected Supabase auth callback boundary (C3 contract).
+# This is an object exposing async login/resolve/refresh/issue_principal/
+# revoke_principal/logout methods that return plain dicts (or None, or raise an
+# exception carrying int .http_status and str .reason). case_dashboard NEVER
+# imports sift_gateway; all Supabase/principal logic is reached through this.
+_SUPABASE_AUTH = None
+# When false, the legacy PBKDF2 challenge/login, sift_session HMAC cookie, and
+# examiner Bearer fallback are disabled. Defaults to True so existing suites and
+# non-Supabase deployments keep working; the Gateway passes the real flag.
+_LEGACY_PORTAL_SESSION_ENABLED: bool = True
 
 # Max delta file size (1 MB)
 _MAX_DELTA_SIZE = 1_048_576
@@ -2691,8 +2707,187 @@ async def get_auth_challenge(request: Request) -> JSONResponse:
     )
 
 
+def _http_status_from_callback_error(exc: Exception, default: int = 500) -> int:
+    """Map a Supabase-auth callback exception to an HTTP status (C3 contract).
+
+    The injected supabase_auth raises exceptions carrying int .http_status and
+    str .reason; everything else maps to ``default``. Never includes token
+    material in the response.
+    """
+    status = getattr(exc, "http_status", None)
+    if isinstance(status, int) and 400 <= status <= 599:
+        return status
+    return default
+
+
+def _principal_profile(principal: dict) -> dict:
+    """Public, token-free operator profile shape for /api/auth/me responses."""
+    if not isinstance(principal, dict):
+        return {}
+    memberships = principal.get("case_memberships") or []
+    safe_memberships = [
+        {"case_id": m.get("case_id"), "role": m.get("role")}
+        for m in memberships
+        if isinstance(m, dict)
+    ]
+    return {
+        "principal_type": principal.get("principal_type"),
+        "principal_id": principal.get("principal_id"),
+        "auth_user_id": principal.get("auth_user_id"),
+        "display_name": principal.get("display_name"),
+        "email": principal.get("email"),
+        "system_role": principal.get("system_role"),
+        "status": principal.get("status"),
+        "case_memberships": safe_memberships,
+    }
+
+
+def _clear_envelope_cookie_response(body: dict, status_code: int) -> JSONResponse:
+    """Build a JSON response that clears the Supabase session-envelope cookie."""
+    resp = JSONResponse(body, status_code=status_code)
+    resp.set_cookie(
+        SESSION_ENVELOPE_COOKIE_NAME,
+        "",
+        max_age=0,
+        path=SESSION_ENVELOPE_COOKIE_PATH,
+        httponly=True,
+        secure=True,
+        samesite=SESSION_ENVELOPE_COOKIE_SAME_SITE,
+    )
+    return resp
+
+
+async def post_supabase_login(request: Request) -> JSONResponse:
+    """PR03A — email/password login via the Gateway Supabase callback.
+
+    On success sets the signed, Secure/HttpOnly/SameSite session-envelope cookie
+    carrying the Supabase access/refresh tokens. Token material is never returned
+    in the JSON body or logged. Only operator principals succeed (the callback
+    raises http_status=403 for agent/service).
+    """
+    if _SUPABASE_AUTH is None:
+        return JSONResponse({"error": "Supabase auth not configured"}, status_code=503)
+    if not _SESSION_SECRET:
+        logger.error("Portal session secret not configured")
+        return JSONResponse(
+            {"error": "Portal session not configured — check gateway logs"},
+            status_code=500,
+        )
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    email = str(body.get("email", "")).strip()
+    password = str(body.get("password", ""))
+    if not email or not password:
+        return JSONResponse({"error": "Missing email or password"}, status_code=400)
+
+    source_ip = request.client.host if request.client else "unknown"
+    try:
+        result = await _SUPABASE_AUTH.login(email, password, source_ip)
+    except Exception as exc:  # noqa: BLE001 - never leak token material
+        status = _http_status_from_callback_error(exc, default=401)
+        reason = getattr(exc, "reason", None)
+        msg = reason if isinstance(reason, str) and reason else "Invalid credentials"
+        return JSONResponse({"error": msg}, status_code=status)
+
+    if not result:
+        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
+
+    principal = result.get("principal") or {}
+    envelope = generate_session_envelope(
+        access_token=result.get("access_token", ""),
+        refresh_token=result.get("refresh_token", ""),
+        expires_at=int(result.get("expires_at", 0)),
+        sub=result.get("sub", ""),
+        fingerprint=result.get("fingerprint", ""),
+        secret=_SESSION_SECRET,
+    )
+
+    resp = JSONResponse({"ok": True, "principal": _principal_profile(principal)})
+    resp.set_cookie(
+        SESSION_ENVELOPE_COOKIE_NAME,
+        envelope,
+        max_age=_SESSION_MAX_AGE,
+        path=SESSION_ENVELOPE_COOKIE_PATH,
+        httponly=True,
+        secure=True,
+        samesite=SESSION_ENVELOPE_COOKIE_SAME_SITE,
+    )
+    return resp
+
+
+async def post_supabase_refresh(request: Request) -> JSONResponse:
+    """PR03A — explicit refresh: rotate the session envelope from its refresh token."""
+    if _SUPABASE_AUTH is None:
+        return JSONResponse({"error": "Supabase auth not configured"}, status_code=503)
+    if not _SESSION_SECRET:
+        return JSONResponse({"error": "Portal session not configured"}, status_code=500)
+
+    cookie_val = request.cookies.get(SESSION_ENVELOPE_COOKIE_NAME)
+    envelope = verify_session_envelope(cookie_val, _SESSION_SECRET) if cookie_val else None
+    if not envelope or not envelope.get("rt"):
+        return JSONResponse({"error": "No session to refresh"}, status_code=401)
+
+    source_ip = request.client.host if request.client else "unknown"
+    try:
+        result = await _SUPABASE_AUTH.refresh(envelope["rt"], source_ip)
+    except Exception as exc:  # noqa: BLE001
+        # Fail closed: a raising refresh (e.g. revoked session) must drop the
+        # cookie, not just report 401 (C10.1).
+        status = _http_status_from_callback_error(exc, default=401)
+        return _clear_envelope_cookie_response(
+            {"error": "Session refresh failed"}, status_code=status
+        )
+
+    if not result:
+        # Fail closed: clear the envelope cookie.
+        return _clear_envelope_cookie_response(
+            {"error": "Session refresh failed"}, status_code=401
+        )
+
+    principal = result.get("principal") or {}
+    # Refresh is for operator portal sessions only (C10.2). Agent/service JWTs use
+    # /mcp, never the portal session-envelope cookie.
+    if not isinstance(principal, dict) or principal.get("principal_type") != "operator":
+        return _clear_envelope_cookie_response(
+            {"error": "Session refresh failed"}, status_code=401
+        )
+
+    new_envelope = generate_session_envelope(
+        access_token=result.get("access_token", ""),
+        refresh_token=result.get("refresh_token", ""),
+        expires_at=int(result.get("expires_at", 0)),
+        sub=result.get("sub", envelope.get("sub", "")),
+        fingerprint=result.get("fingerprint", ""),
+        secret=_SESSION_SECRET,
+        # Preserve the original issued-at so the absolute ceiling is not reset.
+        issued_at=envelope.get("eiat"),
+    )
+    resp = JSONResponse({"ok": True, "principal": _principal_profile(principal)})
+    resp.set_cookie(
+        SESSION_ENVELOPE_COOKIE_NAME, new_envelope, max_age=_SESSION_MAX_AGE,
+        path=SESSION_ENVELOPE_COOKIE_PATH, httponly=True, secure=True,
+        samesite=SESSION_ENVELOPE_COOKIE_SAME_SITE,
+    )
+    return resp
+
+
 async def post_auth_login(request: Request) -> JSONResponse:
-    """Authenticate via PBKDF2 challenge-response. Sets session cookie on success."""
+    """Authenticate. PR03A: email/password Supabase when configured, else legacy.
+
+    When the Gateway has injected ``supabase_auth`` the portal uses the Supabase
+    email/password path. Otherwise it falls back to the legacy PBKDF2
+    challenge-response (still used by tests and non-Supabase deployments).
+    """
+    if _SUPABASE_AUTH is not None:
+        return await post_supabase_login(request)
+
+    if not _LEGACY_PORTAL_SESSION_ENABLED:
+        return JSONResponse({"error": "Legacy portal login disabled"}, status_code=403)
+
     if not _SESSION_SECRET:
         logger.error("Portal session secret not configured")
         return JSONResponse(
@@ -2860,7 +3055,26 @@ async def post_auth_reset_password(request: Request) -> JSONResponse:
 
 
 async def post_auth_logout(request: Request) -> JSONResponse:
-    """Clear the portal session cookie and revoke the JTI."""
+    """Clear the portal session cookie(s). PR03A: also tells Supabase to revoke.
+
+    Clears both the legacy sift_session cookie (revoking its JTI) and the
+    Supabase session-envelope cookie. When a Supabase callback is configured and
+    a valid envelope is present, the access token is passed to supabase_auth.logout
+    so the Gateway can revoke the upstream session. Token values are never logged.
+    """
+    # PR03A — Supabase session envelope logout.
+    if _SESSION_SECRET:
+        env_cookie = request.cookies.get(SESSION_ENVELOPE_COOKIE_NAME)
+        if env_cookie:
+            envelope = verify_session_envelope(env_cookie, _SESSION_SECRET)
+            if envelope and _SUPABASE_AUTH is not None and envelope.get("at"):
+                source_ip = request.client.host if request.client else "unknown"
+                try:
+                    await _SUPABASE_AUTH.logout(envelope["at"], source_ip)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("portal logout callback failed: %s", type(exc).__name__)
+
+    # Legacy sift_session JTI revocation.
     cookie_token = request.cookies.get(COOKIE_NAME)
     if cookie_token and _SESSION_SECRET:
         payload = verify_jwt(cookie_token, _SESSION_SECRET)
@@ -2877,11 +3091,33 @@ async def post_auth_logout(request: Request) -> JSONResponse:
         secure=True,
         samesite=COOKIE_SAME_SITE,
     )
+    resp.set_cookie(
+        SESSION_ENVELOPE_COOKIE_NAME,
+        "",
+        max_age=0,
+        path=SESSION_ENVELOPE_COOKIE_PATH,
+        httponly=True,
+        secure=True,
+        samesite=SESSION_ENVELOPE_COOKIE_SAME_SITE,
+    )
     return resp
 
 
 async def get_auth_me(request: Request) -> JSONResponse:
-    """Return current session info, or 401 if not authenticated."""
+    """Return current session info, or 401 if not authenticated.
+
+    PR03A: when the middleware resolved a Supabase app principal, return the
+    operator profile + system_role + case memberships (no token material). Falls
+    back to the legacy examiner/role/must_reset shape otherwise.
+    """
+    principal = getattr(request.state, "principal", None)
+    if isinstance(principal, dict) and principal:
+        profile = _principal_profile(principal)
+        # Agent/service principals never authenticate operator portal APIs.
+        if profile.get("principal_type") != "operator":
+            return JSONResponse({"error": "Not authenticated"}, status_code=401)
+        return JSONResponse(profile)
+
     examiner = getattr(request.state, "examiner", None)
     role = getattr(request.state, "role", None)
 
@@ -3335,6 +3571,232 @@ async def reactivate_token(request: Request) -> JSONResponse:
 
     logger.info("Service token reactivated: token_id=%s by=%s", token_id, examiner)
     return JSONResponse({"ok": True, "token_id": token_id})
+
+
+# ---------------------------------------------------------------------------
+# PR03A — Agent/service principal (Supabase JWT) lifecycle
+# ---------------------------------------------------------------------------
+#
+# These endpoints replace the operator-facing "agent token" target with
+# "agent JWT/session" issuance. They call the Gateway-injected supabase_auth
+# callbacks; case_dashboard never imports sift_gateway. PR02 token-lifecycle
+# endpoints (/api/tokens/*) remain as a legacy compatibility surface.
+
+_PRINCIPAL_KINDS = {"agent", "service"}
+_SYSTEM_ROLE_VALUES = {"readonly", "operator", "lead", "owner", "admin"}
+
+
+def _require_operator(request: Request) -> JSONResponse | None:
+    """Deny-by-default operator gate for portal operator APIs (charter invariant).
+
+    A resolved Supabase principal authorizes a portal operator API ONLY when it
+    is an operator principal. Agent/service principals presenting a valid JWT are
+    rejected with 403 even though they authenticated — principal-truthiness is
+    never treated as authorization (C1). On the legacy (no-Supabase) path, the
+    examiner/role state set by the middleware governs instead.
+    """
+    principal = getattr(request.state, "principal", None)
+    if isinstance(principal, dict) and principal:
+        if principal.get("principal_type") != "operator":
+            return JSONResponse({"error": "Operator role required"}, status_code=403)
+        return None
+    # Legacy path: examiner identity + portal role (examiner/readonly) required.
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    return _require_portal_role(request)
+
+
+def _require_owner_or_admin(request: Request) -> JSONResponse | None:
+    """Return 403 unless the resolved operator principal has owner/admin authority.
+
+    Requires an operator principal first (C1), then owner/admin system_role. Falls
+    back to examiner-role for the legacy (no-Supabase) path so existing
+    deployments keep their behavior.
+    """
+    principal = getattr(request.state, "principal", None)
+    if isinstance(principal, dict) and principal:
+        if principal.get("principal_type") != "operator":
+            return JSONResponse({"error": "Operator role required"}, status_code=403)
+        if principal.get("system_role") not in ("owner", "admin"):
+            return JSONResponse(
+                {"error": "Owner or admin role required"}, status_code=403
+            )
+        return None
+    # Legacy path: examiner role gates principal management.
+    return _require_examiner_role(request)
+
+
+async def list_principals(request: Request) -> JSONResponse:
+    """GET /api/auth/principals — list agent/service app principals (no token material).
+
+    Operator-only (C1): an agent/service principal with a valid Supabase JWT is
+    denied (403), not allowed to enumerate the principal roster.
+    """
+    op_err = _require_operator(request)
+    if op_err:
+        return op_err
+
+    if _SUPABASE_AUTH is None or not hasattr(_SUPABASE_AUTH, "list_principals"):
+        return JSONResponse(
+            {"error": "Principal management unavailable: Supabase auth not configured"},
+            status_code=503,
+        )
+
+    examiner = getattr(request.state, "examiner", None)
+    principal = getattr(request.state, "principal", None)
+    source_ip = request.client.host if request.client else "unknown"
+    creator = principal if isinstance(principal, dict) else {"display_name": examiner}
+    try:
+        items = await _SUPABASE_AUTH.list_principals(creator, source_ip)
+    except Exception as exc:  # noqa: BLE001
+        status = _http_status_from_callback_error(exc, default=500)
+        return JSONResponse({"error": "Failed to list principals"}, status_code=status)
+
+    # Defensive: never echo token material even if a callback misbehaves.
+    safe = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        safe.append(
+            {
+                k: v
+                for k, v in it.items()
+                if k not in ("access_token", "refresh_token", "password")
+            }
+        )
+    return JSONResponse({"principals": safe, "count": len(safe)})
+
+
+async def create_principal(request: Request) -> JSONResponse:
+    """POST /api/auth/principals — create an agent/service Supabase principal.
+
+    Owner/admin operator only. Returns access/refresh token material EXACTLY ONCE;
+    it is never stored, persisted, or recoverable afterwards.
+    """
+    role_err = _require_owner_or_admin(request)
+    if role_err:
+        return role_err
+    if _SUPABASE_AUTH is None:
+        return JSONResponse(
+            {"error": "Principal management unavailable: Supabase auth not configured"},
+            status_code=503,
+        )
+
+    creator = getattr(request.state, "principal", None)
+    examiner = getattr(request.state, "examiner", None)
+    if not (isinstance(creator, dict) and creator) and not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    if not (isinstance(creator, dict) and creator):
+        creator = {"display_name": examiner}
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    kind = str(body.get("kind", "")).strip()
+    display_name = str(body.get("display_name", "")).strip()
+    system_role = str(body.get("system_role", "")).strip() or None
+    tool_scopes = body.get("tool_scopes", [])
+    case_id = body.get("case_id")
+
+    if kind not in _PRINCIPAL_KINDS:
+        return JSONResponse({"error": "kind must be 'agent' or 'service'"}, status_code=400)
+    if not display_name or not _TOKEN_LABEL_RE.match(display_name):
+        return JSONResponse({"error": "Invalid display_name"}, status_code=400)
+    if system_role is not None and system_role not in _SYSTEM_ROLE_VALUES:
+        return JSONResponse({"error": "Invalid system_role"}, status_code=400)
+    if not isinstance(tool_scopes, list) or not all(
+        isinstance(s, str) for s in tool_scopes
+    ):
+        return JSONResponse({"error": "tool_scopes must be a list of strings"}, status_code=400)
+
+    source_ip = request.client.host if request.client else "unknown"
+    try:
+        result = await _SUPABASE_AUTH.issue_principal(
+            creator,
+            kind,
+            display_name,
+            system_role,
+            tool_scopes,
+            case_id,
+            source_ip,
+        )
+    except Exception as exc:  # noqa: BLE001 - never leak token material
+        status = _http_status_from_callback_error(exc, default=500)
+        reason = getattr(exc, "reason", None)
+        msg = reason if isinstance(reason, str) and reason else "Failed to create principal"
+        return JSONResponse({"error": msg}, status_code=status)
+
+    if not result:
+        return JSONResponse({"error": "Failed to create principal"}, status_code=500)
+
+    logger.info(
+        "Principal created: type=%s id=%s by=%s",
+        result.get("principal_type"),
+        result.get("principal_id"),
+        result.get("display_name"),
+    )
+    # Token material returned exactly once; stored nowhere on this side.
+    return JSONResponse(
+        {
+            "ok": True,
+            "principal_type": result.get("principal_type"),
+            "principal_id": result.get("principal_id"),
+            "auth_user_id": result.get("auth_user_id"),
+            "display_name": result.get("display_name"),
+            "access_token": result.get("access_token"),
+            "refresh_token": result.get("refresh_token"),
+            "expires_at": result.get("expires_at"),
+            "token_fingerprint": result.get("fingerprint"),
+            "warning": "Copy these tokens now — they cannot be recovered.",
+        },
+        status_code=201,
+    )
+
+
+async def revoke_principal(request: Request) -> JSONResponse:
+    """DELETE /api/auth/principals/{principal_type}/{principal_id} — disable+revoke."""
+    role_err = _require_owner_or_admin(request)
+    if role_err:
+        return role_err
+    if _SUPABASE_AUTH is None:
+        return JSONResponse(
+            {"error": "Principal management unavailable: Supabase auth not configured"},
+            status_code=503,
+        )
+
+    creator = getattr(request.state, "principal", None)
+    examiner = getattr(request.state, "examiner", None)
+    if not (isinstance(creator, dict) and creator):
+        creator = {"display_name": examiner}
+
+    principal_type = request.path_params.get("principal_type", "")
+    principal_id = request.path_params.get("principal_id", "")
+    if principal_type not in _PRINCIPAL_KINDS:
+        return JSONResponse({"error": "Invalid principal_type"}, status_code=400)
+    if not principal_id:
+        return JSONResponse({"error": "Missing principal_id"}, status_code=400)
+
+    source_ip = request.client.host if request.client else "unknown"
+    try:
+        await _SUPABASE_AUTH.revoke_principal(
+            creator, principal_type, principal_id, source_ip
+        )
+    except Exception as exc:  # noqa: BLE001
+        status = _http_status_from_callback_error(exc, default=500)
+        return JSONResponse({"error": "Failed to revoke principal"}, status_code=status)
+
+    logger.info(
+        "Principal revoked: type=%s id=%s by=%s",
+        principal_type,
+        principal_id,
+        examiner or (creator.get("display_name") if isinstance(creator, dict) else None),
+    )
+    return JSONResponse(
+        {"ok": True, "principal_type": principal_type, "principal_id": principal_id}
+    )
 
 
 def _resolve_gateway(request: Request):
@@ -4308,7 +4770,16 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/auth/login", post_auth_login, methods=["POST"]),
         Route("/api/auth/reset-password", post_auth_reset_password, methods=["POST"]),
         Route("/api/auth/logout", post_auth_logout, methods=["POST"]),
+        Route("/api/auth/refresh", post_supabase_refresh, methods=["POST"]),
         Route("/api/auth/me", get_auth_me, methods=["GET"]),
+        # PR03A — agent/service Supabase principal lifecycle
+        Route("/api/auth/principals", list_principals, methods=["GET"]),
+        Route("/api/auth/principals", create_principal, methods=["POST"]),
+        Route(
+            "/api/auth/principals/{principal_type}/{principal_id}",
+            revoke_principal,
+            methods=["DELETE"],
+        ),
         # Phase 13f: service-token lifecycle
         Route("/api/tokens", list_tokens, methods=["GET"]),
         Route("/api/tokens", create_token, methods=["POST"]),
@@ -4633,6 +5104,9 @@ def create_dashboard_v2_app(
     on_override_get_status: Callable[[str], dict] | None = None,
     on_override_enable: Callable[[str, str, int], dict] | None = None,
     on_override_cancel: Callable[[str], None] | None = None,
+    *,
+    supabase_auth=None,
+    legacy_portal_session_enabled: bool = True,
 ) -> Starlette:
     """Create the v2 dashboard sub-app for mounting on the gateway.
 
@@ -4656,6 +5130,17 @@ def create_dashboard_v2_app(
             Bound to response_guard.get_override_status / enable_override /
             cancel_override by the gateway. Required for response-guard portal
             endpoints; absent in tests returns a 503 / warning response.
+        supabase_auth: PR03A C3 callback boundary. A Gateway-injected object whose
+            async methods (login/resolve/refresh/issue_principal/revoke_principal/
+            logout/list_principals) return plain dicts (or None, or raise an
+            exception carrying int .http_status and str .reason). case_dashboard
+            never imports sift_gateway; all Supabase/principal logic is reached
+            through this object. When None, the portal uses the legacy auth path.
+        legacy_portal_session_enabled: When false, disables the legacy PBKDF2
+            challenge/login, the sift_session HMAC cookie, and the examiner Bearer
+            fallback. Defaults to True so existing suites and non-Supabase
+            deployments keep working; the Gateway passes
+            auth.legacy.portal_session_enabled.
     """
     from case_dashboard.auth import PortalSessionMiddleware
 
@@ -4663,6 +5148,7 @@ def create_dashboard_v2_app(
     global _TOKEN_REGISTRY
     global _ON_CHAIN_MUTATION, _OVERRIDE_GET_STATUS, _OVERRIDE_ENABLE, _OVERRIDE_CANCEL
     global _ON_CASE_ACTIVATED
+    global _SUPABASE_AUTH, _LEGACY_PORTAL_SESSION_ENABLED
     _SESSION_SECRET = session_secret
     _SESSION_MAX_AGE = session_max_age
     _API_KEYS = api_keys if api_keys is not None else {}
@@ -4673,6 +5159,8 @@ def create_dashboard_v2_app(
     _OVERRIDE_GET_STATUS = on_override_get_status
     _OVERRIDE_ENABLE = on_override_enable
     _OVERRIDE_CANCEL = on_override_cancel
+    _SUPABASE_AUTH = supabase_auth
+    _LEGACY_PORTAL_SESSION_ENABLED = legacy_portal_session_enabled
     routes = _dashboard_api_routes()
     routes.append(Route("/assets/{filename:path}", serve_v2_assets, methods=["GET"]))
     routes.append(Route("/{filename}", serve_v2_static, methods=["GET"]))
@@ -4685,6 +5173,8 @@ def create_dashboard_v2_app(
                 session_secret=session_secret,
                 api_keys=_API_KEYS,
                 session_max_age=session_max_age,
+                supabase_auth=supabase_auth,
+                legacy_portal_session_enabled=legacy_portal_session_enabled,
             ),
             Middleware(SecurityHeadersMiddleware),
         ],

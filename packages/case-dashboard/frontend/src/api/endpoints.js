@@ -9,6 +9,15 @@ export const postLogout = () => apiPost('/api/auth/logout', {})
 export const postResetPassword = (body) => apiPost('/api/auth/reset-password', body)
 export const getMe = () => apiFetch('/api/auth/me')
 
+// --- PR03A: Supabase email/password login + agent/service principals ---
+// Supabase login posts { email, password }; the server sets the signed session
+// envelope cookie. No token material is ever returned, displayed, or stored.
+export const postSupabaseLogin = (body) => apiPost('/api/auth/login', body)
+export const postAuthRefresh = () => apiPost('/api/auth/refresh', {})
+export const getPrincipals = () => apiFetch('/api/auth/principals')
+export const postPrincipal = (body) => apiPost('/api/auth/principals', body)
+export const deletePrincipal = (type, id) => apiDelete(`/api/auth/principals/${type}/${id}`)
+
 // --- Cases ---
 export const getCases = () => apiFetch('/api/cases')
 export const postCaseCreate = (body) => apiPost('/api/case/create', body)

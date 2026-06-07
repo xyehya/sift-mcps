@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react'
-import { getTokens, postToken, deleteToken, postRotateToken, postReactivateToken } from '../../api/endpoints'
+import {
+  getTokens, postToken, deleteToken, postRotateToken, postReactivateToken,
+  getPrincipals, postPrincipal, deletePrincipal,
+} from '../../api/endpoints'
 import { useStore } from '../../store/useStore'
 
 export function SettingsTab() {
   const [tokens, setTokens] = useState([])
+  const [legacyEnabled, setLegacyEnabled] = useState(false)
   const [loading, setLoading] = useState(false)
   const [agentId, setAgentId] = useState('')
   const [label, setLabel] = useState('')
@@ -12,17 +16,66 @@ export function SettingsTab() {
   const [newTokenDisplay, setNewTokenDisplay] = useState(false)
   const { addToast } = useStore()
 
+  // PR03A — target path: agent/service Supabase JWT principals.
+  const [principals, setPrincipals] = useState([])
+  const [pKind, setPKind] = useState('agent')
+  const [pName, setPName] = useState('')
+  const [pScopes, setPScopes] = useState('mcp:*')
+  // Issued JWT session material — shown ONCE, never written to localStorage.
+  const [issued, setIssued] = useState(null)
+
   useEffect(() => {
+    fetchPrincipals()
     fetchTokens()
   }, [])
+
+  async function fetchPrincipals() {
+    try {
+      const res = await getPrincipals()
+      setPrincipals(res.principals || [])
+    } catch (ex) {
+      // 503 = Supabase auth not wired in this deployment; not an error to surface loudly.
+    }
+  }
+
+  async function handleCreatePrincipal(e) {
+    e.preventDefault()
+    if (!pName) { addToast('Display name is required', 'warn'); return }
+    try {
+      const tool_scopes = pScopes.split(',').map((s) => s.trim()).filter(Boolean)
+      const result = await postPrincipal({ kind: pKind, display_name: pName, tool_scopes })
+      // Token material returned exactly once. Hold in memory only for display.
+      setIssued(result)
+      setPName('')
+      addToast('Principal created', 'success')
+      await fetchPrincipals()
+    } catch (ex) {
+      addToast(ex.message || 'Failed to create principal', 'error')
+    }
+  }
+
+  async function handleRevokePrincipal(type, id) {
+    if (!confirm('Revoke this principal? Its JWT session is disabled immediately and cannot be restored.')) {
+      return
+    }
+    try {
+      await deletePrincipal(type, id)
+      addToast('Principal revoked', 'success')
+      await fetchPrincipals()
+    } catch (ex) {
+      addToast(ex.message || 'Failed to revoke principal', 'error')
+    }
+  }
 
   async function fetchTokens() {
     setLoading(true)
     try {
       const res = await getTokens()
       setTokens(res.tokens || [])
+      setLegacyEnabled(true)
     } catch (ex) {
-      addToast(ex.message || 'Failed to load tokens', 'error')
+      // PR02 legacy tokens are a compatibility surface; absence is fine.
+      setLegacyEnabled(false)
     } finally {
       setLoading(false)
     }
@@ -102,8 +155,115 @@ export function SettingsTab() {
     <div className="h-full overflow-y-auto p-5 space-y-6" style={{ background: 'var(--bg-base)' }}>
       <h1 className="font-display font-bold text-lg text-text-bright">Settings</h1>
 
+      {/* PR03A target — agent/service JWT principals */}
+      <div>
+        <p className="text-[10px] font-sans font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--text-muted)' }}>
+          AGENT / SERVICE JWT SESSIONS
+        </p>
+
+        {/* Issued-once banner — token material shown a single time, not recoverable */}
+        {issued && (
+          <div className="p-4 rounded border text-xs font-mono space-y-2 relative mb-4"
+            style={{ background: 'var(--cyan-dim)', borderColor: 'var(--cyan)', color: 'var(--text-bright)' }}>
+            <button onClick={() => setIssued(null)} className="absolute top-2 right-3 text-cyan font-bold text-lg hover:text-white">&times;</button>
+            <div className="font-bold text-cyan text-sm mb-1">NEW JWT SESSION ISSUED</div>
+            <p className="text-text-muted leading-relaxed font-sans text-xs">
+              Copy these tokens now. They are shown once and cannot be recovered.
+            </p>
+            <div className="bg-bg-surface border border-border-soft p-2.5 rounded space-y-1 text-[11px] break-all">
+              <div><span className="text-text-muted">principal:</span> <span className="text-cyan">{issued.principal_type}/{issued.principal_id}</span></div>
+              <div><span className="text-text-muted">access_token:</span> <span className="text-cyan select-all">{issued.access_token}</span></div>
+              <div><span className="text-text-muted">refresh_token:</span> <span className="text-cyan select-all">{issued.refresh_token}</span></div>
+              <div><span className="text-text-muted">fingerprint:</span> <span className="text-text-primary">{issued.token_fingerprint}</span></div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-1 p-4 rounded border flex flex-col h-fit"
+            style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-faint)' }}>
+            <p className="text-[10px] font-sans font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--text-muted)' }}>
+              ISSUE JWT SESSION
+            </p>
+            <form onSubmit={handleCreatePrincipal} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-mono text-text-muted mb-1">KIND</label>
+                <select value={pKind} onChange={(e) => setPKind(e.target.value)}
+                  className="w-full px-3 py-2 rounded text-xs focus:outline-none"
+                  style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }}>
+                  <option value="agent">agent</option>
+                  <option value="service">service</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-mono text-text-muted mb-1">DISPLAY NAME *</label>
+                <input type="text" placeholder="e.g. Hermes investigation agent" value={pName} onChange={(e) => setPName(e.target.value)} required
+                  className="w-full px-3 py-2 rounded text-xs focus:outline-none"
+                  style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }} />
+              </div>
+              <div>
+                <label className="block text-[10px] font-mono text-text-muted mb-1">TOOL SCOPES (comma-separated)</label>
+                <input type="text" placeholder="mcp:* or tool:foo, namespace:bar" value={pScopes} onChange={(e) => setPScopes(e.target.value)}
+                  className="w-full px-3 py-2 rounded text-xs font-mono focus:outline-none"
+                  style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }} />
+              </div>
+              <button type="submit" className="w-full py-2 rounded text-xs font-sans font-semibold hover:opacity-85 border transition-opacity"
+                style={{ background: 'var(--cyan-dim)', color: 'var(--cyan)', borderColor: 'var(--cyan)' }}>
+                Issue session
+              </button>
+            </form>
+          </div>
+
+          <div className="lg:col-span-2 p-4 rounded border flex flex-col"
+            style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-faint)' }}>
+            <p className="text-[10px] font-sans font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--text-muted)' }}>
+              ACTIVE PRINCIPALS
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b" style={{ borderColor: 'var(--border-soft)' }}>
+                    <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">TYPE</th>
+                    <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">NAME</th>
+                    <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">STATUS</th>
+                    <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px] text-right">ACTIONS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {principals.length === 0 ? (
+                    <tr><td colSpan="4" className="py-8 text-center text-text-muted font-mono">No agent/service principals.</td></tr>
+                  ) : (
+                    principals.map((p) => (
+                      <tr key={`${p.principal_type}-${p.principal_id}`} className="border-b" style={{ borderColor: 'var(--border-faint)' }}>
+                        <td className="py-3 font-mono text-text-muted">{p.principal_type}</td>
+                        <td className="py-3 font-mono font-semibold text-text-primary">{p.display_name || p.principal_id}</td>
+                        <td className="py-3 font-mono text-text-muted">{p.status || 'active'}</td>
+                        <td className="py-3 text-right">
+                          <button onClick={() => handleRevokePrincipal(p.principal_type, p.principal_id)}
+                            className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
+                            style={{ background: 'var(--crimson-dim)', color: 'var(--crimson)', borderColor: 'var(--crimson)' }}>
+                            Revoke
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Legacy PR02 compatibility — only when token fallback is enabled */}
+      {legacyEnabled && (
+      <p className="text-[10px] font-sans font-semibold uppercase tracking-widest pt-2" style={{ color: 'var(--amber)' }}>
+        LEGACY COMPATIBILITY — PR02 SERVICE TOKENS
+      </p>
+      )}
+
       {/* Copy-once banner */}
-      {newTokenDisplay && (
+      {legacyEnabled && newTokenDisplay && (
         <div className="p-4 rounded border text-xs font-mono space-y-2 relative"
           style={{ background: 'var(--cyan-dim)', borderColor: 'var(--cyan)', color: 'var(--text-bright)' }}>
           <button onClick={() => setNewTokenDisplay(false)} className="absolute top-2 right-3 text-cyan font-bold text-lg hover:text-white">&times;</button>
@@ -124,9 +284,10 @@ export function SettingsTab() {
         </div>
       )}
 
-      {/* Grid container */}
+      {/* Grid container — legacy PR02 tokens only when fallback enabled */}
+      {legacyEnabled && (
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
+
         {/* Token Form */}
         <div className="lg:col-span-1 p-4 rounded border flex flex-col h-fit"
           style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-faint)' }}>
@@ -236,6 +397,7 @@ export function SettingsTab() {
         </div>
 
       </div>
+      )}
     </div>
   )
 }
