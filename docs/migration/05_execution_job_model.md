@@ -7,6 +7,19 @@ model for SIFT workers claiming and running durable jobs from
 Supabase/Postgres. It does not create schemas, migrations, REST APIs, MCP tools,
 frontend views, code changes, or a full execution roadmap.
 
+> Locked decisions (see `00_migration_charter.md`): v1 worker topology is a
+> **single local worker** (D9); the v1 job schema is a **lean core**
+> (`jobs`, `job_steps`, `job_logs`, `workers`) with `attempt_count`/cancellation/
+> heartbeat fields on the row and `job_attempts`/`job_cancellations`/
+> `worker_heartbeats` deferred; cross-case `SKIP LOCKED` fairness is added only
+> when a second worker exists (D13). The full status set and job-type list below
+> are the target enumeration; only `health_check` plus the first converted
+> workflow are implemented initially. Case scope for a job is the control-plane
+> **active case** (portal-set, charter D4), recorded immutably on the job row;
+> per-backend MCP routes are disabled and all tool calls are Gateway-only
+> (D2/D3). Add `evidence_anchor` to the job types (Solana anchoring retained,
+> D14).
+
 ## 1. Executive Summary
 
 The target execution model makes Supabase/Postgres the source of truth for
@@ -143,20 +156,30 @@ Every job is explicitly scoped. Minimum target job fields:
 - `cancellation_requested_by`
 - `failure_summary`
 
-`case_id` must not come from process environment, Gateway config active-case
-pointers, `SIFT_CASE_DIR`, or `~/.sift/active_case` in the target model. The
-current system uses these mechanisms for portal, Gateway, MCP backends, audit,
-and OpenSearch active-case resolution (`04_execution_current_state.md`,
-sections 1 and 4). That is acceptable as legacy compatibility but unsafe as
-job authority because jobs can outlive request processes, workers can run
-multiple cases, and subprocesses inherit environment accidentally.
+`case_id` must not be read from process environment, `SIFT_CASE_DIR`, or
+`~/.sift/active_case` **files/env as authority** in the target model. Those
+remain only as generated compatibility exports (charter D4). The authoritative
+active case lives in the control plane (`active_case_state`), is set by the
+operator in the portal, and is propagated by the Gateway. The current system
+uses env/pointer mechanisms for portal, Gateway, MCP backends, audit, and
+OpenSearch active-case resolution (`04_execution_current_state.md`, sections 1
+and 4); that is acceptable as legacy compatibility but unsafe as authority
+because jobs can outlive request processes and subprocesses inherit environment
+accidentally.
 
 Target case scope comes from:
 
-- Gateway-validated human session context for operator-created jobs.
-- Gateway-validated MCP/service-token context for agent/service-created jobs.
+- The control-plane active case (portal-set), resolved and propagated by the
+  Gateway, recorded immutably on the job row at creation time.
+- Gateway-validated human session context (operator-created jobs) and
+  Gateway-validated MCP/service-token context (agent/service-created jobs), which
+  must be authorized for that active case.
 - System policy only for maintenance jobs, with explicit case scope unless the
   maintenance type is intentionally cross-case and admin-only.
+
+Because v1 runs one active case per deployment (D4), the job's `case_id` is the
+active case at enqueue time; switching the active case later does not affect an
+in-flight job.
 
 Workers do not choose arbitrary case scope. They receive case scope from the
 claimed job row and use it to constrain evidence paths, parser execution,
@@ -554,6 +577,7 @@ Initial target job types:
 | `evidence_register` | Register evidence metadata and vault reference. | Required. | Source path/hash expected. | Validate scope, register metadata, audit access. | None. | Required for unsafe path/import policies. | Case + evidence/source hash + operation. | Fail without mutating evidence authority; log validation reason. |
 | `evidence_hash` | Compute or confirm cryptographic hashes. | Required. | Required. | Resolve evidence, hash, store hash event. | None. | None unless destructive side effects are requested. | Case + evidence + hash algorithm + source hash. | Retry if transient IO; fail on missing source. |
 | `evidence_verify_integrity` | Verify manifest/ledger and file integrity. | Required. | Optional single evidence or full case. | Load metadata, stat/hash as needed, write integrity event. | None. | None. | Case + evidence/all + verification policy + manifest hash. | Mark failed/degraded with integrity findings; do not auto-fix. |
+| `evidence_anchor` | Anchor an evidence integrity proof to an external provider (e.g. Solana). Retained capability (D14). | Required. | Evidence or manifest hash. | Compute payload hash, submit to provider, record `evidence_anchors` row. | None. | Required (high-risk/final). | Case + evidence/manifest hash + provider. | Fail without mutating evidence; record `failed` anchor status; retry transient submit errors. |
 | `evidence_ingest` | Prepare evidence for parser workflows. | Required. | Required. | Validate, discover sources, create parser/index jobs or steps. | Optional. | Required when ingest changes final/immutable state. | Case + evidence + operation + source hash. | Retry discovery; preserve partial registered outputs. |
 | `parser_run` | Run a parser against evidence/source. | Required. | Usually required. | Resolve source, run parser, register parser_run/output. | Often yes. | None for derived output; approval needed for final findings. | Case + evidence + parser + version + source hash + spec. | Retry by parser/source; preserve failed run records. |
 | `opensearch_index` | Index parser output or ingest batch. | Required. | Optional through parser output. | Validate alias, bulk index, register counts/status. | Required. | None. | Case + alias + schema + ingest batch. | Retry transient OpenSearch; mark degraded if OpenSearch down. |
@@ -667,20 +691,29 @@ files now:
   records.
 - Cancellation is explicit and audited.
 
-### Decisions Needing User Approval
+### Decisions previously open here, now locked (charter)
 
-- Whether the first implementation slice covers only OpenSearch ingest or also
-  native `run_command`, report generation, and evidence operations.
-- Whether short native commands remain synchronous or all native execution
-  becomes job-backed.
-- The exact local worker topology: one local worker, multiple local workers, or
-  Gateway-hosted worker plus independent workers.
-- How long to export legacy `~/.sift/ingest-status` and
-  `~/.sift/ingest-logs` compatibility files after DB job state exists.
-- Cancellation semantics for partially indexed OpenSearch batches.
-- Retry granularity: whole job, host, artifact, parser run, or indexing batch.
-- Whether per-case logical OpenSearch indexes are approved as the initial
-  strategy, as recommended in the OpenSearch integration plan.
+- Worker topology: single local worker in v1, extensible later (D9).
+- OpenSearch indexing: reuse the existing `case-{case}-{type}-{host}` model and
+  register it; logical-family rename deferred (D18, see `03` §7A). OS 3.5.0
+  security-on (D6).
+- Lean job core; defer `job_attempts`/`job_cancellations`/`worker_heartbeats`
+  (D13).
+- First converted workflow is the safest evidence operation
+  (`evidence_hash`/`evidence_verify_integrity`) after JOB-0 baseline tests and
+  job infrastructure exist (see `07`).
+
+### Decisions still genuinely open (non-blocking, decide at conversion time)
+
+- Whether short native `run_command` calls stay synchronous while only
+  long-running native work becomes job-backed (default: keep short commands
+  synchronous; convert long/parser work to jobs).
+- Compatibility-export lifetime for `~/.sift/ingest-status` / `~/.sift/ingest-logs`
+  (default: one release cycle past parity).
+- Cancellation semantics for partially indexed OpenSearch batches (default:
+  cooperative stop, mark batch `partial`, never report partial as complete).
+- Retry granularity (default: whole job for v1; finer parser-run/indexing-batch
+  retry when converting parser paths in JOB-8/JOB-9).
 
 ### Code Facts Still Needing Confirmation
 

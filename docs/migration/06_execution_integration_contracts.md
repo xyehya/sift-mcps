@@ -7,6 +7,15 @@ target DB-backed execution/job model. It does not implement REST APIs, MCP
 tools, frontend views, OpenSearch changes, evidence changes, workers, database
 migrations, or the final execution roadmap.
 
+> Locked decisions (see `00_migration_charter.md`): ALL REST APIs, MCP tools,
+> and actions go through the Gateway; per-backend `/mcp/{name}` routes are
+> disabled (D2/D3). Case context is the control-plane active case (portal-set,
+> Gateway-propagated, charter D4). v1 is a single local worker with a lean job
+> schema (D9/D13). OpenSearch is 3.5.0 security-on (D6). Identity/cases/tokens
+> cut over first (D17, `09_identity_auth_cutover.md`). These contracts target
+> the post-foundation state; the foundation track must land before the job APIs
+> here are wired to real authorization.
+
 This design is grounded in:
 
 - `docs/migration/04_execution_current_state.md`
@@ -994,28 +1003,30 @@ Config/env handling:
 - OpenSearch degraded mode is explicit in REST, MCP, frontend, and job/indexing
   state.
 
-### Decisions Needing User Approval
+### Decisions previously open here, now locked (charter)
 
-- Exact human role names and permissions for job creation, retry, cancel, logs,
-  worker details, approvals, export, archive, and destructive cleanup.
-- Whether the initial implementation slice covers only OpenSearch ingest or also
-  native `run_command`, report generation, evidence verification, and finding
-  generation.
-- Whether short native commands remain synchronous while long commands become
-  jobs.
-- Initial worker topology: one local worker, multiple local workers, or
-  Gateway-hosted worker plus independent worker process.
-- Retry granularity: whole job, host, artifact, parser run, or indexing batch.
-- Cancellation semantics for subprocess trees and partially indexed OpenSearch
-  batches.
-- Initial frontend polling intervals and when to introduce SSE/WebSocket or
-  Supabase Realtime.
-- Whether per-case logical OpenSearch indexes are approved as the first target
-  strategy.
-- Whether raw OpenSearch DSL is admin-only or ever allowed in a constrained
-  normal-agent mode.
-- How long to export compatibility files/status such as `~/.sift/ingest-status`,
-  `~/.sift/ingest-logs`, `~/.sift/active_case`, and legacy case JSON files.
+- Human role names/permissions: `readonly`, `operator`, `lead`, `owner`, `admin`
+  with the permission matrix in `09_identity_auth_cutover.md` §5.
+- Worker topology: single local worker in v1 (D9).
+- OpenSearch indexing: reuse the existing `case-{case}-{type}-{host}` model and
+  register it; logical-family rename deferred (D18, see `03` §7A). OpenSearch
+  3.5.0 security-on (D6).
+- Raw OpenSearch DSL is admin-only; normal agents get allowlisted query inputs
+  only.
+- Gateway-only access; per-backend MCP routes disabled (D2/D3).
+- Frontend polling first; SSE/WebSocket/Supabase Realtime is a later upgrade once
+  the DB/RLS/Gateway event policy is stable (suggested cadences are in §4).
+
+### Decisions still genuinely open (non-blocking, decide at conversion time)
+
+- Whether short native commands stay synchronous while long native work becomes
+  jobs (default: short stays synchronous).
+- Retry granularity (default: whole job in v1; finer later).
+- Cancellation semantics for subprocess trees and partially indexed batches
+  (default: cooperative stop, mark `partial`, never report partial as complete).
+- Compatibility-export lifetime for `~/.sift/ingest-status`, `~/.sift/ingest-logs`,
+  `~/.sift/active_case`, and legacy case JSON (default: one release cycle past
+  parity).
 
 ### Code Facts Still Needing Confirmation
 

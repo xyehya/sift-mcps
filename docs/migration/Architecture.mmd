@@ -14,7 +14,7 @@
     "curve": "linear",
     "htmlLabels": true,
     "nodeSpacing": 55,
-    "rankSpacing": 60,
+    "rankSpacing": 70,
     "padding": 20
   }
 }}%%
@@ -22,114 +22,133 @@
 flowchart TB
 
   %% =========================================================
-  %% SIFT VM Autonomous DFIR Agent - exact Mermaid replica
-  %% of the provided high-level architecture diagram.
-  %% Note: Mermaid auto-layout is not pixel-perfect, but this
-  %% file preserves the same topology, labels, groupings, and flow.
+  %% SIFT VM Autonomous DFIR Agent - TARGET migration architecture.
+  %%
+  %% Canonical decisions reflected in this diagram (see
+  %% 00_migration_charter.md "Confirmed Decisions (Locked)"):
+  %%  - The Gateway is the SINGLE policy boundary. ALL REST APIs,
+  %%    ALL MCP tool calls, and ALL privileged actions go through it.
+  %%    Per-backend direct MCP routes (/mcp/{name}) are DISABLED.
+  %%  - Supabase/Postgres is the authoritative control plane.
+  %%  - There is NEVER a direct job/invoke to the Evidence Vault.
+  %%    Tool calls (ingest/search/etc.) enter the Gateway, which
+  %%    enqueues durable jobs/pipelines in the control plane; workers
+  %%    CLAIM (poll + SKIP LOCKED) those jobs and run the pipelines.
+  %%  - ACTIVE CASE is selected by the operator in the portal only,
+  %%    is authoritative in the control plane, and the Gateway
+  %%    propagates it to every backend/API/tool call.
+  %%  - OpenSearch 3.5.0 with security ENABLED is the derived
+  %%    search/data plane. It is never authoritative.
+  %%  - AI agents reach tools ONLY through Gateway MCP tools and run
+  %%    deeper analysis in a sandboxed, allowlisted execution plane.
+  %% Note: Mermaid auto-layout is not pixel-perfect.
   %% =========================================================
 
-  subgraph SYSTEM["SIFT VM Autonomous DFIR Agent (Overall System)"]
+  subgraph SYSTEM["SIFT VM Autonomous DFIR Agent - Target Architecture"]
     direction TB
 
     %% -------------------------
-    %% Top row
+    %% Clients
     %% -------------------------
-    subgraph TOP_ROW[" "]
+    subgraph CLIENTS[" "]
       direction LR
 
-      Portal("▭<br/><b>Presentation Layer</b><br/>React + Vite Operator Portal<br/><br/>Case lifecycle, findings, timeline,<br/>evidence integrity, MCP token<br/>management")
+      Portal("<b>Presentation Layer</b><br/>React + Vite Operator Portal<br/><br/>Case lifecycle, <b>ACTIVE CASE selection</b>,<br/>findings + approvals, timeline, TODOs, IOCs,<br/>evidence integrity, MCP token management,<br/>reports, AI-agent activity review")
 
-      TopSpacer1[" "]
-
-      Agents("▭<br/><b>AI Agent Clients</b><br/>Codex / Claude / Local MCP Clients")
+      Agents("<b>AI Agent Clients</b><br/>Codex / Claude / Local MCP Clients<br/><br/>case-scoped MCP tools only<br/>(no direct backend, no direct OpenSearch)")
     end
 
     %% -------------------------
-    %% Gateway / Broker Layer
+    %% Gateway - single policy boundary
     %% -------------------------
-    Gateway("<b>Gateway / Broker Layer</b><br/>Starlette + FastAPI + FastMCP<br/>REST / WebSocket / SSE<br/>Authentication & Authorization<br/>Case-scoped MCP tools<br/>Audit & policy enforcement")
-
-    %% -------------------------
-    %% Middle row: OpenSearch / Case Control / Evidence
-    %% -------------------------
-    subgraph MID_ROW[" "]
-      direction LR
-
-      OpenSearch[("<b>OpenSearch</b><br/>Artifacts, timeline, IOCs,<br/>full-text / vector search")]
-
-      subgraph CASE_CONTROL["Case Control Plane"]
-        direction LR
-
-        Supabase[("<b>Supabase Local</b><br/>Postgres + Auth +<br/>RLS + Realtime + Storage<br/><i>Authoritative case &<br/>workflow state</i>")]
-
-        subgraph CONTROL_BOXES[" "]
-          direction TB
-          TokenRegistry["<b>MCP Token Registry</b>"]
-          AuditEvents["<b>Audit Events</b>"]
-          PipelineState["<b>Jobs / Pipeline State</b>"]
-        end
-
-        Supabase <-.-> TokenRegistry
-        Supabase <-.-> AuditEvents
-        Supabase <-.-> PipelineState
-      end
-
-      Evidence[("<b>Evidence Vault</b><br/>Immutable evidence<br/>files + hashes")]
-    end
+    Gateway("<b>Gateway / Broker Layer - SINGLE POLICY BOUNDARY</b><br/>Starlette + FastAPI + FastMCP<br/><br/>ALL REST APIs + ALL MCP tool calls + ALL privileged actions<br/>AuthN / AuthZ, case scope, tool scope, evidence gate,<br/>audit + policy enforcement, OpenSearch query mediation,<br/>ACTIVE CASE propagation to backends/tools<br/><i>per-backend direct MCP routes DISABLED</i>")
 
     %% -------------------------
-    %% Bottom row: legend / execution / reports
+    %% Control plane (authoritative)
     %% -------------------------
-    subgraph BOT_ROW[" "]
-      direction LR
+    subgraph CONTROL["Case Control Plane - AUTHORITATIVE"]
+      direction TB
 
-      Legend["<b><i>Postgres/Supabase</i></b> = control plane<br/><br/><b><i>OpenSearch</i></b> = search/data plane"]
+      Supabase[("<b>Supabase Local / Postgres</b><br/>Auth + RLS + Storage<br/><i>Source of truth</i>")]
 
-      subgraph EXECUTION["Execution Plane"]
+      subgraph CP_BOXES[" "]
         direction TB
-
-        Worker("<b>SIFT VM Worker Runtime</b><br/>Durable jobs from Postgres<br/>Python parsers & native Linux workflows<br/>Ingestion, parsing, normalization,<br/>report generation")
-
-        subgraph EXEC_INTERNALS[" "]
-          direction LR
-          ParserModules["<b>Parser / Workflow Modules</b>"]
-          JobDispatcher["<b>Job Dispatcher</b><br/>DB-backed polling /<br/>locked job claim"]
-        end
-
-        Worker --- ParserModules
-        Worker --- JobDispatcher
+        B1["<b>Identity + Auth + Case Membership</b>"]
+        B2["<b>MCP / Service Token Registry</b> (hash-only)"]
+        B3["<b>Active Case State</b> (portal-set)"]
+        B4["<b>Cases / Findings / Approvals / TODOs / IOCs / Timeline refs</b>"]
+        B5["<b>Evidence Metadata + Integrity + Anchoring state</b>"]
+        B6["<b>Durable Jobs / Steps / Logs / Pipeline State</b>"]
+        B7["<b>Audit Events</b>"]
+        B8["<b>Reports + Report Artifacts</b>"]
+        B9["<b>RAG Collections + Agent Skills (skills.md)</b>"]
       end
 
-      Reports[("<b>Reports / Exports</b><br/>HTML / PDF /<br/>JSON bundles")]
+      Supabase --- B1
+      Supabase --- B2
+      Supabase --- B3
+      Supabase --- B4
+      Supabase --- B5
+      Supabase --- B6
+      Supabase --- B7
+      Supabase --- B8
+      Supabase --- B9
     end
 
     %% -------------------------
-    %% Visible flows from the image
+    %% Data plane + Evidence vault
     %% -------------------------
-    Portal -. "Operator actions /<br/>REST API" .-> Gateway
-    Agents -. "MCP tool calls" .-> Gateway
+    OpenSearch[("<b>OpenSearch 3.5.0 (Security ON)</b><br/><b>Core</b> derived search / data plane<br/><b>case-*</b> SIFT indices + <b>opencti_*</b> OpenCTI indices<br/>per-consumer scoped roles - agent has no cluster creds<br/>artifacts, timeline, IOCs, full-text + vector")]
 
-    Gateway -. "Case lifecycle /<br/>auth / state" .-> Supabase
-    Gateway -. "Search &<br/>retrieval" .-> OpenSearch
-    Gateway -. "Create job /<br/>invoke workflow" .-> Evidence
-
-    Supabase -. "Durable job state" .-> EXECUTION
-    EXECUTION -. "Status, findings,<br/>logs, audit updates" .-> Supabase
-
-    EXECUTION -. "Parsed artifacts /<br/>timeline indexing" .-> OpenSearch
-    EXECUTION -. "Register /<br/>verify evidence" .-> Evidence
-    EXECUTION -. "Generate<br/>reports" .-> Reports
-
-    Reports -. "Review /<br/>download" .-> Portal
+    Evidence[("<b>Evidence Vault</b><br/>Immutable raw evidence files + hashes<br/>manifest + ledger proof artifacts")]
 
     %% -------------------------
-    %% Invisible layout hints
+    %% Execution plane
     %% -------------------------
-    TopSpacer1 ~~~ Gateway
-    OpenSearch ~~~ CASE_CONTROL
-    CASE_CONTROL ~~~ Evidence
-    Legend ~~~ EXECUTION
-    EXECUTION ~~~ Reports
+    subgraph EXECUTION["Execution Plane - SIFT VM Workers"]
+      direction TB
+
+      Worker("<b>SIFT VM Worker Runtime</b><br/>Claim durable jobs from Postgres (poll + SKIP LOCKED)<br/>Ingestion pipelines, parsers, normalization,<br/>evidence operations, report generation")
+
+      Sandbox["<b>Sandboxed Agent Tool Execution</b><br/>run_command / deeper extraction<br/>shell-free, allowlisted, case-jailed"]
+
+      Worker --- Sandbox
+    end
+
+    Reports[("<b>Reports / Exports</b><br/>HTML / PDF / JSON bundles")]
+
+    %% -------------------------
+    %% Add-on MCP backends (registered in control-plane mcp_backends;
+    %% reached ONLY through the Gateway aggregate policy path)
+    %% -------------------------
+    subgraph ADDONS["Add-on MCP Backends - query-only, registered in control-plane mcp_backends"]
+      direction LR
+      OpenCTI("<b>opencti-mcp</b> &rarr; <b>OpenCTI platform</b><br/>platform + worker + redis + rabbitmq + minio<br/>query-only; case_scoped = false")
+      WinTriage("<b>windows-triage-mcp</b><br/>local baseline DBs<br/>query-only; case_scoped = false")
+    end
+
+    %% Note: OpenSearch and RAG are CORE, not add-ons (D19/D23).
+    %% RAG retrieval is a core control-plane tool over Supabase pgvector.
+
+    %% -------------------------
+    %% Flows
+    %% -------------------------
+    Portal -. "Operator actions / REST API<br/>(set ACTIVE CASE)" .-> Gateway
+    Agents -. "MCP tool calls<br/>(ingest / search / query via Gateway only)" .-> Gateway
+
+    Gateway -. "AuthZ, active case, audit,<br/>case + workflow state, backend registry,<br/><b>ENQUEUE jobs / pipelines</b>" .-> Supabase
+    Gateway -. "Mediated case-scoped<br/>search & retrieval (core OpenSearch tools)" .-> OpenSearch
+    Gateway -. "Registered add-on tool calls<br/>query-only, audited under active case" .-> ADDONS
+    OpenCTI -. "opencti_* indices<br/>(scoped role)" .-> OpenSearch
+
+    Supabase == "Workers CLAIM durable jobs<br/>(poll + lease)" ==> EXECUTION
+    EXECUTION -. "Status, steps, logs, parser runs,<br/>proposed findings, audit updates" .-> Supabase
+
+    EXECUTION -. "Parsed artifacts / timeline /<br/>IOC indexing (+ provenance IDs)" .-> OpenSearch
+    EXECUTION -. "Read immutable evidence /<br/>verify & register metadata" .-> Evidence
+    EXECUTION -. "Generate reports" .-> Reports
+
+    Reports -. "Review / download<br/>(via Gateway)" .-> Portal
   end
 
   %% =========================================================
@@ -139,18 +158,13 @@ flowchart TB
   classDef db fill:#ffffff,stroke:#111111,stroke-width:1.4px,color:#111111;
   classDef group fill:#ffffff,stroke:#111111,stroke-width:1.2px,stroke-dasharray: 6 4,color:#111111;
   classDef outer fill:#ffffff,stroke:#111111,stroke-width:2px,color:#111111;
-  classDef note fill:#ffffff,stroke:#111111,stroke-width:1.2px,stroke-dasharray: 6 4,color:#111111;
-  classDef invisible fill:transparent,stroke:transparent,color:transparent;
+  classDef gw fill:#ffffff,stroke:#111111,stroke-width:2.2px,color:#111111;
 
-  class Portal,Agents,Gateway,TokenRegistry,AuditEvents,PipelineState,Worker,ParserModules,JobDispatcher box;
+  class Portal,Agents,B1,B2,B3,B4,B5,B6,B7,B8,B9,Worker,Sandbox,OpenCTI,WinTriage box;
   class Supabase,OpenSearch,Evidence,Reports db;
-  class CASE_CONTROL,EXECUTION group;
-  class Legend note;
+  class Gateway gw;
+  class CONTROL,EXECUTION,ADDONS group;
   class SYSTEM outer;
-  class TopSpacer1 invisible;
 
-  style TOP_ROW fill:#ffffff,stroke:transparent
-  style MID_ROW fill:#ffffff,stroke:transparent
-  style BOT_ROW fill:#ffffff,stroke:transparent
-  style CONTROL_BOXES fill:#ffffff,stroke:transparent
-  style EXEC_INTERNALS fill:#ffffff,stroke:transparent
+  style CLIENTS fill:#ffffff,stroke:transparent
+  style CP_BOXES fill:#ffffff,stroke:transparent

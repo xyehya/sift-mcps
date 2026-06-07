@@ -7,6 +7,24 @@ changes, database migrations, OpenSearch refactors, or MCP tool rewrites.
 
 Line references were taken from repository inspection during this planning run.
 
+> Locked decisions (see `00_migration_charter.md`): OpenSearch profile is **3.5.0
+> with security enabled** (D6). The root repo `docker-compose.yml` (OpenSearch
+> 2.18.0, security disabled, bound to localhost) is **pre-migration only** and is
+> not the target; security-disabled localhost exposure is incompatible with the
+> Gateway-mediated case-scope boundary this document depends on, because anything
+> on localhost could reach `:9200` directly. The per-case approach (Option A) is
+> approved, but **v1 reuses the existing working index naming**
+> `case-{case_id}-{artifact_type}-{hostname}` and the existing templates/
+> `flush_bulk`/host-discovery/provenance machinery; the control plane *registers*
+> these indices rather than renaming them. The logical-family rename
+> (`dfir-case-*-vN`) is a deferred, optional evolution (D18). Query/tool access is
+> Gateway-only and per-backend `/mcp/{name}` routes are disabled (D2/D3); internal
+> execution-plane bulk writes (workers/enrichments) write directly under an
+> authorized job. All long-running ingestion/indexing runs as control-plane
+> durable jobs claimed by workers - there is never a direct invoke to the Evidence
+> Vault (D5). The shared **write contract** in §7A governs every writer (core +
+> addon + enrichment) without refactoring working backends.
+
 ## 1. Executive summary
 
 OpenSearch should become a core SIFT search/data plane for indexed forensic
@@ -398,10 +416,10 @@ OpenSearch as a first-class, case-scoped search/data service.
 | OpenSearch document metadata may not link back to evidence/job/parser state. | Ingest manifests are filesystem JSON files (`packages/opensearch-mcp/src/opensearch_mcp/ingest.py:29-95`), and job/parser concepts are not represented as durable DB IDs. | Reindex, audit, report evidence lookup, and deletion are fragile. | Add control-plane IDs to indexed docs and register index/doc batches in Postgres. | P0 |
 | Cross-case search risk. | `_validate_index()` only checks the `case-` prefix, not the authenticated caller's authorized case (`packages/opensearch-mcp/src/opensearch_mcp/server.py:32-45`). | A wildcard like `case-*` can search across cases if allowed through a tool path. | Prohibit raw index input for normal tools; use aliases resolved from authorized case context. | P0 |
 | Degraded mode may be unclear when OpenSearch is down. | Gateway can hide/gate add-on tools based on manifest requirements (`packages/sift-gateway/src/sift_gateway/server.py:376-391`) and health becomes `degraded` generically (`packages/sift-gateway/src/sift_gateway/health.py:16-67`). | Operators may see missing tools rather than an explicit search/indexing degradation reason. | Add explicit OpenSearch status in Gateway health, frontend status views, and MCP structured errors. | P1 |
-| MCP Gateway may expose OpenSearch based on availability instead of target policy. | Backend requirements are evaluated from manifest `requires`, and tools are registered from backend availability (`packages/sift-gateway/src/sift_gateway/server.py:260-330`, `packages/sift-gateway/src/sift_gateway/server.py:376-504`). | A policy-critical core service behaves like a plugin. | Treat OpenSearch as a core dependency with degraded-mode policy, not an opportunistic add-on. | P1 |
+| MCP Gateway may expose OpenSearch based on availability instead of target policy. | Backend requirements are evaluated from manifest `requires`, and tools are registered from backend availability (`packages/sift-gateway/src/sift_gateway/server.py:260-330`, `packages/sift-gateway/src/sift_gateway/server.py:376-504`). | A policy-critical core service behaves like a plugin. | Treat OpenSearch as a core dependency with degraded-mode policy, not an opportunistic add-on. Per-backend `/mcp/{name}` routes are **disabled** (D3); all OpenSearch tool calls use the single aggregate Gateway policy path. | P1 |
 | Frontend search/timeline behavior may depend on backend assumptions rather than explicit control-plane state. | Timeline and IOC endpoints currently read JSON files, while OpenSearch search is separate (`packages/case-dashboard/src/case_dashboard/routes.py:1660-1673`, `packages/case-dashboard/src/case_dashboard/routes.py:2147-2161`). | UI may present stale or incomplete search/indexing state. | Frontend should combine authorized control-plane reads with Gateway-mediated search results and explicit index status. | P1 |
 | Per-backend MCP routes may bypass aggregate endpoint controls. | Aggregate MCP applies evidence gates and transport audit (`mcp_endpoint.py:624-872`); per-backend route directly calls one backend (`mcp_endpoint.py:876-977`). | Add-on OpenSearch tools can have a different policy/audit surface than aggregate tools. | Restrict or deprecate per-backend OpenSearch exposure; enforce identical policy for all OpenSearch paths. | P1 |
-| OpenSearch versions/config may diverge. | Root compose uses 2.18.0 with security disabled (`docker-compose.yml:1-35`); package compose uses 3.5.0 and `SIFT_OS_PASSWORD` (`packages/opensearch-mcp/docker/docker-compose.yml:1-17`). | Mappings, APIs, security, and demo setup can behave differently. | Declare one supported prototype profile and one hardened profile with explicit compatibility tests. | P2 |
+| OpenSearch versions/config may diverge. | Root compose uses 2.18.0 with security disabled (`docker-compose.yml:1-35`); package compose uses 3.5.0 and `SIFT_OS_PASSWORD` (`packages/opensearch-mcp/docker/docker-compose.yml:1-17`). | Mappings, APIs, security, and demo setup can behave differently. | **Locked (D6): canonical profile is OpenSearch 3.5.0 with security enabled.** The root 2.18.0/security-disabled compose is pre-migration only and must be aligned to the target as a scoped implementation task. | P1 |
 
 ## 4. Target responsibility boundary
 
@@ -570,19 +588,35 @@ current query resolver defaults to `case-{case_id}-*`
 per-case indexes lets the migration add Gateway-enforced case aliases and
 Postgres index registration without immediately redesigning every parser.
 
-The target naming should move from parser/host-specific operational indexes to
-logical document-family indexes:
+**v1 decision (locked, D18): reuse the existing naming.** Keep
+`case-{case_id}-{artifact_type}-{hostname}` as the concrete index name in v1. It
+is already case-prefixed, already backed by installed index templates that
+auto-create the index on first bulk write, and already produced by the single
+`build_index_name()` helper. The control plane **registers** each such index in
+`opensearch_indexes` (with `logical_kind` classifying it, e.g. `evtx`,
+`hayabusa`, `csv`, `timeline`, `iocs`) rather than renaming it. This adds
+Postgres registration, Gateway-enforced case scope, and per-document
+control-plane provenance **without redesigning any parser**.
+
+**Deferred, optional evolution (not required for v1):** collapsing
+`artifact_type`/`hostname` into document fields under logical document-family
+indexes:
 
 - Artifacts: `dfir-case-{case_id}-artifacts-v{schema_version}`
 - Timeline: `dfir-case-{case_id}-timeline-v{schema_version}`
 - IOCs: `dfir-case-{case_id}-iocs-v{schema_version}`
 
-Parser-specific fields and artifact types should be document fields, not
-unbounded index naming dimensions. During compatibility, current
-`case-{case_id}-{artifact_type}-{hostname}` indexes can continue to exist while
-new indexes are introduced.
+This rename can be introduced later behind read/write aliases and the
+`opensearch_indexes` registry, building `vN` beside `vN-1` and switching aliases,
+without breaking the v1 indexes. It is an optimization, not a prerequisite.
 
 ### Aliases
+
+> The `### Aliases`, `### Schema versioning`, `### Mapping templates`, and
+> `### Migration and reindexing` subsections below describe the **deferred,
+> optional** logical-family evolution (D18). They are NOT v1 work. In v1, the
+> Gateway resolves the concrete registered `case-{case}-{type}-{host}` index from
+> `opensearch_indexes` for the authorized case; aliases are nullable and unused.
 
 Each case should have control-plane-registered aliases:
 
@@ -697,6 +731,190 @@ Gateway enforcement requirements:
   degraded-mode reason when applicable.
 - Agents must not bypass Gateway policy by using the standalone OpenSearch MCP
   backend or direct OpenSearch HTTP access.
+
+## 7A. OpenSearch write contract for all writers (core + addon + enrichment)
+
+This section locks the spec the migration needs so that the **existing working
+ingestion model is reused** and **future addon backends** (e.g. an OpenCTI
+enrichment that writes back, a Hayabusa autodetection addon, or any future addon)
+can write to OpenSearch **without a full refactor**, while still respecting the
+control-plane requirements (D18).
+
+### Confirmed current mechanics (reused as-is)
+
+These are confirmed from code and are the foundation v1 builds on:
+
+- **Index naming**: one helper, `build_index_name(case_id, artifact_type,
+  hostname) -> case-{case}-{type}-{host}`, fully sanitized/lowercased
+  (`packages/opensearch-mcp/src/opensearch_mcp/paths.py:194-220`). Every ingest
+  path uses it (`ingest.py`, `ingest_cli.py`, `parse_memory.py`, `server.py`).
+- **Index creation is implicit**: indices are auto-created on first bulk write,
+  governed by **index templates** matching `case-*-{type}-*` that are installed
+  idempotently at server first-connection and ingest pre-flight
+  (`mappings/__init__.py:install_all_templates` + `ensure_winlog_pipeline`; 14
+  registered templates + a winlog normalize pipeline). No explicit create call.
+- **Single shared writer**: `flush_bulk()` with persistent retry, batch
+  splitting, a systemic-failure circuit breaker, and deterministic `_id`s for
+  safe re-ingest dedup (`bulk.py`).
+- **Host auto-discovery preflight**: `host_discovery.discover_hosts()` runs once
+  per ingest, sourcing hostnames from the SYSTEM hive
+  (`hostname.detect_hostname_from_volume`), Velociraptor, path patterns, content
+  peek (`hostname.peek_hostname_from_evidence`), and EVTX `Computer` sampling,
+  building a per-case host dictionary; parsers resolve `host.id` from it at parse
+  time. Archive basenames are never used as `host.name`.
+- **Provenance stamping**: parsers stamp `host.name`, `host.id`, and `vhir.*`
+  (`vhir.source_file`, `vhir.ingest_audit_id`, `vhir.parse_method`, optional
+  `vhir.vss_id`, `vhir.table`) plus `pipeline_version`, with dedup `_id` computed
+  before provenance is added so it stays stable across re-ingests (e.g.
+  `parse_csv.py:160-193`).
+- **In-place enrichment**: enrichers mutate existing `case-*` docs via
+  `client.update_by_query(...)` (`threat_intel.py:570`, `triage_remote.py`,
+  `server.py:3904`) rather than creating indices.
+- **Today only `opensearch-mcp` writes to OpenSearch.** OpenCTI, windows-triage,
+  forensic-mcp, and forensic-rag do not write to OpenSearch in the current code;
+  the contract below is what *future* writers must follow.
+
+### Two write modes
+
+1. **Document ingestion** - a parser/worker produces normalized documents and
+   bulk-writes them to a `case-{case}-{type}-{host}` index. New artifact types
+   create a new index implicitly via template match.
+2. **In-place enrichment** - an enricher adds fields to existing case documents
+   via `update_by_query`, keyed on a case-scoped query. It must not create
+   uncontrolled new indices and must not rewrite the original parsed fields'
+   meaning.
+
+### Mandatory write contract (all writers, both modes)
+
+Every writer - the core worker, an addon MCP backend, or an enrichment - must:
+
+1. **Take `case_id` from job / active-case context, never invent it.** Workers
+   inherit `case_id` from the claimed job; addon enrichments inherit it from the
+   Gateway-issued, case-scoped invocation. No writer derives case scope from a
+   raw argument, `SIFT_CASE_DIR`, or `~/.sift/active_case` as authority.
+2. **Name indices only via `build_index_name()`** (or the registered alias for a
+   logical-family index, when that optional evolution lands). No ad-hoc or
+   cross-case index names; no `case-*` wildcard writes.
+3. **Stamp the provenance/metadata contract on every document** it creates:
+   the existing `host.*`, `vhir.*`, `pipeline_version` fields **plus** the
+   control-plane IDs (`case_id`, `job_id`, `job_step_id`, `parser_run_id`,
+   `parser_name`, `parser_version`, `source_hash`, `indexed_at`,
+   `schema_version`, `ingest_batch_id`). Reuse `flush_bulk()` so retry/dedup/
+   circuit-breaker behavior is consistent.
+4. **Register the index and the indexing batch in the control plane** before/
+   after writing: an `opensearch_indexes` row (discovery/registration of the
+   concrete `case-{case}-{type}-{host}` name with a `logical_kind`) and an
+   `opensearch_indexing_status`/`ingest_batches` row with counts and status
+   (`08_control_plane_schema.md` §9). This is how Postgres stays authoritative
+   for "what was indexed" while documents live in OpenSearch.
+5. **Enrichment writers additionally** scope every `update_by_query` to the
+   authorized case (no `case-*` fan-out), stamp enrichment provenance
+   (`enrichment.<name>`, enricher version, intel/source reference, `job_id`,
+   `enriched_at`) on the fields they add, and never mutate the original parsed
+   fields' values or the dedup `_id`.
+6. **Audit** the indexing/enrichment batch (alias/index, counts, failures,
+   schema version, parser/enricher run) per the job model.
+
+### How addons conform without a refactor
+
+Addon backends keep their own client, tools, and parsing logic. Conformance is
+**additive**, delivered as a thin shared adapter/SDK (a small importable module,
+not a rewrite):
+
+- The adapter exposes `build_index_name()`, the provenance-stamping helper, the
+  `flush_bulk()` writer, and `register_index()` / `record_indexing_batch()` /
+  `record_enrichment()` calls against the control plane.
+- An addon ingests by: receiving `case_id` + job context from the Gateway-issued
+  invocation, building the index name via the helper, stamping provenance, writing
+  via `flush_bulk`, and registering the batch. Its internal parsing is untouched.
+- An addon enriches by: scoping `update_by_query` to the case, stamping
+  `enrichment.<name>` provenance, and recording the enrichment batch.
+- If an addon cannot yet register batches, it still must use the index-naming
+  helper and provenance contract; registration can be backfilled by a discovery
+  sweep (`opensearch.case_indexes` discovery) until the addon adopts the adapter.
+
+### Gateway-only reconciliation (important)
+
+The Gateway-only rule (D2/D3) governs the **control/tool-call boundary**: no
+operator or agent reaches OpenSearch except through Gateway-mediated, case-scoped
+tools; per-backend `/mcp/{name}` routes are disabled; raw DSL/index names are
+admin-only. It does **not** require funneling every bulk write through the
+Gateway HTTP path. **Execution-plane writes** (a worker or an addon enrichment
+running under an authorized, case-scoped job) write to OpenSearch directly with a
+service credential, bound by this contract. This preserves the existing working
+ingestion performance and the addon backends while keeping case scope,
+provenance, and registration authoritative in the control plane.
+
+## 7B. OpenSearch as a core service + cluster cohabitation with OpenCTI
+
+### OpenSearch is core, not an add-on (D19)
+
+OpenSearch is promoted from an optional add-on backend to a **core service**:
+
+- Read tools (`search`, `status`, `aggregate`, `timeline`, `field_values`,
+  `case_summary`, document/explain) are exposed as in-process **core SIFT MCP
+  tools**, served synchronously through the single aggregate Gateway policy path
+  (case-scoped, audited, evidence-gated). They are no longer registered through
+  the add-on manifest path.
+- Long-running tools (`ingest`, enrichment batches, reindex) are core tools that
+  **enqueue durable jobs**; the worker (which imports the `opensearch-mcp` ingest/
+  enrichment code) runs them. Nothing long-running runs inside the Gateway
+  request path.
+- The standalone stdio/http server and the OpenSearch add-on **manifest
+  registration** are retired. The `opensearch-mcp` **package remains** as the
+  in-process implementation imported by the Gateway (read tools) and the worker
+  (ingest/enrichment). This is a packaging/exposure change, not a rewrite.
+- Call-path note: the control plane is **consulted and written** for authz, case
+  scope, evidence gate, audit, and job state - it is not a data-path proxy that
+  MCP payloads flow through. Synchronous reads return through the Gateway;
+  long-running work returns a `job_id`.
+
+### Cluster cohabitation with OpenCTI (D20/D21)
+
+OpenCTI runs as the **full platform** (platform, worker, redis, rabbitmq, minio)
+but uses the **existing SIFT OpenSearch cluster** as its index store instead of a
+second cluster. `opencti-mcp` stays a **query-only** API client to the OpenCTI
+platform (`OpenCTIClient`, circuit breaker, TTL cache) - the agent never queries
+OpenCTI's OpenSearch indices directly; the path is `Gateway -> opencti-mcp ->
+OpenCTI API -> OpenCTI's own indices`.
+
+The shared cluster therefore hosts **two index classes**:
+
+| Index class | Pattern | Owner / writer | Scope | Lifecycle | Agent access |
+| --- | --- | --- | --- | --- | --- |
+| SIFT case indices | `case-{case}-{type}-{host}` | SIFT worker/enrichment (§7A contract) | Case-scoped, evidence-derived | Tied to case lifecycle | Only via Gateway case-scoped tools |
+| OpenCTI platform indices | `opencti_*` (OpenCTI-managed) | OpenCTI platform + connectors (MITRE/CVE/...) | Global reference data | Persistent, not tied to any case | Never directly; only via `opencti-mcp` query tools |
+
+Governance rules (locked):
+
+- **Per-consumer OpenSearch security roles** (OpenSearch 3.5.0 security is on):
+  - SIFT worker/service user -> read/write `case-*` only.
+  - OpenCTI user -> read/write `opencti_*` only.
+  - The **AI agent gets no cluster credentials at all**; it reaches OpenSearch
+    only through Gateway-mediated, case-scoped tools.
+  This role split is the real isolation boundary: OpenCTI cannot read case
+  evidence and case-search cannot read CTI. The existing `_validate_index`
+  (`case-*` only) already keeps agent case-search off `opencti_*`.
+- **Capacity**: OpenCTI's reference indices add real shard/volume load to the
+  shared single-VM cluster. `shard_capacity`/`opensearch_shard_status`
+  monitoring must account for both classes; the portal surfaces combined cluster
+  health.
+- **OpenCTI internals are exempt from "No Redis/RQ"**: that rule governs SIFT
+  durable-job authority (Postgres) only. OpenCTI's internal redis/rabbitmq/minio
+  are third-party platform internals.
+- **Reference-data population** (connectors) is OpenCTI-managed and runs outside
+  the SIFT job/worker model. It is not a SIFT parser run and does not register in
+  `opensearch_indexes` (which is case-scoped). Cohabitation is by isolation
+  (roles + naming), not by SIFT-side registration of OpenCTI indices.
+
+### Portal OpenSearch monitoring/management
+
+The operator portal monitors and operates OpenSearch through Gateway REST:
+cluster health (`GET /api/system/opensearch/health`), per-case index status, and
+ingest via the job APIs. Diagnostics are surfaced read-only; actual remediation
+(restart docker, raise `cluster.max_shards_per_node`, fix host) is an operator
+action on the SIFT VM, optionally guided by the existing `opensearch_host_fix`
+diagnostic. The portal does not perform privileged VM-level fixes itself.
 
 ## 8. OpenSearch integration with Gateway APIs and frontend
 
@@ -1238,21 +1456,29 @@ What intentionally remains unchanged:
 - The first migration slices should be additive and preserve current
   OpenSearch add-on behavior until target policy paths are tested.
 
-### Decisions needing user approval
+### Decisions previously open here, now locked (charter)
 
-- Approve Option A, per-case logical indexes, as the initial target strategy.
-- Approve target index prefix and family names:
-  `dfir-case-{case_id}-artifacts-vN`, `dfir-case-{case_id}-timeline-vN`,
-  and `dfir-case-{case_id}-iocs-vN`.
-- Decide how long the legacy `case-{case_id}-{artifact_type}-{hostname}` indexes
-  remain queryable.
-- Decide whether per-backend OpenSearch MCP routes should become admin-only,
-  disabled by default, or removed after core tools are available.
-- Decide whether any normal agent token may access constrained raw DSL, or
-  whether raw DSL is admin-only.
-- Decide whether semantic/vector search is in the initial scope or deferred.
-- Decide which OpenSearch deployment/version profile is canonical for the
-  prototype and hardened target.
+- Per-case approach approved; **v1 reuses the existing
+  `case-{case_id}-{artifact_type}-{hostname}` naming + templates + `flush_bulk` +
+  host discovery + provenance** and registers those indices in
+  `opensearch_indexes` (D18). The `dfir-case-*-vN` logical-family rename is a
+  deferred, optional evolution, not a v1 requirement.
+- A single write contract (§7A) governs every writer (core worker, addon MCP
+  backend, enrichment) additively, without refactoring working backends.
+- Per-backend OpenSearch MCP routes are **disabled** (D3), not merely admin-only.
+- Raw OpenSearch DSL is **admin-only**; normal agent tokens get constrained,
+  allowlisted query inputs only (never raw DSL or raw index names).
+- Canonical OpenSearch profile: **3.5.0 with security enabled** (D6). The root
+  2.18.0/security-disabled compose is pre-migration only.
+
+### Decisions still genuinely open (non-blocking, decide at implementation)
+
+- How long legacy `case-{case_id}-{artifact_type}-{hostname}` indexes remain
+  queryable after reindex (default: read-only until the per-case rollback window
+  closes, then audited retirement).
+- Whether semantic/vector search ships in the first OpenSearch slice or follows
+  RAG centralization (default: defer vector to the RAG/skills phase, keep
+  full-text/timeline/IOC first).
 
 ### Code facts still needing confirmation
 
@@ -1266,30 +1492,20 @@ What intentionally remains unchanged:
   `opensearch_*` names.
 - Whether OpenSearch Security Analytics APIs are required for target demos or
   should remain optional behind capability detection.
-- Whether package-level OpenSearch 3.5.0 or root-compose OpenSearch 2.18.0 is
-  the intended baseline.
 - The exact Supabase/Postgres schema split among `jobs`, `job_steps`,
   `job_logs`, `parser_runs`, `parser_outputs`, `opensearch_indexes`, and
   indexing batches.
 
-## 14. Next recommended run
+## 14. Status
 
-The next focused run should be the DB-backed jobs and worker dispatcher design.
-
-Reason: the OpenSearch code shows that the largest integration gap is not only
-query policy. Ingest and indexing are currently driven by subprocess launchers,
-process-local active case state, filesystem status files, logs, and ingest
-manifests (`packages/opensearch-mcp/src/opensearch_mcp/server.py:1702-1823`,
-`packages/opensearch-mcp/src/opensearch_mcp/server.py:3006-3168`,
-`packages/opensearch-mcp/src/opensearch_mcp/ingest_status.py:13-148`,
-`packages/opensearch-mcp/src/opensearch_mcp/ingest.py:29-95`). OpenSearch
-cannot become a reliable core data plane until parser execution, parser runs,
-parser outputs, indexing batches, retries, and partial failures have durable
-DB-backed state.
-
-Recommended next document:
-
-- `docs/migration/07_execution_jobs.md`
+The DB-backed jobs/worker design this section anticipated now exists as
+`05_execution_job_model.md`, `06_execution_integration_contracts.md`,
+`07_execution_roadmap.md`, and `08_control_plane_schema.md`. OpenSearch
+indexing is connected to durable jobs there (OpenSearch indexing/parser lineage
+in Postgres; documents in OpenSearch). Per the cutover order (charter D17),
+identity/cases/tokens (`09_identity_auth_cutover.md`) land before the OpenSearch
+integration phases here, because OpenSearch case-scope enforcement depends on
+control-plane case authorization.
 
 Recommended next scope:
 

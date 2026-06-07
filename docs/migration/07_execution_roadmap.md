@@ -9,6 +9,21 @@ refactor REST APIs, MCP tools, frontend views, OpenSearch, evidence, audit, or
 worker code. It does not introduce Redis, RQ, Celery, Temporal, or any external
 queue.
 
+> Cutover order (locked, charter D17): this JOB-* roadmap is the **execution
+> track**. The **identity/cases/tokens foundation track**
+> (`09_identity_auth_cutover.md`, phases ID-0..ID-6) lands first, because the
+> case-scoped job APIs (JOB-5/JOB-6) require control-plane case authorization,
+> active-case authority, and the hash-only token registry to exist. JOB-0
+> baseline tests are additive and order-independent and may run in parallel.
+>
+> Other locks reflected below: v1 job schema is the **lean core** (`jobs`,
+> `job_steps`, `job_logs`, `workers`; defer `job_attempts`/`job_cancellations`/
+> `worker_heartbeats`; row-level attempt/cancel/heartbeat fields), single local
+> worker, no cross-case fairness until a second worker exists (D13/D9).
+> Disabling per-backend `/mcp/{name}` routes is an **early hardening step**
+> (folded into the identity track ID-5 and reinforced in JOB-6), not a late one
+> (D3). OpenSearch is 3.5.0 security-on (D6).
+
 ## 1. Executive Summary
 
 The execution migration moves SIFT from scattered file-based workflow and
@@ -201,9 +216,14 @@ parser outputs, ingest batches, and OpenSearch indexing status.
 Scope:
 
 - Add migrations for the execution control-plane tables after schema design is
-  approved.
+  approved. v1 lean core only (D13): `jobs`, `job_steps`, `job_logs`, `workers`
+  with attempt/cancel/heartbeat fields on the rows. Do not add `job_attempts`,
+  `job_cancellations`, or `worker_heartbeats` tables yet.
+- This phase assumes the identity foundation tables (`09_identity_auth_cutover.md`
+  Phase ID-1: `cases`, `case_members`, `active_case_state`, `mcp_tokens`, etc.)
+  already exist, since jobs carry `case_id` and requester identity FKs.
 - Include constraints for case scope, job status, idempotency keys, worker
-  leases, parser lineage, indexing batches, and audit linkage.
+  leases (single fields), parser lineage, indexing batches, and audit linkage.
 - Keep runtime code unconverted.
 
 Likely files to change:
@@ -1323,26 +1343,29 @@ Freezing/deprecating file authority later:
 - First execution PR should be baseline tests/fixtures only and small enough for
   one Codex coding session.
 
-### Decisions needing user approval
+### Decisions previously open here, now locked (charter)
 
-- Exact Supabase Local deployment and migration directory shape.
-- Exact worker topology for the first implementation: one local worker, multiple
-  local workers, or Gateway-hosted worker plus independent workers.
-- Whether short native commands remain synchronous while long-running native
-  commands become jobs.
-- How long to export compatibility files and status such as
-  `~/.sift/ingest-status`, `~/.sift/ingest-logs`, `~/.sift/active_case`, and
-  legacy case JSON files.
-- Retry granularity for parser/indexing work: whole job, host, artifact,
-  parser run, or indexing batch.
-- Cancellation semantics for subprocess trees and partially indexed OpenSearch
-  batches.
-- Exact human role names and permissions for job creation, retry, cancel, log
-  reads, worker detail, approvals, export, archive, and destructive cleanup.
-- Whether per-case logical OpenSearch indexes are approved as the first target
-  strategy.
-- Whether raw OpenSearch DSL is admin-only forever or ever allowed in a
-  constrained normal-agent mode.
+- Worker topology: single local worker in v1 (D9).
+- Human roles: `readonly`, `operator`, `lead`, `owner`, `admin`
+  (`09_identity_auth_cutover.md` §5).
+- OpenSearch indexing: reuse the existing `case-{case}-{type}-{host}` model and
+  register it; logical-family rename deferred (D18, see `03` §7A). OpenSearch
+  3.5.0 security-on (D6).
+- Raw OpenSearch DSL admin-only; normal agents get allowlisted inputs.
+- Cutover order: identity/cases/tokens first (D17).
+- Lean job core (D13).
+
+### Decisions still genuinely open (non-blocking, decide at implementation)
+
+- Exact Supabase Local deployment/migration directory shape (resolved in the
+  first schema-infrastructure PR by inspecting the repo).
+- Whether short native commands stay synchronous (default: yes; long/parser work
+  becomes jobs).
+- Compatibility-export lifetime (default: one release cycle past parity).
+- Retry granularity (default: whole job in v1; finer parser-run/indexing-batch
+  retry in JOB-8/JOB-9).
+- Cancellation semantics for subprocess trees / partial batches (default:
+  cooperative stop, mark `partial`, never report partial as complete).
 
 ### Code facts still needing confirmation
 
@@ -1362,24 +1385,13 @@ Freezing/deprecating file authority later:
 
 ## 10. Next Recommended Run
 
-Next focused run:
+The control-plane schema (`08_control_plane_schema.md`) and the identity
+foundation track (`09_identity_auth_cutover.md`) now exist, and all blocking
+decisions are locked in `00_migration_charter.md`.
 
-`docs/migration/08_control_plane_schema.md`
-
-Recommended scope:
-
-- Concrete Supabase/Postgres schema design for the control plane, focused on
-  execution/jobs and directly related domains.
-- Use the decisions and boundaries from:
-  - `00_migration_charter.md`
-  - `02_authoritative_domains_and_boundaries.md`
-  - `03_opensearch_core_integration.md`
-  - `04_execution_current_state.md`
-  - `05_execution_job_model.md`
-  - `06_execution_integration_contracts.md`
-  - this roadmap
-- Define tables, fields, relationships, constraints, statuses, indexes,
-  idempotency keys, worker lease fields, parser/indexing lineage, audit links,
-  and compatibility/export considerations.
-- Keep it documentation-only unless a future prompt explicitly authorizes
-  migrations.
+Next focused run: plan the first implementation PR candidate
+(`11_first_pr_candidate.md`) for roadmap phase JOB-0 (additive baseline
+execution smoke tests/fixtures, no runtime change). After JOB-0, implementation
+follows the cutover order: identity Phase ID-1 schema first, then the execution
+JOB-* phases. Keep planning documentation-only unless a future prompt explicitly
+authorizes code or migrations.

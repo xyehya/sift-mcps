@@ -8,9 +8,28 @@ design. It does not create SQL migrations, modify application code, refactor
 REST APIs, MCP tools, frontend views, OpenSearch, evidence, or worker code, and
 it does not introduce Redis, RQ, Celery, Temporal, or any external queue.
 
-Several schema choices below are initial recommendations, not approved
-implementation decisions. They should be confirmed before any SQL migration is
-created.
+Several schema choices below were initial recommendations and have now been
+**locked** by `00_migration_charter.md` "Confirmed Decisions (Locked)". The
+relevant locks for this document:
+
+- D10: UUID primary keys plus explicit legacy text keys (`case_key`,
+  `legacy_case_id`). Locked.
+- D11: tables live in an `app` schema (RLS) plus an `internal`/`svc` schema for
+  service-only helpers. Locked. The "place everything in `public`" alternative
+  is rejected.
+- D12: privileged writes go through Gateway/worker service-role paths; RLS
+  protects human reads and a small set of explicitly safe human writes; the
+  browser never writes authoritative state directly and never talks to a backend
+  or OpenSearch directly.
+- D13: lean job core (`jobs`, `job_steps`, `job_logs`, `workers`).
+  `job_attempts`, `job_cancellations`, `worker_heartbeats` are deferred.
+- D6: OpenSearch 3.5.0 with security enabled is the canonical profile for the
+  index registry and indexing-status tables.
+- D14/D15: TODOs, IOCs, evidence anchoring, RAG collections, and agent skills are
+  first-class tables, not deferred or hand-waved.
+
+Where a row below still says "needs approval", it is now superseded by the
+charter lock; the charter wins.
 
 ## 1. Executive Summary
 
@@ -84,9 +103,9 @@ Initial recommendation, pending user approval:
 | `internal` or `svc` | Service-only helper tables/functions if needed, such as token validation helpers, worker claim functions, compatibility export bookkeeping, and policy helpers. | Not directly exposed to frontend clients. Gateway and worker service roles only. |
 | `public` | Optional frontend-safe views if the project prefers keeping Supabase exposed schemas simple. | Read-only or narrowly writable views, never raw privileged tables. |
 
-Alternative if Supabase Local setup is simpler: place initial tables in
-`public` with strict RLS and later move or namespace them. This is a deployment
-decision that should be approved before migrations.
+Locked (D11): use `app` (RLS) plus `internal`/`svc` (service-only). The
+"everything in `public`" alternative is rejected. Supabase-managed `auth`
+remains the human identity source.
 
 Access model:
 
@@ -105,10 +124,10 @@ Access model:
 
 ## 4. Core Identity And Authorization Tables
 
-Recommended key convention, pending approval: use UUID primary keys for new DB
-records and keep legacy string IDs in explicit columns such as `case_key` or
-`legacy_case_id`. This avoids making current directory names the permanent DB
-primary key while preserving compatibility.
+Key convention (locked, D10): use UUID primary keys for new DB records and keep
+legacy string IDs in explicit columns such as `case_key` or `legacy_case_id`.
+This avoids making current directory names the permanent DB primary key while
+preserving compatibility.
 
 ### `operator_profiles`
 
@@ -142,7 +161,7 @@ primary key while preserving compatibility.
 | Who can read | Case members through RLS; Gateway and worker service roles as needed. |
 | Who can write | Gateway service role. Human direct writes should be limited to safe metadata only if approved. |
 | Migration source | `CASE.yaml`, case directories, active case config/pointers. |
-| Notes/open questions | Need approval on UUID `id` plus text `case_key` versus text primary case IDs. |
+| Notes/open questions | Locked (D10): UUID `id` plus text `case_key`/`legacy_case_id`. |
 
 ### `case_members`
 
@@ -159,7 +178,24 @@ primary key while preserving compatibility.
 | Who can read | Case members can read members according to role policy; Gateway service role. |
 | Who can write | Gateway/admin service path. |
 | Migration source | Current examiner role/session model. |
-| Notes/open questions | Exact role names and permissions need user approval. Initial practical roles could be `owner`, `lead`, `operator`, `readonly`, `admin`, but this is not final. |
+| Notes/open questions | Locked: roles `owner`, `lead`, `operator`, `readonly`, `admin`; permission matrix in `09_identity_auth_cutover.md` §5. |
+
+### `active_case_state`
+
+| Detail | Design |
+| --- | --- |
+| Purpose | Authoritative current active case for the SIFT VM deployment (charter D4). Replaces `SIFT_CASE_DIR` / `~/.sift/active_case` / `gateway.yaml case.dir` as authority. Operator sets it via the portal; the Gateway reads it and propagates it to backends/APIs/tool calls and generates legacy env/pointer compatibility exports. |
+| Key columns | `id uuid`, `scope text`, `active_case_id uuid null`, `set_by_user_id uuid null`, `set_at`, `compat_export_status text`, `updated_at`, `metadata jsonb`. |
+| Primary key | `id`. |
+| Foreign keys | `active_case_id` references `cases(id)`; `set_by_user_id` references `operator_profiles(id)`. |
+| Indexes | Unique `scope`; `active_case_id`. |
+| Uniqueness constraints | One row per `scope`. v1 uses a single `scope = 'deployment'` row (one active case per SIFT VM, matching current behavior). The `scope` column leaves room for per-operator active case later without a schema change. |
+| Status values | `compat_export_status`: `pending`, `exported`, `stale`. |
+| RLS/security notes | Human reads through membership; writes through Gateway portal-activation service path only. Agents/MCP clients never set it. |
+| Who can read | Authorized case members; Gateway/worker service roles. |
+| Who can write | Gateway service path on portal case activation. |
+| Migration source | `SIFT_CASE_DIR`, `gateway.yaml case.dir`, `~/.sift/active_case`, portal case activation (`packages/case-dashboard/src/case_dashboard/routes.py:3598-3717`). |
+| Notes/open questions | None. Locked to one active case per deployment in v1 (D4). |
 
 ### `agents`
 
@@ -210,7 +246,7 @@ primary key while preserving compatibility.
 | Who can read | Gateway service role. Authorized operators through redacted safe views only. |
 | Who can write | Gateway service path. |
 | Migration source | `~/.sift/gateway.yaml` `api_keys` raw-token registry. |
-| Notes/open questions | Token hash algorithm, pepper/KMS use, prefix/fingerprint format, default expiry, and legacy fallback duration need approval. |
+| Notes/open questions | Locked (D8): SHA-256 + server pepper hash, 16-hex fingerprint, default expiries (agent 90d / service 30d), one-time raw display, dual-validate then sunset legacy; KMS deferred. See `09_identity_auth_cutover.md` §4. |
 
 ### `mcp_token_scopes`
 
@@ -228,6 +264,24 @@ primary key while preserving compatibility.
 | Who can write | Gateway service path. |
 | Migration source | Current role/capability metadata in gateway config and backend manifests. |
 | Notes/open questions | Scope naming must align with future MCP tools, for example `jobs.enqueue`, `parsers.run`, `opensearch.health.read`. |
+
+### `mcp_backends`
+
+| Detail | Design |
+| --- | --- |
+| Purpose | Control-plane registry of MCP add-on backends (D22). Replaces `gateway.yaml`-based backend config as authority. The Gateway reads registration/enabled/health state from here; the portal manages enable/disable and monitors health. Core tools (OpenSearch, RAG, case/evidence/job tools) are NOT add-ons and are not listed here. |
+| Key columns | `id uuid`, `name text`, `namespace text`, `tier text`, `transport text`, `status text`, `enabled boolean`, `manifest jsonb`, `spec_version text`, `data_plane jsonb`, `default_case_scoped boolean`, `health_status text`, `last_health_at null`, `registered_by_user_id uuid null`, `created_at`, `updated_at`, `metadata jsonb`. |
+| Primary key | `id`. |
+| Foreign keys | `registered_by_user_id` references `operator_profiles(id)`. |
+| Indexes | Unique `name`; unique `namespace`; `(status, enabled)`; `health_status`. |
+| Uniqueness constraints | Unique `name` and `namespace` (no tool/namespace collisions). |
+| Status values | `registered`, `enabled`, `disabled`, `degraded`, `unavailable`, `retired`. |
+| `data_plane` shape | Declares what the backend reads/writes, e.g. `{"type":"external_platform","opensearch_role":"opencti","index_prefix":"opencti_*"}`, `{"type":"local_package"}` (wintriage), or `{"type":"none"}`. See `10_addon_backend_spec.md`. |
+| RLS/security notes | Read for authorized operators; registration/enable/disable through Gateway/admin service paths only. |
+| Who can read | Operators (portal) and Gateway service role. |
+| Who can write | Gateway/admin service path (manifest validation + registration). |
+| Migration source | `gateway.yaml` backend config and `sift-backend.json` manifests. |
+| Notes/open questions | `manifest` stores the validated add-on manifest; `default_case_scoped` is the backend default, overridable per tool in the manifest (`case_scoped`). Full contract in `10_addon_backend_spec.md`. |
 
 ## 5. Evidence And Integrity Tables
 
@@ -257,13 +311,13 @@ primary key while preserving compatibility.
 | Primary key | `id`. |
 | Foreign keys | `case_id` references `cases(id)`; `evidence_source_id` references `evidence_sources(id)`; `registered_by_user_id` references `operator_profiles(id)`; `registered_by_job_id` references `jobs(id)` when jobs exist; `registered_audit_event_id` references `audit_events(id)`. |
 | Indexes | `(case_id, status)`, `(case_id, integrity_status)`, `(case_id, sha256)`, `registered_by_job_id`, `created_at`. |
-| Uniqueness constraints | Recommended unique active `(case_id, sha256)` when `sha256` is known and policy treats same hash as same evidence. This needs approval because duplicate acquisitions may still be meaningful. |
+| Uniqueness constraints | Locked (D16): preserve by default. Do NOT enforce unique active `(case_id, sha256)` as the default, because duplicate acquisitions are often forensically meaningful. Any such uniqueness is an explicit, opt-in per-deployment policy and must never silently drop evidence. |
 | Status values | `registered`, `sealed`, `ignored`, `retired`, `missing`, `quarantined`, `archived`. |
 | RLS/security notes | Read through case membership and evidence visibility. Writes through Gateway/evidence service only. |
 | Who can read | Authorized case members; Gateway/worker service roles; MCP agents through Gateway only. |
 | Who can write | Gateway/evidence service and authorized worker jobs. |
 | Migration source | `evidence-manifest.json`, legacy `evidence.json`, case evidence paths, evidence-chain operations. |
-| Notes/open questions | Need approval on dedupe semantics and on whether `legacy_path` is exposed to normal users. |
+| Notes/open questions | Locked: dedupe preserves by default (D16). Default: `legacy_path`/raw source paths are not exposed to normal operators/agents; reads are redacted or role-gated to `lead`/`owner`/`admin`. |
 
 ### `evidence_manifests`
 
@@ -280,7 +334,7 @@ primary key while preserving compatibility.
 | Who can read | Authorized case members; Gateway/worker service roles. |
 | Who can write | Gateway/evidence service path. |
 | Migration source | `/var/lib/sift/<case>/evidence-manifest.json` and `evidence-ledger.jsonl`. |
-| Notes/open questions | Legal/canonical role of manifest/ledger after DB authority still needs approval. |
+| Notes/open questions | Locked: manifest/ledger files are preserved indefinitely as proof/export artifacts after DB authority (charter). Whether they are additionally treated as the canonical legal artifact is a deployment/legal-retention policy, not a schema blocker. |
 
 ### `evidence_integrity_events`
 
@@ -350,7 +404,7 @@ primary key while preserving compatibility.
 | Who can read | Authorized case members; Gateway service role. |
 | Who can write | Gateway service path; workers can create requests only through job service paths. |
 | Migration source | `pending-reviews.json`, `approvals.jsonl`, approval commit flow. |
-| Notes/open questions | Exact role permissions for approval targets need approval. |
+| Notes/open questions | Locked: approval/destructive actions require `lead`/`owner`/`admin` per the role matrix (`09_identity_auth_cutover.md` §5); agents never approve their own findings. |
 
 ### `approval_decisions`
 
@@ -447,6 +501,41 @@ Event classification:
 | Migration source | `timeline.json`, OpenSearch timeline docs, CaseManager timeline tools. |
 | Notes/open questions | Decide how much timeline data is duplicated into Postgres versus kept only in OpenSearch. |
 
+### `case_todos`
+
+| Detail | Design |
+| --- | --- |
+| Purpose | Investigation TODOs (retained capability, D14). Replaces `todos.json`. |
+| Key columns | `id uuid`, `case_id uuid`, `title text`, `description text null`, `status text`, `priority text null`, `assigned_to_user_id uuid null`, `created_by_user_id uuid null`, `created_by_agent_id uuid null`, `created_by_job_id uuid null`, `due_at null`, `completed_at null`, `created_at`, `updated_at`, `metadata jsonb`. |
+| Primary key | `id`. |
+| Foreign keys | `case_id`; creator/assignee refs; `created_by_job_id`. |
+| Indexes | `(case_id, status)`, `(case_id, assigned_to_user_id)`, `created_at`. |
+| Uniqueness constraints | None by default. |
+| Status values | `open`, `in_progress`, `blocked`, `done`, `cancelled`. |
+| RLS/security notes | Case-scoped reads. Agents may create/update TODOs through Gateway tools; humans manage them through portal/Gateway. |
+| Who can read | Authorized case members; MCP agents through Gateway. |
+| Who can write | Gateway/portal service and worker/agent tool paths. |
+| Migration source | `todos.json`, `CaseManager` TODO tools, forensic-mcp TODO tools. |
+| Notes/open questions | None. First-class, not deferred (D14). |
+
+### `iocs`
+
+| Detail | Design |
+| --- | --- |
+| Purpose | Indicators of compromise (retained capability, D14). Replaces `iocs.json`. Postgres holds authoritative IOC records and review state; OpenSearch holds searchable IOC documents/views. |
+| Key columns | `id uuid`, `case_id uuid`, `ioc_type text`, `value text`, `status text`, `confidence text null`, `severity text null`, `source_type text`, `finding_id uuid null`, `evidence_id uuid null`, `parser_run_id uuid null`, `opensearch_doc_id text null`, `opensearch_index_id uuid null`, `created_by_user_id uuid null`, `created_by_agent_id uuid null`, `created_by_job_id uuid null`, `approved_by_user_id uuid null`, `approved_at null`, `created_at`, `updated_at`, `metadata jsonb`. |
+| Primary key | `id`. |
+| Foreign keys | `case_id`; `finding_id`; `evidence_id`; `parser_run_id`; `opensearch_index_id`; creator/approver refs; `created_by_job_id`. |
+| Indexes | `(case_id, status)`, `(case_id, ioc_type)`, `(case_id, value)`, `finding_id`, `evidence_id`, `(opensearch_index_id, opensearch_doc_id)`. |
+| Uniqueness constraints | Optional unique active `(case_id, ioc_type, value)` to dedupe within a case; must not silently drop forensically distinct observations (D16) - prefer status/merge over delete. |
+| Status values | `proposed`, `approved`, `rejected`, `superseded`, `archived`. |
+| IOC types | `ip`, `domain`, `url`, `hash_md5`, `hash_sha1`, `hash_sha256`, `email`, `filename`, `filepath`, `registry_key`, `mutex`, `user_account`, `host`, `other`. |
+| RLS/security notes | Case-scoped reads. Agent-proposed IOCs remain `proposed` until human approval, mirroring findings. |
+| Who can read | Authorized case members; MCP agents through Gateway. |
+| Who can write | Gateway/service paths; workers/agents create proposed IOCs through jobs/tools. |
+| Migration source | `iocs.json`, IOC extraction in `CaseManager`/`record_finding`, OpenSearch IOC views. |
+| Notes/open questions | None. First-class, not deferred (D14). |
+
 ### `reports`
 
 | Detail | Design |
@@ -483,6 +572,18 @@ Event classification:
 
 ## 8. Durable Execution And Job Tables
 
+**v1 lean core (locked, D13).** Implement only `jobs`, `job_steps`, `job_logs`,
+and `workers` first. `attempt_count`, `cancellation_requested_at`,
+`cancellation_requested_by`, and `heartbeat_at` live directly on the `jobs` /
+`workers` rows. The separate `job_attempts`, `job_cancellations`, and
+`worker_heartbeats` tables below are **deferred** until a concrete need exists
+(multi-worker fairness, attempt forensics, or heartbeat history); their history
+is initially captured by `jobs` fields plus `audit_events`. `SKIP LOCKED`
+cross-case fairness is added only when a second worker exists (D9). All job
+types and step types in §12 are enumerated now, but only `health_check` plus the
+first converted workflow (e.g. `evidence_hash`/`parser_run`) are implemented
+initially.
+
 ### `jobs`
 
 | Detail | Design |
@@ -498,9 +599,13 @@ Event classification:
 | Who can read | Authorized case members through RLS or Gateway; MCP agents through Gateway. |
 | Who can write | Gateway job service and worker service for claimed jobs. |
 | Migration source | OpenSearch ingest status files, in-memory report generation state, current synchronous evidence/report/parser workflows. |
-| Notes/open questions | Exact priority scale and retry granularity need approval. |
+| Notes/open questions | Default (non-blocking): integer `priority` (higher = sooner), small range e.g. 0-9; retry granularity is whole-job in v1, finer parser-run/indexing-batch retry later (JOB-8/JOB-9). |
 
-### `job_attempts`
+### `job_attempts` (DEFERRED in v1 - D13)
+
+This table is deferred. In v1, `jobs.attempt_count` plus `job_steps` and
+`audit_events` capture attempt history. Add this table only when attempt-level
+forensics are actually needed.
 
 | Detail | Design |
 | --- | --- |
@@ -568,7 +673,10 @@ Event classification:
 | Migration source | Current process-local OpenSearch ingest pids and future worker runtime. |
 | Notes/open questions | Exact worker topology remains unapproved. |
 
-### `worker_heartbeats`
+### `worker_heartbeats` (DEFERRED in v1 - D13)
+
+This table is deferred. Current heartbeat lives on `workers.last_seen_at`. Add
+history only if operations require it.
 
 | Detail | Design |
 | --- | --- |
@@ -585,7 +693,11 @@ Event classification:
 | Migration source | No current durable heartbeat history. |
 | Notes/open questions | Defer unless heartbeat history is required for operations. |
 
-### `job_cancellations`
+### `job_cancellations` (DEFERRED in v1 - D13)
+
+This table is deferred. In v1, `jobs.cancellation_requested_at` /
+`jobs.cancellation_requested_by` plus `audit_events` record cancellation. Add
+this table only if richer cancellation lineage is needed.
 
 | Detail | Design |
 | --- | --- |
@@ -600,7 +712,7 @@ Event classification:
 | Who can read | Authorized case members. |
 | Who can write | Gateway cancellation path and worker service finalization. |
 | Migration source | No current durable cancellation model. |
-| Notes/open questions | Exact subprocess termination policy needs approval. |
+| Notes/open questions | Default (non-blocking): cooperative stop first, then bounded force-kill of the subprocess group when policy allows; partial outputs marked `partial`, never reported as complete. Table itself is deferred in v1 (D13). |
 
 ## 9. Parser, Ingest, And OpenSearch Lineage Tables
 
@@ -653,7 +765,7 @@ Event classification:
 | Who can read | Authorized case members through status views. |
 | Who can write | Worker/parser/indexing service. |
 | Migration source | OpenSearch ingest run/artifact batches and sidecar manifests. |
-| Notes/open questions | Batch granularity needs approval: source file, host/artifact, parser run, or bulk chunk. |
+| Notes/open questions | Default (non-blocking): per-source-file plus parser run in v1; finer bulk-chunk batching when converting parser paths (JOB-8/JOB-9). |
 
 ### `opensearch_indexes`
 
@@ -670,7 +782,7 @@ Event classification:
 | Who can read | Authorized case members; MCP agents through Gateway. |
 | Who can write | Gateway/OpenSearch service and worker indexing jobs. |
 | Migration source | Existing `case-*` indexes and future logical aliases. |
-| Notes/open questions | Per-case logical index strategy and canonical names still need user approval before migration. |
+| Notes/open questions | Locked (D18): v1 **registers the existing** `case-{case_id}-{artifact_type}-{hostname}` indices (discovery/registration, not renaming); `logical_kind` classifies them (`evtx`, `hayabusa`, `csv`, `timeline`, `iocs`, etc.); `read_alias`/`write_alias` are nullable in v1. The logical-family rename (`dfir-case-*-vN` + aliases) is a deferred, optional evolution. OpenSearch 3.5.0 security-on (D6). The write contract for all writers (core + addon + enrichment) is `03` §7A. |
 
 ### `opensearch_indexing_status`
 
@@ -706,6 +818,84 @@ Event classification:
 | Migration source | Future finding/report evidence lookups and selected indexed document refs. |
 | Notes/open questions | Defer full document-ref population unless required. Every OpenSearch document should still carry provenance fields in its body. |
 
+## 9A. Evidence Anchoring, RAG, And Agent Skill Tables
+
+These tables retain an existing capability (evidence anchoring, D14) and realize
+the locked control-plane scope additions (RAG centralization and retrievable
+agent skills, D15). RAG and skills are net-new capabilities specified concretely
+here; they are post-foundation work but are not vague "future" items.
+
+### `evidence_anchors`
+
+| Detail | Design |
+| --- | --- |
+| Purpose | Durable record of external anchoring (e.g. Solana) of evidence integrity proofs. Retains the current anchoring capability whose proof state is file-based today (`evidence-verify-state.json` / Solana proof state, `packages/case-dashboard/src/case_dashboard/routes.py:1034-1074`). |
+| Key columns | `id uuid`, `case_id uuid`, `evidence_id uuid null`, `manifest_hash text null`, `anchor_provider text`, `anchor_ref text`, `tx_signature text null`, `anchor_payload_hash text`, `status text`, `anchored_by_user_id uuid null`, `job_id uuid null`, `audit_event_id uuid null`, `anchored_at null`, `created_at`, `metadata jsonb`. |
+| Primary key | `id`. |
+| Foreign keys | `case_id`, `evidence_id`, `job_id`, `audit_event_id`, `anchored_by_user_id`. |
+| Indexes | `(case_id, created_at)`, `evidence_id`, `status`, `anchor_provider`. |
+| Uniqueness constraints | Optional unique `(anchor_provider, tx_signature)` where a signature exists. |
+| Status values | `pending`, `submitted`, `confirmed`, `failed`, `superseded`. |
+| Anchor providers | `solana`, `none`/`local` for non-chain proof export, extensible. |
+| RLS/security notes | Case-scoped reads. Anchoring is a high-risk/approval-gated action; writes through Gateway/worker service paths. |
+| Who can read | Authorized case members; Gateway/worker service roles. |
+| Who can write | Gateway/evidence service and anchoring worker jobs (`evidence_anchor` job type). |
+| Migration source | Solana proof state files and evidence verify-state. |
+| Notes/open questions | None. Capability retained (D14); anchoring runs as an approval-gated job. |
+
+### `rag_collections`
+
+| Detail | Design |
+| --- | --- |
+| Purpose | Registry of RAG knowledge collections centralized into the control plane (D15). Replaces the in-memory Chroma index in `forensic-rag-mcp`. RAG **folds into core** (D23): retrieval is a core, control-plane-backed tool over Supabase `pgvector`, not a standalone add-on backend. |
+| Key columns | `id uuid`, `scope text`, `case_id uuid null`, `name text`, `description text null`, `embedding_model text null`, `status text`, `document_count int`, `created_by_user_id uuid null`, `created_at`, `updated_at`, `metadata jsonb`. |
+| Primary key | `id`. |
+| Foreign keys | `case_id` (null for global/shared collections); `created_by_user_id`. |
+| Indexes | `(scope, status)`, `case_id`, unique `(scope, name)`. |
+| Uniqueness constraints | Unique `(scope, name)`. |
+| Scope values | `global` (shared knowledge), `case` (case-specific). |
+| Status values | `active`, `building`, `degraded`, `disabled`, `archived`. |
+| RLS/security notes | Global collections readable to authorized operators/agents; case collections case-scoped. Access mediated by Gateway. |
+| Who can read | Authorized operators/agents through Gateway. |
+| Who can write | Gateway/RAG service path. |
+| Migration source | `forensic-rag-mcp` Chroma index and SANS/knowledge corpora. |
+| Notes/open questions | Vector storage approach: Postgres `pgvector` is the v1 target for centralization; OpenSearch vector remains available for case artifact search. Confirm pgvector availability in the Supabase Local image at implementation time. |
+
+### `rag_documents`
+
+| Detail | Design |
+| --- | --- |
+| Purpose | Documents/chunks within a RAG collection, with optional embeddings for retrieval. |
+| Key columns | `id uuid`, `collection_id uuid`, `case_id uuid null`, `title text null`, `source_ref text null`, `chunk_index int null`, `content text`, `content_hash text`, `embedding vector null`, `token_count int null`, `status text`, `created_at`, `metadata jsonb`. |
+| Primary key | `id`. |
+| Foreign keys | `collection_id` references `rag_collections(id)`; `case_id` references `cases(id)`. |
+| Indexes | `(collection_id, status)`, `content_hash`, vector index on `embedding` (e.g. ivfflat/hnsw via pgvector) when embeddings are used. |
+| Uniqueness constraints | Optional unique `(collection_id, content_hash)` to dedupe chunks. |
+| Status values | `active`, `superseded`, `retired`. |
+| RLS/security notes | Inherits collection scope/visibility. Retrieval is Gateway-mediated. |
+| Who can read | Authorized operators/agents through Gateway. |
+| Who can write | Gateway/RAG ingestion service. |
+| Migration source | RAG corpus files and embeddings. |
+| Notes/open questions | `embedding vector` type requires `pgvector`; if unavailable, store embeddings externally and keep a reference. Decide at implementation. |
+
+### `agent_skills`
+
+| Detail | Design |
+| --- | --- |
+| Purpose | Retrievable agent/operator skill documents (`skills.md`-style playbooks) the agent can fetch on demand (D15). |
+| Key columns | `id uuid`, `scope text`, `case_id uuid null`, `name text`, `description text null`, `content text null`, `content_uri text null`, `content_hash text`, `version text`, `tags text[]`, `status text`, `created_by_user_id uuid null`, `created_at`, `updated_at`, `metadata jsonb`. |
+| Primary key | `id`. |
+| Foreign keys | `case_id` (null for global skills); `created_by_user_id`. |
+| Indexes | `(scope, status)`, unique `(scope, name, version)`, `tags` (GIN). |
+| Uniqueness constraints | Unique `(scope, name, version)`. |
+| Scope values | `global`, `case`. |
+| Status values | `active`, `draft`, `deprecated`, `archived`. |
+| RLS/security notes | Skills are operator-curated; agents read through Gateway tools, do not self-author final skills without policy. Content may live inline (`content`) or in Supabase Storage (`content_uri`). |
+| Who can read | Authorized operators/agents through Gateway. |
+| Who can write | Gateway/skill service path; operator-curated. |
+| Migration source | New capability; seed from existing operator playbooks/docs. |
+| Notes/open questions | None at schema level. Whether agents may propose new skill drafts (status `draft`) is a policy choice, defaulted off. |
+
 ## 10. Compatibility And Migration Mapping
 
 | Current source/path/domain | Current authority role | Future table(s) | Bridge strategy | Cutover phase | Deprecation condition | Risk |
@@ -715,7 +905,10 @@ Event classification:
 | `/var/lib/sift/<case>/audit/*.jsonl` | Audit logs today | `audit_events`, optional exports | DB audit first when available, JSONL export during bridge | Audit service phase | JSONL consumers migrated and export verified | Audit gaps or duplicates |
 | `/var/lib/sift/<case>/approvals.jsonl` and pending review files | Approval and review state | `approval_requests`, `approval_decisions`, `finding_reviews` | Import/mirror, then DB transactional review/approval | Approval/review phase | Portal review commit uses DB | Approval mismatch |
 | `~/.sift/gateway.yaml api_keys` | Raw-token-keyed token registry | `agents`, `service_identities`, `mcp_tokens`, `mcp_token_scopes` | DB hash registry first, legacy fallback read-only/limited during cutover | Auth/token phase | No active legacy raw tokens | Raw token leakage |
-| `gateway.yaml case.dir`, `SIFT_CASE_DIR`, `~/.sift/active_case` | Active case selection | `cases`, `case_members`, future session/active-case table if approved | DB/session/token case context, export env/pointer for legacy tools | Case/auth phase | Backends accept explicit case context | Cross-case confusion |
+| `gateway.yaml case.dir`, `SIFT_CASE_DIR`, `~/.sift/active_case` | Active case selection | `active_case_state` (+ `cases`, `case_members`) | Control-plane active case set via portal; Gateway propagates and generates env/pointer compatibility exports | Cutover step 1 (identity), see `09` | Backends accept Gateway-propagated case context | Cross-case confusion |
+| `case/agent` Solana proof / evidence verify-state files | Evidence anchoring proof | `evidence_anchors` | Mirror anchor proofs to DB, run anchoring as approval-gated `evidence_anchor` job | Evidence phase | Anchoring proof recorded in DB + proof export | Lost anchor provenance |
+| `forensic-rag-mcp` Chroma index / knowledge corpora | RAG knowledge (in-memory/add-on) | `rag_collections`, `rag_documents` | Centralize into control plane (pgvector), Gateway-mediated retrieval | Post-foundation (D15) | RAG served from control plane | Stale/duplicate knowledge |
+| Operator playbooks / skill docs (new) | Agent skill retrieval (new) | `agent_skills` | Curate operator skills into control plane; agents retrieve via Gateway tools | Post-foundation (D15) | Skills served from control plane | n/a (net-new) |
 | `~/.sift/ingest-status/*.json` | Background ingest progress and PID status | `jobs`, `job_steps`, `parser_runs`, `ingest_batches`, `opensearch_indexing_status` | Mirror/read current status, then DB job status first and export files | JOB-8/JOB-9 | CLI/status tools use DB or generated files | Status drift |
 | `~/.sift/ingest-logs/*.log` | Ingest diagnostics | `job_logs` plus retained log artifact refs | Register log metadata and optionally ingest redacted summaries | JOB-8/JOB-9 | Retention/export policy exists | Secret/path leakage |
 | `case/agent/run_commands`, `case/extractions`, `case/tmp` | Native/parser output spill | `parser_outputs`, `job_logs`, evidence-derived artifact refs | Register outputs with hashes while preserving files | Parser/native job phases | Output-producing tools create DB lineage | Orphan outputs |
@@ -783,7 +976,7 @@ care when values change.
 | --- | --- |
 | Case status | `draft`, `active`, `paused`, `closed`, `archived` |
 | Operator status | `active`, `disabled`, `invited`, `archived` |
-| Case member role | Pending approval. Candidate values: `owner`, `lead`, `operator`, `readonly`, `admin` |
+| Case member role | Locked: `owner`, `lead`, `operator`, `readonly`, `admin` (permission matrix in `09_identity_auth_cutover.md` §5) |
 | Case member status | `active`, `suspended`, `removed`, `expired` |
 | Agent type | `assistant`, `automation`, `service_agent`, `external_client` |
 | Agent status | `active`, `disabled`, `revoked`, `archived` |
@@ -799,9 +992,16 @@ care when values change.
 | Report status | `draft`, `generating`, `pending_approval`, `approved`, `exported`, `failed`, `archived` |
 | Report type | `case_summary`, `finding_report`, `timeline_report`, `evidence_report`, `export_package` |
 | Job status | `pending`, `queued`, `running`, `waiting_human`, `succeeded`, `failed`, `retrying`, `cancelled`, `stale`, `paused` |
-| Job type | `evidence_register`, `evidence_hash`, `evidence_verify_integrity`, `evidence_ingest`, `parser_run`, `opensearch_index`, `timeline_build`, `ioc_extract`, `finding_generate`, `report_generate`, `report_export`, `case_archive`, `maintenance_reindex`, `health_check` |
+| Job type | `evidence_register`, `evidence_hash`, `evidence_verify_integrity`, `evidence_anchor`, `evidence_ingest`, `parser_run`, `opensearch_index`, `timeline_build`, `ioc_extract`, `finding_generate`, `report_generate`, `report_export`, `case_archive`, `maintenance_reindex`, `health_check` |
 | Job step status | `pending`, `running`, `succeeded`, `failed`, `skipped`, `cancelled`, `stale`, `waiting_human` |
-| Job step type | `validate_request`, `resolve_evidence`, `hash_evidence`, `verify_integrity`, `run_parser`, `register_output`, `bulk_index_opensearch`, `write_report_artifact`, `generate_findings`, `approval_gate`, `cleanup_partial_outputs` |
+| Job step type | `validate_request`, `resolve_evidence`, `hash_evidence`, `verify_integrity`, `anchor_evidence`, `run_parser`, `register_output`, `bulk_index_opensearch`, `extract_iocs`, `write_report_artifact`, `generate_findings`, `approval_gate`, `cleanup_partial_outputs` |
+| TODO status | `open`, `in_progress`, `blocked`, `done`, `cancelled` |
+| IOC status | `proposed`, `approved`, `rejected`, `superseded`, `archived` |
+| IOC type | `ip`, `domain`, `url`, `hash_md5`, `hash_sha1`, `hash_sha256`, `email`, `filename`, `filepath`, `registry_key`, `mutex`, `user_account`, `host`, `other` |
+| Evidence anchor status | `pending`, `submitted`, `confirmed`, `failed`, `superseded` |
+| Anchor provider | `solana`, `local`, `none` |
+| RAG collection scope/status | scope: `global`, `case`; status: `active`, `building`, `degraded`, `disabled`, `archived` |
+| Agent skill scope/status | scope: `global`, `case`; status: `active`, `draft`, `deprecated`, `archived` |
 | Worker status | `online`, `degraded`, `offline`, `stale`, `draining`, `disabled` |
 | Parser run status | `pending`, `running`, `succeeded`, `failed`, `cancelled`, `stale`, `partial` |
 | Parser output status | `created`, `ready`, `failed`, `partial`, `indexed`, `retired` |
@@ -922,11 +1122,12 @@ What remains intentionally unchanged:
 
 Follow-up schema table PR candidate, after infrastructure is approved:
 
-- Add foundational tables only: `operator_profiles`, `cases`,
-  `case_members`, `agents`, `service_identities`, `mcp_tokens`,
+- Add foundational identity tables only (cutover step 1, see
+  `09_identity_auth_cutover.md`): `operator_profiles`, `cases`, `case_members`,
+  `active_case_state`, `agents`, `service_identities`, `mcp_tokens`,
   `mcp_token_scopes`, and `audit_events`.
-- Keep jobs, evidence, parser, OpenSearch, findings, reports, and approvals for
-  later focused PRs unless the user approves a different order.
+- Keep jobs, evidence, parser, OpenSearch, findings, TODOs, IOCs, reports,
+  approvals, anchoring, RAG, and skills for later focused PRs, in cutover order.
 
 ## 15. Decisions And Open Questions
 
@@ -950,25 +1151,45 @@ Follow-up schema table PR candidate, after infrastructure is approved:
 - Agent findings are not auto-approved.
 - Migration remains additive first.
 
-### Decisions needing user approval
+### Decisions now locked (previously "needs approval")
 
-- Use UUID DB primary keys plus legacy text keys, or use text case IDs as
-  primary identifiers.
-- Use `app` plus `internal` schemas, or keep initial tables in `public` with
-  strict RLS.
-- Exact Supabase Local deployment and migration directory layout.
-- Exact human role names and role permissions.
-- Token hash algorithm, pepper/KMS use, token fingerprint format, and default
-  expiry.
-- Whether `service_identities` is required in the first table slice or can be
-  deferred.
-- Whether evidence dedupe should enforce unique active `(case_id, sha256)`.
-- Whether `evidence_access_events`, `worker_heartbeats`, and
-  `opensearch_document_refs` should be first-class initial tables or deferred.
-- Batch granularity for parser/indexing idempotency.
-- Per-case logical OpenSearch index strategy and canonical index/alias names.
-- Which audit events must fail closed if DB audit write is unavailable.
-- How long compatibility files remain exported after DB authority is available.
+- Keys: UUID PKs plus legacy text keys (D10).
+- Namespaces: `app` (RLS) plus `internal`/`svc`; not `public` (D11).
+- Human roles: `readonly`, `operator`, `lead`, `owner`, `admin` with the
+  permission matrix in `09_identity_auth_cutover.md` §5.
+- Token hashing: SHA-256 + server pepper, 16-hex fingerprint, default expiries,
+  one-time raw display, dual-validate then sunset legacy; KMS deferred
+  (`09_identity_auth_cutover.md` §4, D8).
+- `service_identities`: included in the first foundational slice.
+- Evidence dedup: preserve by default; `(case_id, sha256)` uniqueness is an
+  explicit opt-in policy, never a silent drop (D16).
+- OpenSearch indexing: reuse the existing working model (D18). v1 registers the
+  current `case-{case_id}-{artifact_type}-{hostname}` indices in
+  `opensearch_indexes`; the `dfir-case-*-vN` logical-family rename is deferred/
+  optional. OpenSearch 3.5.0 security-on (D6). All writers (core + addon +
+  enrichment) follow the write contract in `03` §7A.
+- Active case: `active_case_state`, one row per deployment in v1 (D4).
+- Retained capabilities: `case_todos`, `iocs`, `evidence_anchors` are first-class
+  (D14); `rag_collections`/`rag_documents`/`agent_skills` are first-class
+  control-plane scope additions (D15).
+- Lean job core: `job_attempts`, `job_cancellations`, `worker_heartbeats`
+  deferred (D13).
+
+### Decisions still genuinely open (non-blocking, decide at implementation)
+
+- Exact Supabase Local deployment/migration directory layout (resolved during the
+  first schema-infrastructure PR by inspecting the repo).
+- Batch granularity for parser/indexing idempotency (source file vs host/artifact
+  vs parser run vs bulk chunk) - pick when converting the first parser path
+  (JOB-8), default to per-source-file + parser run.
+- Which audit events must fail closed if the DB audit write is unavailable -
+  default fail-closed set: token issuance, evidence integrity/seal/anchor,
+  approvals, and destructive/export/archive actions; confirm during JOB-7.
+- pgvector availability in the chosen Supabase Local image (for `rag_documents.embedding`).
+- How long compatibility exports remain after DB authority - default 1 release
+  cycle past parity; revisit per surface.
+- `evidence_access_events` and `opensearch_document_refs` remain optional/deferred
+  (defer unless a query need appears); `audit_events` covers access initially.
 
 ### Code facts still needing confirmation
 
@@ -987,18 +1208,17 @@ Follow-up schema table PR candidate, after infrastructure is approved:
 
 ## 16. Next Recommended Run
 
-Next focused run:
-
-`docs/migration/09_first_pr_candidate.md`
-
-Recommended scope:
+The identity foundation track is now documented in
+`09_identity_auth_cutover.md` and all blocking schema decisions are locked in
+`00_migration_charter.md`. The next focused run is to plan the first
+implementation PR candidate (`11_first_pr_candidate.md`):
 
 - Plan only the first implementation PR candidate that is safe for one Codex
   coding session.
 - Use Phase JOB-0 from `07_execution_roadmap.md`: baseline execution
-  smoke-test fixtures and lightweight tests.
+  smoke-test fixtures and lightweight tests (additive, order-independent).
+- After JOB-0, the first feature-bearing slice is Phase ID-1 (foundational
+  identity schema) per the cutover order.
 - Identify exact test files, fixtures, package commands, and context guardrails
-  after inspecting only the minimum implementation/test files required for that
-  PR.
-- Do not implement the tests in that planning run unless the user explicitly
-  asks for implementation.
+  after inspecting only the minimum implementation/test files required.
+- Do not implement code in that planning run unless the user explicitly asks.

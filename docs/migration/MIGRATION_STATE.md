@@ -2,16 +2,134 @@
 
 ## Current Objective
 
-Run 8 migration planning completed. The migration workspace now has a concrete
-Supabase/Postgres control-plane schema design document that translates the
-agreed architecture into practical initial tables, relationships, security/RLS
-guidance, status values, indexes, migration compatibility mapping, first
-schema-focused PR recommendation, and open questions requiring approval.
+Run 9 completed a decision-locking and reconciliation pass across the whole
+workspace. All previously-open blocking decisions are now locked in
+`00_migration_charter.md` "Confirmed Decisions (Locked)" (D1-D17); the
+architecture diagram was corrected; a new identity/auth foundation track
+(`09_identity_auth_cutover.md`) was created as cutover step 1; the schema doc was
+made lean (job core) and gained TODO/IOC/RAG/skills/anchoring/active-case tables;
+and every doc's "decisions needing approval"/"open questions" sections were
+reconciled to the locks or marked explicitly non-blocking with defaults.
+
+The workspace is now handoff-ready: a new session can proceed to plan/implement
+the first PR candidate (JOB-0 baseline tests), then the identity foundation
+(Phase ID-1), per the cutover order.
 
 This run stayed documentation-only. It did not implement code, create database
 migrations, refactor REST APIs, MCP tools, frontend views, OpenSearch, evidence,
 audit, parser, report, finding, or worker code. It did not introduce
 Redis/RQ/Celery/Temporal or any external queue.
+
+## Run 9 - Locked Decisions And Reconciliation
+
+User-confirmed decisions captured this run (full list in the charter):
+
+- D2/D3: Gateway is the single boundary; ALL REST APIs, MCP tools, and actions
+  go through it; per-backend `/mcp/{name}` routes are disabled (early hardening).
+- D4: active case is portal-set, authoritative in `active_case_state`, propagated
+  by the Gateway; `SIFT_CASE_DIR`/`~/.sift/active_case` become generated
+  compatibility exports; one active case per SIFT VM in v1. Current
+  active-case behavior preserved, authority moved to the control plane.
+- D5: long-running tool calls enqueue durable control-plane jobs/pipelines and
+  return a job ID; never a direct job/invoke to the Evidence Vault; workers
+  CLAIM (poll + SKIP LOCKED), control plane never pushes. (Fixed the diagram's
+  Gateway->Evidence job arrow and the push-vs-pull arrow.)
+- D6: OpenSearch 3.5.0 with security enabled is canonical; root repo
+  `docker-compose.yml` (2.18.0, security off) is pre-migration only.
+- D7: local Supabase on the network-restricted (non-air-gapped) SIFT VM.
+- D8: hash-only token registry, SHA-256 + server pepper, 16-hex fingerprint,
+  default expiries, one-time raw display, dual-validate then sunset legacy.
+- D9: single local worker in v1.
+- D10/D11: UUID PKs + legacy text keys; `app`+`internal` schemas (not `public`).
+- D12: privileged writes via Gateway/worker service paths; RLS = defense-in-depth
+  behind the Gateway; browser never talks to a backend/OpenSearch directly.
+- D13: lean job core (`jobs`, `job_steps`, `job_logs`, `workers`); defer
+  `job_attempts`/`job_cancellations`/`worker_heartbeats`.
+- D14: retain Solana anchoring, TODOs, IOCs as first-class (added tables + job
+  type `evidence_anchor`).
+- D15: centralize RAG and add retrievable agent skills into the control plane
+  (added `rag_collections`/`rag_documents`/`agent_skills`).
+- D16: evidence dedup never silently drops forensically distinct acquisitions.
+- D17: cutover order = cases/tokens/identity first.
+
+Files changed/created in Run 9:
+
+- `docs/migration/Architecture.mmd` (rewritten/corrected).
+- `docs/migration/00_migration_charter.md` (locked decisions + cutover order).
+- `docs/migration/README.md` (numbering fix + doc set).
+- `docs/migration/09_identity_auth_cutover.md` (new foundation track).
+- `docs/migration/08_control_plane_schema.md` (lean job core; +`active_case_state`,
+  `case_todos`, `iocs`, `evidence_anchors`, `rag_collections`, `rag_documents`,
+  `agent_skills`; locked decisions; resolved open questions).
+- `docs/migration/02`,`03`,`05`,`06`,`07` (locked-decision banners + resolved
+  open-question sections).
+
+## Run 10 - Active-case refinement + OpenSearch write contract (D18)
+
+After a code scan of `packages/opensearch-mcp/`, two refinements were locked:
+
+- D4 refined: **one operator, one active case at a time**; other cases may exist
+  but only one is active.
+- D18 added: **reuse the existing working OpenSearch ingestion model** - index
+  naming `case-{case}-{type}-{host}` via `build_index_name()`, template
+  auto-create, shared `flush_bulk` writer, host auto-discovery preflight, and
+  `vhir.*`/`host.*`/`pipeline_version` provenance. The control plane *registers*
+  these indices in `opensearch_indexes` rather than renaming them; the
+  `dfir-case-*-vN` logical-family rename is deferred/optional. A single **write
+  contract** (`03` §7A) governs every writer - core worker, addon MCP backend
+  (future OpenCTI/Hayabusa enrichment), and enrichment - additively and without
+  refactoring working backends: take `case_id` from job/active-case context, name
+  via the helper, stamp provenance + control-plane IDs, reuse `flush_bulk`,
+  register index/batch, scope `update_by_query` to the case. Gateway-only governs
+  the tool/query boundary; execution-plane bulk writes run directly under an
+  authorized job.
+
+Code facts confirmed this run: only `opensearch-mcp` writes to OpenSearch today
+(OpenCTI/windows-triage/forensic-mcp/forensic-rag do not); enrichers mutate
+existing `case-*` docs via `update_by_query`; indices are created implicitly on
+first bulk write through installed `case-*-{type}-*` templates.
+
+Files changed in Run 10: `00_migration_charter.md` (D4 refined, D18 added),
+`03_opensearch_core_integration.md` (banner + §6 reuse + new §7A write contract +
+§13 reconcile), `08_control_plane_schema.md` (`opensearch_indexes` cell + §15).
+
+## Run 11 - MCP backends + OpenSearch core + OpenCTI cohabitation (D19-D23)
+
+User-confirmed decisions this run (full text in the charter):
+
+- D19: **OpenSearch is core, not an add-on.** Read tools = in-process core MCP
+  tools (sync); ingest/enrichment = core tools that enqueue worker jobs.
+  Standalone server + OpenSearch add-on manifest registration retired; the
+  `opensearch-mcp` package remains as the in-process implementation.
+- D20: **OpenCTI = full platform** (platform, worker, redis, rabbitmq, minio)
+  sharing the **existing SIFT OpenSearch** as its index store (not a 2nd
+  cluster). `opencti-mcp` stays query-only. OpenCTI's internal redis/rabbitmq/
+  minio are exempt from "No Redis/RQ" (which governs SIFT job authority only).
+  (User has tested the full-wiring implementation against case evidence.)
+- D21: **Cluster cohabitation + scoped security roles.** Two index classes:
+  `case-*` (SIFT) and `opencti_*` (OpenCTI). Per-consumer roles: worker->`case-*`,
+  OpenCTI->`opencti_*`, **agent->no cluster creds**. Capacity monitored for both.
+- D22: **Add-on spec direction.** Query-only/read-only default; write-capable is
+  the declared §7A exception. Per-tool `case_scoped` flag (opencti/wintriage =
+  global, audited under active case). Backend `data_plane` declaration. Backend
+  registration moves from `gateway.yaml` to a control-plane `mcp_backends`
+  registry, portal-managed. Full spec: `10_addon_backend_spec.md`.
+- D23: **RAG folds into core** (Supabase pgvector-backed retrieval tool), no
+  longer a standalone add-on; `forensic-rag-mcp` Chroma store migrated.
+  `windows-triage-mcp` stays the minimal query-only add-on reference.
+
+Code facts confirmed: `opencti-mcp` is an API client to the OpenCTI **platform**
+(not an OpenSearch client); the OpenCTI stack is heavy (redis/rabbitmq/minio/
+platform/worker); current manifest requires `spec_version,name,version,tier,
+transport,namespace,capabilities,tools,health` with rich per-tool metadata but
+**no `case_scoped` or `data_plane`** - those are the additive gaps.
+
+Files changed/created in Run 11: `00_migration_charter.md` (D19-D23),
+`03_opensearch_core_integration.md` (new §7B: OpenSearch-core + OpenCTI
+cohabitation + security roles + portal monitoring), `08_control_plane_schema.md`
+(`mcp_backends` registry table; RAG core-served note), **new**
+`10_addon_backend_spec.md`, `README.md` (doc 10 + planned docs renumbered to
+11/12).
 
 ## Decisions Already Made
 
@@ -367,7 +485,15 @@ migration documents.
   active job, `last_seen_at`, degraded/offline state, health endpoints, and
   stale-job audit/log behavior.
 
-## Open Questions
+## Open Questions (RESOLVED in Run 9 - historical)
+
+> The list below is historical. All blocking items are now answered by
+> `00_migration_charter.md` "Confirmed Decisions (Locked)" (D1-D17) and
+> `09_identity_auth_cutover.md`. The few genuinely non-blocking items (exact
+> Supabase migration directory shape, compatibility-export lifetime defaults,
+> retry/cancellation granularity defaults, pgvector availability) are recorded
+> with defaults in the relevant docs' "Decisions still genuinely open" sections.
+> Do not treat the items below as still-open.
 
 - What exact Supabase Local deployment shape should this repo target?
 - Should active-case state be per human session, per workstation, per Gateway instance, or a combination with explicit precedence?
@@ -428,16 +554,24 @@ migration documents.
 
 ## Next Recommended Run
 
-Create `docs/migration/09_first_pr_candidate.md`.
+Plan the first implementation PR candidate: `docs/migration/11_first_pr_candidate.md`.
+
+Required reading before that run: `00_migration_charter.md` (Confirmed Decisions
++ Cutover Order), then `09_identity_auth_cutover.md`, then
+`07_execution_roadmap.md`.
 
 Recommended scope:
 
-- first implementation PR candidate that is safe for one Codex coding session
-- Phase JOB-0 from `07_execution_roadmap.md`: baseline execution smoke-test
-  fixtures and lightweight tests
-- exact test files, fixtures, package commands, manual validation, rollback,
-  acceptance criteria, and context guardrails
-- inspect only the minimum implementation/test files required for that PR plan
+- First implementation PR candidate that is safe for one Codex coding session.
+- Phase JOB-0 from `07_execution_roadmap.md`: additive baseline execution
+  smoke-test fixtures and lightweight tests (order-independent, no runtime
+  change).
+- Exact test files, fixtures, package commands, manual validation, rollback,
+  acceptance criteria, and context guardrails.
+- Inspect only the minimum implementation/test files required for that PR plan.
+
+After JOB-0, the first feature-bearing implementation is the identity foundation
+(Phase ID-1 schema in `09_identity_auth_cutover.md`), per the cutover order.
 
 Keep the next run focused on first-PR planning. Do not implement tests or code
 unless a future prompt explicitly authorizes that work.

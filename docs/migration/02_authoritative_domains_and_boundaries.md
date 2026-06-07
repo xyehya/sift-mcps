@@ -1,11 +1,20 @@
 # Authoritative Domains And Boundaries
 
-Last updated: 2026-06-06.
+Last updated: 2026-06-07.
 
 Scope: planning only. This document defines target authoritative domains,
 trust boundaries, and migration mapping from current file-based authority into
 Supabase/Postgres. It intentionally does not create schemas, migrations, or
 runtime code changes.
+
+> Locked decisions: see `00_migration_charter.md` "Confirmed Decisions
+> (Locked)". Key reconciliations for this document: the Gateway is the single
+> boundary and per-backend MCP routes are disabled (D2/D3); active case is
+> portal-set and authoritative in the control plane (`active_case_state`),
+> propagated by the Gateway, with env/pointers as generated exports only (D4);
+> OpenSearch is 3.5.0 with security enabled (D6); identity/cases/tokens cut over
+> first (D17, see `09_identity_auth_cutover.md`). Where this document's
+> Section 9 "Decisions needing user approval" overlaps these, the charter wins.
 
 ## 1. Executive Summary
 
@@ -373,33 +382,29 @@ verified.
 
 ### Confirmed decisions
 
-- No Redis/RQ.
-- Supabase/Postgres is the authority.
-- OpenSearch is core search/data plane.
-- MCP/service tokens are DB-backed hash-only registry records.
-- Frontend does not become forensic authority.
-- Agent findings are not auto-approved.
-- Human operators authenticate through Supabase Auth and RLS.
-- AI agents, MCP clients, workers, and backend services use
-  Gateway-issued MCP/service tokens.
-- Gateway remains the enforcement point for case scope, tool scope, expiry,
-  revocation, and policy checks.
-- Evidence Vault remains immutable evidence storage; raw evidence must not
-  become mutable database state.
+See `00_migration_charter.md` "Confirmed Decisions (Locked)" D1-D17 for the
+authoritative list. In summary: no Redis/RQ; Supabase/Postgres is authority;
+OpenSearch is core search/data plane (3.5.0, security on); hash-only DB tokens;
+frontend is not authority and never talks to a backend/OpenSearch directly;
+agent findings are not auto-approved; humans use Supabase Auth + RLS; agents/
+services use Gateway-issued tokens; the Gateway is the single enforcement point
+with per-backend MCP routes disabled; evidence vault stays immutable.
 
-### Decisions needing user approval
+### Decisions previously open here, now locked (charter)
 
-- Exact Supabase Local deployment shape for this repo and installer.
-- Whether active-case state is per human session, per workstation, per Gateway
-  instance, or all three with explicit precedence.
-- Token hash strategy and metadata policy, including hash algorithm, optional
-  pepper/KMS use, token prefix/fingerprint display, and default expiry.
-- First compatibility cutover order: cases/tokens first, evidence/audit first,
-  or OpenSearch/jobs first.
-- How long generated compatibility files should remain supported after DB
-  authority is available.
-- Whether legacy examiner bearer fallback should exist during Supabase Auth
-  rollout, and for how long.
+- Supabase Local deployment shape: local Supabase on the network-restricted
+  (non-air-gapped) SIFT VM (D7).
+- Active-case state: one active case per SIFT VM deployment, set in the portal,
+  authoritative in `active_case_state`, propagated by the Gateway; env/pointers
+  are generated compatibility exports (D4).
+- Token hash strategy: SHA-256 + server pepper, 16-hex fingerprint, default
+  expiries, one-time raw display, dual-validate then sunset legacy; KMS deferred
+  (D8, `09_identity_auth_cutover.md` §4).
+- Cutover order: cases/tokens/identity first (D17).
+- Compatibility export lifetime: default one release cycle past parity, revisit
+  per surface.
+- Legacy examiner bearer fallback: retained behind a config flag during cutover,
+  then removed (`09_identity_auth_cutover.md` §6).
 
 ### Code facts still needing confirmation
 
