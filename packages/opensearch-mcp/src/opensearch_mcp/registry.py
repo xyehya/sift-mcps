@@ -552,6 +552,38 @@ class EnrichTriageOut(BaseModel):
     details: dict[str, Any] = Field(..., description="Per-artifact enriched counts.")
 
 
+class ListDetectionsIn(BaseModel):
+    severity: Literal["", "critical", "high", "medium", "low"] = Field(
+        "", description="Severity filter; empty returns all severities."
+    )
+    detector_type: str = Field("", description="Detector type filter; empty returns all.")
+    limit: int = Field(50, ge=1, le=500, description="Max findings. Hard cap 500.")
+    offset: int = Field(0, ge=0, description="Pagination start.")
+
+
+class DetectionRuleRef(BaseModel):
+    name: str | None = Field(None, description="Detection rule name.")
+    tags: list[str] = Field(default_factory=list, description="Rule tags.")
+
+
+class Detection(BaseModel):
+    id: str | None = Field(None, description="Finding id.")
+    timestamp: str | int | None = Field(None, description="Finding timestamp.")
+    index: str | None = Field(None, description="Source index.")
+    rules: list[DetectionRuleRef] = Field(default_factory=list, description="Matched rules.")
+    matched_docs: int = Field(..., description="Related document count.")
+
+
+class ListDetectionsOut(BaseModel):
+    findings: list[Detection] = Field(..., description="Detection findings.")
+    total: int = Field(..., description="Total findings reported by upstream.")
+    returned: int = Field(..., description="Findings returned after filtering.")
+    offset: int = Field(..., description="Pagination offset.")
+    suggestion: str | None = Field(
+        None, description="Hayabusa fallback query when Sigma is unavailable or empty."
+    )
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -1111,6 +1143,36 @@ async def run_opensearch_enrich_triage(params: EnrichTriageIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
+async def run_opensearch_list_detections(params: ListDetectionsIn) -> ToolResult:
+    try:
+        raw = _legacy_server().opensearch_list_detections(**params.model_dump())
+    except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
+        return _tool_error_result(
+            ErrorCode.upstream_unavailable,
+            f"{type(exc).__name__}: detection lookup failed.",
+            "Check OpenSearch Security Analytics availability, then retry.",
+            retryable=True,
+        )
+    if "error" in raw and "Security Analytics plugin not available" not in str(raw.get("error")):
+        return _legacy_error(raw, default_code=ErrorCode.upstream_unavailable)
+    raw.pop("error", None)
+    meta = _meta_from_raw(raw)
+    out = ListDetectionsOut(
+        findings=[Detection.model_validate(item) for item in raw.get("findings", [])],
+        total=int(raw.get("total", 0)),
+        returned=int(raw.get("returned", 0)),
+        offset=int(raw.get("offset", params.offset)),
+        suggestion=raw.get("suggestion"),
+    )
+    return _success_tool_result(out, meta)
+
+
+async def opensearch_case_detections_resource(case_id: str) -> str:
+    _ = case_id
+    result = await run_opensearch_list_detections(ListDetectionsIn())
+    return _json_from_tool_result(result)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -1144,6 +1206,33 @@ REGISTRY.append(
             "when you need per-value counts; use opensearch_aggregate. Example: "
             "opensearch_count(query='event.code:4624')."
         ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_list_detections",
+        fn=run_opensearch_list_detections,
+        in_model=ListDetectionsIn,
+        out_model=ListDetectionsOut,
+        annotations=_read_annotations("Security Analytics Detections"),
+        title="Security Analytics Detections",
+        description=(
+            "List Security Analytics detection findings, or suggest a Hayabusa "
+            "query when Sigma is unavailable or empty. Use to triage rule-based "
+            "detections; severity filtering is applied behavior-compatibly. "
+            "Example: opensearch_list_detections(severity='high')."
+        ),
+    )
+)
+
+RESOURCE_REGISTRY.append(
+    ResourceDef(
+        uri="opensearch://case/{case_id}/detections",
+        fn=opensearch_case_detections_resource,
+        name="opensearch_case_detections",
+        title="Case Detection Findings",
+        description="Unfiltered resource view of detection findings for case-oriented clients.",
     )
 )
 

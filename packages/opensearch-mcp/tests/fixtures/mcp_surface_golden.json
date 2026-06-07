@@ -4,6 +4,15 @@
   "resource_templates": [
     {
       "annotations": null,
+      "description": "Unfiltered resource view of detection findings for case-oriented clients.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_case_detections",
+      "title": "Case Detection Findings",
+      "uri_template": "opensearch://case/{case_id}/detections"
+    },
+    {
+      "annotations": null,
       "description": "Parameterized resource view of a case coverage summary.",
       "meta": null,
       "mime_type": "application/json",
@@ -273,6 +282,192 @@
         "type": "object"
       },
       "title": "Count Documents"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Security Analytics Detections"
+      },
+      "description": "List Security Analytics detection findings, or suggest a Hayabusa query when Sigma is unavailable or empty. Use to triage rule-based detections; severity filtering is applied behavior-compatibly. Example: opensearch_list_detections(severity='high').",
+      "input_schema": {
+        "properties": {
+          "detector_type": {
+            "default": "",
+            "description": "Detector type filter; empty returns all.",
+            "title": "Detector Type",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Max findings. Hard cap 500.",
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Pagination start.",
+            "minimum": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "severity": {
+            "default": "",
+            "description": "Severity filter; empty returns all severities.",
+            "enum": [
+              "",
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Severity",
+            "type": "string"
+          }
+        },
+        "title": "ListDetectionsIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_list_detections",
+      "output_schema": {
+        "properties": {
+          "findings": {
+            "description": "Detection findings.",
+            "items": {
+              "properties": {
+                "id": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Finding id.",
+                  "title": "Id"
+                },
+                "index": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Source index.",
+                  "title": "Index"
+                },
+                "matched_docs": {
+                  "description": "Related document count.",
+                  "title": "Matched Docs",
+                  "type": "integer"
+                },
+                "rules": {
+                  "description": "Matched rules.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Detection rule name.",
+                        "title": "Name"
+                      },
+                      "tags": {
+                        "description": "Rule tags.",
+                        "items": {
+                          "type": "string"
+                        },
+                        "title": "Tags",
+                        "type": "array"
+                      }
+                    },
+                    "title": "DetectionRuleRef",
+                    "type": "object"
+                  },
+                  "title": "Rules",
+                  "type": "array"
+                },
+                "timestamp": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Finding timestamp.",
+                  "title": "Timestamp"
+                }
+              },
+              "required": [
+                "matched_docs"
+              ],
+              "title": "Detection",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "offset": {
+            "description": "Pagination offset.",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "returned": {
+            "description": "Findings returned after filtering.",
+            "title": "Returned",
+            "type": "integer"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Hayabusa fallback query when Sigma is unavailable or empty.",
+            "title": "Suggestion"
+          },
+          "total": {
+            "description": "Total findings reported by upstream.",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "findings",
+          "total",
+          "returned",
+          "offset"
+        ],
+        "title": "ListDetectionsOut",
+        "type": "object"
+      },
+      "title": "Security Analytics Detections"
     },
     {
       "annotations": {
