@@ -41,7 +41,6 @@ baseline, and that's OK. Only flag as suspicious if actual indicators present.
 
 from __future__ import annotations
 
-import atexit
 import fnmatch
 import json
 import logging
@@ -1666,28 +1665,9 @@ class WindowsTriageServer:
 
 
 def main() -> None:
-    """Entry point for the forensic triage MCP server.
+    """Entry point for the standalone FastMCP 3 Windows triage server."""
 
-    Initializes configuration from environment variables, sets up logging,
-    creates the server instance, and runs the async event loop.
-
-    Configuration is loaded via get_config() which reads WT_* environment
-    variables. See config.py for available settings.
-
-    Exit codes:
-        0: Normal shutdown
-        1: Configuration error (invalid WT_* variables)
-        1: Database error (missing or invalid database files)
-        1: Unexpected server error
-
-    Environment Variables:
-        WT_DATA_DIR: Base directory for databases (default: ./data)
-        WT_KNOWN_GOOD_DB: Path to baseline database
-        WT_CONTEXT_DB: Path to context database
-        WT_LOG_LEVEL: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        WT_CACHE_SIZE: LRU cache size for lookups (default: 10000)
-    """
-    import asyncio
+    from .registry import create_server, get_runtime
 
     # Load configuration from environment
     try:
@@ -1706,9 +1686,8 @@ def main() -> None:
     logger.info(f"  context_db: {config.context_db}")
 
     try:
-        server = WindowsTriageServer(config=config)
-        atexit.register(server.close_databases)
-        asyncio.run(server.run())
+        get_runtime()
+        create_server().run()
     except DatabaseError as e:
         logger.error(f"Database error: {e}")
         raise SystemExit(1) from e
