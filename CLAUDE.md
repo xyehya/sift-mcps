@@ -44,3 +44,67 @@ first so the workflow is followed from the opening turn.
 - Backend revamp (D27a) spec + per-tool contracts → `15_backend_tooling_revamp.md`,
   `16_backend_tool_contracts.md`
 - Host/VM + Supabase operational details → `AGENTS.md`
+
+---
+
+## Claude's Delivery-Management Playbook (Claude-only)
+
+This section is mine. The operator runs **Build** sessions (the Codex orchestrator + its
+subagents create worktrees and implement); I run **Plan**, **Review/GO**, **Land**, and I
+own the gateway cutover (**D27b**) and integration. The operator hands me build outputs in a
+fresh session; I take over from there. This playbook lets me re-enter cold and act
+correctly within one turn.
+
+### Catch-up ritual (every session, before acting)
+1. `git log --oneline -8` and `git status -s` — what landed, what's dirty, which branch.
+2. `MIGRATION_STATE.md` → Current Objective + latest Run — where we are in the loop.
+3. `REGISTER.md` → open **F#** (need my call) and **B#** (must be carried). 
+4. `00_migration_charter.md` "Confirmed Decisions" if I'm about to make an architectural claim.
+5. Name the loop stage out loud (Plan / Build / Review / Land / Log) before doing anything.
+
+### Pipeline map (update as it moves)
+`JOB-0 ✓ → ID-1/PR01 ✓ → ID-2/PR02 ✓ → D27a backend revamp (operator BUILD) →
+[MY REVIEW + GO] → D27b gateway cutover (MINE) → evidence/audit → jobs/OpenSearch-core →
+findings/RAG/skills.` The cutover order is in the charter; D27a merges before D27b.
+
+### Review → GO procedure (when the operator hands me D27a outputs)
+1. **Scope fence:** `git diff --stat <base>..<branch>` — only `packages/*-mcp/**` touched. Any
+   stray path = NO-GO until explained.
+2. **Surface diff:** read the golden-snapshot diff + the change-map. Every rename has a
+   deprecated alias; the F-1 resources + aliases and the F-2 legacy aliases are present.
+3. **`/code-review`** the collected diff. Triage: fix-now vs new B#.
+4. **`/security-review`** — mandatory here. Specifically check: F-5 `password` redaction at the
+   tool boundary; that output models don't leak secrets into `structured_content` (B-3 is the
+   gateway-side guard, owed at D27b — confirm it's still tracked, not silently assumed done);
+   no tokens/evidence/secrets in fixtures or snapshots.
+5. **Contract conformance:** spot-check tool blocks against `16_backend_tool_contracts.md` §5
+   (typed in/out, annotations, result shaping, error model); ≥1 prompt + ≥1 resource per
+   backend; D5 write-tools still `readOnlyHint=false` with execution unchanged.
+6. **Tests:** green on host AND on the VM (AGENTS.md path). No green VM run = NO-GO.
+7. **Decide.** GO → I Land (merge `revamp/backends-mcp3` into `revamp/spg-v1`), add the Run
+   entry, close F#/B# that are done, flip doc statuses to "implemented in <commit>". NO-GO →
+   I write precise, file/line remediation back for a follow-up Build session; nothing merges.
+
+### Invariants I enforce on every review/decision
+- Charter wins; **no silent decisions** — if a build made one, it's a finding.
+- Gateway is the policy boundary; FastMCP is substrate only (D24). Policy (evidence gate,
+  response guard, audit, active-case, authz) is never delegated to the framework.
+- Principal separation: machines = hash-only tokens; humans = Supabase-JWT via FastAPI DI
+  (D26). No human JWT ever handed to an agent.
+- D5 write-tool guardrail; evidence immutability; agent findings stay proposed until approved.
+- No secrets/tokens in repo files, fixtures, or snapshots.
+- The structured_content redaction (B-3) is a **hard gate at D27b** — I do not start D27b
+  review without it.
+
+### Backlog I must carry into D27b / later (from REGISTER.md)
+- **B-1** remove reclassified tool aliases once skills/RAG use the resource URIs (at/after D27b).
+- **B-2** remove the 10 legacy wintriage aliases after one cycle; first update the
+  `forensic-knowledge` playbook + `tool_metadata.py` `analyze_filename` reference.
+- **B-3** gateway response-guard must scan `structured_content` — **gate for D27b**.
+- **B-4** replace credential-as-tool-arg (`opensearch_ingest.password`) with a named
+  control-plane credential — auth/jobs phase.
+
+### My next handoff
+After the operator finishes the three Build sessions and returns the outputs, I: review →
+GO/NO-GO → Land → log Run → then **plan and own D27b** (`14_fastmcp3_supabase_integration.md`),
+whose parity gate is policy-only and which consumes D27a's new tool surface.
