@@ -61,6 +61,12 @@ class ArtifactType(str, Enum):
     dll = "dll"
 
 
+class SystemType(str, Enum):
+    service = "service"
+    scheduled_task = "scheduled_task"
+    autorun = "autorun"
+
+
 class Finding(BaseModel):
     type: str = Field(..., description="Machine-readable finding type.")
     severity: Literal["critical", "high", "medium", "low"] = Field(
@@ -273,6 +279,138 @@ class CheckProcessTreeOut(VerdictOut):
     user_context: dict[str, Any] | None = Field(
         None, description="User-context validation details when user was provided."
     )
+
+
+class CheckSystemIn(BaseModel):
+    type: SystemType = Field(
+        ..., description="System check type: service, scheduled_task, or autorun."
+    )
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=1024,
+        description="Service name, scheduled-task path, or autorun registry key path.",
+    )
+    binary_path: str | None = Field(
+        None,
+        max_length=4096,
+        description="Optional service binary path (type='service').",
+    )
+    value_name: str | None = Field(
+        None,
+        max_length=256,
+        description="Optional registry value name (type='autorun').",
+    )
+    os_version: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description=(
+            "Target OS (e.g. Win10_21H2_Pro, W11_22H2, Server2022). "
+            "REQUIRED because baselines vary by release."
+        ),
+    )
+
+    @field_validator("name", "binary_path", "value_name", "os_version")
+    @classmethod
+    def _reject_null_bytes(cls, value: str | None) -> str | None:
+        if value is not None and "\x00" in value:
+            raise ValueError("null bytes are not allowed")
+        return value
+
+
+class CheckSystemOut(VerdictOut):
+    system_type: SystemType = Field(..., description="System artifact subtype checked.")
+    in_baseline: bool | None = Field(
+        None, description="True when the service/task/autorun is present in baseline."
+    )
+    baseline_info: dict[str, Any] | None = Field(
+        None, description="Baseline service metadata when available."
+    )
+    os_versions: list[str] = Field(
+        default_factory=list, description="OS versions associated with the match."
+    )
+    hive: str | None = Field(None, description="Autorun hive for matching entries.")
+    task_name: str | None = Field(None, description="Scheduled task display name.")
+    lookup_performed: bool = Field(
+        True, description="False only when validation prevented a baseline lookup."
+    )
+
+
+class CheckServiceAliasIn(BaseModel):
+    service_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description="Deprecated alias argument: service name.",
+    )
+    binary_path: str | None = Field(
+        None,
+        max_length=4096,
+        description="Deprecated alias argument: optional service binary path.",
+    )
+    os_version: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description="Deprecated alias argument: required target OS version.",
+    )
+
+    @field_validator("service_name", "binary_path", "os_version")
+    @classmethod
+    def _reject_null_bytes(cls, value: str | None) -> str | None:
+        if value is not None and "\x00" in value:
+            raise ValueError("null bytes are not allowed")
+        return value
+
+
+class CheckScheduledTaskAliasIn(BaseModel):
+    task_path: str = Field(
+        ...,
+        min_length=1,
+        max_length=1024,
+        description="Deprecated alias argument: scheduled task path.",
+    )
+    os_version: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description="Deprecated alias argument: required target OS version.",
+    )
+
+    @field_validator("task_path", "os_version")
+    @classmethod
+    def _reject_null_bytes(cls, value: str | None) -> str | None:
+        if value is not None and "\x00" in value:
+            raise ValueError("null bytes are not allowed")
+        return value
+
+
+class CheckAutorunAliasIn(BaseModel):
+    key_path: str = Field(
+        ...,
+        min_length=1,
+        max_length=1024,
+        description="Deprecated alias argument: autorun registry key path.",
+    )
+    value_name: str | None = Field(
+        None,
+        max_length=256,
+        description="Deprecated alias argument: optional registry value name.",
+    )
+    os_version: str = Field(
+        ...,
+        min_length=1,
+        max_length=256,
+        description="Deprecated alias argument: required target OS version.",
+    )
+
+    @field_validator("key_path", "value_name", "os_version")
+    @classmethod
+    def _reject_null_bytes(cls, value: str | None) -> str | None:
+        if value is not None and "\x00" in value:
+            raise ValueError("null bytes are not allowed")
+        return value
 
 
 REGISTRY: list[ToolDef] = []
@@ -790,6 +928,98 @@ async def wintriage_check_process_tree(
         )
 
 
+async def wintriage_check_system(
+    params: CheckSystemIn, context: dict[str, Any] | None = None
+) -> ToolResult:
+    runtime = get_runtime()
+    tool_name = (context or {}).get("tool_name", "wintriage_check_system")
+    raw_args = params.model_dump(mode="json", exclude_none=True)
+    audit_id = runtime._audit._next_audit_id()
+    start = time.monotonic()
+    try:
+        if params.type is SystemType.service:
+            raw = await runtime._check_service(
+                params.name,
+                params.binary_path,
+                params.os_version,
+            )
+        elif params.type is SystemType.scheduled_task:
+            raw = await runtime._check_scheduled_task(params.name, params.os_version)
+        else:
+            raw = await runtime._check_autorun(
+                params.name,
+                params.value_name,
+                params.os_version,
+            )
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(runtime, tool_name, raw_args, raw, audit_id, elapsed_ms)
+        if "error" in raw:
+            return _legacy_error_result(raw, meta)
+        out = CheckSystemOut(
+            system_type=params.type,
+            verdict=Verdict(raw.get("verdict", "UNKNOWN")),
+            reasons=list(raw.get("reasons", [])),
+            confidence=raw.get("confidence", "low"),
+            findings=_findings(raw.get("findings", [])),
+            in_baseline=raw.get("in_baseline"),
+            baseline_info=raw.get("baseline_info"),
+            os_versions=list(raw.get("os_versions", []) or []),
+            hive=raw.get("hive"),
+            task_name=raw.get("task_name"),
+            lookup_performed=bool(raw.get("lookup_performed", True)),
+        )
+        return _model_result(out, meta)
+    except TriageValidationError as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "validation_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.invalid_input,
+            str(exc),
+            "Correct the system artifact arguments and retry.",
+            meta=meta,
+        )
+    except DatabaseError:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "database_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.upstream_degraded,
+            "A baseline database error occurred.",
+            "Check the local Windows triage database installation and retry.",
+            retryable=True,
+            meta=meta,
+        )
+    except WindowsTriageError as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "server_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.internal,
+            str(exc),
+            "Check backend logs for details, then retry.",
+            meta=meta,
+        )
+
+
 def _check_file_alias(params: BaseModel) -> CheckArtifactIn:
     alias = CheckFileAliasIn.model_validate(params)
     return CheckArtifactIn(
@@ -816,6 +1046,35 @@ def _filename_alias(artifact_type: ArtifactType) -> Callable[[BaseModel], CheckA
 def _dll_alias(params: BaseModel) -> CheckArtifactIn:
     alias = DllAliasIn.model_validate(params)
     return CheckArtifactIn(type=ArtifactType.dll, value=alias.dll_name)
+
+
+def _check_service_alias(params: BaseModel) -> CheckSystemIn:
+    alias = CheckServiceAliasIn.model_validate(params)
+    return CheckSystemIn(
+        type=SystemType.service,
+        name=alias.service_name,
+        binary_path=alias.binary_path,
+        os_version=alias.os_version,
+    )
+
+
+def _check_scheduled_task_alias(params: BaseModel) -> CheckSystemIn:
+    alias = CheckScheduledTaskAliasIn.model_validate(params)
+    return CheckSystemIn(
+        type=SystemType.scheduled_task,
+        name=alias.task_path,
+        os_version=alias.os_version,
+    )
+
+
+def _check_autorun_alias(params: BaseModel) -> CheckSystemIn:
+    alias = CheckAutorunAliasIn.model_validate(params)
+    return CheckSystemIn(
+        type=SystemType.autorun,
+        name=alias.key_path,
+        value_name=alias.value_name,
+        os_version=alias.os_version,
+    )
 
 
 REGISTRY.append(
@@ -859,6 +1118,27 @@ REGISTRY.append(
             "expectations DB. Example: "
             "`wintriage_check_process_tree(process_name='cmd.exe', "
             "parent_name='winword.exe')`."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="wintriage_check_system",
+        fn=wintriage_check_system,
+        in_model=CheckSystemIn,
+        out_model=CheckSystemOut,
+        annotations=_annotation("Check System Persistence"),
+        title="Check System Persistence",
+        description=(
+            "Validate Windows persistence and system configuration against "
+            "OS-version baselines: `type='service'`, `type='scheduled_task'`, "
+            "or `type='autorun'`. `os_version` is required because services, "
+            "tasks, and autoruns vary by release. UNKNOWN is neutral unless "
+            "the result includes concrete suspicious findings. Example: "
+            "`wintriage_check_system(type='service', name='EventLog', "
+            "os_version='Win10_21H2_Pro', "
+            "binary_path='C:\\\\Windows\\\\System32\\\\svchost.exe')`."
         ),
     )
 )
@@ -912,6 +1192,39 @@ ALIAS_REGISTRY["wintriage_check_artifact"] = [
         description=(
             "Maps legacy `check_hijackable_dll(dll_name)` calls to "
             "`wintriage_check_artifact(type='dll', value=dll_name)`."
+        ),
+    ),
+]
+
+ALIAS_REGISTRY["wintriage_check_system"] = [
+    ToolAliasDef(
+        name="check_service",
+        in_model=CheckServiceAliasIn,
+        transform=_check_service_alias,
+        title="Deprecated: Check Service",
+        description=(
+            "Maps legacy `check_service(service_name, binary_path, os_version)` "
+            "calls to `wintriage_check_system(type='service', name=service_name, ...)`."
+        ),
+    ),
+    ToolAliasDef(
+        name="check_scheduled_task",
+        in_model=CheckScheduledTaskAliasIn,
+        transform=_check_scheduled_task_alias,
+        title="Deprecated: Check Scheduled Task",
+        description=(
+            "Maps legacy `check_scheduled_task(task_path, os_version)` calls to "
+            "`wintriage_check_system(type='scheduled_task', name=task_path, ...)`."
+        ),
+    ),
+    ToolAliasDef(
+        name="check_autorun",
+        in_model=CheckAutorunAliasIn,
+        transform=_check_autorun_alias,
+        title="Deprecated: Check Autorun",
+        description=(
+            "Maps legacy `check_autorun(key_path, value_name, os_version)` calls to "
+            "`wintriage_check_system(type='autorun', name=key_path, ...)`."
         ),
     ),
 ]

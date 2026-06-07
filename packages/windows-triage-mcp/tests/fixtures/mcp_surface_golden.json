@@ -1382,6 +1382,878 @@
         "type": "object"
       },
       "title": "Check Process Tree"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check System Persistence"
+      },
+      "description": "Validate Windows persistence and system configuration against OS-version baselines: `type='service'`, `type='scheduled_task'`, or `type='autorun'`. `os_version` is required because services, tasks, and autoruns vary by release. UNKNOWN is neutral unless the result includes concrete suspicious findings. Example: `wintriage_check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro', binary_path='C:\\\\Windows\\\\System32\\\\svchost.exe')`.",
+      "input_schema": {
+        "properties": {
+          "binary_path": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional service binary path (type='service').",
+            "title": "Binary Path"
+          },
+          "name": {
+            "description": "Service name, scheduled-task path, or autorun registry key path.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "os_version": {
+            "description": "Target OS (e.g. Win10_21H2_Pro, W11_22H2, Server2022). REQUIRED because baselines vary by release.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Os Version",
+            "type": "string"
+          },
+          "type": {
+            "description": "System check type: service, scheduled_task, or autorun.",
+            "enum": [
+              "service",
+              "scheduled_task",
+              "autorun"
+            ],
+            "title": "SystemType",
+            "type": "string"
+          },
+          "value_name": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional registry value name (type='autorun').",
+            "title": "Value Name"
+          }
+        },
+        "required": [
+          "type",
+          "name",
+          "os_version"
+        ],
+        "title": "CheckSystemIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "wintriage_check_system",
+      "output_schema": {
+        "properties": {
+          "baseline_info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Baseline service metadata when available.",
+            "title": "Baseline Info"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "hive": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Autorun hive for matching entries.",
+            "title": "Hive"
+          },
+          "in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "True when the service/task/autorun is present in baseline.",
+            "title": "In Baseline"
+          },
+          "lookup_performed": {
+            "default": true,
+            "description": "False only when validation prevented a baseline lookup.",
+            "title": "Lookup Performed",
+            "type": "boolean"
+          },
+          "os_versions": {
+            "description": "OS versions associated with the match.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Os Versions",
+            "type": "array"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "system_type": {
+            "description": "System artifact subtype checked.",
+            "enum": [
+              "service",
+              "scheduled_task",
+              "autorun"
+            ],
+            "title": "SystemType",
+            "type": "string"
+          },
+          "task_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Scheduled task display name.",
+            "title": "Task Name"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "system_type"
+        ],
+        "title": "CheckSystemOut",
+        "type": "object"
+      },
+      "title": "Check System Persistence"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check System Persistence"
+      },
+      "description": "DEPRECATED alias for `wintriage_check_system`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_service(service_name, binary_path, os_version)` calls to `wintriage_check_system(type='service', name=service_name, ...)`.\n\nValidate Windows persistence and system configuration against OS-version baselines: `type='service'`, `type='scheduled_task'`, or `type='autorun'`. `os_version` is required because services, tasks, and autoruns vary by release. UNKNOWN is neutral unless the result includes concrete suspicious findings. Example: `wintriage_check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro', binary_path='C:\\\\Windows\\\\System32\\\\svchost.exe')`.",
+      "input_schema": {
+        "properties": {
+          "binary_path": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Deprecated alias argument: optional service binary path.",
+            "title": "Binary Path"
+          },
+          "os_version": {
+            "description": "Deprecated alias argument: required target OS version.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Os Version",
+            "type": "string"
+          },
+          "service_name": {
+            "description": "Deprecated alias argument: service name.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Service Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "service_name",
+          "os_version"
+        ],
+        "title": "CheckServiceAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_check_system",
+        "deprecated": true
+      },
+      "name": "check_service",
+      "output_schema": {
+        "properties": {
+          "baseline_info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Baseline service metadata when available.",
+            "title": "Baseline Info"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "hive": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Autorun hive for matching entries.",
+            "title": "Hive"
+          },
+          "in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "True when the service/task/autorun is present in baseline.",
+            "title": "In Baseline"
+          },
+          "lookup_performed": {
+            "default": true,
+            "description": "False only when validation prevented a baseline lookup.",
+            "title": "Lookup Performed",
+            "type": "boolean"
+          },
+          "os_versions": {
+            "description": "OS versions associated with the match.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Os Versions",
+            "type": "array"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "system_type": {
+            "description": "System artifact subtype checked.",
+            "enum": [
+              "service",
+              "scheduled_task",
+              "autorun"
+            ],
+            "title": "SystemType",
+            "type": "string"
+          },
+          "task_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Scheduled task display name.",
+            "title": "Task Name"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "system_type"
+        ],
+        "title": "CheckSystemOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Check Service"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check System Persistence"
+      },
+      "description": "DEPRECATED alias for `wintriage_check_system`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_scheduled_task(task_path, os_version)` calls to `wintriage_check_system(type='scheduled_task', name=task_path, ...)`.\n\nValidate Windows persistence and system configuration against OS-version baselines: `type='service'`, `type='scheduled_task'`, or `type='autorun'`. `os_version` is required because services, tasks, and autoruns vary by release. UNKNOWN is neutral unless the result includes concrete suspicious findings. Example: `wintriage_check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro', binary_path='C:\\\\Windows\\\\System32\\\\svchost.exe')`.",
+      "input_schema": {
+        "properties": {
+          "os_version": {
+            "description": "Deprecated alias argument: required target OS version.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Os Version",
+            "type": "string"
+          },
+          "task_path": {
+            "description": "Deprecated alias argument: scheduled task path.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Task Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_path",
+          "os_version"
+        ],
+        "title": "CheckScheduledTaskAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_check_system",
+        "deprecated": true
+      },
+      "name": "check_scheduled_task",
+      "output_schema": {
+        "properties": {
+          "baseline_info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Baseline service metadata when available.",
+            "title": "Baseline Info"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "hive": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Autorun hive for matching entries.",
+            "title": "Hive"
+          },
+          "in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "True when the service/task/autorun is present in baseline.",
+            "title": "In Baseline"
+          },
+          "lookup_performed": {
+            "default": true,
+            "description": "False only when validation prevented a baseline lookup.",
+            "title": "Lookup Performed",
+            "type": "boolean"
+          },
+          "os_versions": {
+            "description": "OS versions associated with the match.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Os Versions",
+            "type": "array"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "system_type": {
+            "description": "System artifact subtype checked.",
+            "enum": [
+              "service",
+              "scheduled_task",
+              "autorun"
+            ],
+            "title": "SystemType",
+            "type": "string"
+          },
+          "task_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Scheduled task display name.",
+            "title": "Task Name"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "system_type"
+        ],
+        "title": "CheckSystemOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Check Scheduled Task"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check System Persistence"
+      },
+      "description": "DEPRECATED alias for `wintriage_check_system`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_autorun(key_path, value_name, os_version)` calls to `wintriage_check_system(type='autorun', name=key_path, ...)`.\n\nValidate Windows persistence and system configuration against OS-version baselines: `type='service'`, `type='scheduled_task'`, or `type='autorun'`. `os_version` is required because services, tasks, and autoruns vary by release. UNKNOWN is neutral unless the result includes concrete suspicious findings. Example: `wintriage_check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro', binary_path='C:\\\\Windows\\\\System32\\\\svchost.exe')`.",
+      "input_schema": {
+        "properties": {
+          "key_path": {
+            "description": "Deprecated alias argument: autorun registry key path.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Key Path",
+            "type": "string"
+          },
+          "os_version": {
+            "description": "Deprecated alias argument: required target OS version.",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Os Version",
+            "type": "string"
+          },
+          "value_name": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Deprecated alias argument: optional registry value name.",
+            "title": "Value Name"
+          }
+        },
+        "required": [
+          "key_path",
+          "os_version"
+        ],
+        "title": "CheckAutorunAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_check_system",
+        "deprecated": true
+      },
+      "name": "check_autorun",
+      "output_schema": {
+        "properties": {
+          "baseline_info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Baseline service metadata when available.",
+            "title": "Baseline Info"
+          },
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "hive": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Autorun hive for matching entries.",
+            "title": "Hive"
+          },
+          "in_baseline": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "True when the service/task/autorun is present in baseline.",
+            "title": "In Baseline"
+          },
+          "lookup_performed": {
+            "default": true,
+            "description": "False only when validation prevented a baseline lookup.",
+            "title": "Lookup Performed",
+            "type": "boolean"
+          },
+          "os_versions": {
+            "description": "OS versions associated with the match.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Os Versions",
+            "type": "array"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "system_type": {
+            "description": "System artifact subtype checked.",
+            "enum": [
+              "service",
+              "scheduled_task",
+              "autorun"
+            ],
+            "title": "SystemType",
+            "type": "string"
+          },
+          "task_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Scheduled task display name.",
+            "title": "Task Name"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "system_type"
+        ],
+        "title": "CheckSystemOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Check Autorun"
     }
   ]
 }
