@@ -2254,6 +2254,269 @@
         "type": "object"
       },
       "title": "Deprecated: Check Autorun"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Check Registry Baseline"
+      },
+      "description": "Check a registry key or value against the full Windows registry baseline. This requires the optional large `known_good_registry.db`. Use for general registry validation; for autorun persistence prefer `wintriage_check_system(type='autorun')` because it is faster and does not require the large registry DB. UNKNOWN is neutral: not in the local registry baseline is not evidence of malice. Example: `wintriage_check_registry(key_path='SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run')`.",
+      "input_schema": {
+        "properties": {
+          "hive": {
+            "anyOf": [
+              {
+                "enum": [
+                  "SYSTEM",
+                  "SOFTWARE",
+                  "NTUSER",
+                  "DEFAULT"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional registry hive.",
+            "title": "Hive"
+          },
+          "key_path": {
+            "description": "Registry key path (e.g. 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion').",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Key Path",
+            "type": "string"
+          },
+          "os_version": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional OS-version filter.",
+            "title": "Os Version"
+          },
+          "value_name": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional specific value name.",
+            "title": "Value Name"
+          }
+        },
+        "required": [
+          "key_path"
+        ],
+        "title": "CheckRegistryIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "wintriage_check_registry",
+      "output_schema": {
+        "properties": {
+          "confidence": {
+            "description": "Confidence in the baseline verdict.",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "findings": {
+            "description": "Suspicious or contextual findings.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Human-readable finding summary.",
+                  "title": "Description",
+                  "type": "string"
+                },
+                "extra": {
+                  "additionalProperties": true,
+                  "description": "Type-specific finding details.",
+                  "title": "Extra",
+                  "type": "object"
+                },
+                "severity": {
+                  "description": "Finding severity.",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ],
+                  "title": "Severity",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "Machine-readable finding type.",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "severity",
+                "description"
+              ],
+              "title": "Finding",
+              "type": "object"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "in_baseline": {
+            "description": "True when the key/value exists in the registry baseline.",
+            "title": "In Baseline",
+            "type": "boolean"
+          },
+          "match_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Total matching registry rows before output capping.",
+            "title": "Match Count"
+          },
+          "os_version_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Total OS-version count before output capping.",
+            "title": "Os Version Count"
+          },
+          "os_versions": {
+            "description": "Up to 10 OS versions associated with matching entries.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Os Versions",
+            "type": "array"
+          },
+          "reasons": {
+            "description": "Why this verdict was assigned.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "value_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Total value count before output capping.",
+            "title": "Value Count"
+          },
+          "values": {
+            "description": "Up to 10 matching values as {name,type,hive}.",
+            "items": {
+              "properties": {
+                "hive": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Registry hive.",
+                  "title": "Hive"
+                },
+                "name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Registry value name.",
+                  "title": "Name"
+                },
+                "type": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Registry value type.",
+                  "title": "Type"
+                }
+              },
+              "title": "RegistryValueSummary",
+              "type": "object"
+            },
+            "title": "Values",
+            "type": "array"
+          },
+          "verdict": {
+            "description": "Offline Windows baseline verdict.",
+            "enum": [
+              "EXPECTED",
+              "EXPECTED_LOLBIN",
+              "SUSPICIOUS",
+              "UNKNOWN",
+              "ERROR"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reasons",
+          "confidence",
+          "in_baseline"
+        ],
+        "title": "CheckRegistryOut",
+        "type": "object"
+      },
+      "title": "Check Registry Baseline"
     }
   ]
 }

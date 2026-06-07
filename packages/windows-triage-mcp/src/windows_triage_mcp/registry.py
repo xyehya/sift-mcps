@@ -413,6 +413,67 @@ class CheckAutorunAliasIn(BaseModel):
         return value
 
 
+class RegistryValueSummary(BaseModel):
+    name: str | None = Field(None, description="Registry value name.")
+    type: str | None = Field(None, description="Registry value type.")
+    hive: str | None = Field(None, description="Registry hive.")
+
+
+class CheckRegistryIn(BaseModel):
+    key_path: str = Field(
+        ...,
+        min_length=1,
+        max_length=1024,
+        description=(
+            "Registry key path (e.g. "
+            "'SOFTWARE\\Microsoft\\Windows\\CurrentVersion')."
+        ),
+    )
+    value_name: str | None = Field(
+        None,
+        max_length=256,
+        description="Optional specific value name.",
+    )
+    hive: Literal["SYSTEM", "SOFTWARE", "NTUSER", "DEFAULT"] | None = Field(
+        None, description="Optional registry hive."
+    )
+    os_version: str | None = Field(
+        None,
+        max_length=256,
+        description="Optional OS-version filter.",
+    )
+
+    @field_validator("key_path", "value_name", "hive", "os_version")
+    @classmethod
+    def _reject_null_bytes(cls, value: str | None) -> str | None:
+        if value is not None and "\x00" in value:
+            raise ValueError("null bytes are not allowed")
+        return value
+
+
+class CheckRegistryOut(VerdictOut):
+    in_baseline: bool = Field(
+        ..., description="True when the key/value exists in the registry baseline."
+    )
+    os_versions: list[str] = Field(
+        default_factory=list,
+        description="Up to 10 OS versions associated with matching entries.",
+    )
+    os_version_count: int | None = Field(
+        None, description="Total OS-version count before output capping."
+    )
+    match_count: int | None = Field(
+        None, description="Total matching registry rows before output capping."
+    )
+    values: list[RegistryValueSummary] = Field(
+        default_factory=list,
+        description="Up to 10 matching values as {name,type,hive}.",
+    )
+    value_count: int | None = Field(
+        None, description="Total value count before output capping."
+    )
+
+
 REGISTRY: list[ToolDef] = []
 ALIAS_REGISTRY: dict[str, list[ToolAliasDef]] = {}
 PROMPT_REGISTRY: list[PromptDef] = []
@@ -1020,6 +1081,114 @@ async def wintriage_check_system(
         )
 
 
+async def wintriage_check_registry(
+    params: CheckRegistryIn, context: dict[str, Any] | None = None
+) -> ToolResult:
+    runtime = get_runtime()
+    tool_name = (context or {}).get("tool_name", "wintriage_check_registry")
+    raw_args = params.model_dump(mode="json", exclude_none=True)
+    audit_id = runtime._audit._next_audit_id()
+    start = time.monotonic()
+    try:
+        raw = await runtime._check_registry(
+            params.key_path,
+            params.value_name,
+            params.hive,
+            params.os_version,
+        )
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(runtime, tool_name, raw_args, raw, audit_id, elapsed_ms)
+        if "error" in raw:
+            code = (
+                ErrorCode.upstream_degraded
+                if "not available" in str(raw.get("error", "")).lower()
+                else ErrorCode.invalid_input
+            )
+            remediation = (
+                "Install the optional known_good_registry.db per SETUP.md, "
+                "or use wintriage_check_system(type='autorun') for persistence checks."
+                if code is ErrorCode.upstream_degraded
+                else str(raw.get("next_step") or "Correct the request and retry.")
+            )
+            return _error_result(
+                code,
+                str(raw.get("message") or raw.get("error") or "Registry lookup failed."),
+                remediation,
+                retryable=code is ErrorCode.upstream_degraded,
+                details={
+                    key: value
+                    for key, value in raw.items()
+                    if key not in {"error", "message", "next_step"}
+                },
+                meta=meta,
+            )
+        out = CheckRegistryOut(
+            verdict=Verdict(raw.get("verdict", "UNKNOWN")),
+            reasons=list(raw.get("reasons", [])),
+            confidence=raw.get("confidence", "low"),
+            findings=_findings(raw.get("findings", [])),
+            in_baseline=bool(raw.get("in_baseline", False)),
+            os_versions=list(raw.get("os_versions", []) or [])[:10],
+            os_version_count=raw.get("os_version_count"),
+            match_count=raw.get("match_count"),
+            values=[
+                RegistryValueSummary.model_validate(item)
+                for item in list(raw.get("values", []) or [])[:10]
+            ],
+            value_count=raw.get("value_count"),
+        )
+        return _model_result(out, meta)
+    except TriageValidationError as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "validation_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.invalid_input,
+            str(exc),
+            "Correct the registry key, hive, value name, or OS-version argument and retry.",
+            meta=meta,
+        )
+    except DatabaseError:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "database_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.upstream_degraded,
+            "A registry baseline database error occurred.",
+            "Check the optional known_good_registry.db installation and retry.",
+            retryable=True,
+            meta=meta,
+        )
+    except WindowsTriageError as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "server_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.internal,
+            str(exc),
+            "Check backend logs for details, then retry.",
+            meta=meta,
+        )
+
+
 def _check_file_alias(params: BaseModel) -> CheckArtifactIn:
     alias = CheckFileAliasIn.model_validate(params)
     return CheckArtifactIn(
@@ -1139,6 +1308,27 @@ REGISTRY.append(
             "`wintriage_check_system(type='service', name='EventLog', "
             "os_version='Win10_21H2_Pro', "
             "binary_path='C:\\\\Windows\\\\System32\\\\svchost.exe')`."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="wintriage_check_registry",
+        fn=wintriage_check_registry,
+        in_model=CheckRegistryIn,
+        out_model=CheckRegistryOut,
+        annotations=_annotation("Check Registry Baseline"),
+        title="Check Registry Baseline",
+        description=(
+            "Check a registry key or value against the full Windows registry "
+            "baseline. This requires the optional large `known_good_registry.db`. "
+            "Use for general registry validation; for autorun persistence prefer "
+            "`wintriage_check_system(type='autorun')` because it is faster and "
+            "does not require the large registry DB. UNKNOWN is neutral: not in "
+            "the local registry baseline is not evidence of malice. Example: "
+            "`wintriage_check_registry(key_path='SOFTWARE\\\\Microsoft\\\\Windows"
+            "\\\\CurrentVersion\\\\Run')`."
         ),
     )
 )
