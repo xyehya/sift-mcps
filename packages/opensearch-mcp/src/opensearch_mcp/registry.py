@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -200,6 +201,33 @@ class GetEventOut(SearchHit):
     note: str = Field("Full document - no truncation", description="Full document fetch note.")
 
 
+class TimelineIn(CaseScopedQueryBase):
+    query: str = Field("*", description="query_string filter.")
+    interval: str = Field(
+        "1h",
+        pattern=r"^\d+[smhd]$",
+        description="Bucket size: Ns/Nm/Nh/Nd (e.g. 30m, 1h, 1d).",
+    )
+    time_field: str = Field("@timestamp", description="Date field to bucket on.")
+    time_from: str = Field("", description="ISO-8601 lower bound.")
+    time_to: str = Field("", description="ISO-8601 upper bound.")
+
+
+class TimeBucket(BaseModel):
+    time: str = Field(..., description="Bucket start (ISO-8601).")
+    count: int = Field(..., description="Document count in this time bucket.")
+
+
+class TimelineOut(BaseModel):
+    total_docs: int = Field(..., description="Docs matching query before bucketing.")
+    interval: str = Field(..., description="Histogram interval used.")
+    buckets: list[TimeBucket] = Field(..., description="Sparse date histogram buckets.")
+    advisories: list[Advisory] = Field(
+        default_factory=list,
+        description="Optional narrowing advisory for very large histograms.",
+    )
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -317,6 +345,15 @@ def _advisories_from_raw(raw: dict[str, Any]) -> list[Advisory]:
     return advisories
 
 
+def _timeline_bucket_warning_limit() -> int:
+    raw = os.environ.get("OPENSEARCH_TIMELINE_BUCKET_WARNING_LIMIT", "2000")
+    try:
+        value = int(raw)
+    except ValueError:
+        return 2000
+    return max(value, 1)
+
+
 def _search_hit_from_legacy(hit: dict[str, Any]) -> SearchHit:
     fields = {
         key: value for key, value in hit.items() if key not in {"_id", "_index", "_truncated"}
@@ -394,6 +431,34 @@ async def run_opensearch_get_event(params: GetEventIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
+async def run_opensearch_timeline(params: TimelineIn) -> ToolResult:
+    raw = _legacy_server().opensearch_timeline(**params.model_dump())
+    if "error" in raw:
+        return _legacy_error(raw)
+    meta = _meta_from_raw(raw)
+    buckets = [TimeBucket.model_validate(bucket) for bucket in raw.get("buckets", [])]
+    advisories = _advisories_from_raw(raw)
+    warning_limit = _timeline_bucket_warning_limit()
+    if len(buckets) >= warning_limit:
+        advisories.append(
+            Advisory(
+                kind="pagination",
+                text=(
+                    f"Timeline returned {len(buckets)} buckets, meeting the "
+                    f"configured warning ceiling ({warning_limit}). Narrow with "
+                    "time_from/time_to or increase interval; buckets were not truncated."
+                ),
+            )
+        )
+    out = TimelineOut(
+        total_docs=int(raw.get("total_docs", 0)),
+        interval=str(raw.get("interval", params.interval)),
+        buckets=buckets,
+        advisories=advisories,
+    )
+    return _success_tool_result(out, meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -426,6 +491,24 @@ REGISTRY.append(
             "population or gauge magnitude before opensearch_search. Do not use "
             "when you need per-value counts; use opensearch_aggregate. Example: "
             "opensearch_count(query='event.code:4624')."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_timeline",
+        fn=run_opensearch_timeline,
+        in_model=TimelineIn,
+        out_model=TimelineOut,
+        annotations=_read_annotations("Event Timeline (Histogram)"),
+        title="Event Timeline (Histogram)",
+        description=(
+            "Build a date histogram of event counts to find activity bursts before "
+            "drilling in. Use to locate spikes, then scope opensearch_search with "
+            "time_from/time_to. Buckets are warned at the configured ceiling and "
+            "never silently truncated. Example: "
+            "opensearch_timeline(query='event.code:4688', interval='1h')."
         ),
     )
 )

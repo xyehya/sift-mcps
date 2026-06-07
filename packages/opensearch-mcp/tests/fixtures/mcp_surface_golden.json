@@ -251,6 +251,145 @@
         "idempotentHint": true,
         "openWorldHint": true,
         "readOnlyHint": true,
+        "title": "Event Timeline (Histogram)"
+      },
+      "description": "Build a date histogram of event counts to find activity bursts before drilling in. Use to locate spikes, then scope opensearch_search with time_from/time_to. Buckets are warned at the configured ceiling and never silently truncated. Example: opensearch_timeline(query='event.code:4688', interval='1h').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "index": {
+            "default": "",
+            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "title": "Index",
+            "type": "string"
+          },
+          "interval": {
+            "default": "1h",
+            "description": "Bucket size: Ns/Nm/Nh/Nd (e.g. 30m, 1h, 1d).",
+            "pattern": "^\\d+[smhd]$",
+            "title": "Interval",
+            "type": "string"
+          },
+          "query": {
+            "default": "*",
+            "description": "query_string filter.",
+            "title": "Query",
+            "type": "string"
+          },
+          "time_field": {
+            "default": "@timestamp",
+            "description": "Date field to bucket on.",
+            "title": "Time Field",
+            "type": "string"
+          },
+          "time_from": {
+            "default": "",
+            "description": "ISO-8601 lower bound.",
+            "title": "Time From",
+            "type": "string"
+          },
+          "time_to": {
+            "default": "",
+            "description": "ISO-8601 upper bound.",
+            "title": "Time To",
+            "type": "string"
+          }
+        },
+        "title": "TimelineIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_timeline",
+      "output_schema": {
+        "properties": {
+          "advisories": {
+            "description": "Optional narrowing advisory for very large histograms.",
+            "items": {
+              "properties": {
+                "kind": {
+                  "description": "Machine-readable advisory category.",
+                  "enum": [
+                    "field_mapping",
+                    "execution_evidence",
+                    "pagination",
+                    "empty_result"
+                  ],
+                  "title": "Kind",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "Human-readable advisory text.",
+                  "title": "Text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "title": "Advisory",
+              "type": "object"
+            },
+            "title": "Advisories",
+            "type": "array"
+          },
+          "buckets": {
+            "description": "Sparse date histogram buckets.",
+            "items": {
+              "properties": {
+                "count": {
+                  "description": "Document count in this time bucket.",
+                  "title": "Count",
+                  "type": "integer"
+                },
+                "time": {
+                  "description": "Bucket start (ISO-8601).",
+                  "title": "Time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "time",
+                "count"
+              ],
+              "title": "TimeBucket",
+              "type": "object"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "interval": {
+            "description": "Histogram interval used.",
+            "title": "Interval",
+            "type": "string"
+          },
+          "total_docs": {
+            "description": "Docs matching query before bucketing.",
+            "title": "Total Docs",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_docs",
+          "interval",
+          "buckets"
+        ],
+        "title": "TimelineOut",
+        "type": "object"
+      },
+      "title": "Event Timeline (Histogram)"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
         "title": "Get Full Document"
       },
       "description": "Fetch one complete document by _id with every field and no truncation. Use after opensearch_search when a compact hit needs inspection. The index must be exact, not a wildcard. Example: opensearch_get_event(event_id='abc123', index='case-rocba-drive-20260526-1417-evtx-srl-forge').",
