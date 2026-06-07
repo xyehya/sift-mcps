@@ -244,6 +244,111 @@
         "type": "object"
       },
       "title": "Count Documents"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Aggregate Field (Top-N)"
+      },
+      "description": "Group by a field for top-N frequency analysis such as event codes, users, hosts, or process names. Use for distributions. Do not use when you want individual documents; use opensearch_search. Example: opensearch_aggregate(field='event.code').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "field": {
+            "description": "Field to group by. CSV/registry text fields need '.keyword' (e.g. 'Path.keyword'); evtx fields like event.code are already keyword.",
+            "minLength": 1,
+            "title": "Field",
+            "type": "string"
+          },
+          "index": {
+            "default": "",
+            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "title": "Index",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Max buckets. Hard cap 500.",
+            "maximum": 500,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "default": "*",
+            "description": "query_string filter applied before aggregation.",
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "title": "AggregateIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_aggregate",
+      "output_schema": {
+        "properties": {
+          "buckets": {
+            "description": "Top-N buckets for the requested field.",
+            "items": {
+              "properties": {
+                "count": {
+                  "description": "Doc count for the value.",
+                  "title": "Count",
+                  "type": "integer"
+                },
+                "key": {
+                  "description": "Bucket value.",
+                  "title": "Key"
+                }
+              },
+              "required": [
+                "key",
+                "count"
+              ],
+              "title": "Bucket",
+              "type": "object"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "field": {
+            "description": "Field grouped by this aggregation.",
+            "title": "Field",
+            "type": "string"
+          },
+          "total_docs": {
+            "description": "Docs matching query before bucketing.",
+            "title": "Total Docs",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "True when bucket count hit the limit.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "total_docs",
+          "buckets",
+          "truncated"
+        ],
+        "title": "AggregateOut",
+        "type": "object"
+      },
+      "title": "Aggregate Field (Top-N)"
     }
   ]
 }

@@ -154,6 +154,31 @@ class CountOut(BaseModel):
     count: int = Field(..., description="Exact document count for the query in scope.")
 
 
+class AggregateIn(CaseScopedQueryBase):
+    field: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Field to group by. CSV/registry text fields need '.keyword' "
+            "(e.g. 'Path.keyword'); evtx fields like event.code are already keyword."
+        ),
+    )
+    query: str = Field("*", description="query_string filter applied before aggregation.")
+    limit: int = Field(50, ge=1, le=500, description="Max buckets. Hard cap 500.")
+
+
+class Bucket(BaseModel):
+    key: Any = Field(..., description="Bucket value.")
+    count: int = Field(..., description="Doc count for the value.")
+
+
+class AggregateOut(BaseModel):
+    field: str = Field(..., description="Field grouped by this aggregation.")
+    total_docs: int = Field(..., description="Docs matching query before bucketing.")
+    buckets: list[Bucket] = Field(..., description="Top-N buckets for the requested field.")
+    truncated: bool = Field(..., description="True when bucket count hit the limit.")
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -309,6 +334,20 @@ async def run_opensearch_count(params: CountIn) -> ToolResult:
     return _success_tool_result(CountOut(count=int(raw.get("count", 0))), meta)
 
 
+async def run_opensearch_aggregate(params: AggregateIn) -> ToolResult:
+    raw = _legacy_server().opensearch_aggregate(**params.model_dump())
+    if "error" in raw:
+        return _legacy_error(raw)
+    meta = _meta_from_raw(raw)
+    out = AggregateOut(
+        field=str(raw.get("field", params.field)),
+        total_docs=int(raw.get("total_docs", 0)),
+        buckets=[Bucket.model_validate(bucket) for bucket in raw.get("buckets", [])],
+        truncated=bool(raw.get("truncated", False)),
+    )
+    return _success_tool_result(out, meta)
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -341,6 +380,23 @@ REGISTRY.append(
             "population or gauge magnitude before opensearch_search. Do not use "
             "when you need per-value counts; use opensearch_aggregate. Example: "
             "opensearch_count(query='event.code:4624')."
+        ),
+    )
+)
+
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_aggregate",
+        fn=run_opensearch_aggregate,
+        in_model=AggregateIn,
+        out_model=AggregateOut,
+        annotations=_read_annotations("Aggregate Field (Top-N)"),
+        title="Aggregate Field (Top-N)",
+        description=(
+            "Group by a field for top-N frequency analysis such as event codes, "
+            "users, hosts, or process names. Use for distributions. Do not use "
+            "when you want individual documents; use opensearch_search. Example: "
+            "opensearch_aggregate(field='event.code')."
         ),
     )
 )
