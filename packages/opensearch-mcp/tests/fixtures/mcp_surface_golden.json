@@ -11,6 +11,15 @@
       "name": "opensearch_cluster_status",
       "title": "Cluster & Index Status",
       "uri": "opensearch://cluster/status"
+    },
+    {
+      "annotations": null,
+      "description": "Read-only resource view of OpenSearch shard usage and capacity headroom.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "opensearch_cluster_shards",
+      "title": "Shard Capacity",
+      "uri": "opensearch://cluster/shards"
     }
   ],
   "tools": [
@@ -752,6 +761,128 @@
         "type": "object"
       },
       "title": "Cluster & Index Status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Shard Capacity"
+      },
+      "description": "DEPRECATED tool form; prefer resource opensearch://cluster/shards when available. Reports shard usage and capacity headroom. Use before large ingests because a full disk image can add many shards.",
+      "input_schema": {
+        "properties": {},
+        "title": "ShardStatusIn",
+        "type": "object"
+      },
+      "meta": {
+        "deprecated": true,
+        "removal_horizon": "at/after D27b",
+        "resource_uri": "opensearch://cluster/shards"
+      },
+      "name": "opensearch_shard_status",
+      "output_schema": {
+        "properties": {
+          "current_shards": {
+            "description": "Current shard count.",
+            "title": "Current Shards",
+            "type": "integer"
+          },
+          "data_nodes": {
+            "description": "Number of data nodes.",
+            "title": "Data Nodes",
+            "type": "integer"
+          },
+          "headroom_pct": {
+            "description": "Remaining shard capacity percentage.",
+            "title": "Headroom Pct",
+            "type": "number"
+          },
+          "max_shards_per_node": {
+            "description": "Configured max shards per data node.",
+            "title": "Max Shards Per Node",
+            "type": "integer"
+          },
+          "max_total": {
+            "description": "Maximum total shards across data nodes.",
+            "title": "Max Total",
+            "type": "integer"
+          },
+          "status": {
+            "description": "ok>=10%, warning>=2%, critical<2% headroom.",
+            "enum": [
+              "ok",
+              "warning",
+              "critical"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "top_indices_by_shard_count": {
+            "description": "Top visible indices by shard count.",
+            "items": {
+              "properties": {
+                "doc_count": {
+                  "description": "Document count.",
+                  "title": "Doc Count",
+                  "type": "integer"
+                },
+                "index": {
+                  "description": "Index name.",
+                  "title": "Index",
+                  "type": "string"
+                },
+                "primary_shards": {
+                  "description": "Primary shard count.",
+                  "title": "Primary Shards",
+                  "type": "integer"
+                },
+                "replica_shards": {
+                  "description": "Replica shard count.",
+                  "title": "Replica Shards",
+                  "type": "integer"
+                },
+                "size": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Human store size if reported.",
+                  "title": "Size"
+                }
+              },
+              "required": [
+                "index",
+                "primary_shards",
+                "replica_shards",
+                "doc_count"
+              ],
+              "title": "TopIndexShards",
+              "type": "object"
+            },
+            "title": "Top Indices By Shard Count",
+            "type": "array"
+          }
+        },
+        "required": [
+          "current_shards",
+          "max_shards_per_node",
+          "data_nodes",
+          "max_total",
+          "headroom_pct",
+          "status",
+          "top_indices_by_shard_count"
+        ],
+        "title": "ShardStatusOut",
+        "type": "object"
+      },
+      "title": "Shard Capacity"
     }
   ]
 }

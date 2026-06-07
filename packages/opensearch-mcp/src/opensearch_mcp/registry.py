@@ -269,6 +269,32 @@ class StatusOut(BaseModel):
     total_indices: int = Field(..., description="Number of case-* indices returned.")
 
 
+class ShardStatusIn(BaseModel):
+    pass
+
+
+class TopIndexShards(BaseModel):
+    index: str = Field(..., description="Index name.")
+    primary_shards: int = Field(..., description="Primary shard count.")
+    replica_shards: int = Field(..., description="Replica shard count.")
+    doc_count: int = Field(..., description="Document count.")
+    size: str | None = Field(None, description="Human store size if reported.")
+
+
+class ShardStatusOut(BaseModel):
+    current_shards: int = Field(..., description="Current shard count.")
+    max_shards_per_node: int = Field(..., description="Configured max shards per data node.")
+    data_nodes: int = Field(..., description="Number of data nodes.")
+    max_total: int = Field(..., description="Maximum total shards across data nodes.")
+    headroom_pct: float = Field(..., description="Remaining shard capacity percentage.")
+    status: Literal["ok", "warning", "critical"] = Field(
+        ..., description="ok>=10%, warning>=2%, critical<2% headroom."
+    )
+    top_indices_by_shard_count: list[TopIndexShards] = Field(
+        ..., description="Top visible indices by shard count."
+    )
+
+
 def _read_annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -546,6 +572,38 @@ async def opensearch_cluster_status_resource() -> str:
     return _json_from_tool_result(await run_opensearch_status(StatusIn()))
 
 
+async def run_opensearch_shard_status(_params: ShardStatusIn) -> ToolResult:
+    try:
+        raw = _legacy_server().opensearch_shard_status()
+    except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
+        return _tool_error_result(
+            ErrorCode.upstream_unavailable,
+            f"{type(exc).__name__}: OpenSearch shard status check failed.",
+            "Check OpenSearch connectivity and credentials, then retry.",
+            retryable=True,
+        )
+    if raw.get("status") == "error" or "error" in raw:
+        return _legacy_error(raw, default_code=ErrorCode.upstream_unavailable)
+    meta = _meta_from_raw(raw)
+    out = ShardStatusOut(
+        current_shards=int(raw.get("current_shards", 0)),
+        max_shards_per_node=int(raw.get("max_shards_per_node", 0)),
+        data_nodes=int(raw.get("data_nodes", 0)),
+        max_total=int(raw.get("max_total", 0)),
+        headroom_pct=float(raw.get("headroom_pct", 0.0)),
+        status=raw.get("status", "critical"),
+        top_indices_by_shard_count=[
+            TopIndexShards.model_validate(item)
+            for item in raw.get("top_indices_by_shard_count", [])
+        ],
+    )
+    return _success_tool_result(out, meta)
+
+
+async def opensearch_cluster_shards_resource() -> str:
+    return _json_from_tool_result(await run_opensearch_shard_status(ShardStatusIn()))
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -681,6 +739,37 @@ RESOURCE_REGISTRY.append(
         name="opensearch_cluster_status",
         title="Cluster & Index Status",
         description="Read-only resource view of OpenSearch cluster health and case index counts.",
+    )
+)
+
+_TOOL_META["opensearch_shard_status"] = {
+    "deprecated": True,
+    "resource_uri": "opensearch://cluster/shards",
+    "removal_horizon": "at/after D27b",
+}
+REGISTRY.append(
+    ToolDef(
+        name="opensearch_shard_status",
+        fn=run_opensearch_shard_status,
+        in_model=ShardStatusIn,
+        out_model=ShardStatusOut,
+        annotations=_read_annotations("Shard Capacity"),
+        title="Shard Capacity",
+        description=(
+            "DEPRECATED tool form; prefer resource opensearch://cluster/shards when "
+            "available. Reports shard usage and capacity headroom. Use before large "
+            "ingests because a full disk image can add many shards."
+        ),
+    )
+)
+
+RESOURCE_REGISTRY.append(
+    ResourceDef(
+        uri="opensearch://cluster/shards",
+        fn=opensearch_cluster_shards_resource,
+        name="opensearch_cluster_shards",
+        title="Shard Capacity",
+        description="Read-only resource view of OpenSearch shard usage and capacity headroom.",
     )
 )
 
