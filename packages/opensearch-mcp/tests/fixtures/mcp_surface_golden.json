@@ -3,5 +3,196 @@
   "prompts": [],
   "resource_templates": [],
   "resources": [],
-  "tools": []
+  "tools": [
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true,
+        "readOnlyHint": true,
+        "title": "Search Evidence"
+      },
+      "description": "Search indexed evidence with query_string syntax. Use for targeted lookups by indicator, user, IP, hash, or field value. Do not use for frequency counts (use opensearch_aggregate) or activity spikes (use opensearch_timeline); for one full document use opensearch_get_event. Example: opensearch_search(query='event.code:4688 AND process.name:*powershell*', case_id='rocba-drive-20260526-1417').",
+      "input_schema": {
+        "properties": {
+          "case_id": {
+            "default": "",
+            "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
+            "title": "Case Id",
+            "type": "string"
+          },
+          "compact": {
+            "default": true,
+            "description": "True excludes bloat fields and truncates values to 500 chars. Set False for full docs (prefer opensearch_get_event for one doc).",
+            "title": "Compact",
+            "type": "boolean"
+          },
+          "index": {
+            "default": "",
+            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "title": "Index",
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "description": "Max hits to return. Hard cap 200.",
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Pagination offset; capped at OpenSearch max_result_window (10000).",
+            "maximum": 10000,
+            "minimum": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "query": {
+            "description": "OpenSearch query_string. Include file extensions ('svchost.exe' not 'svchost'); quote special chars (source.ip:\"::1\").",
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "sort": {
+            "default": "@timestamp:desc",
+            "description": "Sort as 'field:asc|desc'. Defaults to newest-first.",
+            "title": "Sort",
+            "type": "string"
+          },
+          "time_from": {
+            "default": "",
+            "description": "ISO-8601 lower bound on @timestamp (inclusive).",
+            "title": "Time From",
+            "type": "string"
+          },
+          "time_to": {
+            "default": "",
+            "description": "ISO-8601 upper bound on @timestamp (inclusive).",
+            "title": "Time To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SearchIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "opensearch_search",
+      "output_schema": {
+        "properties": {
+          "advisories": {
+            "description": "Optional field-mapping/empty-result/pagination hints.",
+            "items": {
+              "properties": {
+                "kind": {
+                  "description": "Machine-readable advisory category.",
+                  "enum": [
+                    "field_mapping",
+                    "execution_evidence",
+                    "pagination",
+                    "empty_result"
+                  ],
+                  "title": "Kind",
+                  "type": "string"
+                },
+                "text": {
+                  "description": "Human-readable advisory text.",
+                  "title": "Text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "title": "Advisory",
+              "type": "object"
+            },
+            "title": "Advisories",
+            "type": "array"
+          },
+          "compact": {
+            "description": "Whether compact projection was applied.",
+            "title": "Compact",
+            "type": "boolean"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Echoed pagination offset.",
+            "title": "Offset",
+            "type": "integer"
+          },
+          "results": {
+            "description": "Matching documents, projected.",
+            "items": {
+              "properties": {
+                "fields": {
+                  "additionalProperties": true,
+                  "description": "Projected _source fields after compact-mode shaping.",
+                  "title": "Fields",
+                  "type": "object"
+                },
+                "id": {
+                  "description": "Document _id.",
+                  "title": "Id",
+                  "type": "string"
+                },
+                "index": {
+                  "description": "Concrete index the hit came from.",
+                  "title": "Index",
+                  "type": "string"
+                },
+                "truncated": {
+                  "description": "Field names whose values were truncated to the size ceiling.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Truncated",
+                  "type": "array"
+                }
+              },
+              "required": [
+                "id",
+                "index",
+                "fields"
+              ],
+              "title": "SearchHit",
+              "type": "object"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "returned": {
+            "description": "Number of hits in results.",
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Total matching docs (see total_capped).",
+            "title": "Total",
+            "type": "integer"
+          },
+          "total_capped": {
+            "default": false,
+            "description": "True when total is a lower bound (relation gte); call count for exact.",
+            "title": "Total Capped",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "total",
+          "returned",
+          "compact",
+          "results"
+        ],
+        "title": "SearchOut",
+        "type": "object"
+      },
+      "title": "Search Evidence"
+    }
+  ]
 }
