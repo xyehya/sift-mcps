@@ -46,6 +46,7 @@ from .validation import (
     validate_ioc,
     validate_labels,
     validate_observable_types,
+    validate_relationship_types,
     validate_uuid,
 )
 
@@ -214,6 +215,7 @@ TOOL_CATALOG_META: dict[str, dict[str, Any]] = {
     "cti_lookup_ioc": _tool_meta(),
     "cti_get_recent_indicators": _tool_meta(),
     "cti_get_entity": _tool_meta(),
+    "cti_get_relationships": _tool_meta(),
 }
 
 
@@ -270,6 +272,12 @@ class CtiEntityType(str, Enum):
     note = "note"
 
 
+class CtiDirection(str, Enum):
+    from_ = "from"
+    to = "to"
+    both = "both"
+
+
 class CtiSearchEntityIn(CtiSearchFilters):
     type: CtiEntityType = Field(..., description="Single OpenCTI entity type to search.")
     query: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH, description="Search term for the selected entity type.")
@@ -299,6 +307,24 @@ class CtiGetEntityIn(BaseModel):
     @classmethod
     def _validate_entity_id(cls, value: str) -> str:
         return validate_uuid(value, "entity_id")
+
+
+class CtiGetRelationshipsIn(BaseModel):
+    entity_id: str = Field(..., description="OpenCTI entity UUID to expand.")
+    direction: CtiDirection = Field(CtiDirection.both, description="Relationship direction: from=outgoing, to=incoming, both=default.")
+    relationship_types: list[str] | None = Field(None, description="Optional relationship type filter, e.g. ['indicates', 'uses', 'targets'].")
+    limit: int = Field(50, ge=1, le=50, description="Maximum relationships to return. Cap 50.")
+
+    @field_validator("entity_id")
+    @classmethod
+    def _validate_entity_id(cls, value: str) -> str:
+        return validate_uuid(value, "entity_id")
+
+    @field_validator("relationship_types")
+    @classmethod
+    def _validate_relationship_types(cls, value: list[str] | None) -> list[str] | None:
+        relationship_types = validate_relationship_types(value)
+        return relationship_types or None
 
 
 class CtiEntity(BaseModel):
@@ -348,6 +374,20 @@ class CtiGetEntityOut(BaseModel):
     found: bool = Field(..., description="True when the entity id exists in OpenCTI.")
     entity_id: str = Field(..., description="Echoed entity UUID.")
     entity: CtiEntity | None = Field(None, description="Projected entity details, or null when not found.")
+
+
+class CtiRelationship(BaseModel):
+    id: str | None = Field(None, description="OpenCTI relationship id.")
+    relationship_type: str | None = Field(None, description="OpenCTI relationship type such as indicates, uses, or targets.")
+    source: CtiEntity | None = Field(None, description="Source entity for the relationship.")
+    target: CtiEntity | None = Field(None, description="Target entity for the relationship.")
+    direction: str | None = Field(None, description="Direction relative to the requested entity when inferable.")
+
+
+class CtiRelationshipsOut(BaseModel):
+    entity_id: str = Field(..., description="Echoed entity UUID.")
+    relationships: list[CtiRelationship] = Field(..., description="Projected relationships for the entity.")
+    total: int = Field(..., description="Number of relationships returned.")
 
 
 async def cti_get_health(params: CtiHealthIn, ctx: RuntimeContext) -> CtiHealthOut:
@@ -527,6 +567,29 @@ async def cti_get_entity(
     )
 
 
+async def cti_get_relationships(
+    params: CtiGetRelationshipsIn,
+    ctx: RuntimeContext,
+) -> CtiRelationshipsOut:
+    client = ctx.require_client()
+    results = await asyncio.to_thread(
+        client.get_relationships,
+        params.entity_id,
+        params.direction.value,
+        params.relationship_types,
+        params.limit,
+    )
+    relationships = [
+        _shape_relationship(item, params.entity_id)
+        for item in _safe_list(results)[: params.limit]
+    ]
+    return CtiRelationshipsOut(
+        entity_id=params.entity_id,
+        relationships=relationships,
+        total=len(relationships),
+    )
+
+
 REGISTRY: list[ToolDef] = [
     ToolDef(
         name="cti_get_health",
@@ -617,6 +680,22 @@ REGISTRY: list[ToolDef] = [
             "fields and type-specific extras. Use after a search returns an entity id "
             "that needs expansion; the UUID comes from search-result `id`. Example: "
             "`cti_get_entity(entity_id='00000000-0000-4000-8000-000000000000')`."
+        ),
+    ),
+    ToolDef(
+        name="cti_get_relationships",
+        fn=cti_get_relationships,
+        in_model=CtiGetRelationshipsIn,
+        out_model=CtiRelationshipsOut,
+        annotations=_opencti_annotations("Entity Relationships"),
+        title="Entity Relationships",
+        description=(
+            "Return relationships for an OpenCTI entity: who uses it, what it indicates, "
+            "what it targets, and adjacent context. Use to map actor toolkits, malware "
+            "capabilities, or indicator context after selecting a relevant entity. Filter "
+            "with `direction` and `relationship_types` for narrower pivots. Example: "
+            "`cti_get_relationships(entity_id='00000000-0000-4000-8000-000000000000', "
+            "relationship_types=['uses'])`."
         ),
     ),
 ]
@@ -948,6 +1027,40 @@ def _shape_related_entities(raw: Any, entity_type: str) -> list[CtiEntity]:
         else:
             entities.append(CtiEntity(entity_type=entity_type, name=str(item)))
     return entities
+
+
+def _shape_relationship(raw: Any, requested_entity_id: str) -> CtiRelationship:
+    if not isinstance(raw, dict):
+        return CtiRelationship(relationship_type=str(raw))
+    source_raw = raw.get("from") or raw.get("source")
+    target_raw = raw.get("to") or raw.get("target")
+    source = _shape_endpoint(source_raw)
+    target = _shape_endpoint(target_raw)
+    direction = raw.get("direction")
+    if not direction:
+        if source and source.id == requested_entity_id:
+            direction = "from"
+        elif target and target.id == requested_entity_id:
+            direction = "to"
+    return CtiRelationship(
+        id=_optional_str(raw.get("id")),
+        relationship_type=_optional_str(raw.get("relationship_type")),
+        source=source,
+        target=target,
+        direction=_optional_str(direction),
+    )
+
+
+def _shape_endpoint(raw: Any) -> CtiEntity | None:
+    if not isinstance(raw, dict):
+        return None
+    return _shape_entity(
+        {
+            "id": raw.get("id"),
+            "entity_type": raw.get("entity_type") or raw.get("type"),
+            "name": raw.get("name") or raw.get("value"),
+        }
+    )
 
 
 def _optional_str(value: Any) -> str | None:
