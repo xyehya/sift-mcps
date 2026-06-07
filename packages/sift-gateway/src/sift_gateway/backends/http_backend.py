@@ -128,8 +128,8 @@ class HttpMCPBackend(MCPBackend):
             hint = ""
             if "Cancel" in exc_name or "cancel" in str(exc).lower():
                 hint = (
-                    " — if this is an auth issue, check bearer_token "
-                    "in gateway.yaml matches the remote server"
+                    " — if this is an auth issue, check the backend "
+                    "bearer-token environment reference matches the remote server"
                 )
             logger.error(
                 "Backend %s failed to start (http -> %s): %s: %s%s",

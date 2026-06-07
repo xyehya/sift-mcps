@@ -15,7 +15,11 @@ from sift_gateway.auth import AuthMiddleware
 from sift_gateway.mcp_endpoint import (
     _capability_guide,
 )
-from sift_gateway.mcp_server import GatewayToolCatalogMiddleware
+from sift_gateway.mcp_server import (
+    GatewayToolCatalogMiddleware,
+    assert_mounted_tool_names,
+    expected_mounted_tool_names,
+)
 from sift_gateway.rest import rest_routes
 from sift_gateway.server import Gateway
 
@@ -77,6 +81,19 @@ class _FakeBackend:
 
     async def health_check(self):
         return {"status": "ok"}
+
+
+class _FakeRegistry:
+    def __init__(self):
+        self.registered = []
+
+    def register(self, *, name, config, manifest, actor=None):
+        del actor
+        self.registered.append((name, config, manifest))
+        return type("Record", (), {"id": f"id-{name}", "name": name})()
+
+    def list_backends(self):
+        return []
 
 
 def _repo_root() -> Path:
@@ -267,6 +284,23 @@ def test_capability_guide_health_tools_are_manifest_driven():
     assert guide["available_backends"][0]["health_tool"] == "sample_health"
 
 
+def test_expected_mounted_tool_names_are_manifest_driven():
+    gateway = _gateway_with_fake_backends(_manifest())
+
+    assert expected_mounted_tool_names(gateway) == {
+        "sample_search",
+        "sample_health",
+        "sample_hidden",
+    }
+
+
+def test_mounted_tool_name_assertion_detects_missing_proxy_tool():
+    mcp = FastMCP("test")
+
+    with pytest.raises(ValueError, match="sample_search"):
+        asyncio.run(assert_mounted_tool_names(mcp, {"sample_search"}))
+
+
 def test_manifest_instructions_path_is_package_local_and_readable(tmp_path):
     guidance = tmp_path / "GUIDANCE.md"
     guidance.write_text("Local backend guidance.", encoding="utf-8")
@@ -382,6 +416,7 @@ def test_register_route_keeps_gated_backend_unavailable(tmp_path, monkeypatch):
     manifest_path = tmp_path / "sift-backend.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     gateway = Gateway({"backends": {}, **_execute_security()})
+    gateway.mcp_backend_registry = _FakeRegistry()
     client = _rest_client(gateway)
 
     response = client.post(
@@ -403,6 +438,7 @@ def test_register_route_keeps_gated_backend_unavailable(tmp_path, monkeypatch):
     assert payload["unmet_requires"] == ["unknown:req"]
     assert "sample_search" not in gateway._tool_map
     assert "sample-addon" not in gateway._available_backends
+    assert gateway.mcp_backend_registry.registered[0][0] == "sample-addon"
 
 
 def test_gateway_core_has_no_hardcoded_addon_names():

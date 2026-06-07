@@ -260,7 +260,7 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
         raise ValueError(f"Backend manifest validation failed for {name}: {e}") from e
 
 
-def create_backend(name: str, config: dict) -> MCPBackend:
+def create_backend(name: str, config: dict, *, manifest: dict | None = None) -> MCPBackend:
     """Factory: create a backend from config.
 
     Args:
@@ -274,7 +274,8 @@ def create_backend(name: str, config: dict) -> MCPBackend:
         ValueError: If the backend type is unknown or config is invalid.
     """
     backend_type = config.get("type", "stdio")
-    manifest = load_and_validate_manifest(name, config)
+    if manifest is None:
+        manifest = load_and_validate_manifest(name, config)
 
     if backend_type == "stdio":
         # Validate required keys for stdio

@@ -1,21 +1,20 @@
 # 22 - D22A / Batch H `mcp_backends` Control-Plane Registry (decision D22)
 
-Status: planned
+Status: implemented on build branch `codex/d22a-mcp-backends-registry` (not landed)
 Scope fence: see §4
-Decisions referenced: D2, D3, D12, D22, D24, D30, D32; carries F-11, B-13;
-complements B-4.
+Decisions referenced: D2, D3, D12, D22, D24, D30, D32, D33, D34; carries
+F-11, B-13; complements B-4.
 
-This is the Build-ready candidate for **D22A / Batch H**: move add-on MCP backend
-registration out of `gateway.yaml` into a Supabase/Postgres `app.mcp_backends`
-control-plane registry, make the Gateway backend loader DB-authoritative, turn
-the portal backend-management surface over to that registry, resolve **F-11**,
-and resolve **B-13** (the unused `assert_mounted_tool_names` startup assertion).
-It preserves every landed policy guarantee: PR03A Supabase JWT identity, PR03B
-DB active-case authority, B-10 tool authz, B-11 proxy active-case handling, D3
-no per-backend `/mcp/{name}`, and D24 SIFT-owned policy.
+This Build branch implements **D22A / Batch H**: add-on MCP backend registration
+moves out of `gateway.yaml` into a Supabase/Postgres `app.mcp_backends`
+control-plane registry, the Gateway backend loader becomes DB-authoritative, the
+portal backend-management surface is turned over to that registry, and **B-13**
+is wired in code. It preserves every landed policy guarantee: PR03A Supabase JWT
+identity, PR03B DB active-case authority, B-10 tool authz, B-11 proxy active-case
+handling, D3 no per-backend `/mcp/{name}`, and D24 SIFT-owned policy.
 
-It does **not** implement runtime code. The Build session implements it from this
-doc without redefining scope.
+This branch is not Land yet: **F-11** and **B-13** are marked resolved/done only
+after the D22A commit lands on `revamp/spg-v1`.
 
 ## 1. Operator Decisions Locked For This Batch
 
@@ -37,9 +36,10 @@ From the charter and the D22A prompt:
 - No raw backend secrets land in the repo, in migration files, in DB rows, in
   fixtures, in snapshots, in logs, in audit payloads, or in docs.
 
-Two decisions this batch cannot make silently are raised as forks for the
-operator in §13 (**F-14** backend credential storage model; **F-15** live FastMCP
-proxy (re)mount vs restart-to-apply). They must be resolved before Build.
+Two decisions this batch could not make silently were raised as forks for the
+operator in §13 and are now locked for Build: **F-14 -> D33** (credential
+references only, `env` source in D22A) and **F-15 -> D34** (restart-to-apply for
+the FastMCP `/mcp` catalog).
 
 ## 2. Required Reading
 
@@ -196,14 +196,18 @@ single live `health_check()` surface). Add a separate
 timeline genuinely needs it — otherwise defer (D13 lean-core discipline). State
 the choice explicitly; do not add unused tables.
 
-### 5.3 Credential references (F-14)
+### 5.3 Credential references (F-14 -> D33)
 
-No raw secret column. `connection` stores only references (recommended: env-var
-*names*, consistent with the existing `auth.*_key_env` pattern in
-`gateway.yaml.template`). The exact mechanism is **F-14** and must be resolved
-before Build. Whatever is chosen, a DB row never contains a usable secret, and
-the loader resolves the real secret from the process environment / named secret
-source at backend-construction time. This complements **B-4**.
+No raw secret column. `connection` stores only non-secret connection metadata and
+structured references, consistent with the existing `auth.*_env` pattern in
+`gateway.yaml.template`. D22A implements `env` references now:
+`bearer_token_env`, `tls_cert_env`, and `env_refs` (target backend environment
+variable -> Gateway process environment variable). The loader resolves these
+references from the Gateway process environment at backend-construction time.
+Raw secret-bearing fields are rejected at registration. Supabase Vault is an
+allowed future reference source only after a separately scoped secret-lifecycle
+design; D22A does not enable Vault or write Vault secrets. This complements
+**B-4**.
 
 ### 5.4 RLS / write model (D12)
 
@@ -267,21 +271,14 @@ middleware stack order is unchanged and non-negotiable:
 response guard -> case context -> audit) -> tool authz. D24/D2/D3 hold: policy is
 SIFT-owned, single `/mcp` path, no per-backend route.
 
-**Activation model is F-15.** Today new mounts require a process restart. D22A
-must define one of:
-- **(a, recommended for v1)** registry changes are authority immediately; the
-  **FastMCP catalog applies them on Gateway (re)start or an explicit
-  "apply/reload" that rebuilds the aggregate FastMCP server**. The portal shows a
-  clear "registered - pending apply/restart to expose tools on `/mcp`" state.
-  REST `_tool_map` may reflect the new backend sooner (as today), but `/mcp`
-  exposure is gated on the rebuild. Simplest, lowest risk to policy ordering.
-- **(b)** implement live dynamic remount/unmount of FastMCP proxies into the
-  running `http_app`. Heavier; must prove middleware ordering, auth, and the
-  namespace/collision assertion still hold per request. Only if the operator
-  wants zero-restart activation now.
-
-The Build session implements whichever F-15 resolves to and does not silently
-pick.
+**Activation model is F-15 -> D34.** Registry changes are authoritative
+immediately for REST/portal metadata, but the FastMCP `/mcp` catalog applies
+them only when the Gateway process restarts and rebuilds the aggregate FastMCP
+server from the DB registry. `POST /api/backends/reload` refreshes
+registry/runtime metadata and reports `restart_required`; it does not
+live-remount providers into the running `http_app`. The portal shows a clear
+`pending_apply` state for rows whose registry revision is newer than the current
+MCP catalog revision. A future zero-restart dynamic remount requires a new fork.
 
 ## 8. Portal Backend Management Turnover
 
@@ -368,19 +365,12 @@ Host (`.venv`) and VM (`/usr/bin/python3.12`, `UV_NO_MANAGED_PYTHON=1`,
 
 ## 13. Risks / Forks (-> REGISTER.md)
 
-- **F-14 (blocking) - backend credential storage model.** `bearer_token`,
-  per-backend `env`, and `tls_cert` are secrets that today sit in `gateway.yaml`.
-  Moving registration to the DB must not put raw secrets in a DB row.
-  Recommended: store only credential **references** (env-var names, consistent
-  with `auth.*_key_env`), resolved from the process environment at load; never a
-  raw value in the row. Alternatives: an encrypted secret store, or keeping
-  secrets in a local non-authoritative env/file while only metadata moves to DB.
-  Operator must pick before Build. Complements B-4.
-- **F-15 (blocking) - activation model.** FastMCP proxy mounts are fixed at
-  server assembly today; a live-registered backend is not on `/mcp` until
-  restart. Choose **(a)** restart/explicit-apply rebuild (recommended v1) or
-  **(b)** live dynamic remount. Determines how much of `server.py`/`mcp_server.py`
-  the Build touches and the portal UX copy.
+- **F-14 - backend credential storage model. RESOLVED by D33.** `bearer_token`,
+  per-backend `env`, and `tls_cert` are represented by `env` references in D22A;
+  raw secrets are rejected. Supabase Vault remains future scoped work.
+- **F-15 - activation model. RESOLVED by D34.** FastMCP proxy mounts are fixed at
+  server assembly today; D22A uses restart-to-apply and a portal/API
+  `pending_apply` state, not live dynamic remount.
 - **B-13** is resolved by §9 but only marked DONE at Land.
 - Carried unchanged: **B-4** (credential-as-arg; F-14 is adjacent),
   **B-12** (capped-result `backend_audit_id`), **B-15** (DNS-rebinding TOCTOU on
@@ -406,9 +396,9 @@ beyond optional manifest field additions.
   back-compatible).
 - `configs/gateway.yaml.template`: `backends:` block documented as
   non-authoritative/removed; control-plane DSN remains the registry source.
-- Docs/logs: flip this doc to implemented (commit hash), log the Run in
-  `MIGRATION_STATE.md`, mark **F-11 RESOLVED** and **B-13 DONE** at Land, refresh
-  README/AGENTS/CLAUDE handoff.
+- Docs/logs: this doc is flipped to implemented for the Build branch; Run 38 is
+  logged in `MIGRATION_STATE.md`; mark **F-11 RESOLVED** and **B-13 DONE** only
+  at Land.
 
 ## 15. Ready-to-copy Build Prompt
 

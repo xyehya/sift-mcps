@@ -17,7 +17,6 @@ def _execute_security():
 
 
 async def test_core_tools_are_in_process_when_core_backends_disabled(tmp_path, monkeypatch):
-    import pytest
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     cases_root = tmp_path / "cases"
     case = case_init_data(
@@ -31,16 +30,16 @@ async def test_core_tools_are_in_process_when_core_backends_disabled(tmp_path, m
     monkeypatch.setenv("SIFT_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("SIFT_EXAMINER", "alice")
 
-    with pytest.raises(ValueError, match="Core backend.*is not allowed"):
-        Gateway(
-            {
-                "case": {"root": str(cases_root), "dir": case["case_dir"]},
-                **_execute_security(),
-                "backends": {
-                    "case-mcp": {"enabled": True, "type": "stdio", "command": "missing-case-mcp"},
-                },
-            }
-        )
+    stale_yaml_gateway = Gateway(
+        {
+            "case": {"root": str(cases_root), "dir": case["case_dir"]},
+            **_execute_security(),
+            "backends": {
+                "case-mcp": {"enabled": True, "type": "stdio", "command": "missing-case-mcp"},
+            },
+        }
+    )
+    assert stale_yaml_gateway.backends == {}
 
     gateway = Gateway(
         {

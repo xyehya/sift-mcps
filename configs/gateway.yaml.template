@@ -177,12 +177,10 @@ enrichment:
   # advertises in its manifest (capabilities.provides: reference/enrichment),
   # via the gateway's declaration-driven provider — never a static core flag.
 
-# The SIFT Protocol Gateway core is self-contained and names NO add-on backend
-# here. Add-ons (OpenCTI, OpenSearch, windows-triage, forensic-rag, or any
-# third-party backend written to the SIFT MCP Backend Contract) are external
-# and optional. They are added through the ONE integration door — the portal
-# self-service flow (validate -> register -> hot-reload), which writes the
-# backend entry into this block at registration time. Do not pre-seed add-ons
-# here; that would couple the core to specific backends. Use the portal, or
-# `scripts/setup-addon.sh` to prepare a register payload for it.
+# D22A: add-on backend registration is authoritative in Supabase/Postgres
+# app.mcp_backends, reached through the Gateway portal/API. This legacy YAML
+# block is intentionally non-authoritative and ignored by the Gateway loader.
+# Keep it empty; backend credentials are represented by DB-stored env-var
+# references such as bearer_token_env / tls_cert_env / env_refs, while usable
+# secret values live only in the Gateway process environment.
 backends: {}

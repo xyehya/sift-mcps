@@ -234,6 +234,23 @@ def _mount_addon_proxies(mcp: FastMCP, gateway: Any) -> None:
         )
 
 
+def expected_mounted_tool_names(gateway: Any) -> set[str]:
+    expected: set[str] = set()
+    for backend_name, backend in sorted(getattr(gateway, "backends", {}).items()):
+        manifest = getattr(backend, "manifest", None)
+        if not manifest:
+            continue
+        reqs = manifest.get("capabilities", {}).get("requires", [])
+        unmet = [req for req in reqs if not gateway.evaluate_requirement(req)]
+        if unmet:
+            continue
+        for tool in manifest.get("tools", []):
+            tool_name = tool.get("name")
+            if isinstance(tool_name, str) and tool_name:
+                expected.add(tool_name)
+    return expected
+
+
 def _tool_rename_map(manifest: dict) -> dict[str, str] | None:
     namespace = str(manifest.get("namespace") or "")
     if not namespace:

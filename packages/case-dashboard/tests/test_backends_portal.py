@@ -7,11 +7,11 @@ import hmac
 import json
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 
 import pytest
-import yaml
 from starlette.testclient import TestClient
 
 import case_dashboard.routes as routes_mod
@@ -19,6 +19,73 @@ from case_dashboard.routes import create_dashboard_v2_app
 from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
 
 _SECRET = secrets.token_hex(32)
+
+
+class _RegistryRecord:
+    def __init__(self, name, *, transport="stdio", enabled=True, manifest=None, updated_at=None):
+        self.id = f"id-{name}"
+        self.name = name
+        self.transport = transport
+        self.namespace = name.split("-", 1)[0]
+        self.tier = "addon"
+        self.enabled = enabled
+        self.connection = {"type": transport}
+        self.manifest = manifest or {"capabilities": {"provides": ["search"], "requires": []}}
+        self.manifest_source = None
+        self.manifest_sha256 = "0" * 64
+        self.health_status = "unknown"
+        self.health_detail = None
+        self.health_checked_at = None
+        self.created_at = updated_at or datetime.now(timezone.utc)
+        self.updated_at = updated_at or self.created_at
+
+    def public_dict(self, *, started, available, pending_apply):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.transport,
+            "transport": self.transport,
+            "namespace": self.namespace,
+            "tier": self.tier,
+            "enabled": self.enabled,
+            "started": started,
+            "available": available,
+            "pending_apply": pending_apply,
+            "connection": dict(self.connection),
+            "manifest_source": self.manifest_source,
+            "manifest_sha256": self.manifest_sha256,
+            "health": {"status": self.health_status, "detail": self.health_detail, "checked_at": None},
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+
+class _Registry:
+    def __init__(self, records=None):
+        self.records = list(records or [])
+        self.registered = []
+
+    def list_backends(self):
+        return list(self.records)
+
+    def register(self, *, name, config, manifest, actor=None):
+        del actor
+        record = _RegistryRecord(
+            name,
+            transport=config.get("type", "stdio"),
+            enabled=config.get("enabled", True),
+            manifest=manifest,
+            updated_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+        )
+        self.registered.append((name, config, manifest))
+        self.records = [r for r in self.records if r.name != name] + [record]
+        return record
+
+    def update_health(self, name, status, detail=None):
+        for record in self.records:
+            if record.name == name:
+                record.health_status = status
+                record.health_detail = detail
 
 
 @pytest.fixture()
@@ -34,8 +101,8 @@ def mock_gateway():
     gateway.evaluate_requirement.side_effect = lambda req: req != "unmet:req"
     gateway.backends = {}
     gateway.config = {"backends": {}}
-    gateway._pending_backends = {}
-    gateway._reload_event = MagicMock()
+    gateway.mcp_backend_registry = _Registry()
+    gateway._mcp_catalog_loaded_at = datetime.now(timezone.utc)
     gateway._build_tool_map = AsyncMock()
     return gateway
 
@@ -144,17 +211,12 @@ class TestBackendsPortal:
             headers=headers
         )
         assert resp.status_code == 200
-        assert resp.json()["status"] == "no_config"  # config path doesn't exist in test tmp_path
+        assert resp.json()["status"] == "current"
+        assert resp.json()["authority"] == "app.mcp_backends"
 
     def test_register_route_requires_challenge_and_handles_success(self, client, passwords_dir, mock_gateway, tmp_path, monkeypatch):
         _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
         headers = {"origin": "http://testserver"}
-
-        # Write gateway config path
-        config_path = tmp_path / "gateway.yaml"
-        monkeypatch.setattr(routes_mod, "_GATEWAY_CONFIG_PATH", config_path)
-        from sift_gateway.rest import _gateway_config_path
-        monkeypatch.setattr("sift_gateway.rest._gateway_config_path", lambda: config_path)
 
         # Write temporary manifest
         manifest = {
@@ -212,11 +274,14 @@ class TestBackendsPortal:
         resp = client.post("/api/backends", json=payload, headers=headers)
         assert resp.status_code == 201
         assert resp.json()["registered"] is True
+        assert resp.json()["restart_required"] is True
+        assert resp.json()["pending_apply"] is True
 
-        # Check config was written
-        assert config_path.exists()
-        cfg_doc = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        assert "test-backend" in cfg_doc["backends"]
+        assert mock_gateway.mcp_backend_registry.registered
+        name, config, stored_manifest = mock_gateway.mcp_backend_registry.registered[-1]
+        assert name == "test-backend"
+        assert config["manifest_path"] == str(manifest_path)
+        assert stored_manifest["health"] == "test_health"
 
     def test_register_rejects_invalid_name(self, client, passwords_dir, mock_gateway, tmp_path, monkeypatch):
         _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
@@ -236,14 +301,6 @@ class TestBackendsPortal:
     def test_list_backends_includes_disabled_and_gated_and_redacts_secrets(self, client, passwords_dir, mock_gateway):
         _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
 
-        # Set config in mock gateway
-        mock_gateway.config = {
-            "backends": {
-                "active-backend": {"type": "stdio", "enabled": True, "command": "true"},
-                "disabled-backend": {"type": "stdio", "enabled": False, "command": "true"},
-                "gated-backend": {"type": "http", "enabled": True, "url": "http://localhost:1234", "bearer_token": "secret_token"}
-            }
-        }
         # mock active backend in gateway.backends
         active_bk = MagicMock()
         active_bk.started = True
@@ -266,6 +323,13 @@ class TestBackendsPortal:
             "active-backend": active_bk,
             "gated-backend": gated_bk
         }
+        mock_gateway.mcp_backend_registry = _Registry(
+            [
+                _RegistryRecord("active-backend", enabled=True, manifest=active_bk.manifest),
+                _RegistryRecord("disabled-backend", enabled=False),
+                _RegistryRecord("gated-backend", transport="http", enabled=True, manifest=gated_bk.manifest),
+            ]
+        )
 
         resp = client.get("/api/backends")
         assert resp.status_code == 200
@@ -293,12 +357,6 @@ class TestBackendsPortal:
         _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
         headers = {"origin": "http://testserver"}
 
-        mock_gateway.config = {
-            "backends": {
-                "test-gated": {"type": "stdio", "enabled": True, "command": "true"}
-            }
-        }
-
         # Start service should fail if gated/disabled
         active_bk = MagicMock()
         active_bk.started = True
@@ -307,6 +365,9 @@ class TestBackendsPortal:
         }
         active_bk.stop = AsyncMock()
         mock_gateway.backends = {"test-gated": active_bk}
+        mock_gateway.mcp_backend_registry = _Registry(
+            [_RegistryRecord("test-gated", enabled=True, manifest=active_bk.manifest)]
+        )
 
         # Try to start -> should be rejected because requirements are unmet
         challenge_id, response = _get_challenge_response(client, passwords_dir)

@@ -4961,8 +4961,9 @@ async def register_backend_route(request: Request) -> JSONResponse:
     if challenge_err:
         return challenge_err
 
+    actor = getattr(request.state, "principal", None) or getattr(request.state, "identity", None)
     from sift_gateway.rest import register_backend_logic
-    response, status_code = await register_backend_logic(gateway, body)
+    response, status_code = await register_backend_logic(gateway, body, actor=actor)
     return JSONResponse(response, status_code=status_code)
 
 

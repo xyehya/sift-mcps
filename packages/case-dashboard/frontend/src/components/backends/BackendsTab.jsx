@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   getBackends,
   postRegisterBackend,
@@ -29,8 +29,8 @@ export function BackendsTab() {
   const [envList, setEnvList] = useState([{ key: '', value: '' }])
   // http specific
   const [url, setUrl] = useState('')
-  const [bearerToken, setBearerToken] = useState('')
-  const [tlsCert, setTlsCert] = useState('')
+  const [bearerTokenEnv, setBearerTokenEnv] = useState('')
+  const [tlsCertEnv, setTlsCertEnv] = useState('')
 
   // Challenge Modal State
   const [challengeModal, setChallengeModal] = useState({
@@ -42,11 +42,7 @@ export function BackendsTab() {
     onConfirm: null
   })
 
-  useEffect(() => {
-    fetchBackends()
-  }, [])
-
-  async function fetchBackends() {
+  const fetchBackends = useCallback(async () => {
     setLoading(true)
     try {
       const res = await getBackends()
@@ -56,7 +52,11 @@ export function BackendsTab() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [addToast])
+
+  useEffect(() => {
+    fetchBackends()
+  }, [fetchBackends])
 
   // Build the payload config
   function buildConfigPayload() {
@@ -73,7 +73,7 @@ export function BackendsTab() {
             if (!Array.isArray(parsedArgs)) {
               throw new Error('Args JSON must be an array')
             }
-          } catch (e) {
+          } catch {
             parsedArgs = trimmedArgs.split('\n').map(a => a.trim()).filter(Boolean)
           }
         } else {
@@ -82,18 +82,18 @@ export function BackendsTab() {
       }
       config.args = parsedArgs
 
-      // Environment variables compiler
+      // Environment variable reference compiler: backend env -> Gateway env.
       const envObj = {}
       envList.forEach(({ key, value }) => {
-        if (key.trim()) {
-          envObj[key.trim()] = value
+        if (key.trim() && value.trim()) {
+          envObj[key.trim()] = value.trim()
         }
       })
-      config.env = envObj
+      config.env_refs = envObj
     } else {
       config.url = url
-      if (bearerToken) config.bearer_token = bearerToken
-      if (tlsCert) config.tls_cert = tlsCert
+      if (bearerTokenEnv) config.bearer_token_env = bearerTokenEnv
+      if (tlsCertEnv) config.tls_cert_env = tlsCertEnv
     }
     return config
   }
@@ -181,8 +181,8 @@ export function BackendsTab() {
         config: buildConfigPayload(),
         ...challengeParams
       }
-      await postRegisterBackend(payload)
-      addToast('Backend registered successfully', 'success')
+      const res = await postRegisterBackend(payload)
+      addToast(res.restart_required ? 'Backend registered; Gateway restart required' : 'Backend registered successfully', 'success')
       // Reset form
       setName('')
       setManifestPath('')
@@ -190,17 +190,17 @@ export function BackendsTab() {
       setArgsStr('')
       setEnvList([{ key: '', value: '' }])
       setUrl('')
-      setBearerToken('')
-      setTlsCert('')
+      setBearerTokenEnv('')
+      setTlsCertEnv('')
       setValidationResult(null)
       await fetchBackends()
     })
   }
 
   function handleReloadClick() {
-    openChallenge('Verify Password to Reload Configurations', async (challengeParams) => {
+    openChallenge('Verify Password to Check Apply Status', async (challengeParams) => {
       const res = await postReloadBackends(challengeParams)
-      addToast(`Configuration reload completed: ${res.status || 'success'}`, 'success')
+      addToast(res.restart_required ? 'Registry changes pending Gateway restart' : `Registry status: ${res.status || 'current'}`, res.restart_required ? 'warn' : 'success')
       await fetchBackends()
     })
   }
@@ -256,7 +256,7 @@ export function BackendsTab() {
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89M9 11l3-3m0 0l3 3m-3-3v12" />
           </svg>
-          Reload Config
+          Apply Status
         </button>
       </div>
 
@@ -267,7 +267,7 @@ export function BackendsTab() {
         <div className="lg:col-span-2 p-4 rounded border flex flex-col"
           style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-faint)' }}>
           <p className="text-[10px] font-sans font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--text-muted)' }}>
-            CONFIGURED BACKENDS
+            DB REGISTRY BACKENDS
           </p>
 
           <div className="overflow-x-auto">
@@ -285,11 +285,11 @@ export function BackendsTab() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan="6" className="py-8 text-center text-text-muted font-mono animate-pulse">Loading configured backends…</td>
+                    <td colSpan="6" className="py-8 text-center text-text-muted font-mono animate-pulse">Loading registry backends...</td>
                   </tr>
                 ) : backends.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="py-8 text-center text-text-muted font-mono">No configured backends found.</td>
+                    <td colSpan="6" className="py-8 text-center text-text-muted font-mono">No DB-registered backends found.</td>
                   </tr>
                 ) : (
                   backends.map((b) => {
@@ -318,7 +318,9 @@ export function BackendsTab() {
                             </span>
                           )}
                           <span className="ml-2 font-sans text-xs">
-                            {b.started ? (
+                            {b.pending_apply ? (
+                              <span style={{ color: 'var(--amber)' }}>Pending restart</span>
+                            ) : b.started ? (
                               <span style={{ color: 'var(--jade)' }}>Started</span>
                             ) : (
                               <span style={{ color: 'var(--text-muted)' }}>Stopped</span>
@@ -466,7 +468,7 @@ export function BackendsTab() {
 
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="block text-[10px] font-mono text-text-muted">ENVIRONMENT VARIABLES</label>
+                      <label className="block text-[10px] font-mono text-text-muted">ENV VAR REFERENCES</label>
                       <button
                         type="button"
                         onClick={addEnvRow}
@@ -480,7 +482,7 @@ export function BackendsTab() {
                         <div key={index} className="flex gap-2 items-center">
                           <input
                             type="text"
-                            placeholder="Key"
+                            placeholder="Backend env"
                             value={row.key}
                             onChange={(e) => updateEnv(index, 'key', e.target.value)}
                             className="w-1/2 px-2 py-1 rounded text-xs focus:outline-none"
@@ -488,7 +490,7 @@ export function BackendsTab() {
                           />
                           <input
                             type="text"
-                            placeholder="Value"
+                            placeholder="Gateway env var"
                             value={row.value}
                             onChange={(e) => updateEnv(index, 'value', e.target.value)}
                             className="w-1/2 px-2 py-1 rounded text-xs focus:outline-none"
@@ -522,24 +524,24 @@ export function BackendsTab() {
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-mono text-text-muted mb-1">BEARER TOKEN</label>
+                    <label className="block text-[10px] font-mono text-text-muted mb-1">BEARER TOKEN ENV VAR</label>
                     <input
-                      type="password"
-                      placeholder="OAuth/Bearer authentication token"
-                      value={bearerToken}
-                      onChange={(e) => setBearerToken(e.target.value)}
+                      type="text"
+                      placeholder="SIFT_BACKEND_NAME_TOKEN"
+                      value={bearerTokenEnv}
+                      onChange={(e) => setBearerTokenEnv(e.target.value)}
                       className="w-full px-3 py-2 rounded text-xs focus:outline-none"
                       style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-mono text-text-muted mb-1">TLS CERT PATH</label>
+                    <label className="block text-[10px] font-mono text-text-muted mb-1">TLS CERT PATH ENV VAR</label>
                     <input
                       type="text"
-                      placeholder="Path to TLS certificate file"
-                      value={tlsCert}
-                      onChange={(e) => setTlsCert(e.target.value)}
+                      placeholder="SIFT_BACKEND_NAME_TLS_CERT"
+                      value={tlsCertEnv}
+                      onChange={(e) => setTlsCertEnv(e.target.value)}
                       className="w-full px-3 py-2 rounded text-xs focus:outline-none"
                       style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }}
                     />

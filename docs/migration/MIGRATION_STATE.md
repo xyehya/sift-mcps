@@ -45,17 +45,107 @@ patterns found in the alignment audit. Run 37 installed the short
 `CONVENTIONS.md` contract into the auto-loaded entry points and promoted
 `scripts/validate_docs.py` as the primary docs gate.
 
-**Next:** **Build D22A / Batch H** from
-`docs/migration/22_d22a_mcp_backends_registry.md` (planned in Run 35) once the
-operator resolves the two blocking forks it raised — **F-14** (backend
-credential storage model) and **F-15** (FastMCP activation: restart/apply vs live
-remount). D22A moves add-on backend registration from `gateway.yaml` into a
-Supabase `app.mcp_backends` registry, makes the Gateway loader DB-authoritative,
-turns the portal backend-management surface over to the DB, and resolves **F-11**
-and **B-13** at Land. Keep evidence/audit DB authority (Batch C), jobs/workers
-(Batch E), OpenSearch-core, RAG/skills, and findings/timeline/TODO/report data
-migration separate unless a new candidate doc explicitly batches them. Carry
-B-4/B-12/B-15 forward.
+**Next:** **Review/Land D22A / Batch H** from branch
+`codex/d22a-mcp-backends-registry`. Run `/code-review` and `/security-review`
+for the branch diff before Land because it touches Gateway policy, credentials,
+and the backend registry path. At Land, mark **F-11 RESOLVED** and **B-13 DONE**
+only after the D22A commit is merged to `revamp/spg-v1`; keep
+B-4/B-12/B-15 forward. Do not fold evidence/audit DB authority (Batch C),
+jobs/workers (Batch E), OpenSearch-core, RAG/skills, or
+findings/timeline/TODO/report data migration into D22A.
+
+## Run 38 - D22A / Batch H `mcp_backends` Registry Build
+
+Build-stage run in worktree
+`/home/yk/AI/SIFTHACK/sift-mcps-d22a-mcp-backends-registry` on branch
+`codex/d22a-mcp-backends-registry`. Not landed on `revamp/spg-v1` yet.
+
+Trigger: operator delegated the two blocking D22A calls and asked to proceed
+autonomously through research, decision, implementation, host verification, VM
+verification, and documentation logging.
+
+Research / decisions:
+- Reviewed FastMCP 3.4.2 official docs/source for composition/proxy mounting
+  and confirmed no stable remove/unmount provider path suitable for live dynamic
+  remount in this batch.
+- Reviewed Supabase Vault docs and PostgreSQL RLS docs. Vault remains a future
+  secret lifecycle option, not a D22A storage target.
+- Resolved **F-14 -> D33**: D22A stores only non-secret backend connection
+  metadata and env-var credential references (`bearer_token_env`,
+  `tls_cert_env`, `env_refs`) in `app.mcp_backends`; raw secret-bearing fields
+  are rejected and usable values resolve from the Gateway process environment.
+- Resolved **F-15 -> D34**: D22A uses restart-to-apply for FastMCP `/mcp`
+  catalog exposure. Registry metadata updates immediately; mounted provider
+  exposure changes on Gateway restart. Reload reports `pending_apply` /
+  `restart_required`; it does not live-remount.
+
+Implemented:
+- Added additive Supabase migration
+  `supabase/migrations/202606070500_mcp_backends_registry.sql` for
+  `app.mcp_backends`, including no-raw-secret connection shape, health/manifest
+  cache columns, indexes, RLS, and operator select policy.
+- Added `sift_gateway.mcp_backends_registry.McpBackendRegistry` and rewired the
+  Gateway loader so `app.mcp_backends` is the only add-on backend authority when
+  a control-plane DSN exists. With no DSN, stale `gateway.yaml backends` blocks
+  are ignored and the Gateway serves core tools only.
+- Rewired REST/portal backend registration, listing, apply-status, and service
+  controls to the DB registry. Registration writes a registry row and audit
+  event, returns `restart_required`, and never writes backend secrets to YAML or
+  DB rows.
+- Wired the B-13 FastMCP startup assertion with manifest-derived expected tool
+  names and removed the old runtime backend-loader hot-remount path to match
+  D34.
+- Added optional manifest schema fields for `case_scoped`, `default_case_scoped`,
+  and `data_plane`; added DB and Gateway tests for D22A behavior.
+- Rebuilt the checked-in portal v2 static bundle so the packaged UI uses
+  credential references, DB registry labels, and pending-restart status.
+
+Verification:
+- Host: `uv run pytest packages/sift-gateway/tests` passed (303 tests).
+- Host: `uv run pytest tests` from `packages/case-dashboard` passed (309 tests,
+  64 existing Starlette cookie warnings).
+- Host: `uv run pytest packages/sift-core/tests` passed (330 tests).
+- Host: `uv run pytest tests/db` passed (28 tests).
+- Host: `npm run build` from `packages/case-dashboard/frontend` passed and
+  regenerated `static/v2`.
+- Host: `python3 scripts/validate_docs.py` passed; `git diff --check` passed.
+- Host: `npm run lint` still fails on unrelated existing frontend lint debt
+  outside this change (43 errors / 4 warnings after the BackendsTab edit was
+  cleaned).
+- VM: synced to `~/sift-mcps-test`; `UV_NO_MANAGED_PYTHON=1
+  UV_PYTHON_DOWNLOADS=never /home/sansforensics/.local/bin/uv sync --extra core
+  --group dev --python /usr/bin/python3.12` passed.
+- VM: `.venv/bin/python --version` reported Python 3.12.3; imports for `yaml`,
+  `mcp`, `fastmcp`, `sift_core`, and `sift_gateway` passed.
+- VM: `python3 scripts/validate_docs.py` passed.
+- VM: D22A-only SQL rollback failed on the empty VM DB because prerequisite
+  PR01/PR03/PR03B tables were absent (`app.operator_profiles` missing). Rerun
+  with prerequisite migrations plus D22A in the same `BEGIN` / `ROLLBACK`
+  transaction passed against pinned Supabase.
+- VM: `.venv/bin/python -m pytest
+  packages/sift-gateway/tests/test_d22a_mcp_backends_registry.py
+  packages/sift-gateway/tests/test_inprocess_core_tools.py::test_core_tools_are_in_process_when_core_backends_disabled
+  packages/sift-gateway/tests/test_phase6.py
+  tests/db/test_d22a_mcp_backends_schema.py` passed (28 tests).
+- VM: from `packages/case-dashboard`,
+  `../../.venv/bin/python -m pytest tests/test_backends_portal.py` passed
+  (9 tests).
+- VM: `.venv/bin/python -m pytest tests/db` passed (28 tests).
+- VM: short-lived branch Gateway from `~/sift-mcps-test` on port `4518` returned
+  `/api/v1/health` with `{"status":"ok","backends":{},"tools_count":0}`.
+  The installed `sift-gateway` systemd service also restarted and passed health,
+  but that service points at `/home/sansforensics/sift-mcps`, not the synced
+  test-copy worktree.
+
+Forks/decisions:
+- **F-14** resolved to **D33**.
+- **F-15** resolved to **D34**.
+- **F-11** remains OPEN until D22A Land.
+- **B-13** remains OPEN until D22A Land, even though the Build branch wires the
+  assertion.
+
+Next: run `/code-review` and `/security-review`, then Land D22A. At Land only,
+mark F-11 RESOLVED and B-13 DONE.
 
 ## Run 37 — Documentation Conventions Injection
 

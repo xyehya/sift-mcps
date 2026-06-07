@@ -5,7 +5,6 @@ import contextlib
 import logging
 import time
 
-import anyio
 from fastapi import FastAPI
 from fastmcp.utilities.lifespan import combine_lifespans
 from mcp.types import TextContent, Tool
@@ -104,12 +103,16 @@ from sift_gateway.audit_helpers import (
     _summarize_result,
     _truncate_params,
 )
-from sift_gateway.backends import MCPBackend, create_backend
+from sift_gateway.backends import MCPBackend
 from sift_gateway.backends.http_backend import HttpMCPBackend
 from sift_gateway.config import apply_case_env, apply_execute_security_env
 from sift_gateway.health import health_routes
 from sift_gateway.mcp_endpoint import MCPAuthASGIApp
-from sift_gateway.mcp_server import create_gateway_mcp_server
+from sift_gateway.mcp_server import (
+    assert_mounted_tool_names,
+    create_gateway_mcp_server,
+    expected_mounted_tool_names,
+)
 from sift_gateway.rest import rest_routes
 from sift_gateway.token_registry import create_token_registry
 
@@ -136,10 +139,10 @@ class Gateway:
         self._tool_map: dict[str, str] = {}  # tool_name -> backend_name
         self._tool_cache: dict[str, Tool] = {}  # tool_name -> Tool object
         self._start_locks: dict[str, asyncio.Lock] = {}
-        self._reload_event = asyncio.Event()
-        self._pending_backends: dict[str, dict] = {}
         self._audit = AuditWriter(mcp_name="sift-gateway")
         self._available_backends: set[str] = set()
+        self.mcp_backend_registry = None
+        self._mcp_catalog_loaded_at = None
         # tool_name -> manifest-declared UX metadata (category / recommended_phase /
         # health / health_args / hidden_from_agent / backend). Rebuilt on every
         # _build_tool_map so the gateway never hardcodes add-on tool names.
@@ -156,21 +159,33 @@ class Gateway:
         set_reference_backend_provider(self.get_reference_backends)
         set_backend_capability_provider(self.get_available_backend_capabilities)
 
-        # Create backend instances from config
-        backends_config = config.get("backends", {})
-        for name, backend_conf in backends_config.items():
-            if name in _RETIRED_CORE_BACKENDS or name == "sift-core":
-                raise ValueError(
-                    f"Core backend {name} is not allowed as a configured subprocess/add-on backend"
-                )
-            if not backend_conf.get("enabled", True):
-                logger.info("Backend %s is disabled, skipping", name)
-                continue
+        # D22A: add-on backend authority is app.mcp_backends, not gateway.yaml.
+        # If there is no control-plane DSN, serve core tools only and make the
+        # stale yaml block inert rather than treating it as fallback authority.
+        from sift_gateway.token_registry import registry_config
+
+        dsn, _ = registry_config(config)
+        if dsn:
             try:
-                backend = create_backend(name, backend_conf)
-                self.backends[name] = backend
+                from sift_gateway.mcp_backends_registry import McpBackendRegistry
+
+                self.mcp_backend_registry = McpBackendRegistry(dsn, audit=self._audit)
+                self.backends, self._mcp_catalog_loaded_at = (
+                    self.mcp_backend_registry.create_backend_instances()
+                )
+                logger.info(
+                    "Loaded %d add-on backend(s) from app.mcp_backends",
+                    len(self.backends),
+                )
             except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
-                logger.error("Failed to create backend %s: %s", name, exc)
+                logger.error("Failed to load app.mcp_backends registry: %s", exc)
+                self.backends = {}
+                self._mcp_catalog_loaded_at = None
+        elif config.get("backends"):
+            logger.warning(
+                "Ignoring gateway.yaml backends because no control-plane DSN is "
+                "configured; serving core tools only"
+            )
 
     @property
     def lazy_start(self) -> bool:
@@ -381,7 +396,9 @@ class Gateway:
                         "when_to_use": t_decl.get("when_to_use", ""),
                         "avoid_when": t_decl.get("avoid_when", ""),
                         "output_notes": t_decl.get("output_notes", ""),
-                        "case_scoped": t_decl.get("case_scoped"),
+                        "case_scoped": t_decl.get(
+                            "case_scoped", manifest.get("default_case_scoped")
+                        ),
                     }
 
             if backend.started:
@@ -537,7 +554,7 @@ class Gateway:
         """Periodically retry failed backends and re-sync case on started ones."""
         while True:
             try:
-                await anyio.sleep(30)
+                await asyncio.sleep(30)
                 for name, backend in self.backends.items():
                     if not backend.started:
                         try:
@@ -561,62 +578,6 @@ class Gateway:
                         logger.info("Tool map rebuilt after %s reconnected", name)
             except (Exception, BaseExceptionGroup) as exc:
                 logger.error("Late-start checker error (will retry): %s", exc)
-
-    async def _backend_loader(self) -> None:
-        """Start backends added after gateway boot (e.g. wintools after join).
-
-        Runs inside an anyio task group so that streamablehttp_client's
-        cancel scopes are properly managed.  Backends started here are
-        stopped in the finally block (same task) to avoid cancel-scope
-        mismatch between start() and stop().
-        """
-        dynamic: dict[str, MCPBackend] = {}
-        try:
-            while True:
-                await self._reload_event.wait()
-                self._reload_event.clear()
-                pending = dict(self._pending_backends)
-                for name, conf in pending.items():
-                    loaded = False
-                    for attempt in range(6):
-                        if attempt > 0:
-                            await anyio.sleep(10)
-                        try:
-                            bk = create_backend(name, conf)
-                            self.backends[name] = bk
-                            await bk.start()
-                            await self._build_tool_map()
-                            dynamic[name] = bk
-                            loaded = True
-                            logger.info("Loaded backend: %s", name)
-                            break
-                        except (
-                            Exception,
-                            asyncio.CancelledError,
-                            BaseExceptionGroup,
-                        ) as exc:
-                            self.backends.pop(name, None)
-                            logger.warning(
-                                "Backend %s attempt %d/6: %s",
-                                name,
-                                attempt + 1,
-                                exc,
-                            )
-                    self._pending_backends.pop(name, None)
-                    if not loaded:
-                        logger.warning(
-                            "Could not load %s after retries — "
-                            "restart gateway to load it",
-                            name,
-                        )
-        finally:
-            for _name, bk in dynamic.items():
-                if not bk.started:
-                    continue
-                try:
-                    await bk.stop()
-                except BaseException:
-                    pass
 
     async def list_tools(self) -> dict[str, str]:
         """Return the current tool map (tool_name -> backend_name)."""
@@ -957,6 +918,9 @@ class Gateway:
             """Start gateway metadata/background tasks around the FastAPI app."""
             import os as _os
             await gateway.start()
+            await assert_mounted_tool_names(
+                gateway_mcp, expected_mounted_tool_names(gateway)
+            )
             reaper_task = None
             if gateway.idle_timeout > 0:
                 reaper_task = asyncio.create_task(gateway._idle_reaper())
@@ -966,12 +930,7 @@ class Gateway:
             # is driven by DB active-case context and portal mutation callbacks.
             watcher_task = None
 
-            # Backend loader runs in an anyio task group. It still serves the
-            # REST/join path; MCP proxy mounts are fixed at server startup.
-            async with anyio.create_task_group() as loader_tg:
-                loader_tg.start_soon(gateway._backend_loader)
-                yield
-                loader_tg.cancel_scope.cancel()
+            yield
             if reaper_task is not None:
                 reaper_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

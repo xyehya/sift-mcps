@@ -29,7 +29,6 @@ from sift_gateway.rate_limit import check_rate_limit
 from sift_gateway.token_gen import generate_gateway_token
 from sift_gateway.backends import (
     SCHEMA_PATH,
-    create_backend,
     load_and_validate_manifest,
     validate_manifest_contract,
 )
@@ -89,9 +88,12 @@ def _normalize_backend_payload(body: dict) -> tuple[str, dict, dict | None, list
                 "env",
                 "url",
                 "bearer_token",
+                "bearer_token_env",
                 "tls_cert",
+                "tls_cert_env",
                 "manifest_path",
                 "enabled",
+                "env_refs",
             )
             if key in body
         }
@@ -330,48 +332,39 @@ async def call_tool(request: Request) -> JSONResponse:
 async def list_backends(request: Request) -> JSONResponse:
     """GET /api/v1/backends — list all backends with status."""
     gateway = request.app.state.gateway
+    registry = getattr(gateway, "mcp_backend_registry", None)
+    if registry is None:
+        return JSONResponse(
+            {
+                "backends": [],
+                "count": 0,
+                "authority": "app.mcp_backends",
+                "control_plane": "unavailable",
+            }
+        )
+
+    try:
+        records = registry.list_backends()
+    except Exception as exc:
+        logger.warning("Failed to list app.mcp_backends: %s", exc)
+        return JSONResponse({"error": "mcp backend registry unavailable"}, status_code=503)
 
     backends = []
-    for name, conf in gateway.config.get("backends", {}).items():
-        if not isinstance(conf, dict):
-            continue
-        enabled = bool(conf.get("enabled", True))
+    for record in records:
+        name = record.name
+        enabled = record.enabled
         backend = gateway.backends.get(name)
         started = backend.started if backend else False
-
-        # Load manifest to get requires and unmet requirements
-        manifest = None
-        manifest_err = None
-        if backend:
-            manifest = getattr(backend, "manifest", None)
-        else:
-            # For HTTP/URL manifests, list_backends relies on cached manifests if present;
-            # it does not perform blocking remote network requests during listing.
-            explicit_path = conf.get("manifest_path")
-            is_http_manifest = isinstance(explicit_path, str) and explicit_path.startswith(("http://", "https://"))
-            if not is_http_manifest:
-                try:
-                    manifest = load_and_validate_manifest(name, conf)
-                except Exception as e:
-                    manifest_err = str(e)
-
+        manifest = getattr(backend, "manifest", None) if backend else record.manifest
         requires, unmet_requires = _requirement_status(gateway, manifest)
 
         health = {"status": "disabled"}
         if enabled:
-            if manifest_err:
-                # Redact potential secrets in manifest_err
-                if any(k in manifest_err for k in ("bearer_token", "tls_cert", "env")):
-                    manifest_err = "Secret validation failed."
-                health = {"status": "invalid_manifest", "detail": manifest_err}
-            elif not backend:
-                health = {"status": "error", "detail": "Failed to initialize backend"}
-            elif unmet_requires:
+            if unmet_requires:
                 health = {"status": "gated", "detail": f"Unmet requirements: {', '.join(unmet_requires)}"}
             elif not started:
                 health = {"status": "stopped"}
             else:
-                # Only check health of started, available backends
                 try:
                     health = await backend.health_check()
                 except (RuntimeError, ConnectionError, OSError) as e:
@@ -380,21 +373,51 @@ async def list_backends(request: Request) -> JSONResponse:
                 except Exception as e:
                     logger.warning("Health check unexpected error for backend %s: %s", name, e)
                     health = {"status": "error"}
+                try:
+                    registry.update_health(name, health.get("status", "unknown"), health.get("detail"))
+                except Exception:
+                    pass
 
-        backends.append(
+        item = record.public_dict(
+            started=started,
+            available=enabled and not unmet_requires,
+            pending_apply=_backend_pending_apply(gateway, record),
+        )
+        item.update(
             {
-                "name": name,
-                "type": conf.get("type", "stdio"),
-                "enabled": enabled,
-                "started": started,
-                "available": enabled and not unmet_requires,
                 "health": health,
                 "requires": requires,
                 "unmet_requires": unmet_requires,
             }
         )
+        backends.append(item)
 
-    return JSONResponse({"backends": backends, "count": len(backends)})
+    return JSONResponse(
+        {"backends": backends, "count": len(backends), "authority": "app.mcp_backends"}
+    )
+
+
+def _backend_pending_apply(gateway, record) -> bool:
+    loaded_at = getattr(gateway, "_mcp_catalog_loaded_at", None)
+    if loaded_at is None:
+        return bool(record.enabled)
+    updated_at = getattr(record, "updated_at", None)
+    if updated_at is None:
+        return False
+    return updated_at > loaded_at
+
+
+def _registry_record_by_name(gateway, name: str):
+    registry = getattr(gateway, "mcp_backend_registry", None)
+    if registry is None:
+        return None
+    try:
+        for record in registry.list_backends():
+            if record.name == name:
+                return record
+    except Exception as exc:
+        logger.warning("Failed to query app.mcp_backends for %s: %s", name, exc)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -431,39 +454,25 @@ async def start_service(request: Request) -> JSONResponse:
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
-    backends_config = gateway.config.get("backends", {})
-    if name not in backends_config:
+    record = _registry_record_by_name(gateway, name)
+    if record is None:
         return JSONResponse({"error": f"Unknown backend: {name}"}, status_code=404)
 
-    conf = backends_config[name]
-    if not conf.get("enabled", True):
+    if not record.enabled:
         return JSONResponse({"error": f"Cannot control service for disabled backend: {name}"}, status_code=400)
 
     # Resolve manifest and check requirements
     backend = gateway.backends.get(name)
-    manifest = getattr(backend, "manifest", None) if backend else None
-    if not manifest:
-        try:
-            manifest = load_and_validate_manifest(name, conf)
-        except Exception as e:
-            msg = str(e)
-            if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
-                msg = "Secret validation failed."
-            return JSONResponse({"error": f"Invalid manifest: {msg}"}, status_code=400)
+    if backend is None:
+        return JSONResponse(
+            {"error": f"Backend {name} is registered but pending Gateway restart", "restart_required": True},
+            status_code=409,
+        )
+    manifest = getattr(backend, "manifest", None) or record.manifest
 
     requires, unmet_requires = _requirement_status(gateway, manifest)
     if unmet_requires:
         return JSONResponse({"error": f"Cannot start backend with unmet requirements: {', '.join(unmet_requires)}"}, status_code=400)
-
-    if not backend:
-        try:
-            backend = create_backend(name, conf)
-            gateway.backends[name] = backend
-        except Exception as e:
-            msg = str(e)
-            if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
-                msg = "Secret validation failed."
-            return JSONResponse({"error": f"Failed to initialize backend: {msg}"}, status_code=500)
 
     if backend.started:
         return JSONResponse({"status": "already_running", "name": name})
@@ -487,8 +496,7 @@ async def stop_service(request: Request) -> JSONResponse:
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
-    backends_config = gateway.config.get("backends", {})
-    if name not in backends_config:
+    if _registry_record_by_name(gateway, name) is None:
         return JSONResponse({"error": f"Unknown backend: {name}"}, status_code=404)
 
     backend = gateway.backends.get(name)
@@ -514,39 +522,25 @@ async def restart_service(request: Request) -> JSONResponse:
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
-    backends_config = gateway.config.get("backends", {})
-    if name not in backends_config:
+    record = _registry_record_by_name(gateway, name)
+    if record is None:
         return JSONResponse({"error": f"Unknown backend: {name}"}, status_code=404)
 
-    conf = backends_config[name]
-    if not conf.get("enabled", True):
+    if not record.enabled:
         return JSONResponse({"error": f"Cannot control service for disabled backend: {name}"}, status_code=400)
 
     # Resolve manifest and check requirements for start
     backend = gateway.backends.get(name)
-    manifest = getattr(backend, "manifest", None) if backend else None
-    if not manifest:
-        try:
-            manifest = load_and_validate_manifest(name, conf)
-        except Exception as e:
-            msg = str(e)
-            if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
-                msg = "Secret validation failed."
-            return JSONResponse({"error": f"Invalid manifest: {msg}"}, status_code=400)
+    if backend is None:
+        return JSONResponse(
+            {"error": f"Backend {name} is registered but pending Gateway restart", "restart_required": True},
+            status_code=409,
+        )
+    manifest = getattr(backend, "manifest", None) or record.manifest
 
     requires, unmet_requires = _requirement_status(gateway, manifest)
     if unmet_requires:
         return JSONResponse({"error": f"Cannot start backend with unmet requirements: {', '.join(unmet_requires)}"}, status_code=400)
-
-    if not backend:
-        try:
-            backend = create_backend(name, conf)
-            gateway.backends[name] = backend
-        except Exception as e:
-            msg = str(e)
-            if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
-                msg = "Secret validation failed."
-            return JSONResponse({"error": f"Failed to initialize backend: {msg}"}, status_code=500)
 
     # Stop if running
     if backend.started:
@@ -664,8 +658,12 @@ async def join_gateway(request: Request) -> JSONResponse:
     else:
         new_token = None
 
-    # If wintools: add wintools backend to config and hot-load
+    # If wintools: register DB metadata only. D22A forbids persisting the
+    # received bearer token in gateway.yaml or Postgres; keep it as a process
+    # env value for this runtime and require a Gateway restart with the same env
+    # reference configured to expose the backend on /mcp.
     wintools_registered = False
+    wintools_restart_required = False
     if machine_type == "wintools" and wintools_url and wintools_token:
         parsed = urlparse(wintools_url)
         if parsed.scheme not in ("http", "https"):
@@ -701,25 +699,31 @@ async def join_gateway(request: Request) -> JSONResponse:
             else:
                 logger.warning("Invalid wintools_cert in join body (not PEM)")
 
-        # Write to disk
-        _add_wintools_backend(
-            gateway, wintools_url, wintools_token, tls_cert=cert_path_str
-        )
-        wintools_registered = True
-
-        # Schedule background loading.  The backend loader retries until
-        # wintools-mcp is online (Windows installer starts it after
-        # receiving this join response).
+        token_env = "SIFT_BACKEND_WINTOOLS_MCP_TOKEN"
+        os.environ[token_env] = str(wintools_token)
         backend_config = {
             "type": "http",
             "url": wintools_url,
-            "bearer_token": wintools_token,
+            "bearer_token_env": token_env,
             "enabled": True,
         }
         if cert_path_str:
-            backend_config["tls_cert"] = cert_path_str
-        gateway._pending_backends["wintools-mcp"] = backend_config
-        gateway._reload_event.set()
+            cert_env = "SIFT_BACKEND_WINTOOLS_MCP_TLS_CERT"
+            os.environ[cert_env] = cert_path_str
+            backend_config["tls_cert_env"] = cert_env
+        register_response, register_status = await register_backend_logic(
+            gateway,
+            {"name": "wintools-mcp", "config": backend_config},
+            actor=None,
+        )
+        if register_status < 400:
+            wintools_registered = True
+            wintools_restart_required = True
+        else:
+            logger.warning(
+                "wintools backend registry registration failed: %s",
+                register_response.get("error") or register_response.get("reasons"),
+            )
 
     # Build response (after hot-load so backends list is current)
     backends = list(gateway.backends.keys())
@@ -736,6 +740,14 @@ async def join_gateway(request: Request) -> JSONResponse:
 
     if wintools_registered:
         response["wintools_registered"] = True
+        response["restart_required"] = wintools_restart_required
+        response["credential_refs"] = {
+            "bearer_token_env": "SIFT_BACKEND_WINTOOLS_MCP_TOKEN"
+        }
+        if "SIFT_BACKEND_WINTOOLS_MCP_TLS_CERT" in os.environ:
+            response["credential_refs"]["tls_cert_env"] = (
+                "SIFT_BACKEND_WINTOOLS_MCP_TLS_CERT"
+            )
         samba_config = _load_samba_config()
         if samba_config:
             smb_host = _get_sift_ip()
@@ -827,46 +839,6 @@ def _add_api_key_to_config(gateway, token: str, examiner: str) -> None:
         gateway._api_keys[token] = {"examiner": examiner, "role": "examiner"}
 
 
-def _add_wintools_backend(
-    gateway, url: str, token: str, tls_cert: str | None = None
-) -> None:
-    """Add a wintools-mcp HTTP backend to the gateway config."""
-    from pathlib import Path
-
-    import yaml
-
-    with _CONFIG_LOCK:
-        config_path = Path.home() / ".sift" / "gateway.yaml"
-        if config_path.exists():
-            try:
-                with open(config_path) as f:
-                    config = yaml.safe_load(f) or {}
-            except (yaml.YAMLError, OSError):
-                config = {}
-        else:
-            config = {}
-
-        if "backends" not in config:
-            config["backends"] = {}
-
-        config["backends"]["wintools-mcp"] = {
-            "type": "http",
-            "url": url,
-            "bearer_token": token,
-            "enabled": True,
-        }
-        if tls_cert:
-            config["backends"]["wintools-mcp"]["tls_cert"] = tls_cert
-
-        try:
-            _atomic_yaml_write(config_path, config)
-        except OSError as e:
-            logger.error("Failed to write gateway config: %s", e)
-            raise HTTPException(
-                status_code=500, detail="Failed to save configuration"
-            ) from e
-
-
 def _get_gateway_url(gateway) -> str:
     """Build the gateway URL from config."""
     gw_config = gateway.config.get("gateway", {})
@@ -932,39 +904,33 @@ def _get_sift_ip() -> str | None:
 
 
 async def reload_backends(request: Request) -> JSONResponse:
-    """POST /api/v1/backends/reload — schedule loading of new backends.
+    """POST /api/v1/backends/reload — refresh DB registry status.
 
-    Re-reads gateway.yaml and starts any backends not yet loaded.
-    Does not restart existing backends (safe for active sessions).
+    D34 is restart-to-apply for FastMCP catalog exposure. This endpoint does not
+    live-remount providers; it reports which DB rows are pending Gateway restart.
     """
-    from pathlib import Path
-
-    import yaml
-
-    from sift_gateway.config import load_config
-
     gateway = request.app.state.gateway
-    config_path = Path.home() / ".sift" / "gateway.yaml"
-    if not config_path.exists():
-        return JSONResponse({"status": "no_config", "pending": []})
+    registry = getattr(gateway, "mcp_backend_registry", None)
+    if registry is None:
+        return JSONResponse(
+            {"status": "registry_unavailable", "pending": [], "restart_required": False},
+            status_code=503,
+        )
     try:
-        config = load_config(str(config_path))
-    except (ValueError, yaml.YAMLError, OSError):
-        return JSONResponse({"error": "failed to read gateway.yaml"}, status_code=500)
+        records = registry.list_backends()
+    except Exception as exc:
+        logger.warning("Failed to reload app.mcp_backends metadata: %s", exc)
+        return JSONResponse({"error": "mcp backend registry unavailable"}, status_code=503)
 
-    pending = []
-    for name, conf in config.get("backends", {}).items():
-        if not conf.get("enabled", True):
-            continue
-        existing = gateway.backends.get(name)
-        if existing and existing.started:
-            continue
-        gateway._pending_backends[name] = conf
-        pending.append(name)
-
-    if pending:
-        gateway._reload_event.set()
-    return JSONResponse({"status": "reload_scheduled", "pending": pending})
+    pending = [record.name for record in records if _backend_pending_apply(gateway, record)]
+    return JSONResponse(
+        {
+            "status": "restart_required" if pending else "current",
+            "pending": pending,
+            "restart_required": bool(pending),
+            "authority": "app.mcp_backends",
+        }
+    )
 
 
 def _sanitize_reasons(reasons: list[dict]) -> list[dict]:
@@ -982,6 +948,13 @@ def _sanitize_reasons(reasons: list[dict]) -> list[dict]:
 
 def validate_backend_logic(gateway, body: dict) -> tuple[dict, int]:
     name, config, inline_manifest, reasons = _normalize_backend_payload(body)
+    if not reasons and (inline_manifest is None or set(config) - {"type"}):
+        try:
+            from sift_gateway.mcp_backends_registry import normalize_connection_config
+
+            normalize_connection_config(config)
+        except Exception as exc:
+            reasons.append({"field": "config", "reason": str(exc)})
     manifest = None
     if not reasons:
         manifest, reasons = _load_manifest_for_rest(name, config, inline_manifest)
@@ -1017,8 +990,9 @@ def validate_backend_logic(gateway, body: dict) -> tuple[dict, int]:
     return response, status_code
 
 
-async def register_backend_logic(gateway, body: dict) -> tuple[dict, int]:
+async def register_backend_logic(gateway, body: dict, *, actor=None) -> tuple[dict, int]:
     name, config, inline_manifest, reasons = _normalize_backend_payload(body)
+    registry = getattr(gateway, "mcp_backend_registry", None)
     if inline_manifest is not None and "manifest_path" not in config:
         reasons.append(
             {
@@ -1026,6 +1000,13 @@ async def register_backend_logic(gateway, body: dict) -> tuple[dict, int]:
                 "reason": "Registration requires a manifest_path or URL; inline manifests are validate-only.",
             }
         )
+    if not reasons:
+        try:
+            from sift_gateway.mcp_backends_registry import normalize_connection_config
+
+            normalize_connection_config(config)
+        except Exception as exc:
+            reasons.append({"field": "config", "reason": str(exc)})
 
     manifest = None
     if not reasons:
@@ -1036,58 +1017,46 @@ async def register_backend_logic(gateway, body: dict) -> tuple[dict, int]:
         return {"registered": False, "name": name, "reasons": reasons}, 422
 
     assert manifest is not None
+    if registry is None:
+        return {
+            "registered": False,
+            "name": name,
+            "error": "mcp backend registry unavailable",
+            "restart_required": False,
+        }, 503
     enabled = bool(config.get("enabled", True))
     requires, unmet = _requirement_status(gateway, manifest)
     try:
-        backend = create_backend(name, config)
-    except ValueError as exc:
+        record = registry.register(name=name, config=config, manifest=manifest, actor=actor)
+    except Exception as exc:
+        http_status = getattr(exc, "http_status", None)
         msg = str(exc)
         if any(k in msg for k in ("bearer_token", "tls_cert", "env")):
-            msg = "Secret validation failed."
+            msg = "Backend credential reference validation failed."
+        if http_status is None or int(http_status) >= 500:
+            logger.warning("mcp backend registry write failed for %s: %s", name, msg)
+            return {
+                "registered": False,
+                "name": name,
+                "error": "mcp backend registry write failed",
+            }, 503
         return {
             "registered": False,
             "name": name,
             "reasons": [{"field": "config", "reason": msg}],
-        }, 422
-
-    with _CONFIG_LOCK:
-        config_path = _gateway_config_path()
-        if config_path.exists():
-            import yaml
-
-            try:
-                config_doc = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-            except (yaml.YAMLError, OSError):
-                return {"registered": False, "error": "failed to read gateway.yaml"}, 500
-        else:
-            config_doc = {}
-
-        config_doc.setdefault("backends", {})[name] = config
-        try:
-            _atomic_yaml_write(config_path, config_doc)
-        except OSError:
-            logger.exception("Failed to write gateway config")
-            return {"registered": False, "error": "failed to write gateway.yaml"}, 500
-
-    gateway.config.setdefault("backends", {})[name] = config
-    if enabled:
-        gateway.backends[name] = backend
-        await gateway._build_tool_map()
-        if not unmet:
-            gateway._pending_backends[name] = config
-            gateway._reload_event.set()
-    else:
-        gateway.backends.pop(name, None)
-        await gateway._build_tool_map()
+        }, int(http_status)
 
     return {
         "registered": True,
-        "name": name,
+        "id": record.id,
+        "name": record.name,
         "enabled": enabled,
         "available": enabled and not unmet,
         "requires": requires,
         "unmet_requires": unmet,
-        "reload_scheduled": enabled and not unmet,
+        "reload_scheduled": False,
+        "pending_apply": True,
+        "restart_required": True,
     }, 201
 
 
@@ -1109,7 +1078,8 @@ async def register_backend(request: Request) -> JSONResponse:
     if error:
         return error
     assert body is not None
-    response, status_code = await register_backend_logic(gateway, body)
+    actor = getattr(request.state, "identity", None)
+    response, status_code = await register_backend_logic(gateway, body, actor=actor)
     return JSONResponse(response, status_code=status_code)
 
 
