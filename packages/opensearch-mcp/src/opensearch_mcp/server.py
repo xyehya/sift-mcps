@@ -3963,7 +3963,9 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
 
 def main():
     """Run the MCP server."""
-    server.run(transport="stdio")
+    from opensearch_mcp.registry import create_server
+
+    create_server().run(transport="stdio")
 
 
 if __name__ == "__main__":
