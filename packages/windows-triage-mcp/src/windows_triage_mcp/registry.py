@@ -517,6 +517,57 @@ class CheckPipeOut(BaseModel):
     )
 
 
+class ServerStatusIn(BaseModel):
+    resource: Literal["health", "db_stats", "all"] = Field(
+        "health",
+        description="health=connectivity/cache; db_stats=baseline coverage counts; all=both.",
+    )
+
+
+class WintriageHealth(BaseModel):
+    status: Literal["healthy", "degraded"] = Field(
+        ..., description="Backend readiness status."
+    )
+    uptime_seconds: float = Field(..., description="Server uptime in seconds.")
+    databases: dict[str, str] = Field(
+        default_factory=dict, description="Database connectivity status by database."
+    )
+    cache: dict[str, Any] = Field(
+        default_factory=dict, description="Cache statistics by database."
+    )
+    config: dict[str, Any] = Field(
+        default_factory=dict, description="Non-secret runtime configuration summary."
+    )
+
+
+class WintriageDbStats(BaseModel):
+    known_good_db: dict[str, Any] = Field(
+        default_factory=dict, description="known_good.db coverage counts."
+    )
+    context_db: dict[str, Any] = Field(
+        default_factory=dict, description="context.db coverage counts."
+    )
+    registry_db: dict[str, Any] = Field(
+        default_factory=dict, description="known_good_registry.db availability/stats."
+    )
+
+
+class ServerStatusOut(BaseModel):
+    resource: Literal["health", "db_stats", "all"] = Field(
+        ..., description="Status resource returned."
+    )
+    health: WintriageHealth | None = Field(
+        None, description="Health payload when requested."
+    )
+    db_stats: WintriageDbStats | None = Field(
+        None, description="Database statistics payload when requested."
+    )
+
+
+class EmptyAliasIn(BaseModel):
+    pass
+
+
 REGISTRY: list[ToolDef] = []
 ALIAS_REGISTRY: dict[str, list[ToolAliasDef]] = {}
 PROMPT_REGISTRY: list[PromptDef] = []
@@ -1308,6 +1359,80 @@ async def wintriage_check_pipe(
         )
 
 
+async def wintriage_server_status(
+    params: ServerStatusIn, context: dict[str, Any] | None = None
+) -> ToolResult:
+    runtime = get_runtime()
+    tool_name = (context or {}).get("tool_name", "wintriage_server_status")
+    raw_args = params.model_dump(mode="json", exclude_none=True)
+    audit_id = runtime._audit._next_audit_id()
+    start = time.monotonic()
+    try:
+        raw: dict[str, Any] = {}
+        if params.resource in {"health", "all"}:
+            raw["health"] = await runtime._get_health()
+        if params.resource in {"db_stats", "all"}:
+            raw["db_stats"] = await runtime._get_db_stats()
+        raw["resource"] = params.resource
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(runtime, tool_name, raw_args, raw, audit_id, elapsed_ms)
+        out = _server_status_out(raw)
+        return _model_result(out, meta)
+    except DatabaseError:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "database_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.upstream_degraded,
+            "A baseline database error occurred.",
+            "Check the local Windows triage database installation and retry.",
+            retryable=True,
+            meta=meta,
+        )
+    except WindowsTriageError as exc:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        meta = _audit_meta(
+            runtime,
+            tool_name,
+            raw_args,
+            {"error": "server_error"},
+            audit_id,
+            elapsed_ms,
+        )
+        return _error_result(
+            ErrorCode.internal,
+            str(exc),
+            "Check backend logs for details, then retry.",
+            meta=meta,
+        )
+
+
+async def wintriage_status_resource() -> dict[str, Any]:
+    runtime = get_runtime()
+    return (await runtime._get_health()).copy()
+
+
+async def wintriage_baseline_catalog_resource() -> dict[str, Any]:
+    runtime = get_runtime()
+    return (await runtime._get_db_stats()).copy()
+
+
+def _server_status_out(raw: dict[str, Any]) -> ServerStatusOut:
+    health = raw.get("health")
+    db_stats = raw.get("db_stats")
+    return ServerStatusOut(
+        resource=raw.get("resource", "health"),
+        health=WintriageHealth.model_validate(health) if health else None,
+        db_stats=WintriageDbStats.model_validate(db_stats) if db_stats else None,
+    )
+
+
 def _check_file_alias(params: BaseModel) -> CheckArtifactIn:
     alias = CheckFileAliasIn.model_validate(params)
     return CheckArtifactIn(
@@ -1363,6 +1488,16 @@ def _check_autorun_alias(params: BaseModel) -> CheckSystemIn:
         value_name=alias.value_name,
         os_version=alias.os_version,
     )
+
+
+def _get_health_alias(params: BaseModel) -> ServerStatusIn:
+    EmptyAliasIn.model_validate(params)
+    return ServerStatusIn(resource="health")
+
+
+def _get_db_stats_alias(params: BaseModel) -> ServerStatusIn:
+    EmptyAliasIn.model_validate(params)
+    return ServerStatusIn(resource="db_stats")
 
 
 REGISTRY.append(
@@ -1471,6 +1606,48 @@ REGISTRY.append(
     )
 )
 
+REGISTRY.append(
+    ToolDef(
+        name="wintriage_server_status",
+        fn=wintriage_server_status,
+        in_model=ServerStatusIn,
+        out_model=ServerStatusOut,
+        annotations=_annotation("Triage Backend Status"),
+        title="Triage Backend Status",
+        description=(
+            "Report Windows triage backend readiness. Use `resource='health'` "
+            "for connectivity/cache health, `resource='db_stats'` for local "
+            "baseline coverage counts, or `resource='all'` before a triage-heavy "
+            "investigation. This is a resource-compatible tool kept for one "
+            "cutover cycle; prefer `wintriage://status` or "
+            "`wintriage://catalog/baselines` where resource access is available. "
+            "Example: `wintriage_server_status(resource='all')`."
+        ),
+    )
+)
+
+RESOURCE_REGISTRY.extend(
+    [
+        ResourceDef(
+            uri="wintriage://status",
+            fn=wintriage_status_resource,
+            name="wintriage_status",
+            title="Windows Triage Status",
+            description="Read-only health, database connectivity, and cache status.",
+        ),
+        ResourceDef(
+            uri="wintriage://catalog/baselines",
+            fn=wintriage_baseline_catalog_resource,
+            name="wintriage_baseline_catalog",
+            title="Windows Triage Baseline Catalog",
+            description=(
+                "Read-only coverage counts for known_good.db, context.db, and the "
+                "optional known_good_registry.db."
+            ),
+        ),
+    ]
+)
+
 ALIAS_REGISTRY["wintriage_check_artifact"] = [
     ToolAliasDef(
         name="check_file",
@@ -1553,6 +1730,29 @@ ALIAS_REGISTRY["wintriage_check_system"] = [
         description=(
             "Maps legacy `check_autorun(key_path, value_name, os_version)` calls to "
             "`wintriage_check_system(type='autorun', name=key_path, ...)`."
+        ),
+    ),
+]
+
+ALIAS_REGISTRY["wintriage_server_status"] = [
+    ToolAliasDef(
+        name="get_db_stats",
+        in_model=EmptyAliasIn,
+        transform=_get_db_stats_alias,
+        title="Deprecated: Get DB Stats",
+        description=(
+            "Maps legacy `get_db_stats()` calls to "
+            "`wintriage_server_status(resource='db_stats')`."
+        ),
+    ),
+    ToolAliasDef(
+        name="get_health",
+        in_model=EmptyAliasIn,
+        transform=_get_health_alias,
+        title="Deprecated: Get Health",
+        description=(
+            "Maps legacy `get_health()` calls to "
+            "`wintriage_server_status(resource='health')`."
         ),
     ),
 ]

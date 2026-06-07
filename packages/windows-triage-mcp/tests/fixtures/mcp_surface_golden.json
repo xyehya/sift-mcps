@@ -2,7 +2,26 @@
   "backend": "windows-triage-mcp",
   "prompts": [],
   "resource_templates": [],
-  "resources": [],
+  "resources": [
+    {
+      "annotations": null,
+      "description": "Read-only health, database connectivity, and cache status.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "wintriage_status",
+      "title": "Windows Triage Status",
+      "uri": "wintriage://status"
+    },
+    {
+      "annotations": null,
+      "description": "Read-only coverage counts for known_good.db, context.db, and the optional known_good_registry.db.",
+      "meta": null,
+      "mime_type": "application/json",
+      "name": "wintriage_baseline_catalog",
+      "title": "Windows Triage Baseline Catalog",
+      "uri": "wintriage://catalog/baselines"
+    }
+  ],
   "tools": [
     {
       "annotations": {
@@ -2644,6 +2663,393 @@
         "type": "object"
       },
       "title": "Check Named Pipe"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Triage Backend Status"
+      },
+      "description": "Report Windows triage backend readiness. Use `resource='health'` for connectivity/cache health, `resource='db_stats'` for local baseline coverage counts, or `resource='all'` before a triage-heavy investigation. This is a resource-compatible tool kept for one cutover cycle; prefer `wintriage://status` or `wintriage://catalog/baselines` where resource access is available. Example: `wintriage_server_status(resource='all')`.",
+      "input_schema": {
+        "properties": {
+          "resource": {
+            "default": "health",
+            "description": "health=connectivity/cache; db_stats=baseline coverage counts; all=both.",
+            "enum": [
+              "health",
+              "db_stats",
+              "all"
+            ],
+            "title": "Resource",
+            "type": "string"
+          }
+        },
+        "title": "ServerStatusIn",
+        "type": "object"
+      },
+      "meta": null,
+      "name": "wintriage_server_status",
+      "output_schema": {
+        "properties": {
+          "db_stats": {
+            "anyOf": [
+              {
+                "properties": {
+                  "context_db": {
+                    "additionalProperties": true,
+                    "description": "context.db coverage counts.",
+                    "title": "Context Db",
+                    "type": "object"
+                  },
+                  "known_good_db": {
+                    "additionalProperties": true,
+                    "description": "known_good.db coverage counts.",
+                    "title": "Known Good Db",
+                    "type": "object"
+                  },
+                  "registry_db": {
+                    "additionalProperties": true,
+                    "description": "known_good_registry.db availability/stats.",
+                    "title": "Registry Db",
+                    "type": "object"
+                  }
+                },
+                "title": "WintriageDbStats",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Database statistics payload when requested."
+          },
+          "health": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cache": {
+                    "additionalProperties": true,
+                    "description": "Cache statistics by database.",
+                    "title": "Cache",
+                    "type": "object"
+                  },
+                  "config": {
+                    "additionalProperties": true,
+                    "description": "Non-secret runtime configuration summary.",
+                    "title": "Config",
+                    "type": "object"
+                  },
+                  "databases": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Database connectivity status by database.",
+                    "title": "Databases",
+                    "type": "object"
+                  },
+                  "status": {
+                    "description": "Backend readiness status.",
+                    "enum": [
+                      "healthy",
+                      "degraded"
+                    ],
+                    "title": "Status",
+                    "type": "string"
+                  },
+                  "uptime_seconds": {
+                    "description": "Server uptime in seconds.",
+                    "title": "Uptime Seconds",
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "status",
+                  "uptime_seconds"
+                ],
+                "title": "WintriageHealth",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Health payload when requested."
+          },
+          "resource": {
+            "description": "Status resource returned.",
+            "enum": [
+              "health",
+              "db_stats",
+              "all"
+            ],
+            "title": "Resource",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource"
+        ],
+        "title": "ServerStatusOut",
+        "type": "object"
+      },
+      "title": "Triage Backend Status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Triage Backend Status"
+      },
+      "description": "DEPRECATED alias for `wintriage_server_status`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `get_db_stats()` calls to `wintriage_server_status(resource='db_stats')`.\n\nReport Windows triage backend readiness. Use `resource='health'` for connectivity/cache health, `resource='db_stats'` for local baseline coverage counts, or `resource='all'` before a triage-heavy investigation. This is a resource-compatible tool kept for one cutover cycle; prefer `wintriage://status` or `wintriage://catalog/baselines` where resource access is available. Example: `wintriage_server_status(resource='all')`.",
+      "input_schema": {
+        "properties": {},
+        "title": "EmptyAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_server_status",
+        "deprecated": true
+      },
+      "name": "get_db_stats",
+      "output_schema": {
+        "properties": {
+          "db_stats": {
+            "anyOf": [
+              {
+                "properties": {
+                  "context_db": {
+                    "additionalProperties": true,
+                    "description": "context.db coverage counts.",
+                    "title": "Context Db",
+                    "type": "object"
+                  },
+                  "known_good_db": {
+                    "additionalProperties": true,
+                    "description": "known_good.db coverage counts.",
+                    "title": "Known Good Db",
+                    "type": "object"
+                  },
+                  "registry_db": {
+                    "additionalProperties": true,
+                    "description": "known_good_registry.db availability/stats.",
+                    "title": "Registry Db",
+                    "type": "object"
+                  }
+                },
+                "title": "WintriageDbStats",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Database statistics payload when requested."
+          },
+          "health": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cache": {
+                    "additionalProperties": true,
+                    "description": "Cache statistics by database.",
+                    "title": "Cache",
+                    "type": "object"
+                  },
+                  "config": {
+                    "additionalProperties": true,
+                    "description": "Non-secret runtime configuration summary.",
+                    "title": "Config",
+                    "type": "object"
+                  },
+                  "databases": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Database connectivity status by database.",
+                    "title": "Databases",
+                    "type": "object"
+                  },
+                  "status": {
+                    "description": "Backend readiness status.",
+                    "enum": [
+                      "healthy",
+                      "degraded"
+                    ],
+                    "title": "Status",
+                    "type": "string"
+                  },
+                  "uptime_seconds": {
+                    "description": "Server uptime in seconds.",
+                    "title": "Uptime Seconds",
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "status",
+                  "uptime_seconds"
+                ],
+                "title": "WintriageHealth",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Health payload when requested."
+          },
+          "resource": {
+            "description": "Status resource returned.",
+            "enum": [
+              "health",
+              "db_stats",
+              "all"
+            ],
+            "title": "Resource",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource"
+        ],
+        "title": "ServerStatusOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Get DB Stats"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Triage Backend Status"
+      },
+      "description": "DEPRECATED alias for `wintriage_server_status`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `get_health()` calls to `wintriage_server_status(resource='health')`.\n\nReport Windows triage backend readiness. Use `resource='health'` for connectivity/cache health, `resource='db_stats'` for local baseline coverage counts, or `resource='all'` before a triage-heavy investigation. This is a resource-compatible tool kept for one cutover cycle; prefer `wintriage://status` or `wintriage://catalog/baselines` where resource access is available. Example: `wintriage_server_status(resource='all')`.",
+      "input_schema": {
+        "properties": {},
+        "title": "EmptyAliasIn",
+        "type": "object"
+      },
+      "meta": {
+        "canonical_name": "wintriage_server_status",
+        "deprecated": true
+      },
+      "name": "get_health",
+      "output_schema": {
+        "properties": {
+          "db_stats": {
+            "anyOf": [
+              {
+                "properties": {
+                  "context_db": {
+                    "additionalProperties": true,
+                    "description": "context.db coverage counts.",
+                    "title": "Context Db",
+                    "type": "object"
+                  },
+                  "known_good_db": {
+                    "additionalProperties": true,
+                    "description": "known_good.db coverage counts.",
+                    "title": "Known Good Db",
+                    "type": "object"
+                  },
+                  "registry_db": {
+                    "additionalProperties": true,
+                    "description": "known_good_registry.db availability/stats.",
+                    "title": "Registry Db",
+                    "type": "object"
+                  }
+                },
+                "title": "WintriageDbStats",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Database statistics payload when requested."
+          },
+          "health": {
+            "anyOf": [
+              {
+                "properties": {
+                  "cache": {
+                    "additionalProperties": true,
+                    "description": "Cache statistics by database.",
+                    "title": "Cache",
+                    "type": "object"
+                  },
+                  "config": {
+                    "additionalProperties": true,
+                    "description": "Non-secret runtime configuration summary.",
+                    "title": "Config",
+                    "type": "object"
+                  },
+                  "databases": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Database connectivity status by database.",
+                    "title": "Databases",
+                    "type": "object"
+                  },
+                  "status": {
+                    "description": "Backend readiness status.",
+                    "enum": [
+                      "healthy",
+                      "degraded"
+                    ],
+                    "title": "Status",
+                    "type": "string"
+                  },
+                  "uptime_seconds": {
+                    "description": "Server uptime in seconds.",
+                    "title": "Uptime Seconds",
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "status",
+                  "uptime_seconds"
+                ],
+                "title": "WintriageHealth",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Health payload when requested."
+          },
+          "resource": {
+            "description": "Status resource returned.",
+            "enum": [
+              "health",
+              "db_stats",
+              "all"
+            ],
+            "title": "Resource",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource"
+        ],
+        "title": "ServerStatusOut",
+        "type": "object"
+      },
+      "title": "Deprecated: Get Health"
     }
   ]
 }
