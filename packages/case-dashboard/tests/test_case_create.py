@@ -124,8 +124,13 @@ def test_portal_case_create_rejects_free_form_directory(client, case_env, passwo
 
 
 def test_case_id_format_validation_regex():
+    # A1-BOOTSTRAP: strict format case-<slug>-<MMDDHHSS> (8-digit timestamp)
+    assert routes_mod._valid_case_id("case-rocba-cdrive-05251433")  # frozen format
+    assert routes_mod._valid_case_id("case-brief-case-05251400")    # frozen format
+    # Legacy slugs still accepted (backwards compat)
     assert routes_mod._valid_case_id("case-20260525-1412")
     assert routes_mod._valid_case_id("rocba_cdrive-20260525-1412")
+    # Invalid cases
     assert not routes_mod._valid_case_id("Case-20260525-1412")
     assert not routes_mod._valid_case_id("1case-20260525-1412")
     assert not routes_mod._valid_case_id("c")
@@ -147,6 +152,9 @@ def test_portal_case_create_rejects_path_traversal(client, passwords_dir, monkey
 
 
 def test_portal_case_create_computes_case_id_with_time(client, case_env, passwords_dir, monkeypatch):
+    # A1-BOOTSTRAP: frozen format is case-<slug>-<MMDDHHSS> where MMDDHHSS =
+    # strftime("%m%d%H%S") on SIFT VM local time.
+    # 2026-05-25T14:12:33 → MM=05 DD=25 HH=14 SS=33 → "05251433"
     class FrozenDatetime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -162,7 +170,7 @@ def test_portal_case_create_computes_case_id_with_time(client, case_env, passwor
         "title": "ROCBA C Drive",
     })
 
-    expected_id = "rocba-cdrive-20260525-1412"
+    expected_id = "case-rocba-cdrive-05251433"
     expected_dir = case_root / expected_id
     assert resp.status_code == 200
     assert resp.json()["case_id"] == expected_id
@@ -184,7 +192,10 @@ def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
     monkeypatch.setattr(routes_mod, "datetime", FrozenDatetime)
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
 
-    requested_dir = case_root / "case-2026-001-20260525-1413"
+    # A1-BOOTSTRAP: frozen format case-<slug>-<MMDDHHSS>.
+    # casename "case-2026-001" → slug "case-2026-001" → id "case-case-2026-001-<MMDDHHSS>"
+    # 2026-05-25T14:13:00 → MMDDHHSS = strftime("%m%d%H%S") = "05251400"
+    requested_dir = case_root / "case-case-2026-001-05251400"
 
     resp = client.post("/api/case/create", json={
         "casename": "case-2026-001",
@@ -193,7 +204,7 @@ def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
-    assert resp.json()["case_id"] == "case-2026-001-20260525-1413"
+    assert resp.json()["case_id"] == "case-case-2026-001-05251400"
     assert resp.json()["case_dir"] == str(requested_dir)
 
     assert requested_dir.exists()
@@ -207,7 +218,7 @@ def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
     assert case_yaml_path.exists()
     with open(case_yaml_path) as f:
         meta = yaml.safe_load(f)
-    assert meta["case_id"] == "case-2026-001-20260525-1413"
+    assert meta["case_id"] == "case-case-2026-001-05251400"
     assert meta["title"] == "Case 2026 001"
     assert meta["status"] == "open"
     assert meta["examiner"] == "alice"
@@ -248,7 +259,8 @@ def test_case_creation_persists_optional_synopsis(client, case_env, passwords_di
         "description": "Home break-in targeting an SRL-issued laptop; determine exfiltration.",
     })
     assert resp.status_code == 200
-    case_dir = case_root / "brief-case-20260525-1413"
+    # A1-BOOTSTRAP: frozen format case-<slug>-<MMDDHHSS> → "case-brief-case-05251400"
+    case_dir = case_root / "case-brief-case-05251400"
     with open(case_dir / "CASE.yaml") as f:
         meta = yaml.safe_load(f)
     assert meta["description"].startswith("Home break-in")
@@ -285,7 +297,8 @@ def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_
     client = TestClient(app, raise_server_exceptions=True)
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
 
-    requested_dir = case_root / "case-activation-20260525-1414"
+    # A1-BOOTSTRAP: frozen format case-<slug>-<MMDDHHSS> → "case-case-activation-05251400"
+    requested_dir = case_root / "case-case-activation-05251400"
     resp = client.post("/api/case/create", json={
         "casename": "case-activation",
         "title": "Case Activation",
