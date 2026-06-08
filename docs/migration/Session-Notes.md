@@ -13,6 +13,61 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - Dependent wave landed and integrated (E1/F1/G1/I1)
+
+Status: DONE
+
+Changed (merged into `revamp/spg-v1`, one `--no-ff` merge per batch; branch
+filesets verified fully disjoint, no conflicts):
+
+- BATCH-E1 (`0390a9c`): Portal authority migration. `routes.py` gains four
+  Gateway-injected service slots (`evidence_service`, `investigation_service`,
+  `report_service`, `job_service`) following the established DI seam
+  (`_ACTIVE_CASES`/`_SUPABASE_AUTH`); each route prefers DB authority when wired
+  and falls back to the file path when `None`. Evidence seal/ignore/retire refuse
+  403 without a `reauth_audit_event_id` (C1 contract); reports gate 409 on no
+  approved findings; new `GET /api/portal/state` and `GET /api/jobs/{job_id}`
+  (D2 `JobService`). Report generation internals left to J1. Frontend evidence/
+  reports tabs + polling + rebuilt v2 bundle.
+- BATCH-F1 (`4a27aba`): OpenSearch ingest job adapter. `job_ingest.py` concrete
+  `ingest` handler for the D1 `JobWorker` (resolves path from worker-only
+  `spec_internal`, never echoed); central provenance stamping at the `flush_bulk`
+  choke point (no parser-module edits); migration
+  `202606081300_opensearch_provenance.sql` (index + ingest-provenance tables,
+  service-only RPCs, sanitized coverage view, case-member RLS); registry surfaces
+  `default_case_scoped`/`data_plane`. Owned `mcp_backends_registry.py` this wave.
+- BATCH-G1 (`cc8c7a8`): RAG pgvector. Migration `202606081400_rag_pgvector.sql`
+  (collections/documents/chunks, `vector(768)`, IVFFlat cosine, knowledge-vs-derived
+  CHECK, RLS); `pgvector_store.py` case-scoped path-free adapter; `rag_search`
+  returns shared knowledge UNION only the querying case's derived chunks. No
+  gateway source touched (one new bridge test only).
+- BATCH-I1 (`3fd86bd`): run_command uplift. `evidence_refs`/`output_ref` instead
+  of arbitrary paths; `MVP_FORENSIC_ALLOWLIST` + `@mvp_forensic` alias; deep
+  agent-response path sanitization (audit keeps absolutes); hash-linked provenance
+  receipt. Deny-floor preserved (`bash` denied even when requested; dd/mount/losetup
+  excluded). Updated 2 existing gateway tests that asserted the old absolute-path
+  contract.
+
+Validation:
+
+- Passed: `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`.
+- Passed (integrated, main worktree): sift-gateway 355, sift-core 364,
+  case-dashboard 344, forensic-rag 18, opensearch-mcp 987 (+71 skipped),
+  tests/db 45. No regressions.
+- Not run in this environment: live `supabase db` apply of migrations
+  `202606081300`/`202606081400`, live OpenSearch ingest, and live VM portal journey.
+  Validation was structural + unit-level, consistent with prior waves.
+
+Last-mile binding gap (every consuming batch deferred this; no defined batch owns
+it yet): the DB-authority code paths are built but not yet bound to live services.
+Captured as B-MVP-5/6/7. These block BATCH-V1's live end-to-end journey but not the
+individual batch acceptances (each passes with fallbacks/units).
+
+Next:
+
+- Launch BATCH-J1 (approved-only report generation/export; depends on E1, now landed).
+- Resolve the binding batch (B-MVP-5/6/7) before BATCH-V1.
+
 ### 2026-06-08 - BATCH-D2 landed and integrated (Gateway job/authority seam)
 
 Status: DONE
@@ -219,3 +274,6 @@ Next:
 | B-MVP-2 | Backlog | DEFERRED | ContextForge/Envoy-style external gateway integration. | Post-MVP presentation/backlog only; Gateway policy remains in SIFT Gateway for MVP. | none |
 | B-MVP-3 | Backlog | DONE | Gateway enqueue/status adapter over D1's `enqueue_job`/`job_status_public` (job_id only, sets `enqueue_audit_event_id`, schedules `expire_stale_jobs` reaper). | Landed in BATCH-D2 (`e80ad41`) as `JobService` + lifespan reaper. | E1, F1, G1, I1, J1 |
 | B-MVP-4 | Backlog | DONE | Runtime enforcement of add-on `authority_contract` (non_authoritative, prohibited_operations, required_scopes) in the Gateway backend registry; schema acceptance landed in this wave. | Landed in BATCH-D2 (`e80ad41`) as `AddonAuthorityMiddleware`. | F1 |
+| B-MVP-5 | Backlog | OPEN | Bind `create_dashboard_v2_app` service slots (`evidence_service`/`investigation_service`/`report_service`/`job_service`) to live Postgres/C1 RPCs/D2 `JobService`. Method contracts are documented in `routes.py` and exercised by E1's fakes. | Dedicated binding batch before V1. | V1 |
+| B-MVP-6 | Backlog | OPEN | Worker bootstrap + enqueue call sites: register D1 `JobWorker` handlers (F1 `ingest`, I1 `run_command`) and the enqueue call sites that place the resolved evidence path in `spec_internal`. | Dedicated binding batch before V1. | V1 |
+| B-MVP-7 | Backlog | OPEN | Wire a case-scoped pgvector RAG query tool (G1 `app.rag_search`/`PgVectorRagStore`) into the Gateway tool surface with a worker service DSN; current `kb_*` tools are ChromaDB knowledge-only. | Dedicated binding batch; routes results through the existing response guard. | V1 |

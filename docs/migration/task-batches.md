@@ -24,11 +24,11 @@ Rules:
 - [x] BATCH-C1 - DB evidence authority, custody ledger, and seal broker
 - [x] BATCH-D1 - Durable Postgres jobs and local worker claim loop
 - [x] BATCH-D2 - Gateway job adapter and add-on authority enforcement
-- [ ] BATCH-E1 - Portal authority migration for evidence, findings, timeline, TODOs, and reports
-- [ ] BATCH-F1 - OpenSearch secure core integration and ingest job adapter
-- [ ] BATCH-G1 - RAG pgvector target with provenance filters
+- [x] BATCH-E1 - Portal authority migration for evidence, findings, timeline, TODOs, and reports
+- [x] BATCH-F1 - OpenSearch secure core integration and ingest job adapter
+- [x] BATCH-G1 - RAG pgvector target with provenance filters
 - [x] BATCH-H1 - Add-on contract hardening for OpenCTI, Windows triage, and forensic knowledge
-- [ ] BATCH-I1 - Sandboxed run_command uplift
+- [x] BATCH-I1 - Sandboxed run_command uplift
 - [ ] BATCH-J1 - Approved-only report generation and export
 - [ ] BATCH-V1 - End-to-end validation and cutover
 
