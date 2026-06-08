@@ -1134,6 +1134,38 @@ class InvestigationService(_BasePortalDbService):
         """Approved findings/timeline/IOCs for report generation (DB authority)."""
         return self._store().report_inputs(case_id)
 
+    def audit_events(
+        self, case_id: str, audit_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Return ``app.audit_events`` rows for this case matching ``audit_ids``.
+
+        BATCH-K6: the portal audit view sources audit entries from Postgres
+        (DB authority) rather than scanning the local ``audit/*.jsonl`` mirror, so
+        tampering with or deleting the JSONL files cannot spoof, hide, or fabricate
+        the audit trail shown for a finding. Scoped to ``case_id`` so a leaked
+        event id from another case cannot be surfaced here.
+        """
+        ids = [str(a) for a in (audit_ids or []) if str(a).strip()]
+        if not ids:
+            return []
+        sql = (
+            "select id::text, event_type, actor_type, source, status, summary, "
+            "request_id, job_id::text, created_at, details "
+            "from app.audit_events "
+            "where case_id = %s and id::text = any(%s) "
+            "order by created_at"
+        )
+        rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (case_id, ids))
+                cols = [d[0] for d in cur.description]
+                for record in cur.fetchall():
+                    row = dict(zip(cols, record))
+                    row["created_at"] = _iso(row.get("created_at"))
+                    rows.append(row)
+        return rows
+
     def create_todo(
         self,
         *,

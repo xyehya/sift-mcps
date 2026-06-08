@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
+from sift_core.active_case_context import db_authority_active
 from sift_core.case_io import case_approvals_path, case_audit_dir
 
 
@@ -65,8 +67,25 @@ def _load_audit_entries(case_dir: Path) -> list[dict]:
     return entries
 
 
-def audit_summary_data(case_dir) -> dict:
-    """Return audit summary as structured data."""
+def audit_summary_data(
+    case_dir, db_audit_reader: Callable[[], dict[str, Any]] | None = None
+) -> dict:
+    """Return audit summary as structured data.
+
+    BATCH-K6: ``app.audit_events`` is the audit authority in DB-active mode. The
+    ``audit/*.jsonl`` + ``approvals.jsonl`` files are a local mirror/export only,
+    so this file-based summary must never be presented as the authoritative audit
+    trail when DB authority is active. When ``db_audit_reader`` is supplied and
+    DB authority is active, the summary is derived from Postgres; otherwise the
+    file-mirror summary is returned with an explicit ``authority`` label so callers
+    cannot mistake a tampered/stale local mirror for the audit of record.
+    """
+    if db_authority_active() and db_audit_reader is not None:
+        summary = dict(db_audit_reader())
+        summary.setdefault("authority", "db-audit-events")
+        summary["db_active"] = True
+        return summary
+
     case_dir = Path(case_dir)
     entries = _load_audit_entries(case_dir)
 
@@ -90,4 +109,9 @@ def audit_summary_data(case_dir) -> dict:
         "audit_ids": len(audit_ids),
         "by_mcp": mcp_counts,
         "by_tool": tool_counts,
+        # In DB-active mode this file mirror is NOT the audit of record. The label
+        # is explicit so a tampered/stale local mirror cannot masquerade as
+        # authority (BATCH-K6 file-authority removal).
+        "authority": "legacy-file-mirror" if db_authority_active() else "file",
+        "db_active": db_authority_active(),
     }

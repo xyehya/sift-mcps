@@ -9,6 +9,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sift_core.active_case_context import db_authority_active
 from sift_core.case_io import load_case_meta
 from sift_core.verification import VERIFICATION_DIR
 
@@ -173,6 +174,19 @@ def create_backup_data(
         if progress_fn:
             progress_fn("Generating manifest", i, total_manifest)
 
+    # BATCH-K6: a backup is an export snapshot of case files, never an authority
+    # source. In DB-active mode Postgres is the authority for findings, timeline,
+    # TODOs, IOCs, approvals, evidence custody, and audit; the JSON/JSONL/ledger
+    # files captured here are archival copies and must never be restored as
+    # authoritative state. The label is explicit so an operator (or a future
+    # restore path) cannot mistake the snapshot for the record of truth.
+    _db_active = db_authority_active()
+    backup_notes = ["approvals.jsonl is an archival copy, not used for verification"]
+    if _db_active:
+        backup_notes.append(
+            "DB-active case: Postgres is authority. This backup is an export "
+            "snapshot of case files only and must not be restored as authority."
+        )
     manifest = {
         "version": 1,
         "case_id": case_id,
@@ -185,7 +199,9 @@ def create_backup_data(
         "includes_password_hashes": bool(password_examiners),
         "password_examiners": password_examiners,
         "includes_opensearch": False,
-        "notes": ["approvals.jsonl is an archival copy, not used for verification"],
+        "authority": "db-postgres" if _db_active else "file",
+        "snapshot_only": _db_active,
+        "notes": backup_notes,
         "files": manifest_files,
         "total_bytes": total_bytes,
         "file_count": len(manifest_files),

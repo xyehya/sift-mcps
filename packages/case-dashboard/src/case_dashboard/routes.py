@@ -2263,14 +2263,44 @@ async def get_audit_for_finding(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
+    finding_id = request.path_params["finding_id"]
+
+    # BATCH-K6: in DB-active mode the finding and its audit trail are Postgres
+    # authority. Source the finding's audit_ids from the DB investigation record
+    # and the audit entries from app.audit_events — never from findings.json or
+    # the audit/*.jsonl mirror — so tampering with or deleting those files cannot
+    # spoof, hide, or fabricate the audit trail shown for a finding.
+    if _db_investigation_active():
+        case_id = _active_case_id()
+        finding = None
+        for f in _INVESTIGATION_DB.list_findings(case_id):
+            if f.get("id") == finding_id:
+                finding = f
+                break
+        if not finding:
+            return JSONResponse([])
+        audit_ids = set(finding.get("audit_ids", []))
+        for art in finding.get("artifacts", []):
+            for step in art.get("provenance_chain", []):
+                if step.get("audit_id"):
+                    audit_ids.add(step["audit_id"])
+        if not audit_ids:
+            return JSONResponse([])
+        reader = getattr(_INVESTIGATION_DB, "audit_events", None)
+        if not callable(reader):
+            return JSONResponse([])
+        events = reader(case_id, sorted(audit_ids))
+        for ev in events:
+            ev["_backend"] = ev.get("source", "db")
+        return JSONResponse(events)
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
-    finding_id = request.path_params["finding_id"]
 
-    # Get the finding's audit_ids
+    # Legacy (non-DB) mode only: get the finding's audit_ids from findings.json
     findings = _load_json(case_dir / "findings.json") or []
-    audit_ids: set[str] = set()
+    audit_ids = set()
     for f in findings:
         if f.get("id") == finding_id:
             audit_ids = set(f.get("audit_ids", []))

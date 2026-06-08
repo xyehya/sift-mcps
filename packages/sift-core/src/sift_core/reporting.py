@@ -30,6 +30,8 @@ from sift_core.evidence_chain import (
 from sift_core.evidence_ops import list_evidence_data
 from sift_core.report_profiles import PROFILES, STRIPPED_FINDING_FIELDS
 from sift_core.verification import VERIFICATION_DIR
+from sift_core.active_case_context import db_authority_active
+from sift_core.investigation_store import compute_content_hash
 
 # Substantive-field exclusion used when reconciling an approved item against
 # its verification ledger snapshot. Mirrors sift_core.case_io.hmac_text intent.
@@ -618,9 +620,34 @@ def generate_report_data(
             "Register and seal evidence in the Examiner Portal before finalizing this report."
         )
 
-    # Verification ledger reconciliation
+    # Verification reconciliation. In DB-active mode the verification authority is
+    # the per-row DB ``content_hash`` recorded at approval (BATCH-K2), not the
+    # local verification JSONL ledger — so report integrity cannot be spoofed by
+    # tampering, deleting, or staling the ledger file. The file-ledger path
+    # (``reconcile_verification``) is retained only for legacy non-DB mode
+    # (BATCH-K6 file-authority removal).
     case_id = metadata.get("case_id", "")
-    if case_id:
+    _db_mode = investigation_inputs is not None or db_authority_active()
+    if _db_mode:
+        result["verification_authority"] = "db-content-hash"
+        try:
+            alerts = reconcile_verification_db(approved_findings, approved_timeline)
+        except Exception as e:
+            alerts = [{"alert": "RECONCILIATION_ERROR", "detail": str(e)}]
+        if alerts:
+            result["verification_alerts"] = alerts
+            has_mismatch = any(
+                a.get("status") == "DESCRIPTION_MISMATCH" for a in alerts
+            )
+            if has_mismatch:
+                result["integrity_warning"] = (
+                    "One or more approved findings no longer match the content hash "
+                    "recorded in the database at approval. Verify integrity before "
+                    "including in report. Mismatched findings may contain "
+                    "unauthorized changes."
+                )
+    elif case_id:
+        result["verification_authority"] = "legacy-file-ledger"
         try:
             alerts = reconcile_verification(
                 case_id, approved_findings, approved_timeline
@@ -658,6 +685,36 @@ def generate_report_data(
         )
 
     return result
+
+
+def reconcile_verification_db(
+    approved_findings: list[dict],
+    approved_timeline: list[dict],
+) -> list[dict]:
+    """DB-authority verification: compare each approved item's live content
+    against the ``content_hash`` recorded in Postgres at approval (BATCH-K2/K6).
+
+    Unlike :func:`reconcile_verification`, this reads no local file: the items
+    carry their authoritative DB ``content_hash`` (the portal sources them from
+    ``PostgresInvestigationStore.report_inputs``). Recomputing the hash with the
+    same canonicalisation the store uses (:func:`compute_content_hash`) detects
+    any post-approval mutation of the row's substantive content. Tampering with,
+    deleting, or staling the legacy verification JSONL ledger has no effect on
+    this result.
+    """
+    results: list[dict] = []
+    for item in approved_findings + approved_timeline:
+        item_id = item.get("id", "")
+        stored = item.get("content_hash") or ""
+        if not stored:
+            results.append({"id": item_id, "status": "APPROVED_NO_DB_HASH"})
+            continue
+        live = compute_content_hash(item)
+        if live != stored:
+            results.append({"id": item_id, "status": "DESCRIPTION_MISMATCH"})
+        else:
+            results.append({"id": item_id, "status": "VERIFIED"})
+    return results
 
 
 def reconcile_verification(
