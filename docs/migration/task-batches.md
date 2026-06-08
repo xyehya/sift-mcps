@@ -33,11 +33,11 @@ Rules:
 - [x] BATCH-L1 - Live service binding, worker bootstrap, and Gateway tool bridge
 - [x] BATCH-K0 - Authority cutover impact model and batch freeze
 - [x] BATCH-K1 - Authority context and DB audit cutover
-- [ ] BATCH-K2 - Core investigation DB authority cutover
-- [ ] BATCH-K3 - Evidence gate, proof export, and Solana anchor cutover
-- [ ] BATCH-K4 - OpenSearch derived-state and host identity cutover
-- [ ] BATCH-K5 - run_command authority-isolation hardening
-- [ ] BATCH-K6 - Portal/report tamper regression and file-authority removal
+- [x] BATCH-K2 - Core investigation DB authority cutover
+- [x] BATCH-K3 - Evidence gate, proof export, and Solana anchor cutover
+- [x] BATCH-K4 - OpenSearch derived-state and host identity cutover
+- [x] BATCH-K5 - run_command authority-isolation hardening
+- [x] BATCH-K6 - Portal/report tamper regression and file-authority removal
 - [ ] BATCH-V1 - End-to-end validation and cutover
 
 ## BATCH-A0 - Freeze simplified migration operating model
