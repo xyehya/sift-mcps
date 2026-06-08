@@ -836,12 +836,12 @@ post-seal `run_command`, completed `ingest_job`/OpenSearch and
 `rag_search_case`, exported an approved-finding report, and exported DB custody
 proof. Validation evidence is recorded at the top of `Session-Notes.md`.
 
-Post-cutover freeze follow-up (2026-06-08): B-MVP-18 found that the live
-pgvector smoke loaded only the small bundled JSONL corpus, while the full
-downloaded forensic RAG Chroma release corpus (`20K+` records) was expected in
-Supabase pgvector. Code now adds `rag-mcp-import-chroma-pgvector` and wires the
-installer to run it after `download_rag_index`; live VM full-import row-count,
-search, and leak proof remain required before freeze.
+Post-cutover freeze follow-up (2026-06-08): B-MVP-18 is DONE. The live VM
+downloaded Chroma release `rag-index-v2026.03.01` through the SSH-tunneled
+proxy, imported `22268` Chroma records into Supabase pgvector with
+`rag-mcp-import-chroma-pgvector`, and proved `app.rag_chunks=26586`, all
+`kind='knowledge'`, all `case_id NULL`, with live `rag_search_case` returning
+Chroma-backed knowledge hits and no local path/secret leakage.
 
 Scope:
 
