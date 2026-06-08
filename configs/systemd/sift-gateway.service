@@ -11,6 +11,12 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 Environment=SIFT_EXAMINER=${SIFT_EXAMINER}
+# A1-BOOTSTRAP: Supabase environment variables — secrets are read from the
+# process environment only, never stored in the gateway config file.
+# Set SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY in
+# the systemd drop-in or ~/.config/environment.d/ before starting the service.
+# These are left empty here; override in a drop-in: systemctl --user edit sift-gateway
+EnvironmentFile=-%h/.sift/supabase.env
 
 [Install]
 WantedBy=default.target

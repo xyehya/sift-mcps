@@ -396,6 +396,28 @@ class SupabaseAuthClient:
             )
         return user_id
 
+    async def admin_update_user_password(self, user_id: str, new_password: str) -> None:
+        """Update a Supabase Auth user's password (A1-BOOTSTRAP: forced-reset path).
+
+        Called after the operator has authenticated with the temporary installer
+        password and wants to set a permanent one. Uses
+        ``PUT /auth/v1/admin/users/{id}`` with ``{password: new_password}``.
+        The new_password is never logged or stored.
+        """
+        try:
+            resp = await self._client.put(
+                f"{self._url}/auth/v1/admin/users/{user_id}",
+                headers=self._admin_headers(),
+                json={"password": new_password},
+            )
+        except httpx.HTTPError as exc:
+            raise SupabaseUnavailableError("Supabase Admin unreachable") from exc
+        if resp.status_code not in (200, 204):
+            raise SupabaseAuthError(
+                "admin password update failed", reason="admin_update_failed",
+                http_status=502,
+            )
+
     async def admin_revoke_user(self, user_id: str, *, delete: bool = True) -> None:
         """Revoke a Supabase user (D31 revocation model).
 
@@ -1043,6 +1065,95 @@ class SupabaseAuthCallbacks:
                    "count": len(principals)},
         )
         return principals
+
+    # -- forced reset (A1-BOOTSTRAP) --------------------------------------
+
+    async def forced_reset(
+        self,
+        access_token: str,
+        new_password: str,
+        source_ip: str | None,
+    ) -> None:
+        """Complete a forced password reset for an operator on first login.
+
+        Validates the current access token, verifies the principal is an operator
+        in 'invited' status, updates the Supabase password via Admin API, and
+        marks the operator principal as 'active'. Never logs passwords.
+
+        Raises SupabaseAuthError on denial; AdminCapabilityError when the
+        service-role key is not configured (can't call Admin API).
+        """
+        if not self._client._service_role_key:
+            raise AdminCapabilityError("service-role key required for forced reset")
+        if not new_password or len(new_password) < 8:
+            raise SupabaseAuthError(
+                "new_password too short (minimum 8 characters)",
+                reason="password_too_short",
+                http_status=400,
+            )
+
+        # Re-validate the current token to get the auth_user_id.
+        user = await self._client.get_user(access_token)
+        auth_user_id = str(user.get("id") or "")
+        if not auth_user_id:
+            raise InvalidTokenError("token has no subject")
+
+        record = await asyncio.to_thread(
+            self._repository.lookup_by_auth_user_id, auth_user_id
+        )
+        if record is None:
+            raise PrincipalNotMappedError("no app principal for user")
+        if record.principal_type != "operator":
+            raise PrincipalForbiddenError("forced reset only applies to operators")
+        if record.status != "invited":
+            raise SupabaseAuthError(
+                "forced reset only allowed for invited (first-login) operators",
+                reason="not_forced_reset",
+                http_status=409,
+            )
+
+        # Update password via Admin API (new_password never stored or logged).
+        await self._client.admin_update_user_password(auth_user_id, new_password)
+
+        # Mark operator principal as active in Postgres.
+        await asyncio.to_thread(
+            self._activate_operator_principal, record.principal_id
+        )
+
+        self._audit_log(
+            tool="portal_forced_reset",
+            summary="forced reset accepted",
+            extra={
+                "source_ip": source_ip,
+                "auth_user_id": auth_user_id,
+                "principal_id": record.principal_id,
+                "principal_type": "operator",
+            },
+        )
+
+        # Proactively drop cached identities so the old token is not served
+        # after the principal transitions from invited → active.
+        self._resolver.invalidate_principal(auth_user_id)
+
+    def _activate_operator_principal(self, principal_id: str) -> None:
+        """Transition operator status from 'invited' to 'active' in Postgres."""
+        if self._repository is None:
+            return
+        try:
+            with self._repository._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        update app.operator_profiles
+                        set status = 'active', updated_at = now()
+                        where id = %s and status = 'invited'
+                        """,
+                        (principal_id,),
+                    )
+                conn.commit()
+        except Exception as exc:
+            logger.warning("forced_reset: operator activate failed: %s", exc)
+            raise
 
     # -- issuance / revoke (delegated) ------------------------------------
 

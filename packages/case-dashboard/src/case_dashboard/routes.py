@@ -2874,7 +2874,17 @@ async def post_supabase_login(request: Request) -> JSONResponse:
         secret=_SESSION_SECRET,
     )
 
-    resp = JSONResponse({"ok": True, "principal": _principal_profile(principal)})
+    # A1-BOOTSTRAP: signal forced reset when the operator was provisioned by the
+    # installer with status='invited'. The portal must present a password-reset
+    # screen before allowing any other action. Token material is not in the body.
+    principal_status = principal.get("status", "active")
+    must_reset = principal_status == "invited"
+
+    resp = JSONResponse({
+        "ok": True,
+        "principal": _principal_profile(principal),
+        "must_reset": must_reset,  # A1-BOOTSTRAP: installer handoff forced-reset signal
+    })
     resp.set_cookie(
         SESSION_ENVELOPE_COOKIE_NAME,
         envelope,
@@ -2941,6 +2951,55 @@ async def post_supabase_refresh(request: Request) -> JSONResponse:
         samesite=SESSION_ENVELOPE_COOKIE_SAME_SITE,
     )
     return resp
+
+
+async def post_supabase_forced_reset(request: Request) -> JSONResponse:
+    """POST /portal/api/auth/forced-reset — A1-BOOTSTRAP: complete the installer forced-reset.
+
+    Called when ``must_reset: true`` is returned on first login. Requires the
+    current Supabase session envelope cookie (the operator is already
+    authenticated with the temporary installer password). Sets the new permanent
+    password via Admin API and transitions the operator from 'invited' to 'active'.
+
+    Body: {new_password: string}
+    Token material is never in the request/response body or logs.
+    """
+    if _SUPABASE_AUTH is None:
+        return JSONResponse({"error": "Supabase auth not configured"}, status_code=503)
+    if not _SESSION_SECRET:
+        return JSONResponse({"error": "Portal session not configured"}, status_code=500)
+
+    # Require an active session envelope — the operator must already be logged in.
+    cookie_val = request.cookies.get(SESSION_ENVELOPE_COOKIE_NAME)
+    if not cookie_val:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    envelope = verify_session_envelope(cookie_val, _SESSION_SECRET)
+    if not envelope or not envelope.get("at"):
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    new_password = str(body.get("new_password", ""))
+    if not new_password:
+        return JSONResponse({"error": "Missing new_password"}, status_code=400)
+
+    source_ip = request.client.host if request.client else "unknown"
+    try:
+        await _SUPABASE_AUTH.forced_reset(
+            access_token=envelope["at"],
+            new_password=new_password,
+            source_ip=source_ip,
+        )
+    except Exception as exc:  # noqa: BLE001 - never leak token material
+        status = _http_status_from_callback_error(exc, default=400)
+        reason = getattr(exc, "reason", None)
+        msg = reason if isinstance(reason, str) and reason else "Forced reset failed"
+        return JSONResponse({"error": msg}, status_code=status)
+
+    return JSONResponse({"ok": True, "must_reset": False})
 
 
 async def post_auth_login(request: Request) -> JSONResponse:
@@ -3947,8 +4006,42 @@ def _slugify_case_name(casename: str) -> str:
     return slug.strip("-")
 
 
+# A1-BOOTSTRAP: case path convention is frozen as case-<slug>-<MMDDHHSS> (F-MVP-1).
+# The regex accepts the frozen MMDDHHSS suffix (8 digits) and the pre-existing
+# YYYYMMDD-HHMM format for backward-compatibility with already-created test cases.
+_CASE_ID_RE_STRICT = re.compile(
+    r"^case-[a-z][a-z0-9_-]{1,51}-\d{8}$"  # frozen: case-<slug>-<MMDDHHSS>
+)
+_CASE_ID_RE_LEGACY = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
+
+
 def _valid_case_id(case_id: str) -> bool:
-    return bool(_CASE_ID_RE.fullmatch(case_id))
+    """Accept the frozen MMDDHHSS format or any legacy alphanumeric slug."""
+    return bool(_CASE_ID_RE_STRICT.fullmatch(case_id) or _CASE_ID_RE_LEGACY.fullmatch(case_id))
+
+
+def _make_case_name(slug: str, cases_root: "Path") -> tuple[str, "Path"]:
+    """Build a case directory name using the frozen A1-BOOTSTRAP convention.
+
+    Format: case-<slug>-<MMDDHHSS>  (SIFT VM local time, zero-padded).
+    If the directory already exists append -NN (01..99) as a collision suffix.
+
+    Returns (case_id, resolved_path).
+    """
+    # Use local time per spec (SIFT VM clock, not UTC).
+    # MMDDHHSS = month(2)+day(2)+hour(2)+second(2) via strftime("%m%d%H%S").
+    ts = datetime.now().strftime("%m%d%H%S")
+    base_id = f"case-{slug}-{ts}"
+    candidate = cases_root / base_id
+    if not candidate.exists():
+        return base_id, candidate.resolve()
+    # Collision suffix -NN (01..99)
+    for nn in range(1, 100):
+        suffixed = f"{base_id}-{nn:02d}"
+        candidate = cases_root / suffixed
+        if not candidate.exists():
+            return suffixed, candidate.resolve()
+    raise ValueError("Too many case-directory collisions (tried 99 suffixes)")
 
 
 def _load_cases_root() -> Path:
@@ -4216,12 +4309,21 @@ async def post_case_create(request: Request) -> JSONResponse:
         return JSONResponse({"error": "casename must be lowercase"}, status_code=400)
 
     slug = _slugify_case_name(casename)
-    case_id = f"{slug}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}"
+    real_root = _load_cases_root()
+
+    # R5: slug must not contain path separators or traversal sequences.
+    if "/" in slug or "\\" in slug or ".." in slug:
+        return JSONResponse({"error": "Directory must be under case root"}, status_code=400)
+
+    # A1-BOOTSTRAP: use frozen convention case-<slug>-<MMDDHHSS> with -NN collision suffix.
+    try:
+        case_id, real_requested = _make_case_name(slug, real_root)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+
     if not _valid_case_id(case_id):
         return JSONResponse({"error": "Invalid case_id format"}, status_code=400)
 
-    real_root = _load_cases_root()
-    real_requested = (real_root / case_id).resolve()
     if not real_requested.is_relative_to(real_root):
         return JSONResponse({"error": "Directory must be under case root"}, status_code=400)
 
@@ -4231,6 +4333,7 @@ async def post_case_create(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Another case creation is in progress"}, status_code=409)
 
     try:
+        # Re-check under lock (race between _make_case_name and mkdir)
         if real_requested.exists():
             return JSONResponse({"error": "Case directory already exists"}, status_code=409)
 
@@ -4805,6 +4908,8 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/auth/challenge", get_auth_challenge, methods=["GET"]),
         Route("/api/auth/login", post_auth_login, methods=["POST"]),
         Route("/api/auth/reset-password", post_auth_reset_password, methods=["POST"]),
+        # A1-BOOTSTRAP: installer forced-reset endpoint (Supabase path only)
+        Route("/api/auth/forced-reset", post_supabase_forced_reset, methods=["POST"]),
         Route("/api/auth/logout", post_auth_logout, methods=["POST"]),
         Route("/api/auth/refresh", post_supabase_refresh, methods=["POST"]),
         Route("/api/auth/me", get_auth_me, methods=["GET"]),

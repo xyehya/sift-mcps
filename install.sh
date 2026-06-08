@@ -442,7 +442,7 @@ generate_tls() {
 }
 
 # =============================================================================
-# Phase 6 — examiner account
+# Phase 6 — examiner account (local PBKDF2 legacy + Supabase-first bootstrap)
 # =============================================================================
 
 write_default_examiner() {
@@ -484,6 +484,129 @@ except BaseException:
     except OSError: pass
     raise
 PY
+}
+
+# A1-BOOTSTRAP: create the operator in Supabase Auth (Admin API) with status=invited.
+# This runs AFTER gateway config is written (so SUPABASE_URL/SERVICE_ROLE_KEY are
+# available in the environment) and after the gateway is started (so the DB is live).
+# It is idempotent: if the handoff file already has a supabase_operator_email line,
+# the bootstrap is skipped.
+bootstrap_supabase_operator() {
+  local sb_url="${SUPABASE_URL:-}"
+  local sb_key="${SUPABASE_SERVICE_ROLE_KEY:-}"
+
+  if [[ -z "$sb_url" || -z "$sb_key" ]]; then
+    warn "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set — skipping Supabase operator bootstrap."
+    warn "  Set these env vars and re-run ./install.sh to provision the Supabase operator account."
+    SUPABASE_OPERATOR_CREATED=0
+    return
+  fi
+
+  # Idempotency: skip if already bootstrapped
+  if [[ -f "$MATERIALS_FILE" ]] && grep -q '^supabase_operator_email=' "$MATERIALS_FILE" 2>/dev/null; then
+    log "Supabase operator already bootstrapped — preserving."
+    SUPABASE_OPERATOR_CREATED=0
+    return
+  fi
+
+  # A1-BOOTSTRAP: generate one-time installer password for Supabase operator.
+  # The operator MUST reset this on first login (status=invited in DB).
+  local sb_temp_password
+  sb_temp_password="SiftReset-$(random_hex 16)"
+  local sb_email="${SIFT_EXAMINER}@operators.sift.local"
+
+  log "Provisioning Supabase operator: $sb_email (status=invited, forced-reset on first login)."
+  export SUPABASE_URL="$sb_url" SUPABASE_SERVICE_ROLE_KEY="$sb_key"
+  export SB_OPERATOR_EMAIL="$sb_email" SB_OPERATOR_TEMP_PW="$sb_temp_password"
+  export SB_OPERATOR_EXAMINER="$SIFT_EXAMINER"
+
+  local create_result
+  create_result=$("$VENV_DIR/bin/python" - <<'PY' 2>&1)
+import json, os, sys, urllib.request, urllib.error
+
+url = os.environ["SUPABASE_URL"].rstrip("/")
+key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+email = os.environ["SB_OPERATOR_EMAIL"]
+password = os.environ["SB_OPERATOR_TEMP_PW"]
+examiner = os.environ["SB_OPERATOR_EXAMINER"]
+
+payload = json.dumps({
+    "email": email,
+    "password": password,
+    "email_confirm": True,
+    "user_metadata": {
+        "sift_principal_kind": "operator",
+        "display_name": examiner,
+        "installer_bootstrap": True,
+    },
+}).encode()
+
+req = urllib.request.Request(
+    f"{url}/auth/v1/admin/users",
+    data=payload,
+    method="POST",
+    headers={
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    },
+)
+try:
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = json.loads(resp.read())
+    user_id = str(data.get("id") or (data.get("user") or {}).get("id") or "")
+    if user_id:
+        print(f"ok:{user_id}")
+    else:
+        print(f"error:no_id_in_response")
+except urllib.error.HTTPError as exc:
+    body = exc.read()[:200].decode("utf-8", errors="replace")
+    print(f"http_error:{exc.code}:{body}")
+except Exception as exc:
+    print(f"error:{exc}")
+PY
+
+  local rc=$?
+  if [[ "$rc" -ne 0 ]] || [[ "$create_result" == error:* ]] || [[ "$create_result" == http_error:* ]]; then
+    warn "Supabase operator bootstrap FAILED: $create_result"
+    warn "  The legacy local examiner password is still available as a fallback."
+    SUPABASE_OPERATOR_CREATED=0
+    SB_OPERATOR_USER_ID=""
+    return
+  fi
+
+  local sb_user_id
+  sb_user_id="${create_result#ok:}"
+  SB_OPERATOR_USER_ID="$sb_user_id"
+  SUPABASE_OPERATOR_CREATED=1
+  SUPABASE_OPERATOR_EMAIL="$sb_email"
+  SUPABASE_OPERATOR_TEMP_PASSWORD="$sb_temp_password"
+  export SB_OPERATOR_USER_ID SUPABASE_OPERATOR_EMAIL SUPABASE_OPERATOR_TEMP_PASSWORD
+
+  log "Supabase operator created: id=$sb_user_id  status=invited (forced-reset on first login)."
+  log "NOTE: The one-time Supabase login password is written to: $MATERIALS_FILE"
+  log "  The operator MUST reset this password immediately after first login."
+
+  # Unset temp password from env so it's not inherited by child processes.
+  unset SB_OPERATOR_TEMP_PW
+}
+
+# A1-BOOTSTRAP: validate the evidence/cases root directory and warn if missing.
+validate_evidence_root() {
+  log "Validating evidence root: $SIFT_CASES_ROOT"
+  if [[ ! -d "$SIFT_CASES_ROOT" ]]; then
+    warn "Evidence root '$SIFT_CASES_ROOT' does not exist — creating."
+    sudo_if_needed install -d -m 755 -o "$(user_name)" -g "$(group_name)" "$SIFT_CASES_ROOT" || \
+      warn "Could not create '$SIFT_CASES_ROOT' — operator must create it manually."
+    return
+  fi
+  if [[ ! -r "$SIFT_CASES_ROOT" ]]; then
+    warn "Evidence root '$SIFT_CASES_ROOT' is not readable by the current user."
+    return
+  fi
+  local case_count
+  case_count=$(find "$SIFT_CASES_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l || echo 0)
+  log "Evidence root OK: $SIFT_CASES_ROOT ($case_count existing case directories)."
 }
 
 # =============================================================================
@@ -534,6 +657,39 @@ except BaseException:
     except OSError: pass
     raise
 PY
+}
+
+# A1-BOOTSTRAP: write the Supabase env file that the systemd service reads.
+# Supabase secrets are NEVER stored in gateway.yaml — only in this env file
+# which is chmod 600 and owned by the runtime user.
+write_supabase_env() {
+  local supabase_env_file="$SIFT_HOME/supabase.env"
+  local sb_url="${SUPABASE_URL:-}"
+  local sb_anon="${SUPABASE_ANON_KEY:-}"
+  local sb_service="${SUPABASE_SERVICE_ROLE_KEY:-}"
+
+  if [[ -z "$sb_url" && -z "$sb_anon" && -z "$sb_service" ]]; then
+    log "No SUPABASE_* env vars set — skipping supabase.env."
+    log "  To enable Supabase auth, set SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY"
+    log "  and re-run ./install.sh, or write them to $supabase_env_file manually."
+    return
+  fi
+
+  if [[ -f "$supabase_env_file" ]]; then
+    log "Supabase env file already exists — preserving $supabase_env_file."
+    return
+  fi
+
+  log "Writing Supabase env file: $supabase_env_file"
+  install -d -m 700 "$(dirname "$supabase_env_file")"
+  {
+    printf '# Supabase environment — managed by sift-mcps install.sh\n'
+    printf '# Secrets are stored here, not in gateway.yaml.\n'
+    [[ -n "$sb_url" ]]     && printf 'SUPABASE_URL=%s\n' "$sb_url"
+    [[ -n "$sb_anon" ]]    && printf 'SUPABASE_ANON_KEY=%s\n' "$sb_anon"
+    [[ -n "$sb_service" ]] && printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$sb_service"
+  } > "$supabase_env_file"
+  chmod 600 "$supabase_env_file"
 }
 
 write_gateway_config() {
@@ -933,13 +1089,18 @@ poll_gateway() {
 
 write_handoff() {
   local existing_temp_password existing_gateway_token existing_service_token
+  local existing_sb_email existing_sb_pw
   existing_temp_password=""
   existing_gateway_token=""
   existing_service_token=""
+  existing_sb_email=""
+  existing_sb_pw=""
   if [[ -f "$MATERIALS_FILE" ]]; then
     existing_temp_password="$(awk -F= '$1=="temporary_examiner_password"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
     existing_gateway_token="$(awk -F= '$1=="examiner_fallback_token"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
     existing_service_token="$(awk -F= '$1=="hermes_service_token"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
+    existing_sb_email="$(awk -F= '$1=="supabase_operator_email"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
+    existing_sb_pw="$(awk -F= '$1=="supabase_operator_temp_password"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
   fi
   umask 077
   {
@@ -950,6 +1111,25 @@ write_handoff() {
     printf 'ca_cert=%s/ca-cert.pem\n' "$SIFT_TLS_DIR"
     printf 'gateway_config=%s\n' "$SIFT_CONFIG"
     printf 'examiner=%s\n' "$SIFT_EXAMINER"
+    # A1-BOOTSTRAP: Supabase-first operator credentials (forced-reset on first login).
+    if [[ "${SUPABASE_OPERATOR_CREATED:-0}" -eq 1 ]]; then
+      printf 'supabase_operator_email=%s\n' "${SUPABASE_OPERATOR_EMAIL:-}"
+      printf 'supabase_operator_temp_password=%s\n' "${SUPABASE_OPERATOR_TEMP_PASSWORD:-}"
+      printf 'supabase_auth=enabled\n'
+      printf 'supabase_forced_reset=required_on_first_login\n'
+    elif [[ -n "$existing_sb_email" ]]; then
+      printf 'supabase_operator_email=%s\n' "$existing_sb_email"
+      if [[ -n "$existing_sb_pw" ]]; then
+        printf 'supabase_operator_temp_password=%s\n' "$existing_sb_pw"
+      else
+        printf 'supabase_operator_temp_password=already-reset\n'
+      fi
+      printf 'supabase_auth=enabled\n'
+      printf 'supabase_forced_reset=check_if_completed\n'
+    else
+      printf 'supabase_auth=not_bootstrapped\n'
+    fi
+    # Legacy local PBKDF2 examiner password (fallback when Supabase is not configured).
     if [[ "${TEMP_PASSWORD_CREATED:-0}" -eq 1 ]]; then
       printf 'temporary_examiner_password=%s\n' "$TEMP_PASSWORD"
     elif [[ -n "$existing_temp_password" && "$existing_temp_password" != "existing-password-preserved" ]]; then
@@ -968,6 +1148,8 @@ write_handoff() {
     fi
   } > "$MATERIALS_FILE"
   chmod 600 "$MATERIALS_FILE"
+  # A1-BOOTSTRAP: clear the temp password from env now that it's in the handoff file.
+  unset SUPABASE_OPERATOR_TEMP_PASSWORD
 }
 
 # =============================================================================
@@ -1048,12 +1230,27 @@ print_summary() {
   printf 'CA cert:      %s/ca-cert.pem\n' "$SIFT_TLS_DIR"
   printf 'Config:       %s\n' "$SIFT_CONFIG"
   printf 'Secrets:      %s\n' "$MATERIALS_FILE"
+  printf 'Evidence root: %s\n' "$SIFT_CASES_ROOT"
   printf '\n'
   printf 'Next steps:\n'
-  printf '  1. On the analyst machine, trust the CA cert or set REQUESTS_CA_BUNDLE.\n'
-  printf '  2. Configure Hermes with configs/hermes-forensics-profile.yaml and the service token.\n'
-  printf '  3. Sign into the portal as %s and reset the temporary password.\n' "$SIFT_EXAMINER"
-  printf '  4. Add-on backends are OPTIONAL and external. To integrate one, prepare it with\n'
+  # A1-BOOTSTRAP: Supabase-first login instructions when provisioned.
+  if [[ "${SUPABASE_OPERATOR_CREATED:-0}" -eq 1 ]]; then
+    printf '  1. Sign into the portal with:\n'
+    printf '       email:    %s\n' "${SUPABASE_OPERATOR_EMAIL:-}"
+    printf '       password: (see %s -> supabase_operator_temp_password)\n' "$MATERIALS_FILE"
+    printf '     You will be FORCED to reset this password on first login.\n'
+    printf '  2. After reset, create a case and activate it with your new password.\n'
+    printf '  3. Mount or copy evidence into the active case evidence directory.\n'
+    printf '  4. Generate an AI agent credential from Portal -> Agents.\n'
+  else
+    printf '  1. Sign into the portal as %s and reset the temporary password.\n' "$SIFT_EXAMINER"
+    printf '     (Supabase bootstrap was skipped — see %s for credentials)\n' "$MATERIALS_FILE"
+    printf '  2. Create a case and activate it with password re-auth.\n'
+    printf '  3. Mount or copy evidence into the active case evidence directory.\n'
+    printf '  4. Generate an AI agent credential from Portal -> Agents.\n'
+  fi
+  printf '  5. On the analyst machine, trust the CA cert or set REQUESTS_CA_BUNDLE.\n'
+  printf '  6. Add-on backends are OPTIONAL and external. To integrate one, prepare it with\n'
   printf '     scripts/setup-addon.sh, then register it from Portal -> Backends\n'
   printf '     (validate -> register -> hot-reload). The core ships with none enabled.\n'
 }
@@ -1301,6 +1498,7 @@ main() {
   generate_tls
   write_default_examiner
   prepare_opencti_secrets
+  write_supabase_env   # A1-BOOTSTRAP: Supabase secrets in ~/.sift/supabase.env
   write_gateway_config
   prepare_enrichment_assets   # FK enrichment is core (D4: FK data is a core runtime dep)
 
@@ -1321,11 +1519,24 @@ main() {
     log "CORE-ONLY: skipped add-on backends, OpenSearch/Docker, and forensic-tool downloads."
   fi
 
+  # A1-BOOTSTRAP: validate evidence/cases root before starting services.
+  validate_evidence_root
+
   install_systemd_service
   configure_immutable_capability
   configure_auditd
   configure_apparmor
   poll_gateway
+
+  # A1-BOOTSTRAP: Supabase operator bootstrap runs after the gateway is up
+  # (Postgres must be reachable for the DB principal insert to succeed later).
+  # Runs only when SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set.
+  SUPABASE_OPERATOR_CREATED=0
+  SB_OPERATOR_USER_ID=""
+  SUPABASE_OPERATOR_EMAIL=""
+  SUPABASE_OPERATOR_TEMP_PASSWORD=""
+  bootstrap_supabase_operator
+
   write_handoff
   print_summary
 }
