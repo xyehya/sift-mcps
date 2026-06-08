@@ -24,8 +24,11 @@ directly. Knowledge data is stored as reference (``kind='knowledge'``,
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import math
 import re
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -41,10 +44,13 @@ _FORBIDDEN_OUTPUT_KEYS = frozenset({"embedding", "spec_internal", "dsn", "connec
 _ABS_PATH_RE = re.compile(
     r"(^|\s)/(home|root|mnt|media|evidence|cases?|var|opt|srv)/|[a-zA-Z]:\\"
 )
+_BAD_SOURCE_REF_RE = re.compile(r"(^/)|(^|/)\.\.(/|$)|^[a-zA-Z]:[\\/]")
 
 # Embedding dimension contract — must match vector(768) in the migration.
 EMBEDDING_DIM = 768
 MAX_TOP_K = 50
+_ZERO_UUID = "00000000-0000-0000-0000-000000000000"
+_UUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://sift.local/rag")
 
 
 class PgVectorStoreError(Exception):
@@ -62,6 +68,33 @@ def _connect(dsn: str):
 def _scrub_text(value: str) -> str:
     """Redact any absolute path that leaked into a text field."""
     return _ABS_PATH_RE.sub(" [redacted-path] ", value)
+
+
+def stable_rag_uuid(*parts: Any) -> str:
+    """Return a deterministic UUID for repeatable MVP RAG seed operations."""
+    name = "|".join(str(part) for part in parts)
+    return str(uuid.uuid5(_UUID_NAMESPACE, name))
+
+
+def deterministic_embedding(text: str, *, dim: int = EMBEDDING_DIM) -> list[float]:
+    """Build a stable local embedding for pgvector smoke data.
+
+    This is deliberately dependency-free. It is not a semantic model replacement;
+    it exists so the live VM can prove that rows are populated and retrieved from
+    Supabase pgvector without downloading a model or falling back to Chroma.
+    """
+    if dim <= 0:
+        raise PgVectorStoreError("embedding dimension must be positive")
+    seed = (text or "sift-rag-empty").encode("utf-8", errors="replace")
+    values: list[float] = []
+    counter = 0
+    while len(values) < dim:
+        digest = hashlib.sha256(seed + counter.to_bytes(4, "big")).digest()
+        values.extend((byte - 127.5) / 127.5 for byte in digest)
+        counter += 1
+    values = values[:dim]
+    norm = math.sqrt(sum(v * v for v in values)) or 1.0
+    return [v / norm for v in values]
 
 
 def _sanitize_hit(row: dict[str, Any]) -> dict[str, Any]:
@@ -170,6 +203,143 @@ class PgVectorRagStore:
     def _connect(self):
         return _connect(self._dsn)
 
+    # -- metadata ingest -----------------------------------------------------
+
+    def ensure_collection(
+        self,
+        *,
+        name: str,
+        kind: str = "knowledge",
+        case_id: str | None = None,
+        description: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Create or update a RAG collection and return its id."""
+        _validate_kind_case(kind, case_id)
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            raise PgVectorStoreError("collection name is required")
+        meta = metadata if isinstance(metadata, dict) else {}
+        collection_id = ""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id
+                    from app.rag_collections
+                    where coalesce(case_id, %s::uuid) = coalesce(%s::uuid, %s::uuid)
+                      and lower(name) = lower(%s)
+                    limit 1
+                    """,
+                    (_ZERO_UUID, case_id, _ZERO_UUID, clean_name),
+                )
+                row = cur.fetchone()
+                if row:
+                    collection_id = str(row[0])
+                    cur.execute(
+                        """
+                        update app.rag_collections
+                        set description = coalesce(%s, description),
+                            metadata = metadata || %s::jsonb,
+                            updated_at = now()
+                        where id = %s
+                        """,
+                        (description, _jsonb_param(meta), collection_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        insert into app.rag_collections
+                          (name, kind, case_id, description, metadata)
+                        values (%s, %s, %s, %s, %s::jsonb)
+                        returning id
+                        """,
+                        (
+                            clean_name,
+                            kind,
+                            case_id,
+                            description,
+                            _jsonb_param(meta),
+                        ),
+                    )
+                    row = cur.fetchone()
+                    collection_id = str(row[0]) if row else ""
+            conn.commit()
+        return collection_id
+
+    def upsert_document(
+        self,
+        *,
+        collection_id: str,
+        title: str,
+        kind: str = "knowledge",
+        case_id: str | None = None,
+        provenance_id: str | None = None,
+        source_ref: str | None = None,
+        evidence_object_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Create or update a RAG document row and return its id."""
+        _validate_kind_case(kind, case_id)
+        clean_title = str(title or "").strip()
+        if not clean_title:
+            raise PgVectorStoreError("document title is required")
+        if source_ref and _BAD_SOURCE_REF_RE.search(source_ref):
+            raise PgVectorStoreError("source_ref must be a relative display label")
+        meta = metadata if isinstance(metadata, dict) else {}
+        document_id = ""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id
+                    from app.rag_documents
+                    where collection_id = %s
+                      and title = %s
+                      and source_ref is not distinct from %s
+                    limit 1
+                    """,
+                    (collection_id, clean_title, source_ref),
+                )
+                row = cur.fetchone()
+                if row:
+                    document_id = str(row[0])
+                    cur.execute(
+                        """
+                        update app.rag_documents
+                        set metadata = metadata || %s::jsonb,
+                            updated_at = now()
+                        where id = %s
+                        """,
+                        (_jsonb_param(meta), document_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        insert into app.rag_documents (
+                          collection_id, case_id, kind, title, provenance_id,
+                          evidence_object_id, source_ref, metadata
+                        )
+                        values (%s, %s, %s, %s, coalesce(%s::uuid, gen_random_uuid()),
+                                %s, %s, %s::jsonb)
+                        returning id
+                        """,
+                        (
+                            collection_id,
+                            case_id,
+                            kind,
+                            clean_title,
+                            provenance_id,
+                            evidence_object_id,
+                            source_ref,
+                            _jsonb_param(meta),
+                        ),
+                    )
+                    row = cur.fetchone()
+                    document_id = str(row[0]) if row else ""
+            conn.commit()
+        return document_id
+
     # -- retrieval ----------------------------------------------------------
 
     def search(
@@ -270,3 +440,12 @@ def _jsonb_param(value: dict[str, Any]):
 
         return json.dumps(value)
     return Jsonb(value)
+
+
+def _validate_kind_case(kind: str, case_id: str | None) -> None:
+    if kind not in {"knowledge", "derived"}:
+        raise PgVectorStoreError("kind must be 'knowledge' or 'derived'")
+    if kind == "knowledge" and case_id is not None:
+        raise PgVectorStoreError("knowledge RAG rows must not carry case_id")
+    if kind == "derived" and case_id is None:
+        raise PgVectorStoreError("derived RAG rows require case_id")

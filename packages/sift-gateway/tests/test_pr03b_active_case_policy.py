@@ -4,15 +4,14 @@ from unittest.mock import MagicMock, patch
 
 from fastmcp import FastMCP
 from fastmcp.server import create_proxy
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.testclient import TestClient
-
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.auth import AuthMiddleware
 from sift_gateway.identity import Identity
 from sift_gateway.policy_middleware import gateway_policy_middlewares
 from sift_gateway.rest import rest_routes
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.testclient import TestClient
 
 
 def _identity() -> Identity:
@@ -54,15 +53,16 @@ class _Service:
 
 
 class _Gateway:
-    def __init__(self, case, safe_args):
+    def __init__(self, case, safe_args, *, local_tools=None):
         self.active_case_service = _Service(case)
         self._audit = MagicMock()
         self._audit.log = MagicMock(return_value="aid-1")
         self._tool_map = {"addon_needs_case": "addon", "addon_implicit": "addon"}
         self._safe_args = safe_args
+        self._gateway_local_tools = set(local_tools or ())
 
     def is_case_scoped_tool(self, name):
-        return name.startswith("addon_")
+        return name.startswith("addon_") or name in self._gateway_local_tools
 
     def safe_case_argument_names(self, name):
         return set(self._safe_args.get(name, set()))
@@ -114,6 +114,28 @@ async def test_proxied_case_tool_without_safe_case_arg_is_denied(tmp_path):
     sources = [call.kwargs["source"] for call in gw._audit.log.call_args_list]
     assert "gateway_proxy_active_case" in sources
     assert "gateway_mcp_envelope" in sources
+
+
+async def test_gateway_local_case_tool_without_safe_case_arg_is_not_proxy_denied(tmp_path):
+    ran = False
+    gw = _Gateway(_case(tmp_path), {"rag_search_case": set()}, local_tools={"rag_search_case"})
+    parent = FastMCP("parent", middleware=gateway_policy_middlewares(gw))
+
+    @parent.tool(name="rag_search_case")
+    async def rag_search_case():
+        nonlocal ran
+        ran = True
+        return {"status": "ok"}
+
+    with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=_identity()), patch(
+        "sift_gateway.policy_middleware.check_evidence_gate",
+        return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
+    ):
+        result = await parent.call_tool("rag_search_case", {})
+
+    assert ran is True
+    assert not result.is_error
+    assert "active_case_proxy_denied" not in result.content[0].text
 
 
 async def test_client_supplied_mismatched_case_id_is_rejected(tmp_path):
