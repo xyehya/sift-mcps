@@ -433,6 +433,30 @@ def test_claim_respects_job_type_filter(db):
     assert w.claim_one(job_types=["report"]) is not None
 
 
+def test_run_once_respects_job_type_filter(db):
+    report = db.enqueue(_Job("report"))
+    ingest = db.enqueue(_Job("ingest"))
+    w = _worker(db, {"ingest": lambda j, c: JobResult()})
+
+    claimed = w.run_once(job_types=["ingest"])
+
+    assert claimed is not None and claimed.job_id == ingest.id
+    assert ingest.status == "succeeded"
+    assert report.status == "queued"
+
+
+def test_run_forever_respects_job_type_filter(db):
+    report = db.enqueue(_Job("report"))
+    ingest = db.enqueue(_Job("ingest"))
+    w = _worker(db, {"ingest": lambda j, c: JobResult()})
+
+    handled = w.run_forever(max_iterations=2, job_types=["ingest"])
+
+    assert handled == 1
+    assert ingest.status == "succeeded"
+    assert report.status == "queued"
+
+
 # --------------------------------------------------------------------------
 # Failure, retry, and lease expiry
 # --------------------------------------------------------------------------

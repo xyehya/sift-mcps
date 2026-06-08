@@ -19,7 +19,11 @@ from sift_core.agent_tools import core_tool_names
 
 from sift_gateway.audit_helpers import _extract_audit_id
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
-from sift_gateway.evidence_gate import build_block_response, check_evidence_gate
+from sift_gateway.evidence_gate import (
+    build_block_response,
+    check_evidence_gate,
+    check_evidence_gate_db,
+)
 from sift_gateway.mcp_endpoint import (
     _append_case_context,
     _stamp_identity_extra,
@@ -411,7 +415,11 @@ class EvidenceGateMiddleware(Middleware):
         if case is None and _active_case_service(self.gateway) is not None:
             return await call_next(context)
         case_dir_str = case.artifact_path if case is not None else os.environ.get("SIFT_CASE_DIR", "")
-        gate = check_evidence_gate(case_dir_str)
+        dsn = getattr(self.gateway, "control_plane_dsn", None)
+        if case is not None and dsn:
+            gate = check_evidence_gate_db(case.case_id, dsn)
+        else:
+            gate = check_evidence_gate(case_dir_str)
         if not gate["blocked"]:
             return await call_next(context)
 

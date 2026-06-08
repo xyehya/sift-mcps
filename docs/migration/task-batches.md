@@ -30,6 +30,7 @@ Rules:
 - [x] BATCH-H1 - Add-on contract hardening for OpenCTI, Windows triage, and forensic knowledge
 - [x] BATCH-I1 - Sandboxed run_command uplift
 - [x] BATCH-J1 - Approved-only report generation and export
+- [x] BATCH-L1 - Live service binding, worker bootstrap, and Gateway tool bridge
 - [ ] BATCH-V1 - End-to-end validation and cutover
 
 ## BATCH-A0 - Freeze simplified migration operating model
@@ -418,9 +419,58 @@ Acceptance:
 - Approved findings include provenance and supporting custody references.
 - Exported report bundle includes verification material.
 
+## BATCH-L1 - Live service binding, worker bootstrap, and Gateway tool bridge
+
+Dependencies: BATCH-C1; BATCH-D1; BATCH-D2; BATCH-E1; BATCH-F1; BATCH-G1; BATCH-I1; BATCH-J1.
+
+Scope:
+
+- `packages/sift-gateway/src/sift_gateway/server.py`
+- `packages/sift-gateway/src/sift_gateway/mcp_server.py`
+- `packages/sift-gateway/src/sift_gateway/policy_middleware.py`
+- `packages/sift-gateway/src/sift_gateway/jobs.py`
+- `packages/sift-gateway/src/sift_gateway/portal_services.py`
+- `packages/sift-gateway/src/sift_gateway/job_tools.py`
+- `packages/sift-gateway/src/sift_gateway/rag_bridge.py`
+- `packages/sift-core/src/sift_core/execute/job_worker.py`
+- `packages/sift-core/src/sift_core/execute/job_worker_cli.py`
+- `packages/sift-core/src/sift_core/execute/run_command_job.py`
+- `supabase/migrations/202606081500_report_metadata.sql`
+- `configs/systemd/sift-job-worker.service`
+- Binding tests and DB structural tests
+
+Exact work:
+
+- Bind `create_dashboard_v2_app` service slots to live Gateway-owned DB
+  adapters for evidence/custody, findings/timeline/IOCs/TODOs, report metadata,
+  and D2 job status.
+- Add the report/investigation metadata migration required by J1's
+  `report_service.record_report` seam.
+- Prefer the C1 DB evidence gate for DB active cases; keep the legacy file gate
+  only as bridge fallback.
+- Add a worker CLI/service that registers D1 `JobWorker` handlers for `ingest`
+  and `run_command`, and filters claims to job types this worker can handle.
+- Add Gateway-owned MCP tools for durable `ingest_job`, durable
+  `run_command_job`, and sanitized `job_status`; public job specs stay
+  path-free and worker-only `spec_internal` carries resolved local paths.
+- Add the case-scoped pgvector `rag_search_case` Gateway tool over G1's
+  `PgVectorRagStore`, routed through normal Gateway policy and response guard.
+
+Acceptance:
+
+- Portal DB service slots are wired by Gateway startup when a control-plane DSN
+  exists.
+- Agent-facing durable job tools return `job_id` and status only; absolute
+  paths appear only in worker-only `spec_internal`.
+- Worker claim loop does not claim unsupported job types.
+- DB active cases use DB evidence-gate status before tool dispatch.
+- RAG query tool validates case scope and embedding shape and returns
+  provenance-linked, path-free results.
+- Gateway, core, portal, RAG/DB, and OpenSearch job-ingest tests pass.
+
 ## BATCH-V1 - End-to-end validation and cutover
 
-Dependencies: BATCH-A1; BATCH-B1; BATCH-C1; BATCH-D1; BATCH-D2; BATCH-E1; BATCH-F1; BATCH-G1; BATCH-H1; BATCH-I1; BATCH-J1.
+Dependencies: BATCH-A1; BATCH-B1; BATCH-C1; BATCH-D1; BATCH-D2; BATCH-E1; BATCH-F1; BATCH-G1; BATCH-H1; BATCH-I1; BATCH-J1; BATCH-L1.
 
 Scope:
 
@@ -650,14 +700,49 @@ ACCEPTANCE
 Add-on metadata clearly marks capabilities and required scopes; query-only behavior is tested or snapshotted; tool surface snapshots remain deterministic; no add-on gains authority over cases, evidence, approvals, or reports.
 ```
 
-## Dependent Prompt Order
+## Next Prompt
 
-Launch BATCH-D2 next. After BATCH-D2 lands, launch the dependent implementation
-wave:
+Launch BATCH-V1 next. No additional implementation batch is currently open.
 
-- BATCH-E1 for portal DB authority migration.
-- BATCH-F1 for OpenSearch secure ingest job adapter.
-- BATCH-G1 for RAG pgvector and provenance filters.
-- BATCH-I1 for job-backed sandboxed `run_command`.
-- BATCH-J1 for approved-only report generation and export.
-- BATCH-V1 after all implementation batches land.
+Suggested worktree:
+
+```bash
+git worktree add ../sift-mcps-v1 -b revamp/mvp-v1-validation-cutover revamp/spg-v1
+```
+
+Prompt:
+
+```text
+ROLE & MODE
+You are the BATCH-V1 validation/cutover agent for the SIFT MVP sprint. Do not
+start new architecture work. Validate the integrated MVP on the live SIFT VM,
+fix only defects that block the Phase 3 smoke journey, and keep the repo in a
+clean, committable state.
+
+REQUIRED READING
+Read, in order: AGENTS.md; docs/migration/Migration-Spec.md sections 2, 3, 4,
+and 5; docs/migration/task-batches.md BATCH-V1 and BATCH-L1; the latest two
+entries in docs/migration/Session-Notes.md.
+
+SCOPE
+Own BATCH-V1 only. Apply Supabase migrations in timestamp order, start/verify
+Gateway and sift-job-worker, run the Phase 3 smoke journey, run package tests
+for any changed code, and update only task-batches.md and Session-Notes.md for
+final validation evidence. If a live defect appears, fix it in the smallest
+relevant code surface and rerun the failing smoke/test step.
+
+SECURITY INVARIANTS
+No agent-visible absolute case/evidence/mount paths, DB credentials,
+OpenSearch credentials, service-role keys, or local secrets. Gateway remains
+the policy boundary. Supabase/Postgres remains authority. Evidence must be
+registered and sealed before analysis. Reports include approved findings only.
+
+ACCEPTANCE
+The SIFT VM flow works end to end: install/health, operator forced reset, case
+create/activate, evidence detect/register/seal, one-time agent credential,
+MCP connection, pre-seal denial and post-seal allow, ingest_job/job_status,
+search/RAG query, record finding/timeline/TODO, portal approval, approved-only
+report generation/export, allowed/denied run_command examples, and audit/custody
+proof export. Both doc validators pass. Record all live validation evidence in
+Session-Notes.md and mark BATCH-V1 only after acceptance passes.
+```

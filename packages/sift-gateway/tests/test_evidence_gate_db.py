@@ -16,8 +16,13 @@ import types
 
 import pytest
 
+from sift_gateway.active_case import ActiveCase
 from sift_core.evidence_chain import ChainStatus
 from sift_gateway.evidence_gate import check_evidence_gate_db
+from sift_gateway.policy_middleware import (
+    EvidenceGateMiddleware,
+    _use_gateway_active_case,
+)
 
 
 _DSN = "postgresql://service@localhost/sift"
@@ -166,3 +171,53 @@ def test_result_shape_matches_file_gate(monkeypatch):
     result = check_evidence_gate_db(_CASE, _DSN)
     assert set(result.keys()) == {"blocked", "status", "issues", "manifest_version"}
     assert isinstance(result["issues"], list)
+
+
+async def test_mcp_evidence_gate_prefers_db_for_active_case(monkeypatch, tmp_path):
+    calls = {}
+
+    def fake_db_gate(case_id, dsn):
+        calls["db"] = (case_id, dsn)
+        return {
+            "blocked": False,
+            "status": ChainStatus.OK,
+            "issues": [],
+            "manifest_version": 4,
+        }
+
+    monkeypatch.setattr("sift_gateway.policy_middleware.check_evidence_gate_db", fake_db_gate)
+    monkeypatch.setattr(
+        "sift_gateway.policy_middleware.check_evidence_gate",
+        lambda _case_dir: pytest.fail("file evidence gate should not be used"),
+    )
+
+    class _Gateway:
+        control_plane_dsn = _DSN
+        _audit = None
+
+    class _Message:
+        name = "run_command"
+        arguments = {}
+
+    class _Context:
+        message = _Message()
+
+    case = ActiveCase(
+        case_id=_CASE,
+        case_key="db-case",
+        title="DB Case",
+        description=None,
+        status="active",
+        artifact_path=str(tmp_path),
+        metadata={},
+    )
+    middleware = EvidenceGateMiddleware(_Gateway())
+
+    async def call_next(_context):
+        return "allowed"
+
+    with _use_gateway_active_case(case):
+        result = await middleware.on_call_tool(_Context(), call_next)
+
+    assert result == "allowed"
+    assert calls["db"] == (_CASE, _DSN)

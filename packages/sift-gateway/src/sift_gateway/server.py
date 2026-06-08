@@ -148,6 +148,12 @@ class Gateway:
         # _build_tool_map so the gateway never hardcodes add-on tool names.
         self._tool_manifest_meta: dict[str, dict] = {}
         self.active_case_service = None
+        self.control_plane_dsn = None
+        self.evidence_service = None
+        self.investigation_service = None
+        self.report_service = None
+        self.rag_query_service = None
+        self._gateway_local_tools: set[str] = set()
         # BATCH-D2: Gateway adapter over the D1 durable job state machine. Built
         # in create_app() once the control-plane DSN is resolved.
         self.job_service = None
@@ -168,6 +174,7 @@ class Gateway:
         from sift_gateway.token_registry import registry_config
 
         dsn, _ = registry_config(config)
+        self.control_plane_dsn = dsn
         if dsn:
             try:
                 from sift_gateway.mcp_backends_registry import McpBackendRegistry
@@ -632,6 +639,7 @@ class Gateway:
     async def list_tools(self) -> dict[str, str]:
         """Return the current tool map (tool_name -> backend_name)."""
         result = {name: "sift-core" for name in core_tool_names()}
+        result.update({name: "sift-gateway" for name in self._gateway_local_tools})
         result.update(self._tool_map)
         return result
 
@@ -639,6 +647,8 @@ class Gateway:
         """Return whether a mounted/add-on tool requires active-case context."""
         if tool_name in core_tool_names():
             return tool_name not in {"get_tool_help", "capability_guide"}
+        if tool_name in self._gateway_local_tools:
+            return True
         meta = self._tool_manifest_meta.get(tool_name, {})
         if isinstance(meta.get("case_scoped"), bool):
             return bool(meta["case_scoped"])
@@ -706,6 +716,43 @@ class Gateway:
                     description=spec.description,
                     inputSchema=spec.input_schema,
                     annotations={"readOnlyHint": True} if spec.read_only else None,
+                )
+            )
+        if self.job_service is not None:
+            from sift_gateway.job_tools import gateway_job_tool_specs
+
+            for spec in gateway_job_tool_specs():
+                tools.append(
+                    Tool(
+                        name=spec["name"],
+                        description=spec["description"],
+                        inputSchema=spec["parameters"],
+                        annotations={"readOnlyHint": True} if spec["read_only"] else None,
+                        meta={
+                            "category": spec["category"],
+                            "recommended_for_phase": spec["phase"],
+                        },
+                    )
+                )
+        if self.rag_query_service is not None:
+            from sift_gateway.rag_bridge import (
+                RAG_SEARCH_CASE_TOOL,
+                rag_search_case_schema,
+            )
+
+            tools.append(
+                Tool(
+                    name=RAG_SEARCH_CASE_TOOL,
+                    description=(
+                        "Search the case-scoped pgvector RAG plane and shared "
+                        "forensic knowledge. Returns path-free, provenance-linked snippets."
+                    ),
+                    inputSchema=rag_search_case_schema(),
+                    annotations={"readOnlyHint": True},
+                    meta={
+                        "category": "knowledge-rag",
+                        "recommended_for_phase": "CORRELATE",
+                    },
                 )
             )
         for mapped_name in self._tool_map:
@@ -896,6 +943,7 @@ class Gateway:
         from sift_gateway.token_registry import registry_config
 
         dsn, _ = registry_config(self.config)
+        self.control_plane_dsn = dsn
         if dsn:
             try:
                 from sift_gateway.active_case import ActiveCaseService
@@ -909,6 +957,33 @@ class Gateway:
                 self.job_service = JobService(dsn, audit=self._audit)
             except Exception as exc:  # pragma: no cover - defensive startup
                 logger.warning("Job service init failed: %s", exc)
+            try:
+                from sift_gateway.portal_services import (
+                    EvidenceAuthorityService,
+                    InvestigationService,
+                    ReportService,
+                )
+
+                self.evidence_service = EvidenceAuthorityService(dsn)
+                self.investigation_service = InvestigationService(dsn)
+                self.report_service = ReportService(dsn)
+            except Exception as exc:  # pragma: no cover - defensive startup
+                logger.warning("Portal DB services init failed: %s", exc)
+            try:
+                from sift_gateway.rag_bridge import PgVectorRagQueryService
+
+                self.rag_query_service = PgVectorRagQueryService(dsn)
+            except Exception as exc:  # pragma: no cover - defensive startup
+                logger.warning("RAG query service init failed: %s", exc)
+        self._gateway_local_tools = set()
+        if self.job_service is not None:
+            from sift_gateway.job_tools import GATEWAY_JOB_TOOLS
+
+            self._gateway_local_tools.update(GATEWAY_JOB_TOOLS)
+        if self.rag_query_service is not None:
+            from sift_gateway.rag_bridge import RAG_SEARCH_CASE_TOOL
+
+            self._gateway_local_tools.add(RAG_SEARCH_CASE_TOOL)
 
         # PR03A: build the shared Supabase identity resolver + portal callbacks.
         # Fail-soft: if Supabase is disabled or env/DSN is absent, the gateway
@@ -1070,6 +1145,10 @@ class Gateway:
                 token_registry=token_registry,
                 supabase_auth=supabase_callbacks,
                 active_case_service=self.active_case_service,
+                evidence_service=self.evidence_service,
+                investigation_service=self.investigation_service,
+                report_service=self.report_service,
+                job_service=self.job_service,
                 legacy_portal_session_enabled=auth_config.legacy_portal_session_enabled,
                 on_chain_mutation=invalidate_evidence_cache,
                 on_case_activated=None,

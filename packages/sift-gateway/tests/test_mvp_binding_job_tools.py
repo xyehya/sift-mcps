@@ -1,0 +1,183 @@
+"""B-MVP-5/6/7 binding tests for Gateway-owned job/RAG tool seams."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+from sift_gateway.active_case import ActiveCase
+from sift_gateway.job_tools import (
+    handle_ingest_job,
+    handle_job_status,
+    handle_run_command_job,
+)
+from sift_gateway.mcp_server import create_gateway_mcp_server
+from sift_gateway.rag_bridge import handle_rag_search_case
+
+
+def _case(case_dir: Path) -> ActiveCase:
+    return ActiveCase(
+        case_id="11111111-1111-1111-1111-111111111111",
+        case_key="case-one",
+        title="Case One",
+        description=None,
+        status="active",
+        artifact_path=str(case_dir),
+        metadata={},
+        membership_role="agent",
+    )
+
+
+class _ActiveCaseService:
+    def __init__(self, case):
+        self.case = case
+
+    def require_active_case_for_principal(self, principal):
+        return self.case
+
+
+class _JobResult:
+    def __init__(self, job_id):
+        self.job_id = job_id
+
+    def public_dict(self):
+        return {"job_id": self.job_id}
+
+
+class _JobService:
+    def __init__(self):
+        self.enqueued = []
+
+    def enqueue_job(self, **kwargs):
+        self.enqueued.append(kwargs)
+        return _JobResult(f"job-{len(self.enqueued)}")
+
+    def job_status_public(self, job_id, principal=None):
+        return {
+            "job_id": job_id,
+            "status": "running",
+            "spec_public": {"evidence_ref": "evidence/disk.E01"},
+        }
+
+
+class _EvidenceService:
+    def __init__(self, case_dir: Path):
+        self.case_dir = case_dir
+
+    def resolve_evidence_reference(self, case_id, ref):
+        return {
+            "evidence_id": "ev-1",
+            "display_path": "evidence/disk.E01",
+            "path": self.case_dir / "evidence" / "disk.E01",
+        }
+
+
+class _Gateway:
+    def __init__(self, case_dir: Path):
+        self.active_case_service = _ActiveCaseService(_case(case_dir))
+        self.job_service = _JobService()
+        self.evidence_service = _EvidenceService(case_dir)
+        self.rag_query_service = None
+        self._audit = None
+        self._gateway_local_tools = {"ingest_job", "run_command_job", "job_status"}
+        self._tool_manifest_meta = {}
+        self.backends = {}
+
+    def is_case_scoped_tool(self, name):
+        return name in self._gateway_local_tools
+
+    def safe_case_argument_names(self, name):
+        return set()
+
+
+def _payload(contents):
+    return json.loads(contents[0].text)
+
+
+def test_ingest_job_writes_path_only_to_spec_internal(tmp_path):
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
+    gateway = _Gateway(case_dir)
+
+    result = asyncio.run(
+        handle_ingest_job(
+            gateway,
+            {"evidence_ref": "ev-1", "hostname": "host-a", "include": ["winevt"]},
+            "agent-1",
+        )
+    )
+
+    body = _payload(result)
+    assert body == {"job_id": "job-1", "status": "queued", "job_type": "ingest"}
+    call = gateway.job_service.enqueued[0]
+    assert call["job_type"] == "ingest"
+    assert call["case_id"] == "11111111-1111-1111-1111-111111111111"
+    assert call["evidence_id"] == "ev-1"
+    assert call["spec_public"] == {
+        "evidence_ref": "evidence/disk.E01",
+        "hostname": "host-a",
+        "include": ["winevt"],
+        "full": False,
+    }
+    assert call["spec_internal"]["evidence_path"].endswith("evidence/disk.E01")
+    assert "/case/" not in json.dumps(body)
+
+
+def test_run_command_job_enqueues_public_args_and_internal_case_dir(tmp_path):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    gateway = _Gateway(case_dir)
+
+    result = asyncio.run(
+        handle_run_command_job(
+            gateway,
+            {
+                "command": "fls evidence/disk.E01",
+                "purpose": "list filesystem",
+                "evidence_refs": ["evidence/disk.E01"],
+                "output_ref": "fls",
+            },
+            "agent-1",
+        )
+    )
+
+    body = _payload(result)
+    assert body["job_id"] == "job-1"
+    call = gateway.job_service.enqueued[0]
+    assert call["job_type"] == "run_command"
+    assert call["spec_public"]["evidence_refs"] == ["evidence/disk.E01"]
+    assert call["spec_internal"]["case_dir"] == str(case_dir)
+    assert "case_dir" not in json.dumps(body)
+
+
+def test_job_status_returns_sanitized_service_payload(tmp_path):
+    gateway = _Gateway(tmp_path / "case")
+    result = asyncio.run(handle_job_status(gateway, {"job_id": "job-1"}, "agent-1"))
+    body = _payload(result)
+    assert body["status"] == "running"
+    assert "spec_internal" not in json.dumps(body)
+
+
+def test_rag_search_case_rejects_wrong_embedding_dimension(tmp_path):
+    gateway = _Gateway(tmp_path / "case")
+    gateway.rag_query_service = object()
+    result = asyncio.run(
+        handle_rag_search_case(gateway, {"query_embedding": [0.1, 0.2]}, "agent-1")
+    )
+    assert _payload(result)["error"] == "query_embedding_must_be_768_dimensional"
+
+
+async def test_gateway_mcp_registers_local_binding_tools(tmp_path):
+    gateway = _Gateway(tmp_path / "case")
+    gateway.rag_query_service = object()
+    with patch(
+        "sift_gateway.policy_middleware.check_evidence_gate",
+        return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
+    ):
+        mcp = create_gateway_mcp_server(gateway, api_keys={})
+        tools = {tool.name for tool in await mcp.list_tools()}
+
+    assert {"ingest_job", "run_command_job", "job_status", "rag_search_case"} <= tools

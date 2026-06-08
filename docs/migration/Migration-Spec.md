@@ -260,10 +260,9 @@ Already done:
 
 Needed:
 
-- Supabase-first operator bootstrap and forced reset.
-- Case path convention normalization.
-- Evidence mount validation and health contract.
-- REST/MCP policy parity decision implemented before agent-facing work expands.
+- Live SIFT VM validation that the Supabase-first operator bootstrap, forced
+  reset, case path convention, evidence mount validation, and health contract
+  work together after migrations are applied.
 
 ### Phase 2: Execution / Code Migration
 
@@ -307,18 +306,19 @@ Already done:
 - `packages/opensearch-mcp/src/opensearch_mcp/**` contains the parser, ingest,
   mapping, search, and enrichment strengths.
 - RAG, OpenCTI, Windows triage, and forensic knowledge packages exist.
+- DB evidence/custody, durable jobs, portal authority seams, derived search
+  ingest adapter, pgvector RAG store, add-on authority contracts, sandboxed
+  `run_command` uplift, approved-only reports, and the live Gateway binding
+  layer are implemented and unit/structurally tested.
+- Gateway startup wires portal DB services, durable job tools, `rag_search_case`,
+  and DB evidence-gate preference when a control-plane DSN exists.
 
 Needed:
 
-- DB evidence metadata, custody ledger, and seal broker.
-- Minimal Postgres job state machine and local worker claim loop.
-- DB-backed findings, timeline, TODOs, reports, and RAG metadata.
-- Agent response redaction so case/evidence paths are never exposed.
-- Portal screens wired to DB authority instead of file authority.
-- `run_command` uplift to evidence refs, job status, allowlist, output refs,
-  and stricter audit/provenance.
-- Add-on contract alignment so add-ons are query-only, audited, and
-  non-authoritative.
+- Apply all migrations to the live Supabase/Postgres target in timestamp order.
+- Start Gateway and `sift-job-worker` on the SIFT VM with service DSN and local
+  evidence mount access.
+- Run the Phase 3 smoke journey and fix any live wiring defects before cutover.
 
 ### Phase 3: Validation & Cutover
 

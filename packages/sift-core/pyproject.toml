@@ -16,6 +16,9 @@ dependencies = [
     "sift-common",
 ]
 
+[project.scripts]
+sift-job-worker = "sift_core.execute.job_worker_cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0",

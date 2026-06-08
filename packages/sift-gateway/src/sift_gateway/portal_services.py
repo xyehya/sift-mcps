@@ -1,0 +1,1079 @@
+"""Gateway-owned DB adapters injected into the operator portal.
+
+These services close the B-MVP-5 live binding gap: the portal already had DI
+slots for evidence, investigation, report, and job state, but production startup
+was not wiring concrete Postgres-backed implementations. The services in this
+module keep filesystem access server-side, store no absolute paths in Postgres,
+and return only portal-safe relative display paths / opaque IDs.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+class PortalServiceError(Exception):
+    def __init__(self, reason: str, *, http_status: int = 400) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.http_status = http_status
+
+
+def _connect(dsn: str):
+    try:
+        import psycopg
+    except ImportError as exc:  # pragma: no cover - deployment env
+        raise RuntimeError("psycopg is required for portal DB services") from exc
+    return psycopg.connect(dsn)
+
+
+def _jsonb(value: Any):
+    try:
+        from psycopg.types.json import Jsonb
+    except ImportError:  # pragma: no cover
+        return json.dumps(value)
+    return Jsonb(value)
+
+
+def _iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    return str(value)
+
+
+def _actor_columns(actor: Any) -> tuple[str, str | None, str | None, str | None]:
+    if not isinstance(actor, dict):
+        return "system", None, None, None
+    ptype = str(actor.get("principal_type") or "")
+    pid = str(actor.get("principal_id") or "") or None
+    agent_id = str(actor.get("agent_id") or "") or None
+    if ptype in ("operator", "user"):
+        return "user", pid, None, None
+    if ptype == "agent":
+        return "agent", None, agent_id or pid, None
+    if ptype == "service":
+        return "service", None, None, pid
+    return "system", None, None, None
+
+
+def _safe_item_id(row: dict[str, Any], fallback_prefix: str, idx: int) -> str:
+    value = row.get("id") or row.get("item_id") or row.get("todo_id")
+    if value:
+        return str(value)
+    return f"{fallback_prefix}-{idx:03d}"
+
+
+class _BasePortalDbService:
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+
+    def _connect(self):
+        return _connect(self._dsn)
+
+    def _case_artifact_path(self, case_id: str) -> Path | None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select legacy_case_dir from app.cases where id = %s",
+                    (case_id,),
+                )
+                row = cur.fetchone()
+        if not row or not row[0]:
+            return None
+        path = Path(str(row[0]))
+        return path if path.is_dir() else None
+
+    def _read_json_list(self, case_id: str, filename: str) -> list[dict[str, Any]]:
+        case_dir = self._case_artifact_path(case_id)
+        if case_dir is None:
+            return []
+        path = case_dir / filename
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        if isinstance(data, dict):
+            rows = data.get("items") or data.get("files") or []
+            return [row for row in rows if isinstance(row, dict)]
+        return []
+
+    def _write_json_list(self, case_id: str, filename: str, rows: list[dict[str, Any]]) -> None:
+        case_dir = self._case_artifact_path(case_id)
+        if case_dir is None:
+            return
+        path = case_dir / filename
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(rows, handle, indent=2, default=str)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp, path)
+            except Exception:
+                with contextlib_suppress_oserror():
+                    os.unlink(tmp)
+                raise
+        except OSError as exc:
+            logger.warning("artifact mirror write failed for %s: %s", filename, exc)
+
+    def _sync_findings(self, case_id: str) -> None:
+        rows = self._read_json_list(case_id, "findings.json")
+        if not rows:
+            return
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                for idx, payload in enumerate(rows, start=1):
+                    item_id = _safe_item_id(payload, "F-sync", idx)
+                    cur.execute(
+                        """
+                        insert into app.investigation_findings
+                          (case_id, item_id, status, content_hash, payload,
+                           created_by, approved_by, approved_at, rejected_by,
+                           rejected_at, source, updated_at)
+                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                'artifact_sync', now())
+                        on conflict (case_id, item_id) do update
+                          set status = excluded.status,
+                              content_hash = excluded.content_hash,
+                              payload = excluded.payload,
+                              created_by = excluded.created_by,
+                              approved_by = excluded.approved_by,
+                              approved_at = excluded.approved_at,
+                              rejected_by = excluded.rejected_by,
+                              rejected_at = excluded.rejected_at,
+                              source = 'artifact_sync',
+                              updated_at = now()
+                        """,
+                        (
+                            case_id,
+                            item_id,
+                            str(payload.get("status") or "DRAFT"),
+                            payload.get("content_hash"),
+                            _jsonb(payload),
+                            payload.get("created_by") or payload.get("examiner"),
+                            payload.get("approved_by"),
+                            payload.get("approved_at") or None,
+                            payload.get("rejected_by"),
+                            payload.get("rejected_at") or None,
+                        ),
+                    )
+            conn.commit()
+
+    def _sync_timeline(self, case_id: str) -> None:
+        rows = self._read_json_list(case_id, "timeline.json")
+        if not rows:
+            return
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                for idx, payload in enumerate(rows, start=1):
+                    item_id = _safe_item_id(payload, "T-sync", idx)
+                    cur.execute(
+                        """
+                        insert into app.investigation_timeline_events
+                          (case_id, item_id, status, content_hash, payload,
+                           created_by, approved_by, approved_at, rejected_by,
+                           rejected_at, source, updated_at)
+                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                'artifact_sync', now())
+                        on conflict (case_id, item_id) do update
+                          set status = excluded.status,
+                              content_hash = excluded.content_hash,
+                              payload = excluded.payload,
+                              created_by = excluded.created_by,
+                              approved_by = excluded.approved_by,
+                              approved_at = excluded.approved_at,
+                              rejected_by = excluded.rejected_by,
+                              rejected_at = excluded.rejected_at,
+                              source = 'artifact_sync',
+                              updated_at = now()
+                        """,
+                        (
+                            case_id,
+                            item_id,
+                            str(payload.get("status") or "DRAFT"),
+                            payload.get("content_hash"),
+                            _jsonb(payload),
+                            payload.get("created_by") or payload.get("examiner"),
+                            payload.get("approved_by"),
+                            payload.get("approved_at") or None,
+                            payload.get("rejected_by"),
+                            payload.get("rejected_at") or None,
+                        ),
+                    )
+            conn.commit()
+
+    def _sync_iocs(self, case_id: str) -> None:
+        rows = self._read_json_list(case_id, "iocs.json")
+        if not rows:
+            return
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                for idx, payload in enumerate(rows, start=1):
+                    item_id = _safe_item_id(payload, "IOC-sync", idx)
+                    cur.execute(
+                        """
+                        insert into app.investigation_iocs
+                          (case_id, item_id, status, value, ioc_type, payload,
+                           created_by, approved_by, approved_at, rejected_by,
+                           rejected_at, source, updated_at)
+                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                'artifact_sync', now())
+                        on conflict (case_id, item_id) do update
+                          set status = excluded.status,
+                              value = excluded.value,
+                              ioc_type = excluded.ioc_type,
+                              payload = excluded.payload,
+                              created_by = excluded.created_by,
+                              approved_by = excluded.approved_by,
+                              approved_at = excluded.approved_at,
+                              rejected_by = excluded.rejected_by,
+                              rejected_at = excluded.rejected_at,
+                              source = 'artifact_sync',
+                              updated_at = now()
+                        """,
+                        (
+                            case_id,
+                            item_id,
+                            str(payload.get("status") or "DRAFT"),
+                            payload.get("value"),
+                            payload.get("type") or payload.get("ioc_type"),
+                            _jsonb(payload),
+                            payload.get("created_by") or payload.get("examiner"),
+                            payload.get("approved_by"),
+                            payload.get("approved_at") or None,
+                            payload.get("rejected_by"),
+                            payload.get("rejected_at") or None,
+                        ),
+                    )
+            conn.commit()
+
+    def _sync_todos(self, case_id: str) -> None:
+        rows = self._read_json_list(case_id, "todos.json")
+        if not rows:
+            return
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                for idx, payload in enumerate(rows, start=1):
+                    todo_id = str(payload.get("todo_id") or payload.get("id") or f"TODO-sync-{idx:03d}")
+                    cur.execute(
+                        """
+                        insert into app.investigation_todos
+                          (case_id, todo_id, status, priority, assignee, payload,
+                           created_by, completed_at, source, updated_at)
+                        values (%s, %s, %s, %s, %s, %s, %s, %s,
+                                'artifact_sync', now())
+                        on conflict (case_id, todo_id) do update
+                          set status = excluded.status,
+                              priority = excluded.priority,
+                              assignee = excluded.assignee,
+                              payload = excluded.payload,
+                              created_by = excluded.created_by,
+                              completed_at = excluded.completed_at,
+                              source = excluded.source,
+                              updated_at = now()
+                        """,
+                        (
+                            case_id,
+                            todo_id,
+                            str(payload.get("status") or "open"),
+                            str(payload.get("priority") or "medium"),
+                            payload.get("assignee"),
+                            _jsonb(payload),
+                            payload.get("created_by") or payload.get("examiner"),
+                            payload.get("completed_at") or None,
+                        ),
+                    )
+            conn.commit()
+
+
+class contextlib_suppress_oserror:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return exc_type is not None and issubclass(exc_type, OSError)
+
+
+class EvidenceAuthorityService(_BasePortalDbService):
+    """DB evidence/custody adapter over the C1 RPCs."""
+
+    def gate_status(self, case_id: str) -> dict[str, Any]:
+        self._scan_evidence(case_id)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select seal_status, manifest_version, head_hash, active_count,
+                           issues, last_verified_at
+                    from app.evidence_gate_status(%s)
+                    """,
+                    (case_id,),
+                )
+                row = cur.fetchone()
+                cur.execute(
+                    """
+                    select display_path
+                    from app.evidence_objects
+                    where case_id = %s and status in ('detected', 'registered')
+                    order by display_path
+                    """,
+                    (case_id,),
+                )
+                unregistered = [str(r[0]) for r in cur.fetchall()]
+        if not row:
+            return {
+                "seal_status": "unsealed",
+                "manifest_version": 0,
+                "head_hash": "",
+                "active_count": 0,
+                "issues": [],
+                "last_verified_at": None,
+                "unregistered": unregistered,
+            }
+        return {
+            "seal_status": row[0],
+            "manifest_version": row[1],
+            "head_hash": row[2],
+            "active_count": row[3],
+            "issues": row[4] if isinstance(row[4], list) else [],
+            "last_verified_at": _iso(row[5]),
+            "unregistered": unregistered,
+        }
+
+    def list_evidence(self, case_id: str) -> list[dict[str, Any]]:
+        self._scan_evidence(case_id)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id::text, display_name, display_path, description, source,
+                           status, seal_status, current_sha256, current_bytes,
+                           registered_at, sealed_at
+                    from app.evidence_objects
+                    where case_id = %s
+                    order by display_path
+                    """,
+                    (case_id,),
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "evidence_id": r[0],
+                "display_name": r[1],
+                "display_path": r[2],
+                "description": r[3],
+                "source": r[4],
+                "status": r[5],
+                "seal_status": r[6],
+                "current_sha256": r[7],
+                "current_bytes": r[8],
+                "registered_at": _iso(r[9]),
+                "sealed_at": _iso(r[10]),
+            }
+            for r in rows
+        ]
+
+    def custody_events(self, case_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select seq, event_type, manifest_version, prev_hash, event_hash,
+                           evidence_object_id::text, reauth_audit_event_id::text,
+                           created_at
+                    from app.evidence_custody_events
+                    where case_id = %s
+                    order by seq
+                    """,
+                    (case_id,),
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "seq": r[0],
+                "event_type": r[1],
+                "manifest_version": r[2],
+                "prev_hash": r[3],
+                "event_hash": r[4],
+                "evidence_id": r[5],
+                "reauth_audit_event_id": r[6],
+                "created_at": _iso(r[7]),
+            }
+            for r in rows
+        ]
+
+    def resolve_evidence_reference(self, case_id: str, ref: str) -> dict[str, Any]:
+        """Resolve an opaque evidence id or relative display path for worker use.
+
+        The returned absolute path is for Gateway/worker internals only. Callers
+        that serialize this result must use ``display_path``/``evidence_id`` and
+        never the ``path`` field.
+        """
+        self._scan_evidence(case_id)
+        display_path = None
+        try:
+            display_path = _relative_display_path(ref)
+        except PortalServiceError:
+            display_path = None
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id::text, display_path, status, seal_status
+                    from app.evidence_objects
+                    where case_id = %s
+                      and (id::text = %s or display_path = %s)
+                    """,
+                    (case_id, ref, display_path),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise PortalServiceError("evidence_object_not_found", http_status=404)
+        if row[2] != "sealed" or row[3] != "sealed":
+            raise PortalServiceError("evidence_object_not_sealed", http_status=403)
+        path = self._resolve_evidence_path(case_id, str(row[1]))
+        return {"evidence_id": str(row[0]), "display_path": str(row[1]), "path": path}
+
+    def record_reauth_event(
+        self, *, case_id: str, actor: Any, examiner: str, action: str
+    ) -> str | None:
+        actor_type, actor_user, actor_agent, actor_service = _actor_columns(actor)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into app.audit_events
+                      (case_id, event_type, actor_type, actor_user_id,
+                       actor_agent_id, actor_service_identity_id, source,
+                       status, summary, details)
+                    values (%s, %s, %s, %s, %s, %s, 'portal_reauth',
+                            'success', %s, %s)
+                    returning id::text
+                    """,
+                    (
+                        case_id,
+                        f"reauth.{action}",
+                        actor_type,
+                        actor_user,
+                        actor_agent,
+                        actor_service,
+                        f"operator re-auth for {action}",
+                        _jsonb({"examiner": examiner, "action": action}),
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return str(row[0]) if row and row[0] else None
+
+    def seal(
+        self,
+        *,
+        case_id: str,
+        file_specs: list[dict[str, Any]],
+        reauth_audit_event_id: str,
+        actor: Any,
+        examiner: str,
+    ) -> dict[str, Any]:
+        self._scan_evidence(case_id)
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        del actor_type
+        items: list[dict[str, Any]] = []
+        for spec in file_specs:
+            display_path = _relative_display_path(str(spec.get("path") or ""))
+            evidence_id = self._ensure_registered(
+                case_id,
+                display_path,
+                display_name=Path(display_path).name,
+                description=str(spec.get("description") or "") or None,
+                source=str(spec.get("source") or "") or None,
+                actor_user_id=actor_user,
+                actor_service_identity_id=actor_service,
+            )
+            path = self._resolve_evidence_path(case_id, display_path)
+            sha256, size = _hash_file(path)
+            items.append(
+                {
+                    "evidence_object_id": evidence_id,
+                    "sha256": f"sha256:{sha256}",
+                    "bytes": size,
+                    "registered_by": examiner,
+                }
+            )
+        if not items:
+            raise PortalServiceError("seal_requires_items", http_status=400)
+        manifest_version = self._next_manifest_version(case_id)
+        manifest_hash = _manifest_hash(case_id, manifest_version, items)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select case_id::text, manifest_version, head_seq, head_hash,
+                           manifest_hash, seal_status, active_count, issues,
+                           last_event_type, last_verified_at
+                    from app.evidence_seal(%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        case_id,
+                        _jsonb(items),
+                        manifest_version,
+                        manifest_hash,
+                        reauth_audit_event_id,
+                        actor_user,
+                        actor_service,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return _chain_head_dict(row)
+
+    def ignore(
+        self,
+        *,
+        case_id: str,
+        display_path: str,
+        reason: str,
+        reauth_audit_event_id: str,
+        actor: Any,
+        examiner: str,
+    ) -> dict[str, Any]:
+        del examiner
+        self._scan_evidence(case_id)
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        del actor_type
+        path = _relative_display_path(display_path)
+        evidence_id = self._ensure_detected(case_id, path, actor_user, actor_service)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select id::text, display_path, status from app.evidence_ignore(%s, %s, %s, %s, %s)",
+                    (evidence_id, reason, reauth_audit_event_id, actor_user, actor_service),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return {"evidence_id": row[0], "display_path": row[1], "status": row[2]} if row else {}
+
+    def retire(
+        self,
+        *,
+        case_id: str,
+        display_path: str,
+        reason: str,
+        reauth_audit_event_id: str,
+        actor: Any,
+        examiner: str,
+    ) -> dict[str, Any]:
+        del examiner
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        del actor_type
+        path = _relative_display_path(display_path)
+        evidence_id = self._evidence_id_for_path(case_id, path)
+        if not evidence_id:
+            raise PortalServiceError("evidence_object_not_found", http_status=404)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select id::text, display_path, status from app.evidence_retire(%s, %s, %s, %s, %s)",
+                    (evidence_id, reason, reauth_audit_event_id, actor_user, actor_service),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return {"evidence_id": row[0], "display_path": row[1], "status": row[2]} if row else {}
+
+    def _scan_evidence(self, case_id: str) -> None:
+        case_dir = self._case_artifact_path(case_id)
+        if case_dir is None:
+            return
+        evidence_dir = case_dir / "evidence"
+        if not evidence_dir.is_dir():
+            return
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                for path in sorted(evidence_dir.rglob("*")):
+                    if path.is_symlink() or not path.is_file():
+                        continue
+                    rel = path.relative_to(case_dir).as_posix()
+                    cur.execute(
+                        "select app.evidence_detect(%s, %s, %s, %s, null, null)",
+                        (case_id, rel, path.name, path.stat().st_size),
+                    )
+            conn.commit()
+
+    def _resolve_evidence_path(self, case_id: str, display_path: str) -> Path:
+        case_dir = self._case_artifact_path(case_id)
+        if case_dir is None:
+            raise PortalServiceError("case_artifact_path_unavailable", http_status=404)
+        candidate = (case_dir / display_path).resolve()
+        case_resolved = case_dir.resolve()
+        if not candidate.is_relative_to(case_resolved) or not candidate.is_file():
+            raise PortalServiceError("evidence_file_unavailable", http_status=404)
+        return candidate
+
+    def _ensure_detected(
+        self,
+        case_id: str,
+        display_path: str,
+        actor_user_id: str | None,
+        actor_service_identity_id: str | None,
+    ) -> str:
+        existing = self._evidence_id_for_path(case_id, display_path)
+        if existing:
+            return existing
+        path = self._resolve_evidence_path(case_id, display_path)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select app.evidence_detect(%s, %s, %s, %s, %s, %s)",
+                    (
+                        case_id,
+                        display_path,
+                        path.name,
+                        path.stat().st_size,
+                        actor_user_id,
+                        actor_service_identity_id,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return str(row[0])
+
+    def _ensure_registered(
+        self,
+        case_id: str,
+        display_path: str,
+        *,
+        display_name: str,
+        description: str | None,
+        source: str | None,
+        actor_user_id: str | None,
+        actor_service_identity_id: str | None,
+    ) -> str:
+        evidence_id = self._ensure_detected(
+            case_id, display_path, actor_user_id, actor_service_identity_id
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id::text
+                    from app.evidence_register(%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        evidence_id,
+                        display_name,
+                        description,
+                        source,
+                        actor_user_id,
+                        actor_service_identity_id,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return str(row[0]) if row else evidence_id
+
+    def _evidence_id_for_path(self, case_id: str, display_path: str) -> str | None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select id::text from app.evidence_objects where case_id = %s and display_path = %s",
+                    (case_id, display_path),
+                )
+                row = cur.fetchone()
+        return str(row[0]) if row else None
+
+    def _next_manifest_version(self, case_id: str) -> int:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select manifest_version from app.evidence_gate_status(%s)",
+                    (case_id,),
+                )
+                row = cur.fetchone()
+        return int(row[0] or 0) + 1 if row else 1
+
+
+class InvestigationService(_BasePortalDbService):
+    """DB read/mutation adapter for findings, timeline, IOCs, and TODOs."""
+
+    def list_findings(self, case_id: str) -> list[dict[str, Any]]:
+        self._sync_findings(case_id)
+        return self._payload_rows(
+            "select payload from app.investigation_findings where case_id = %s order by updated_at desc, item_id",
+            case_id,
+        )
+
+    def list_timeline(self, case_id: str) -> list[dict[str, Any]]:
+        self._sync_timeline(case_id)
+        return self._payload_rows(
+            "select payload from app.investigation_timeline_events where case_id = %s order by updated_at desc, item_id",
+            case_id,
+        )
+
+    def list_iocs(self, case_id: str) -> list[dict[str, Any]]:
+        self._sync_iocs(case_id)
+        return self._payload_rows(
+            "select payload from app.investigation_iocs where case_id = %s order by updated_at desc, item_id",
+            case_id,
+        )
+
+    def list_todos(self, case_id: str) -> list[dict[str, Any]]:
+        self._sync_todos(case_id)
+        return self._payload_rows(
+            "select payload from app.investigation_todos where case_id = %s order by updated_at desc, todo_id",
+            case_id,
+        )
+
+    def create_todo(
+        self,
+        *,
+        case_id: str,
+        examiner: str,
+        actor: Any,
+        description: str,
+        priority: str,
+        assignee: str,
+        related_findings: list[str],
+    ) -> dict[str, Any]:
+        del actor
+        self._sync_todos(case_id)
+        seq = self._next_todo_seq(case_id, examiner)
+        todo_id = f"TODO-{examiner}-{seq:03d}"
+        todo = {
+            "todo_id": todo_id,
+            "description": description,
+            "status": "open",
+            "priority": priority,
+            "assignee": assignee,
+            "related_findings": related_findings,
+            "created_by": examiner,
+            "examiner": examiner,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "notes": [],
+            "completed_at": None,
+        }
+        self._upsert_todo(case_id, todo_id, todo, source="portal")
+        self._mirror_todos(case_id)
+        return todo
+
+    def update_todo(
+        self,
+        *,
+        case_id: str,
+        todo_id: str,
+        examiner: str,
+        actor: Any,
+        patch: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        del actor
+        rows = self.list_todos(case_id)
+        todo = next((row for row in rows if row.get("todo_id") == todo_id), None)
+        if todo is None:
+            return None
+        for key in ("description", "priority", "status", "assignee", "related_findings"):
+            if key in patch:
+                todo[key] = patch[key]
+        if patch.get("note"):
+            todo.setdefault("notes", []).append(
+                {
+                    "note": patch["note"],
+                    "by": examiner,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        if todo.get("status") == "completed":
+            todo["completed_at"] = todo.get("completed_at") or datetime.now(timezone.utc).isoformat()
+        else:
+            todo["completed_at"] = None
+        self._upsert_todo(case_id, todo_id, todo, source="portal")
+        self._mirror_todos(case_id)
+        return todo
+
+    def delete_todo(self, *, case_id: str, todo_id: str, examiner: str, actor: Any) -> bool:
+        del examiner, actor
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "delete from app.investigation_todos where case_id = %s and todo_id = %s",
+                    (case_id, todo_id),
+                )
+                deleted = cur.rowcount > 0
+            conn.commit()
+        if deleted:
+            self._mirror_todos(case_id)
+        return deleted
+
+    def _payload_rows(self, sql: str, case_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (case_id,))
+                rows = cur.fetchall()
+        out = []
+        for (payload,) in rows:
+            if isinstance(payload, dict):
+                out.append(payload)
+            elif isinstance(payload, str):
+                try:
+                    parsed = json.loads(payload)
+                    if isinstance(parsed, dict):
+                        out.append(parsed)
+                except ValueError:
+                    pass
+        return out
+
+    def _next_todo_seq(self, case_id: str, examiner: str) -> int:
+        prefix = f"TODO-{examiner}-"
+        rows = self.list_todos(case_id)
+        max_seq = 0
+        for row in rows:
+            tid = str(row.get("todo_id") or "")
+            if tid.startswith(prefix):
+                try:
+                    max_seq = max(max_seq, int(tid[len(prefix):]))
+                except ValueError:
+                    pass
+        return max_seq + 1
+
+    def _upsert_todo(self, case_id: str, todo_id: str, payload: dict[str, Any], *, source: str) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into app.investigation_todos
+                      (case_id, todo_id, status, priority, assignee, payload,
+                       created_by, completed_at, source, updated_at)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                    on conflict (case_id, todo_id) do update
+                      set status = excluded.status,
+                          priority = excluded.priority,
+                          assignee = excluded.assignee,
+                          payload = excluded.payload,
+                          completed_at = excluded.completed_at,
+                          source = excluded.source,
+                          updated_at = now()
+                    """,
+                    (
+                        case_id,
+                        todo_id,
+                        str(payload.get("status") or "open"),
+                        str(payload.get("priority") or "medium"),
+                        payload.get("assignee"),
+                        _jsonb(payload),
+                        payload.get("created_by") or payload.get("examiner"),
+                        payload.get("completed_at") or None,
+                        source,
+                    ),
+                )
+            conn.commit()
+
+    def _mirror_todos(self, case_id: str) -> None:
+        self._write_json_list(case_id, "todos.json", self.list_todos(case_id))
+
+
+class ReportService(_BasePortalDbService):
+    """DB report metadata adapter and approved-only eligibility gate."""
+
+    def list_reports(self, case_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select report_id::text, profile, examiner, status, exported,
+                           created_at, updated_at, metadata
+                    from app.report_metadata
+                    where case_id = %s
+                    order by created_at desc
+                    """,
+                    (case_id,),
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "id": r[0],
+                "profile": r[1],
+                "examiner": r[2],
+                "status": r[3],
+                "exported": r[4],
+                "created_at": _iso(r[5]),
+                "updated_at": _iso(r[6]),
+                "metadata": r[7] if isinstance(r[7], dict) else {},
+            }
+            for r in rows
+        ]
+
+    def report_eligibility(self, case_id: str) -> dict[str, Any]:
+        self._sync_findings(case_id)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select
+                      count(*) filter (where upper(status) = 'APPROVED') as approved,
+                      count(*) as total
+                    from app.investigation_findings
+                    where case_id = %s
+                    """,
+                    (case_id,),
+                )
+                row = cur.fetchone() or (0, 0)
+        approved = int(row[0] or 0)
+        total = int(row[1] or 0)
+        return {
+            "eligible": approved > 0,
+            "approved_findings": approved,
+            "total_findings": total,
+            "reason": None if approved > 0 else "no approved findings",
+        }
+
+    def record_report(
+        self,
+        *,
+        case_id: str,
+        report_id: str,
+        profile: str,
+        examiner: str,
+        created_at: str,
+        reauth_audit_event_id: str | None,
+        seal_status: str | None,
+        manifest_version: int | None,
+        manifest_hash: str | None,
+        chain_head_hash: str | None,
+        exported: bool = False,
+        **metadata: Any,
+    ) -> None:
+        status = "exported" if exported else "generated"
+        meta_payload = {
+            "profile": profile,
+            "examiner": examiner,
+            "created_at": created_at,
+            **metadata,
+        }
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    insert into app.report_metadata
+                      (case_id, report_id, profile, examiner, status,
+                       reauth_audit_event_id, seal_status, manifest_version,
+                       manifest_hash, chain_head_hash, exported, metadata,
+                       created_at, updated_at)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, coalesce(%s::timestamptz, now()), now())
+                    on conflict (case_id, report_id) do update
+                      set profile = excluded.profile,
+                          examiner = excluded.examiner,
+                          status = excluded.status,
+                          reauth_audit_event_id = coalesce(excluded.reauth_audit_event_id, app.report_metadata.reauth_audit_event_id),
+                          seal_status = excluded.seal_status,
+                          manifest_version = excluded.manifest_version,
+                          manifest_hash = excluded.manifest_hash,
+                          chain_head_hash = excluded.chain_head_hash,
+                          exported = app.report_metadata.exported or excluded.exported,
+                          metadata = excluded.metadata,
+                          updated_at = now()
+                    """,
+                    (
+                        case_id,
+                        report_id,
+                        profile,
+                        examiner,
+                        status,
+                        reauth_audit_event_id,
+                        seal_status,
+                        manifest_version,
+                        manifest_hash,
+                        chain_head_hash,
+                        exported,
+                        _jsonb(meta_payload),
+                        created_at or None,
+                    ),
+                )
+            conn.commit()
+
+    def addon_status(self, case_id: str) -> list[dict[str, Any]]:
+        del case_id
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select name, namespace, enabled, health_status, health_detail,
+                           health_checked_at, tier
+                    from app.mcp_backends
+                    order by name
+                    """
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "name": r[0],
+                "namespace": r[1],
+                "enabled": r[2],
+                "health_status": r[3],
+                "health_detail": r[4],
+                "health_checked_at": _iso(r[5]),
+                "tier": r[6],
+            }
+            for r in rows
+        ]
+
+
+def _relative_display_path(value: str) -> str:
+    value = value.strip().replace("\\", "/")
+    if not value:
+        raise PortalServiceError("evidence_path_required", http_status=400)
+    if value.startswith("/") or "/../" in f"/{value}/" or value.startswith("../"):
+        raise PortalServiceError("invalid_relative_evidence_path", http_status=400)
+    if not value.startswith("evidence/"):
+        value = f"evidence/{value}"
+    return value
+
+
+def _hash_file(path: Path) -> tuple[str, int]:
+    h = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            size += len(chunk)
+            h.update(chunk)
+    return h.hexdigest(), size
+
+
+def _manifest_hash(case_id: str, version: int, items: list[dict[str, Any]]) -> str:
+    payload = json.dumps(
+        {"case_id": case_id, "version": version, "items": items},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _chain_head_dict(row: Any) -> dict[str, Any]:
+    if not row:
+        return {}
+    return {
+        "case_id": row[0],
+        "manifest_version": row[1],
+        "head_seq": row[2],
+        "head_hash": row[3],
+        "manifest_hash": row[4],
+        "seal_status": row[5],
+        "active_count": row[6],
+        "issues": row[7] if isinstance(row[7], list) else [],
+        "last_event_type": row[8],
+        "last_verified_at": _iso(row[9]),
+    }

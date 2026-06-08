@@ -48,6 +48,10 @@ _CORE_TOOL_CATEGORIES: dict[str, str] = {
     "record_timeline_event": "findings",
     "list_existing_findings": "findings",
     "manage_todo": "findings",
+    "job_status": "ingest",
+    "ingest_job": "ingest",
+    "rag_search_case": "knowledge-rag",
+    "run_command_job": "detection",
 }
 
 _CORE_TOOL_PHASES: dict[str, str] = {
@@ -60,6 +64,10 @@ _CORE_TOOL_PHASES: dict[str, str] = {
     "record_timeline_event": "FINDINGS",
     "list_existing_findings": "FINDINGS",
     "manage_todo": "FINDINGS",
+    "job_status": "INGEST",
+    "ingest_job": "INGEST",
+    "rag_search_case": "CORRELATE",
+    "run_command_job": "TRIAGE",
 }
 
 
@@ -211,6 +219,59 @@ def _register_core_tools(mcp: FastMCP, gateway: Any) -> None:
             meta={
                 "category": _CORE_TOOL_CATEGORIES["capability_guide"],
                 "recommended_for_phase": _CORE_TOOL_PHASES["capability_guide"],
+            },
+        )
+    )
+
+    _register_gateway_job_tools(mcp, gateway)
+    _register_rag_tool(mcp, gateway)
+
+
+def _register_gateway_job_tools(mcp: FastMCP, gateway: Any) -> None:
+    if getattr(gateway, "job_service", None) is None:
+        return
+    from sift_gateway.job_tools import gateway_job_tool_specs
+
+    for spec in gateway_job_tool_specs():
+        mcp.add_tool(
+            GatewayLocalTool(
+                gateway=gateway,
+                handler=spec["handler"],
+                name=spec["name"],
+                description=spec["description"],
+                parameters=spec["parameters"],
+                annotations=ToolAnnotations(readOnlyHint=bool(spec["read_only"])),
+                meta={
+                    "category": spec["category"],
+                    "recommended_for_phase": spec["phase"],
+                },
+            )
+        )
+
+
+def _register_rag_tool(mcp: FastMCP, gateway: Any) -> None:
+    if getattr(gateway, "rag_query_service", None) is None:
+        return
+    from sift_gateway.rag_bridge import (
+        RAG_SEARCH_CASE_TOOL,
+        handle_rag_search_case,
+        rag_search_case_schema,
+    )
+
+    mcp.add_tool(
+        GatewayLocalTool(
+            gateway=gateway,
+            handler=handle_rag_search_case,
+            name=RAG_SEARCH_CASE_TOOL,
+            description=(
+                "Search the case-scoped pgvector RAG plane and shared forensic "
+                "knowledge. Returns path-free, provenance-linked snippets."
+            ),
+            parameters=rag_search_case_schema(),
+            annotations=ToolAnnotations(readOnlyHint=True),
+            meta={
+                "category": _CORE_TOOL_CATEGORIES[RAG_SEARCH_CASE_TOOL],
+                "recommended_for_phase": _CORE_TOOL_PHASES[RAG_SEARCH_CASE_TOOL],
             },
         )
     )

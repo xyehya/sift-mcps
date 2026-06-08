@@ -252,7 +252,12 @@ class JobWorker:
     def stop(self) -> None:
         self._stop = True
 
-    def run_forever(self, *, max_iterations: int | None = None) -> int:
+    def run_forever(
+        self,
+        *,
+        max_iterations: int | None = None,
+        job_types: list[str] | None = None,
+    ) -> int:
         """Claim and run jobs until stopped. Returns the count of jobs handled."""
         handled = 0
         iterations = 0
@@ -260,7 +265,7 @@ class JobWorker:
             if max_iterations is not None and iterations >= max_iterations:
                 break
             iterations += 1
-            job = self.claim_one()
+            job = self.claim_one(job_types=job_types)
             if job is None:
                 self._heartbeat_idle()
                 self._sleep(self.poll_interval)
@@ -269,9 +274,9 @@ class JobWorker:
             handled += 1
         return handled
 
-    def run_once(self) -> ClaimedJob | None:
+    def run_once(self, *, job_types: list[str] | None = None) -> ClaimedJob | None:
         """Claim and run a single job if one is available."""
-        job = self.claim_one()
+        job = self.claim_one(job_types=job_types)
         if job is None:
             return None
         self.run_job(job)

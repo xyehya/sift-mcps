@@ -13,6 +13,43 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - BATCH-L1 landed (live service binding before V1)
+
+Status: DONE
+
+Changed:
+
+- Resolved B-MVP-5: Gateway startup now wires portal service slots to live
+  Postgres-backed adapters for evidence/custody, investigation records, report
+  metadata, and D2 job status. Added migration
+  `202606081500_report_metadata.sql` for findings/timeline/IOCs/TODOs/report
+  metadata used by the portal/report seams.
+- Resolved B-MVP-6: added `sift-job-worker` bootstrap and systemd unit, registered
+  `ingest` and `run_command` handlers, and filtered worker claims to supported
+  job types. Added Gateway-owned durable MCP tools: `ingest_job`,
+  `run_command_job`, and `job_status`. Public job specs stay path-free;
+  worker-only `spec_internal` carries resolved local paths.
+- Resolved B-MVP-7: added Gateway `rag_search_case` over G1 pgvector RAG with
+  case scope, embedding validation, and normal Gateway policy/response guard.
+- Switched MCP evidence gating for DB active cases to prefer C1
+  `app.evidence_gate_status`; legacy file gate remains only as bridge fallback.
+- Kept Gateway source add-on-name-neutral by exposing a generic `ingest_job`
+  tool rather than hardcoding a derived-plane backend name.
+
+Validation:
+
+- Passed: `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`.
+- Passed: sift-gateway 361, sift-core 376, case-dashboard 350,
+  forensic-rag/tests + `tests/db` 66, opensearch job-ingest 8.
+- Not run here: live `supabase db` migration apply, live OpenSearch indexing,
+  or SIFT VM end-to-end journey.
+
+Next:
+
+- Run BATCH-V1 on the SIFT VM: apply migrations in timestamp order, start
+  Gateway + `sift-job-worker`, and execute the Phase 3 smoke journey from
+  `Migration-Spec.md`.
+
 ### 2026-06-08 - BATCH-J1 landed and integrated (approved-only reports)
 
 Status: DONE
@@ -316,6 +353,6 @@ Next:
 | B-MVP-2 | Backlog | DEFERRED | ContextForge/Envoy-style external gateway integration. | Post-MVP presentation/backlog only; Gateway policy remains in SIFT Gateway for MVP. | none |
 | B-MVP-3 | Backlog | DONE | Gateway enqueue/status adapter over D1's `enqueue_job`/`job_status_public` (job_id only, sets `enqueue_audit_event_id`, schedules `expire_stale_jobs` reaper). | Landed in BATCH-D2 (`e80ad41`) as `JobService` + lifespan reaper. | E1, F1, G1, I1, J1 |
 | B-MVP-4 | Backlog | DONE | Runtime enforcement of add-on `authority_contract` (non_authoritative, prohibited_operations, required_scopes) in the Gateway backend registry; schema acceptance landed in this wave. | Landed in BATCH-D2 (`e80ad41`) as `AddonAuthorityMiddleware`. | F1 |
-| B-MVP-5 | Backlog | OPEN | Bind `create_dashboard_v2_app` service slots (`evidence_service`/`investigation_service`/`report_service`/`job_service`) to live Postgres/C1 RPCs/D2 `JobService`. Method contracts are documented in `routes.py` and exercised by E1's fakes. | Dedicated binding batch before V1. | V1 |
-| B-MVP-6 | Backlog | OPEN | Worker bootstrap + enqueue call sites: register D1 `JobWorker` handlers (F1 `ingest`, I1 `run_command`) and the enqueue call sites that place the resolved evidence path in `spec_internal`. | Dedicated binding batch before V1. | V1 |
-| B-MVP-7 | Backlog | OPEN | Wire a case-scoped pgvector RAG query tool (G1 `app.rag_search`/`PgVectorRagStore`) into the Gateway tool surface with a worker service DSN; current `kb_*` tools are ChromaDB knowledge-only. | Dedicated binding batch; routes results through the existing response guard. | V1 |
+| B-MVP-5 | Backlog | DONE | Bind `create_dashboard_v2_app` service slots (`evidence_service`/`investigation_service`/`report_service`/`job_service`) to live Postgres/C1 RPCs/D2 `JobService`. | Landed in BATCH-L1 with Gateway-owned `portal_services.py` and migration `202606081500_report_metadata.sql`. | none |
+| B-MVP-6 | Backlog | DONE | Worker bootstrap + enqueue call sites: register D1 `JobWorker` handlers (`ingest`, `run_command`) and enqueue call sites that place resolved local paths in worker-only `spec_internal`. | Landed in BATCH-L1 with `sift-job-worker`, generic `ingest_job`, `run_command_job`, and `job_status`. | none |
+| B-MVP-7 | Backlog | DONE | Wire a case-scoped pgvector RAG query tool (G1 `app.rag_search`/`PgVectorRagStore`) into the Gateway tool surface with a worker service DSN. | Landed in BATCH-L1 as `rag_search_case`, routed through existing Gateway policy/response guard. | none |
