@@ -1479,6 +1479,69 @@ def _write_approval_log_entry(
         pass
 
 
+def _apply_delta_db(request: Request, case_dir: Path, examiner: str, reviewer) -> dict:
+    """Apply the pending review delta to DB authority (BATCH-K2).
+
+    Reads the operator's queued decisions from pending-reviews.json (UI staging
+    only — not authority), records the re-auth audit event, and applies the
+    approve/reject/edit transition to Postgres via the injected investigation
+    service. The DB rows (status, content hash, version, re-auth id) are
+    authority; the case JSON is a mirror/export. The delta file is cleared on
+    success so the queue does not re-apply.
+    """
+    delta_path = case_dir / "pending-reviews.json"
+    if not delta_path.exists():
+        raise ValueError("No pending reviews to commit")
+    delta = json.loads(delta_path.read_text())
+    items_list = delta.get("items", []) if isinstance(delta, dict) else []
+    if not items_list:
+        raise ValueError("No items in delta")
+
+    case_id = _active_case_id()
+    if not case_id:
+        raise ValueError("No active case for DB review")
+
+    # The challenge/response already authenticated the operator; record it as the
+    # re-auth audit event that authorizes this review batch.
+    reauth_id = _record_reauth_event(request, examiner, "review_commit")
+
+    actions: list[dict] = []
+    for entry in items_list:
+        if not isinstance(entry, dict):
+            continue
+        actions.append(
+            {
+                "id": entry.get("id", ""),
+                "action": entry.get("action", ""),
+                "modifications": entry.get("modifications") or {},
+                "note": entry.get("note"),
+                "rejection_reason": entry.get("rejection_reason")
+                or entry.get("reason"),
+                "content_hash_at_review": entry.get("content_hash_at_review"),
+                "version_at_review": entry.get("version_at_review"),
+            }
+        )
+
+    result = reviewer(
+        case_id=case_id,
+        actions=actions,
+        examiner=examiner,
+        reauth_audit_event_id=reauth_id,
+        actor=_request_principal(request),
+    )
+
+    # Clear the staged delta now that the authoritative transition committed.
+    try:
+        delta_path.unlink(missing_ok=True)
+        (case_dir / "pending-reviews.processing").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    summary = dict(result) if isinstance(result, dict) else {}
+    summary.setdefault("authority", "db")
+    return summary
+
+
 def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
     """Apply pending delta. Returns summary dict.
 
@@ -2983,6 +3046,24 @@ async def post_commit(request: Request) -> JSONResponse:
         return JSONResponse({"error": msg}, status_code=401)
 
     _clear_commit_failures(examiner)
+
+    # BATCH-K2: in DB-active mode the approve/reject/edit transition is applied to
+    # Postgres authority (content-hash/version guarded, atomic) and the case JSON
+    # is no longer the authority for report eligibility. The successful
+    # password/HMAC challenge above is the operator re-auth; record it as an audit
+    # event and pass its id into the DB review so the human decision is provenance
+    # linked. Falls through to the file path only when DB authority is not wired.
+    if _db_investigation_active():
+        reviewer = getattr(_INVESTIGATION_DB, "apply_review", None)
+        if callable(reviewer):
+            try:
+                result = _apply_delta_db(request, case_dir, examiner, reviewer)
+            except Exception:
+                logger.exception("DB commit failed")
+                return JSONResponse(
+                    {"error": "Commit failed — check gateway logs"}, status_code=500
+                )
+            return JSONResponse(result)
 
     # Apply delta (mirrors _review_mode)
     try:
@@ -5281,6 +5362,20 @@ async def generate_report_route(request: Request) -> JSONResponse:
         # Sanitized custody summary for the provenance appendix (DB authority).
         custody = _db_custody_summary()
 
+        # BATCH-K2: in DB-active mode, report inclusion reads approved findings/
+        # timeline from Postgres authority, never the case JSON. A missing/empty
+        # set still yields a (gated) report with no findings rather than reading
+        # tamperable files.
+        investigation_inputs = None
+        if _db_investigation_active():
+            getter = getattr(_INVESTIGATION_DB, "report_inputs", None)
+            if callable(getter):
+                try:
+                    investigation_inputs = getter(_active_case_id())
+                except Exception as exc:
+                    logger.warning("DB report inputs unavailable: %s", exc)
+                    investigation_inputs = {"findings": [], "timeline": [], "iocs": []}
+
         from sift_core.reporting import generate_report_data
         result = generate_report_data(
             profile_name=profile,
@@ -5290,6 +5385,7 @@ async def generate_report_route(request: Request) -> JSONResponse:
             end_date=end_date,
             custody=custody,
             reauth_audit_event_id=reauth_id,
+            investigation_inputs=investigation_inputs,
         )
 
         if isinstance(result, dict) and "error" in result:

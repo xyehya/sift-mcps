@@ -221,7 +221,14 @@ def _compute_content_hash(item: dict) -> str:
     Local variant of the approval content hash; excludes provenance fields
     that are specific to staged findings.
     """
-    hashable = {k: v for k, v in item.items() if k not in _HASH_EXCLUDE_KEYS}
+    # Drop volatile fields and internal underscore-prefixed keys (e.g. the
+    # DB-projected ``_version`` optimistic-lock marker) so the hash is stable
+    # whether the item was just staged or round-tripped through the DB store.
+    hashable = {
+        k: v
+        for k, v in item.items()
+        if k not in _HASH_EXCLUDE_KEYS and not k.startswith("_")
+    }
     canonical = json.dumps(hashable, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -700,6 +707,62 @@ class CaseManager:
         return (
             override.strip().lower() if override and override.strip() else self.examiner
         )
+
+    # --- BATCH-K2: DB investigation authority hooks ---------------------- #
+
+    def _db_case_id(self) -> str | None:
+        """Return the Postgres case UUID for the active authority context.
+
+        Only populated in DB-active mode where the Gateway/worker loaded the case
+        from Postgres into the :class:`AuthorityContext`. ``case_id`` is the case
+        row UUID; ``case_key`` is the human slug.
+        """
+        try:
+            from sift_core.active_case_context import current_active_case
+
+            ctx = current_active_case()
+        except Exception:
+            return None
+        if ctx is None or not ctx.db_active:
+            return None
+        return ctx.case_id or None
+
+    def _investigation_store(self):
+        """Return the DB investigation authority store, or None in file mode."""
+        try:
+            from sift_core.investigation_store import resolve_investigation_store
+
+            return resolve_investigation_store()
+        except Exception as exc:  # pragma: no cover - import/connect guard
+            logger.warning("investigation store unavailable: %s", exc)
+            return None
+
+    def _persist_investigation(self, kind: str, item_id: str, record: dict) -> None:
+        """Write an agent-created investigation record to DB authority.
+
+        In DB-active mode this is the authoritative write; the case JSON file is a
+        mirror/export only. Fails closed (raises) when the DB write cannot persist
+        so a mutating tool never silently degrades to file-only authority.
+        """
+        case_id = self._db_case_id()
+        if not case_id:
+            return
+        store = self._investigation_store()
+        if store is None:
+            from sift_core.investigation_store import InvestigationStoreError
+
+            raise InvestigationStoreError(
+                "DB authority is active but the investigation store is unavailable; "
+                "refusing to record investigation state to files only."
+            )
+        if kind == "finding":
+            store.upsert_finding(case_id, item_id, record)
+        elif kind == "timeline":
+            store.upsert_timeline_event(case_id, item_id, record)
+        elif kind == "ioc":
+            store.upsert_ioc(case_id, item_id, record)
+        elif kind == "todo":
+            store.upsert_todo(case_id, item_id, record)
 
     def get_case_status(self, case_id: str | None = None) -> dict:
         """Get investigation summary."""
@@ -1395,6 +1458,9 @@ class CaseManager:
         # Compute content hash at staging
         finding_record["content_hash"] = _compute_content_hash(finding_record)
 
+        # K2: DB authority write first in DB-active mode (fails closed). The case
+        # JSON file is a mirror/export only and cannot be the authority source.
+        self._persist_investigation("finding", finding_id, finding_record)
         findings.append(finding_record)
         self._save_findings(case_dir, findings)
 
@@ -1425,6 +1491,7 @@ class CaseManager:
                     "audit_ids": list(sanitized.get("audit_ids", [])),
                 }
                 tl_event["content_hash"] = _compute_content_hash(tl_event)
+                self._persist_investigation("timeline", timeline_event_id, tl_event)
                 timeline.append(tl_event)
                 self._save_timeline(case_dir, timeline)
             except Exception as exc:
@@ -1560,6 +1627,7 @@ class CaseManager:
             "examiner": exam,
         }
         event_record["content_hash"] = _compute_content_hash(event_record)
+        self._persist_investigation("timeline", event_id, event_record)
         timeline.append(event_record)
         self._save_timeline(case_dir, timeline)
 
@@ -1661,6 +1729,7 @@ class CaseManager:
             "notes": [],
             "completed_at": None,
         }
+        self._persist_investigation("todo", todo_id, todo)
         todos.append(todo)
         self._save_todos(case_dir, todos)
 
@@ -1710,6 +1779,7 @@ class CaseManager:
                             "at": datetime.now(timezone.utc).isoformat(),
                         }
                     )
+                self._persist_investigation("todo", todo_id, todo)
                 self._save_todos(case_dir, todos)
                 return {"status": "updated", "todo_id": todo_id}
 
@@ -1917,7 +1987,32 @@ class CaseManager:
 
     # --- Data I/O (case root) ---
 
+    def _load_db_investigation(self, method: str) -> list[dict] | None:
+        """Read findings/timeline/iocs/todos from DB authority in DB-active mode.
+
+        Returns None in legacy/file mode so callers fall back to the JSON file.
+        This is the chokepoint that makes file tampering inert in DB-active mode:
+        every authoritative read (agent list tools, IOC dedup, id sequencing,
+        report inputs) resolves through the DB store, not the case JSON.
+        """
+        case_id = self._db_case_id()
+        if not case_id:
+            return None
+        store = self._investigation_store()
+        if store is None:
+            from sift_core.investigation_store import InvestigationStoreError
+
+            raise InvestigationStoreError(
+                "DB authority is active but the investigation store is unavailable; "
+                "refusing to read investigation state from files."
+            )
+        rows = getattr(store, method)(case_id)
+        return rows if isinstance(rows, list) else []
+
     def _load_findings(self, case_dir: Path) -> list[dict]:
+        db = self._load_db_investigation("list_findings")
+        if db is not None:
+            return db
         return self._load_json_file(case_dir / "findings.json", [])
 
     def _save_findings(self, case_dir: Path, findings: list[dict]) -> None:
@@ -1926,6 +2021,9 @@ class CaseManager:
         )
 
     def _load_timeline(self, case_dir: Path) -> list[dict]:
+        db = self._load_db_investigation("list_timeline")
+        if db is not None:
+            return db
         return self._load_json_file(case_dir / "timeline.json", [])
 
     def _save_timeline(self, case_dir: Path, timeline: list[dict]) -> None:
@@ -1934,6 +2032,9 @@ class CaseManager:
         )
 
     def _load_iocs(self, case_dir: Path) -> list[dict]:
+        db = self._load_db_investigation("list_iocs")
+        if db is not None:
+            return db
         return self._load_json_file(case_dir / "iocs.json", [])
 
     def _save_iocs(self, case_dir: Path, iocs: list[dict]) -> None:
@@ -1965,6 +2066,7 @@ class CaseManager:
 
         iocs = self._load_iocs(case_dir)
         ioc_by_value = {_normalize_ioc(ioc["value"]): ioc for ioc in iocs}
+        touched_iocs: list[dict] = []
 
         # Contextual hints for ambiguous IOC classification
         affected_account = finding.get("affected_account", "")
@@ -2012,6 +2114,7 @@ class CaseManager:
                         existing.setdefault("mitre_techniques", []).append(mid)
                 existing["modified_at"] = now
                 existing["content_hash"] = _compute_ioc_hash(existing)
+                touched_iocs.append(existing)
             else:
                 seq = _next_seq(iocs, "id", "IOC", examiner)
                 new_ioc = {
@@ -2036,11 +2139,19 @@ class CaseManager:
                 new_ioc["content_hash"] = _compute_ioc_hash(new_ioc)
                 iocs.append(new_ioc)
                 ioc_by_value[dedup_key] = new_ioc
+                touched_iocs.append(new_ioc)
 
+        # K2: persist touched IOC rows to DB authority first (fails closed in
+        # DB-active mode). IOC file remains a mirror/export.
+        for ioc in touched_iocs:
+            self._persist_investigation("ioc", ioc["id"], ioc)
         self._save_iocs(case_dir, iocs)
         return len(raw_iocs)
 
     def _load_todos(self, case_dir: Path) -> list[dict]:
+        db = self._load_db_investigation("list_todos")
+        if db is not None:
+            return db
         return self._load_json_file(case_dir / "todos.json", [])
 
     def _save_todos(self, case_dir: Path, todos: list[dict]) -> None:

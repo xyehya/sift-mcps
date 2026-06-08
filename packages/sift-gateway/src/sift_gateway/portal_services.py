@@ -77,8 +77,14 @@ def _safe_item_id(row: dict[str, Any], fallback_prefix: str, idx: int) -> str:
 
 
 class _BasePortalDbService:
-    def __init__(self, dsn: str) -> None:
+    def __init__(self, dsn: str, *, legacy_sync: bool = False) -> None:
         self._dsn = dsn
+        # BATCH-K2: legacy_sync backfills DB rows from case JSON. It is OFF by
+        # default so that in DB-active mode Postgres is authority and tampering
+        # with findings.json / timeline.json / iocs.json / todos.json cannot be
+        # re-imported into the DB read model. Enable only for a one-time legacy
+        # bridge against a non-DB-active case.
+        self._legacy_sync = bool(legacy_sync)
 
     def _connect(self):
         return _connect(self._dsn)
@@ -134,6 +140,8 @@ class _BasePortalDbService:
             logger.warning("artifact mirror write failed for %s: %s", filename, exc)
 
     def _sync_findings(self, case_id: str) -> None:
+        if not self._legacy_sync:
+            return
         rows = self._read_json_list(case_id, "findings.json")
         if not rows:
             return
@@ -177,6 +185,8 @@ class _BasePortalDbService:
             conn.commit()
 
     def _sync_timeline(self, case_id: str) -> None:
+        if not self._legacy_sync:
+            return
         rows = self._read_json_list(case_id, "timeline.json")
         if not rows:
             return
@@ -220,6 +230,8 @@ class _BasePortalDbService:
             conn.commit()
 
     def _sync_iocs(self, case_id: str) -> None:
+        if not self._legacy_sync:
+            return
         rows = self._read_json_list(case_id, "iocs.json")
         if not rows:
             return
@@ -265,6 +277,8 @@ class _BasePortalDbService:
             conn.commit()
 
     def _sync_todos(self, case_id: str) -> None:
+        if not self._legacy_sync:
+            return
         rows = self._read_json_list(case_id, "todos.json")
         if not rows:
             return
@@ -709,35 +723,86 @@ class EvidenceAuthorityService(_BasePortalDbService):
 
 
 class InvestigationService(_BasePortalDbService):
-    """DB read/mutation adapter for findings, timeline, IOCs, and TODOs."""
+    """DB read/mutation adapter for findings, timeline, IOCs, and TODOs.
+
+    BATCH-K2: this adapter delegates the authoritative approve/reject/edit
+    transition and report inputs to the core ``PostgresInvestigationStore`` so the
+    Gateway and core agree on one content-hash/version-guarded transition. List
+    reads project the DB ``status``/``version`` columns onto the payload, never the
+    case-JSON status, so file tampering cannot change portal state.
+    """
+
+    def _store(self):
+        from sift_core.investigation_store import PostgresInvestigationStore
+
+        return PostgresInvestigationStore(self._dsn)
 
     def list_findings(self, case_id: str) -> list[dict[str, Any]]:
         self._sync_findings(case_id)
-        return self._payload_rows(
-            "select payload from app.investigation_findings where case_id = %s order by updated_at desc, item_id",
-            case_id,
-        )
+        return self._store().list_findings(case_id)
 
     def list_timeline(self, case_id: str) -> list[dict[str, Any]]:
         self._sync_timeline(case_id)
-        return self._payload_rows(
-            "select payload from app.investigation_timeline_events where case_id = %s order by updated_at desc, item_id",
-            case_id,
-        )
+        return self._store().list_timeline(case_id)
 
     def list_iocs(self, case_id: str) -> list[dict[str, Any]]:
         self._sync_iocs(case_id)
-        return self._payload_rows(
-            "select payload from app.investigation_iocs where case_id = %s order by updated_at desc, item_id",
-            case_id,
-        )
+        return self._store().list_iocs(case_id)
 
     def list_todos(self, case_id: str) -> list[dict[str, Any]]:
         self._sync_todos(case_id)
-        return self._payload_rows(
-            "select payload from app.investigation_todos where case_id = %s order by updated_at desc, todo_id",
+        return self._store().list_todos(case_id)
+
+    def apply_review(
+        self,
+        *,
+        case_id: str,
+        actions: list[dict[str, Any]],
+        examiner: str,
+        reauth_audit_event_id: str | None,
+        actor: Any = None,
+    ) -> dict[str, Any]:
+        """Apply operator approve/reject/edit decisions to DB authority.
+
+        Each action: {id, action, modifications?, note?, rejection_reason?,
+        content_hash_at_review?, version_at_review?}. Returns approve/reject/edit
+        counts and a list of skipped items (stale or conflicting). The transition
+        is content-hash/version guarded and atomic.
+        """
+        from sift_core.investigation_store import ReviewAction
+
+        parsed: list[ReviewAction] = []
+        for entry in actions:
+            if not isinstance(entry, dict):
+                continue
+            item_id = str(entry.get("id") or entry.get("item_id") or "").strip()
+            if not item_id:
+                continue
+            parsed.append(
+                ReviewAction(
+                    item_id=item_id,
+                    action=str(entry.get("action") or "").strip().lower(),
+                    modifications=entry.get("modifications") or None,
+                    note=entry.get("note") or None,
+                    rejection_reason=entry.get("rejection_reason")
+                    or entry.get("reason")
+                    or None,
+                    content_hash_at_review=entry.get("content_hash_at_review"),
+                    version_at_review=entry.get("version_at_review"),
+                )
+            )
+        result = self._store().apply_review(
             case_id,
+            parsed,
+            examiner=examiner,
+            reauth_audit_event_id=reauth_audit_event_id,
+            actor=actor,
         )
+        return result.as_dict()
+
+    def report_inputs(self, case_id: str) -> dict[str, list[dict[str, Any]]]:
+        """Approved findings/timeline/IOCs for report generation (DB authority)."""
+        return self._store().report_inputs(case_id)
 
     def create_todo(
         self,

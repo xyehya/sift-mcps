@@ -409,6 +409,7 @@ def generate_report_data(
     end_date: str = "",
     custody: dict | None = None,
     reauth_audit_event_id: str | None = None,
+    investigation_inputs: dict | None = None,
 ) -> dict:
     """Core report generation logic.
 
@@ -419,13 +420,24 @@ def generate_report_data(
     custody / reauth_audit_event_id are supplied by the portal (F-MVP-4): the
     custody summary is folded into the provenance appendix, and the re-auth
     event id is recorded as the authorization that gated report inclusion.
+
+    BATCH-K2: in DB-active mode the portal passes ``investigation_inputs`` =
+    ``{"findings": [...], "timeline": [...], "iocs": [...]}`` already filtered to
+    APPROVED DB rows. When supplied, findings/timeline come from Postgres
+    authority and the case JSON is never consulted for report inclusion, so file
+    tampering cannot inject or alter report content.
     """
     profile = PROFILES[profile_name]
 
-    # Load all data
+    # Load all data. In DB-active mode the approved findings/timeline come from
+    # the DB authority inputs, not the (mirror/export) case JSON.
     metadata = load_case_meta(case_dir)
-    all_findings = load_findings(case_dir)
-    all_timeline = load_timeline(case_dir)
+    if investigation_inputs is not None:
+        all_findings = list(investigation_inputs.get("findings") or [])
+        all_timeline = list(investigation_inputs.get("timeline") or [])
+    else:
+        all_findings = load_findings(case_dir)
+        all_timeline = load_timeline(case_dir)
     todos = load_todos(case_dir)
 
     # Evidence
