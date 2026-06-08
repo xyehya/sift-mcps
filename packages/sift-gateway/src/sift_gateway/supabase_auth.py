@@ -1457,6 +1457,39 @@ def is_tool_allowed(identity: Identity | None, tool_name: str) -> bool:
     return False
 
 
+def is_scope_satisfied(identity: Identity | None, required_scope: str) -> bool:
+    """Return True if ``identity`` holds the manifest-declared ``required_scope``.
+
+    BATCH-D2 / H1 add-on scope enforcement. A tool's ``required_scopes`` are
+    additional, manifest-declared grants the caller must hold to invoke that
+    add-on tool — distinct from the gateway tool-scope authorization in
+    :func:`is_tool_allowed`. The check is fail-closed: an identity with no
+    scopes (or none matching) is denied.
+
+    Matching rules against the caller's normalized ``tool_scopes``:
+      - ``mcp:*`` held by the caller satisfies any required scope (superuser).
+      - An exact scope-string match satisfies the requirement.
+      - A required ``tool:<name>``/``namespace:<pfx>`` is satisfied by a caller
+        scope that grants that tool/namespace via :func:`is_tool_allowed`.
+    """
+    if identity is None:
+        return False
+    scopes = identity.tool_scopes or frozenset()
+    if not scopes:
+        return False
+    if "mcp:*" in scopes:
+        return True
+    if required_scope in scopes:
+        return True
+    # Allow grammar-aware coverage when the requirement is itself expressed in
+    # the tool:/namespace: grammar (e.g. a tool requiring tool:foo is satisfied
+    # by a caller holding namespace:foo_pfx). Plain capability scopes (e.g.
+    # "cti:read") only match by exact membership above.
+    if required_scope.startswith("tool:"):
+        return is_tool_allowed(identity, required_scope[len("tool:"):])
+    return False
+
+
 def legacy_default_scopes() -> frozenset[str]:
     """The compatibility default for legacy PR02 tokens (mcp:* equivalent)."""
     return frozenset({"mcp:*"})
