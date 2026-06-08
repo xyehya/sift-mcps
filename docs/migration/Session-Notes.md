@@ -13,6 +13,51 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - BATCH-D2 landed and integrated (Gateway job/authority seam)
+
+Status: DONE
+
+Changed (merged into `revamp/spg-v1`, `--no-ff`):
+
+- BATCH-D2 (`e80ad41`): Gateway integration seam.
+  - `jobs.py` (new) `JobService` over D1's `app.enqueue_job` /
+    `app.job_status_public` / `app.expire_stale_jobs`. Enqueue writes the Gateway
+    enqueue audit event first and passes its id as `p_enqueue_audit_event_id`,
+    returning only `{job_id}`. Status reads go through an explicit agent-safe
+    allow-list with case-membership enforcement (no `spec_internal`, `worker_id`,
+    lease internals, local paths, or DB errors). `expire_stale_jobs` runs from a
+    Gateway-owned periodic reaper wired into the FastAPI lifespan (mirrors the
+    existing idle-reaper pattern). No grant/wrapper migration needed — same
+    service DSN path as `ActiveCaseService`.
+  - `AddonAuthorityMiddleware` (in `policy_middleware.py`) runs before the
+    evidence gate/audit/dispatch: denies `addon_scope_missing` when the caller
+    lacks a tool's `required_scopes`, denies `addon_prohibited_operation` when a
+    backend's `prohibited_operations` is invoked; `non_authoritative` surfaced as
+    advisory. `transport: library` manifests stay accepted but non-routable.
+  - `server.py` indexes `required_scopes`/`authority_contract` into tool meta and
+    exposes `Gateway.job_service` + `addon_authority_for_tool()`;
+    `supabase_auth.is_scope_satisfied()` helper added.
+
+Resolved B-MVP-3 and B-MVP-4 (both implemented by D2).
+
+Validation:
+
+- Passed: `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`.
+- Passed: sift-gateway 348 (335 baseline + 13 new); existing manifest/registry/policy
+  tests green. D2 touched only the gateway package.
+- Not run in this environment: live `supabase`/Postgres execution of the job RPCs
+  (D2 pins to D1's frozen RPC/view names; D1 verified them on a Postgres 16 container).
+
+Launch readiness: E1/F1/G1/I1 need no further Gateway glue — they wire their own
+call sites onto `gateway.job_service` and inherit the authority enforcement. D2
+deliberately did not add REST/MCP route handlers surfacing `JobService` (out of its
+fence); the consuming batches own those call sites.
+
+Next:
+
+- Launch BATCH-E1, BATCH-F1, BATCH-G1, BATCH-I1 in parallel worktrees. BATCH-J1
+  follows E1. BATCH-V1 follows all implementation batches.
+
 ### 2026-06-08 - Next-wave seams assigned to BATCH-D2
 
 Status: DONE
@@ -172,5 +217,5 @@ Next:
 | F-MVP-4 | Fork | RESOLVED | Hackathon report export keeps current profile output and adds DB metadata, approved-only filtering, custody/provenance appendix, and downloadable artifact. | Locked for BATCH-J1. | none |
 | B-MVP-1 | Backlog | DEFERRED | Enterprise object-lock/WORM evidence vault option. | Post-MVP architecture appendix only. | none |
 | B-MVP-2 | Backlog | DEFERRED | ContextForge/Envoy-style external gateway integration. | Post-MVP presentation/backlog only; Gateway policy remains in SIFT Gateway for MVP. | none |
-| B-MVP-3 | Backlog | ASSIGNED | Gateway enqueue/status adapter over D1's `enqueue_job`/`job_status_public` (job_id only, sets `enqueue_audit_event_id`, schedules `expire_stale_jobs` reaper). | Implement in BATCH-D2 before dependent job-backed actions ship. | E1, F1, G1, I1, J1 |
-| B-MVP-4 | Backlog | ASSIGNED | Runtime enforcement of add-on `authority_contract` (non_authoritative, prohibited_operations, required_scopes) in the Gateway backend registry; schema acceptance landed in this wave. | Implement in BATCH-D2 so F1 consumes enforced registry behavior. | F1 |
+| B-MVP-3 | Backlog | DONE | Gateway enqueue/status adapter over D1's `enqueue_job`/`job_status_public` (job_id only, sets `enqueue_audit_event_id`, schedules `expire_stale_jobs` reaper). | Landed in BATCH-D2 (`e80ad41`) as `JobService` + lifespan reaper. | E1, F1, G1, I1, J1 |
+| B-MVP-4 | Backlog | DONE | Runtime enforcement of add-on `authority_contract` (non_authoritative, prohibited_operations, required_scopes) in the Gateway backend registry; schema acceptance landed in this wave. | Landed in BATCH-D2 (`e80ad41`) as `AddonAuthorityMiddleware`. | F1 |

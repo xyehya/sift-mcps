@@ -23,7 +23,7 @@ Rules:
 - [x] BATCH-B1 - Gateway policy parity and agent response redaction
 - [x] BATCH-C1 - DB evidence authority, custody ledger, and seal broker
 - [x] BATCH-D1 - Durable Postgres jobs and local worker claim loop
-- [ ] BATCH-D2 - Gateway job adapter and add-on authority enforcement
+- [x] BATCH-D2 - Gateway job adapter and add-on authority enforcement
 - [ ] BATCH-E1 - Portal authority migration for evidence, findings, timeline, TODOs, and reports
 - [ ] BATCH-F1 - OpenSearch secure core integration and ingest job adapter
 - [ ] BATCH-G1 - RAG pgvector target with provenance filters
