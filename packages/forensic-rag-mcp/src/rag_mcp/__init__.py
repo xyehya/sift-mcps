@@ -46,4 +46,8 @@ from .config import Config, get_config
 from .index import RAGIndex
 from .server import RAGServer
 
+# NOTE: ``pgvector_store`` (the BATCH-G1 Supabase pgvector RAG adapter) is a
+# dependency-light module and is intentionally NOT eagerly imported here so it
+# can be used without loading the ChromaDB knowledge index. Import it directly:
+#     from rag_mcp.pgvector_store import PgVectorRagStore
 __all__ = ["RAGIndex", "RAGServer", "get_config", "Config", "__version__"]
