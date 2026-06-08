@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import os
 import sys
 import threading
@@ -10,6 +11,83 @@ import time
 from opensearchpy import OpenSearch, helpers
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
 from opensearchpy.exceptions import ConnectionTimeout, TransportError
+
+# ---------------------------------------------------------------------------
+# Provenance stamping (BATCH-F1)
+# ---------------------------------------------------------------------------
+# When an ingest runs as a durable DB job (sift_core JobWorker -> job_ingest),
+# every indexed document must carry the case/evidence/job provenance IDs so the
+# OpenSearch plane stays derived-but-traceable back to authoritative Postgres
+# state. Rather than thread a provenance dict through all 14 parser modules,
+# the job adapter sets this context var and every action funnelled through
+# flush_bulk is stamped centrally. The fields use the existing `vhir.*`
+# provenance namespace already present on indexed docs (source_file,
+# ingest_audit_id, ...). Stamping is opaque-ID-only: no OS/mount/case paths.
+#
+# A ContextVar (not thread-local) is used so the stamp follows the logical
+# ingest scope and never leaks across concurrent in-process ingests. Empty by
+# default, so the CLI/non-job ingest path is unchanged.
+_provenance_ctx: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "opensearch_ingest_provenance", default=None
+)
+
+# Only opaque-ID provenance keys are accepted onto documents. This is an
+# allow-list so a future caller cannot smuggle a path-bearing field into every
+# indexed doc through the provenance channel.
+_ALLOWED_PROVENANCE_KEYS = frozenset(
+    {
+        "vhir.case_id",
+        "vhir.evidence_id",
+        "vhir.provenance_id",
+        "vhir.job_id",
+    }
+)
+
+
+def set_ingest_provenance(provenance: dict[str, str] | None) -> contextvars.Token:
+    """Set the provenance IDs stamped onto every doc indexed in this scope.
+
+    Returns a token; pass it to :func:`reset_ingest_provenance` to restore the
+    previous value (use a try/finally so the stamp never outlives the job).
+    Only opaque-ID keys in ``_ALLOWED_PROVENANCE_KEYS`` are kept; any path-like
+    or unknown key is dropped defensively.
+    """
+    cleaned: dict[str, str] | None = None
+    if provenance:
+        cleaned = {
+            str(k): str(v)
+            for k, v in provenance.items()
+            if k in _ALLOWED_PROVENANCE_KEYS and v not in (None, "")
+        }
+        if not cleaned:
+            cleaned = None
+    return _provenance_ctx.set(cleaned)
+
+
+def reset_ingest_provenance(token: contextvars.Token) -> None:
+    """Restore the provenance context to its pre-:func:`set_ingest_provenance` value."""
+    try:
+        _provenance_ctx.reset(token)
+    except (ValueError, LookupError):  # pragma: no cover - token from another context
+        _provenance_ctx.set(None)
+
+
+def _stamp_provenance(actions: list[dict]) -> None:
+    """Stamp the active provenance IDs onto each action's ``_source`` in place.
+
+    No-op when no provenance scope is active (CLI / non-job ingest). Existing
+    keys on the doc are not overwritten (a parser-set value wins), so re-ingest
+    determinism and parser-owned fields are preserved.
+    """
+    provenance = _provenance_ctx.get()
+    if not provenance:
+        return
+    for action in actions:
+        source = action.get("_source")
+        if not isinstance(source, dict):
+            continue
+        for key, value in provenance.items():
+            source.setdefault(key, value)
 
 _INITIAL_BACKOFF = 10
 _MAX_BACKOFF = 120
@@ -125,6 +203,9 @@ def flush_bulk(client: OpenSearch, actions: list[dict]) -> tuple[int, int]:
     Raises ShardCapacityExhausted if N consecutive batches fail for
     systemic reasons (e.g., cluster-wide shard limit).
     """
+    # Stamp case/evidence/job provenance onto every doc when an ingest job
+    # scope is active (BATCH-F1). No-op for CLI/non-job ingest.
+    _stamp_provenance(actions)
     return _flush_with_retry(client, actions, attempt=0)
 
 
