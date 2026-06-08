@@ -113,7 +113,7 @@ class FakeSupabaseAuth:
     async def issue_principal(
         self, creator, kind, display_name, system_role, tool_scopes, case_id, source_ip
     ):
-        self.calls.append(("issue_principal", kind, display_name, source_ip))
+        self.calls.append(("issue_principal", kind, display_name, case_id, source_ip))
         self._counter += 1
         result = {
             "principal_type": kind,
@@ -124,6 +124,7 @@ class FakeSupabaseAuth:
             "expires_at": 9999999999,
             "fingerprint": "fp-" + secrets.token_hex(4),
             "display_name": display_name,
+            "default_case_id": case_id if kind == "agent" else None,
         }
         self.tokens_issued.append(result)
         return result
@@ -150,6 +151,22 @@ class FakeSupabaseAuth:
                 "access_token": "LEAK-SHOULD-BE-STRIPPED",
             }
         ]
+
+
+class _ActiveCase:
+    def __init__(self, case_id="11111111-1111-1111-1111-111111111111"):
+        self.case_id = case_id
+
+    def as_dict(self):
+        return {"case_id": self.case_id, "name": "Active"}
+
+
+class _ActiveCases:
+    def __init__(self, case_id="11111111-1111-1111-1111-111111111111"):
+        self.case_id = case_id
+
+    def get_active_case(self):
+        return _ActiveCase(self.case_id)
 
 
 @pytest.fixture()
@@ -480,6 +497,32 @@ class TestPrincipalLifecycle:
         assert "cannot be recovered" in data["warning"].lower()
         # The portal stores nothing: no module-level cache of raw tokens.
         assert not hasattr(routes_mod, "_ISSUED_TOKENS")
+
+    def test_create_agent_defaults_to_active_case(self, fake_auth):
+        active_case_id = "11111111-1111-1111-1111-111111111111"
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET,
+            session_max_age=28800,
+            supabase_auth=fake_auth,
+            active_case_service=_ActiveCases(active_case_id),
+            legacy_portal_session_enabled=False,
+        )
+        client = TestClient(app, raise_server_exceptions=True)
+        cookie = self._operator_cookie(client)
+        resp = client.post(
+            "/api/auth/principals",
+            json={"kind": "agent", "display_name": "Scanner agent", "tool_scopes": ["mcp:*"]},
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["default_case_id"] == active_case_id
+        assert fake_auth.calls[-1] == (
+            "issue_principal",
+            "agent",
+            "Scanner agent",
+            active_case_id,
+            "testclient",
+        )
 
     def test_create_requires_owner_admin(self, app, fake_auth):
         client = TestClient(app, raise_server_exceptions=True)

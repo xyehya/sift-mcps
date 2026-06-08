@@ -4098,6 +4098,16 @@ async def create_token(request: Request) -> JSONResponse:
         return JSONResponse(
             {"error": "role must be 'agent' or 'readonly'"}, status_code=400
         )
+    case_id = body.get("case_id")
+    if case_id is not None:
+        case_id = str(case_id).strip() or None
+    if token_role == "agent" and case_id is None and _ACTIVE_CASES is not None:
+        case_id = _active_case_id()
+        if not case_id:
+            return JSONResponse(
+                {"error": "An active DB case is required before issuing an agent token"},
+                status_code=409,
+            )
     if expires_at is not None:
         try:
             datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
@@ -4123,6 +4133,7 @@ async def create_token(request: Request) -> JSONResponse:
             role=token_role,
             created_by=examiner,
             expires_at=expires_at,
+            case_id=case_id,
         )
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=409)
@@ -4148,6 +4159,7 @@ async def create_token(request: Request) -> JSONResponse:
             "agent_id": agent_id,
             "role": token_role,
             "label": label,
+            "case_id": record.case_id,
             "created_at": now_iso,
             "expires_at": record.expires_at.isoformat(),
         },
@@ -4256,6 +4268,7 @@ async def rotate_token(request: Request) -> JSONResponse:
             "agent_id": record.agent_id,
             "role": record.role,
             "label": record.label,
+            "case_id": record.case_id,
             "created_at": now_iso,
             "expires_at": record.expires_at.isoformat(),
         },
@@ -4426,6 +4439,8 @@ async def create_principal(request: Request) -> JSONResponse:
     system_role = str(body.get("system_role", "")).strip() or None
     tool_scopes = body.get("tool_scopes", [])
     case_id = body.get("case_id")
+    if case_id is not None:
+        case_id = str(case_id).strip() or None
 
     if kind not in _PRINCIPAL_KINDS:
         return JSONResponse({"error": "kind must be 'agent' or 'service'"}, status_code=400)
@@ -4437,6 +4452,13 @@ async def create_principal(request: Request) -> JSONResponse:
         isinstance(s, str) for s in tool_scopes
     ):
         return JSONResponse({"error": "tool_scopes must be a list of strings"}, status_code=400)
+    if kind == "agent" and case_id is None and _ACTIVE_CASES is not None:
+        case_id = _active_case_id()
+        if not case_id:
+            return JSONResponse(
+                {"error": "An active DB case is required before issuing an agent principal"},
+                status_code=409,
+            )
 
     source_ip = request.client.host if request.client else "unknown"
     try:
@@ -4472,6 +4494,7 @@ async def create_principal(request: Request) -> JSONResponse:
             "principal_id": result.get("principal_id"),
             "auth_user_id": result.get("auth_user_id"),
             "display_name": result.get("display_name"),
+            "default_case_id": result.get("default_case_id"),
             "access_token": result.get("access_token"),
             "refresh_token": result.get("refresh_token"),
             "expires_at": result.get("expires_at"),

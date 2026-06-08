@@ -63,12 +63,15 @@ class FakeTokenRegistry:
                 "expires_at": info["expires_at"],
                 "revoked_at": info["revoked_at"],
                 "last_used_at": None,
+                "case_id": info.get("case_id"),
                 "status": "revoked" if info["revoked_at"] else "active",
             }
             for token_id, info in sorted(self.tokens.items())
         ]
 
-    def create_token(self, *, raw_token, agent_id, label, role, created_by, expires_at):
+    def create_token(
+        self, *, raw_token, agent_id, label, role, created_by, expires_at, case_id=None
+    ):
         if any(
             info["agent_id"] == agent_id and info["revoked_at"] is None
             for info in self.tokens.values()
@@ -89,6 +92,7 @@ class FakeTokenRegistry:
             "created_at": "2026-06-07T00:00:00+00:00",
             "expires_at": exp.isoformat(),
             "revoked_at": None,
+            "case_id": case_id,
         }
         self.raw_seen.append(raw_token)
         self.tokens[token_id] = info
@@ -101,7 +105,7 @@ class FakeTokenRegistry:
             agent_id=agent_id,
             service_identity_id=None,
             created_by=created_by,
-            case_id=None,
+            case_id=case_id,
             label=label,
             expires_at=exp,
             scopes=frozenset({"mcp:*"}),
@@ -126,6 +130,7 @@ class FakeTokenRegistry:
             role=info["role"],
             created_by=rotated_by,
             expires_at=info["expires_at"],
+            case_id=info.get("case_id"),
         )
 
     def reactivate_token(self, token_id):
@@ -169,6 +174,22 @@ def _create(client, examiner_token, **body_kwargs):
     )
 
 
+class _ActiveCase:
+    def __init__(self, case_id="11111111-1111-1111-1111-111111111111"):
+        self.case_id = case_id
+
+    def as_dict(self):
+        return {"case_id": self.case_id, "name": "Active"}
+
+
+class _ActiveCases:
+    def __init__(self, case_id="11111111-1111-1111-1111-111111111111"):
+        self.case_id = case_id
+
+    def get_active_case(self):
+        return _ActiveCase(self.case_id)
+
+
 def test_legacy_list_never_returns_raw_token_value(tmp_gateway_config):
     cfg_path, api_keys, examiner_token, agent_token = tmp_gateway_config
     app = create_dashboard_v2_app(
@@ -208,6 +229,31 @@ def test_create_returns_raw_token_once_and_writes_hash_only_registry(app_and_tok
     stored = registry.tokens[data["token_id"]]
     assert stored["agent_id"] == "scanner-01"
     assert stored["token_fingerprint"] == token_fingerprint(raw)
+
+
+def test_create_agent_token_defaults_to_active_case(tmp_gateway_config):
+    cfg_path, api_keys, examiner_token, _ = tmp_gateway_config
+    registry = FakeTokenRegistry()
+    active_case_id = "11111111-1111-1111-1111-111111111111"
+    app = create_dashboard_v2_app(
+        session_secret="test-secret-32-chars-xxxxxxxxxxxxxx",
+        api_keys=api_keys,
+        gateway_config_path=str(cfg_path),
+        token_registry=registry,
+        active_case_service=_ActiveCases(active_case_id),
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+
+    created = _create(client, examiner_token, agent_id="case-bound").json()
+    assert created["case_id"] == active_case_id
+    assert registry.tokens[created["token_id"]]["case_id"] == active_case_id
+
+    rotated = client.post(
+        f"/api/tokens/{created['token_id']}/rotate",
+        headers={"Authorization": f"Bearer {examiner_token}"},
+    ).json()
+    assert rotated["case_id"] == active_case_id
+    assert registry.tokens[rotated["token_id"]]["case_id"] == active_case_id
 
 
 def test_create_requires_db_registry(tmp_gateway_config):

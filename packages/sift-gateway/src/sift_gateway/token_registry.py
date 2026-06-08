@@ -51,6 +51,7 @@ class TokenRegistry(Protocol):
         role: str,
         created_by: str,
         expires_at: str | None,
+        case_id: str | None = None,
     ) -> RegistryToken: ...
 
     def revoke_token(self, token_id: str, *, revoked_by: str) -> str | None: ...
@@ -73,12 +74,19 @@ def registry_config(config: dict[str, Any]) -> tuple[str | None, str | None]:
     control_cfg = config.get("control_plane", {})
     if not isinstance(control_cfg, dict):
         control_cfg = {}
+    dsn_env = str(control_cfg.get("postgres_dsn_env") or CONTROL_PLANE_DSN_ENV)
+    pepper_env = str(token_cfg.get("pepper_env") or TOKEN_PEPPER_ENV)
     dsn = (
         token_cfg.get("postgres_dsn")
         or control_cfg.get("postgres_dsn")
+        or os.environ.get(dsn_env)
         or os.environ.get(CONTROL_PLANE_DSN_ENV)
     )
-    pepper = token_cfg.get("pepper") or os.environ.get(TOKEN_PEPPER_ENV)
+    pepper = (
+        token_cfg.get("pepper")
+        or os.environ.get(pepper_env)
+        or os.environ.get(TOKEN_PEPPER_ENV)
+    )
     return str(dsn).strip() if dsn else None, str(pepper) if pepper else None
 
 
@@ -203,7 +211,7 @@ class PostgresTokenRegistry:
                 cur.execute(
                     """
                     select id::text, token_fingerprint, label, status, created_at,
-                           expires_at, revoked_at, last_used_at,
+                           expires_at, revoked_at, last_used_at, case_id::text,
                            coalesce(metadata, '{}'::jsonb)::text
                     from app.mcp_tokens
                     order by created_at
@@ -221,16 +229,20 @@ class PostgresTokenRegistry:
         role: str,
         created_by: str,
         expires_at: str | None,
+        case_id: str | None = None,
     ) -> RegistryToken:
         token_id = str(uuid4())
         expires_dt = _parse_expiry(expires_at, role)
         fingerprint = token_fingerprint(raw_token)
         digest = token_hash(raw_token, self._pepper)
+        bound_case_id = str(case_id).strip() if case_id else None
         metadata = {
             "role": role,
             "legacy_agent_id": agent_id,
             "created_by": created_by,
         }
+        if bound_case_id:
+            metadata["default_case_id"] = bound_case_id
         scopes = ["mcp:*"] if role == "agent" else ["portal:read"]
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -250,10 +262,19 @@ class PostgresTokenRegistry:
                 cur.execute(
                     """
                     insert into app.mcp_tokens
-                      (id, token_hash, token_fingerprint, status, label, expires_at, metadata)
-                    values (%s, %s, %s, 'active', %s, %s, %s::jsonb)
+                      (id, token_hash, token_fingerprint, status, label, expires_at,
+                       case_id, metadata)
+                    values (%s, %s, %s, 'active', %s, %s, %s, %s::jsonb)
                     """,
-                    (token_id, digest, fingerprint, label, expires_dt, _json(metadata)),
+                    (
+                        token_id,
+                        digest,
+                        fingerprint,
+                        label,
+                        expires_dt,
+                        bound_case_id,
+                        _json(metadata),
+                    ),
                 )
                 for scope in scopes:
                     cur.execute(
@@ -273,7 +294,7 @@ class PostgresTokenRegistry:
             agent_id=agent_id,
             service_identity_id=None,
             created_by=created_by,
-            case_id=None,
+            case_id=bound_case_id,
             label=label,
             expires_at=expires_dt,
             scopes=frozenset(scopes),
@@ -283,11 +304,6 @@ class PostgresTokenRegistry:
         revoked_at = datetime.now(timezone.utc)
         with self._connect() as conn:
             with conn.cursor() as cur:
-                new_id = str(uuid4())
-                fingerprint = token_fingerprint(new_raw_token)
-                digest = token_hash(new_raw_token, self._pepper)
-                new_metadata = dict(metadata)
-                new_metadata["created_by"] = rotated_by
                 cur.execute(
                     """
                     update app.mcp_tokens
@@ -318,22 +334,27 @@ class PostgresTokenRegistry:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    select label, expires_at, coalesce(metadata, '{}'::jsonb)::text,
-                           revoked_at, status
+                    select label, expires_at, case_id::text,
+                           coalesce(metadata, '{}'::jsonb)::text, revoked_at, status
                     from app.mcp_tokens
                     where id = %s
                     """,
                     (token_id,),
                 )
                 old = cur.fetchone()
-                if old is None or old[3] is not None or old[4] == "revoked":
+                if old is None or old[4] is not None or old[5] == "revoked":
                     return None
-                label, expires_at, metadata_raw, _revoked_at, _status = old
+                label, expires_at, case_id, metadata_raw, _revoked_at, _status = old
                 import json
 
                 metadata = json.loads(metadata_raw)
                 agent_id = str(metadata.get("legacy_agent_id") or "unknown")
                 role = str(metadata.get("role") or "agent")
+                new_id = str(uuid4())
+                fingerprint = token_fingerprint(new_raw_token)
+                digest = token_hash(new_raw_token, self._pepper)
+                new_metadata = dict(metadata)
+                new_metadata["created_by"] = rotated_by
                 cur.execute(
                     """
                     update app.mcp_tokens
@@ -349,8 +370,9 @@ class PostgresTokenRegistry:
                 cur.execute(
                     """
                     insert into app.mcp_tokens
-                      (id, token_hash, token_fingerprint, status, label, expires_at, metadata)
-                    values (%s, %s, %s, 'active', %s, %s, %s::jsonb)
+                      (id, token_hash, token_fingerprint, status, label, expires_at,
+                       case_id, metadata)
+                    values (%s, %s, %s, 'active', %s, %s, %s, %s::jsonb)
                     """,
                     (
                         new_id,
@@ -358,6 +380,7 @@ class PostgresTokenRegistry:
                         fingerprint,
                         str(label or ""),
                         _to_aware_utc(expires_at),
+                        str(case_id) if case_id else None,
                         _json(new_metadata),
                     ),
                 )
@@ -380,7 +403,7 @@ class PostgresTokenRegistry:
             agent_id=agent_id,
             service_identity_id=None,
             created_by=rotated_by,
-            case_id=None,
+            case_id=str(case_id) if case_id else None,
             label=str(label or ""),
             expires_at=_to_aware_utc(expires_at),
             scopes=frozenset(scopes),
@@ -439,6 +462,7 @@ def _public_token_row(row: tuple[Any, ...]) -> dict[str, Any]:
         expires_at,
         revoked_at,
         last_used_at,
+        case_id,
         metadata_raw,
     ) = row
     try:
@@ -456,5 +480,6 @@ def _public_token_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "expires_at": _iso(_to_aware_utc(expires_at)),
         "revoked_at": _iso(_to_aware_utc(revoked_at)) if revoked_at else None,
         "last_used_at": _iso(_to_aware_utc(last_used_at)) if last_used_at else None,
+        "case_id": str(case_id) if case_id else metadata.get("default_case_id"),
         "status": status,
     }
