@@ -1,0 +1,68 @@
+{
+  "spec_version": "1.0",
+  "name": "forensic-knowledge",
+  "version": "0.6.1",
+  "tier": "addon",
+  "transport": "library",
+  "namespace": "fk",
+  "instructions": "forensic-knowledge is a reference data library consumed by forensic-mcp and sift-core. It provides YAML-backed discipline snippets, artifact definitions, tool references, playbooks, and investigation frameworks for structured DFIR guidance.",
+  "authority_contract": {
+    "non_authoritative": true,
+    "plane": "reference",
+    "authority_disclaimer": "This package is a local reference data library. It does not expose an MCP server, does not authorize cases, seal evidence, approve findings, approve reports, or bypass Gateway. All guidance is supporting context derived from static YAML data files.",
+    "prohibited_operations": [
+      "create_case",
+      "activate_case",
+      "seal_evidence",
+      "register_evidence",
+      "approve_finding",
+      "reject_finding",
+      "approve_report",
+      "include_in_report",
+      "issue_agent_credential",
+      "bypass_gateway",
+      "expose_mcp_surface"
+    ],
+    "query_only": true
+  },
+  "capabilities": {
+    "provides": ["reference", "discipline-knowledge", "forensic-guidance"],
+    "requires": [],
+    "enriches_responses": false,
+    "standalone_server": false
+  },
+  "data_categories": [
+    {
+      "category": "artifacts",
+      "description": "Windows and Linux artifact definitions with collection and analysis guidance",
+      "loaders": ["get_artifact", "list_artifacts", "artifact_catalog"]
+    },
+    {
+      "category": "tools",
+      "description": "Forensic tool references including CLI usage, interpretation constraints, and known limitations",
+      "loaders": ["get_tool", "list_tools", "get_tool_interpretation"]
+    },
+    {
+      "category": "playbooks",
+      "description": "Investigation playbooks for common DFIR scenarios",
+      "loaders": ["get_playbook", "list_playbooks"]
+    },
+    {
+      "category": "discipline",
+      "description": "Evidence standards, confidence definitions, anti-patterns, templates, checkpoints, and investigation frameworks",
+      "loaders": [
+        "get_rules",
+        "get_confidence_definitions",
+        "get_anti_patterns",
+        "get_evidence_standards",
+        "get_evidence_template",
+        "get_checkpoint",
+        "get_corroboration",
+        "get_false_positive_context",
+        "get_collection_checklist",
+        "get_investigation_framework"
+      ]
+    }
+  ],
+  "integration_notes": "Consumers (forensic-mcp, sift-core) import forensic_knowledge.loader directly. There is no standalone MCP server or stdio transport. The Gateway backend registry should treat this as a library dependency, not a routable backend endpoint."
+}

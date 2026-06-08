@@ -6,6 +6,24 @@
   "transport": "stdio",
   "namespace": "wintriage",
   "instructions": "Use this backend for offline Windows baseline checks. UNKNOWN means not present in the local baseline and is neutral unless case evidence adds suspicion.",
+  "authority_contract": {
+    "non_authoritative": true,
+    "plane": "reference",
+    "authority_disclaimer": "This add-on is a derived/reference plane. It queries local offline baselines only and does not authorize cases, seal evidence, approve findings, approve reports, or bypass Gateway. All baseline verdicts are supporting context only.",
+    "prohibited_operations": [
+      "create_case",
+      "activate_case",
+      "seal_evidence",
+      "register_evidence",
+      "approve_finding",
+      "reject_finding",
+      "approve_report",
+      "include_in_report",
+      "issue_agent_credential",
+      "bypass_gateway"
+    ],
+    "query_only": true
+  },
   "capabilities": {
     "provides": ["reference", "baseline"],
     "requires": [],
@@ -21,6 +39,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
       "category": "baseline-check",
       "recommended_phase": "CORRELATE"
     },
@@ -33,6 +52,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
       "category": "baseline-check",
       "recommended_phase": "CORRELATE"
     },
@@ -44,6 +64,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
       "category": "baseline-check",
       "recommended_phase": "CORRELATE"
     },
@@ -56,6 +77,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
       "category": "baseline-check",
       "recommended_phase": "CORRELATE"
     },
@@ -67,6 +89,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
       "category": "baseline-check",
       "recommended_phase": "CORRELATE"
     },
@@ -78,6 +101,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
       "category": "baseline-check",
       "recommended_phase": "SURVEY",
       "health": true,
