@@ -34,7 +34,7 @@ from sift_gateway.response_guard import (
     is_override_active,
     output_cap_bytes,
 )
-from sift_gateway.supabase_auth import is_tool_allowed
+from sift_gateway.supabase_auth import is_scope_satisfied, is_tool_allowed
 
 logger = logging.getLogger(__name__)
 _CURRENT_ACTIVE_CASE: ContextVar[ActiveCase | None] = ContextVar(
@@ -252,6 +252,146 @@ class ToolAuthorizationMiddleware(Middleware):
             "tool": name,
             "detail": "principal lacks an active tool scope for this tool",
         }
+        return ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+            is_error=True,
+        )
+
+
+_PROHIBITED_OP_ARG_KEYS = ("operation", "action", "op", "command", "mode")
+
+
+class AddonAuthorityMiddleware(Middleware):
+    """H1 (BATCH-D2): enforce add-on authority_contract before backend dispatch.
+
+    Runs after :class:`ToolAuthorizationMiddleware` (so the caller already holds a
+    gateway tool scope for the tool) but before the evidence gate, audit
+    envelope, and proxy dispatch. For add-on tools only — core in-process tools
+    carry no manifest authority contract and are skipped.
+
+    Enforcement is fail-closed and happens BEFORE the backend is ever invoked:
+
+      * ``required_scopes``: every manifest-declared scope on the tool must be
+        satisfied by the caller's identity scopes. A missing required scope is
+        denied (``addon_scope_missing``).
+      * ``prohibited_operations``: a query-only/non-authoritative add-on must
+        never perform an authority operation (seal evidence, approve findings,
+        bypass gateway, ...). If the tool name itself, or an
+        operation/action-style argument value, names a prohibited operation, the
+        call is denied (``addon_prohibited_operation``).
+
+    ``non_authoritative`` is honored as advisory state: it is surfaced in the
+    audit trail and, when set, tightens prohibited-operation matching to fail
+    closed. The Gateway — not the add-on — remains the authority boundary.
+    """
+
+    def __init__(self, gateway: Any, *, auth_enabled: bool = False) -> None:
+        self.gateway = gateway
+        self.auth_enabled = auth_enabled
+
+    async def on_call_tool(self, context, call_next):
+        name = _tool_name(context)
+        fn = getattr(self.gateway, "addon_authority_for_tool", None)
+        profile = fn(name) if callable(fn) else None
+        # Core tools and unknown/unmapped tools carry no add-on contract.
+        if not profile:
+            return await call_next(context)
+
+        identity = current_mcp_identity()
+
+        required_scopes = profile.get("required_scopes") or []
+        if required_scopes:
+            missing = [
+                scope
+                for scope in required_scopes
+                if not is_scope_satisfied(identity, scope)
+            ]
+            if missing:
+                return await self._deny(
+                    name,
+                    identity=identity,
+                    reason="addon_scope_missing",
+                    detail=(
+                        "principal is missing add-on tool scope(s) required by "
+                        "this backend tool"
+                    ),
+                    extra={"missing_scopes": sorted(missing)},
+                )
+
+        prohibited = {op for op in (profile.get("prohibited_operations") or []) if op}
+        if prohibited:
+            attempted = self._attempted_prohibited_operations(
+                name, _tool_args(context), prohibited
+            )
+            if attempted:
+                return await self._deny(
+                    name,
+                    identity=identity,
+                    reason="addon_prohibited_operation",
+                    detail=(
+                        "add-on backend is non-authoritative and may not perform "
+                        "this authority operation"
+                    ),
+                    extra={
+                        "prohibited_operations": sorted(attempted),
+                        "non_authoritative": bool(profile.get("non_authoritative")),
+                    },
+                )
+
+        return await call_next(context)
+
+    def _attempted_prohibited_operations(
+        self, tool_name: str, args: dict, prohibited: set[str]
+    ) -> set[str]:
+        """Return the prohibited operation names this call would perform."""
+        hits: set[str] = set()
+        if tool_name in prohibited:
+            hits.add(tool_name)
+        for key in _PROHIBITED_OP_ARG_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value in prohibited:
+                hits.add(value)
+        return hits
+
+    async def _deny(
+        self,
+        name: str,
+        *,
+        identity: Any,
+        reason: str,
+        detail: str,
+        extra: dict[str, Any] | None = None,
+    ) -> ToolResult:
+        req_ctx = _request_context()
+        audit_extra = _stamp_identity_extra(
+            {
+                "role": req_ctx["role"],
+                "token_id": req_ctx["token_id"],
+                "source_ip": req_ctx["source_ip"],
+                "status": "denied",
+                "denial_reason": reason,
+                **(extra or {}),
+            },
+            identity,
+            req_ctx["examiner"],
+        )
+        try:
+            await asyncio.to_thread(
+                self.gateway._audit.log,
+                tool=name,
+                params={},
+                result_summary=f"denied: {reason}",
+                source="gateway_addon_authority",
+                extra=audit_extra,
+                examiner_override=identity.principal if identity else None,
+            )
+        except Exception as exc:
+            logger.warning("addon_authority: audit write failed: %s", exc)
+
+        payload = {"error": reason, "tool": name, "detail": detail}
+        if extra:
+            payload.update(extra)
         return ToolResult(
             content=[TextContent(type="text", text=json.dumps(payload))],
             structured_content=payload,
@@ -633,10 +773,13 @@ def gateway_policy_middlewares(
     ToolAuthorizationMiddleware (B-10) runs first so denied tools are rejected
     before the evidence gate, audit envelope, and tool dispatch, and filtered
     out of list_tools. ``auth_enabled`` makes it fail closed when a configured
-    verifier yields no SIFT identity (B6).
+    verifier yields no SIFT identity (B6). AddonAuthorityMiddleware (H1/BATCH-D2)
+    runs next so missing add-on required_scopes and prohibited authority
+    operations are denied before the evidence gate, audit envelope, and dispatch.
     """
     return [
         ToolAuthorizationMiddleware(gateway, auth_enabled=auth_enabled),
+        AddonAuthorityMiddleware(gateway, auth_enabled=auth_enabled),
         CaseContextMiddleware(gateway),
         ProxyActiveCaseMiddleware(gateway),
         EvidenceGateMiddleware(gateway),

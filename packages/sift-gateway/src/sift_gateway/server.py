@@ -148,6 +148,9 @@ class Gateway:
         # _build_tool_map so the gateway never hardcodes add-on tool names.
         self._tool_manifest_meta: dict[str, dict] = {}
         self.active_case_service = None
+        # BATCH-D2: Gateway adapter over the D1 durable job state machine. Built
+        # in create_app() once the control-plane DSN is resolved.
+        self.job_service = None
 
         # Register declaration-driven providers: grounding reference backends
         # and the available-backend capability summary (both keyed on manifest
@@ -382,10 +385,23 @@ class Gateway:
             # tools, recommend phases, and filter the agent view without
             # hardcoding any add-on tool name (R-no-hardcoded-names).
             if manifest:
+                # H1 (BATCH-D2): the backend-level authority_contract is advisory
+                # add-on metadata; the Gateway is the enforcement boundary. Index
+                # it per tool so AddonAuthorityMiddleware can deny prohibited
+                # operations and missing required_scopes BEFORE backend dispatch.
+                authority_contract = manifest.get("authority_contract")
+                if not isinstance(authority_contract, dict):
+                    authority_contract = None
                 for t_decl in manifest.get("tools", []):
                     t_meta_name = t_decl.get("name")
                     if not t_meta_name:
                         continue
+                    required_scopes = t_decl.get("required_scopes")
+                    required_scopes = (
+                        [str(s) for s in required_scopes]
+                        if isinstance(required_scopes, list)
+                        else []
+                    )
                     manifest_meta[t_meta_name] = {
                         "backend": name,
                         "category": t_decl.get("category", ""),
@@ -399,6 +415,8 @@ class Gateway:
                         "case_scoped": t_decl.get(
                             "case_scoped", manifest.get("default_case_scoped")
                         ),
+                        "required_scopes": required_scopes,
+                        "authority_contract": authority_contract,
                     }
 
             if backend.started:
@@ -579,6 +597,38 @@ class Gateway:
             except (Exception, BaseExceptionGroup) as exc:
                 logger.error("Late-start checker error (will retry): %s", exc)
 
+    @property
+    def job_reaper_interval(self) -> int:
+        """Seconds between durable-job lease-expiry sweeps. 0 disables."""
+        gw_config = self.config.get("gateway", {})
+        jobs_cfg = gw_config.get("jobs", {}) if isinstance(gw_config.get("jobs"), dict) else {}
+        try:
+            return int(jobs_cfg.get("reaper_interval_seconds", 60))
+        except (TypeError, ValueError):
+            return 60
+
+    async def _job_reaper(self) -> None:
+        """Gateway-owned periodic sweep of expired D1 job leases.
+
+        Calls the JobService ``expire_stale_jobs`` adapter (the ``app.
+        expire_stale_jobs`` RPC) on a fixed interval so leases whose worker
+        stopped heartbeating are re-queued or marked expired. A null/absent job
+        service (no control-plane DSN) makes this a no-op so core-only mode is
+        unaffected.
+        """
+        interval = self.job_reaper_interval
+        if interval <= 0 or self.job_service is None:
+            return
+        logger.info("Durable-job reaper started (interval=%ds)", interval)
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                await asyncio.to_thread(self.job_service.expire_stale_jobs)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive loop
+                logger.warning("Durable-job reaper sweep failed (will retry): %s", exc)
+
     async def list_tools(self) -> dict[str, str]:
         """Return the current tool map (tool_name -> backend_name)."""
         result = {name: "sift-core" for name in core_tool_names()}
@@ -608,6 +658,30 @@ class Gateway:
         schema = getattr(tool, "inputSchema", None) if tool else None
         props = schema.get("properties", {}) if isinstance(schema, dict) else {}
         return {name for name in ("case_id", "case_key") if name in props}
+
+    def addon_authority_for_tool(self, tool_name: str) -> dict | None:
+        """Return the H1 add-on authority enforcement profile for a tool.
+
+        The profile combines the tool-level ``required_scopes`` and the
+        backend-level ``authority_contract`` (``non_authoritative``,
+        ``prohibited_operations``) declared in the add-on manifest. Returns
+        ``None`` for in-process core tools and unknown/unmapped tools (core
+        tools enforce their own policy and never carry an add-on contract).
+        """
+        meta = self._tool_manifest_meta.get(tool_name)
+        if not meta:
+            return None
+        contract = meta.get("authority_contract") or {}
+        prohibited = contract.get("prohibited_operations")
+        prohibited = (
+            [str(op) for op in prohibited] if isinstance(prohibited, list) else []
+        )
+        return {
+            "backend": meta.get("backend"),
+            "required_scopes": list(meta.get("required_scopes") or []),
+            "non_authoritative": bool(contract.get("non_authoritative", False)),
+            "prohibited_operations": prohibited,
+        }
 
     async def get_tools_list(self) -> list[Tool]:
         """Return MCP ``Tool`` objects for all aggregated tools.
@@ -829,6 +903,12 @@ class Gateway:
                 self.active_case_service = ActiveCaseService(dsn, audit=self._audit)
             except Exception as exc:  # pragma: no cover - defensive startup
                 logger.warning("Active-case service init failed: %s", exc)
+            try:
+                from sift_gateway.jobs import JobService
+
+                self.job_service = JobService(dsn, audit=self._audit)
+            except Exception as exc:  # pragma: no cover - defensive startup
+                logger.warning("Job service init failed: %s", exc)
 
         # PR03A: build the shared Supabase identity resolver + portal callbacks.
         # Fail-soft: if Supabase is disabled or env/DSN is absent, the gateway
@@ -926,6 +1006,11 @@ class Gateway:
                 reaper_task = asyncio.create_task(gateway._idle_reaper())
             late_start_task = asyncio.create_task(gateway._late_start_checker())
 
+            # BATCH-D2: Gateway-owned durable-job lease reaper (app.expire_stale_jobs).
+            job_reaper_task = None
+            if gateway.job_service is not None and gateway.job_reaper_interval > 0:
+                job_reaper_task = asyncio.create_task(gateway._job_reaper())
+
             # PR03B: no active-case env watcher. Evidence-gate cache invalidation
             # is driven by DB active-case context and portal mutation callbacks.
             watcher_task = None
@@ -935,6 +1020,10 @@ class Gateway:
                 reaper_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await reaper_task
+            if job_reaper_task is not None:
+                job_reaper_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await job_reaper_task
             if watcher_task is not None:
                 watcher_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
