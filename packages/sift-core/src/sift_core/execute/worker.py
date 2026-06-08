@@ -17,6 +17,11 @@ import threading
 import time
 from typing import Any
 
+from sift_core.execute.runtime_acl import (
+    assert_no_authority_write_target as _assert_no_authority_write_target,
+    build_sandbox_env,
+)
+
 
 _pipe_lock = threading.Lock()
 
@@ -83,6 +88,13 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if os.name == "posix":
         preexec_fn = lambda: _resource_preexec(timeout, memory_limit_bytes)
 
+    # K5 authority isolation: scrub the environment the forensic tool runs with.
+    # The worker process itself was already spawned with a scrubbed env, but we
+    # rebuild here so the guarantee holds even when the worker is invoked
+    # directly (tests, alternate entrypoints) and so secrets never leak through
+    # a stray inherited variable. We keep PATH so binaries still resolve.
+    tool_env = build_sandbox_env()
+
     processes = []
     prev_stdout = None
     
@@ -105,6 +117,9 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                     continue
                 # Verify parent directory exists for write redirects
                 if op in (">", ">>", "2>", "2>>", "&>", "&>>"):
+                    # K5: never let a redirect overwrite an authority/proof
+                    # artifact, even inside the case write-jail.
+                    _assert_no_authority_write_target([target])
                     parent = os.path.dirname(target)
                     if parent and not os.path.isdir(parent):
                         raise FileNotFoundError(
@@ -155,6 +170,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 shell=False,
                 start_new_session=(os.name == "posix"),
                 preexec_fn=preexec_fn,
+                env=tool_env,
             )
             processes.append((proc, opened_files, original_argv))
             

@@ -20,6 +20,7 @@ from typing import Any
 
 from sift_core.execute.config import get_config, resolve_case_dir
 from sift_core.execute.exceptions import ExecutionError, ExecutionTimeoutError
+from sift_core.execute.runtime_acl import build_sandbox_env, is_authority_path
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,13 @@ def _run_isolated_worker(
 
     worker_cmd = [sys.executable, "-m", "sift_core.execute.worker"]
     logger.debug("Starting native user execution worker: %s", cmd_str)
+    # K5 authority isolation: the worker subprocess (and, downstream, the
+    # forensic tool it launches) must not inherit DB DSNs, Supabase/service-role
+    # keys, OpenSearch credentials, or other VM secrets that live in the
+    # Gateway/worker environment. Spawn the short-lived worker with a scrubbed
+    # env so secrets never reach it; the worker scrubs again before the tool as
+    # defense in depth.
+    worker_env = build_sandbox_env()
     proc = subprocess.run(
         worker_cmd,
         input=json.dumps(payload),
@@ -59,6 +67,7 @@ def _run_isolated_worker(
         text=True,
         timeout=timeout + 3,
         shell=False,
+        env=worker_env,
     )
 
     if proc.returncode != 0:
@@ -303,6 +312,10 @@ def _save_output(
         str(out_dir) == p or str(out_dir).startswith(p + "/") for p in _blocked_prefixes
     ):
         raise ExecutionError(f"Refusing to write output to system directory: {out_dir}")
+
+    # K5: refuse output directories that target authority/proof artifacts.
+    if is_authority_path(str(out_dir)):
+        raise ExecutionError(f"Refusing to write output to authority artifact: {out_dir}")
 
     # When case dir is known, restrict save_dir to agent, extractions, or tmp.
     case_dir = resolve_case_dir() or None
