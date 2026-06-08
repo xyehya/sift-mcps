@@ -19,14 +19,14 @@ Rules:
 ## Batch Index
 
 - [x] BATCH-A0 - Freeze simplified migration operating model
-- [ ] BATCH-A1 - Final installer, Supabase bootstrap, forced reset, and health contract
-- [ ] BATCH-B1 - Gateway policy parity and agent response redaction
-- [ ] BATCH-C1 - DB evidence authority, custody ledger, and seal broker
-- [ ] BATCH-D1 - Durable Postgres jobs and local worker claim loop
+- [x] BATCH-A1 - Final installer, Supabase bootstrap, forced reset, and health contract
+- [x] BATCH-B1 - Gateway policy parity and agent response redaction
+- [x] BATCH-C1 - DB evidence authority, custody ledger, and seal broker
+- [x] BATCH-D1 - Durable Postgres jobs and local worker claim loop
 - [ ] BATCH-E1 - Portal authority migration for evidence, findings, timeline, TODOs, and reports
 - [ ] BATCH-F1 - OpenSearch secure core integration and ingest job adapter
 - [ ] BATCH-G1 - RAG pgvector target with provenance filters
-- [ ] BATCH-H1 - Add-on contract hardening for OpenCTI, Windows triage, and forensic knowledge
+- [x] BATCH-H1 - Add-on contract hardening for OpenCTI, Windows triage, and forensic knowledge
 - [ ] BATCH-I1 - Sandboxed run_command uplift
 - [ ] BATCH-J1 - Approved-only report generation and export
 - [ ] BATCH-V1 - End-to-end validation and cutover

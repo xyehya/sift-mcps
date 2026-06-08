@@ -13,6 +13,74 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - First parallel wave landed and integrated (A1/B1/C1/D1/H1)
+
+Status: DONE
+
+Changed (merged into `revamp/spg-v1`, one `--no-ff` merge per batch + one integration commit):
+
+- BATCH-A1 (`4effda6`): Supabase-first installer/bootstrap. `~/.sift/supabase.env`
+  (chmod 600) secrets via systemd `EnvironmentFile`; Admin-API invite + one-time
+  temp password; `invited->active` forced-reset transition (`POST /api/auth/forced-reset`,
+  `must_reset` login flag); frozen case path `case-<slug>-<MMDDHHSS>` + `-NN` with
+  slug traversal guard; rewritten `/health` (Gateway, Supabase, evidence root,
+  tools_count).
+- BATCH-B1 (`55e6933`): Gateway policy parity + agent redaction. Agent/service
+  tokens 403 on `POST /api/v1/tools/{tool}` before dispatch (F-MVP-3, closes the
+  REST bypass the prior R4 block missed); path-redaction at the MCP choke point
+  (in-case absolute -> relative, all other host paths -> `[REDACTED:absolute_path]`,
+  audit retains absolute) (F-MVP-2). Made no edits to `evidence_gate.py`.
+- BATCH-C1 (`67d0dbb`): DB evidence authority + custody ledger. Migration
+  `202606081000_evidence_custody.sql` (evidence_objects/versions, append-only
+  hash-linked custody events, chain heads as fail-closed read model, proof exports);
+  service-only transition RPCs (seal/ignore/retire require a re-auth audit event id);
+  added `check_evidence_gate_db()` alongside the untouched file-backed gate.
+- BATCH-D1 (`df93104`): Durable Postgres jobs + worker. Migration
+  `202606081200_durable_jobs.sql` (jobs/job_steps/job_logs/worker_heartbeats);
+  `FOR UPDATE SKIP LOCKED` claim/lease RPCs; `job_status_public` sanitized view;
+  `JobWorker` claim loop with path-scrubbed logs/results. Lease/race verified on a
+  live Postgres 16 container.
+- BATCH-H1 (`ed5f27a`): Add-on contract hardening. `authority_contract` +
+  tool `required_scopes` on OpenCTI/Windows-triage; new library manifest for
+  forensic-knowledge.
+- Integration (`be4d7f4`, conductor): reconciled H1 into the Gateway manifest layer
+  (the gateway-side glue H1 deferred) — backend schema now permits optional
+  `authority_contract` + tool `required_scopes`; `load_and_validate_manifest` skips
+  `transport: library` / `standalone_server: false` manifests as non-routable;
+  `test_phase6` enumerates routable backends only.
+
+Branch fileset was fully disjoint across the five batches; merges were
+conflict-free. The B1/C1 `evidence_gate.py` overlap I pre-split did not
+materialize (B1 worked in `policy_middleware`/`response_guard` instead).
+
+Validation:
+
+- Passed: `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`.
+- Passed: sift-gateway 335, sift-core 346, case-dashboard 322, tests/db 45,
+  opencti 11, windows-triage 24, forensic-knowledge 31. No regressions.
+- Not run in this environment: live SIFT VM smoke (installer bootstrap, Supabase
+  Admin API) and live `supabase db` apply of the two new migrations. C1 used the
+  repo's text-based migration tests; D1 applied on a Postgres 16 container.
+
+Carried-forward integration follow-ups (feed the dependent wave):
+
+- Gateway enqueue/status adapter over D1's `enqueue_job` / `job_status_public`
+  (returns only `job_id`; set `enqueue_audit_event_id`; schedule `expire_stale_jobs`
+  reaper). New B-MVP-3.
+- Switch the MCP evidence gate to prefer `check_evidence_gate_db()` once cases
+  carry DB evidence state (B1/C1 seam) — consumed by BATCH-E1.
+- Runtime enforcement of `authority_contract` (`non_authoritative`,
+  `prohibited_operations`, `required_scopes`) in the Gateway backend registry;
+  schema acceptance is done, routing-time enforcement is not. New B-MVP-4.
+- Concrete job handlers (ingest/enrich/report/run_command) for `JobWorker` belong
+  to BATCH-F1 and BATCH-I1.
+
+Next:
+
+- Launch the dependent wave: BATCH-E1 (portal DB authority), BATCH-F1 (OpenSearch
+  ingest adapter), BATCH-G1 (RAG pgvector), BATCH-I1 (job-backed run_command),
+  BATCH-J1 (approved-only reports), then BATCH-V1.
+
 ### 2026-06-08 - MVP forks closed for parallel sprint
 
 Status: DONE
@@ -77,3 +145,5 @@ Next:
 | F-MVP-4 | Fork | RESOLVED | Hackathon report export keeps current profile output and adds DB metadata, approved-only filtering, custody/provenance appendix, and downloadable artifact. | Locked for BATCH-J1. | none |
 | B-MVP-1 | Backlog | DEFERRED | Enterprise object-lock/WORM evidence vault option. | Post-MVP architecture appendix only. | none |
 | B-MVP-2 | Backlog | DEFERRED | ContextForge/Envoy-style external gateway integration. | Post-MVP presentation/backlog only; Gateway policy remains in SIFT Gateway for MVP. | none |
+| B-MVP-3 | Backlog | OPEN | Gateway enqueue/status adapter over D1's `enqueue_job`/`job_status_public` (job_id only, sets `enqueue_audit_event_id`, schedules `expire_stale_jobs` reaper). | Build alongside BATCH-E1/F1 before job-backed actions ship. | E1, F1, I1 |
+| B-MVP-4 | Backlog | OPEN | Runtime enforcement of add-on `authority_contract` (non_authoritative, prohibited_operations, required_scopes) in the Gateway backend registry; schema acceptance landed in this wave. | Wire into BATCH-F1 registry work. | none |
