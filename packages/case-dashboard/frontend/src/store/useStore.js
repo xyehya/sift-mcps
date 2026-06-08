@@ -57,6 +57,10 @@ export const useStore = create((set, get) => ({
   chainStatus: null,
   setChainStatus: (chainStatus) => set({ chainStatus }),
 
+  // Portal state (DB authority: evidence seal/custody, add-on status, report eligibility)
+  portalState: null,
+  setPortalState: (portalState) => set({ portalState }),
+
   // Loading state (true until first data fetch resolves)
   isLoading: true,
   setIsLoading: (v) => set({ isLoading: v }),

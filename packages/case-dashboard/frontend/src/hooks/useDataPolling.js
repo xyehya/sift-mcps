@@ -4,6 +4,7 @@ import {
   getCase, getCases, getSummary,
   getFindings, getDelta, getTimeline,
   getChainStatus, getIocs, getTodos, getReports,
+  getPortalState,
 } from '../api/endpoints'
 
 export function useDataPolling() {
@@ -11,10 +12,11 @@ export function useDataPolling() {
     setActiveCase, setCases, setSummary,
     setFindings, setDelta, setTimeline,
     setChainStatus, setLastSync, setIsLoading, setIocs, setTodos, setReports,
+    setPortalState,
   } = useStore()
 
   usePolling(async () => {
-    const [cas, cases, summary, findings, delta, timeline, chain, iocs, todos, reports] = await Promise.allSettled([
+    const [cas, cases, summary, findings, delta, timeline, chain, iocs, todos, reports, portal] = await Promise.allSettled([
       getCase(),
       getCases(),
       getSummary(),
@@ -25,6 +27,7 @@ export function useDataPolling() {
       getIocs(),
       getTodos(),
       getReports(),
+      getPortalState(),
     ])
 
     if (cas.status === 'fulfilled' && cas.value) setActiveCase(cas.value)
@@ -37,6 +40,7 @@ export function useDataPolling() {
     if (iocs.status === 'fulfilled' && iocs.value) setIocs(iocs.value)
     if (todos.status === 'fulfilled' && todos.value) setTodos(todos.value)
     if (reports.status === 'fulfilled' && reports.value) setReports(reports.value)
+    if (portal.status === 'fulfilled' && portal.value) setPortalState(portal.value)
 
     setLastSync(Date.now())
     setIsLoading(false)

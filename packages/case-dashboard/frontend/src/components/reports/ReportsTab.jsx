@@ -35,7 +35,13 @@ const PROFILES = {
 }
 
 export function ReportsTab() {
-  const { addToast } = useStore()
+  const { addToast, portalState } = useStore()
+  // Approved-only report eligibility (DB authority). When the portal-state
+  // endpoint is wired and reports it ineligible, generation is blocked in the UI
+  // (the backend also enforces this with a 409). When unavailable (file-backed
+  // deployments), eligibility is unknown and generation is allowed.
+  const eligibility = portalState?.report_eligibility ?? null
+  const reportIneligible = eligibility != null && eligibility.eligible === false
   const [reports, setReports] = useState([])
   const [reportsLoading, setReportsLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -393,7 +399,19 @@ export function ReportsTab() {
         {/* Generate Control Form */}
         <form onSubmit={handleGenerate} className="p-4 border-b border-border-faint flex flex-col gap-3">
           <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-text-muted">Generate Report</h2>
-          
+
+          {/* Approved-only report eligibility (DB authority) */}
+          {eligibility != null && (
+            <div
+              className={`text-[10px] rounded px-2 py-1.5 border ${reportIneligible ? 'border-amber text-amber' : 'border-border-soft text-text-muted'}`}
+              data-testid="report-eligibility"
+            >
+              {reportIneligible
+                ? `Not eligible: ${eligibility.reason || 'no approved findings'}. Approve at least one finding before generating a report.`
+                : `Eligible — ${eligibility.approved_findings ?? 0} of ${eligibility.total_findings ?? 0} findings approved. Reports include approved data only.`}
+            </div>
+          )}
+
           <div className="flex flex-col gap-1 relative group">
             <label className="text-[11px] font-sans font-medium text-text-muted">Report Profile</label>
             <select
@@ -452,7 +470,8 @@ export function ReportsTab() {
 
           <button
             type="submit"
-            disabled={generating}
+            disabled={generating || reportIneligible}
+            title={reportIneligible ? 'Report generation requires at least one approved finding' : undefined}
             className="w-full mt-2 bg-cyan text-bg-base font-bold text-xs py-2 rounded hover:bg-opacity-95 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
             style={{ backgroundColor: 'var(--cyan)' }}
           >
