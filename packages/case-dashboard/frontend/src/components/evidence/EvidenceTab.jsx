@@ -7,6 +7,7 @@ import {
   getChainChallenge,
   postChainSeal,
   postChainAnchor,
+  postChainProofExport,
   postChainVerifyHmac,
   postVerifyEvidence,
   postChainIgnore,
@@ -266,6 +267,23 @@ export function EvidenceTab() {
     }
   }
 
+  async function handleProofExport() {
+    try {
+      addToast('Generating proof export from DB custody authority...', 'info')
+      const result = await postChainProofExport()
+      const freshStatus = await getChainStatus()
+      if (freshStatus) setChainStatus(freshStatus)
+      const pe = result.proof_export || {}
+      if (pe.verified) {
+        addToast('Proof export generated and verified against mounted evidence.', 'success')
+      } else {
+        addToast('Proof export recorded, but evidence verification reported issues.', 'warning')
+      }
+    } catch (err) {
+      addToast(err.message || 'Proof export failed', 'error')
+    }
+  }
+
   async function handleVerifyEvidence(path) {
     setVerifyStatus((prev) => ({ ...prev, [path]: 'checking' }))
     try {
@@ -512,6 +530,46 @@ export function EvidenceTab() {
             )}
           </div>
         </div>
+
+        {/* Proof Export (DB-derived custody proof bundle) */}
+        {chainStatus && chainStatus.authority === 'db' && (
+          <div className="p-4 rounded border flex flex-col justify-between" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-faint)' }}>
+            <div>
+              <p className="text-[10px] font-sans font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--text-muted)' }}>
+                Custody Proof Export
+              </p>
+              {(() => {
+                const pe = chainStatus.proof_export
+                if (pe) {
+                  return (
+                    <div className="text-xs p-3 rounded border" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                      <div className="font-mono text-[11px]" style={{ color: pe.verified ? 'var(--jade)' : 'var(--amber)' }}>
+                        {pe.verified ? 'Verified against mounted evidence' : 'Recorded — verification reported issues'}
+                      </div>
+                      <div className="text-[11px] opacity-80 mt-1 font-mono break-all">
+                        v{pe.manifest_version} · {pe.export_kind} · {(pe.proof_hash || '').slice(0, 22)}…
+                      </div>
+                      {pe.verified_at && (
+                        <div className="text-[11px] opacity-60 mt-1">Exported {formatTime(pe.verified_at)}</div>
+                      )}
+                    </div>
+                  )
+                }
+                return (
+                  <div className="text-xs p-3 rounded border" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
+                    No proof export recorded yet. Proof material is derived from Postgres custody authority and re-verified against mounted evidence.
+                  </div>
+                )
+              })()}
+            </div>
+            <button
+              onClick={handleProofExport}
+              className="mt-3 px-2 py-1 rounded bg-[rgba(0,200,255,0.12)] border border-[var(--cyan)] text-[var(--cyan)] font-semibold text-[10px] self-start hover:bg-[rgba(0,200,255,0.22)] transition-colors cursor-pointer"
+            >
+              Generate Proof Export
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Custody Violations */}

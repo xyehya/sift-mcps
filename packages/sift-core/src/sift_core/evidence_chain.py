@@ -836,6 +836,52 @@ def anchor_manifest(
     return proof
 
 
+def anchor_db_proof(
+    *,
+    manifest_version: int,
+    manifest_hash: str,
+    ledger_tip_hash: str,
+    keypair_path: str | None = None,
+    rpc_url: str | None = None,
+    cluster: str = "mainnet",
+) -> dict:
+    """Anchor DB-derived proof material on Solana without writing any case file.
+
+    The payload is derived from DB custody authority (manifest hash + custody
+    chain head/ledger tip + manifest version) supplied by the caller. Returns the
+    proof dict; the DB-active caller records it in app.evidence_proof_exports.
+    Degrades gracefully: if no keypair is configured or solders is unavailable,
+    solana_tx stays None (proof material recorded, no on-chain tx). Anchoring is
+    external proof only and never decides evidence gate state.
+    """
+    mh_hex = manifest_hash.split(":")[-1] if ":" in manifest_hash else manifest_hash
+    tip_hex = ledger_tip_hash.split(":")[-1] if ":" in ledger_tip_hash else ledger_tip_hash
+    anchor_payload = f"SIFT|{mh_hex[:16]}|{tip_hex[:16]}"
+
+    proof: dict = {
+        "schema": "sift.evidence-anchor.v1",
+        "timestamp": _now(),
+        "manifest_version": manifest_version,
+        "manifest_hash": manifest_hash,
+        "ledger_tip_hmac": ledger_tip_hash,
+        "anchor_payload": anchor_payload,
+        "solana_tx": None,
+        "solana_cluster": cluster,
+        "confirmed": False,
+        "explorer_url": None,
+    }
+
+    if keypair_path:
+        try:
+            _do_solana_anchor(proof, keypair_path, rpc_url, cluster)
+        except ImportError:
+            logger.warning("anchor_db_proof: solders not installed — proof recorded without on-chain tx")
+        except Exception as exc:
+            logger.warning("anchor_db_proof: Solana submission failed: %s", exc)
+
+    return proof
+
+
 def _do_solana_anchor(proof: dict, keypair_path: str, rpc_url: str | None, cluster: str) -> None:
     """Submit anchor_payload to Solana via SPL Memo. Modifies proof in place."""
     import base64

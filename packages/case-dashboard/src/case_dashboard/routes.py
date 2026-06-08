@@ -797,7 +797,7 @@ def _db_evidence_chain_status() -> dict | None:
     except Exception as exc:
         logger.warning("DB evidence gate_status failed: %s", exc)
         return None
-    return {
+    payload = {
         "authority": "db",
         "status": status.get("seal_status", "unsealed"),
         "seal_status": status.get("seal_status", "unsealed"),
@@ -808,6 +808,87 @@ def _db_evidence_chain_status() -> dict | None:
         "hmac_last_verified_at": status.get("last_verified_at"),
         "hmac_verify_needed": status.get("last_verified_at") is None,
     }
+    # Surface the latest DB-recorded proof export + Solana anchor metadata so the
+    # portal anchor/proof badge works in DB-active mode. Anchor metadata is
+    # external proof only; absence is reported as not-configured, never an error.
+    keypair_configured = bool(os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip())
+    anchor_info: dict = {
+        "anchoring_enabled": keypair_configured,
+        "manifest_version": payload["manifest_version"],
+    }
+    latest = getattr(_EVIDENCE_DB, "latest_proof_export", None)
+    if callable(latest):
+        try:
+            export = latest(case_id)
+        except Exception as exc:
+            logger.warning("DB latest_proof_export failed: %s", exc)
+            export = None
+        if export is not None:
+            payload["proof_export"] = export
+            anchor = export.get("anchor") or {}
+            if anchor:
+                anchor_info.update({
+                    "solana_tx": anchor.get("solana_tx"),
+                    "confirmed": anchor.get("confirmed", False),
+                    "cluster": anchor.get("cluster") or "mainnet",
+                    "explorer_url": anchor.get("explorer_url"),
+                    "timestamp": export.get("verified_at"),
+                })
+    payload["anchor"] = anchor_info
+    return payload
+
+
+def _db_export_proof_after_seal(request, examiner):
+    """Generate the DB-derived proof export after a DB-active seal.
+
+    Returns (anchor_info | None, proof_info | None). Optional Solana anchoring is
+    attempted only when SIFT_SOLANA_KEYPAIR is configured; the anchor result is
+    folded into the proof export metadata in Postgres. Anchoring never blocks the
+    seal — any failure degrades to a recorded proof export without an on-chain tx.
+    """
+    exporter = getattr(_EVIDENCE_DB, "export_proof", None)
+    if not callable(exporter):
+        return None, None
+    case_id = _active_case_id()
+    if not case_id:
+        return None, None
+
+    anchor_proof: dict | None = None
+    anchor_info: dict | None = None
+    keypair_path = os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip() or None
+    if keypair_path:
+        gate = getattr(_EVIDENCE_DB, "gate_status", None)
+        head = gate(case_id) if callable(gate) else {}
+        head = head if isinstance(head, dict) else {}
+        try:
+            from sift_core.evidence_chain import anchor_db_proof
+            anchor_proof = anchor_db_proof(
+                manifest_version=head.get("manifest_version", 0),
+                manifest_hash=head.get("head_hash", "") or "",
+                ledger_tip_hash=head.get("head_hash", "") or "",
+                keypair_path=keypair_path,
+                cluster=os.environ.get("SIFT_SOLANA_CLUSTER", "mainnet"),
+            )
+            anchor_info = {
+                "solana_tx": anchor_proof.get("solana_tx"),
+                "confirmed": anchor_proof.get("confirmed"),
+                "explorer_url": anchor_proof.get("explorer_url"),
+            }
+        except Exception as exc:
+            logger.warning("evidence seal: DB Solana anchor failed: %s", exc)
+            anchor_proof = None
+
+    try:
+        proof_info = exporter(
+            case_id=case_id,
+            actor=_request_principal(request),
+            export_kind="bundle",
+            anchor=anchor_proof,
+        )
+    except Exception as exc:
+        logger.warning("evidence seal: DB proof export failed: %s", exc)
+        return anchor_info, None
+    return anchor_info, proof_info
 
 
 async def get_evidence_chain_status(request: Request) -> JSONResponse:
@@ -967,13 +1048,22 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
             except Exception as exc:
                 return _active_case_error_response(exc, default=500)
             head = head if isinstance(head, dict) else {}
-            return JSONResponse({
+            # DB-first proof export: derive proof material from DB custody state
+            # and record metadata/hash in Postgres. Optional Solana anchoring is
+            # external proof only and must never block the seal.
+            anchor_info, proof_info = _db_export_proof_after_seal(request, examiner)
+            resp = {
                 "sealed": True,
                 "authority": "db",
                 "manifest_version": head.get("manifest_version"),
                 "seal_status": head.get("seal_status", "sealed"),
                 "files_added": [s.get("path") for s in file_specs],
-            })
+            }
+            if proof_info is not None:
+                resp["proof_export"] = proof_info
+            if anchor_info is not None:
+                resp["anchor"] = anchor_info
+            return JSONResponse(resp)
 
     try:
         new_manifest = seal_manifest(case_dir, file_specs, examiner, derived_key)
@@ -1302,16 +1392,31 @@ async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir = _resolve_case_dir()
-    if not case_dir:
-        return _no_case_response()
-
     keypair_path = os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip() or None
     if not keypair_path:
         return JSONResponse(
             {"error": "Solana anchoring not configured — set SIFT_SOLANA_KEYPAIR"},
             status_code=503,
         )
+
+    # DB-authority path: anchor DB-derived proof material and record it in
+    # app.evidence_proof_exports. No case file is read or written as authority.
+    if _db_evidence_active():
+        anchor_info, proof_info = _db_export_proof_after_seal(request, _resolve_examiner(request))
+        anchor_info = anchor_info or {}
+        return JSONResponse({
+            "authority": "db",
+            "anchored": anchor_info.get("solana_tx") is not None,
+            "manifest_version": (proof_info or {}).get("manifest_version"),
+            "solana_tx": anchor_info.get("solana_tx"),
+            "confirmed": anchor_info.get("confirmed"),
+            "explorer_url": anchor_info.get("explorer_url"),
+            "proof_export": proof_info,
+        })
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
 
     manifest = load_manifest(case_dir)
     if not manifest or manifest.get("version", 0) == 0:
@@ -1333,6 +1438,39 @@ async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
         "explorer_url": proof.get("explorer_url"),
         "cluster": proof.get("solana_cluster"),
     })
+
+
+async def post_evidence_chain_proof_export(request: Request) -> JSONResponse:
+    """Generate a DB-derived proof export and record its metadata in Postgres.
+
+    DB-active only. The proof bundle (sealed object snapshot, custody event
+    chain, chain head) is derived from DB custody authority; mounted evidence is
+    re-verified by full re-hash and the verify outcome + content hash are
+    recorded via app.evidence_record_proof_export. Optional Solana anchoring is
+    attempted when configured and recorded as external proof; its absence does
+    not fail the export.
+    """
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    if not _db_evidence_active():
+        return JSONResponse(
+            {"error": "Proof export requires DB evidence authority"},
+            status_code=503,
+        )
+
+    examiner = _resolve_examiner(request)
+    anchor_info, proof_info = _db_export_proof_after_seal(request, examiner)
+    if proof_info is None:
+        return JSONResponse(
+            {"error": "Proof export failed — check gateway logs"},
+            status_code=500,
+        )
+    resp = {"authority": "db", "proof_export": proof_info}
+    if anchor_info is not None:
+        resp["anchor"] = anchor_info
+    return JSONResponse(resp)
 
 
 # ---------------------------------------------------------------------------
@@ -5706,6 +5844,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/retire", post_evidence_chain_retire, methods=["POST"]),
         Route("/api/evidence/chain/verify-hmac", post_evidence_chain_verify_hmac, methods=["POST"]),
         Route("/api/evidence/chain/anchor", post_evidence_chain_anchor, methods=["POST"]),
+        Route("/api/evidence/chain/proof-export", post_evidence_chain_proof_export, methods=["POST"]),
         # Approach C: response-guard override
         Route("/api/response-guard/status", get_response_guard_status, methods=["GET"]),
         Route("/api/response-guard/override", post_response_guard_override, methods=["POST"]),

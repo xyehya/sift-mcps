@@ -662,6 +662,39 @@ class TestAnchorManifest:
         assert loaded["manifest_version"] == 1
         assert loaded["solana_tx"] is None
 
+    def test_anchor_db_proof_writes_no_file_and_derives_payload(self, initialized):
+        """anchor_db_proof derives payload from DB material, writes no case file."""
+        from sift_core.evidence_chain import anchor_db_proof
+
+        before = set(p.name for p in initialized.iterdir())
+        proof = anchor_db_proof(
+            manifest_version=2,
+            manifest_hash="sha256:" + "a" * 64,
+            ledger_tip_hash="sha256:" + "b" * 64,
+        )
+        after = set(p.name for p in initialized.iterdir())
+        # No evidence-anchor-v*.json (or any new file) written: DB records it.
+        assert before == after
+        assert proof["schema"] == "sift.evidence-anchor.v1"
+        assert proof["manifest_version"] == 2
+        assert proof["solana_tx"] is None
+        assert proof["confirmed"] is False
+        assert proof["anchor_payload"].startswith("SIFT|")
+        parts = proof["anchor_payload"].split("|")
+        assert len(parts) == 3 and len(parts[1]) == 16 and len(parts[2]) == 16
+
+    def test_anchor_db_proof_degrades_without_keypair(self, initialized):
+        from sift_core.evidence_chain import anchor_db_proof
+
+        proof = anchor_db_proof(
+            manifest_version=1,
+            manifest_hash="sha256:" + "c" * 64,
+            ledger_tip_hash="",
+            keypair_path=None,
+        )
+        assert proof["solana_tx"] is None
+        assert proof["confirmed"] is False
+
     def test_each_version_gets_own_proof_file(self, initialized):
         for i in range(2):
             fname = f"evidence/file{i}.bin"

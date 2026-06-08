@@ -611,23 +611,353 @@ class EvidenceAuthorityService(_BasePortalDbService):
         return {"evidence_id": row[0], "display_path": row[1], "status": row[2]} if row else {}
 
     def _scan_evidence(self, case_id: str) -> None:
+        """Reconcile the mounted evidence tree against DB custody authority.
+
+        Two responsibilities, both DB-first:
+
+        - Newly appeared files under ``evidence/`` are recorded via
+          ``app.evidence_detect`` (idempotent). A new ``detected`` row keeps the
+          aggregate seal status non-OK until the operator registers/ignores and
+          reseals, so a post-seal addition fails the gate closed.
+        - Sealed files that have gone missing or changed bytes on disk are a
+          tamper event. We escalate the case chain to ``violated`` via
+          ``app.evidence_mark_violation`` so the DB gate fails closed. File
+          manifests/ledgers are never consulted for this decision — only the
+          mounted bytes vs. the sealed DB version metadata.
+
+        File proofs (manifest/ledger/anchor JSON) are not read here; tampering
+        with them cannot change the DB-active gate state.
+        """
         case_dir = self._case_artifact_path(case_id)
         if case_dir is None:
             return
         evidence_dir = case_dir / "evidence"
         if not evidence_dir.is_dir():
             return
+        live: dict[str, int] = {}
         with self._connect() as conn:
             with conn.cursor() as cur:
                 for path in sorted(evidence_dir.rglob("*")):
                     if path.is_symlink() or not path.is_file():
                         continue
                     rel = path.relative_to(case_dir).as_posix()
+                    try:
+                        size = path.stat().st_size
+                    except OSError:
+                        continue
+                    live[rel] = size
                     cur.execute(
                         "select app.evidence_detect(%s, %s, %s, %s, null, null)",
-                        (case_id, rel, path.name, path.stat().st_size),
+                        (case_id, rel, path.name, size),
                     )
             conn.commit()
+        self._detect_seal_tamper(case_id, live)
+
+    def _detect_seal_tamper(self, case_id: str, live: dict[str, int]) -> None:
+        """Mark a case violated when a sealed evidence item is missing/modified.
+
+        ``live`` maps the relative display path to its current byte size on the
+        mounted tree. A sealed object whose file is absent (missing) or whose
+        size differs from the sealed ``current_bytes`` (modified) is a custody
+        violation. We do not re-hash here (stat-check, matching the file gate's
+        fast path); a full re-hash happens at proof export. Idempotent: once the
+        case is already ``violated`` we do not append duplicate violation events.
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select coalesce(seal_status, 'unsealed') "
+                    "from app.evidence_gate_status(%s)",
+                    (case_id,),
+                )
+                head = cur.fetchone()
+                if head and head[0] == "violated":
+                    return
+                cur.execute(
+                    """
+                    select id::text, display_path, current_bytes
+                    from app.evidence_objects
+                    where case_id = %s and status = 'sealed' and seal_status = 'sealed'
+                    """,
+                    (case_id,),
+                )
+                sealed = cur.fetchall()
+                issues: list[str] = []
+                offenders: list[tuple[str, str]] = []
+                for obj_id, display_path, sealed_bytes in sealed:
+                    rel = str(display_path)
+                    if rel not in live:
+                        issues.append(f"Missing: {rel}")
+                        offenders.append((str(obj_id), rel))
+                    elif sealed_bytes is not None and live[rel] != int(sealed_bytes):
+                        issues.append(f"Modified: {rel}")
+                        offenders.append((str(obj_id), rel))
+                if not offenders:
+                    return
+                for obj_id, _rel in offenders:
+                    cur.execute(
+                        "select app.evidence_mark_violation(%s, %s, %s, %s, null, null)",
+                        (
+                            case_id,
+                            obj_id,
+                            "sealed_evidence_changed_or_missing",
+                            _jsonb(issues),
+                        ),
+                    )
+            conn.commit()
+
+    def verify(
+        self,
+        *,
+        case_id: str,
+        actor: Any = None,
+    ) -> dict[str, Any]:
+        """Re-verify sealed evidence against mounted bytes and record the outcome.
+
+        Re-hashes every sealed object's mounted file and compares against the
+        sealed ``current_sha256``. Records the result through ``app.evidence_verify``
+        (which escalates to ``violated`` on failure). Returns the chain-head dict.
+        DB is the authority; no file manifest/ledger is consulted.
+        """
+        self._scan_evidence(case_id)
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        del actor_type
+        ok, issues, manifest_version = self._reverify_sealed(case_id)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select case_id::text, manifest_version, head_seq, head_hash,
+                           manifest_hash, seal_status, active_count, issues,
+                           last_event_type, last_verified_at
+                    from app.evidence_verify(%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        case_id,
+                        ok,
+                        manifest_version,
+                        _jsonb(issues),
+                        actor_user,
+                        actor_service,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        result = _chain_head_dict(row)
+        result["verified"] = ok
+        result["issues"] = issues
+        return result
+
+    def _reverify_sealed(self, case_id: str) -> tuple[bool, list[str], int]:
+        """Full re-hash of sealed objects vs. their sealed DB hash.
+
+        Returns (ok, issues, manifest_version). ok is False on any
+        missing/modified file. Used by verify() and export_proof().
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select coalesce(manifest_version, 0) "
+                    "from app.evidence_gate_status(%s)",
+                    (case_id,),
+                )
+                head = cur.fetchone()
+                manifest_version = int(head[0]) if head else 0
+                cur.execute(
+                    """
+                    select display_path, current_sha256, current_bytes
+                    from app.evidence_objects
+                    where case_id = %s and status = 'sealed' and seal_status = 'sealed'
+                    order by display_path
+                    """,
+                    (case_id,),
+                )
+                sealed = cur.fetchall()
+        issues: list[str] = []
+        for display_path, sealed_sha, sealed_bytes in sealed:
+            rel = str(display_path)
+            try:
+                path = self._resolve_evidence_path(case_id, rel)
+            except PortalServiceError:
+                issues.append(f"Missing: {rel}")
+                continue
+            actual_sha, actual_bytes = _hash_file(path)
+            if sealed_bytes is not None and actual_bytes != int(sealed_bytes):
+                issues.append(f"Modified: {rel}")
+            elif sealed_sha and f"sha256:{actual_sha}" != str(sealed_sha):
+                issues.append(f"Modified: {rel}")
+        return (not issues, issues, manifest_version)
+
+    def export_proof(
+        self,
+        *,
+        case_id: str,
+        actor: Any = None,
+        export_kind: str = "bundle",
+        anchor: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Generate a DB-derived proof export and record its metadata in Postgres.
+
+        Proof material is derived from DB custody authority, not file manifests:
+        the sealed evidence-object snapshot, the append-only custody event chain,
+        and the current chain head. Mounted evidence is re-verified (full
+        re-hash); the verify outcome and a content hash over the proof material
+        are recorded through ``app.evidence_record_proof_export``. An optional
+        Solana ``anchor`` result is folded into the recorded metadata as external
+        proof only — it is never authority and lack of it does not block.
+
+        Returns a portal-safe dict (no absolute paths): export id, kind,
+        manifest_version, manifest_hash, ledger_tip_hash, verified, anchor.
+        """
+        self._scan_evidence(case_id)
+        actor_type, actor_user, _actor_agent, _actor_service = _actor_columns(actor)
+        del actor_type
+        verified, issues, manifest_version = self._reverify_sealed(case_id)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select manifest_hash, head_hash
+                    from app.evidence_chain_heads where case_id = %s
+                    """,
+                    (case_id,),
+                )
+                head = cur.fetchone()
+                manifest_hash = str(head[0]) if head and head[0] else None
+                ledger_tip_hash = str(head[1]) if head and head[1] else None
+                cur.execute(
+                    """
+                    select display_path, status, seal_status, current_sha256,
+                           current_bytes
+                    from app.evidence_objects
+                    where case_id = %s
+                    order by display_path
+                    """,
+                    (case_id,),
+                )
+                objects = [
+                    {
+                        "display_path": str(r[0]),
+                        "status": r[1],
+                        "seal_status": r[2],
+                        "sha256": r[3],
+                        "bytes": r[4],
+                    }
+                    for r in cur.fetchall()
+                ]
+                cur.execute(
+                    """
+                    select seq, event_type, manifest_version, prev_hash, event_hash
+                    from app.evidence_custody_events
+                    where case_id = %s order by seq
+                    """,
+                    (case_id,),
+                )
+                events = [
+                    {
+                        "seq": r[0],
+                        "event_type": r[1],
+                        "manifest_version": r[2],
+                        "prev_hash": r[3],
+                        "event_hash": r[4],
+                    }
+                    for r in cur.fetchall()
+                ]
+        proof_material = {
+            "case_id": case_id,
+            "manifest_version": manifest_version,
+            "manifest_hash": manifest_hash,
+            "ledger_tip_hash": ledger_tip_hash,
+            "objects": objects,
+            "custody_events": events,
+            "verified": verified,
+            "issues": issues,
+        }
+        proof_hash = "sha256:" + hashlib.sha256(
+            json.dumps(proof_material, sort_keys=True, separators=(",", ":"), default=str).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        metadata: dict[str, Any] = {
+            "proof_hash": proof_hash,
+            "object_count": len(objects),
+            "custody_event_count": len(events),
+            "issues": issues,
+        }
+        anchor_meta: dict[str, Any] | None = None
+        if anchor is not None:
+            # Solana is external proof only: record the result, never authority.
+            anchor_meta = {
+                "solana_tx": anchor.get("solana_tx"),
+                "confirmed": bool(anchor.get("confirmed", False)),
+                "cluster": anchor.get("solana_cluster") or anchor.get("cluster"),
+                "anchor_payload": anchor.get("anchor_payload"),
+                "explorer_url": anchor.get("explorer_url"),
+            }
+            metadata["anchor"] = anchor_meta
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select app.evidence_record_proof_export(
+                        %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        case_id,
+                        manifest_version,
+                        export_kind,
+                        manifest_hash,
+                        ledger_tip_hash,
+                        verified,
+                        actor_user,
+                        _jsonb(metadata),
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return {
+            "export_id": str(row[0]) if row and row[0] else None,
+            "export_kind": export_kind,
+            "manifest_version": manifest_version,
+            "manifest_hash": manifest_hash,
+            "ledger_tip_hash": ledger_tip_hash,
+            "proof_hash": proof_hash,
+            "verified": verified,
+            "issues": issues,
+            "anchor": anchor_meta,
+        }
+
+    def latest_proof_export(self, case_id: str) -> dict[str, Any] | None:
+        """Return portal-safe metadata for the most recent proof export, if any."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id::text, manifest_version, export_kind, manifest_hash,
+                           ledger_tip_hash, verified, verified_at, metadata
+                    from app.evidence_proof_exports
+                    where case_id = %s
+                    order by created_at desc
+                    limit 1
+                    """,
+                    (case_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        metadata = row[7] if isinstance(row[7], dict) else {}
+        return {
+            "export_id": row[0],
+            "manifest_version": row[1],
+            "export_kind": row[2],
+            "manifest_hash": row[3],
+            "ledger_tip_hash": row[4],
+            "verified": row[5],
+            "verified_at": _iso(row[6]),
+            "anchor": metadata.get("anchor"),
+            "proof_hash": metadata.get("proof_hash"),
+        }
 
     def _resolve_evidence_path(self, case_id: str, display_path: str) -> Path:
         case_dir = self._case_artifact_path(case_id)
