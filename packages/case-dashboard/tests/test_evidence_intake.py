@@ -14,15 +14,13 @@ import hashlib
 import hmac as hmac_mod
 import json
 import secrets
-import time
 from pathlib import Path
 
-import pytest
-from starlette.testclient import TestClient
-
 import case_dashboard.routes as routes_mod
+import pytest
 from case_dashboard.routes import create_dashboard_v2_app
 from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 _PBKDF2_ITERS = 600_000
@@ -165,8 +163,8 @@ class TestEvidenceChainStatus:
 
     def test_unregistered_file_shows_in_status(self, authed_client, case_dir, passwords_dir):
         """After sealing an empty manifest then dropping a file, status shows unregistered."""
-        from sift_core.evidence_chain import seal_manifest
         from sift_core.approval_auth import derive_ledger_key
+        from sift_core.evidence_chain import seal_manifest
 
         entry = json.loads((passwords_dir / "alice.json").read_text())
         key = derive_ledger_key(entry["hash"])
@@ -242,6 +240,7 @@ class TestEvidenceChainChallenge:
         assert "nonce" in data
         assert "salt" in data
         assert data["iterations"] == 600000
+        assert data["reauth_method"] == "local_hmac_mvp_bridge"
 
     def test_challenge_stored_in_evidence_challenges(self, authed_client):
         resp = authed_client.get("/api/evidence/chain/challenge")
@@ -422,7 +421,7 @@ class TestEvidenceChainIgnore:
 
     def test_ignore_unregistered_file(self, authed_client, passwords_dir, case_dir):
         """Ignoring an unregistered file creates a new manifest version with FILE_IGNORED."""
-        from sift_core.evidence_chain import load_ledger, load_manifest
+        from sift_core.evidence_chain import load_ledger
 
         stray = case_dir / "evidence" / "stray.txt"
         stray.write_text("unintended")
@@ -496,8 +495,7 @@ class TestEvidenceChainIgnore:
 class TestEvidenceChainRetire:
     def _seal_evidence_file(self, client, passwords_dir, case_dir, filename="evidence/sample.E01"):
         """Helper: write evidence file and seal it via the portal."""
-        from sift_core.evidence_chain import seal_manifest
-        import hashlib, json
+        import json
 
         (case_dir / filename).write_bytes(b"DISK_IMAGE_CONTENT")
         entry = json.loads((passwords_dir / "alice.json").read_text())
@@ -622,7 +620,6 @@ class TestEvidenceChainRetire:
         assert resp2.status_code == 401
 
     def test_retire_invokes_on_chain_mutation(self, passwords_dir, case_dir, tmp_path, monkeypatch):
-        from sift_core.evidence_chain import seal_manifest
         import json as json_mod
 
         routes_mod._evidence_challenges.clear()
