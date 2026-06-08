@@ -8,6 +8,7 @@ import re
 import shlex
 import unicodedata
 from pathlib import Path
+from typing import Any
 
 from sift_core.case_io import case_records_dir, cases_root
 from sift_core.execute.environment import find_binary
@@ -1009,5 +1010,231 @@ def validate_shell_command(
             "resolved": resolved,
             "privileged": binary in _PRIVILEGED_TARGETS,
         })
-        
+
     return validated_stages
+
+
+# ---------------------------------------------------------------------------
+# BATCH-I1: evidence-ref / output-ref resolution + agent-facing path sanitizer
+# ---------------------------------------------------------------------------
+#
+# run_command is the only forensic-CLI surface the agent can reach. The agent
+# must never hand us an absolute case/evidence/mount path, and must never see
+# one back. These helpers turn opaque references into the absolute paths the
+# worker needs *inside* policy code, and collapse any path-like value down to a
+# case-relative display path (or a redaction marker) before it leaves the tool.
+#
+# Resolution is fail-closed: an evidence ref must resolve to an ACTIVE entry in
+# the sealed manifest, so the agent can only operate on evidence the operator
+# has already registered and sealed (the evidence-gate / seal posture upstream
+# still applies; this is the in-process belt).
+
+
+class EvidenceRefError(ValueError):
+    """An evidence/output reference could not be resolved to a sealed target."""
+
+
+def _evidence_manifest_entries(case_dir: Path) -> list[dict]:
+    """ACTIVE sealed-manifest entries for the active case (empty if unsealed)."""
+    try:
+        from sift_core.evidence_chain import load_manifest
+
+        manifest = load_manifest(case_dir)
+    except Exception:  # pragma: no cover - defensive against packaging issues
+        return []
+    if not manifest:
+        return []
+    return [
+        f
+        for f in manifest.get("files", [])
+        if isinstance(f, dict) and f.get("status") == "ACTIVE"
+    ]
+
+
+def resolve_evidence_ref(ref: str, *, case_dir: str | Path | None = None) -> str:
+    """Resolve an opaque evidence reference to an absolute path under evidence/.
+
+    A reference is matched, in order, against the ACTIVE entries of the sealed
+    evidence manifest by:
+      * exact ``evidence_id`` (manifest entry ``evidence_id`` / ``id``),
+      * exact relative display ``path`` (e.g. ``evidence/disk.E01``),
+      * basename of the relative path (e.g. ``disk.E01``).
+
+    Returns the absolute path the worker should read. Raises EvidenceRefError if
+    no active sealed entry matches — the agent cannot reach arbitrary paths and
+    cannot reach unsealed/ignored/retired evidence through this door.
+    """
+    if not isinstance(ref, str) or not ref.strip():
+        raise EvidenceRefError("evidence reference must be a non-empty string")
+    ref = ref.strip()
+    if "\x00" in ref:
+        raise EvidenceRefError("evidence reference contains a null byte")
+
+    case_str = str(case_dir) if case_dir else resolve_case_dir()
+    if not case_str:
+        raise EvidenceRefError(
+            "No active case: an evidence reference can only be resolved with an "
+            "active sealed case."
+        )
+    case_resolved = Path(case_str).resolve()
+
+    entries = _evidence_manifest_entries(case_resolved)
+    if not entries:
+        raise EvidenceRefError(
+            f"Evidence reference '{ref}' could not be resolved: the case has no "
+            "sealed evidence. Ask the operator to register and seal evidence "
+            "via the Examiner Portal first."
+        )
+
+    match: dict | None = None
+    for entry in entries:
+        rel = str(entry.get("path", ""))
+        ev_id = str(entry.get("evidence_id") or entry.get("id") or "")
+        if ref == ev_id or ref == rel or ref == Path(rel).name:
+            match = entry
+            break
+    if match is None:
+        raise EvidenceRefError(
+            f"Evidence reference '{ref}' does not match any sealed evidence in "
+            "this case. Reference sealed evidence by its evidence_id or relative "
+            "display path."
+        )
+
+    rel_path = str(match.get("path", ""))
+    # Reuse the input-path jail so the resolved target is provably inside the
+    # case and never escapes via traversal in a manifest entry.
+    resolved = _resolve_user_path(rel_path, base_dir=case_resolved)
+    if not (resolved == case_resolved or resolved.is_relative_to(case_resolved)):
+        raise EvidenceRefError(
+            f"Evidence reference '{ref}' resolves outside the case directory."
+        )
+    return str(resolved)
+
+
+def resolve_output_ref(ref: str, *, case_dir: str | Path | None = None) -> str:
+    """Resolve a logical output-ref name to an absolute path under agent/.
+
+    The agent supplies a short logical name (no separators, no traversal); the
+    real, writable location is chosen here — always inside ``agent/run_commands``
+    — so the agent never picks an output path. Reuses validate_output_path so the
+    result is provably inside the case write-jail (agent/extractions/tmp).
+    """
+    if not isinstance(ref, str) or not ref.strip():
+        raise EvidenceRefError("output reference must be a non-empty string")
+    ref = ref.strip()
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in ref)[:80]
+    safe = safe.strip("._") or "output"
+    if ".." in safe or "/" in safe or "\x00" in safe:
+        raise EvidenceRefError("output reference must not contain path separators")
+
+    case_str = str(case_dir) if case_dir else resolve_case_dir()
+    if not case_str:
+        raise EvidenceRefError(
+            "No active case: an output reference can only be resolved with an "
+            "active case."
+        )
+    target = str(Path(case_str).resolve() / "agent" / "run_commands" / safe)
+    # Belt-and-suspenders: confirm the chosen path is inside the write-jail.
+    return validate_output_path(target, base_dir=case_str)
+
+
+_SENSITIVE_PATH_PREFIXES = (
+    "/cases",
+    "/evidence",
+    "/mnt",
+    "/media",
+    "/var/lib/sift",
+    "/dev",
+)
+
+
+# A path-like token: an absolute POSIX path. The negative lookbehind ensures the
+# leading '/' is not preceded by a path/word character, so a *relative* path like
+# ``agent/run_commands/out`` is not mistaken for an absolute one (its inner '/'
+# follows a word char). Used to scrub embedded absolute paths inside free-text
+# tool output (stdout/stderr) without nuking the whole blob.
+_ABS_PATH_TOKEN_RE = re.compile(r"(?<![\w./])/[A-Za-z0-9._\-/]+")
+
+
+def _sensitive_prefixes() -> tuple[str, ...]:
+    """Static sensitive mounts plus the operator-configured cases/state roots."""
+    prefixes = list(_SENSITIVE_PATH_PREFIXES)
+    try:
+        prefixes.append(str(cases_root().resolve()))
+    except Exception:  # pragma: no cover - defensive
+        pass
+    state = os.environ.get("SIFT_STATE_DIR")
+    if state:
+        prefixes.append(str(Path(state).resolve()))
+    return tuple(prefixes)
+
+
+def _redact_abs_token(
+    token: str, case_resolved: Path | None, sensitive: tuple[str, ...]
+) -> str:
+    if case_resolved is not None:
+        try:
+            candidate = Path(token).resolve()
+            if candidate == case_resolved or candidate.is_relative_to(case_resolved):
+                return str(candidate.relative_to(case_resolved))
+        except (OSError, ValueError):
+            pass
+        # An in-case path may not exist on disk (e.g. a planned output ref);
+        # fall back to a textual relative-prefix check before redacting.
+        case_prefix = str(case_resolved) + "/"
+        if token == str(case_resolved):
+            return "."
+        if token.startswith(case_prefix):
+            return token[len(case_prefix):]
+    # Only redact paths that could leak case/evidence/mount/device/state
+    # geography. Benign system locations (resolved tool binaries under /usr,
+    # /bin, etc.) are left intact so provenance/command echoes stay readable.
+    if any(token == p or token.startswith(p + "/") for p in sensitive):
+        return "[REDACTED:absolute_path]"
+    return token
+
+
+def sanitize_path_value(value: str, *, case_dir: str | Path | None = None) -> str:
+    """Collapse absolute, path-like content to an agent-safe form.
+
+    In-case absolute paths become case-relative display paths; any other
+    absolute path that looks like a host/case/evidence/mount location becomes
+    ``[REDACTED:absolute_path]``. For a value that is exactly one absolute path
+    the whole value is rewritten; for free text (stdout/stderr) every embedded
+    absolute-path token is rewritten in place so the surrounding text survives.
+
+    This mirrors the Gateway MCP choke-point redaction (BATCH-B1) but runs at
+    the tool boundary so a path never even reaches the transport in the clear.
+    """
+    if not isinstance(value, str) or "/" not in value:
+        return value
+    case_str = str(case_dir) if case_dir else resolve_case_dir()
+    case_resolved: Path | None = None
+    if case_str:
+        try:
+            case_resolved = Path(case_str).resolve()
+        except (OSError, ValueError):
+            case_resolved = None
+
+    sensitive = _sensitive_prefixes()
+    stripped = value.strip()
+    # Exact single-token absolute path (the common case for path fields).
+    if stripped.startswith("/") and stripped == value and " " not in value and "\n" not in value:
+        return _redact_abs_token(value, case_resolved, sensitive)
+
+    # Free text: rewrite each embedded absolute-path token in place.
+    return _ABS_PATH_TOKEN_RE.sub(
+        lambda m: _redact_abs_token(m.group(0), case_resolved, sensitive), value
+    )
+
+
+def sanitize_paths_deep(obj: Any, *, case_dir: str | Path | None = None) -> Any:
+    """Recursively sanitize every path-like string in a response structure."""
+    if isinstance(obj, str):
+        return sanitize_path_value(obj, case_dir=case_dir)
+    if isinstance(obj, dict):
+        return {k: sanitize_paths_deep(v, case_dir=case_dir) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        sanitized = [sanitize_paths_deep(v, case_dir=case_dir) for v in obj]
+        return type(obj)(sanitized) if isinstance(obj, tuple) else sanitized
+    return obj

@@ -83,6 +83,100 @@ DENY_FLOOR = frozenset(
     }
 )
 
+# BATCH-I1: a tight MVP allowlist of forensic tools an operator can opt into by
+# setting `execute.security.mode: allowlist` and
+# `execute.security.allowed_binaries: <this set>` (or a subset) in gateway.yaml.
+# It is intentionally read-only / inspection-oriented: imaging and acquisition
+# tooling (dd/dc3dd/mount/losetup/fdisk) is excluded because operators perform
+# acquisition outside the agent session. The hardcoded DENY_FLOOR still applies
+# on top of any allowlist, so an entry here can never re-enable a denied binary.
+MVP_FORENSIC_ALLOWLIST = frozenset(
+    {
+        # Sleuth Kit / filesystem forensics (read-only inspection)
+        "mmls",
+        "fls",
+        "fsstat",
+        "istat",
+        "ifind",
+        "icat",
+        "img_stat",
+        "blkcat",
+        "fcat",
+        "tsk_recover",
+        "mactime",
+        "sorter",
+        "sigfind",
+        # Registry / Windows artifacts
+        "rip.pl",
+        "regripper",
+        "evtx_dump",
+        "evtxexport",
+        "hayabusa",
+        "pecmd",
+        "amcacheparser",
+        "appcompatcacheparser",
+        "lecmd",
+        "jlecmd",
+        "sbecmd",
+        "rbcmd",
+        "mftecmd",
+        "wxtcmd",
+        # Strings / carving / signatures
+        "strings",
+        "bstrings",
+        "bulk_extractor",
+        "foremost",
+        "scalpel",
+        "binwalk",
+        "yara",
+        # Hashing / inspection
+        "sha256sum",
+        "sha1sum",
+        "md5sum",
+        "b2sum",
+        "file",
+        "stat",
+        "xxd",
+        "hexdump",
+        "od",
+        "exiftool",
+        # Text / search (no shell-out flags; blocked flags enforced separately)
+        "cat",
+        "head",
+        "tail",
+        "grep",
+        "egrep",
+        "fgrep",
+        "zgrep",
+        "sort",
+        "uniq",
+        "wc",
+        "cut",
+        "tr",
+        "awk",
+        "sed",
+        "find",
+        "ls",
+        "tree",
+        "date",
+        "echo",
+        # Archives (read-only listing; mutating flags blocked per-tool)
+        "tar",
+        "unzip",
+        "zipinfo",
+        "7z",
+        # Memory / network forensics
+        "vol",
+        "vol3",
+        "volatility3",
+        "tshark",
+        "tcpdump",
+        # Threat intel fetch (read-only; upload flags blocked per-tool)
+        "curl",
+        "wget",
+    }
+)
+
 DEFAULT_SECURITY_POLICY: dict[str, Any] = {
     "mode": "denylist",
     "allowed_binaries": [],
@@ -156,6 +250,22 @@ def _as_map(value: Any, *, name: str) -> dict[str, list[str]]:
     return result
 
 
+def _expand_allowlist_tokens(values: list[str]) -> list[str]:
+    """Expand the ``@mvp_forensic`` alias into the tight MVP forensic allowlist.
+
+    Lets an operator opt into the curated set with a single token in
+    gateway.yaml (``allowed_binaries: ["@mvp_forensic"]``) instead of pasting
+    ~70 binary names, while still allowing extra explicit entries alongside it.
+    """
+    expanded: list[str] = []
+    for value in values:
+        if value.strip().lower() == "@mvp_forensic":
+            expanded.extend(sorted(MVP_FORENSIC_ALLOWLIST))
+        else:
+            expanded.append(value)
+    return expanded
+
+
 def _dedupe_lower(values: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -203,8 +313,10 @@ def build_security_policy(
     policy = {
         "mode": mode,
         "allowed_binaries": _dedupe_lower(
-            _as_list(base.get("allowed_binaries"), name="allowed_binaries")
-            + _as_list(operator.get("allowed_binaries"), name="allowed_binaries")
+            _expand_allowlist_tokens(
+                _as_list(base.get("allowed_binaries"), name="allowed_binaries")
+                + _as_list(operator.get("allowed_binaries"), name="allowed_binaries")
+            )
         ),
         "dangerous_flags": _dedupe_lower(
             _as_list(base.get("dangerous_flags"), name="dangerous_flags")

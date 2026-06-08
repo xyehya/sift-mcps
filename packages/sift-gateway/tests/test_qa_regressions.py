@@ -239,11 +239,14 @@ def test_capability_guide_empty_state_has_note():
 
 
 async def test_large_output_no_preview_returns_path_not_keyerror(tmp_path, monkeypatch):
-    """Over-budget output WITHOUT preview_lines must succeed and surface
-    full_output_path. The pre-fix code popped _output_format/output_file before
+    """Over-budget output WITHOUT preview_lines must succeed and surface a
+    full_output_ref. The pre-fix code popped _output_format/output_file before
     reading them, so this exact path raised `KeyError: '_output_format'` and the
-    full output (saved on disk) was never reachable via the response."""
-    gateway, _ = _make_gateway(tmp_path, monkeypatch, "LARGE-OUT")
+    full output (saved on disk) was never reachable via the response.
+
+    BATCH-I1: the agent now receives a case-RELATIVE output ref (never an
+    absolute path); the file still exists under the case directory."""
+    gateway, case = _make_gateway(tmp_path, monkeypatch, "LARGE-OUT")
     payload = await _call(
         gateway,
         "run_command",
@@ -252,16 +255,19 @@ async def test_large_output_no_preview_returns_path_not_keyerror(tmp_path, monke
     )
     assert "keyerror" not in json.dumps(payload).lower(), payload
     assert payload["success"] is True, payload
-    path = payload.get("full_output_path")
-    assert path, f"full_output_path missing on saved large output: {payload}"
-    assert Path(path).is_file(), path
+    ref = payload.get("full_output_ref")
+    assert ref, f"full_output_ref missing on saved large output: {payload}"
+    assert not ref.startswith("/"), f"output ref must be relative, got {ref}"
+    assert (Path(case["case_dir"]) / ref).is_file(), ref
     assert payload.get("full_output_bytes", 0) > 10_240, payload
 
 
 async def test_preview_plus_save_surfaces_recoverable_full_output(tmp_path, monkeypatch):
     """preview_lines + save_output must cap inline stdout AND return a
-    full_output_path whose file holds the COMPLETE (un-truncated) output."""
-    gateway, _ = _make_gateway(tmp_path, monkeypatch, "SAVE-PREVIEW")
+    full_output_ref whose file holds the COMPLETE (un-truncated) output.
+
+    BATCH-I1: the ref is case-relative; resolve it against the case dir."""
+    gateway, case = _make_gateway(tmp_path, monkeypatch, "SAVE-PREVIEW")
     payload = await _call(
         gateway,
         "run_command",
@@ -277,9 +283,11 @@ async def test_preview_plus_save_surfaces_recoverable_full_output(tmp_path, monk
     data = payload["data"]
     assert (data.get("stdout") or "").count("\n") <= 5, data
     assert data.get("stdout_truncated") is True, data
-    path = payload.get("full_output_path")
-    assert path and Path(path).is_file(), payload
-    with open(path) as fh:
+    ref = payload.get("full_output_ref")
+    assert ref and not ref.startswith("/"), payload
+    full_path = Path(case["case_dir"]) / ref
+    assert full_path.is_file(), payload
+    with open(full_path) as fh:
         assert sum(1 for _ in fh) == 5000, "saved file must hold the full output"
 
 
