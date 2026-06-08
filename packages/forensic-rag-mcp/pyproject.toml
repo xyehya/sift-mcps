@@ -40,6 +40,7 @@ dev = [
 [project.scripts]
 rag-mcp = "rag_mcp.server:main"
 rag-mcp-seed-pgvector = "rag_mcp.pgvector_seed:main"
+rag-mcp-import-chroma-pgvector = "rag_mcp.pgvector_chroma_import:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rag_mcp"]

@@ -13,6 +13,53 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - Full RAG corpus pgvector import gap
+
+Status: IN_PROGRESS
+
+Post-BATCH-V1 review found that the live pgvector RAG smoke loaded only the
+small bundled JSONL corpus (`4318` chunks) through `rag-mcp-seed-pgvector`. The
+legacy/full forensic RAG grounding corpus is the downloaded Chroma release bundle
+(`rag-index.tar.zst`, expected `20K+` records) installed by `install.sh`; that
+bundle was not imported into Supabase pgvector during BATCH-V1.
+
+Fix added in this session:
+
+- Added `rag-mcp-import-chroma-pgvector`, which opens the downloaded Chroma
+  collection (`ir_knowledge`), streams documents/metadata/768-d BGE embeddings,
+  and writes them to `app.rag_collections`, `app.rag_documents`, and
+  `app.rag_chunks` as shared `kind='knowledge'`, `case_id NULL` rows.
+- The importer treats Chroma as a source artifact only. Query serving remains
+  Gateway -> Supabase pgvector through `rag_search_case`; agents never query
+  Chroma or receive DB credentials/paths.
+- The importer preserves real Chroma/BGE embeddings, rejects embedding-model
+  mismatches by default, drops path-like metadata keys, and emits stable opaque
+  provenance IDs for imported documents/chunks.
+- `install.sh` now runs the importer after `download_rag_index` in non-core
+  installs when `SIFT_CONTROL_PLANE_DSN` is available, with degraded-mode
+  warnings if the download/import is missing or fails.
+
+Validation:
+
+- `uv run pytest packages/forensic-rag-mcp/tests/test_pgvector_chroma_import.py
+  packages/forensic-rag-mcp/tests/test_pgvector_seed.py
+  packages/forensic-rag-mcp/tests/test_pgvector_store.py`: `19 passed`.
+- `bash -n install.sh`: OK.
+- `uv run --extra full rag-mcp-import-chroma-pgvector --help`: OK.
+- Local dry-run against the default path correctly reports the Chroma index is
+  absent (`packages/forensic-rag-mcp/data/chroma` does not exist in this
+  checkout). Live VM still needs the full import run/proof.
+
+Next:
+
+- On the live VM, run the installer or:
+  `SIFT_CONTROL_PLANE_DSN=... rag-mcp-import-chroma-pgvector --chroma-dir
+  packages/forensic-rag-mcp/data/chroma`.
+- Verify `app.rag_chunks` grows from the small seed to the full release scale
+  (`20K+` knowledge rows expected), `case_id` remains NULL for knowledge rows,
+  and `rag_search_case` returns results from the imported release corpus with no
+  path/secret leakage.
+
 ### 2026-06-08 - BATCH-V1 live cutover completed
 
 Status: DONE
@@ -848,3 +895,4 @@ Next:
 | B-MVP-15 | Backlog | DONE | Supabase pgvector RAG was schema/query-surface only; live VM tables were empty and any knowledge answers came from legacy `kb_*`/forensic-knowledge. | Landed in V1 enabler integration (`db47c71`, merge `2c34520`): `rag-mcp-seed-pgvector` seeds shared knowledge collections/documents/chunks (`kind='knowledge'`, `case_id NULL`) with 768-d embeddings through pgvector, not Chroma. | verified in BATCH-V1 |
 | B-MVP-16 | Backlog | DONE | DB-active mode still has split-brain file authority touchpoints: active-case pointer/env fallbacks, JSONL audit, evidence manifest/ledger, findings/timeline/TODO/IOC JSON, approval JSONL, OpenSearch ingest status/manifests, host dictionary, and run-command access to case-local authority artifacts. | Closed by K1-K6 (landed/integrated on `revamp/spg-v1`): active-case + audit (K1), investigation (K2), evidence/proof (K3), OpenSearch/host (K4), run_command env/ACL (K5), and report/audit/backup file-authority removal + tamper regressions (K6). Remaining file paths are explicit legacy fallback, parser compatibility, workspace/debug, or immutable export only. | verified in BATCH-V1 |
 | B-MVP-17 | Backlog | DONE | K1 DB audit envelope covers case-context-established tool attempts and now wraps proxy/evidence-gate denials, but tool-scope authorization denials and active-case lookup denials still use pre-existing denial audit paths before an authority context can attach. | Decided in K6 (`b76eba9`) and accepted for MVP live cutover: pre-context denials stay on the local audit mirror (`status=denied`) for security telemetry and are NOT projected into `app.audit_events` (projecting unresolved principals/null case_id would write unattributable rows and expose a DB write path to unauthenticated callers). The K1 envelope remains the sole DB-audit write path for allowed calls + post-context denials. Locked by `test_k6_precontext_denial_audit.py`. | none |
+| B-MVP-18 | Backlog | IN_PROGRESS | Full forensic RAG release corpus was expected in Supabase pgvector, but BATCH-V1 only seeded the small bundled JSONL corpus (`4318` chunks). The downloaded Chroma release bundle (`20K+` records) remained legacy-only. | Code path added: `rag-mcp-import-chroma-pgvector` imports Chroma documents/metadata/768-d embeddings into shared pgvector knowledge rows, and `install.sh` runs it after `download_rag_index` when a control-plane DSN exists. Live VM still needs import execution and row-count/search/leak proof before freeze. | freeze |

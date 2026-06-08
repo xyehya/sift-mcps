@@ -321,6 +321,35 @@ download_rag_index() {
   fi
 }
 
+import_rag_pgvector() {
+  local rag_data_dir="$REPO_DIR/packages/forensic-rag-mcp/data"
+  local chroma_dir="$rag_data_dir/chroma"
+  local dsn="${SIFT_CONTROL_PLANE_DSN:-${DATABASE_URL:-${POSTGRES_DSN:-}}}"
+
+  if [[ -z "$dsn" ]]; then
+    dsn="$(_env_file_value "$SIFT_HOME/control-plane.env" "SIFT_CONTROL_PLANE_DSN")"
+  fi
+  if [[ -z "$dsn" ]]; then
+    warn "SIFT_CONTROL_PLANE_DSN is not set — skipping Supabase pgvector RAG import."
+    warn "  Chroma RAG may be present, but rag_search_case will use only existing pgvector rows."
+    return 0
+  fi
+  if [[ ! -d "$chroma_dir" ]]; then
+    warn "Chroma RAG index not found at $chroma_dir — skipping Supabase pgvector RAG import."
+    warn "  Retry after download: rag-mcp-import-chroma-pgvector --chroma-dir '$chroma_dir'"
+    return 0
+  fi
+
+  log "Importing downloaded RAG knowledge index into Supabase pgvector."
+  if SIFT_CONTROL_PLANE_DSN="$dsn" "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads \
+    rag-mcp-import-chroma-pgvector --chroma-dir "$chroma_dir"; then
+    log "Supabase pgvector RAG import completed."
+  else
+    warn "Supabase pgvector RAG import FAILED."
+    warn "  Retry: SIFT_CONTROL_PLANE_DSN='<dsn>' rag-mcp-import-chroma-pgvector --chroma-dir '$chroma_dir'"
+  fi
+}
+
 install_hayabusa() {
   log "Installing hayabusa detection engine."
   local binary_dir="$SIFT_HOME/bin"
@@ -1741,6 +1770,7 @@ main() {
   if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
     download_triage_databases
     download_rag_index
+    import_rag_pgvector
     install_hayabusa
     write_opensearch_config
     start_opensearch
