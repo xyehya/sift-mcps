@@ -113,7 +113,7 @@ configure_case() {
 
     setfacl -m "u:${RUNTIME_USER}:r-x" "${case_dir}"
 
-    for writable in "${case_dir}/agent" "${case_dir}/agent/outputs" "${case_dir}/extractions" "${case_dir}/tmp"; do
+    for writable in "${case_dir}/agent" "${case_dir}/agent/outputs" "${case_dir}/agent/run_commands" "${case_dir}/extractions" "${case_dir}/tmp"; do
         mkdir -p "${writable}"
         setfacl -m "u:${RUNTIME_USER}:rwx" "${writable}"
         find "${writable}" -xdev -exec setfacl -m "u:${RUNTIME_USER}:rwx" {} + || \

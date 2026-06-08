@@ -259,7 +259,9 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
                 "purpose": {"type": "string", "description": "Short reason for this command, recorded in the audit trail."},
                 "timeout": {"type": "integer", "default": 0, "description": "Per-command timeout in seconds. 0 uses the platform default."},
                 "save_output": {"type": "boolean", "default": False, "description": "Persist full stdout/stderr to agent/run_commands/."},
-                "input_files": {"type": "array", "items": {"type": "string"}, "description": "Evidence/input file paths this command reads, for provenance hashing."},
+                "evidence_refs": {"type": "array", "items": {"type": "string"}, "description": "Sealed evidence references (evidence_id or relative display path) this command reads. Resolved to local paths internally; the agent never supplies absolute paths."},
+                "output_ref": {"type": "string", "description": "Logical name for saved output. Resolved internally to a writable location under agent/run_commands/; returned as a relative output ref."},
+                "input_files": {"type": "array", "items": {"type": "string"}, "description": "Deprecated: prefer evidence_refs. Evidence/input file paths this command reads, for provenance hashing."},
                 "working_dir": {"type": "string", "description": "Working directory, relative to the case directory."},
                 "preview_lines": {"type": "integer", "default": 0, "description": "Cap inline stdout to this many lines (0 = no inline cap)."},
                 "skip_enrichment": {"type": "boolean", "default": False, "description": "Skip forensic-knowledge enrichment after the first call."},
@@ -534,18 +536,89 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             examiner=examiner,
         )
 
+    # The case ROOT (not the per-call working_dir, which may be a subdir like
+    # agent/scratch) anchors evidence/output-ref resolution and path
+    # sanitization, so relative display paths are reported from the case root.
+    try:
+        case_root = str(get_case_dir())
+    except Exception:
+        case_root = os.environ.get("SIFT_CASE_DIR", "") or cwd
+
     # Parse command using our split/parse state machines to extract binary and detect inputs
     from sift_core.execute.security import (
+        EvidenceRefError,
         parse_subcommand_argv_and_redirects,
+        resolve_evidence_ref,
+        resolve_output_ref,
+        sanitize_path_value,
+        sanitize_paths_deep,
         split_command_by_operators,
     )
+
+    # Evidence refs (BATCH-I1): the agent references sealed evidence by opaque id
+    # or relative display path; we resolve to the absolute path internally for
+    # provenance hashing and never echo it back. Fail closed if a ref does not
+    # match an ACTIVE sealed manifest entry.
+    evidence_refs = args.get("evidence_refs") or None
+    resolved_evidence_paths: list[str] = []
+    if evidence_refs:
+        if not isinstance(evidence_refs, list):
+            return build_response(
+                tool_name="run_command",
+                success=False,
+                data=None,
+                audit_id=audit_id,
+                error="evidence_refs must be an array of strings",
+                examiner=examiner,
+            )
+        for ref in evidence_refs:
+            try:
+                resolved_evidence_paths.append(
+                    resolve_evidence_ref(str(ref), case_dir=case_root)
+                )
+            except EvidenceRefError as exc:
+                return build_response(
+                    tool_name="run_command",
+                    success=False,
+                    data=None,
+                    audit_id=audit_id,
+                    error=str(exc),
+                    examiner=examiner,
+                )
+
+    # Output ref (BATCH-I1): a logical name the agent picks; we choose the real
+    # writable location under agent/run_commands/ and return it as a relative ref.
+    output_ref = args.get("output_ref") or None
+    save_dir: str | None = None
+    if output_ref:
+        try:
+            save_dir = resolve_output_ref(str(output_ref), case_dir=case_root)
+        except EvidenceRefError as exc:
+            return build_response(
+                tool_name="run_command",
+                success=False,
+                data=None,
+                audit_id=audit_id,
+                error=str(exc),
+                examiner=examiner,
+            )
+
     subcmds = split_command_by_operators(command)
-    
+
     first_binary = ""
     detected_inputs: list[str] = []
-    
+
     input_files = args.get("input_files") or None
-    if input_files:
+    if resolved_evidence_paths:
+        detected_inputs.extend(resolved_evidence_paths)
+        if input_files:
+            for fpath in input_files:
+                try:
+                    detected_inputs.append(str(resolve_case_path(str(fpath))))
+                except ValueError:
+                    detected_inputs.append(str(fpath))
+        detection_method = "evidence_ref"
+    elif input_files:
         for fpath in input_files:
             try:
                 detected_inputs.append(str(resolve_case_path(str(fpath))))
@@ -612,7 +685,8 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             command,
             purpose=purpose,
             timeout=int(args.get("timeout") or 0) or None,
-            save_output=bool(args.get("save_output", False)),
+            save_output=bool(args.get("save_output", False)) or bool(save_dir),
+            save_dir=save_dir,
             cwd=cwd,
             preview_lines=min(int(args.get("preview_lines") or 0), 200),
         )
@@ -632,6 +706,11 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         fk_name = get_tool_def(first_binary).knowledge_name if get_tool_def(first_binary) else first_binary
         artifact_hint = _detect_artifact_context([command])
         resp_data = exec_result["_parsed"] if exec_result.get("_parsed") else exec_result
+        # Output ref: the agent only ever sees a case-relative reference to the
+        # saved output, never the absolute path the worker wrote to.
+        output_file_ref = (
+            sanitize_path_value(output_file, case_dir=case_root) if output_file else None
+        )
         response = build_response(
             tool_name="run_command",
             success=exec_result["exit_code"] == 0,
@@ -642,12 +721,20 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             exit_code=exec_result["exit_code"],
             command=[command],
             fk_tool_name=fk_name,
-            output_files=[output_file] if output_file else None,
+            output_files=[output_file_ref] if output_file_ref else None,
             extractions=exec_result.get("extractions"),
             skip_enrichment=bool(args.get("skip_enrichment", False)),
             artifact_context=artifact_hint,
             examiner=examiner,
         )
+        # Provenance receipt: a stable job/receipt id binds this execution to its
+        # audit record, input evidence hashes, and output hashes — reportable
+        # without exposing any local path. D1 durable jobs are enqueued by the
+        # Gateway for long-running work; for the synchronous run_command path the
+        # receipt id is derived from the audit id so downstream report/provenance
+        # consumers always have a hash-linked handle.
+        job_id = f"rc-{audit_id}"
+        response["job_id"] = job_id
         if "warnings" in exec_result:
             response["warnings"] = exec_result["warnings"]
             if "agent_action" in exec_result:
@@ -660,10 +747,30 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                 for s in raw_stages
                 if "binary" in s
             ]
-        if output_file:
-            response["full_output_path"] = output_file
+        if output_file_ref:
+            # full_output_path keeps its documented key name but now carries a
+            # case-RELATIVE ref (never an absolute path). full_output_ref is the
+            # I1 alias that makes the path-free contract explicit.
+            response["full_output_path"] = output_file_ref
+            response["full_output_ref"] = output_file_ref
             response["full_output_sha256"] = output_sha256
             response["full_output_bytes"] = stdout_total_bytes
+
+        # Provenance receipt: hash-linked, path-free record the agent can cite in
+        # findings/reports. Input hashes prove which sealed evidence was read;
+        # output hash proves the artifact produced.
+        provenance = {
+            "job_id": job_id,
+            "audit_id": audit_id,
+            "input_sha256s": sorted(set(input_hashes.values())) if input_hashes else [],
+            "input_count": len(input_hashes),
+            "evidence_refs": list(evidence_refs) if evidence_refs else [],
+        }
+        if output_sha256:
+            provenance["output_sha256"] = output_sha256
+        if output_file_ref:
+            provenance["output_ref"] = output_file_ref
+        response["provenance"] = provenance
 
         # Log privilege events using the same audit writer
         priv_events = exec_result.get("privilege_events", [])
@@ -710,7 +817,12 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             response["input_files_warning"] = (
                 "input_files provided but none resolved to existing files. Provenance chain will be incomplete."
             )
-        return response
+        # Final defense-in-depth: scrub every path-like value in the agent-facing
+        # response. In-case absolutes (including those embedded in tool stdout)
+        # collapse to relative display paths; any other case/evidence/mount path
+        # becomes [REDACTED:absolute_path]. The audit record above already
+        # captured the unredacted values for the operator.
+        return sanitize_paths_deep(response, case_dir=case_root)
 
     except SiftError as exc:
         elapsed = time.monotonic() - start

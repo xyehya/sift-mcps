@@ -279,7 +279,11 @@ async def test_run_command_preserves_case_cwd_jail(tmp_path, monkeypatch):
     payload = json.loads(result[0].text)
 
     assert payload["success"] is True
-    assert payload["data"]["stdout"].strip() == str(work_dir)
+    # BATCH-I1: pwd ran inside the jailed working dir, but the agent-facing
+    # output is path-sanitized to the case-RELATIVE display path (never the
+    # absolute host path). The cwd jail is still proven: it resolved under the
+    # case root, hence the relative form.
+    assert payload["data"]["stdout"].strip() == "agent/scratch"
 
     result = await gateway.call_tool(
         "run_command",
