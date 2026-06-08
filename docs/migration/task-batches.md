@@ -32,7 +32,7 @@ Rules:
 - [x] BATCH-J1 - Approved-only report generation and export
 - [x] BATCH-L1 - Live service binding, worker bootstrap, and Gateway tool bridge
 - [x] BATCH-K0 - Authority cutover impact model and batch freeze
-- [ ] BATCH-K1 - Authority context and DB audit cutover
+- [x] BATCH-K1 - Authority context and DB audit cutover
 - [ ] BATCH-K2 - Core investigation DB authority cutover
 - [ ] BATCH-K3 - Evidence gate, proof export, and Solana anchor cutover
 - [ ] BATCH-K4 - OpenSearch derived-state and host identity cutover
@@ -540,6 +540,14 @@ Acceptance:
 ## BATCH-K1 - Authority context and DB audit cutover
 
 Dependencies: BATCH-K0. This is the dependency root for K2-K6.
+
+Status (2026-06-08): DONE - landed as `0e9577a`. K1 introduced
+`AuthorityContext`, DB-active active-case fail-closed behavior, worker
+`SIFT_DB_ACTIVE=1`, DB-first `app.audit_events` envelope writes, and mutating
+fail-closed audit behavior. Conductor security review found and fixed one
+pre-merge gap: the DB audit envelope now wraps proxy/evidence-gate denials after
+case-context setup, and evidence-gate block results are MCP errors so DB result
+receipts record `failure`.
 
 Scope:
 
@@ -1063,56 +1071,189 @@ Add-on metadata clearly marks capabilities and required scopes; query-only behav
 
 ## Next Prompt
 
-Launch BATCH-K1 next. BATCH-V1 is blocked until K1-K6 close the DB-active
-authority cutover. After K1 lands, K2-K5 can proceed in parallel; K6 is the
-tamper/regression gate before V1 resumes.
+Launch BATCH-K2, BATCH-K3, BATCH-K4, and BATCH-K5 in parallel worktrees.
+BATCH-K6 waits until K2-K5 land. BATCH-V1 remains blocked until K1-K6 close the
+DB-active authority cutover.
 
-Suggested worktree:
+Suggested worktrees:
 
 ```bash
-git worktree add ../sift-mcps-k1 -b revamp/mvp-k1-authority-context-audit revamp/spg-v1
+git worktree add ../sift-mcps-k2 -b revamp/mvp-k2-investigation-db-authority revamp/spg-v1
+git worktree add ../sift-mcps-k3 -b revamp/mvp-k3-evidence-proof-cutover revamp/spg-v1
+git worktree add ../sift-mcps-k4 -b revamp/mvp-k4-opensearch-host-authority revamp/spg-v1
+git worktree add ../sift-mcps-k5 -b revamp/mvp-k5-run-command-authority-isolation revamp/spg-v1
 ```
 
-Prompt:
+### PROMPT-K2 - Core investigation DB authority
 
 ```text
 ROLE & MODE
-You are the BATCH-K1 coding agent for the SIFT MVP sprint. Build the authority
-context and DB-audit dependency root. Do not redesign the architecture.
+You are the BATCH-K2 coding agent for the SIFT MVP sprint. Cut over core
+investigation state to Postgres authority in DB-active mode. Do not redesign the
+architecture.
 
 REQUIRED READING
 Read, in order: AGENTS.md; docs/migration/Migration-Spec.md sections 2, 3, 4,
 and 5, especially "Authority cutover impact model"; docs/migration/task-batches.md
-BATCH-K1; the latest entry in docs/migration/Session-Notes.md.
+BATCH-K2; the latest entry in docs/migration/Session-Notes.md.
 
 SCOPE
-Own BATCH-K1 only. Inspect and edit only the K1 scope paths unless a test proves
-a minimal adjacent change is required: sift_common active-case resolution and
-AuditWriter; sift_core active_case_context/case_manager/case_ops; Gateway
-active_case/audit_helpers/policy_middleware/server/job_tools; job worker
-context; direct tests. Add a narrow timestamped migration only if the current
-audit schema/RPCs cannot support required DB audit writes.
+Own BATCH-K2 only. Inspect and edit only the K2 scope paths unless a test proves
+a minimal adjacent change is required: sift_core case_manager/case_io/agent_tools/
+reporting; sift_gateway portal_services; case-dashboard routes; the existing
+202606081500 report/investigation migration for contract reference; direct core,
+Gateway, portal, and DB tests.
 
 SECURITY INVARIANTS
-In DB-active mode, authoritative work must not resolve active case from
-SIFT_CASE_DIR, ~/.sift/active_case, CASE.yaml, or case JSON files. Gateway
-remains the policy boundary. Supabase/Postgres remains authority. Mutating calls
-must fail closed if required DB audit cannot be persisted. No agent-visible
-absolute paths or secrets.
+In DB-active mode, findings, timeline, TODOs, IOCs, approvals, report
+eligibility, and content hashes are Postgres authority. JSON/JSONL files are
+legacy fallback or mirror/export only. Agents cannot overwrite human-approved or
+rejected records. Mutations must carry AuthorityContext audit event IDs.
 
 DELIVERABLE
-Introduce or harden the AuthorityContext/request context contract, make
-Gateway/core/worker use it for authoritative DB-active work, and replace
-JSONL-first audit with DB-first audit for Gateway/core DB-active paths. Keep
-file audit only as legacy fallback or export mirror.
+Implement the typed investigation authority store/port and wire agent tools,
+portal approval/rejection/edit flows, and report reads to DB authority for
+DB-active cases.
 
 OUTPUT DISCIPLINE
 Do not edit docs/migration in this worker branch. End with a LANDING LOG block:
-changed files, tests run, acceptance evidence, any schema gap, and whether K2-K5
-can launch.
+changed files, tests run, acceptance evidence, schema/RPC gaps, and any K6
+tamper-regression follow-up.
 
 ACCEPTANCE
-Tests prove DB-active Gateway/tool calls ignore ~/.sift/active_case tampering,
-mutating calls fail closed when DB audit fails, audit rows carry the fields K2-K6
-need, and legacy file mode remains explicitly guarded.
+Agent-created findings/timeline/TODO/IOC records appear in portal from Postgres
+without case JSON; portal approval/rejection updates DB and report eligibility;
+tampering with findings/timeline/todos/iocs JSON or approvals.jsonl cannot alter
+DB-active portal/report state; stale content-hash/version races are tested.
+```
+
+### PROMPT-K3 - Evidence proof and gate cutover
+
+```text
+ROLE & MODE
+You are the BATCH-K3 coding agent for the SIFT MVP sprint. Cut over evidence
+gate/proof export/Solana anchor behavior to DB authority. Do not redesign the
+architecture.
+
+REQUIRED READING
+Read, in order: AGENTS.md; docs/migration/Migration-Spec.md sections 2, 3, 4,
+and 5, especially the evidence, proof-export, and Solana carve-out parts;
+docs/migration/task-batches.md BATCH-K3; the latest entry in
+docs/migration/Session-Notes.md.
+
+SCOPE
+Own BATCH-K3 only. Inspect and edit only the K3 scope paths unless a test proves
+a minimal adjacent change is required: sift_core evidence_chain/verification/
+case_io; sift_gateway evidence_gate/portal_services; case-dashboard evidence
+routes/UI; the existing 202606081000 evidence custody migration for contract
+reference; direct evidence/custody/proof-export tests.
+
+SECURITY INVARIANTS
+In DB-active mode, evidence gate state comes only from Postgres chain heads and
+custody events. File manifests, ledgers, and anchor JSON are proof exports or
+legacy fallback only. Optional Solana anchoring is external proof, not authority.
+
+DELIVERABLE
+Ensure evidence detect/register/seal/ignore/retire/violation transitions are
+DB-first, proof exports derive from DB custody material, and new/changed files
+after seal make the DB evidence gate non-OK until resolved and resealed.
+
+OUTPUT DISCIPLINE
+Do not edit docs/migration in this worker branch. End with a LANDING LOG block:
+changed files, tests run, acceptance evidence, Solana/export behavior, and any
+K6 tamper-regression follow-up.
+
+ACCEPTANCE
+Tampering with evidence-manifest.json, evidence-ledger.jsonl, or anchor JSON
+cannot change DB-active gate state; missing/violated/unsealed/stale DB chain head
+fails closed; proof export verifies mounted evidence and records metadata/hash in
+Postgres; Solana configured/unconfigured paths degrade correctly.
+```
+
+### PROMPT-K4 - OpenSearch and host identity authority
+
+```text
+ROLE & MODE
+You are the BATCH-K4 coding agent for the SIFT MVP sprint. Cut over OpenSearch
+ingest status/provenance and host identity decisions to Postgres-backed derived
+state. Do not redesign the architecture.
+
+REQUIRED READING
+Read, in order: AGENTS.md; docs/migration/Migration-Spec.md sections 2, 3, 4,
+and 5, especially the OpenSearch/host identity carve-out; docs/migration/task-batches.md
+BATCH-K4; the latest entry in docs/migration/Session-Notes.md.
+
+SCOPE
+Own BATCH-K4 only. Inspect and edit only the K4 scope paths unless a test proves
+a minimal adjacent change is required: opensearch_mcp ingest/ingest_cli/
+ingest_status/host_discovery/host_dictionary/server/registry/sift-backend.json;
+sift_core job_worker; the existing 202606081300 OpenSearch provenance migration
+for contract reference; direct OpenSearch/job/host tests and Gateway snapshots.
+
+SECURITY INVARIANTS
+Hostname detection/index naming remains required derived parser metadata.
+Host identity and ingest status do not authorize cases, evidence, approvals, or
+reports. Local host-dictionary/status/manifest files are parser compatibility,
+debug, or legacy only in DB-active mode.
+
+DELIVERABLE
+Move DB-active ingest status, provenance manifests, host discovery decisions,
+host dictionary mutations, and host-fix receipts into Postgres-backed records.
+Preserve `opensearch_fix_host_mapping` canonical behavior and deprecated
+`opensearch_host_fix` alias without leaking paths/credentials.
+
+OUTPUT DISCIPLINE
+Do not edit docs/migration in this worker branch. End with a LANDING LOG block:
+changed files, tests run, acceptance evidence, schema/RPC gaps, and any K6
+tamper-regression follow-up.
+
+ACCEPTANCE
+Portal/agent ingest status comes from Postgres job/provenance state; host
+identity decisions/corrections are DB-recorded with source/canonical/actor/tool/
+affected IDs/audit ID; tampering with host-dictionary.yaml cannot change
+DB-active authority; parser/index behavior remains compatible.
+```
+
+### PROMPT-K5 - run_command authority isolation
+
+```text
+ROLE & MODE
+You are the BATCH-K5 coding agent for the SIFT MVP sprint. Harden run_command so
+it cannot read/write authority state and persists command receipts in Postgres.
+Do not redesign the architecture.
+
+REQUIRED READING
+Read, in order: AGENTS.md; docs/migration/Migration-Spec.md sections 2, 3, 4,
+and 5, especially the run_command and authority cutover constraints;
+docs/migration/task-batches.md BATCH-K5; the latest entry in
+docs/migration/Session-Notes.md.
+
+SCOPE
+Own BATCH-K5 only. Inspect and edit only the K5 scope paths unless a test proves
+a minimal adjacent change is required: sift_core execute generic/executor/
+security/security_policy/run_command_job/runtime_acl/agent_tools; Gateway
+job_tools; setup-agent-runtime.sh; sift-job-worker systemd unit; direct execution,
+ACL, redaction, and job tests.
+
+SECURITY INVARIANTS
+run_command receives opaque evidence/input refs and controlled output refs only.
+It must not inherit DB DSNs, Supabase keys, service-role secrets, OpenSearch
+credentials, VM secrets, or unrelated env. It must not read/write authority files
+or change portal/report/evidence state except through approved DB authority APIs.
+
+DELIVERABLE
+Harden job-backed run_command path resolution/env/ACLs, persist command receipt
+metadata in Postgres, keep shell=False/deny floor/allowlist profiles/path
+redaction/bounded previews, and prove allowed and denied paths.
+
+OUTPUT DISCIPLINE
+Do not edit docs/migration in this worker branch. End with a LANDING LOG block:
+changed files, tests run, acceptance evidence, ACL/env proof, and any K6
+tamper-regression follow-up.
+
+ACCEPTANCE
+Allowed commands work against sealed evidence refs and return job/status plus
+redacted previews; denied commands fail closed and are audited; commands cannot
+read DB/service secrets or write authority state; output receipts are DB-backed
+and reportable without local paths.
 ```

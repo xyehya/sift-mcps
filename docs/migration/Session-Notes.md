@@ -13,6 +13,52 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - BATCH-K1 landed with security-review correction
+
+Status: DONE
+
+Changed:
+
+- Landed BATCH-K1 as `0e9577a` on `revamp/spg-v1`.
+- Added the `AuthorityContext` contract in `sift_core.active_case_context`
+  with principal, principal type, tool scopes, evidence-gate snapshot fields,
+  request ID, DB-active flag, and audit event IDs.
+- Hardened `CaseManager._require_active_case()` so DB-active mode uses the
+  request/worker authority context only and fails closed instead of reading
+  `SIFT_CASE_DIR` or `~/.sift/active_case`.
+- Set the durable job worker CLI to `SIFT_DB_ACTIVE=1` after requiring a
+  control-plane DSN.
+- Added `DbAuditWriter` for DB-first `app.audit_events` writes and wired the
+  Gateway MCP audit envelope to reserve `requested` rows and write
+  result/failure receipts. Mutating calls fail closed when the required
+  pre-dispatch DB audit write cannot persist.
+- Conductor security review found one pre-merge audit gap: the new DB audit
+  envelope initially ran after proxy/evidence-gate denials. Fixed it by moving
+  `AuditEnvelopeMiddleware` after case-context setup but before proxy active
+  case and evidence gate middleware, and by marking evidence-gate block results
+  as MCP errors so DB result receipts record `failure`.
+- Root pre-existing candidate patches were stashed before integration as
+  `stash@{0}: pre-k1-root-candidate-patches-20260608` so K1 could land cleanly
+  without mixing unreviewed work.
+
+Validation:
+
+- Passed: `uv run pytest` in `packages/sift-core` - 384 tests.
+- Passed: `uv run pytest` in `packages/sift-gateway` - 371 tests.
+- Passed: `uv run pytest tests/db` - 49 tests.
+- Passed: `git diff --check` before K1 commit.
+- Security report generated and validated:
+  `/tmp/codex-security-scans/sift-mcps/ef52331_20260608T141952Z/report.md`
+  and `report.html`. Result: no remaining reportable findings; K1-001 fixed
+  before merge.
+
+Next:
+
+- Launch BATCH-K2, BATCH-K3, BATCH-K4, and BATCH-K5 in parallel worktrees from
+  `revamp/spg-v1`.
+- BATCH-K6 follows after K2-K5 and must include tamper regressions plus the
+  pre-context denial DB-audit decision tracked as B-MVP-17.
+
 ### 2026-06-08 - Authority cutover model frozen
 
 Status: DONE
@@ -513,3 +559,4 @@ Next:
 | B-MVP-14 | Backlog | OPEN | No standalone register-evidence endpoint exists. Operator journey says detect -> register -> seal, but implementation folds registration into seal `file_specs` while still emitting `EVIDENCE_REGISTERED`. | Add separate register transition/endpoint or update the spec to make register+seal one atomic operator action. | Phase 2 journey parity |
 | B-MVP-15 | Backlog | OPEN | Supabase pgvector RAG is schema/query-surface only so far. The live VM has zero rows in `app.rag_collections`, `app.rag_documents`, and `app.rag_chunks`; no ingestion/population path creates collections/documents/chunks from bundled knowledge or case-derived summaries. | Add an MVP pgvector population path: seed curated knowledge into `kind='knowledge'` collections and/or write case-derived parser/enrichment summaries into `kind='derived'` documents/chunks with 768-d embeddings and provenance IDs. Prove `rag_search_case` returns pgvector-backed hits, not legacy `kb_*` Chroma responses. | RAG acceptance |
 | B-MVP-16 | Backlog | OPEN | DB-active mode still has split-brain file authority touchpoints: active-case pointer/env fallbacks, JSONL audit, evidence manifest/ledger, findings/timeline/TODO/IOC JSON, approval JSONL, OpenSearch ingest status/manifests, host dictionary, and run-command access to case-local authority artifacts. | Execute K1-K6 before resuming V1. Critical file paths become DB-backed authority, explicit legacy fallback, parser compatibility, workspace/debug, or immutable export only. | V1 full journey |
+| B-MVP-17 | Backlog | OPEN | K1 DB audit envelope covers case-context-established tool attempts and now wraps proxy/evidence-gate denials, but tool-scope authorization denials and active-case lookup denials still use pre-existing denial audit paths before an authority context can attach. | In K6, decide and test whether pre-context denials need their own DB audit projector/envelope so all denied agent attempts are visible in `app.audit_events` without losing case-context fidelity for allowed calls. | K6 |
