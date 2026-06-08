@@ -29,7 +29,7 @@ Rules:
 - [x] BATCH-G1 - RAG pgvector target with provenance filters
 - [x] BATCH-H1 - Add-on contract hardening for OpenCTI, Windows triage, and forensic knowledge
 - [x] BATCH-I1 - Sandboxed run_command uplift
-- [ ] BATCH-J1 - Approved-only report generation and export
+- [x] BATCH-J1 - Approved-only report generation and export
 - [ ] BATCH-V1 - End-to-end validation and cutover
 
 ## BATCH-A0 - Freeze simplified migration operating model

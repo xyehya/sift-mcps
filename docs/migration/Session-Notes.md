@@ -13,6 +13,48 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - BATCH-J1 landed and integrated (approved-only reports)
+
+Status: DONE
+
+Changed (merged into `revamp/spg-v1`, `--no-ff`):
+
+- BATCH-J1 (`e12a990`): Approved-only report generation/export to the locked
+  F-MVP-4 shape. `reporting.py` hard-filters to `status == "APPROVED"` (draft/
+  rejected finding IDs and text proven absent from output and API response) and
+  adds `build_custody_appendix()` (seal status + manifest/chain-head/ledger-tip
+  hashes + provenance refs). Portal `generate_report_route` now re-auths
+  (`/api/reports/challenge`), folds in custody, persists metadata via E1's
+  `report_service.record_report` seam, and renders the appendix into the
+  downloadable markdown. ReportsTab gains a re-auth modal. E1's approved-only 409
+  eligibility gate preserved and re-verified. API JSON sanitized (no absolute
+  paths). J1 deliberately did not add a report-metadata migration — deferred to
+  the binding batch (B-MVP-5).
+- Conductor (`<this entry's commit>` precursor): rebuilt the portal v2 bundle
+  (`vite build`) so the committed `static/v2/` includes both E1 and J1 frontend
+  changes (the worker worktrees lacked node_modules); closes J1 frontend-bundle
+  follow-up.
+
+Validation:
+
+- Passed: `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`.
+- Passed (integrated): sift-core 374, case-dashboard 350, sift-gateway 355.
+  `vite build` succeeded. No regressions.
+- Not run here: live `supabase`/VM report journey (depends on the B-MVP-5 binding).
+
+Status: all implementation batches (A1, B1, C1, D1, D2, E1, F1, G1, H1, I1, J1)
+are landed and integrated on `revamp/spg-v1`. Remaining before BATCH-V1 is the
+live-service binding (B-MVP-5/6/7), which is the only thing standing between the
+built code paths and a working SIFT VM end-to-end journey.
+
+Next:
+
+- Resolve the binding work (B-MVP-5 portal service adapters, B-MVP-6 worker
+  handler bootstrap + enqueue call sites, B-MVP-7 pgvector RAG query tool) as one
+  focused batch — it spans portal + worker + gateway tool surface and should not
+  be parallelized.
+- Then BATCH-V1 end-to-end validation and cutover.
+
 ### 2026-06-08 - Dependent wave landed and integrated (E1/F1/G1/I1)
 
 Status: DONE
