@@ -17,7 +17,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from sift_gateway.auth import resolve_examiner
+from sift_gateway.auth import is_agent_principal, resolve_examiner
 from sift_gateway.join import (
     check_join_rate_limit,
     generate_join_code,
@@ -224,6 +224,25 @@ async def call_tool(request: Request) -> JSONResponse:
     gateway = request.app.state.gateway
     tool_name = request.path_params["tool_name"]
     identity = resolve_examiner(request)
+
+    # BATCH-B1 (F-MVP-3): REST tool execution is operator-only for the MVP.
+    # Agents must use the Gateway MCP surface (/mcp), which is the only path that
+    # enforces the SIFT policy middleware (tool authz + evidence gate + response
+    # guard + rate limit). Reject agent/service tokens here so they cannot use
+    # REST to bypass that MCP policy boundary.
+    if is_agent_principal(request):
+        logger.warning(
+            "Agent/service token blocked from REST tool execution: tool=%s principal=%s",
+            tool_name,
+            identity.get("examiner"),
+        )
+        return JSONResponse(
+            {
+                "error": "REST tool execution is operator-only; agents must use the Gateway MCP surface",
+                "tool": tool_name,
+            },
+            status_code=403,
+        )
 
     # Read the raw body and enforce actual size limit.
     # Checking Content-Length alone is insufficient because the header

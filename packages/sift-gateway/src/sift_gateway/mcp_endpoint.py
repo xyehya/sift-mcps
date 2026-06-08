@@ -586,11 +586,13 @@ def _build_case_context(case_dir_str: str) -> dict | None:
             case_id = str(meta.get("case_id") or case_id)
         except (OSError, yaml.YAMLError):
             pass
+    # F-MVP-2: appended to agent-facing MCP responses after the response guard,
+    # so it must be agent-safe at the source — opaque case id + relative display
+    # dirs only, never the absolute /cases/... artifact path.
     return {
         "id": case_id,
-        "dir": str(case_dir),
-        "evidence_dir": str(case_dir / "evidence"),
-        "agent_dir": str(case_dir / "agent"),
+        "evidence_dir": "evidence",
+        "agent_dir": "agent",
     }
 
 
