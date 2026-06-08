@@ -13,6 +13,33 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - Next-wave seams assigned to BATCH-D2
+
+Status: DONE
+
+Changed:
+
+- Checked `revamp/spg-v1` after the first parallel wave: branch is clean,
+  integration commits are present, and both doc validators pass.
+- Solved the two open cross-batch seams by adding BATCH-D2 as a Gateway-only
+  integration batch before the dependent wave.
+- Assigned B-MVP-3 to BATCH-D2: Gateway adapter over D1 job enqueue/status/reaper
+  surfaces.
+- Assigned B-MVP-4 to BATCH-D2: runtime enforcement of add-on
+  `authority_contract` and tool `required_scopes`.
+- Updated dependent batch dependencies so E1/F1/G1/I1/J1/V1 consume D2 instead
+  of each implementing Gateway glue independently.
+
+Validation:
+
+- Passed: `python3 scripts/validate_docs.py`.
+- Passed: `python3 scripts/validate_migration_docs.py`.
+
+Next:
+
+- Launch BATCH-D2 first. After D2 lands cleanly, launch E1/F1/G1/I1 in parallel;
+  J1 follows E1, and V1 follows all implementation batches.
+
 ### 2026-06-08 - First parallel wave landed and integrated (A1/B1/C1/D1/H1)
 
 Status: DONE
@@ -145,5 +172,5 @@ Next:
 | F-MVP-4 | Fork | RESOLVED | Hackathon report export keeps current profile output and adds DB metadata, approved-only filtering, custody/provenance appendix, and downloadable artifact. | Locked for BATCH-J1. | none |
 | B-MVP-1 | Backlog | DEFERRED | Enterprise object-lock/WORM evidence vault option. | Post-MVP architecture appendix only. | none |
 | B-MVP-2 | Backlog | DEFERRED | ContextForge/Envoy-style external gateway integration. | Post-MVP presentation/backlog only; Gateway policy remains in SIFT Gateway for MVP. | none |
-| B-MVP-3 | Backlog | OPEN | Gateway enqueue/status adapter over D1's `enqueue_job`/`job_status_public` (job_id only, sets `enqueue_audit_event_id`, schedules `expire_stale_jobs` reaper). | Build alongside BATCH-E1/F1 before job-backed actions ship. | E1, F1, I1 |
-| B-MVP-4 | Backlog | OPEN | Runtime enforcement of add-on `authority_contract` (non_authoritative, prohibited_operations, required_scopes) in the Gateway backend registry; schema acceptance landed in this wave. | Wire into BATCH-F1 registry work. | none |
+| B-MVP-3 | Backlog | ASSIGNED | Gateway enqueue/status adapter over D1's `enqueue_job`/`job_status_public` (job_id only, sets `enqueue_audit_event_id`, schedules `expire_stale_jobs` reaper). | Implement in BATCH-D2 before dependent job-backed actions ship. | E1, F1, G1, I1, J1 |
+| B-MVP-4 | Backlog | ASSIGNED | Runtime enforcement of add-on `authority_contract` (non_authoritative, prohibited_operations, required_scopes) in the Gateway backend registry; schema acceptance landed in this wave. | Implement in BATCH-D2 so F1 consumes enforced registry behavior. | F1 |

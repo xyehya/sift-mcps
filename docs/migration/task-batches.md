@@ -23,6 +23,7 @@ Rules:
 - [x] BATCH-B1 - Gateway policy parity and agent response redaction
 - [x] BATCH-C1 - DB evidence authority, custody ledger, and seal broker
 - [x] BATCH-D1 - Durable Postgres jobs and local worker claim loop
+- [ ] BATCH-D2 - Gateway job adapter and add-on authority enforcement
 - [ ] BATCH-E1 - Portal authority migration for evidence, findings, timeline, TODOs, and reports
 - [ ] BATCH-F1 - OpenSearch secure core integration and ingest job adapter
 - [ ] BATCH-G1 - RAG pgvector target with provenance filters
@@ -204,9 +205,51 @@ Acceptance:
 - Portal and agent can poll job status without reading worker files.
 - Failed jobs preserve audit/provenance and sanitized logs.
 
+## BATCH-D2 - Gateway job adapter and add-on authority enforcement
+
+Dependencies: BATCH-B1; BATCH-D1; BATCH-H1. BATCH-C1 context is available for
+case/evidence IDs, but D2 must not implement evidence UI.
+
+Scope:
+
+- `packages/sift-gateway/src/sift_gateway/rest.py`
+- `packages/sift-gateway/src/sift_gateway/server.py`
+- `packages/sift-gateway/src/sift_gateway/mcp_server.py`
+- `packages/sift-gateway/src/sift_gateway/mcp_endpoint.py`
+- `packages/sift-gateway/src/sift_gateway/mcp_backends_registry.py`
+- `packages/sift-gateway/src/sift_gateway/backends/**`
+- `packages/sift-gateway/src/sift_gateway/sift-backend.schema.json`
+- Gateway tests for jobs, backend registry, scope enforcement, and add-on
+  authority contracts
+- Optional narrow SQL migration only if required for grants/wrappers around
+  existing D1 job RPCs
+
+Exact work:
+
+- Add the Gateway adapter over D1's `app.enqueue_job`,
+  `app.job_status_public`, and `app.expire_stale_jobs` surfaces.
+- Job enqueue returns only `job_id` to portal/agent callers and attaches the
+  Gateway audit event ID as `enqueue_audit_event_id`.
+- Job status reads are sanitized and expose no worker files or local paths.
+- Add a safe Gateway-owned reaper trigger or service hook for
+  `expire_stale_jobs`.
+- Enforce add-on `authority_contract` at runtime: `non_authoritative`,
+  `prohibited_operations`, and tool-level `required_scopes`.
+- Keep `transport: library` manifests non-routable.
+
+Acceptance:
+
+- Tests prove enqueue/status uses D1 RPC/view shape and returns sanitized
+  `job_id`/status only.
+- Tests prove a missing required add-on scope is denied before backend dispatch.
+- Tests prove prohibited add-on authority operations are denied before backend
+  dispatch.
+- Tests prove library manifests remain accepted but non-routable.
+- Existing Gateway manifest and backend registry tests remain green.
+
 ## BATCH-E1 - Portal authority migration for evidence, findings, timeline, TODOs, and reports
 
-Dependencies: BATCH-B1; BATCH-C1 for evidence; BATCH-D1 for job-backed actions.
+Dependencies: BATCH-B1; BATCH-C1 for evidence; BATCH-D1 for job-backed actions; BATCH-D2 for Gateway job/status adapter.
 
 Scope:
 
@@ -240,7 +283,7 @@ Acceptance:
 
 ## BATCH-F1 - OpenSearch secure core integration and ingest job adapter
 
-Dependencies: BATCH-D1; BATCH-C1 for evidence IDs.
+Dependencies: BATCH-D1; BATCH-C1 for evidence IDs; BATCH-D2 for Gateway job/status adapter and add-on contract enforcement.
 
 Scope:
 
@@ -269,7 +312,7 @@ Acceptance:
 
 ## BATCH-G1 - RAG pgvector target with provenance filters
 
-Dependencies: BATCH-D1; BATCH-C1 for evidence provenance; BATCH-B1 for Gateway policy.
+Dependencies: BATCH-D1; BATCH-C1 for evidence provenance; BATCH-B1 for Gateway policy; BATCH-D2 for job/status adapter.
 
 Scope:
 
@@ -322,7 +365,7 @@ Acceptance:
 
 ## BATCH-I1 - Sandboxed run_command uplift
 
-Dependencies: BATCH-B1; BATCH-C1 for evidence refs; BATCH-D1 for job backing.
+Dependencies: BATCH-B1; BATCH-C1 for evidence refs; BATCH-D1 for job backing; BATCH-D2 for Gateway job/status adapter.
 
 Scope:
 
@@ -351,7 +394,7 @@ Acceptance:
 
 ## BATCH-J1 - Approved-only report generation and export
 
-Dependencies: BATCH-E1; BATCH-D1; BATCH-C1.
+Dependencies: BATCH-E1; BATCH-D1; BATCH-C1; BATCH-D2.
 
 Scope:
 
@@ -377,7 +420,7 @@ Acceptance:
 
 ## BATCH-V1 - End-to-end validation and cutover
 
-Dependencies: BATCH-A1; BATCH-B1; BATCH-C1; BATCH-D1; BATCH-E1; BATCH-F1; BATCH-G1; BATCH-H1; BATCH-I1; BATCH-J1.
+Dependencies: BATCH-A1; BATCH-B1; BATCH-C1; BATCH-D1; BATCH-D2; BATCH-E1; BATCH-F1; BATCH-G1; BATCH-H1; BATCH-I1; BATCH-J1.
 
 Scope:
 
@@ -541,6 +584,39 @@ ACCEPTANCE
 Concurrent workers cannot claim the same job; lease expiry/retry is tested; portal/agent callers can poll sanitized status when the adapter is present; failed jobs preserve audit/provenance and sanitized logs.
 ```
 
+### PROMPT-D2 - Gateway job adapter and authority enforcement
+
+Suggested worktree:
+
+```bash
+git worktree add ../sift-mcps-d2 -b revamp/mvp-d2-gateway-job-contract-seam revamp/spg-v1
+```
+
+Prompt:
+
+```text
+ROLE & MODE
+You are the BATCH-D2 coding agent for the SIFT MVP sprint. Build the Gateway integration seam for jobs and add-on authority contracts. Do not redesign the architecture.
+
+REQUIRED READING
+Read, in order: AGENTS.md; docs/migration/Migration-Spec.md Gateway, Durable Job State Machine, Postgres Control Plane, derived/reference planes, and technical constraints; docs/migration/task-batches.md BATCH-D2; docs/migration/Session-Notes.md latest entry and B-MVP-3/B-MVP-4 rows.
+
+GROUND IN SOURCE
+Inspect only the BATCH-D2 scope paths before editing: packages/sift-gateway/src/sift_gateway/rest.py; server.py; mcp_server.py; mcp_endpoint.py; mcp_backends_registry.py; backends/**; sift-backend.schema.json; packages/sift-gateway/tests relevant to jobs/backend registry/scopes/manifests; supabase/migrations/202606081200_durable_jobs.sql only to confirm RPC/view names.
+
+DELIVERABLE
+Add the Gateway adapter over D1 job surfaces: enqueue_job, job_status_public, and expire_stale_jobs. Enqueue returns only job_id and stores the Gateway audit event id as enqueue_audit_event_id. Status responses are sanitized. Also enforce H1 authority_contract at runtime: non_authoritative, prohibited_operations, and tool required_scopes before backend dispatch. Keep transport: library manifests accepted but non-routable.
+
+HARD CONSTRAINTS
+Do not implement portal UI, OpenSearch ingest handlers, RAG, run_command handlers, report generation, or evidence UI. Do not expose DB errors, local paths, worker files, or credentials. Add SQL only if a minimal grant/wrapper is unavoidable and explain it.
+
+OUTPUT DISCIPLINE
+Keep the scope fence. Do not edit docs/migration in this worker branch. End with a LANDING LOG block containing changed files, tests run, acceptance status, and whether E1/F1/G1/I1 can launch without more Gateway glue.
+
+ACCEPTANCE
+Tests prove job enqueue/status returns sanitized job_id/status only; missing required add-on scopes deny before backend dispatch; prohibited authority operations deny before backend dispatch; library manifests remain non-routable; existing Gateway backend registry tests stay green.
+```
+
 ### PROMPT-H1 - Add-on contract hardening
 
 Suggested worktree:
@@ -576,7 +652,8 @@ Add-on metadata clearly marks capabilities and required scopes; query-only behav
 
 ## Dependent Prompt Order
 
-After BATCH-B1, BATCH-C1, and BATCH-D1 land, launch:
+Launch BATCH-D2 next. After BATCH-D2 lands, launch the dependent implementation
+wave:
 
 - BATCH-E1 for portal DB authority migration.
 - BATCH-F1 for OpenSearch secure ingest job adapter.
