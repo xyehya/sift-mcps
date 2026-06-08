@@ -13,6 +13,77 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - BATCH-K2/K3/K4/K5 landed on worker branches
+
+Status: DONE
+
+Ran the four parallel authority-cutover batches in dedicated worktrees off
+`revamp/spg-v1`. Each is one commit on its own branch (not yet integrated into
+`revamp/spg-v1`); all reuse the K1 `AuthorityContext`/DB-audit contracts and none
+edited `docs/migration`.
+
+Landed (per-branch):
+
+- BATCH-K2 `5a9fe4b` on `revamp/mvp-k2-investigation-db-authority` - typed
+  `InvestigationAuthorityStore` port + `PostgresInvestigationStore`; `case_manager`
+  findings/timeline/IOC/TODO write DB-first and fail closed; portal JSON->DB sync
+  gated off by default; portal approve/reject/edit + report reads route to DB
+  authority with optimistic `version` locking and `reauth_audit_event_id`. New
+  migration `202606081600_investigation_authority.sql`. Tests: sift-core 398,
+  gateway 377, dashboard 354, db 52.
+- BATCH-K3 `662c6aa` on `revamp/mvp-k3-evidence-proof-cutover` - evidence gate
+  reads only `app.evidence_gate_status`; added seal-tamper detection
+  (`_detect_seal_tamper` -> `evidence_mark_violation`), DB-derived proof export
+  (re-hash mounted bytes -> `evidence_record_proof_export`), and `anchor_db_proof()`
+  Solana-as-external-proof-only. Tests: sift-core 386, gateway 382, dashboard 350,
+  db 49.
+- BATCH-K4 `717a548` on `revamp/mvp-k4-opensearch-host-authority` - new migration
+  `202606081600_host_identity.sql` (`app.host_identity_decisions` ledger +
+  `record_host_identity_decision` + `opensearch_ingest_status` RPC); DB-active
+  ingest status from durable jobs/provenance; `host-dictionary.yaml` is parser-compat
+  only and `dict_path` no longer leaked to agents in DB-active mode; canonical
+  `opensearch_fix_host_mapping` + deprecated `opensearch_host_fix` alias preserved;
+  MCP surface golden regenerated. No Gateway registry edits. Tests: opensearch-mcp
+  995, sift-core 384, gateway 371, db 55.
+- BATCH-K5 `63b5f48` on `revamp/mvp-k5-run-command-authority-isolation` - closed the
+  root env-leak defect (sandbox subprocess inherited the full worker env incl.
+  `~/.sift/supabase.env` secrets). New `runtime_acl.py` (`build_sandbox_env()`
+  allowlist + post-allowlist secret deny; authority-path write/redirect refusal);
+  scrubbed env on every `Popen`; path-free DB receipts; fixed a latent non-UUID
+  `provenance_id` bug in the `complete_job` path. Tests: sift-core 408, gateway 371,
+  db 49, +24 new K5 tests.
+
+Two known shared-file overlaps to reconcile at integration (each batch on its own
+branch, so only a merge concern): K2 and K3 both touch
+`sift_gateway/portal_services.py` and `case-dashboard routes.py` (changes are
+service-scoped and additive - K2 only added a `legacy_sync=False` kwarg to the base
+service and edited `InvestigationService`; K3 only added `EvidenceAuthorityService`
+methods + evidence routes); K4 and K5 are disjoint and neither touched
+`job_worker.py`.
+
+Both K2 and K4 introduce a `202606081600_*` migration; the two filenames differ
+(`_investigation_authority` vs `_host_identity`) so they coexist, but confirm
+timestamp ordering at integration.
+
+Validation:
+
+- All four worker suites green as listed above; `git diff --check` clean on each.
+- Per-batch `python3 scripts/validate_docs.py` reported OK where run.
+- Not run: cross-branch integration build and live-VM apply of the two new
+  `202606081600_*` migrations (deferred to integration + BATCH-V1, consistent with
+  prior K-series).
+
+Next:
+
+- Integrate K2-K5 into `revamp/spg-v1` (resolve the K2/K3 `portal_services.py` +
+  `routes.py` overlap additively; confirm `202606081600_*` migration ordering), then
+  run BATCH-K6 as the tamper-regression gate. K6 must cover: end-to-end portal/report
+  tamper regression for findings/timeline/todos/iocs + approvals (K2), the seal-tamper
+  / proof-export verify path (K3), DB-active ingest/host authority vs local-file
+  tampering (K4), the run_command authority-write deny path (K5), and the B-MVP-17
+  pre-context denial DB-audit decision. BATCH-V1 stays blocked until K1-K6 close the
+  cutover.
+
 ### 2026-06-08 - BATCH-K1 landed with security-review correction
 
 Status: DONE
