@@ -2,10 +2,12 @@ import { useState, useEffect } from 'react'
 import { useStore } from '../../store/useStore'
 import {
   getReports,
+  getReportChallenge,
   postReportGenerate,
   postReportSave,
   getReport
 } from '../../api/endpoints'
+import { computeSimpleChallengeResponse } from '../../api/crypto'
 
 const PROFILES = {
   full: {
@@ -56,6 +58,12 @@ export function ReportsTab() {
   const [selectedReportLoading, setSelectedReportLoading] = useState(false)
   const [previewMode, setPreviewMode] = useState('rendered')
 
+  // Operator re-auth for report inclusion/export (F-MVP-4). The server enforces
+  // re-auth when DB evidence authority is wired; the modal collects the password
+  // to compute the HMAC challenge response.
+  const [reauthOpen, setReauthOpen] = useState(false)
+  const [reauthPassword, setReauthPassword] = useState('')
+
   // Load list of saved reports on mount
   const refreshReports = async () => {
     setReportsLoading(true)
@@ -83,8 +91,17 @@ export function ReportsTab() {
     refreshReports()
   }, [])
 
-  const handleGenerate = async (e) => {
+  // Open the re-auth modal before generating (report inclusion is a sensitive
+  // human action and requires password confirmation; F-MVP-4 / AGENTS.md).
+  const handleGenerate = (e) => {
     e.preventDefault()
+    setReauthPassword('')
+    setReauthOpen(true)
+  }
+
+  const handleConfirmGenerate = async (e) => {
+    e.preventDefault()
+    setReauthOpen(false)
     setGenerating(true)
     setDraftReport(null)
     setSelectedReport(null)
@@ -94,6 +111,22 @@ export function ReportsTab() {
       finding_ids: findingIds ? findingIds.split(',').map(id => id.trim()) : null,
       start_date: startDate || '',
       end_date: endDate || ''
+    }
+
+    // Compute the HMAC challenge response so the server can record a re-auth
+    // audit event for this inclusion. Best-effort: if the challenge endpoint is
+    // unavailable, generation still proceeds (the server only enforces re-auth
+    // when DB authority is wired and will reject without it).
+    try {
+      const challenge = await getReportChallenge()
+      if (challenge && challenge.challenge_id) {
+        payload.challenge_id = challenge.challenge_id
+        payload.response = await computeSimpleChallengeResponse(reauthPassword, challenge)
+      }
+    } catch (err) {
+      // No challenge available (file-backed) — proceed without re-auth material.
+    } finally {
+      setReauthPassword('')
     }
 
     try {
@@ -106,6 +139,8 @@ export function ReportsTab() {
     } catch (err) {
       if (err.status === 429) {
         addToast('Too many attempts. A report generation is already in progress for this case.', 'error')
+      } else if (err.status === 401 || err.status === 403) {
+        addToast('Re-auth failed: incorrect password or expired challenge.', 'error')
       } else {
         addToast('Report generation failed. Check the case status.', 'error')
       }
@@ -386,6 +421,46 @@ export function ReportsTab() {
           md.push('```')
           md.push('')
         }
+      }
+    }
+
+    // Custody / provenance appendix (F-MVP-4)
+    const appendix = report.custody_appendix
+    if (appendix) {
+      md.push('## Appendix: Custody & Provenance')
+      md.push('')
+      if (appendix.verification_note) {
+        md.push(appendix.verification_note)
+        md.push('')
+      }
+      if (appendix.authorized_by_reauth_event) {
+        md.push(`- **Authorized by re-auth event**: \`${appendix.authorized_by_reauth_event}\``)
+        md.push('')
+      }
+      const seal = appendix.evidence_seal || {}
+      md.push('### Evidence Seal & Hash-Chain Proof')
+      md.push('| Field | Value |')
+      md.push('|---|---|')
+      md.push(`| Seal Status | ${seal.seal_status || 'N/A'} |`)
+      md.push(`| Manifest Version | ${seal.manifest_version || 0} |`)
+      md.push(`| Manifest Hash | \`${seal.manifest_hash || 'N/A'}\` |`)
+      md.push(`| Chain Head Hash | \`${seal.chain_head_hash || 'N/A'}\` |`)
+      md.push(`| Ledger Tip Hash | \`${seal.ledger_tip_hash || 'N/A'}\` |`)
+      md.push(`| Active Evidence Count | ${seal.active_count || 0} |`)
+      md.push('')
+      md.push('### Finding Provenance')
+      const fp = appendix.finding_provenance || []
+      if (fp.length === 0) {
+        md.push('*No approved findings.*')
+        md.push('')
+      } else {
+        md.push('| Finding ID | Approval Hash | Approved By | Provenance / Audit Refs |')
+        md.push('|---|---|---|---|')
+        for (const entry of fp) {
+          const refs = (entry.provenance_refs || []).join(', ') || '—'
+          md.push(`| ${entry.id || 'N/A'} | \`${entry.content_hash || 'N/A'}\` | ${entry.approved_by || 'N/A'} | ${refs} |`)
+        }
+        md.push('')
       }
     }
 
@@ -930,6 +1005,76 @@ export function ReportsTab() {
                         </div>
                       )
                     })}
+
+                    {/* Custody / Provenance Appendix (F-MVP-4) */}
+                    {currentReport.custody_appendix && (() => {
+                      const appendix = currentReport.custody_appendix
+                      const seal = appendix.evidence_seal || {}
+                      const fp = appendix.finding_provenance || []
+                      return (
+                        <div className="flex flex-col gap-3 mt-4">
+                          <h2 className="text-lg font-bold border-b border-border-faint pb-1.5 mt-4 text-text-primary font-sans">
+                            Appendix: Custody &amp; Provenance
+                          </h2>
+                          {appendix.verification_note && (
+                            <p className="text-xs text-text-muted italic">{appendix.verification_note}</p>
+                          )}
+                          {appendix.authorized_by_reauth_event && (
+                            <div className="text-[10px] font-mono text-text-muted">
+                              Authorized by re-auth event:{' '}
+                              <span className="text-cyan break-all">{appendix.authorized_by_reauth_event}</span>
+                            </div>
+                          )}
+                          <div className="overflow-x-auto">
+                            <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-text-muted mb-1">Evidence Seal &amp; Hash-Chain Proof</h3>
+                            <table className="min-w-full text-[11px] font-mono bg-bg-surface border border-border-soft rounded overflow-hidden">
+                              <tbody>
+                                {[
+                                  ['Seal Status', seal.seal_status || 'N/A'],
+                                  ['Manifest Version', seal.manifest_version ?? 0],
+                                  ['Manifest Hash', seal.manifest_hash || 'N/A'],
+                                  ['Chain Head Hash', seal.chain_head_hash || 'N/A'],
+                                  ['Ledger Tip Hash', seal.ledger_tip_hash || 'N/A'],
+                                  ['Active Evidence Count', seal.active_count ?? 0],
+                                ].map(([k, v]) => (
+                                  <tr key={k} className="border-b border-border-faint last:border-0">
+                                    <td className="px-3 py-1.5 font-bold text-text-muted w-1/3">{k}</td>
+                                    <td className="px-3 py-1.5 text-text-primary break-all">{String(v)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="overflow-x-auto">
+                            <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-text-muted mb-1">Finding Provenance</h3>
+                            {fp.length === 0 ? (
+                              <span className="text-xs text-text-muted italic">No approved findings.</span>
+                            ) : (
+                              <table className="min-w-full text-[11px] font-mono bg-bg-surface border border-border-soft rounded overflow-hidden">
+                                <thead>
+                                  <tr className="bg-bg-raised border-b border-border-soft text-text-muted text-left font-bold">
+                                    <th className="px-2 py-1.5">Finding ID</th>
+                                    <th className="px-2 py-1.5 w-1/3">Approval Hash</th>
+                                    <th className="px-2 py-1.5">Approved By</th>
+                                    <th className="px-2 py-1.5">Provenance / Audit Refs</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {fp.map((entry, i) => (
+                                    <tr key={i} className="border-b border-border-faint last:border-0 hover:bg-bg-base/30">
+                                      <td className="px-2 py-1.5 text-cyan font-bold">{entry.id}</td>
+                                      <td className="px-2 py-1.5 text-text-muted break-all truncate max-w-[160px]" title={entry.content_hash}>{entry.content_hash || 'N/A'}</td>
+                                      <td className="px-2 py-1.5 text-text-primary">{entry.approved_by || 'N/A'}</td>
+                                      <td className="px-2 py-1.5 text-text-muted break-all">{(entry.provenance_refs || []).join(', ') || '—'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })()}
                   </div>
                 )}
               </div>
@@ -937,6 +1082,46 @@ export function ReportsTab() {
           </div>
         )}
       </div>
+
+      {/* Re-auth modal for report inclusion/export (F-MVP-4) */}
+      {reauthOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60">
+          <form
+            onSubmit={handleConfirmGenerate}
+            className="w-[360px] bg-bg-surface border border-border-soft rounded-lg p-5 flex flex-col gap-3 shadow-xl"
+          >
+            <h3 className="text-sm font-bold text-text-primary">Confirm Report Generation</h3>
+            <p className="text-xs text-text-muted leading-relaxed">
+              Report inclusion and export are sensitive actions. Re-enter your password to
+              authorize generating this report from approved data only.
+            </p>
+            <input
+              type="password"
+              autoFocus
+              value={reauthPassword}
+              onChange={(e) => setReauthPassword(e.target.value)}
+              placeholder="Examiner password"
+              className="bg-bg-raised text-text-primary text-xs rounded border border-border-soft px-2 py-2 focus:outline-none focus:border-cyan"
+            />
+            <div className="flex justify-end gap-2 mt-1">
+              <button
+                type="button"
+                onClick={() => { setReauthOpen(false); setReauthPassword('') }}
+                className="text-xs px-3 py-1.5 rounded border border-border-soft text-text-muted hover:text-text-primary transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="text-xs font-bold px-3 py-1.5 rounded text-bg-base"
+                style={{ backgroundColor: 'var(--cyan)' }}
+              >
+                Authorize &amp; Generate
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }

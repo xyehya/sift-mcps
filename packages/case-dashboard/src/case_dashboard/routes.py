@@ -4971,6 +4971,53 @@ def _serialize_to_markdown(report: dict) -> str:
                 md.append(f"```json\n{json.dumps(data, indent=2)}\n```")
                 md.append("")
 
+    # Custody / provenance appendix (F-MVP-4) — rendered on every report as
+    # trailing verification material. Sourced from the top-level appendix the
+    # core generator built; carries hashes, provenance/audit ids, and seal
+    # status only — never absolute paths.
+    appendix = report.get("custody_appendix") or {}
+    if appendix:
+        md.append("## Appendix: Custody & Provenance")
+        md.append("")
+        md.append(appendix.get("verification_note", ""))
+        md.append("")
+        if appendix.get("authorized_by_reauth_event"):
+            md.append(
+                f"- **Authorized by re-auth event**: `{appendix['authorized_by_reauth_event']}`"
+            )
+            md.append("")
+        seal = appendix.get("evidence_seal", {}) or {}
+        md.append("### Evidence Seal & Hash-Chain Proof")
+        md.append("| Field | Value |")
+        md.append("|---|---|")
+        md.append(f"| Seal Status | {seal.get('seal_status', 'N/A')} |")
+        md.append(f"| Manifest Version | {seal.get('manifest_version', 0)} |")
+        md.append(f"| Manifest Hash | `{seal.get('manifest_hash') or 'N/A'}` |")
+        md.append(f"| Chain Head Hash | `{seal.get('chain_head_hash') or 'N/A'}` |")
+        md.append(f"| Ledger Tip Hash | `{seal.get('ledger_tip_hash') or 'N/A'}` |")
+        md.append(f"| Active Evidence Count | {seal.get('active_count', 0)} |")
+        md.append("")
+        fp = appendix.get("finding_provenance", []) or []
+        md.append("### Finding Provenance")
+        if not fp:
+            md.append("*No approved findings.*")
+            md.append("")
+        else:
+            md.append("| Finding ID | Approval Hash | Approved By | Provenance / Audit Refs |")
+            md.append("|---|---|---|---|")
+            for entry in fp:
+                fid = entry.get("id", "N/A")
+                chash = entry.get("content_hash") or "N/A"
+                by = entry.get("approved_by") or "N/A"
+                refs = ", ".join(entry.get("provenance_refs", [])) or "—"
+                md.append(f"| {fid} | `{chash}` | {by} | {refs} |")
+            md.append("")
+        custody = appendix.get("custody")
+        if custody:
+            md.append("### Custody Ledger Summary")
+            md.append(f"```json\n{json.dumps(custody, indent=2, default=str)}\n```")
+            md.append("")
+
     return "\n".join(md)
 
 
@@ -4995,6 +5042,135 @@ def _report_eligibility() -> dict | None:
         logger.warning("DB report_eligibility failed: %s", exc)
         return None
     return elig if isinstance(elig, dict) else None
+
+
+def _db_custody_summary() -> dict | None:
+    """Sanitized custody summary for the report appendix (F-MVP-4).
+
+    Folds the C1 evidence gate status (seal/version/head hash) and, when
+    available, the custody-events summary into one dict for the provenance
+    appendix. Returns None when no DB evidence authority is wired (file-backed
+    deployments rely on the manifest the core generator already reads). Never
+    contains absolute case/evidence/mount paths.
+    """
+    db_status = _db_evidence_chain_status()
+    if db_status is None:
+        return None
+    summary: dict = {
+        "seal_status": db_status.get("seal_status"),
+        "manifest_version": db_status.get("manifest_version"),
+        "head_hash": db_status.get("head_hash"),
+        "active_count": db_status.get("active_count"),
+        "issues": db_status.get("issues", []),
+        "last_verified_at": db_status.get("hmac_last_verified_at"),
+    }
+    if _EVIDENCE_DB is not None:
+        events_fn = getattr(_EVIDENCE_DB, "custody_events", None)
+        if callable(events_fn):
+            try:
+                summary["events"] = events_fn(_active_case_id())
+            except Exception as exc:
+                logger.warning("DB custody_events for report appendix failed: %s", exc)
+    return summary
+
+
+def _report_reauth(request: Request, examiner: str, action: str, body: dict) -> tuple[JSONResponse | None, str | None]:
+    """Verify operator re-auth for a report inclusion/export action (F-MVP-4).
+
+    Re-uses the evidence HMAC challenge/response so report inclusion and export
+    are gated by the same password/HMAC re-auth as the other sensitive human
+    actions (AGENTS.md security invariant), and records a re-auth audit event
+    (consistent with C1/E1). Enforced only when DB evidence authority is wired —
+    the same condition under which seal/ignore/retire require re-auth — so
+    file-backed deployments and E1's report-only fakes are unaffected.
+
+    Returns (error_response | None, reauth_audit_event_id | None).
+    """
+    if _EVIDENCE_DB is None:
+        return None, None
+
+    challenge_id = str(body.get("challenge_id", ""))
+    response_hmac = str(body.get("response", ""))
+    if not challenge_id or not response_hmac:
+        return (
+            JSONResponse(
+                {"error": "Re-auth required: report inclusion/export needs password confirmation."},
+                status_code=403,
+            ),
+            None,
+        )
+    err_msg, _ = _verify_evidence_hmac(
+        examiner, challenge_id, response_hmac, request.client.host
+    )
+    if err_msg:
+        return JSONResponse({"error": err_msg}, status_code=401), None
+
+    reauth_id = _record_reauth_event(request, examiner, action)
+    if not reauth_id:
+        return (
+            JSONResponse(
+                {"error": "Re-auth audit event required for report inclusion/export."},
+                status_code=403,
+            ),
+            None,
+        )
+    return None, reauth_id
+
+
+def _record_report_metadata(
+    *,
+    report_id: str,
+    profile: str,
+    examiner: str,
+    created_at: str,
+    reauth_audit_event_id: str | None,
+    appendix: dict,
+    export: bool = False,
+) -> None:
+    """Persist report metadata to DB authority via the E1 report_service seam.
+
+    Optional and defensive: when no DB report service (or no recorder method) is
+    wired, this is a no-op and the file artifact remains the only record. The
+    metadata is non-authoritative provenance — seal status + hashes + the re-auth
+    event id — and never carries absolute paths or report body content.
+    """
+    if _REPORT_DB is None:
+        return
+    recorder = getattr(_REPORT_DB, "record_report", None)
+    if not callable(recorder):
+        return
+    case_id = _active_case_id()
+    if not case_id:
+        return
+    seal = (appendix or {}).get("evidence_seal", {}) or {}
+    # Prefer the DB custody authority's seal status when folded into the
+    # appendix; the appendix's evidence_seal block can be the file-backed view.
+    custody = (appendix or {}).get("custody") or {}
+    metadata = {
+        "report_id": report_id,
+        "profile": profile,
+        "examiner": examiner,
+        "created_at": created_at,
+        "reauth_audit_event_id": reauth_audit_event_id,
+        "seal_status": custody.get("seal_status") or seal.get("seal_status"),
+        "manifest_version": custody.get("manifest_version", seal.get("manifest_version")),
+        "manifest_hash": seal.get("manifest_hash"),
+        "chain_head_hash": custody.get("head_hash") or seal.get("chain_head_hash"),
+        "exported": export,
+    }
+    try:
+        recorder(case_id=case_id, **metadata)
+    except Exception as exc:
+        logger.warning("DB record_report failed: %s", exc)
+
+
+async def get_report_challenge(request: Request) -> JSONResponse:
+    """Issue a re-auth challenge for report generation/export (F-MVP-4).
+
+    Thin alias over the evidence-chain challenge so the portal can confirm the
+    operator's password before generating or exporting a report.
+    """
+    return await get_evidence_chain_challenge(request)
 
 
 async def get_reports(request: Request) -> JSONResponse:
@@ -5093,6 +5269,18 @@ async def generate_report_route(request: Request) -> JSONResponse:
         start_date = body.get("start_date", "")
         end_date = body.get("end_date", "")
 
+        # Operator re-auth for report inclusion (F-MVP-4). Enforced only when DB
+        # evidence authority is wired; yields a re-auth audit event id stamped
+        # into the report's custody appendix.
+        reauth_err, reauth_id = _report_reauth(
+            request, examiner, "report_generate", body
+        )
+        if reauth_err is not None:
+            return reauth_err
+
+        # Sanitized custody summary for the provenance appendix (DB authority).
+        custody = _db_custody_summary()
+
         from sift_core.reporting import generate_report_data
         result = generate_report_data(
             profile_name=profile,
@@ -5100,6 +5288,8 @@ async def generate_report_route(request: Request) -> JSONResponse:
             finding_ids=finding_ids,
             start_date=start_date,
             end_date=end_date,
+            custody=custody,
+            reauth_audit_event_id=reauth_id,
         )
 
         if isinstance(result, dict) and "error" in result:
@@ -5113,6 +5303,19 @@ async def generate_report_route(request: Request) -> JSONResponse:
 
         _PENDING_REPORTS[report_id] = result
 
+        # Persist report metadata to DB authority so list_reports reflects it
+        # (F-MVP-4). The report file is an exported artifact, not authority; the
+        # DB row is. Optional seam — bound live by the dedicated binding batch
+        # (B-MVP-5); a missing recorder is a no-op here.
+        _record_report_metadata(
+            report_id=report_id,
+            profile=profile,
+            examiner=examiner,
+            created_at=result["created_at"],
+            reauth_audit_event_id=reauth_id,
+            appendix=result.get("custody_appendix", {}),
+        )
+
         response_payload = {
             "id": report_id,
             "profile": profile,
@@ -5120,6 +5323,7 @@ async def generate_report_route(request: Request) -> JSONResponse:
             "sections": result.get("sections"),
             "guidance": result.get("writing_guidance"),
             "evidence_chain": result.get("evidence_chain"),
+            "custody_appendix": result.get("custody_appendix"),
             "integrity_warning": result.get("integrity_warning"),
             "evidence_chain_warning": result.get("evidence_chain_warning"),
             "verification_alerts": result.get("verification_alerts"),
@@ -5248,6 +5452,19 @@ async def download_report(request: Request) -> Response:
         profile = report_data.get("profile", "report")
         filename = f"report_{profile}_{report_id[:8]}.md"
 
+        # Record the export as non-authoritative provenance (F-MVP-4): the
+        # exported bundle is an artifact, the DB row is the record. Best-effort,
+        # only when the report_service seam exposes a recorder.
+        _record_report_metadata(
+            report_id=report_id,
+            profile=profile,
+            examiner=examiner,
+            created_at=report_data.get("created_at", ""),
+            reauth_audit_event_id=report_data.get("reauth_audit_event_id"),
+            appendix=report_data.get("custody_appendix", {}),
+            export=True,
+        )
+
         headers = {
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Type": "text/markdown; charset=utf-8",
@@ -5360,6 +5577,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/portal/state", get_portal_state, methods=["GET"]),
         Route("/api/jobs/{job_id}", get_job_status, methods=["GET"]),
         Route("/api/reports", get_reports, methods=["GET"]),
+        Route("/api/reports/challenge", get_report_challenge, methods=["GET"]),
         Route("/api/reports/generate", generate_report_route, methods=["POST"]),
         Route("/api/reports/{id}/save", save_report_route, methods=["POST"]),
         Route("/api/reports/{id}", get_report_by_id, methods=["GET"]),

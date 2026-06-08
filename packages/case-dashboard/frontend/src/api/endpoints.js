@@ -71,6 +71,7 @@ export const postReactivateToken = (id) => apiPost(`/api/tokens/${id}/reactivate
 
 // --- Reports ---
 export const getReports = () => apiFetch('/api/reports')
+export const getReportChallenge = () => apiFetch('/api/reports/challenge')
 export const postReportGenerate = (body) => apiPost('/api/reports/generate', body)
 export const postReportSave = (id) => apiPost(`/api/reports/${id}/save`, {})
 export const getReport = (id) => apiFetch(`/api/reports/${id}`)

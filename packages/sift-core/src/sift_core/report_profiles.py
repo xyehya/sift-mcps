@@ -5,6 +5,13 @@ Adding a new profile = adding a dict entry. No code changes required.
 Owned by sift-core: report generation is a core capability (Phase 2). The
 portal triggers generation (F-E, examiner-owned); add-on backends never
 generate reports.
+
+Every profile carries a custody / provenance appendix (F-MVP-4): per-finding
+approval hashes + provenance/audit references and the evidence seal/hash-chain
+proof. It is emitted at the top level of the generated report
+(``result["custody_appendix"]``) by ``reporting.generate_report_data`` and
+rendered as a trailing section, independent of the per-profile ``sections``
+below, so verification material is present on all report kinds.
 """
 
 from __future__ import annotations

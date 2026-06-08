@@ -135,6 +135,112 @@ def _strip_finding(finding: dict) -> dict:
     return {k: v for k, v in finding.items() if k not in STRIPPED_FINDING_FIELDS}
 
 
+def _provenance_refs(item: dict) -> list[str]:
+    """Extract sanitized provenance identifiers from a finding/timeline item.
+
+    Provenance is a list/dict of source references stamped by ingest/agent
+    pipelines. We surface only opaque identifiers (provenance ids, audit ids,
+    source-evidence display paths) — never absolute mount/case paths. The caller
+    is responsible for keeping any absolute path out of the appendix.
+    """
+    refs: list[str] = []
+
+    prov = item.get("provenance")
+    if isinstance(prov, list):
+        for p in prov:
+            if isinstance(p, dict):
+                pid = p.get("id") or p.get("provenance_id") or p.get("source_id")
+                if pid:
+                    refs.append(str(pid))
+            elif isinstance(p, str) and p.strip():
+                refs.append(p.strip())
+    elif isinstance(prov, dict):
+        pid = prov.get("id") or prov.get("provenance_id") or prov.get("source_id")
+        if pid:
+            refs.append(str(pid))
+
+    for aid in item.get("audit_ids") or []:
+        if aid:
+            refs.append(str(aid))
+
+    # source_evidence carries relative display paths/labels only (the broker
+    # never writes absolutes here); de-dup against accidental absolute leakage.
+    src = item.get("source_evidence")
+    if isinstance(src, list):
+        for s in src:
+            s = str(s)
+            if s and not s.startswith("/") and not re.match(r"^[A-Za-z]:[\\/]", s):
+                refs.append(s)
+    elif isinstance(src, str) and src.strip():
+        if not src.startswith("/") and not re.match(r"^[A-Za-z]:[\\/]", src):
+            refs.append(src.strip())
+
+    # Stable, de-duplicated order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for r in refs:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+def build_custody_appendix(
+    approved_findings: list[dict],
+    ev_chain: dict,
+    custody: dict | None = None,
+) -> dict:
+    """Assemble the custody / provenance appendix (F-MVP-4).
+
+    Provides the verification material a finalized report must carry:
+      - per-finding provenance: finding id, approval content_hash, provenance
+        ids, audit ids, and relative source-evidence references;
+      - evidence seal/custody status and the per-case hash-chain proof refs
+        (manifest version + hash, chain head hash, ledger tip);
+      - the operator re-auth event id that authorized inclusion/export (stamped
+        in by the portal, not here).
+
+    All values are opaque identifiers, hashes, or relative display labels. No
+    absolute case/evidence/mount path is ever emitted here.
+    """
+    finding_provenance: list[dict] = []
+    for f in approved_findings:
+        entry: dict = {
+            "id": f.get("id", ""),
+            "content_hash": f.get("content_hash", ""),
+            "approved_by": f.get("approved_by", ""),
+            "approved_at": f.get("approved_at", ""),
+            "provenance_refs": _provenance_refs(f),
+        }
+        finding_provenance.append(entry)
+
+    seal = ev_chain.get("status", "")
+    proof: dict = {
+        "seal_status": seal,
+        "manifest_version": ev_chain.get("manifest_version", 0),
+        "manifest_hash": ev_chain.get("manifest_hash"),
+        "chain_head_hash": ev_chain.get("head_hash"),
+        "ledger_tip_hash": ev_chain.get("ledger_tip_hash"),
+        "active_count": ev_chain.get("ok_count", ev_chain.get("active_count", 0)),
+    }
+
+    appendix: dict = {
+        "evidence_seal": proof,
+        "finding_provenance": finding_provenance,
+        "verification_note": (
+            "This appendix lists the approval content hash and provenance/audit "
+            "references for each included finding and the evidence seal status at "
+            "report generation time. Reconcile these against the case custody "
+            "ledger to verify report integrity."
+        ),
+    }
+    if custody is not None:
+        # custody is a sanitized summary (event counts / last events) from the
+        # DB authority; the portal supplies it. Never contains absolute paths.
+        appendix["custody"] = custody
+    return appendix
+
+
 def extract_all_iocs(findings: list[dict]) -> dict[str, list[dict]]:
     """Extract IOCs from findings with cross-references to source finding IDs.
 
@@ -301,12 +407,18 @@ def generate_report_data(
     finding_ids: list[str] | None = None,
     start_date: str = "",
     end_date: str = "",
+    custody: dict | None = None,
+    reauth_audit_event_id: str | None = None,
 ) -> dict:
     """Core report generation logic.
 
     Assembles a structured report dict from approved case data, with evidence
     chain provenance and verification reconciliation. Raises KeyError if the
     profile is unknown (callers validate the profile name first).
+
+    custody / reauth_audit_event_id are supplied by the portal (F-MVP-4): the
+    custody summary is folded into the provenance appendix, and the re-auth
+    event id is recorded as the authorization that gated report inclusion.
     """
     profile = PROFILES[profile_name]
 
@@ -351,7 +463,11 @@ def generate_report_data(
             "manifest_hash": None,
         }
 
-    # Filter approved only
+    # Filter approved only. This is the single authoritative gate: only items
+    # whose status is exactly "APPROVED" reach the report. Unapproved, draft,
+    # proposed, or rejected items are dropped here and never re-introduced
+    # downstream (F-MVP-4 / AGENTS.md security invariant: reports include
+    # approved findings and approved supporting data only).
     approved_findings = [f for f in all_findings if f.get("status") == "APPROVED"]
     approved_timeline = [t for t in all_timeline if t.get("status") == "APPROVED"]
 
@@ -512,6 +628,22 @@ def generate_report_data(
             result["verification_alerts"] = [
                 {"alert": "RECONCILIATION_ERROR", "detail": str(e)}
             ]
+
+    # Custody / provenance appendix (F-MVP-4). Built from the full approved
+    # findings (with provenance/content_hash/audit ids intact) BEFORE they were
+    # stripped for the body, so each included finding carries verification
+    # material. Bodies stay clean; the appendix carries the proof references.
+    result["custody_appendix"] = build_custody_appendix(
+        approved_findings, ev_chain, custody=custody
+    )
+
+    # Record the operator re-auth that authorized report inclusion/export, so the
+    # generated artifact carries its own authorization provenance (F-MVP-4).
+    if reauth_audit_event_id:
+        result["reauth_audit_event_id"] = str(reauth_audit_event_id)
+        result["custody_appendix"]["authorized_by_reauth_event"] = str(
+            reauth_audit_event_id
+        )
 
     return result
 
