@@ -38,7 +38,7 @@ Rules:
 - [x] BATCH-K4 - OpenSearch derived-state and host identity cutover
 - [x] BATCH-K5 - run_command authority-isolation hardening
 - [x] BATCH-K6 - Portal/report tamper regression and file-authority removal
-- [ ] BATCH-V1 - End-to-end validation and cutover
+- [x] BATCH-V1 - End-to-end validation and cutover
 
 ## BATCH-A0 - Freeze simplified migration operating model
 
@@ -825,19 +825,16 @@ Acceptance:
 
 Dependencies: BATCH-A1; BATCH-B1; BATCH-C1; BATCH-D1; BATCH-D2; BATCH-E1; BATCH-F1; BATCH-G1; BATCH-H1; BATCH-I1; BATCH-J1; BATCH-L1; BATCH-K1; BATCH-K2; BATCH-K3; BATCH-K4; BATCH-K5; BATCH-K6.
 
-Status (2026-06-08): IN_PROGRESS - first live VM run done, and the remaining V1
-enablers are now integrated on `revamp/spg-v1`: B-MVP-8 installer
-operator-profile/control-plane env, B-MVP-9 default-case agent issuance,
-B-MVP-11 `rag_search_case` proxy-denial fix, B-MVP-12 per-case
-`agent_runtime` ACLs, B-MVP-13 local-HMAC MVP re-auth decision, B-MVP-14
-atomic register+seal journey decision, and B-MVP-15 pgvector seed path. Earlier
-live validation covered auth, forced reset, case DB authority, evidence
-detect/seal, custody hash chain, agent credential/MCP, path redaction,
-pre-seal deny/post-seal allow, and the run_command deny floor. NOT complete:
-live VM cutover must still apply/restart from the integrated root and drive
-`ingest_job`/OpenSearch, seeded pgvector `rag_search_case`, allowed
-`run_command`, report export, and custody proof export. Box stays unchecked
-until the full live journey completes.
+Status (2026-06-08): DONE - live VM cutover/smoke completed from integrated
+root `revamp/spg-v1`. The run applied the integrated migrations plus additive
+IOC content-hash fixup `202606081602_investigation_iocs_content_hash.sql`,
+restarted Gateway/job worker with `~/.sift/control-plane.env`, seeded the
+shared pgvector forensic-knowledge corpus (`case_id NULL`), created/activated
+`case-v1gate-06081857`, registered/sealed
+evidence, issued an agent with default case binding, proved pre-seal denial and
+post-seal `run_command`, completed `ingest_job`/OpenSearch and
+`rag_search_case`, exported an approved-finding report, and exported DB custody
+proof. Validation evidence is recorded at the top of `Session-Notes.md`.
 
 Scope:
 

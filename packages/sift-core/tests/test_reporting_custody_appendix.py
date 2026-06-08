@@ -140,6 +140,20 @@ class TestCustodyAppendix:
         result = _gen(case_dir, "full", custody=custody)
         assert result["custody_appendix"]["custody"] == custody
 
+    def test_db_custody_drives_visible_evidence_chain(self, case_dir):
+        custody = {
+            "seal_status": "sealed",
+            "manifest_version": 7,
+            "active_count": 2,
+            "head_hash": "sha256:db-head",
+            "issues": [],
+        }
+        result = _gen(case_dir, "full", custody=custody)
+        assert result["evidence_chain"]["status"] == "sealed"
+        assert result["evidence_chain"]["manifest_version"] == 7
+        assert result["evidence_chain"]["head_hash"] == "sha256:db-head"
+        assert "evidence_chain_warning" not in result
+
 
 class TestProvenanceSanitization:
     def test_absolute_paths_dropped(self):

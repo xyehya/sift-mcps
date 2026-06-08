@@ -192,6 +192,47 @@ def test_ingest_handler_stamps_provenance_during_ingest(tmp_path):
     assert bulk._provenance_ctx.get() is None
 
 
+def test_ingest_handler_accepts_single_jsonl_file_without_path_leak(tmp_path):
+    evidence_file = tmp_path / "events.jsonl"
+    evidence_file.write_text(
+        '{"timestamp":"2026-06-08T18:20:00Z","event":"suspicious","host":"HOST01"}\n',
+        encoding="utf-8",
+    )
+    job = _claimed_job(evidence_file)
+    ctx = _fake_ctx(job)
+    captured_actions = []
+
+    def _bulk(_client, actions, **_kwargs):
+        captured_actions.extend(actions)
+        return len(actions), []
+
+    with patch("opensearch_mcp.ingest.discover", side_effect=AssertionError("no dir walk")), \
+         patch("opensearch_mcp.client.get_client", return_value=MagicMock()), \
+         patch("opensearch_mcp.bulk.helpers.bulk", side_effect=_bulk):
+        result = job_ingest.ingest_job_handler(job, ctx)
+
+    rp = result.result_public
+    assert rp["indexed"] == 1
+    assert rp["bulk_failed"] == 0
+    assert rp["hosts"][0]["hostname"] == "HOST01"
+    assert rp["hosts"][0]["artifacts"][0]["artifact"] == "json"
+    assert rp["hosts"][0]["artifacts"][0]["index"].startswith(
+        "case-11111111-1111-1111-1111-111111111111-json-events-host01"
+    )
+
+    blob = repr(rp)
+    assert str(evidence_file) not in blob
+    assert "source_file" not in blob
+
+    assert len(captured_actions) == 1
+    source = captured_actions[0]["_source"]
+    assert source["vhir.case_id"] == job.case_id
+    assert source["vhir.evidence_id"] == job.evidence_id
+    assert source["vhir.job_id"] == job.job_id
+    assert source["vhir.provenance_id"] == result.provenance_id
+    assert "vhir.source_file" not in source
+
+
 def test_ingest_handler_missing_evidence_path_fails_terminally_without_path(tmp_path):
     job = ClaimedJob(
         job_id="job-x",
@@ -219,6 +260,17 @@ def test_ingest_handler_unavailable_source_path_message_has_no_path(tmp_path):
     with pytest.raises(FatalJobError) as exc:
         job_ingest.ingest_job_handler(job, ctx)
     assert str(missing) not in str(exc.value)
+
+
+def test_ingest_handler_unsupported_single_file_message_has_no_path(tmp_path):
+    evidence_file = tmp_path / "plain.log"
+    evidence_file.write_text("not json\n", encoding="utf-8")
+    job = _claimed_job(evidence_file)
+    ctx = _fake_ctx(job)
+    with pytest.raises(FatalJobError) as exc:
+        job_ingest.ingest_job_handler(job, ctx)
+    assert "unsupported single-file evidence format" in str(exc.value)
+    assert str(evidence_file) not in str(exc.value)
 
 
 def test_handler_registers_with_jobworker_as_ingest_type():

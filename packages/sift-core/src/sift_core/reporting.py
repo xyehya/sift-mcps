@@ -451,31 +451,46 @@ def generate_report_data(
         pass
     evidence_count = len(evidence_list)
 
-    # Evidence chain status — included in every report for chain-of-custody
+    # Evidence chain status — included in every report for chain-of-custody. In
+    # DB-active portal generation, the caller supplies the DB custody summary;
+    # prefer that authority over the legacy local manifest mirror.
     ev_chain: dict = {}
-    try:
-        ev_status = _ev_chain_status(case_dir)
+    if custody and custody.get("seal_status"):
+        active_count = custody.get("active_count", 0)
         ev_chain = {
-            "status": str(ev_status["status"]),
-            "manifest_version": ev_status.get("manifest_version", 0),
-            "ok_count": ev_status.get("ok_count", 0),
-            "issues": ev_status.get("issues", []),
-            "manifest_hash": None,
+            "status": str(custody.get("seal_status")),
+            "manifest_version": custody.get("manifest_version", 0),
+            "ok_count": active_count,
+            "active_count": active_count,
+            "issues": custody.get("issues", []),
+            "manifest_hash": custody.get("manifest_hash"),
+            "head_hash": custody.get("head_hash"),
+            "ledger_tip_hash": custody.get("ledger_tip_hash"),
         }
+    else:
         try:
-            manifest = load_manifest(case_dir)
-            if manifest:
-                ev_chain["manifest_hash"] = manifest.get("manifest_hash")
-        except Exception:
-            pass
-    except Exception as exc:
-        ev_chain = {
-            "status": str(ChainStatus.LEDGER_ERROR),
-            "issues": [f"Chain status check failed: {exc}"],
-            "manifest_version": 0,
-            "ok_count": 0,
-            "manifest_hash": None,
-        }
+            ev_status = _ev_chain_status(case_dir)
+            ev_chain = {
+                "status": str(ev_status["status"]),
+                "manifest_version": ev_status.get("manifest_version", 0),
+                "ok_count": ev_status.get("ok_count", 0),
+                "issues": ev_status.get("issues", []),
+                "manifest_hash": None,
+            }
+            try:
+                manifest = load_manifest(case_dir)
+                if manifest:
+                    ev_chain["manifest_hash"] = manifest.get("manifest_hash")
+            except Exception:
+                pass
+        except Exception as exc:
+            ev_chain = {
+                "status": str(ChainStatus.LEDGER_ERROR),
+                "issues": [f"Chain status check failed: {exc}"],
+                "manifest_version": 0,
+                "ok_count": 0,
+                "manifest_hash": None,
+            }
 
     # Filter approved only. This is the single authoritative gate: only items
     # whose status is exactly "APPROVED" reach the report. Unapproved, draft,
@@ -595,13 +610,18 @@ def generate_report_data(
 
     # Evidence chain provenance
     result["evidence_chain"] = ev_chain
-    _ev_status_val = ev_chain.get("status", "")
+    _ev_status_val = str(ev_chain.get("status", ""))
     _VIOLATION_STATUSES = {
         str(ChainStatus.MODIFIED),
+        ChainStatus.MODIFIED.value,
         str(ChainStatus.MISSING),
+        ChainStatus.MISSING.value,
         str(ChainStatus.UNREGISTERED),
+        ChainStatus.UNREGISTERED.value,
         str(ChainStatus.LEDGER_ERROR),
+        ChainStatus.LEDGER_ERROR.value,
     }
+    _OK_STATUSES = {str(ChainStatus.OK), ChainStatus.OK.value, "sealed"}
     if _ev_status_val in _VIOLATION_STATUSES:
         _chain_warning = (
             f"EVIDENCE INTEGRITY VIOLATION ({_ev_status_val}): "
@@ -613,7 +633,7 @@ def generate_report_data(
         result["integrity_warning"] = (
             _chain_warning + " | " + existing if existing else _chain_warning
         )
-    elif _ev_status_val and _ev_status_val != str(ChainStatus.OK):
+    elif _ev_status_val and _ev_status_val not in _OK_STATUSES:
         # UNSEALED — evidence not yet registered
         result["evidence_chain_warning"] = (
             "No sealed evidence manifest. Evidence integrity is unverified. "

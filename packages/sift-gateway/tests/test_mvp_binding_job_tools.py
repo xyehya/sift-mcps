@@ -181,3 +181,22 @@ async def test_gateway_mcp_registers_local_binding_tools(tmp_path):
         tools = {tool.name for tool in await mcp.list_tools()}
 
     assert {"ingest_job", "run_command_job", "job_status", "rag_search_case"} <= tools
+
+
+async def test_gateway_mcp_run_command_job_invokes_gateway_bound_handler(tmp_path):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    gateway = _Gateway(case_dir)
+    with patch(
+        "sift_gateway.policy_middleware.check_evidence_gate",
+        return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
+    ):
+        mcp = create_gateway_mcp_server(gateway, api_keys={})
+        result = await mcp.call_tool(
+            "run_command_job",
+            {"command": "cat evidence/disk.E01", "purpose": "smoke"},
+        )
+
+    body = _payload(result.content)
+    assert body == {"job_id": "job-1", "status": "queued", "job_type": "run_command"}
+    assert gateway.job_service.enqueued[0]["job_type"] == "run_command"

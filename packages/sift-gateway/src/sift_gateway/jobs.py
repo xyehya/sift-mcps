@@ -281,6 +281,13 @@ class JobService:
             sys_role = principal.get("system_role")
         if sys_role in ("owner", "admin"):
             return
+        default_case = None
+        if isinstance(principal, Identity):
+            default_case = principal.case_id
+        elif isinstance(principal, dict):
+            default_case = principal.get("case_id") or principal.get("default_case_id")
+        if default_case and str(default_case) == str(case_id):
+            return
         memberships = ()
         if isinstance(principal, Identity):
             memberships = principal.case_memberships

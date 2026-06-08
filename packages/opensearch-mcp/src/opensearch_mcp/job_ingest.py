@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 # Keys the worker-only spec_internal payload may carry. The evidence path is
 # resolved by the operator/Gateway/worker before enqueue and lives ONLY here.
 _SPEC_EVIDENCE_PATH_KEYS = ("evidence_path", "scan_path", "input_path")
+_JSON_FILE_SUFFIXES = frozenset({".json", ".jsonl", ".ndjson"})
 
 # A provenance recorder persists the index/provenance metadata to Postgres via
 # the BATCH-F1 RPCs (register_opensearch_index / record_opensearch_ingest_provenance).
@@ -95,6 +96,55 @@ def _result(job_result_cls, *, provenance_id: str, hosts: list[dict], indexed: i
         },
         provenance_id=provenance_id,
     )
+
+
+def _single_file_kind(path: Path) -> str | None:
+    if path.suffix.lower() in _JSON_FILE_SUFFIXES:
+        return "json"
+    return None
+
+
+def _ingest_single_json_file(
+    *,
+    evidence_path: Path,
+    client: Any,
+    case_id: str,
+    hostname: str,
+    job_id: str,
+    spec: dict[str, Any],
+) -> Any:
+    from opensearch_mcp import __version__
+    from opensearch_mcp.parse_json import ingest_json
+    from opensearch_mcp.paths import build_index_name
+    from opensearch_mcp.results import ArtifactResult, HostResult, IngestResult
+
+    pipeline_version = f"opensearch-mcp-{__version__}"
+    index_name = build_index_name(case_id, f"json-{evidence_path.stem}", hostname)
+    indexed, skipped, bulk_failed, _host_renamed = ingest_json(
+        evidence_path,
+        client,
+        index_name,
+        hostname,
+        time_field=spec.get("time_field") or None,
+        source_file="",
+        ingest_audit_id=job_id,
+        pipeline_version=pipeline_version,
+        batch_size=int(spec.get("batch_size") or 1000),
+    )
+
+    result = IngestResult(pipeline_version=pipeline_version)
+    host = HostResult(hostname=hostname)
+    host.artifacts.append(
+        ArtifactResult(
+            artifact="json",
+            index=index_name,
+            indexed=int(indexed),
+            skipped=int(skipped),
+            bulk_failed=int(bulk_failed),
+        )
+    )
+    result.hosts.append(host)
+    return result
 
 
 def make_ingest_job_handler(
@@ -167,19 +217,33 @@ def _run_ingest_job(
     ctx.record_step(0, "discover", status="running")
     ctx.heartbeat()
 
-    try:
-        hosts = discover(evidence_path, hostname=hostname)
-    except Exception as exc:
-        ctx.record_step(0, "discover", status="failed")
-        raise JobError(f"evidence discovery failed: {type(exc).__name__}") from exc
+    single_file_kind = _single_file_kind(evidence_path) if evidence_path.is_file() else None
+    hosts: list[Any] = []
+    if evidence_path.is_file():
+        if not single_file_kind:
+            ctx.record_step(0, "discover", status="failed")
+            raise FatalJobError("unsupported single-file evidence format for ingest job")
+        ctx.record_step(
+            0,
+            "discover",
+            status="succeeded",
+            detail={"hosts": 1, "artifact": single_file_kind},
+        )
+        ctx.log(f"discovered 1 {single_file_kind} file for ingest", level="info")
+    else:
+        try:
+            hosts = discover(evidence_path, hostname=hostname)
+        except Exception as exc:
+            ctx.record_step(0, "discover", status="failed")
+            raise JobError(f"evidence discovery failed: {type(exc).__name__}") from exc
 
-    if not hosts:
-        ctx.record_step(0, "discover", status="succeeded",
-                        detail={"hosts": 0})
-        raise FatalJobError("no ingestable hosts/artifacts found in evidence source")
+        if not hosts:
+            ctx.record_step(0, "discover", status="succeeded",
+                            detail={"hosts": 0})
+            raise FatalJobError("no ingestable hosts/artifacts found in evidence source")
 
-    ctx.record_step(0, "discover", status="succeeded", detail={"hosts": len(hosts)})
-    ctx.log(f"discovered {len(hosts)} host(s) for ingest", level="info")
+        ctx.record_step(0, "discover", status="succeeded", detail={"hosts": len(hosts)})
+        ctx.log(f"discovered {len(hosts)} host(s) for ingest", level="info")
 
     try:
         client = get_client()
@@ -203,15 +267,25 @@ def _run_ingest_job(
     ctx.record_step(1, "index", status="running")
     token = set_ingest_provenance(provenance_fields)
     try:
-        result = ingest(
-            hosts=hosts,
-            client=client,
-            audit=audit,
-            case_id=str(job.case_id),
-            include=_as_set(spec.get("include")),
-            exclude=_as_set(spec.get("exclude")),
-            full=bool(spec.get("full", False)),
-        )
+        if single_file_kind == "json":
+            result = _ingest_single_json_file(
+                evidence_path=evidence_path,
+                client=client,
+                case_id=str(job.case_id),
+                hostname=hostname or "single-file",
+                job_id=str(job.job_id),
+                spec=spec,
+            )
+        else:
+            result = ingest(
+                hosts=hosts,
+                client=client,
+                audit=audit,
+                case_id=str(job.case_id),
+                include=_as_set(spec.get("include")),
+                exclude=_as_set(spec.get("exclude")),
+                full=bool(spec.get("full", False)),
+            )
     except Exception as exc:
         ctx.record_step(1, "index", status="failed")
         # type-name only; never the exception text (may carry paths).

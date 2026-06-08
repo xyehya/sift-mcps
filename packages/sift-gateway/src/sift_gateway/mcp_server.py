@@ -233,10 +233,18 @@ def _register_gateway_job_tools(mcp: FastMCP, gateway: Any) -> None:
     from sift_gateway.job_tools import gateway_job_tool_specs
 
     for spec in gateway_job_tool_specs():
+        async def _handler(
+            arguments: dict[str, Any],
+            examiner: str | None,
+            *,
+            _tool_handler=spec["handler"],
+        ):
+            return await _tool_handler(gateway, arguments, examiner)
+
         mcp.add_tool(
             GatewayLocalTool(
                 gateway=gateway,
-                handler=spec["handler"],
+                handler=_handler,
                 name=spec["name"],
                 description=spec["description"],
                 parameters=spec["parameters"],
@@ -258,10 +266,13 @@ def _register_rag_tool(mcp: FastMCP, gateway: Any) -> None:
         rag_search_case_schema,
     )
 
+    async def _handler(arguments: dict[str, Any], examiner: str | None):
+        return await handle_rag_search_case(gateway, arguments, examiner)
+
     mcp.add_tool(
         GatewayLocalTool(
             gateway=gateway,
-            handler=handle_rag_search_case,
+            handler=_handler,
             name=RAG_SEARCH_CASE_TOOL,
             description=(
                 "Search the case-scoped pgvector RAG plane and shared forensic "

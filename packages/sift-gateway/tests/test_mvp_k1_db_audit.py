@@ -179,7 +179,29 @@ def test_actor_columns_agent_maps_agent_id():
     assert actor_type == "agent"
     assert agent == "agent-1"
     assert user is None and service is None
-    assert token == "tok-1"
+    assert token is None
+
+
+def test_actor_columns_preserves_distinct_legacy_token_uuid():
+    ident = Identity(
+        principal="legacy-agent",
+        principal_type="agent",
+        token_id="22222222-2222-2222-2222-222222222222",
+        agent_id="agent-1",
+        created_by=None,
+        role="agent",
+        source_ip="127.0.0.1",
+        auth_surface="mcp",
+        tool_scopes=frozenset({"mcp:*"}),
+        principal_id="agent-1",
+    )
+
+    actor_type, user, agent, service, token = _actor_columns(ident)
+
+    assert actor_type == "agent"
+    assert user is None and service is None
+    assert agent == "agent-1"
+    assert token == "22222222-2222-2222-2222-222222222222"
 
 
 # --------------------------------------------------------------------------

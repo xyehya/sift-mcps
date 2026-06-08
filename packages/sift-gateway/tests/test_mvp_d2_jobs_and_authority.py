@@ -83,6 +83,22 @@ def _operator(case_id="case-1", system_role=None):
     )
 
 
+def _agent(case_id="case-1"):
+    return Identity(
+        principal="hermes",
+        principal_type="agent",
+        token_id="agent-1",
+        agent_id="agent-1",
+        created_by=None,
+        role="agent",
+        source_ip=None,
+        auth_surface="mcp",
+        case_id=case_id,
+        principal_id="agent-1",
+        case_memberships=(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Deliverable 1: job adapter
 # ---------------------------------------------------------------------------
@@ -187,6 +203,22 @@ def test_job_status_denies_non_member():
     with pytest.raises(JobServiceError) as exc:
         svc.job_status_public("j1", principal=_operator(case_id="case-1"))
     assert exc.value.reason == "job_case_membership_required"
+
+
+def test_job_status_allows_agent_default_case_binding():
+    row = ("j1", "run_command", "succeeded", "case-1") + (None,) * 14
+
+    def responder(sql):
+        if "app.job_status_public" in sql:
+            return row
+        return None
+
+    svc, _ = _job_service_with(responder)
+
+    status = svc.job_status_public("j1", principal=_agent(case_id="case-1"))
+
+    assert status["job_id"] == "j1"
+    assert status["status"] == "succeeded"
 
 
 def test_job_status_not_found():

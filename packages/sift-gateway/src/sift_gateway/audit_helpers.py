@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,7 @@ def _actor_columns(principal: Any) -> tuple[str, str | None, str | None, str | N
     ptype = _identity_attr(principal, "principal_type")
     pid = _identity_attr(principal, "principal_id")
     token_id = _identity_attr(principal, "token_id")
-    token_id = str(token_id) if token_id else None
+    token_id = _legacy_token_id(token_id, pid)
     if ptype == "user":
         return "user", (str(pid) if pid else None), None, None, token_id
     if ptype == "agent":
@@ -47,6 +48,26 @@ def _actor_columns(principal: Any) -> tuple[str, str | None, str | None, str | N
     if ptype == "service":
         return "service", None, None, (str(pid) if pid else None), token_id
     return "system", None, None, None, token_id
+
+
+def _legacy_token_id(token_id: Any, principal_id: Any) -> str | None:
+    """Return a DB ``mcp_tokens.id`` value, not a Supabase principal id/hash.
+
+    Supabase JWT identities use their principal row id as ``Identity.token_id``
+    for FastMCP client attribution. That value is not an ``app.mcp_tokens`` row
+    and must not be written to ``audit_events.actor_token_id``. Legacy PR02
+    tokens keep a distinct UUID token id, which remains valid for the FK.
+    """
+    if not token_id:
+        return None
+    value = str(token_id)
+    if principal_id and value == str(principal_id):
+        return None
+    try:
+        uuid.UUID(value)
+    except (TypeError, ValueError):
+        return None
+    return value
 
 
 def _jsonb(value: dict[str, Any]):

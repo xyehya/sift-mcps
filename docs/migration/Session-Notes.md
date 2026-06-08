@@ -13,6 +13,95 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - BATCH-V1 live cutover completed
+
+Status: DONE
+
+Ran the live BATCH-V1 cutover/smoke on the SIFT VM from integrated root
+`revamp/spg-v1`. The VM was synced to `~/sift-mcps-test`, Gateway and the durable
+job worker were restarted with `~/.sift/control-plane.env`, and the demo journey
+completed through portal + Gateway MCP without exposing service secrets or
+absolute evidence paths to the agent surface.
+
+Live VM readiness:
+
+- Root disk was expanded after the run hit space pressure: `/` now has a 200G
+  logical volume with roughly 94G free. Docker uses the VM reverse SOCKS proxy
+  for image pulls.
+- Gateway health on `https://127.0.0.1:4508/api/v1/health`: `status=ok`,
+  Supabase `status=ok`, evidence root `status=ok`.
+- OpenSearch was started through Docker after proxy configuration; cluster
+  health is `yellow` on the single-node VM and indexing/search works.
+- Supabase migration fixup applied live through `psycopg` because the VM image
+  lacks `psql`: new additive migration
+  `202606081602_investigation_iocs_content_hash.sql` adds
+  `app.investigation_iocs.content_hash`. This aligns IOC authority rows with the
+  K2 store's hash-guarded approve/report contract. The self-hosted DB has no
+  `supabase_migrations.schema_migrations` table to stamp.
+
+Live journey evidence:
+
+- Active case: `case-v1gate-06081857`, UUID
+  `57a06521-c9b8-4654-92ac-42b4f2bb0915`, active case authority from Postgres.
+- Evidence seal: `evidence/v1-gate.log` was registered/sealed with DB proof
+  export `d93bc9db-f283-4b23-ad81-0c2c3a3b7cb1`; `evidence/v1-ingest.jsonl`
+  registered/sealed as evidence `f8c0c7bf-1838-4ca6-b2c1-38c436ff25b0`,
+  `manifest_version=2`, proof export `d3736f53-4242-43ec-9416-76d326388c19`,
+  proof hash
+  `sha256:e7d20083ce0b15ae975f37ccb51693f8f721098841432935dd28f5cce1e473bc`.
+- Agent issuance: live agent token was issued with default case binding to
+  `57a06521-c9b8-4654-92ac-42b4f2bb0915`. Token material stayed VM-local.
+- Evidence gate: pre-seal agent execution failed closed with the unsealed
+  evidence gate; post-seal `run_command_job`
+  `884c3641-7bfa-4801-a3de-7eb7b69f0d2e` succeeded and redacted absolute-path
+  output.
+- OpenSearch ingest: `ingest_job`
+  `e6572af3-e894-4b06-ab8a-37db87c7246d` succeeded for
+  `evidence/v1-ingest.jsonl`; provenance
+  `3f90b65a-b829-4ef8-ac2b-419b8f3c65e6`, indexed `1`, bulk failures `0`,
+  index `case-57a06521-c9b8-4654-92ac-42b4f2bb0915-json-v1-ingest-host01`.
+  DB provenance, `app.opensearch_indices`, and
+  `app.host_identity_decisions` all recorded the same job/provenance/index.
+- RAG: `rag_search_case` returned `status=ok`, `count=3`, `kinds=["knowledge"]`,
+  `has_abs_path=false` from Supabase pgvector. Top titles were
+  `Intelligence Requirements Definition`, `SIFT Workstation`, and
+  `oledump.py Overview`; shared knowledge rows retain `case_id NULL`.
+- Report approval/export: agent staged finding `F-hermes-v1-gate-001`; portal
+  HMAC re-auth approved it (`authority=db`, `approved=1`). Report
+  `41e0a5ff-4e43-4a38-8e9c-5ce128160a16` was generated/saved/downloaded with
+  the approved finding, IOC/MITRE sections, and DB sealed custody appendix.
+  Export size was 5570 bytes; a leak scan found no `/cases`, `/home`,
+  `127.0.0.1`, Supabase/service-role/password, Postgres, or OpenSearch strings.
+- Custody proof export: DB proof export
+  `f06b6bb7-ae55-4d44-85be-d34d8c198668`, `manifest_version=2`, proof hash
+  `sha256:e7d20083ce0b15ae975f37ccb51693f8f721098841432935dd28f5cce1e473bc`.
+
+Live defects found and fixed in this cutover:
+
+- DB audit actor FK: Supabase JWT agent principals no longer populate
+  `actor_token_id` with a non-token principal UUID.
+- Gateway local MCP handlers now pass the gateway instance to job/RAG handlers.
+- Agent `job_status` accepts the token's `case_id`/`default_case_id` for the job
+  case.
+- OpenSearch ingest now handles sealed single JSON/JSONL/NDJSON evidence files
+  without leaking paths or requiring directory discovery.
+- Report generation now uses DB custody for the visible evidence-chain block
+  when the portal supplies custody, avoiding stale legacy-manifest warnings.
+- Added `202606081602_investigation_iocs_content_hash.sql` so IOC rows can use
+  the same content-hash authority contract as findings/timeline.
+
+Validation:
+
+- Local focused tests after fixes: core report/K2 store `25 passed`; gateway
+  audit/local-binding/job authorization `30 passed`; OpenSearch ingest
+  `10 passed`.
+- Live report export leak scan: clean for local paths and service-secret terms.
+- `bash -n install.sh`: OK.
+- `uv lock --check`: OK.
+- `python3 scripts/validate_docs.py`: OK.
+- `python3 scripts/validate_migration_docs.py`: OK.
+- `git diff --check`: clean.
+
 ### 2026-06-08 - V1 enablers integrated before live cutover
 
 Status: DONE
@@ -749,13 +838,13 @@ Next:
 | B-MVP-5 | Backlog | DONE | Bind `create_dashboard_v2_app` service slots (`evidence_service`/`investigation_service`/`report_service`/`job_service`) to live Postgres/C1 RPCs/D2 `JobService`. | Landed in BATCH-L1 with Gateway-owned `portal_services.py` and migration `202606081500_report_metadata.sql`. | none |
 | B-MVP-6 | Backlog | DONE | Worker bootstrap + enqueue call sites: register D1 `JobWorker` handlers (`ingest`, `run_command`) and enqueue call sites that place resolved local paths in worker-only `spec_internal`. | Landed in BATCH-L1 with `sift-job-worker`, generic `ingest_job`, `run_command_job`, and `job_status`. | none |
 | B-MVP-7 | Backlog | DONE | Wire a case-scoped pgvector RAG query tool (G1 `app.rag_search`/`PgVectorRagStore`) into the Gateway tool surface with a worker service DSN. | Landed in BATCH-L1 as `rag_search_case`, routed through existing Gateway policy/response guard. | none |
-| B-MVP-8 | Backlog | DONE | Installer bootstrap created Supabase `auth.users` without matching `app.operator_profiles` and lacked full control-plane DSN/env wiring. | Landed in V1 enabler integration (`58c669b`, merge `84404ba`): installer writes `~/.sift/control-plane.env`, keeps DSN/pepper out of YAML, and creates/repairs Auth + `app.operator_profiles` together. | live VM verify |
-| B-MVP-9 | Backlog | DONE | Case-bound agent issuance was inconsistent: case-scoped scopes did not load, while global scopes lacked an active-case default. | Landed in V1 enabler integration (`58c669b`, merge `84404ba`): MVP agents use global tool scopes plus `agents.default_case_id`/token `case_id` bound to the active DB case. | live VM verify |
-| B-MVP-10 | Backlog | DONE | Agent `record_finding`/`record_timeline_event` stage to case files, not `app.investigation_*`; portal approval and approved-only report DB authority do not see them. | Landed in BATCH-K2 (`5b1cf9c`): `case_manager` writes findings/timeline/IOC/TODO DB-first via `PostgresInvestigationStore`; portal review + approved-only report read DB authority. | approval, approved-only report |
-| B-MVP-11 | Backlog | DONE | `rag_search_case` denied live with `active_case_proxy_denied`; case-scoped Gateway-local tool was treated like a proxied tool without safe case args. | Landed in V1 enabler integration (`db47c71`, merge `2c34520`): `ProxyActiveCaseMiddleware` skips Gateway-local tools; RAG still resolves active case internally and remains response-guarded. | live VM RAG smoke |
-| B-MVP-12 | Backlog | DONE | `run_command` deny floor worked, but allowed execution failed because `agent_runtime` lacked read ACL on new case dirs. | Landed in V1 enabler integration (`0acd60f`, merge `09a0023`): portal case creation applies per-case `setfacl` for `agent_runtime` read/write areas and denies legacy authority artifacts. | live VM allowed-exec |
+| B-MVP-8 | Backlog | DONE | Installer bootstrap created Supabase `auth.users` without matching `app.operator_profiles` and lacked full control-plane DSN/env wiring. | Landed in V1 enabler integration (`58c669b`, merge `84404ba`): installer writes `~/.sift/control-plane.env`, keeps DSN/pepper out of YAML, and creates/repairs Auth + `app.operator_profiles` together. | verified in BATCH-V1 |
+| B-MVP-9 | Backlog | DONE | Case-bound agent issuance was inconsistent: case-scoped scopes did not load, while global scopes lacked an active-case default. | Landed in V1 enabler integration (`58c669b`, merge `84404ba`): MVP agents use global tool scopes plus `agents.default_case_id`/token `case_id` bound to the active DB case. | verified in BATCH-V1 |
+| B-MVP-10 | Backlog | DONE | Agent `record_finding`/`record_timeline_event` stage to case files, not `app.investigation_*`; portal approval and approved-only report DB authority do not see them. | Landed in BATCH-K2 (`5b1cf9c`): `case_manager` writes findings/timeline/IOC/TODO DB-first via `PostgresInvestigationStore`; portal review + approved-only report read DB authority. | verified in BATCH-V1 |
+| B-MVP-11 | Backlog | DONE | `rag_search_case` denied live with `active_case_proxy_denied`; case-scoped Gateway-local tool was treated like a proxied tool without safe case args. | Landed in V1 enabler integration (`db47c71`, merge `2c34520`): `ProxyActiveCaseMiddleware` skips Gateway-local tools; RAG still resolves active case internally and remains response-guarded. | verified in BATCH-V1 |
+| B-MVP-12 | Backlog | DONE | `run_command` deny floor worked, but allowed execution failed because `agent_runtime` lacked read ACL on new case dirs. | Landed in V1 enabler integration (`0acd60f`, merge `09a0023`): portal case creation applies per-case `setfacl` for `agent_runtime` read/write areas and denies legacy authority artifacts. | verified in BATCH-V1 |
 | B-MVP-13 | Backlog | DONE | Evidence seal/ignore/retire re-auth still uses legacy local-password PBKDF2 HMAC, not Supabase password re-auth. | MVP decision landed in V1 enabler integration (`0acd60f`, merge `09a0023`): local password/HMAC remains the MVP re-auth bridge and endpoints surface `reauth_method=local_hmac_mvp_bridge`; Supabase password re-auth is deferred. | none |
-| B-MVP-14 | Backlog | DONE | No standalone register-evidence endpoint exists. Operator journey said detect -> register -> seal, but implementation folded registration into seal `file_specs` while emitting `EVIDENCE_REGISTERED`. | MVP decision landed in V1 enabler integration (`0acd60f`, merge `09a0023`): register+seal is one atomic operator action (`registration_mode=atomic_register_and_seal`); DB seal calls `app.evidence_register` before `app.evidence_seal`. | live VM journey verify |
-| B-MVP-15 | Backlog | DONE | Supabase pgvector RAG was schema/query-surface only; live VM tables were empty and any knowledge answers came from legacy `kb_*`/forensic-knowledge. | Landed in V1 enabler integration (`db47c71`, merge `2c34520`): `rag-mcp-seed-pgvector` seeds shared knowledge collections/documents/chunks (`kind='knowledge'`, `case_id NULL`) with 768-d embeddings through pgvector, not Chroma. | live VM RAG smoke |
-| B-MVP-16 | Backlog | DONE | DB-active mode still has split-brain file authority touchpoints: active-case pointer/env fallbacks, JSONL audit, evidence manifest/ledger, findings/timeline/TODO/IOC JSON, approval JSONL, OpenSearch ingest status/manifests, host dictionary, and run-command access to case-local authority artifacts. | Closed by K1-K6 (landed/integrated on `revamp/spg-v1`): active-case + audit (K1), investigation (K2), evidence/proof (K3), OpenSearch/host (K4), run_command env/ACL (K5), and report/audit/backup file-authority removal + tamper regressions (K6). Remaining file paths are explicit legacy fallback, parser compatibility, workspace/debug, or immutable export only. | V1 full journey |
-| B-MVP-17 | Backlog | DONE | K1 DB audit envelope covers case-context-established tool attempts and now wraps proxy/evidence-gate denials, but tool-scope authorization denials and active-case lookup denials still use pre-existing denial audit paths before an authority context can attach. | Decided in K6 (`b76eba9`): pre-context denials stay on the local audit mirror (`status=denied`) for the MVP and are NOT projected into `app.audit_events` (projecting unresolved principals/null case_id would write unattributable rows and expose a DB write path to unauthenticated callers). The K1 envelope remains the sole DB-audit write path for allowed calls + post-context denials. A hardened DB projector with sound principal attribution is deferred to BATCH-V1. Locked by `test_k6_precontext_denial_audit.py`. | V1 (hardened projector) |
+| B-MVP-14 | Backlog | DONE | No standalone register-evidence endpoint exists. Operator journey said detect -> register -> seal, but implementation folded registration into seal `file_specs` while emitting `EVIDENCE_REGISTERED`. | MVP decision landed in V1 enabler integration (`0acd60f`, merge `09a0023`): register+seal is one atomic operator action (`registration_mode=atomic_register_and_seal`); DB seal calls `app.evidence_register` before `app.evidence_seal`. | verified in BATCH-V1 |
+| B-MVP-15 | Backlog | DONE | Supabase pgvector RAG was schema/query-surface only; live VM tables were empty and any knowledge answers came from legacy `kb_*`/forensic-knowledge. | Landed in V1 enabler integration (`db47c71`, merge `2c34520`): `rag-mcp-seed-pgvector` seeds shared knowledge collections/documents/chunks (`kind='knowledge'`, `case_id NULL`) with 768-d embeddings through pgvector, not Chroma. | verified in BATCH-V1 |
+| B-MVP-16 | Backlog | DONE | DB-active mode still has split-brain file authority touchpoints: active-case pointer/env fallbacks, JSONL audit, evidence manifest/ledger, findings/timeline/TODO/IOC JSON, approval JSONL, OpenSearch ingest status/manifests, host dictionary, and run-command access to case-local authority artifacts. | Closed by K1-K6 (landed/integrated on `revamp/spg-v1`): active-case + audit (K1), investigation (K2), evidence/proof (K3), OpenSearch/host (K4), run_command env/ACL (K5), and report/audit/backup file-authority removal + tamper regressions (K6). Remaining file paths are explicit legacy fallback, parser compatibility, workspace/debug, or immutable export only. | verified in BATCH-V1 |
+| B-MVP-17 | Backlog | DONE | K1 DB audit envelope covers case-context-established tool attempts and now wraps proxy/evidence-gate denials, but tool-scope authorization denials and active-case lookup denials still use pre-existing denial audit paths before an authority context can attach. | Decided in K6 (`b76eba9`) and accepted for MVP live cutover: pre-context denials stay on the local audit mirror (`status=denied`) for security telemetry and are NOT projected into `app.audit_events` (projecting unresolved principals/null case_id would write unattributable rows and expose a DB write path to unauthenticated callers). The K1 envelope remains the sole DB-audit write path for allowed calls + post-context denials. Locked by `test_k6_precontext_denial_audit.py`. | none |
