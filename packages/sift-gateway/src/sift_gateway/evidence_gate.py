@@ -1,6 +1,7 @@
 """Evidence chain gate for the MCP endpoint.
 
 check_evidence_gate(case_dir_str) → {blocked, status, issues, manifest_version}
+check_evidence_gate_db(case_id, dsn) → {blocked, status, issues, manifest_version}
 invalidate_evidence_cache(case_dir_str) → None
 
 Performance model (per spec):
@@ -11,6 +12,16 @@ Performance model (per spec):
 Gate behaviour:
   - UNSEALED or any violation → blocked=True, structured response for Hermes
   - OK → blocked=False, proceed to backend
+
+DB-authority resolution path (BATCH-C1):
+  - check_evidence_gate_db() resolves seal status from Postgres
+    (app.evidence_gate_status) by case_id, NOT from files. Postgres is the
+    authority; file manifests/proofs are exports. This is the path the Gateway
+    should prefer once cases carry DB evidence state. The file-backed
+    check_evidence_gate() above remains for the legacy/bridge file flow.
+  - Fail-closed: any DB/resolution error → blocked=True (UNSEALED).
+  - The agent never receives a local path; case_id is opaque and resolves to a
+    mount path only inside broker/worker code.
 """
 
 from __future__ import annotations
@@ -108,6 +119,92 @@ def _result(cached: dict) -> dict:
         "status": status,
         "issues": cached["issues"],
         "manifest_version": cached["manifest_version"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# DB-authority resolution path (BATCH-C1)
+# ---------------------------------------------------------------------------
+# Maps the Postgres aggregate seal_status onto the same gate result shape used
+# by the file-backed path so callers/response shaping are unchanged.
+_DB_STATUS_MAP = {
+    "sealed": ChainStatus.OK,
+    "unsealed": ChainStatus.UNSEALED,
+    "violated": ChainStatus.LEDGER_ERROR,
+}
+
+
+def check_evidence_gate_db(case_id: str | None, dsn: str | None) -> dict:
+    """Resolve the evidence gate from Postgres authority for a case_id.
+
+    Reads app.evidence_gate_status(case_id) via the service DSN. Returns the
+    standard {blocked, status, issues, manifest_version} shape. Fail-closed:
+    a missing case_id, missing DSN, or any DB error returns a blocked result.
+
+    Postgres is the authority here; file manifests/proofs are exports only. The
+    agent never receives a local path — case_id is opaque and resolves to a
+    mount path only inside broker/worker code.
+    """
+    if not case_id or not dsn:
+        return {
+            "blocked": True,
+            "status": ChainStatus.UNSEALED,
+            "issues": ["No active case — create a case in the portal first"],
+            "manifest_version": 0,
+        }
+
+    try:
+        import psycopg
+    except ImportError as exc:  # pragma: no cover - deployment env
+        logger.error("evidence_gate_db: psycopg unavailable: %s", exc)
+        return {
+            "blocked": True,
+            "status": ChainStatus.LEDGER_ERROR,
+            "issues": ["Evidence authority unavailable"],
+            "manifest_version": 0,
+        }
+
+    try:
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select seal_status, manifest_version, issues "
+                    "from app.evidence_gate_status(%s)",
+                    (case_id,),
+                )
+                row = cur.fetchone()
+    except Exception as exc:
+        logger.error("evidence_gate_db: status query failed for %s: %s", case_id, exc)
+        return {
+            "blocked": True,
+            "status": ChainStatus.LEDGER_ERROR,
+            "issues": [f"Internal error resolving evidence authority: {exc}"],
+            "manifest_version": 0,
+        }
+
+    if not row:
+        # Fail-closed: no head row means nothing sealed for this case yet.
+        return {
+            "blocked": True,
+            "status": ChainStatus.UNSEALED,
+            "issues": ["No sealed evidence for this case"],
+            "manifest_version": 0,
+        }
+
+    seal_status, manifest_version, issues = row
+    status = _DB_STATUS_MAP.get(seal_status, ChainStatus.UNSEALED)
+    issue_list = issues if isinstance(issues, list) else []
+    if status != ChainStatus.OK and not issue_list:
+        issue_list = (
+            ["No sealed evidence manifest"]
+            if status == ChainStatus.UNSEALED
+            else ["Evidence integrity violation recorded"]
+        )
+    return {
+        "blocked": status != ChainStatus.OK,
+        "status": status,
+        "issues": issue_list,
+        "manifest_version": manifest_version or 0,
     }
 
 
