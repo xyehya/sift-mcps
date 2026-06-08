@@ -465,10 +465,11 @@ async def test_gate_unsealed_blocks_tool():
     combined = await _drive_call_tool(gw, "record_finding", ChainStatus.UNSEALED)
     assert "blocked" in combined
     gw.call_tool.assert_not_awaited()  # tool never ran
-    # Exactly one audit line on block — the gate line; the transport envelope is
-    # skipped so a blocked call is not double-counted.
-    assert gw._audit.log.call_count == 1
-    assert gw._audit.log.call_args.kwargs["source"] == "gateway_evidence_gate"
+    # K1 authority cutover: the gate denial remains logged, and the transport
+    # envelope now wraps the denied attempt so Postgres can record the result.
+    sources = [call.kwargs["source"] for call in gw._audit.log.call_args_list]
+    assert "gateway_evidence_gate" in sources
+    assert "gateway_mcp_envelope" in sources
 
 
 async def test_gate_violation_blocks_tool():

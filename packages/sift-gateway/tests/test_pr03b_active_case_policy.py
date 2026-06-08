@@ -111,7 +111,9 @@ async def test_proxied_case_tool_without_safe_case_arg_is_denied(tmp_path):
     assert ran is False
     assert result.is_error
     assert "active_case_proxy_denied" in result.content[0].text
-    assert gw._audit.log.call_args.kwargs["source"] == "gateway_proxy_active_case"
+    sources = [call.kwargs["source"] for call in gw._audit.log.call_args_list]
+    assert "gateway_proxy_active_case" in sources
+    assert "gateway_mcp_envelope" in sources
 
 
 async def test_client_supplied_mismatched_case_id_is_rejected(tmp_path):

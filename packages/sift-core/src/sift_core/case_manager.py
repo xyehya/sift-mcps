@@ -613,8 +613,9 @@ class CaseManager:
         return resolve_examiner()
 
     def _require_active_case(self) -> Path:
+        db_active = False
         try:
-            from sift_core.active_case_context import current_active_case
+            from sift_core.active_case_context import current_active_case, db_authority_active
 
             ctx = current_active_case()
             if ctx and ctx.case_dir is not None:
@@ -623,8 +624,18 @@ class CaseManager:
                     self._active_case_id = ctx.case_key or case_dir.name
                     self._active_case_path = case_dir
                     return case_dir
+            db_active = db_authority_active()
         except Exception:
             pass
+
+        # K1: in DB-active mode the active case comes only from the authority
+        # context. Never fall back to SIFT_CASE_DIR / ~/.sift/active_case, which
+        # are tamperable and could silently steer authoritative work elsewhere.
+        if db_active:
+            raise ValueError(
+                "No active case in authority context. The DB active case could not "
+                "be resolved for this request."
+            )
 
         # Check SIFT_CASE_DIR env var first
         from sift_common import resolve_case_dir as _resolve_case_dir_env

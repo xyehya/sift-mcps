@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
@@ -14,7 +15,11 @@ from typing import Any
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
-from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
+from sift_core.active_case_context import (
+    ActiveCaseContext,
+    current_active_case,
+    use_active_case_context,
+)
 from sift_core.agent_tools import core_tool_names
 
 from sift_gateway.audit_helpers import _extract_audit_id
@@ -134,6 +139,34 @@ def _case_text(case: ActiveCase, tool_name: str | None = None) -> TextContent:
     if tool_name:
         payload["case_context"]["tool"] = tool_name
     return TextContent(type="text", text=json.dumps(payload, indent=2))
+
+
+_READ_ONLY_NONCORE_TOOLS = frozenset({"capability_guide", "get_tool_help", "job_status"})
+
+
+def _tool_read_only(gateway: Any, name: str) -> bool:
+    """Return True only when the tool is positively known to be read-only.
+
+    Used by the DB-first audit envelope to decide which tools must fail closed
+    when a required pre-dispatch audit write fails. Unknown tools are treated as
+    mutating (fail-safe), so a missing manifest never silently downgrades a
+    write to a best-effort audit.
+    """
+    try:
+        from sift_core.agent_tools import core_tool_specs
+
+        for spec in core_tool_specs():
+            if spec.name == name:
+                return bool(getattr(spec, "read_only", False))
+    except Exception:  # pragma: no cover - defensive
+        pass
+    if name in _READ_ONLY_NONCORE_TOOLS:
+        return True
+    meta = getattr(gateway, "_tool_manifest_meta", None) or {}
+    entry = meta.get(name)
+    if isinstance(entry, dict) and "read_only" in entry:
+        return bool(entry["read_only"])
+    return False
 
 
 def _is_case_scoped_tool(gateway: Any, name: str) -> bool:
@@ -464,7 +497,11 @@ class EvidenceGateMiddleware(Middleware):
             contents.append(_case_text(case, name))
         else:
             contents = _append_case_context(contents, case_dir_str, name)
-        return ToolResult(content=contents, structured_content=build_block_response(name, gate))
+        return ToolResult(
+            content=contents,
+            structured_content=build_block_response(name, gate),
+            is_error=True,
+        )
 
 
 class ResponseGuardMiddleware(Middleware):
@@ -597,12 +634,20 @@ class CaseContextMiddleware(Middleware):
                         tool=name,
                     )
 
+        # K1: when the case was resolved from the Postgres active-case service,
+        # this request is DB-active. The context becomes the single authority for
+        # the active case; core resolvers must not fall back to env/pointer files.
         core_context = (
             ActiveCaseContext(
                 case_id=case.case_id,
                 case_key=case.case_key,
                 artifact_path=case.artifact_path,
                 membership_role=case.membership_role,
+                principal=getattr(identity, "principal", None),
+                principal_type=getattr(identity, "principal_type", None),
+                tool_scopes=getattr(identity, "tool_scopes", frozenset()) or frozenset(),
+                request_id=uuid.uuid4().hex,
+                db_active=service is not None,
             )
             if case is not None
             else None
@@ -713,13 +758,80 @@ class ProxyActiveCaseMiddleware(Middleware):
 
 
 class AuditEnvelopeMiddleware(Middleware):
-    """Write the gateway MCP transport envelope for each allowed tool call."""
+    """Write the gateway MCP transport envelope for each allowed tool call.
+
+    K1: in DB-active mode (a control-plane ``db_audit`` sink is wired) this is
+    DB-first. Before dispatch it reserves a ``requested`` envelope row in
+    ``app.audit_events`` and attaches its id to the request's
+    :class:`AuthorityContext` so mutating core handlers can reference it. If that
+    *required* pre-dispatch audit write fails and the tool is mutating, the call
+    fails closed and the backend is never invoked. After dispatch it writes a
+    ``success``/``failure`` receipt row. The JSONL writer is kept as a
+    best-effort legacy/export mirror, never the authority.
+    """
 
     def __init__(self, gateway: Any) -> None:
         self.gateway = gateway
 
     async def on_call_tool(self, context, call_next):
         name = _tool_name(context)
+        req_ctx = _request_context()
+        identity = req_ctx["identity"]
+        examiner = req_ctx["examiner"]
+        effective_principal = identity.principal if identity else examiner
+        case = _current_gateway_active_case()
+        backend_name = self._backend_name(name)
+        db_audit = getattr(self.gateway, "db_audit", None)
+
+        request_id = self._request_id()
+        envelope_event_id: str | None = None
+
+        # --- DB-first pre-dispatch envelope (required for mutating tools) ------
+        if db_audit is not None:
+            try:
+                envelope_event_id = await asyncio.to_thread(
+                    db_audit.record,
+                    event_type="mcp.tool.call",
+                    actor=identity,
+                    case_id=case.case_id if case is not None else None,
+                    source="gateway_mcp_envelope",
+                    status="requested",
+                    summary=f"requested {name}",
+                    request_id=request_id,
+                    details={
+                        "tool": name,
+                        "backend": backend_name,
+                        "phase": "pre_dispatch",
+                        "principal": effective_principal,
+                        "principal_type": getattr(identity, "principal_type", None),
+                        "role": req_ctx["role"],
+                        "token_id": req_ctx["token_id"],
+                        "source_ip": req_ctx["source_ip"],
+                        "case_key": case.case_key if case is not None else None,
+                    },
+                )
+                self._attach_audit_event(envelope_event_id, request_id)
+            except Exception as exc:
+                if self._tool_is_mutating(name):
+                    logger.warning(
+                        "mcp_envelope: required pre-dispatch DB audit failed for "
+                        "mutating tool %s; failing closed: %s",
+                        name,
+                        exc,
+                    )
+                    return _error_result(
+                        "audit_unavailable",
+                        "required audit could not be persisted; mutating call denied",
+                        tool=name,
+                    )
+                logger.warning(
+                    "mcp_envelope: pre-dispatch DB audit failed for read-only tool "
+                    "%s; proceeding: %s",
+                    name,
+                    exc,
+                )
+
+        # --- dispatch ---------------------------------------------------------
         start = time.monotonic()
         status = "ok"
         backend_audit_id: str | None = None
@@ -734,12 +846,35 @@ class AuditEnvelopeMiddleware(Middleware):
             status = "error"
             raise
         finally:
-            req_ctx = _request_context()
-            identity = req_ctx["identity"]
-            examiner = req_ctx["examiner"]
-            effective_principal = identity.principal if identity else examiner
             elapsed_ms = round((time.monotonic() - start) * 1000, 1)
-            backend_name = self._backend_name(name)
+            # DB-first result/failure receipt (best-effort: the tool already ran).
+            if db_audit is not None:
+                try:
+                    await asyncio.to_thread(
+                        db_audit.record,
+                        event_type="mcp.tool.result",
+                        actor=identity,
+                        case_id=case.case_id if case is not None else None,
+                        source="gateway_mcp_envelope",
+                        status="success" if status == "ok" else "failure",
+                        summary=f"{status} {name}",
+                        request_id=request_id,
+                        details={
+                            "tool": name,
+                            "backend": backend_name,
+                            "phase": "result",
+                            "status": status,
+                            "elapsed_ms": elapsed_ms,
+                            "backend_audit_id": backend_audit_id,
+                            "envelope_event_id": envelope_event_id,
+                            "principal": effective_principal,
+                        },
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "mcp_envelope: result DB audit write failed for %s: %s", name, exc
+                    )
+            # Legacy/export JSONL mirror (never authority).
             extra_fields = _stamp_identity_extra(
                 {
                     "role": req_ctx["role"],
@@ -748,7 +883,9 @@ class AuditEnvelopeMiddleware(Middleware):
                     "backend": backend_name,
                     "status": status,
                     "backend_audit_id": backend_audit_id,
-                    **_case_extra(_current_gateway_active_case()),
+                    "request_id": request_id,
+                    "audit_event_id": envelope_event_id,
+                    **_case_extra(case),
                 },
                 identity,
                 examiner,
@@ -766,6 +903,20 @@ class AuditEnvelopeMiddleware(Middleware):
                 )
             except Exception as exc:
                 logger.warning("gateway envelope audit write failed for %s: %s", name, exc)
+
+    def _request_id(self) -> str:
+        ctx = current_active_case()
+        if ctx is not None and getattr(ctx, "request_id", None):
+            return str(ctx.request_id)
+        return uuid.uuid4().hex
+
+    def _attach_audit_event(self, event_id: str | None, request_id: str) -> None:
+        ctx = current_active_case()
+        if ctx is not None and event_id:
+            ctx.record_audit_event(event_id)
+
+    def _tool_is_mutating(self, name: str) -> bool:
+        return not _tool_read_only(self.gateway, name)
 
     def _backend_name(self, tool_name: str) -> str:
         if tool_name in core_tool_names() or tool_name == "capability_guide":
@@ -789,8 +940,8 @@ def gateway_policy_middlewares(
         ToolAuthorizationMiddleware(gateway, auth_enabled=auth_enabled),
         AddonAuthorityMiddleware(gateway, auth_enabled=auth_enabled),
         CaseContextMiddleware(gateway),
+        AuditEnvelopeMiddleware(gateway),
         ProxyActiveCaseMiddleware(gateway),
         EvidenceGateMiddleware(gateway),
-        AuditEnvelopeMiddleware(gateway),
         ResponseGuardMiddleware(gateway),
     ]

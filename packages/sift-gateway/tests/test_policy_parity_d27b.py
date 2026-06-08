@@ -89,7 +89,7 @@ async def test_f6_parent_policy_wraps_proxied_structured_result(monkeypatch, tmp
     assert "gateway_mcp_envelope" in sources
 
 
-async def test_gate_block_skips_tool_and_envelope(monkeypatch, tmp_path):
+async def test_gate_block_skips_tool_and_records_envelope(monkeypatch, tmp_path):
     monkeypatch.setenv("SIFT_CASE_DIR", str(tmp_path))
     gateway = _fake_gateway()
     ran = False
@@ -109,8 +109,9 @@ async def test_gate_block_skips_tool_and_envelope(monkeypatch, tmp_path):
 
     assert ran is False
     assert "evidence_chain_unsealed" in result.content[0].text
-    assert gateway._audit.log.call_count == 1
-    assert gateway._audit.log.call_args.kwargs["source"] == "gateway_evidence_gate"
+    sources = [call.kwargs["source"] for call in gateway._audit.log.call_args_list]
+    assert "gateway_evidence_gate" in sources
+    assert "gateway_mcp_envelope" in sources
 
 
 def test_guard_tool_result_redacts_and_caps_structured_content(tmp_path):

@@ -35,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.dsn:
         raise SystemExit("SIFT_CONTROL_PLANE_DSN or --dsn is required")
+    # K1: the worker only ever runs against the Postgres control plane, so it is
+    # always DB-active. Mark the process so core resolvers use the per-job
+    # AuthorityContext and never fall back to SIFT_CASE_DIR / ~/.sift/active_case.
+    os.environ["SIFT_DB_ACTIVE"] = "1"
     handlers = build_handlers(args.dsn)
     job_types = sorted(handlers)
     worker = JobWorker(

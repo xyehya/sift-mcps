@@ -157,6 +157,10 @@ class Gateway:
         # BATCH-D2: Gateway adapter over the D1 durable job state machine. Built
         # in create_app() once the control-plane DSN is resolved.
         self.job_service = None
+        # BATCH-K1: DB-first transport audit sink (app.audit_events). Wired in
+        # create_app() when a control-plane DSN is present; None means file-only
+        # legacy audit (no DB-active enforcement).
+        self.db_audit = None
 
         # Register declaration-driven providers: grounding reference backends
         # and the available-backend capability summary (both keyed on manifest
@@ -411,6 +415,11 @@ class Gateway:
                     )
                     manifest_meta[t_meta_name] = {
                         "backend": name,
+                        # K1: read-only marker for the DB-first audit envelope so
+                        # only mutating add-on tools fail closed on audit failure.
+                        "read_only": bool(
+                            t_decl.get("read_only") or t_decl.get("readOnlyHint", False)
+                        ),
                         "category": t_decl.get("category", ""),
                         "recommended_phase": t_decl.get("recommended_phase", ""),
                         "health": bool(t_decl.get("health", False)),
@@ -830,6 +839,12 @@ class Gateway:
                     case_key=active_case.case_key,
                     artifact_path=active_case.artifact_path,
                     membership_role=active_case.membership_role,
+                    principal=getattr(identity, "principal", None),
+                    principal_type=getattr(identity, "principal_type", None),
+                    tool_scopes=getattr(identity, "tool_scopes", frozenset()) or frozenset(),
+                    # K1: a DB active-case service means Postgres is authority for
+                    # this request; core must use this context, not env/pointer files.
+                    db_active=self.active_case_service is not None,
                 )
                 if active_case is not None
                 else None
@@ -945,6 +960,12 @@ class Gateway:
         dsn, _ = registry_config(self.config)
         self.control_plane_dsn = dsn
         if dsn:
+            try:
+                from sift_gateway.audit_helpers import DbAuditWriter
+
+                self.db_audit = DbAuditWriter(dsn)
+            except Exception as exc:  # pragma: no cover - defensive startup
+                logger.warning("DB audit writer init failed: %s", exc)
             try:
                 from sift_gateway.active_case import ActiveCaseService
 
