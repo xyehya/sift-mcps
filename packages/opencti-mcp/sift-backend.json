@@ -6,6 +6,24 @@
   "transport": "stdio",
   "namespace": "cti",
   "instructions": "Use this backend for threat intelligence context and IOC enrichment. Treat intelligence as supporting context that must be correlated with case evidence.",
+  "authority_contract": {
+    "non_authoritative": true,
+    "plane": "reference",
+    "authority_disclaimer": "This add-on is a derived/reference plane. It does not authorize cases, seal evidence, approve findings, approve reports, or bypass Gateway. All outputs are supporting context only.",
+    "prohibited_operations": [
+      "create_case",
+      "activate_case",
+      "seal_evidence",
+      "register_evidence",
+      "approve_finding",
+      "reject_finding",
+      "approve_report",
+      "include_in_report",
+      "issue_agent_credential",
+      "bypass_gateway"
+    ],
+    "query_only": true
+  },
   "capabilities": {
     "provides": ["reference", "threat-intel"],
     "requires": [],
@@ -20,6 +38,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["cti:read"],
       "category": "threat-intel",
       "recommended_phase": "SURVEY",
       "health": true
@@ -33,6 +52,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["cti:read"],
       "category": "threat-intel",
       "recommended_phase": "CORRELATE"
     },
@@ -44,6 +64,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["cti:read"],
       "category": "threat-intel",
       "recommended_phase": "CORRELATE"
     },
@@ -56,6 +77,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["cti:read"],
       "category": "threat-intel",
       "recommended_phase": "CORRELATE"
     },
@@ -67,6 +89,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["cti:read"],
       "category": "threat-intel",
       "recommended_phase": "CORRELATE"
     },
@@ -78,6 +101,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["cti:read"],
       "category": "threat-intel",
       "recommended_phase": "CORRELATE"
     },
@@ -89,6 +113,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["cti:read"],
       "category": "threat-intel",
       "recommended_phase": "CORRELATE"
     },
@@ -100,6 +125,7 @@
       "read_only": true,
       "readOnlyHint": true,
       "evidence_class": "read_only",
+      "required_scopes": ["cti:read"],
       "category": "threat-intel",
       "recommended_phase": "CORRELATE"
     }
