@@ -28,6 +28,7 @@ from sift_gateway.mcp_endpoint import (
 )
 from sift_gateway.rate_limit import check_examiner_rate_limit
 from sift_gateway.response_guard import (
+    _display_spill_path,
     get_override_status,
     guard_tool_result,
     is_override_active,
@@ -112,14 +113,17 @@ def _case_extra(case: ActiveCase | None) -> dict[str, Any]:
 
 
 def _case_text(case: ActiveCase, tool_name: str | None = None) -> TextContent:
+    # F-MVP-2: this case context is appended to MCP responses AFTER the response
+    # guard has run, so it must be agent-safe at the source. The agent gets opaque
+    # case IDs and RELATIVE display dirs only — never the absolute artifact path,
+    # which would expose the host's /cases/... location.
     payload = {
         "case_context": {
             "id": case.case_id,
             "case_id": case.case_key,
             "case_key": case.case_key,
-            "dir": case.artifact_path,
-            "evidence_dir": f"{case.artifact_path}/evidence" if case.artifact_path else None,
-            "agent_dir": f"{case.artifact_path}/agent" if case.artifact_path else None,
+            "evidence_dir": "evidence" if case.artifact_path else None,
+            "agent_dir": "agent" if case.artifact_path else None,
             "source": "postgres_active_case_state",
         }
     }
@@ -396,12 +400,18 @@ class ResponseGuardMiddleware(Middleware):
                 )
             except Exception as exc:
                 logger.warning("output_cap: audit write failed: %s", exc)
+            # F-MVP-2: the agent-visible _sift_context must carry only a relative
+            # display path; cap_events keep the absolute path for the audit log.
             sift_context["output_capped"] = [
                 {
                     "original_bytes": ev["original_bytes"],
                     "returned_bytes": ev["returned_bytes"],
                     "cap_bytes": ev["cap_bytes"],
-                    **({"output_file": ev["output_file"]} if "output_file" in ev else {}),
+                    **(
+                        {"output_file": _display_spill_path(ev["output_file"], case_dir_str)}
+                        if "output_file" in ev
+                        else {}
+                    ),
                 }
                 for ev in cap_events
             ]

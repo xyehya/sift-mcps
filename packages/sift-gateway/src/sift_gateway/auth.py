@@ -258,3 +258,33 @@ def resolve_examiner(request: Request) -> dict:
         "examiner": examiner,
         "role": getattr(request.state, "role", "examiner"),
     }
+
+
+# BATCH-B1 (F-MVP-3): for the MVP, REST tool execution is operator-only. AI
+# agents use the Gateway MCP surface (/mcp) exclusively, which is the only path
+# that runs the SIFT policy middleware stack (tool authz, evidence gate, response
+# guard, rate limit). Letting an agent token execute a tool over REST would let
+# it bypass that entire MCP policy boundary, so agent/service principals are
+# denied on the REST tool path.
+_REST_TOOL_OPERATOR_TYPES = frozenset({"user", "operator", "examiner"})
+
+
+def is_agent_principal(request: Request) -> bool:
+    """Return True when the authenticated principal is a non-operator (agent/service).
+
+    Resolution order, most authoritative first:
+      1. The resolved :class:`Identity` ``principal_type`` (Supabase / token
+         registry / api-key path all populate this).
+      2. The stamped ``request.state.role`` (``agent``/``service``).
+
+    Anonymous single-user mode (no identity, no role) is treated as operator so
+    existing single-operator deployments keep working.
+    """
+    identity = getattr(request.state, "identity", None)
+    principal_type = getattr(identity, "principal_type", None)
+    if principal_type is not None:
+        return principal_type not in _REST_TOOL_OPERATOR_TYPES
+    role = getattr(request.state, "role", None)
+    if role in ("agent", "service"):
+        return True
+    return False

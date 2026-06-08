@@ -158,6 +158,137 @@ def redact_tool_result(text: str, *, override_active: bool = False) -> tuple[str
     return redacted, findings
 
 
+# ---------------------------------------------------------------------------
+# BATCH-B1 (F-MVP-2): agent-visible absolute-path redaction.
+#
+# The AI agent must never receive absolute case, evidence, or mount paths, nor
+# any other absolute host filesystem path (local config, secrets, scratch). It
+# MAY see opaque IDs, display names, RELATIVE display paths, size, hash, seal
+# status, and provenance IDs. This pass runs at the gateway MCP choke point
+# (agent path only) over every string value, independent of the secret-redaction
+# override — an examiner unredacting secrets in their own session must still not
+# leak host paths to a lower-trust agent.
+#
+# Strategy:
+#   - Any absolute path under the active case dir collapses to a RELATIVE
+#     display path (e.g. ``/cases/case-x-01020304/evidence/d.E01`` -> ``evidence/d.E01``).
+#   - Any other absolute POSIX path token is replaced with
+#     ``[REDACTED:absolute_path]`` (covers mount points, /home, /mnt, /etc, the
+#     cases root prefix for OTHER cases, scratch dirs, etc).
+# ---------------------------------------------------------------------------
+
+# Matches an absolute POSIX path token: a leading slash followed by at least one
+# path segment of non-whitespace / non-quote characters. Bounded segments keep
+# the scan from swallowing surrounding prose. This intentionally does NOT match a
+# bare "/" or relative paths like "evidence/foo".
+_ABS_PATH_RE = re.compile(r'(?<![\w./])/(?:[^\s"\'<>|]+)')
+
+_PATH_REDACTION_PLACEHOLDER = "[REDACTED:absolute_path]"
+
+
+def _redact_paths_in_text(text: str, case_dir_resolved: str | None) -> tuple[str, int]:
+    """Rewrite absolute paths in ``text`` for agent-visible output.
+
+    Absolute paths under ``case_dir_resolved`` become relative display paths;
+    all other absolute paths become ``[REDACTED:absolute_path]``. Returns
+    ``(rewritten_text, count)`` where ``count`` is the number of substitutions.
+    """
+    if "/" not in text:
+        return text, 0
+
+    case_prefix = None
+    if case_dir_resolved:
+        case_prefix = case_dir_resolved.rstrip("/") + "/"
+
+    count = 0
+
+    def _sub(match: re.Match) -> str:
+        nonlocal count
+        token = match.group(0)
+        if case_prefix and token.startswith(case_prefix):
+            rel = token[len(case_prefix):]
+            if rel:
+                count += 1
+                return rel
+            # Bare case dir itself -> redact (the agent gets opaque case IDs).
+            count += 1
+            return _PATH_REDACTION_PLACEHOLDER
+        if case_dir_resolved and token == case_dir_resolved:
+            count += 1
+            return _PATH_REDACTION_PLACEHOLDER
+        count += 1
+        return _PATH_REDACTION_PLACEHOLDER
+
+    rewritten = _ABS_PATH_RE.sub(_sub, text)
+    return rewritten, count
+
+
+def redact_paths_structured(
+    value: Any,
+    *,
+    case_dir_resolved: str | None,
+    _path: str = "$",
+    _depth: int = 0,
+    _max_depth: int = _STRUCTURED_MAX_DEPTH,
+) -> tuple[Any, list[dict]]:
+    """Recursively rewrite absolute paths in JSON-like structured content.
+
+    Returns ``(rewritten_value, findings)``. Findings record where an absolute
+    path outside the case dir was redacted (audit signal that a tool tried to
+    surface a host path to the agent). In-case paths rewritten to relative form
+    do not produce a finding — that is the allowed display-path behaviour.
+    """
+    if _depth > _max_depth:
+        return value, []
+
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        findings: list[dict] = []
+        for key, child in value.items():
+            child_path = f"{_path}.{key}" if isinstance(key, str) else f"{_path}.*"
+            rewritten_child, child_findings = redact_paths_structured(
+                child,
+                case_dir_resolved=case_dir_resolved,
+                _path=child_path,
+                _depth=_depth + 1,
+                _max_depth=_max_depth,
+            )
+            out[key] = rewritten_child
+            findings.extend(child_findings)
+        return out, findings
+
+    if isinstance(value, (list, tuple)):
+        out_items: list[Any] = []
+        findings = []
+        for index, child in enumerate(value):
+            rewritten_child, child_findings = redact_paths_structured(
+                child,
+                case_dir_resolved=case_dir_resolved,
+                _path=f"{_path}[{index}]",
+                _depth=_depth + 1,
+                _max_depth=_max_depth,
+            )
+            out_items.append(rewritten_child)
+            findings.extend(child_findings)
+        return (tuple(out_items) if isinstance(value, tuple) else out_items), findings
+
+    if isinstance(value, str):
+        rewritten, count = _redact_paths_in_text(value, case_dir_resolved)
+        findings = []
+        if _PATH_REDACTION_PLACEHOLDER in rewritten and rewritten != value:
+            findings.append(
+                {
+                    "pattern_name": "Absolute Path",
+                    "severity": "high",
+                    "char_offset": 0,
+                    "path": _path,
+                }
+            )
+        return rewritten, findings
+
+    return value, []
+
+
 def redact_structured(
     value: Any,
     *,
@@ -269,6 +400,25 @@ def output_cap_bytes() -> int:
     return _DEFAULT_OUTPUT_CAP_BYTES
 
 
+def _display_spill_path(output_file: str | None, case_dir: str | None) -> str | None:
+    """Return an agent-safe (relative) form of a spill path under the case dir.
+
+    The agent-facing cap marker must not carry an absolute host path (F-MVP-2).
+    Spill files always live under ``<case>/agent/tool_outputs/``, so collapse the
+    absolute path to a case-relative display path. Falls back to the basename if
+    the file is somehow outside the case dir.
+    """
+    if not output_file:
+        return None
+    if case_dir:
+        try:
+            rel = Path(output_file).resolve().relative_to(Path(case_dir).resolve())
+            return str(rel)
+        except (OSError, ValueError):
+            pass
+    return Path(output_file).name
+
+
 def _spill_full_output(text: str, case_dir: str, tool_name: str) -> tuple[str | None, str]:
     """Persist the full (already-redacted) text under <case>/agent/tool_outputs/.
 
@@ -329,9 +479,10 @@ def cap_tool_result(
     truncated = data[:max_bytes].decode("utf-8", errors="ignore")
     returned_bytes = len(truncated.encode("utf-8"))
 
+    display_file = _display_spill_path(output_file, case_dir)
     pointer = (
-        f"full output persisted at {output_file}"
-        if output_file
+        f"full output persisted at {display_file}"
+        if display_file
         else "full output NOT persisted (no active case directory)"
     )
     marker = (
@@ -408,9 +559,12 @@ def _cap_guarded_result(
             "utf-8", errors="ignore"
         )
 
+    # Agent-facing pointer must be a relative display path, never an absolute
+    # host path (F-MVP-2). The absolute path is kept only in the audit `meta`.
+    display_file = _display_spill_path(output_file, case_dir)
     pointer = (
-        f"full redacted output persisted at {output_file}"
-        if output_file
+        f"full redacted output persisted at {display_file}"
+        if display_file
         else "full redacted output NOT persisted (no active case directory)"
     )
     marker = (
@@ -431,6 +585,7 @@ def _cap_guarded_result(
         "sha256": sha,
     }
     if output_file:
+        # Audit (operator-visible) keeps the absolute path for forensic recall.
         meta["output_file"] = output_file
 
     result.structured_content = {
@@ -439,7 +594,8 @@ def _cap_guarded_result(
             "returned_bytes": meta["returned_bytes"],
             "cap_bytes": meta["cap_bytes"],
             "sha256": sha,
-            **({"output_file": output_file} if output_file else {}),
+            # Agent-visible structured field: relative display path only.
+            **({"output_file": display_file} if display_file else {}),
         }
     }
     result.meta = dict(result.meta or {})
@@ -456,8 +612,22 @@ def guard_tool_result(
     tool_name: str,
     cap_bytes: int,
 ) -> tuple[ToolResult, list[dict], list[dict]]:
-    """Redact and cap a FastMCP ToolResult at the gateway choke point."""
+    """Redact and cap a FastMCP ToolResult at the gateway choke point.
+
+    Order per response: secret redaction -> absolute-path redaction (BATCH-B1,
+    F-MVP-2) -> output cap. Path redaction always runs on the agent path,
+    independent of ``override_active``; the secret override never re-exposes host
+    paths to the agent. ``case_dir`` is resolved once so in-case absolute paths
+    collapse to relative display paths and all other host paths are redacted.
+    """
     all_findings: list[dict] = []
+
+    case_dir_resolved: str | None = None
+    if case_dir:
+        try:
+            case_dir_resolved = str(Path(case_dir).resolve())
+        except (OSError, ValueError):
+            case_dir_resolved = case_dir
 
     guarded_content: list[Any] = []
     for item in result.content or []:
@@ -466,7 +636,16 @@ def guard_tool_result(
                 item.text, override_active=override_active
             )
             all_findings.extend(findings)
-            guarded_content.append(item.model_copy(update={"text": redacted_text}))
+            path_text, _ = _redact_paths_in_text(redacted_text, case_dir_resolved)
+            if _PATH_REDACTION_PLACEHOLDER in path_text and path_text != redacted_text:
+                all_findings.append(
+                    {
+                        "pattern_name": "Absolute Path",
+                        "severity": "high",
+                        "char_offset": 0,
+                    }
+                )
+            guarded_content.append(item.model_copy(update={"text": path_text}))
         else:
             guarded_content.append(item)
     result.content = guarded_content
@@ -477,6 +656,11 @@ def guard_tool_result(
             override_active=override_active,
         )
         all_findings.extend(findings)
+        structured, path_findings = redact_paths_structured(
+            structured,
+            case_dir_resolved=case_dir_resolved,
+        )
+        all_findings.extend(path_findings)
         result.structured_content = structured
 
     cap_events: list[dict] = []
