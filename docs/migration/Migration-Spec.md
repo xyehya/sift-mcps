@@ -230,6 +230,93 @@ class OS,CTI,WTR,FK,REP derived
 | Worker/execution | Privileged local processor | Claimed job IDs, evidence IDs, parser specs | Derived docs, hashes, logs, output refs | Lease TTL, service identity, scratch isolation, allowlisted commands |
 | Derived/reference planes | Non-authoritative | Parser docs, derived text, query strings | Search/RAG/CTI/baseline context | Rebuildable, case-scoped, audited, no authorization power |
 
+### Authority cutover impact model
+
+The blocking cutover is not a JSON-file migration. It is an authority migration.
+In DB-active mode, any file read/write that decides case state, active case,
+evidence gate, audit truth, approval state, report eligibility, agent
+permissions, or custody state is a defect unless the code path is explicitly
+marked as legacy fallback or immutable export.
+
+Classification:
+
+| Class | Authority target | File/storage role | Examples |
+| --- | --- | --- | --- |
+| Critical mutable state | Postgres tables/RPCs | None in DB-active mode except optional mirror | active case, evidence seal state, custody chain head, findings, timeline, TODOs, approvals, report metadata, jobs, agent tokens/scopes |
+| Append-only ledger state | Postgres append-only tables with hash links | Exported proof bundle only | `app.audit_events`, `app.evidence_custody_events`, approval/re-auth events |
+| Evidence bytes | Operator-mounted SIFT VM filesystem | Source bytes only, read-only to broker/worker | `/cases/<case>/evidence/**` |
+| Derived/rebuildable state | OpenSearch/RAG plus Postgres provenance | Scratch/status files allowed only for worker debugging | parser output, enrichment output, embeddings, command output previews |
+| Immutable proof/export artifacts | Postgres metadata plus optional Supabase Storage or case export file | Artifact, never state machine | final reports, custody proof bundles, manifest/ledger snapshots, Solana anchor proof JSON |
+| Legacy compatibility | Explicit fallback only when DB authority is disabled | Compatibility bridge | pre-migration CLI/test flows |
+
+Critical file touchpoints already discovered:
+
+| Touchpoint | Current files/code | Risk | Target |
+| --- | --- | --- | --- |
+| Active case resolution | `packages/sift-common/src/sift_common/__init__.py`; `packages/sift-core/src/sift_core/case_manager.py`; `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py` | Env var or `~/.sift/active_case` can silently steer work to a different case | Gateway loads Postgres active case into `AuthorityContext`; core/worker use that context in DB-active mode |
+| Audit logging | `packages/sift-common/src/sift_common/audit.py`; `packages/opensearch-mcp/src/opensearch_mcp/ingest.py`; `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py` | JSONL audit can be missed, overwritten, inaccessible to portal/report, or writable by privileged local code | DB audit event before dispatch and DB result event after; mutating actions fail if required audit cannot be persisted |
+| Evidence manifest/ledger | `packages/sift-core/src/sift_core/evidence_chain.py`; `packages/sift-core/src/sift_core/verification.py`; `packages/case-dashboard/src/case_dashboard/routes.py` | File manifest can disagree with DB evidence gate and custody state | `app.evidence_objects`, `app.evidence_versions`, `app.evidence_custody_events`, and `app.evidence_chain_heads` are authority; file proofs are exports |
+| Findings/timeline/TODOs/IOCs | `packages/sift-core/src/sift_core/case_manager.py`; `packages/sift-core/src/sift_core/case_io.py`; `packages/sift-gateway/src/sift_gateway/portal_services.py`; `packages/case-dashboard/src/case_dashboard/routes.py` | Agent can stage to files that portal/report DB authority does not see, or file tampering can alter report inputs | Core `InvestigationAuthorityStore` writes/reads `app.investigation_*` in DB-active mode |
+| Approvals/re-auth ledger | `packages/sift-core/src/sift_core/case_io.py`; `packages/case-dashboard/src/case_dashboard/routes.py` | Approval outcome can live in `approvals.jsonl` while DB report eligibility reads another source | Approval transition updates DB row, content hash, actor, re-auth audit event, and approval ledger atomically |
+| Report exports | `packages/sift-core/src/sift_core/reporting.py`; `packages/case-dashboard/src/case_dashboard/routes.py`; `packages/case-dashboard/frontend/src/components/reports/ReportsTab.jsx` | Report may read file-backed findings/timeline or omit DB custody proof | Reports read approved DB rows only and record export metadata/proof hashes in Postgres |
+| OpenSearch ingest status/manifests | `packages/opensearch-mcp/src/opensearch_mcp/ingest.py`; `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py`; `packages/opensearch-mcp/src/opensearch_mcp/ingest_status.py` | Portal/agent status can drift from durable jobs and provenance tables | `app.jobs`, `app.job_steps`, `app.job_logs`, `app.opensearch_*` are authority; local status/manifests are debug/export only |
+| Host identity dictionary | `packages/opensearch-mcp/src/opensearch_mcp/host_discovery.py`; `packages/opensearch-mcp/src/opensearch_mcp/host_dictionary.py`; `packages/opensearch-mcp/src/opensearch_mcp/server.py`; `packages/opensearch-mcp/sift-backend.json` | Host canonicalization affects index names and `host.id`, but must not become case/evidence authority | Treat host identity as derived indexing metadata with DB-recorded decisions and provenance; `opensearch_fix_host_mapping`/deprecated `opensearch_host_fix` may correct OpenSearch/host metadata only |
+| run-command outputs | `packages/sift-core/src/sift_core/execute/**`; `packages/sift-core/src/sift_core/agent_tools.py`; `packages/sift-core/src/sift_core/execute/run_command_job.py`; `scripts/setup-agent-runtime.sh` | A sandboxed command becomes dangerous if authority files exist in the case dir or if DB secrets are inherited | Command receives evidence refs and scratch/output refs only, no DB/service secrets, no authority files, and output receipts/hashes are persisted in Postgres |
+
+DB-active call flow:
+
+1. Gateway authenticates the operator or agent.
+2. Gateway loads active case, membership, scopes, evidence gate head, and
+   request identity from Postgres into an `AuthorityContext`.
+3. Gateway writes or reserves the audit envelope for the call.
+4. Core/worker command handlers receive `AuthorityContext`; they do not resolve
+   active case from env files or local pointer files for authoritative work.
+5. Mutating handlers write state through a typed authority store in one DB
+   transaction with transition guards, row/version checks, provenance IDs, and
+   audit references.
+6. Optional file or Supabase Storage projectors run after the DB commit and
+   produce immutable exports/mirrors. Projector failure does not make the file
+   copy authoritative.
+7. Gateway response guard redacts local paths and secrets before returning to
+   portal or agent.
+
+Evidence change rule:
+
+- If the operator adds or changes files under the evidence mount after a seal,
+  the scanner/broker records the event in Postgres and the case evidence gate
+  becomes non-OK until the operator registers/ignores/retires and seals again.
+- For MVP simplicity, the evidence gate is case-wide. A newly detected or
+  changed evidence item blocks analysis until resolved.
+
+Hostname carve-out:
+
+- Hostname detection for extracted artifacts is expected and necessary for
+  parser routing, OpenSearch index naming, `host.name`, and `host.id`.
+- The current canonical correction tool is `opensearch_fix_host_mapping`; the
+  `opensearch_host_fix` alias remains deprecated for one cutover cycle.
+- Host identity decisions are derived metadata. They may affect OpenSearch
+  index/document state and parser output, but never authorize a case, evidence,
+  report, approval, or agent permission.
+- Target behavior is to record discovery source, proposed canonical host,
+  operator/agent correction, and affected index/provenance IDs in Postgres. A
+  temporary `host-dictionary.yaml` may be materialized only for legacy parser
+  compatibility and must not be treated as authority.
+
+Solana anchor carve-out:
+
+- Pre-migration anchoring used a Solana SPL Memo payload containing shortened
+  manifest hash and ledger tip values, with `evidence-anchor-v<N>.json` as the
+  local proof artifact.
+- For the MVP, Solana remains optional and non-authoritative. Postgres custody
+  chain heads and append-only custody events are the local authority.
+- When configured, the anchor signs the current DB-derived proof material:
+  manifest hash, ledger tip/hash-chain head, manifest version, case ID, and
+  export metadata. The anchor proof is recorded in
+  `app.evidence_proof_exports` and may also be exported to immutable file or
+  Supabase Storage.
+- Lack of Solana must not block the demo journey; a successful Solana anchor
+  strengthens external timestamp proof but does not decide evidence gate state.
+
 ## 3. STEP-BY-STEP MIGRATION JOURNEY
 
 ### Phase 1: Preparation & Setup
@@ -315,6 +402,9 @@ Already done:
 
 Needed:
 
+- Complete the authority cutover before V1: critical mutable state must be
+  Postgres-backed in DB-active mode, with files/storage limited to legacy
+  fallback, workspace, debug, or immutable export roles.
 - Apply all migrations to the live Supabase/Postgres target in timestamp order.
 - Start Gateway and `sift-job-worker` on the SIFT VM with service DSN and local
   evidence mount access.
@@ -361,6 +451,15 @@ Validation journey:
   explicit bridge and must never become the final authority.
 - Postgres transitions must use RLS/security-invoker/service-only patterns
   appropriate to the caller. Browser code must never receive service-role keys.
+- DB-active mode must not use `SIFT_CASE_DIR`, `~/.sift/active_case`,
+  `CASE.yaml`, `findings.json`, `timeline.json`, `todos.json`,
+  `approvals.jsonl`, `evidence-manifest.json`, `evidence-ledger.jsonl`, local
+  audit JSONL, ingest status JSON, or `host-dictionary.yaml` as authority.
+  Those files are legacy fallback, parser compatibility, workspace, debug, or
+  immutable export artifacts only.
+- Core/common code must accept an authority context from Gateway or worker for
+  DB-active requests. If DB authority is configured but unavailable, critical
+  mutations fail closed rather than falling back to files.
 - OpenSearch 3.5 security stays enabled. OpenSearch is derived and rebuildable.
 - The AI agent receives opaque IDs, display names, relative display paths,
   status, provenance IDs, hashes where appropriate, and redacted/capped outputs.
@@ -376,6 +475,9 @@ Validation journey:
   queue for the MVP unless this spec is explicitly changed.
 - Run-command execution must use `shell=False`, deny-by-default policy,
   allowlisted tool profiles, controlled runtime user/ACLs, and output hashing.
+- Run-command execution must not inherit DB DSNs, service-role keys, Supabase
+  secrets, OpenSearch credentials, or local VM secrets. It receives opaque
+  evidence/input refs and writes only to controlled scratch/output refs.
 - Generated docs should not exceed this three-file migration model.
 
 ## 5. DEFINITION OF DONE (DoD)
@@ -404,6 +506,13 @@ The migration is successful when all of the following are true:
 - RAG queries are case/provenance filtered through Gateway.
 - Findings, timeline, TODOs, report metadata, approvals, and report eligibility
   are DB-backed.
+- Active case resolution, audit envelopes, evidence gates, approvals,
+  investigation records, OpenSearch ingest status/provenance, host identity
+  corrections, reports, and run-command receipts are DB-backed in DB-active
+  mode. File tampering cannot change portal state, MCP state, report
+  eligibility, or evidence gate decisions.
+- File/storage artifacts that remain after cutover are explicitly classified as
+  legacy fallback, workspace/debug, parser compatibility, or immutable export.
 - Reports include approved findings/supporting data only.
 - The SIFT VM end-to-end smoke journey in Phase 3 passes.
 - `docs/migration/task-batches.md` has every MVP batch checked complete and

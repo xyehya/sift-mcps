@@ -13,6 +13,47 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - Authority cutover model frozen
+
+Status: DONE
+
+Changed:
+
+- Added the authority cutover impact model to `Migration-Spec.md`. DB-active
+  mode now has an explicit invariant: critical mutable DFIR state cannot be
+  decided from case-local files, env pointers, or legacy JSON/JSONL artifacts.
+- Classified remaining files into authority, append-only ledger, evidence
+  bytes, derived/rebuildable state, immutable proof/export artifacts, and
+  legacy compatibility. Postgres is authority for mutable state; Supabase
+  Storage/case files are export/workspace/debug/parser-compatibility only.
+- Mapped the discovered split-brain touchpoints to implementation files:
+  active case resolution, audit writer, evidence manifest/ledger, findings,
+  timeline, TODOs, IOCs, approvals, reports, OpenSearch ingest status/manifests,
+  host identity, and `run_command`.
+- Locked the hostname carve-out: parser/indexer hostname detection is required
+  derived metadata for OpenSearch index naming and `host.name`/`host.id`.
+  `opensearch_fix_host_mapping` is canonical; `opensearch_host_fix` remains a
+  deprecated alias. Host corrections may mutate derived OpenSearch/host
+  metadata only, not case/evidence/report authority.
+- Locked the Solana carve-out: optional SPL Memo anchoring remains proof export
+  only. DB custody chain heads and custody events are authority; anchor proof is
+  recorded/exported through `app.evidence_proof_exports` when configured.
+- Split the blocking authority cutover into K-series batches:
+  K1 authority context + DB audit, K2 core investigation DB authority, K3
+  evidence/proof/Solana export, K4 OpenSearch/host identity derived-state
+  cutover, K5 `run_command` authority isolation, and K6 portal/report tamper
+  regression. BATCH-V1 now depends on K1-K6.
+
+Validation:
+
+- Passed: `python3 scripts/validate_docs.py`.
+- Passed: `python3 scripts/validate_migration_docs.py`.
+
+Next:
+
+- Launch BATCH-K1 first. After K1 lands, K2-K5 can run in parallel worktrees;
+  K6 follows as the tamper/regression gate before BATCH-V1 resumes.
+
 ### 2026-06-08 - BATCH-V1 live VM validation partial
 
 Status: IN_PROGRESS
@@ -453,6 +494,9 @@ Next:
 | F-MVP-5 | Fork | RESOLVED | Gateway Supabase health probe omitted `apikey`; Kong returned 401 and health read degraded. | Fixed in `health.py`: send configured anon key as `apikey`. | none |
 | F-MVP-6 | Fork | RESOLVED | First-login deadlock: login rejected `invited` operators, but forced reset requires a session cookie. | Fixed in `supabase_auth.py`: login admits `active` and `invited`; protected resolution stays active-only. | none |
 | F-MVP-7 | Fork | RESOLVED | Custody append used pgcrypto `digest()`, unresolved on Supabase under the function search path. | Fixed in `202606081000_evidence_custody.sql`: use built-in `sha256(v_payload::bytea)`. | none |
+| F-MVP-8 | Fork | RESOLVED | Critical mutable DFIR state authority is Postgres. Supabase Storage and case files are immutable exports, workspace/debug artifacts, parser compatibility artifacts, or legacy fallback only. | Locked in `Migration-Spec.md` authority cutover model and K-series batches. | none |
+| F-MVP-9 | Fork | RESOLVED | Hostname detection/correction is required for parser/indexer metadata and OpenSearch index naming, but it is derived state only. | Keep `opensearch_fix_host_mapping` canonical and `opensearch_host_fix` as deprecated alias; record corrections in DB provenance/host identity. | K4 |
+| F-MVP-10 | Fork | RESOLVED | Solana anchoring is optional external proof, not local authority. DB custody chain heads decide evidence gate state. | Record DB-derived anchor proof in `app.evidence_proof_exports`; export to file/storage when configured. | K3 |
 | B-MVP-1 | Backlog | DEFERRED | Enterprise object-lock/WORM evidence vault option. | Post-MVP architecture appendix only. | none |
 | B-MVP-2 | Backlog | DEFERRED | ContextForge/Envoy-style external gateway integration. | Post-MVP presentation/backlog only; Gateway policy remains in SIFT Gateway for MVP. | none |
 | B-MVP-3 | Backlog | DONE | Gateway enqueue/status adapter over D1's `enqueue_job`/`job_status_public` (job_id only, sets `enqueue_audit_event_id`, schedules `expire_stale_jobs` reaper). | Landed in BATCH-D2 (`e80ad41`) as `JobService` + lifespan reaper. | E1, F1, G1, I1, J1 |
@@ -468,3 +512,4 @@ Next:
 | B-MVP-13 | Backlog | OPEN | Evidence seal/ignore/retire re-auth still uses legacy local-password PBKDF2 HMAC, not Supabase password re-auth. | Either integrate Supabase re-auth or explicitly document the local-HMAC bridge as MVP behavior. | none |
 | B-MVP-14 | Backlog | OPEN | No standalone register-evidence endpoint exists. Operator journey says detect -> register -> seal, but implementation folds registration into seal `file_specs` while still emitting `EVIDENCE_REGISTERED`. | Add separate register transition/endpoint or update the spec to make register+seal one atomic operator action. | Phase 2 journey parity |
 | B-MVP-15 | Backlog | OPEN | Supabase pgvector RAG is schema/query-surface only so far. The live VM has zero rows in `app.rag_collections`, `app.rag_documents`, and `app.rag_chunks`; no ingestion/population path creates collections/documents/chunks from bundled knowledge or case-derived summaries. | Add an MVP pgvector population path: seed curated knowledge into `kind='knowledge'` collections and/or write case-derived parser/enrichment summaries into `kind='derived'` documents/chunks with 768-d embeddings and provenance IDs. Prove `rag_search_case` returns pgvector-backed hits, not legacy `kb_*` Chroma responses. | RAG acceptance |
+| B-MVP-16 | Backlog | OPEN | DB-active mode still has split-brain file authority touchpoints: active-case pointer/env fallbacks, JSONL audit, evidence manifest/ledger, findings/timeline/TODO/IOC JSON, approval JSONL, OpenSearch ingest status/manifests, host dictionary, and run-command access to case-local authority artifacts. | Execute K1-K6 before resuming V1. Critical file paths become DB-backed authority, explicit legacy fallback, parser compatibility, workspace/debug, or immutable export only. | V1 full journey |

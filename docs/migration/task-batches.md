@@ -31,6 +31,13 @@ Rules:
 - [x] BATCH-I1 - Sandboxed run_command uplift
 - [x] BATCH-J1 - Approved-only report generation and export
 - [x] BATCH-L1 - Live service binding, worker bootstrap, and Gateway tool bridge
+- [x] BATCH-K0 - Authority cutover impact model and batch freeze
+- [ ] BATCH-K1 - Authority context and DB audit cutover
+- [ ] BATCH-K2 - Core investigation DB authority cutover
+- [ ] BATCH-K3 - Evidence gate, proof export, and Solana anchor cutover
+- [ ] BATCH-K4 - OpenSearch derived-state and host identity cutover
+- [ ] BATCH-K5 - run_command authority-isolation hardening
+- [ ] BATCH-K6 - Portal/report tamper regression and file-authority removal
 - [ ] BATCH-V1 - End-to-end validation and cutover
 
 ## BATCH-A0 - Freeze simplified migration operating model
@@ -468,9 +475,347 @@ Acceptance:
   provenance-linked, path-free results.
 - Gateway, core, portal, RAG/DB, and OpenSearch job-ingest tests pass.
 
+## BATCH-K0 - Authority cutover impact model and batch freeze
+
+Dependencies: BATCH-L1 live binding context; BATCH-V1 partial validation
+findings.
+
+Scope:
+
+- `docs/migration/Migration-Spec.md`
+- `docs/migration/task-batches.md`
+- `docs/migration/Session-Notes.md`
+- `scripts/validate_docs.py` only if the three-file governance model itself
+  needs an intentional rule change
+
+Exact work:
+
+- Document the authority cutover impact model: Postgres is authority for
+  critical mutable state; Supabase Storage/case files are immutable exports,
+  workspace/debug artifacts, parser compatibility artifacts, or legacy fallback
+  only.
+- Map critical file touchpoints with code references so implementation sessions
+  do not rediscover the same split-brain paths:
+  - active case: `packages/sift-common/src/sift_common/__init__.py`,
+    `packages/sift-core/src/sift_core/case_manager.py`,
+    `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py`;
+  - audit: `packages/sift-common/src/sift_common/audit.py`,
+    `packages/opensearch-mcp/src/opensearch_mcp/ingest.py`,
+    `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py`;
+  - evidence/custody: `packages/sift-core/src/sift_core/evidence_chain.py`,
+    `packages/sift-core/src/sift_core/verification.py`,
+    `packages/case-dashboard/src/case_dashboard/routes.py`;
+  - investigation records: `packages/sift-core/src/sift_core/case_manager.py`,
+    `packages/sift-core/src/sift_core/case_io.py`,
+    `packages/sift-gateway/src/sift_gateway/portal_services.py`,
+    `packages/case-dashboard/src/case_dashboard/routes.py`;
+  - OpenSearch status/provenance/host identity:
+    `packages/opensearch-mcp/src/opensearch_mcp/ingest.py`,
+    `packages/opensearch-mcp/src/opensearch_mcp/ingest_status.py`,
+    `packages/opensearch-mcp/src/opensearch_mcp/host_discovery.py`,
+    `packages/opensearch-mcp/src/opensearch_mcp/host_dictionary.py`,
+    `packages/opensearch-mcp/src/opensearch_mcp/server.py`;
+  - run-command: `packages/sift-core/src/sift_core/execute/**`,
+    `packages/sift-core/src/sift_core/agent_tools.py`,
+    `scripts/setup-agent-runtime.sh`.
+- Preserve the hostname carve-out: host detection/index naming is derived
+  parser metadata, not case/evidence authority. `opensearch_fix_host_mapping`
+  is the canonical correction tool; `opensearch_host_fix` is a deprecated alias.
+- Preserve the Solana carve-out: optional SPL Memo anchoring strengthens
+  external proof but never decides evidence gate state. DB custody chain heads
+  remain authority.
+- Split the blocking authority cutover into K1-K6 implementation batches and
+  make BATCH-V1 depend on them.
+
+Acceptance:
+
+- `Migration-Spec.md` includes the authority cutover model, host identity
+  carve-out, Solana anchor carve-out, and DB-active constraints.
+- `task-batches.md` contains grep-friendly K-series checkboxes and executable
+  batch sections.
+- `Session-Notes.md` records the authority decision and next execution order.
+- `python3 scripts/validate_docs.py` passes.
+- `python3 scripts/validate_migration_docs.py` passes.
+
+## BATCH-K1 - Authority context and DB audit cutover
+
+Dependencies: BATCH-K0. This is the dependency root for K2-K6.
+
+Scope:
+
+- `packages/sift-common/src/sift_common/__init__.py`
+- `packages/sift-common/src/sift_common/audit.py`
+- `packages/sift-core/src/sift_core/active_case_context.py`
+- `packages/sift-core/src/sift_core/case_manager.py`
+- `packages/sift-core/src/sift_core/case_ops.py`
+- `packages/sift-gateway/src/sift_gateway/active_case.py`
+- `packages/sift-gateway/src/sift_gateway/audit_helpers.py`
+- `packages/sift-gateway/src/sift_gateway/policy_middleware.py`
+- `packages/sift-gateway/src/sift_gateway/server.py`
+- `packages/sift-gateway/src/sift_gateway/job_tools.py`
+- `packages/sift-core/src/sift_core/execute/job_worker.py`
+- `packages/sift-core/src/sift_core/execute/job_worker_cli.py`
+- Existing DB migrations only if a narrow audit/helper RPC is missing; otherwise
+  add a new timestamped migration.
+- Gateway/common/core tests for active case, audit, and response redaction.
+
+Exact work:
+
+- Introduce or harden a single `AuthorityContext`/request context contract that
+  carries case UUID, case key, artifact path for worker-only use, principal,
+  membership role, tool scopes, evidence gate version/status, request ID, and
+  audit event IDs.
+- In DB-active mode, Gateway/core/worker must use this context for
+  authoritative work. `SIFT_CASE_DIR`, `~/.sift/active_case`, and `CASE.yaml`
+  remain legacy fallback only when DB authority is disabled.
+- Replace JSONL-first audit on Gateway/core DB-active paths with DB-first
+  audit writes to `app.audit_events`. The file writer may remain as an export
+  or legacy fallback, but a required DB audit failure must fail a mutating
+  call.
+- For MCP/API calls, write a pre-dispatch audit envelope and a result/failure
+  audit receipt. Mutating handlers must be able to attach those IDs to DB
+  transitions.
+- Ensure audit output and errors are path/secret redacted for agent callers.
+
+Acceptance:
+
+- Tests prove DB-active Gateway/tool calls do not read active case from
+  `~/.sift/active_case`.
+- Tests prove file pointer tampering cannot change the active case used by
+  MCP/API calls.
+- Tests prove mutating DB-active calls fail closed when required DB audit write
+  fails.
+- Tests prove audit rows carry request/tool/principal/case/provenance fields
+  needed by K2-K6.
+- Existing legacy CLI/file-mode tests still pass or are explicitly scoped as
+  legacy fallback.
+
+## BATCH-K2 - Core investigation DB authority cutover
+
+Dependencies: BATCH-K1.
+
+Scope:
+
+- `packages/sift-core/src/sift_core/case_manager.py`
+- `packages/sift-core/src/sift_core/case_io.py`
+- `packages/sift-core/src/sift_core/agent_tools.py`
+- `packages/sift-core/src/sift_core/reporting.py`
+- `packages/sift-gateway/src/sift_gateway/portal_services.py`
+- `packages/case-dashboard/src/case_dashboard/routes.py`
+- `supabase/migrations/202606081500_report_metadata.sql` for contract
+  reference; add a new timestamped migration only if schema/RPC gaps remain.
+- Core, Gateway, portal, and DB tests for findings, timeline, TODOs, IOCs, and
+  approvals.
+
+Exact work:
+
+- Add a typed investigation authority port/store used by core mutating tools:
+  findings, timeline events, TODOs, IOCs, approvals/rejections, and content
+  hashes.
+- In DB-active mode, `record_finding`, `record_timeline_event`, and
+  `manage_todo` write to `app.investigation_*` first and return DB-backed IDs.
+  File writes are disabled or mirror-only.
+- Approval/rejection/edit transitions must update the DB row, status, actor,
+  re-auth audit ID, content hash, and approval metadata atomically.
+- Portal reads and report generation must use DB rows only for DB-active cases.
+- Prevent agent downgrades or overwrites of human-approved/rejected records:
+  agents may create/update draft/proposed rows only.
+
+Acceptance:
+
+- Agent-created findings, timeline events, TODOs, and IOCs appear in portal
+  from Postgres without reading case JSON.
+- Portal approval/rejection updates Postgres and is visible to report
+  generation.
+- Tampering with `findings.json`, `timeline.json`, `todos.json`, `iocs.json`,
+  or `approvals.jsonl` cannot alter portal state or report eligibility in
+  DB-active mode.
+- Race tests cover stale content hash/version on approval/edit.
+- Approved-only report tests still pass using DB authority.
+
+## BATCH-K3 - Evidence gate, proof export, and Solana anchor cutover
+
+Dependencies: BATCH-K1. Can run in parallel with K2 and K4 after K1 lands.
+
+Scope:
+
+- `packages/sift-core/src/sift_core/evidence_chain.py`
+- `packages/sift-core/src/sift_core/verification.py`
+- `packages/sift-core/src/sift_core/case_io.py`
+- `packages/sift-gateway/src/sift_gateway/evidence_gate.py`
+- `packages/sift-gateway/src/sift_gateway/portal_services.py`
+- `packages/case-dashboard/src/case_dashboard/routes.py`
+- `packages/case-dashboard/frontend/src/components/evidence/EvidenceTab.jsx`
+- `supabase/migrations/202606081000_evidence_custody.sql` for contract
+  reference; add a new timestamped migration only if proof export/anchor
+  metadata is missing.
+- Evidence/custody/proof-export tests.
+
+Exact work:
+
+- Ensure DB-active evidence gate reads only `app.evidence_gate_status` /
+  `app.evidence_chain_heads` and never treats `evidence-manifest.json` or
+  `evidence-ledger.jsonl` as gate authority.
+- Make evidence detect/register/seal/ignore/retire/violation transitions write
+  DB custody rows and chain heads first. File manifest/ledger writes become
+  immutable proof exports or legacy fallback.
+- Add or complete proof export generation from DB-derived evidence state:
+  manifest snapshot, ledger/custody event snapshot, chain head, verification
+  result, and optional storage/file object metadata.
+- Preserve optional Solana anchoring as export proof only. Anchor payload must
+  derive from DB custody proof material and record result in
+  `app.evidence_proof_exports`; lack of Solana must not block sealing.
+- New/changed file detection after seal must mark the case evidence gate non-OK
+  until the operator resolves and seals again.
+
+Acceptance:
+
+- Tampering with `evidence-manifest.json`, `evidence-ledger.jsonl`, or
+  `evidence-anchor-v*.json` cannot change evidence gate state in DB-active mode.
+- Evidence gate fails closed when DB chain head is missing, violated, unsealed,
+  or stale.
+- Proof export verifies mounted evidence and records export metadata/hash in
+  Postgres.
+- Optional Solana anchor writes proof metadata when configured and degrades
+  cleanly when not configured.
+
+## BATCH-K4 - OpenSearch derived-state and host identity cutover
+
+Dependencies: BATCH-K1; BATCH-F1/L1 OpenSearch job adapter. Can run in
+parallel with K2, K3, and K5 after K1 lands.
+
+Scope:
+
+- `packages/opensearch-mcp/src/opensearch_mcp/ingest.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/ingest_status.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/host_discovery.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/host_dictionary.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/server.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/registry.py`
+- `packages/opensearch-mcp/sift-backend.json`
+- `packages/sift-core/src/sift_core/execute/job_worker.py`
+- `supabase/migrations/202606081300_opensearch_provenance.sql` for contract
+  reference; add a new timestamped migration only if host identity/job-status
+  tables/RPCs are missing.
+- OpenSearch ingest/job/host identity tests and Gateway tool-surface snapshots.
+
+Exact work:
+
+- Keep hostname extraction/detection because parsers and index naming need it.
+  Host identity is derived indexing metadata, not case/evidence authority.
+- Move DB-active ingest status, per-artifact provenance manifests, host
+  discovery decisions, host dictionary mutations, and host-fix receipts into
+  Postgres-backed provenance/host-identity records.
+- Treat local `host-dictionary.yaml`, ingest manifests, discovery reports, and
+  ingest status JSON as legacy/parser-compatibility/debug artifacts only.
+- Preserve `opensearch_fix_host_mapping` as the canonical correction tool and
+  `opensearch_host_fix` as the deprecated alias. Both may mutate OpenSearch
+  derived docs and host metadata only, with DB audit/provenance receipts.
+- Ensure OpenSearch credentials and local paths never appear in agent-visible
+  responses.
+
+Acceptance:
+
+- Ingest/job status visible to portal/agent comes from Postgres durable job and
+  provenance state, not case status JSON.
+- Host identity decisions/corrections are recorded in DB with source,
+  canonical value, actor/tool, affected index/provenance IDs, and audit ID.
+- Tampering with `host-dictionary.yaml` cannot change portal/Gateway authority
+  in DB-active mode; at most it can affect a legacy parser compatibility file
+  that is regenerated from DB.
+- Existing parser/index-name behavior remains compatible.
+
+## BATCH-K5 - run_command authority-isolation hardening
+
+Dependencies: BATCH-K1; BATCH-I1/L1 run-command job path. Can run in parallel
+with K2-K4 after K1 lands.
+
+Scope:
+
+- `packages/sift-core/src/sift_core/execute/tools/generic.py`
+- `packages/sift-core/src/sift_core/execute/executor.py`
+- `packages/sift-core/src/sift_core/execute/security.py`
+- `packages/sift-core/src/sift_core/execute/security_policy.py`
+- `packages/sift-core/src/sift_core/execute/run_command_job.py`
+- `packages/sift-core/src/sift_core/execute/runtime_acl.py`
+- `packages/sift-core/src/sift_core/agent_tools.py`
+- `packages/sift-gateway/src/sift_gateway/job_tools.py`
+- `scripts/setup-agent-runtime.sh`
+- `configs/systemd/sift-job-worker.service`
+- Execution, ACL, redaction, and job tests.
+
+Exact work:
+
+- Ensure `run_command` receives opaque evidence refs/input refs and controlled
+  output refs only. Worker-only path resolution must happen after DB job claim,
+  evidence gate check, and audit pre-event.
+- Strip DB DSNs, Supabase keys, service-role secrets, OpenSearch credentials,
+  local VM secrets, and unrelated environment variables from the run-command
+  subprocess environment.
+- Ensure runtime user ACLs cannot read/write authority files. In the final
+  model, critical authority files should not exist in the case dir; remaining
+  proof/export files are read-only unless an operator/export process writes
+  them.
+- Persist output receipt metadata in Postgres: command plan hash, evidence refs,
+  stdout/stderr preview hash, output refs, output file hash, audit IDs, job ID,
+  and provenance ID.
+- Keep `shell=False`, deny floor, allowlist profiles, path redaction, and
+  bounded output previews.
+
+Acceptance:
+
+- Allowed commands work against sealed evidence refs and return job/status plus
+  redacted previews only.
+- Denied commands fail closed and are audited.
+- A command cannot read DB secrets from env, cannot write authority state, and
+  cannot cause portal/report/evidence gate state changes except through
+  approved DB authority APIs.
+- Output receipts are DB-backed and reportable without local paths.
+
+## BATCH-K6 - Portal/report tamper regression and file-authority removal
+
+Dependencies: BATCH-K2; BATCH-K3; BATCH-K4 for OpenSearch status views if
+included; BATCH-K5 for run-command receipts.
+
+Scope:
+
+- `packages/case-dashboard/src/case_dashboard/routes.py`
+- `packages/case-dashboard/frontend/src/**` only for surfaced authority labels
+  or removed file fallback flows
+- `packages/sift-gateway/src/sift_gateway/portal_services.py`
+- `packages/sift-core/src/sift_core/reporting.py`
+- `packages/sift-core/src/sift_core/audit_ops.py`
+- `packages/sift-core/src/sift_core/backup_ops.py`
+- End-to-end portal/Gateway/core/security regression tests.
+
+Exact work:
+
+- Remove or gate DB-active file fallbacks from portal views, approvals, report
+  generation, audit views, backup/export views, and status endpoints.
+- Add tamper regression tests that modify or delete legacy files and prove DB
+  portal state, MCP state, evidence gate, approvals, report eligibility, and
+  report output do not change.
+- Keep legacy file mode explicitly available for old tests/CLI only when DB
+  authority is not configured.
+- Update visible portal labels only where needed so the operator can see DB
+  authority versus export/debug artifacts.
+- Confirm no duplicate state write path remains where file success can mask DB
+  failure for critical mutable state.
+
+Acceptance:
+
+- Portal and report generation remain functional after legacy JSON/JSONL files
+  are absent, stale, corrupt, or tampered in DB-active mode.
+- Tests prove file tampering cannot approve findings, alter todos/timeline,
+  change evidence seal state, change report inclusion, or spoof audit/custody.
+- Any remaining file fallback is protected by an explicit legacy-mode guard.
+- BATCH-V1 can resume with the authority cutover no longer blocking approval,
+  report, ingest status, RAG verification, or run-command proof.
+
 ## BATCH-V1 - End-to-end validation and cutover
 
-Dependencies: BATCH-A1; BATCH-B1; BATCH-C1; BATCH-D1; BATCH-D2; BATCH-E1; BATCH-F1; BATCH-G1; BATCH-H1; BATCH-I1; BATCH-J1; BATCH-L1.
+Dependencies: BATCH-A1; BATCH-B1; BATCH-C1; BATCH-D1; BATCH-D2; BATCH-E1; BATCH-F1; BATCH-G1; BATCH-H1; BATCH-I1; BATCH-J1; BATCH-L1; BATCH-K1; BATCH-K2; BATCH-K3; BATCH-K4; BATCH-K5; BATCH-K6.
 
 Status (2026-06-08): IN_PROGRESS - first live VM run done. Security core
 validated end to end (auth, forced reset, case DB authority, evidence
@@ -485,8 +830,8 @@ export, and custody proof export still need to be driven. The live pgvector RAG
 tables are empty (`app.rag_collections=0`, `app.rag_documents=0`,
 `app.rag_chunks=0`), so any successful knowledge-style VM answers were legacy
 `kb_*`/forensic-knowledge responses, not the new Supabase pgvector path. See
-`Session-Notes.md` `BATCH-V1` entry plus F-MVP-5..7 and B-MVP-8..15. Box stays
-unchecked until the full journey completes.
+`Session-Notes.md` `BATCH-V1` entry plus F-MVP-5..10 and B-MVP-8..16. Box stays
+unchecked until the authority cutover and full journey complete.
 
 Scope:
 
@@ -718,47 +1063,56 @@ Add-on metadata clearly marks capabilities and required scopes; query-only behav
 
 ## Next Prompt
 
-Launch BATCH-V1 next. No additional implementation batch is currently open.
+Launch BATCH-K1 next. BATCH-V1 is blocked until K1-K6 close the DB-active
+authority cutover. After K1 lands, K2-K5 can proceed in parallel; K6 is the
+tamper/regression gate before V1 resumes.
 
 Suggested worktree:
 
 ```bash
-git worktree add ../sift-mcps-v1 -b revamp/mvp-v1-validation-cutover revamp/spg-v1
+git worktree add ../sift-mcps-k1 -b revamp/mvp-k1-authority-context-audit revamp/spg-v1
 ```
 
 Prompt:
 
 ```text
 ROLE & MODE
-You are the BATCH-V1 validation/cutover agent for the SIFT MVP sprint. Do not
-start new architecture work. Validate the integrated MVP on the live SIFT VM,
-fix only defects that block the Phase 3 smoke journey, and keep the repo in a
-clean, committable state.
+You are the BATCH-K1 coding agent for the SIFT MVP sprint. Build the authority
+context and DB-audit dependency root. Do not redesign the architecture.
 
 REQUIRED READING
 Read, in order: AGENTS.md; docs/migration/Migration-Spec.md sections 2, 3, 4,
-and 5; docs/migration/task-batches.md BATCH-V1 and BATCH-L1; the latest two
-entries in docs/migration/Session-Notes.md.
+and 5, especially "Authority cutover impact model"; docs/migration/task-batches.md
+BATCH-K1; the latest entry in docs/migration/Session-Notes.md.
 
 SCOPE
-Own BATCH-V1 only. Apply Supabase migrations in timestamp order, start/verify
-Gateway and sift-job-worker, run the Phase 3 smoke journey, run package tests
-for any changed code, and update only task-batches.md and Session-Notes.md for
-final validation evidence. If a live defect appears, fix it in the smallest
-relevant code surface and rerun the failing smoke/test step.
+Own BATCH-K1 only. Inspect and edit only the K1 scope paths unless a test proves
+a minimal adjacent change is required: sift_common active-case resolution and
+AuditWriter; sift_core active_case_context/case_manager/case_ops; Gateway
+active_case/audit_helpers/policy_middleware/server/job_tools; job worker
+context; direct tests. Add a narrow timestamped migration only if the current
+audit schema/RPCs cannot support required DB audit writes.
 
 SECURITY INVARIANTS
-No agent-visible absolute case/evidence/mount paths, DB credentials,
-OpenSearch credentials, service-role keys, or local secrets. Gateway remains
-the policy boundary. Supabase/Postgres remains authority. Evidence must be
-registered and sealed before analysis. Reports include approved findings only.
+In DB-active mode, authoritative work must not resolve active case from
+SIFT_CASE_DIR, ~/.sift/active_case, CASE.yaml, or case JSON files. Gateway
+remains the policy boundary. Supabase/Postgres remains authority. Mutating calls
+must fail closed if required DB audit cannot be persisted. No agent-visible
+absolute paths or secrets.
+
+DELIVERABLE
+Introduce or harden the AuthorityContext/request context contract, make
+Gateway/core/worker use it for authoritative DB-active work, and replace
+JSONL-first audit with DB-first audit for Gateway/core DB-active paths. Keep
+file audit only as legacy fallback or export mirror.
+
+OUTPUT DISCIPLINE
+Do not edit docs/migration in this worker branch. End with a LANDING LOG block:
+changed files, tests run, acceptance evidence, any schema gap, and whether K2-K5
+can launch.
 
 ACCEPTANCE
-The SIFT VM flow works end to end: install/health, operator forced reset, case
-create/activate, evidence detect/register/seal, one-time agent credential,
-MCP connection, pre-seal denial and post-seal allow, ingest_job/job_status,
-search/RAG query, record finding/timeline/TODO, portal approval, approved-only
-report generation/export, allowed/denied run_command examples, and audit/custody
-proof export. Both doc validators pass. Record all live validation evidence in
-Session-Notes.md and mark BATCH-V1 only after acceptance passes.
+Tests prove DB-active Gateway/tool calls ignore ~/.sift/active_case tampering,
+mutating calls fail closed when DB audit fails, audit rows carry the fields K2-K6
+need, and legacy file mode remains explicitly guarded.
 ```
