@@ -17,6 +17,7 @@ StandardError=journal
 # both the execution worker and the forensic tool it spawns). Do not rely on
 # this unit to pass secrets through to run_command — by design it cannot.
 EnvironmentFile=-%h/.sift/supabase.env
+EnvironmentFile=-%h/.sift/control-plane.env
 Environment=UV_NO_MANAGED_PYTHON=1
 Environment=UV_PYTHON_DOWNLOADS=never
 

@@ -609,7 +609,8 @@ class SupabasePrincipalRepository:
                     cur.execute(
                         """
                         select id::text, display_name, agent_type, status,
-                               auth_user_id::text, owner_user_id::text
+                               auth_user_id::text, owner_user_id::text,
+                               default_case_id::text
                         from app.agents
                         where owner_user_id = %s
                         order by display_name, id
@@ -620,13 +621,14 @@ class SupabasePrincipalRepository:
                     cur.execute(
                         """
                         select id::text, display_name, agent_type, status,
-                               auth_user_id::text, owner_user_id::text
+                               auth_user_id::text, owner_user_id::text,
+                               default_case_id::text
                         from app.agents
                         order by display_name, id
                         """
                     )
                 for row in cur.fetchall():
-                    pid, display_name, agent_type, status, auth_user_id, owner_id = row
+                    pid, display_name, agent_type, status, auth_user_id, owner_id, default_case_id = row
                     principals.append({
                         "principal_type": "agent",
                         "principal_id": str(pid),
@@ -635,6 +637,7 @@ class SupabasePrincipalRepository:
                         "type": str(agent_type) if agent_type else None,
                         "auth_user_id": str(auth_user_id) if auth_user_id else None,
                         "owner_user_id": str(owner_id) if owner_id else None,
+                        "default_case_id": str(default_case_id) if default_case_id else None,
                         "tool_scopes": list(self._load_scopes(cur, "agent", str(pid))),
                     })
 
@@ -1282,6 +1285,7 @@ class AgentServiceIssuance:
             extra={"source_ip": source_ip, "principal_type": kind,
                    "principal_id": principal_id, "auth_user_id": auth_user_id,
                    "created_by": creator.get("principal_id"),
+                   "default_case_id": case_id if kind == "agent" else None,
                    "fingerprint": session.fingerprint},
         )
         return {
@@ -1293,6 +1297,7 @@ class AgentServiceIssuance:
             "expires_at": session.expires_at,
             "fingerprint": session.fingerprint,
             "display_name": display_name,
+            "default_case_id": case_id if kind == "agent" else None,
         }
 
     def _insert_principal_row(
@@ -1338,6 +1343,7 @@ class AgentServiceIssuance:
                     )
                     principal_id = cur.fetchone()[0]
                     scope_col = "service_identity_id"
+                scope_case_id = None if kind == "agent" else case_id
                 for scope in tool_scopes or []:
                     cur.execute(
                         f"""
@@ -1345,7 +1351,7 @@ class AgentServiceIssuance:
                           ({scope_col}, case_id, scope, status)
                         values (%s, %s, %s, 'active')
                         """,
-                        (principal_id, case_id, scope),
+                        (principal_id, scope_case_id, scope),
                     )
             conn.commit()
         return str(principal_id)

@@ -918,7 +918,17 @@ def test_repository_list_principals_global_scopes_and_owner_filter():
 
         def fetchall(self):
             if self._mode == "agents":
-                return [("ag-1", "Hermes", "ai", "active", "auth-ag-1", "op-1")]
+                return [
+                    (
+                        "ag-1",
+                        "Hermes",
+                        "ai",
+                        "active",
+                        "auth-ag-1",
+                        "op-1",
+                        "11111111-1111-1111-1111-111111111111",
+                    )
+                ]
             if self._mode == "services":
                 return [("sv-1", "worker", "worker", "active", "auth-sv-1")]
             if self._mode == "scopes":
@@ -947,3 +957,55 @@ def test_repository_list_principals_global_scopes_and_owner_filter():
     assert all("mcp_tokens" not in s for s in executed)  # never touches raw tokens
     assert any("case_id is null" in s for s in executed)  # global-only scopes
     _assert_no_secret_keys(out)
+
+
+def test_b_mvp9_agent_issuance_binds_default_case_but_global_scopes():
+    from sift_gateway.supabase_auth import AgentServiceIssuance
+
+    issuance = AgentServiceIssuance.__new__(AgentServiceIssuance)
+    executed = []
+
+    class _Cur:
+        def execute(self, sql, params=None):
+            executed.append((sql, params))
+
+        def fetchone(self):
+            return ("agent-db-id",)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    issuance._connect = lambda: _Conn()  # type: ignore[method-assign]
+    principal_id = issuance._insert_principal_row(
+        "agent",
+        "Hermes case agent",
+        "auth-agent-1",
+        None,
+        ["mcp:*"],
+        "11111111-1111-1111-1111-111111111111",
+        {"principal_id": "op-1"},
+    )
+
+    assert principal_id == "agent-db-id"
+    agent_insert = executed[0]
+    assert "insert into app.agents" in agent_insert[0]
+    assert agent_insert[1][3] == "11111111-1111-1111-1111-111111111111"
+    scope_insert = executed[1]
+    assert "insert into app.principal_tool_scopes" in scope_insert[0]
+    assert scope_insert[1] == ("agent-db-id", None, "mcp:*")

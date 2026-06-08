@@ -494,10 +494,19 @@ PY
 bootstrap_supabase_operator() {
   local sb_url="${SUPABASE_URL:-}"
   local sb_key="${SUPABASE_SERVICE_ROLE_KEY:-}"
+  local cp_dsn
+  cp_dsn="$(_resolved_control_plane_dsn)"
 
   if [[ -z "$sb_url" || -z "$sb_key" ]]; then
     warn "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set — skipping Supabase operator bootstrap."
     warn "  Set these env vars and re-run ./install.sh to provision the Supabase operator account."
+    SUPABASE_OPERATOR_CREATED=0
+    return
+  fi
+  if [[ -z "$cp_dsn" ]]; then
+    warn "SIFT_CONTROL_PLANE_DSN is not set — skipping Supabase operator bootstrap."
+    warn "  The installer will not create an auth user without the matching app.operator_profiles row."
+    warn "  Set SIFT_CONTROL_PLANE_DSN (or DATABASE_URL/POSTGRES_DSN) and re-run ./install.sh."
     SUPABASE_OPERATOR_CREATED=0
     return
   fi
@@ -517,54 +526,195 @@ bootstrap_supabase_operator() {
 
   log "Provisioning Supabase operator: $sb_email (status=invited, forced-reset on first login)."
   export SUPABASE_URL="$sb_url" SUPABASE_SERVICE_ROLE_KEY="$sb_key"
+  export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
   export SB_OPERATOR_EMAIL="$sb_email" SB_OPERATOR_TEMP_PW="$sb_temp_password"
   export SB_OPERATOR_EXAMINER="$SIFT_EXAMINER"
 
   local create_result
-  create_result=$("$VENV_DIR/bin/python" - <<'PY' 2>&1)
+  create_result=$("$VENV_DIR/bin/python" - <<'PY' 2>&1
 import json, os, sys, urllib.request, urllib.error
 
 url = os.environ["SUPABASE_URL"].rstrip("/")
 key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+dsn = os.environ["SIFT_CONTROL_PLANE_DSN"]
 email = os.environ["SB_OPERATOR_EMAIL"]
 password = os.environ["SB_OPERATOR_TEMP_PW"]
 examiner = os.environ["SB_OPERATOR_EXAMINER"]
 
-payload = json.dumps({
-    "email": email,
-    "password": password,
-    "email_confirm": True,
-    "user_metadata": {
-        "sift_principal_kind": "operator",
-        "display_name": examiner,
-        "installer_bootstrap": True,
-    },
-}).encode()
-
-req = urllib.request.Request(
-    f"{url}/auth/v1/admin/users",
-    data=payload,
-    method="POST",
-    headers={
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    },
-)
 try:
+    import psycopg
+    from psycopg.types.json import Jsonb
+except Exception as exc:
+    print(f"error:psycopg_unavailable:{exc}")
+    sys.exit(0)
+
+
+def _request(method, path, payload=None):
+    body = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        f"{url}{path}",
+        data=body,
+        method=method,
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+    )
     with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read())
-    user_id = str(data.get("id") or (data.get("user") or {}).get("id") or "")
-    if user_id:
-        print(f"ok:{user_id}")
-    else:
-        print(f"error:no_id_in_response")
+        return json.loads(resp.read() or b"{}")
+
+
+def _auth_user_by_email(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            "select id::text from auth.users where lower(email) = lower(%s) limit 1",
+            (email,),
+        )
+        row = cur.fetchone()
+        return str(row[0]) if row else None
+
+
+def _profile_for(conn, auth_user_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select id::text, status
+            from app.operator_profiles
+            where auth_user_id = %s or lower(email) = lower(%s)
+            order by created_at
+            limit 1
+            """,
+            (auth_user_id, email),
+        )
+        row = cur.fetchone()
+        return (str(row[0]), str(row[1])) if row else (None, None)
+
+
+def _upsert_operator_profile(conn, auth_user_id, prior_status):
+    target_status = "active" if prior_status == "active" else "invited"
+    metadata = {
+        "installer_bootstrap": True,
+        "bootstrap_source": "install.sh",
+        "forced_reset_required": target_status == "invited",
+    }
+    profile_id, _status = _profile_for(conn, auth_user_id)
+    with conn.cursor() as cur:
+        if profile_id:
+            cur.execute(
+                """
+                update app.operator_profiles
+                set auth_user_id = %s,
+                    display_name = %s,
+                    email = %s,
+                    status = case when status = 'active' then 'active' else %s end,
+                    system_role = 'owner',
+                    legacy_examiner_id = %s,
+                    metadata = coalesce(metadata, '{}'::jsonb) || %s,
+                    updated_at = now()
+                where id = %s
+                returning id::text, status
+                """,
+                (
+                    auth_user_id,
+                    examiner,
+                    email,
+                    target_status,
+                    examiner,
+                    Jsonb(metadata),
+                    profile_id,
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                insert into app.operator_profiles
+                  (auth_user_id, display_name, email, status, system_role,
+                   legacy_examiner_id, metadata)
+                values (%s, %s, %s, %s, 'owner', %s, %s)
+                returning id::text, status
+                """,
+                (auth_user_id, examiner, email, target_status, examiner, Jsonb(metadata)),
+            )
+        row = cur.fetchone()
+        return str(row[0]), str(row[1])
+
+
+def _create_auth_user():
+    payload = {
+        "email": email,
+        "password": password,
+        "email_confirm": True,
+        "user_metadata": {
+            "sift_principal_kind": "operator",
+            "display_name": examiner,
+            "installer_bootstrap": True,
+        },
+    }
+    data = _request("POST", "/auth/v1/admin/users", payload)
+    return str(data.get("id") or (data.get("user") or {}).get("id") or "")
+
+
+def _reset_existing_auth_user(auth_user_id):
+    payload = {
+        "password": password,
+        "email_confirm": True,
+        "user_metadata": {
+            "sift_principal_kind": "operator",
+            "display_name": examiner,
+            "installer_bootstrap": True,
+        },
+    }
+    _request("PUT", f"/auth/v1/admin/users/{auth_user_id}", payload)
+
+
+def _delete_auth_user(auth_user_id):
+    try:
+        _request("DELETE", f"/auth/v1/admin/users/{auth_user_id}", None)
+    except Exception:
+        pass
+
+
+created_auth_user = False
+reset_existing_password = False
+auth_user_id = ""
+try:
+    with psycopg.connect(dsn) as conn:
+        auth_user_id = _auth_user_by_email(conn)
+        prior_profile_id = None
+        prior_profile_status = None
+        if auth_user_id:
+            prior_profile_id, prior_profile_status = _profile_for(conn, auth_user_id)
+        if not auth_user_id:
+            auth_user_id = _create_auth_user()
+            if not auth_user_id:
+                print("error:no_id_in_response")
+                sys.exit(0)
+            created_auth_user = True
+        elif prior_profile_status != "active":
+            _reset_existing_auth_user(auth_user_id)
+            reset_existing_password = True
+        profile_id, profile_status = _upsert_operator_profile(
+            conn, auth_user_id, prior_profile_status
+        )
+        conn.commit()
 except urllib.error.HTTPError as exc:
     body = exc.read()[:200].decode("utf-8", errors="replace")
     print(f"http_error:{exc.code}:{body}")
 except Exception as exc:
+    if created_auth_user and auth_user_id:
+        _delete_auth_user(auth_user_id)
     print(f"error:{exc}")
+else:
+    print("ok:" + json.dumps({
+        "auth_user_id": auth_user_id,
+        "operator_profile_id": profile_id,
+        "profile_status": profile_status,
+        "created_auth_user": created_auth_user,
+        "reset_existing_password": reset_existing_password,
+    }, separators=(",", ":")))
 PY
+)
 
   local rc=$?
   if [[ "$rc" -ne 0 ]] || [[ "$create_result" == error:* ]] || [[ "$create_result" == http_error:* ]]; then
@@ -575,17 +725,29 @@ PY
     return
   fi
 
-  local sb_user_id
-  sb_user_id="${create_result#ok:}"
+  local bootstrap_json sb_user_id profile_status password_handoff
+  bootstrap_json="${create_result#ok:}"
+  sb_user_id="$("$VENV_DIR/bin/python" -c 'import json,sys; print(json.loads(sys.argv[1])["auth_user_id"])' "$bootstrap_json")"
+  profile_status="$("$VENV_DIR/bin/python" -c 'import json,sys; print(json.loads(sys.argv[1])["profile_status"])' "$bootstrap_json")"
+  password_handoff="$("$VENV_DIR/bin/python" -c 'import json,sys; d=json.loads(sys.argv[1]); print("1" if d.get("created_auth_user") or d.get("reset_existing_password") else "0")' "$bootstrap_json")"
   SB_OPERATOR_USER_ID="$sb_user_id"
-  SUPABASE_OPERATOR_CREATED=1
   SUPABASE_OPERATOR_EMAIL="$sb_email"
-  SUPABASE_OPERATOR_TEMP_PASSWORD="$sb_temp_password"
-  export SB_OPERATOR_USER_ID SUPABASE_OPERATOR_EMAIL SUPABASE_OPERATOR_TEMP_PASSWORD
+  SUPABASE_OPERATOR_MAPPED=1
+  if [[ "$password_handoff" == "1" ]]; then
+    SUPABASE_OPERATOR_CREATED=1
+    SUPABASE_OPERATOR_TEMP_PASSWORD="$sb_temp_password"
+    export SUPABASE_OPERATOR_TEMP_PASSWORD
+  else
+    SUPABASE_OPERATOR_CREATED=0
+    SUPABASE_OPERATOR_TEMP_PASSWORD=""
+  fi
+  export SB_OPERATOR_USER_ID SUPABASE_OPERATOR_EMAIL SUPABASE_OPERATOR_MAPPED
 
-  log "Supabase operator created: id=$sb_user_id  status=invited (forced-reset on first login)."
-  log "NOTE: The one-time Supabase login password is written to: $MATERIALS_FILE"
-  log "  The operator MUST reset this password immediately after first login."
+  log "Supabase operator mapped: auth_user_id=$sb_user_id  app.status=$profile_status."
+  if [[ "$password_handoff" == "1" ]]; then
+    log "NOTE: The one-time Supabase login password is written to: $MATERIALS_FILE"
+    log "  The operator MUST reset this password immediately after first login."
+  fi
 
   # Unset temp password from env so it's not inherited by child processes.
   unset SB_OPERATOR_TEMP_PW
@@ -690,6 +852,74 @@ write_supabase_env() {
     [[ -n "$sb_service" ]] && printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$sb_service"
   } > "$supabase_env_file"
   chmod 600 "$supabase_env_file"
+}
+
+_env_file_value() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 0
+  awk -F= -v k="$key" '$1 == k {sub(/^[^=]*=/, ""); print; exit}' "$file" 2>/dev/null || true
+}
+
+_resolved_control_plane_dsn() {
+  local dsn="${SIFT_CONTROL_PLANE_DSN:-${DATABASE_URL:-${POSTGRES_DSN:-}}}"
+  if [[ -z "$dsn" ]]; then
+    dsn="$(_env_file_value "$SIFT_HOME/control-plane.env" "SIFT_CONTROL_PLANE_DSN")"
+  fi
+  if [[ -z "$dsn" ]]; then
+    dsn="$(_env_file_value "$SIFT_HOME/supabase.env" "SIFT_CONTROL_PLANE_DSN")"
+  fi
+  printf '%s' "$dsn"
+}
+
+_resolved_token_pepper() {
+  local pepper="${SIFT_TOKEN_PEPPER:-}"
+  if [[ -z "$pepper" ]]; then
+    pepper="$(_env_file_value "$SIFT_HOME/control-plane.env" "SIFT_TOKEN_PEPPER")"
+  fi
+  if [[ -z "$pepper" ]]; then
+    pepper="$(_env_file_value "$SIFT_HOME/supabase.env" "SIFT_TOKEN_PEPPER")"
+  fi
+  if [[ -z "$pepper" ]]; then
+    pepper="$(random_hex 32)"
+  fi
+  printf '%s' "$pepper"
+}
+
+write_control_plane_env() {
+  local control_env_file="$SIFT_HOME/control-plane.env"
+  local cp_dsn token_pepper existing_dsn existing_pepper
+  cp_dsn="$(_resolved_control_plane_dsn)"
+  token_pepper="$(_resolved_token_pepper)"
+  existing_dsn="$(_env_file_value "$control_env_file" "SIFT_CONTROL_PLANE_DSN")"
+  existing_pepper="$(_env_file_value "$control_env_file" "SIFT_TOKEN_PEPPER")"
+
+  if [[ -z "$cp_dsn" && -z "$token_pepper" ]]; then
+    log "No control-plane env vars set — skipping control-plane.env."
+    log "  To enable DB authority, set SIFT_CONTROL_PLANE_DSN and re-run ./install.sh."
+    return
+  fi
+
+  if [[ -n "$existing_dsn" && -n "$existing_pepper" ]]; then
+    log "Control-plane env file already complete — preserving $control_env_file."
+    export SIFT_CONTROL_PLANE_DSN="$existing_dsn"
+    export SIFT_TOKEN_PEPPER="$existing_pepper"
+    return
+  fi
+
+  [[ -n "$existing_dsn" ]] && cp_dsn="$existing_dsn"
+  [[ -n "$existing_pepper" ]] && token_pepper="$existing_pepper"
+
+  log "Writing control-plane env file: $control_env_file"
+  install -d -m 700 "$(dirname "$control_env_file")"
+  {
+    printf '# SIFT control-plane environment — managed by sift-mcps install.sh\n'
+    printf '# Secrets are stored here, not in gateway.yaml.\n'
+    [[ -n "$cp_dsn" ]] && printf 'SIFT_CONTROL_PLANE_DSN=%s\n' "$cp_dsn"
+    [[ -n "$token_pepper" ]] && printf 'SIFT_TOKEN_PEPPER=%s\n' "$token_pepper"
+  } > "$control_env_file"
+  chmod 600 "$control_env_file"
+  [[ -n "$cp_dsn" ]] && export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
+  [[ -n "$token_pepper" ]] && export SIFT_TOKEN_PEPPER="$token_pepper"
 }
 
 write_gateway_config() {
@@ -1126,6 +1356,11 @@ write_handoff() {
       fi
       printf 'supabase_auth=enabled\n'
       printf 'supabase_forced_reset=check_if_completed\n'
+    elif [[ "${SUPABASE_OPERATOR_MAPPED:-0}" -eq 1 ]]; then
+      printf 'supabase_operator_email=%s\n' "${SUPABASE_OPERATOR_EMAIL:-}"
+      printf 'supabase_operator_temp_password=existing-supabase-user\n'
+      printf 'supabase_auth=enabled\n'
+      printf 'supabase_forced_reset=check_if_completed\n'
     else
       printf 'supabase_auth=not_bootstrapped\n'
     fi
@@ -1499,6 +1734,7 @@ main() {
   write_default_examiner
   prepare_opencti_secrets
   write_supabase_env   # A1-BOOTSTRAP: Supabase secrets in ~/.sift/supabase.env
+  write_control_plane_env
   write_gateway_config
   prepare_enrichment_assets   # FK enrichment is core (D4: FK data is a core runtime dep)
 
@@ -1533,6 +1769,7 @@ main() {
   # Runs only when SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set.
   SUPABASE_OPERATOR_CREATED=0
   SB_OPERATOR_USER_ID=""
+  SUPABASE_OPERATOR_MAPPED=0
   SUPABASE_OPERATOR_EMAIL=""
   SUPABASE_OPERATOR_TEMP_PASSWORD=""
   bootstrap_supabase_operator

@@ -129,6 +129,14 @@ auth:
     portal_session_enabled: true
     anonymous_examiner_enabled: false
 
+control_plane:
+  # Name only; the DSN value lives in ~/.sift/control-plane.env.
+  postgres_dsn_env: SIFT_CONTROL_PLANE_DSN
+
+token_registry:
+  # Name only; the pepper value lives in ~/.sift/control-plane.env.
+  pepper_env: SIFT_TOKEN_PEPPER
+
 api_keys:
   ${SIFT_GATEWAY_TOKEN}:
     token_id: "examiner-default"
