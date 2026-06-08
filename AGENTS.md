@@ -66,3 +66,10 @@ volatile project state.
 - Do not revert unrelated user changes.
 - Run targeted tests for touched code and return validation evidence in the
   final response or landing log.
+
+## Live VM Smoke Tests
+
+Live VM coordinates, replay steps, and current BATCH-V1 validation state live in
+`docs/migration/Session-Notes.md`. Do not put raw passwords, Supabase keys,
+OpenSearch credentials, or local VM secrets in repo files; use local shell
+environment variables such as `SSHPASS` when a test session needs them.

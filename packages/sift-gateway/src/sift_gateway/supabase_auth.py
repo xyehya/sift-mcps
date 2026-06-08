@@ -932,7 +932,7 @@ class SupabaseAuthCallbacks:
                        "fingerprint": session.fingerprint, "reason": "principal_not_mapped"},
             )
             raise PrincipalNotMappedError("no app principal for user")
-        if record.status != "active":
+        if record.status not in ("active", "invited"):
             self._audit_log(
                 tool="portal_login",
                 summary=f"rejected: principal_{record.status}",

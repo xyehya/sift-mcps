@@ -472,6 +472,22 @@ Acceptance:
 
 Dependencies: BATCH-A1; BATCH-B1; BATCH-C1; BATCH-D1; BATCH-D2; BATCH-E1; BATCH-F1; BATCH-G1; BATCH-H1; BATCH-I1; BATCH-J1; BATCH-L1.
 
+Status (2026-06-08): IN_PROGRESS - first live VM run done. Security core
+validated end to end (auth, forced reset, case DB authority, evidence
+detect/seal, custody hash chain, agent credential/MCP, path redaction, pre-seal
+deny/post-seal allow, run_command deny floor); migrations apply clean to live
+Supabase; unit suites and both doc validators passed. Three live defects fixed:
+health `apikey`, invited-login deadlock, and custody `digest()` on Supabase. NOT
+complete: agent findings/timeline reach only the case file, so portal approval
+and approved-only report are blocked on the agent-to-DB investigation bridge;
+`ingest_job`/OpenSearch, `rag_search_case`, allowed `run_command`, report
+export, and custody proof export still need to be driven. The live pgvector RAG
+tables are empty (`app.rag_collections=0`, `app.rag_documents=0`,
+`app.rag_chunks=0`), so any successful knowledge-style VM answers were legacy
+`kb_*`/forensic-knowledge responses, not the new Supabase pgvector path. See
+`Session-Notes.md` `BATCH-V1` entry plus F-MVP-5..7 and B-MVP-8..15. Box stays
+unchecked until the full journey completes.
+
 Scope:
 
 - End-to-end tests and smoke scripts.

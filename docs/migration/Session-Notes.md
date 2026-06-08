@@ -13,6 +13,107 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-08 - BATCH-V1 live VM validation partial
+
+Status: IN_PROGRESS
+
+First real end-to-end run on the live SIFT VM. Prior waves were unit/structural;
+this run deployed the integrated MVP to `~/sift-mcps-test`, applied all
+migrations to live Supabase, re-pointed Gateway to the control plane, and drove
+the Phase 3 journey through portal + MCP.
+
+Validated live:
+
+- Migrations: all `supabase/migrations/*.sql` apply clean in timestamp order to
+  fresh Supabase. Schema, RPCs, and pgvector are present.
+- Health: Gateway reports `status: ok`; Supabase and control-plane DB are
+  connected; evidence root is OK after F-MVP-5.
+- Operator bootstrap and forced reset: invited operator can log in, receives
+  `must_reset`, completes forced reset, and transitions `invited -> active`
+  after F-MVP-6.
+- Case create/activate: persisted to `app.cases`; active case is DB authority
+  (`deployment_active_case`, `authority: postgres`), not a file pointer. Frozen
+  case naming confirmed with `case-v1smoke-06081250`.
+- Evidence detect/register/seal: DB evidence detect path works; seal with HMAC
+  re-auth writes custody events; `app.evidence_gate_status` returns `sealed`
+  after F-MVP-7.
+- Custody hash chain: `EVIDENCE_DETECTED -> EVIDENCE_REGISTERED ->
+  MANIFEST_SEALED`, append-only and prev/event-hash linked.
+- Agent credential + MCP: one-time agent credential issued; MCP connects through
+  `/mcp`; scoped catalog exposes the expected tools including `ingest_job`,
+  `run_command_job`, `job_status`, and `rag_search_case`.
+- Path redaction and evidence gate: `case_info` redacts `case_dir`; pre-seal
+  agent calls fail closed with `evidence_chain_unsealed`; post-seal calls allow.
+- Agent writes and command controls: `manage_todo`, `record_timeline_event`, and
+  provenance-enforced `record_finding` work at the agent surface; `run_command`
+  deny floor blocks `bash` and redacts error paths.
+- RAG status: new pgvector schema and `rag_search_case` tool surface exist, but
+  live Supabase row counts are `app.rag_collections=0`, `app.rag_documents=0`,
+  and `app.rag_chunks=0`. Any successful VM knowledge/RAG-looking answers came
+  from legacy `kb_*` forensic-rag/Chroma or core forensic-knowledge guidance,
+  not from the new Supabase pgvector path.
+
+Defects fixed on this branch:
+
+- F-MVP-5: `health.py` Supabase health probe omitted the `apikey` header, so
+  Kong returned 401. The probe now sends the configured anon key as `apikey`.
+- F-MVP-6: `supabase_auth.py` rejected `invited` operators before a session
+  cookie existed, making `/api/auth/forced-reset` unreachable. Login now allows
+  `active` and `invited`; resolver/protected actions remain active-only.
+- F-MVP-7: `202606081000_evidence_custody.sql` used pgcrypto `digest()`, which
+  was unresolved under Supabase's extension schema and the function search path.
+  Custody hashing now uses built-in `sha256(v_payload::bytea)`.
+
+Validation:
+
+- Passed live/unit after fixes: sift-gateway 361, sift-core 376,
+  case-dashboard 350, forensic-rag 18, tests/db 48, opensearch job-ingest 8.
+- Passed: `python3 scripts/validate_docs.py`,
+  `python3 scripts/validate_migration_docs.py`.
+
+Remaining before BATCH-V1 can be checked:
+
+- Resolve B-MVP-8/9/10 first. B-MVP-10, the agent file-to-DB investigation
+  bridge, is the blocker for portal approval and approved-only report.
+- Then drive `ingest_job`/`job_status` with the worker, populate/verify
+  pgvector RAG, drive `rag_search_case`, allowed `run_command`, approved-only
+  report export, and custody proof export.
+
+Live VM replay notes for the next session:
+
+- VM host/user: `192.168.122.81` / `sansforensics`. Use local `SSHPASS` or SSH
+  agent configuration; do not commit the test VM password.
+- Gateway/portal: `https://192.168.122.81:4508`,
+  `https://192.168.122.81:4508/portal/`.
+- VM runtime: Ubuntu 24.04, `/usr/bin/python3.12`, uv at
+  `/home/sansforensics/.local/bin/uv`.
+- Supabase project: `/home/sansforensics/supabase-project`; sparse source clone:
+  `/home/sansforensics/supabase-src-v1.26.05`; pinned Supabase tag `v1.26.05`,
+  commit `23b55d63485e51919d1b4c05b03d33a9edc1f06d`. Supabase secrets stay in
+  VM-local `.env` / `~/.sift/control-plane.env` files only.
+- Deployed V1 copy: `~/sift-mcps-test`; all migrations applied; Gateway
+  re-pointed to the control plane; old Gateway unit/config backed up on the VM
+  as `*.bak.<ts>`.
+- Current live state: operator `examiner@operators.sift.local` active owner;
+  active sealed case `case-v1smoke-06081250` with UUID
+  `31831057-0de9-4781-b6fd-c38043f0aa23`; global `mcp:*` test agent
+  `hermes-v1-global` with token stored VM-local in `~/.sift/agent-token.txt`.
+
+Replay command patterns:
+
+- Sync host to VM:
+  `rsync -avz --exclude '.git' --exclude '.venv' --exclude '__pycache__' --exclude '*.pyc' /home/yk/AI/SIFTHACK/sift-mcps/ sansforensics@192.168.122.81:~/sift-mcps-test/`
+- VM command wrapper:
+  `sshpass -e ssh -o StrictHostKeyChecking=no sansforensics@192.168.122.81 '<command>'`
+- VM dependency sync:
+  `cd ~/sift-mcps-test && UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never ~/.local/bin/uv sync --extra core --group dev --python /usr/bin/python3.12`
+- Start/check Supabase:
+  `cd ~/supabase-project && docker compose up -d --wait && docker compose ps`
+- Apply migrations from a fresh DB:
+  `for m in $(ls ~/sift-mcps-test/supabase/migrations/*.sql | sort); do cat "$m" | docker compose exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1; done`
+- Restart/check Gateway:
+  `systemctl --user restart sift-gateway && curl -s -k https://localhost:4508/api/v1/health | python3 -m json.tool`
+
 ### 2026-06-08 - BATCH-L1 landed (live service binding before V1)
 
 Status: DONE
@@ -349,6 +450,9 @@ Next:
 | F-MVP-2 | Fork | RESOLVED | Agents may see `evidence_id`, display name, relative display path, size, hash, seal status, and provenance ID. Absolute case/evidence/mount paths are forbidden. | Locked for BATCH-B1 and BATCH-C1. | none |
 | F-MVP-3 | Fork | RESOLVED | Agents use MCP only for the MVP. REST tool execution is operator-only. | Locked for BATCH-B1. | none |
 | F-MVP-4 | Fork | RESOLVED | Hackathon report export keeps current profile output and adds DB metadata, approved-only filtering, custody/provenance appendix, and downloadable artifact. | Locked for BATCH-J1. | none |
+| F-MVP-5 | Fork | RESOLVED | Gateway Supabase health probe omitted `apikey`; Kong returned 401 and health read degraded. | Fixed in `health.py`: send configured anon key as `apikey`. | none |
+| F-MVP-6 | Fork | RESOLVED | First-login deadlock: login rejected `invited` operators, but forced reset requires a session cookie. | Fixed in `supabase_auth.py`: login admits `active` and `invited`; protected resolution stays active-only. | none |
+| F-MVP-7 | Fork | RESOLVED | Custody append used pgcrypto `digest()`, unresolved on Supabase under the function search path. | Fixed in `202606081000_evidence_custody.sql`: use built-in `sha256(v_payload::bytea)`. | none |
 | B-MVP-1 | Backlog | DEFERRED | Enterprise object-lock/WORM evidence vault option. | Post-MVP architecture appendix only. | none |
 | B-MVP-2 | Backlog | DEFERRED | ContextForge/Envoy-style external gateway integration. | Post-MVP presentation/backlog only; Gateway policy remains in SIFT Gateway for MVP. | none |
 | B-MVP-3 | Backlog | DONE | Gateway enqueue/status adapter over D1's `enqueue_job`/`job_status_public` (job_id only, sets `enqueue_audit_event_id`, schedules `expire_stale_jobs` reaper). | Landed in BATCH-D2 (`e80ad41`) as `JobService` + lifespan reaper. | E1, F1, G1, I1, J1 |
@@ -356,3 +460,11 @@ Next:
 | B-MVP-5 | Backlog | DONE | Bind `create_dashboard_v2_app` service slots (`evidence_service`/`investigation_service`/`report_service`/`job_service`) to live Postgres/C1 RPCs/D2 `JobService`. | Landed in BATCH-L1 with Gateway-owned `portal_services.py` and migration `202606081500_report_metadata.sql`. | none |
 | B-MVP-6 | Backlog | DONE | Worker bootstrap + enqueue call sites: register D1 `JobWorker` handlers (`ingest`, `run_command`) and enqueue call sites that place resolved local paths in worker-only `spec_internal`. | Landed in BATCH-L1 with `sift-job-worker`, generic `ingest_job`, `run_command_job`, and `job_status`. | none |
 | B-MVP-7 | Backlog | DONE | Wire a case-scoped pgvector RAG query tool (G1 `app.rag_search`/`PgVectorRagStore`) into the Gateway tool surface with a worker service DSN. | Landed in BATCH-L1 as `rag_search_case`, routed through existing Gateway policy/response guard. | none |
+| B-MVP-8 | Backlog | OPEN | Installer bootstrap creates the Supabase `auth.users` row but does not insert `app.operator_profiles`, so login fails closed as unmapped. It also does not fully provision the control-plane DSN/env wiring. | Add operator profile insert (`status='invited'`, `system_role='owner'`) and control-plane env wiring to installer bootstrap. | V1 full journey |
+| B-MVP-9 | Backlog | OPEN | Case-bound agent issuance is inconsistent: case-scoped tool scopes do not load under the current resolver path, while global scopes lack case membership/default binding without manual DB update. | For MVP, issue single-active-case agents with global tool scopes plus `default_case_id`, or wire the B-11 case-scope context path. | V1 full journey |
+| B-MVP-10 | Backlog | OPEN | Agent `record_finding`/`record_timeline_event` stage to case files, not `app.investigation_*`; portal approval and approved-only report DB authority do not see them. | Wire agent investigation writes or commit/delta flow into E1 `investigation_service` DB authority. | approval, approved-only report |
+| B-MVP-11 | Backlog | OPEN | `rag_search_case` denied live with `active_case_proxy_denied`; case-scoped Gateway-local tool is being treated like a proxied tool without safe case args. | Diagnose L1 `rag_bridge` registration versus `ProxyActiveCaseMiddleware`; keep response guard on results. | RAG acceptance |
+| B-MVP-12 | Backlog | OPEN | `run_command` deny floor works, but allowed execution fails because `agent_runtime` lacks read ACL on new case dirs. | Run `scripts/setup-agent-runtime.sh`/`setfacl` per case or fold ACL grant into case creation. | run_command allowed-exec |
+| B-MVP-13 | Backlog | OPEN | Evidence seal/ignore/retire re-auth still uses legacy local-password PBKDF2 HMAC, not Supabase password re-auth. | Either integrate Supabase re-auth or explicitly document the local-HMAC bridge as MVP behavior. | none |
+| B-MVP-14 | Backlog | OPEN | No standalone register-evidence endpoint exists. Operator journey says detect -> register -> seal, but implementation folds registration into seal `file_specs` while still emitting `EVIDENCE_REGISTERED`. | Add separate register transition/endpoint or update the spec to make register+seal one atomic operator action. | Phase 2 journey parity |
+| B-MVP-15 | Backlog | OPEN | Supabase pgvector RAG is schema/query-surface only so far. The live VM has zero rows in `app.rag_collections`, `app.rag_documents`, and `app.rag_chunks`; no ingestion/population path creates collections/documents/chunks from bundled knowledge or case-derived summaries. | Add an MVP pgvector population path: seed curated knowledge into `kind='knowledge'` collections and/or write case-derived parser/enrichment summaries into `kind='derived'` documents/chunks with 768-d embeddings and provenance IDs. Prove `rag_search_case` returns pgvector-backed hits, not legacy `kb_*` Chroma responses. | RAG acceptance |

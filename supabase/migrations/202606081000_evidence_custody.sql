@@ -304,7 +304,10 @@ begin
     || '|' || coalesce(p_manifest_version::text, '')
     || '|' || coalesce(p_manifest_hash, '')
     || '|' || coalesce(p_details::text, '{}');
-  v_event_hash := 'sha256:' || encode(digest(v_payload, 'sha256'), 'hex');
+  -- Supabase installs pgcrypto in the extensions schema, which is not on this
+  -- SECURITY DEFINER function's pinned search_path. Use built-in sha256(bytea)
+  -- instead of pgcrypto digest() so fresh live deployments do not 500 here.
+  v_event_hash := 'sha256:' || encode(sha256(v_payload::bytea), 'hex');
 
   insert into app.evidence_custody_events (
     case_id, evidence_object_id, seq, event_type, manifest_version,

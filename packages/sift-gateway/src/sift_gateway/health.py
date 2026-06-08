@@ -115,9 +115,17 @@ async def _probe_supabase(config: dict) -> dict:
     if not url:
         return {"status": "error", "detail": "SUPABASE_URL not set"}
 
+    anon_env = (
+        str(sb_cfg.get("anon_key_env") or "SUPABASE_ANON_KEY")
+        if isinstance(sb_cfg, dict)
+        else "SUPABASE_ANON_KEY"
+    )
+    anon_key = (os.environ.get(anon_env) or "").strip()
+    headers = {"apikey": anon_key} if anon_key else {}
+
     try:
         async with httpx.AsyncClient(timeout=_SUPABASE_PROBE_TIMEOUT) as client:
-            resp = await client.get(f"{url}/auth/v1/health")
+            resp = await client.get(f"{url}/auth/v1/health", headers=headers)
         if resp.status_code == 200:
             return {"status": "ok", "url": url}
         return {

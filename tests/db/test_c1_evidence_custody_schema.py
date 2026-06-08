@@ -164,6 +164,12 @@ def test_gate_status_is_fail_closed() -> None:
     assert "coalesce(h.seal_status, 'unsealed')" in sql
 
 
+def test_custody_hash_uses_builtin_sha256_not_pgcrypto_digest() -> None:
+    sql = _normalized_sql()
+    assert "encode(sha256(v_payload::bytea), 'hex')" in sql
+    assert "digest(v_payload" not in sql
+
+
 # ---------------------------------------------------------------------------
 # RLS, grants, and proof-as-export posture
 # ---------------------------------------------------------------------------

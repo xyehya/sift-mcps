@@ -8,10 +8,11 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from sift_gateway.health import _check_evidence_root
+from sift_gateway.health import _check_evidence_root, _probe_supabase
 
 
 # ---------------------------------------------------------------------------
@@ -84,3 +85,46 @@ def test_evidence_root_uses_sift_case_root_env(tmp_path, monkeypatch):
     result = _check_evidence_root(None)
     assert result["status"] == "ok"
     assert result["path"] == str(tmp_path)
+
+
+async def test_supabase_probe_sends_anon_key_as_apikey(monkeypatch):
+    """Supabase Kong requires apikey on /auth/v1/health."""
+    monkeypatch.setenv("SUPABASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-test-key")
+    response = type("_Resp", (), {"status_code": 200, "text": "ok"})()
+    calls = []
+
+    class _Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, url, *, headers=None):
+            calls.append((url, headers))
+            return response
+
+    with patch("sift_gateway.health.httpx.AsyncClient", _Client):
+        result = await _probe_supabase(
+            {
+                "auth": {
+                    "supabase": {
+                        "enabled": True,
+                        "url_env": "SUPABASE_URL",
+                        "anon_key_env": "SUPABASE_ANON_KEY",
+                    }
+                }
+            }
+        )
+
+    assert result["status"] == "ok"
+    assert calls == [
+        (
+            "http://127.0.0.1:8000/auth/v1/health",
+            {"apikey": "anon-test-key"},
+        )
+    ]
