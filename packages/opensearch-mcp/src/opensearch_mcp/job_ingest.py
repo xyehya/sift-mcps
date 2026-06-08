@@ -99,6 +99,7 @@ def _result(job_result_cls, *, provenance_id: str, hosts: list[dict], indexed: i
 
 def make_ingest_job_handler(
     provenance_recorder: ProvenanceRecorder | None = None,
+    host_identity_recorder: "Callable[..., Any] | None" = None,
 ):
     """Build a ``job_type='ingest'`` handler, optionally DB-provenance-backed.
 
@@ -107,10 +108,14 @@ def make_ingest_job_handler(
     the BATCH-F1 RPCs. When omitted, ingest still runs and stamps provenance IDs
     onto documents; only the Postgres registration is skipped (keeps this
     package free of a hard psycopg/DSN dependency and unit-testable).
+
+    ``host_identity_recorder`` (BATCH-K4) persists per-host discovery decisions
+    to ``app.record_host_identity_decision`` so host identity is DB-recorded in
+    DB-active mode. Optional and behind injection for the same reason.
     """
 
     def _handler(job: "ClaimedJob", ctx: "JobContext") -> "JobResult":
-        return _run_ingest_job(job, ctx, provenance_recorder)
+        return _run_ingest_job(job, ctx, provenance_recorder, host_identity_recorder)
 
     return _handler
 
@@ -123,13 +128,14 @@ def ingest_job_handler(job: "ClaimedJob", ctx: "JobContext") -> "JobResult":
     already case-scoped (``case-<case_id>-<type>-<host>``) by the ingest stack,
     so OpenSearch search tools remain case-scoped through the Gateway.
     """
-    return _run_ingest_job(job, ctx, None)
+    return _run_ingest_job(job, ctx, None, None)
 
 
 def _run_ingest_job(
     job: "ClaimedJob",
     ctx: "JobContext",
     provenance_recorder: ProvenanceRecorder | None,
+    host_identity_recorder: "Callable[..., Any] | None" = None,
 ) -> "JobResult":
     # Imported lazily so this module never forces a hard sift_core dependency at
     # import time (mirrors the worker's own optional-dependency posture).
@@ -247,6 +253,41 @@ def _run_ingest_job(
                 "index data was written, registration can be retried",
                 type(exc).__name__,
             )
+
+    # BATCH-K4: record per-host discovery decisions in authoritative Postgres so
+    # host identity is DB-recorded (not just inferred from the local dictionary).
+    # Each ingested host produces a discovery decision keyed by its sanitized
+    # hostname + the case-scoped derived index names it wrote. Best-effort: a
+    # recording failure must not fail an ingest that already wrote documents.
+    if host_identity_recorder is not None:
+        for host in host_summaries:
+            hostname = (host.get("hostname") or "").strip()
+            if not hostname:
+                continue
+            index_names = sorted(
+                str(art.get("index"))
+                for art in host.get("artifacts", [])
+                if art.get("index")
+            )
+            try:
+                host_identity_recorder(
+                    str(job.case_id),
+                    hostname,
+                    hostname,
+                    "discovery_auto_new_canonical",
+                    source="ingest_discovery",
+                    tool="opensearch_ingest",
+                    job_id=str(job.job_id),
+                    provenance_id=provenance_id,
+                    index_names=index_names,
+                    metadata={"pipeline_version": pipeline_version},
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "host-identity discovery decision write failed (%s); "
+                    "ingest succeeded, decision can be re-recorded",
+                    type(exc).__name__,
+                )
 
     return _result(
         JobResult,

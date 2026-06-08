@@ -17,9 +17,32 @@ def build_handlers(dsn: str):
             psycopg_provenance_recorder,
         )
 
+        # BATCH-K4: also inject the host-identity decision recorder so host
+        # identity is DB-recorded during ingest. Import-guarded separately so a
+        # missing host_identity_db module never disables ingest provenance.
+        host_identity_recorder = None
+        try:
+            from opensearch_mcp.host_identity_db import psycopg_host_identity_recorder
+
+            host_identity_recorder = psycopg_host_identity_recorder(dsn)
+        except ImportError:
+            pass
+
         handlers["ingest"] = make_ingest_job_handler(
-            provenance_recorder=psycopg_provenance_recorder(dsn)
+            provenance_recorder=psycopg_provenance_recorder(dsn),
+            host_identity_recorder=host_identity_recorder,
         )
+
+        # BATCH-K4: wire the host-mapping correction recorder so
+        # opensearch_fix_host_mapping leaves an authoritative Postgres receipt
+        # when the worker (which owns the service DSN) runs in-process.
+        if host_identity_recorder is not None:
+            try:
+                from opensearch_mcp import server as _os_server
+
+                _os_server.set_host_identity_recorder(host_identity_recorder)
+            except Exception:
+                pass
     except ImportError:
         pass
     return handlers

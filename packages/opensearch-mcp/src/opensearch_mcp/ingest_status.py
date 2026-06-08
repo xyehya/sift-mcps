@@ -1,4 +1,15 @@
-"""Track ingest operation status for CLI and MCP visibility."""
+"""Track ingest operation status for CLI and MCP visibility.
+
+BATCH-K4 authority cutover: in DB-active mode the durable Postgres job +
+provenance state (``app.job_status_public`` / ``app.opensearch_ingest_status``,
+read through the Gateway) is the authority for ingest/enrich status. The local
+``~/.sift/ingest-status/*.json`` files are then a parser-compatibility / debug /
+legacy artifact only: tampering with them cannot change the status the portal or
+agent sees, because that comes from Postgres. The write/read helpers below remain
+for legacy (non-DB-active) CLI use and for in-process progress files the worker
+still emits for local debugging; :func:`db_status_active` gates which plane is
+authoritative.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +22,28 @@ from pathlib import Path
 from opensearch_mcp.paths import sift_dir
 
 _STATUS_DIR = sift_dir() / "ingest-status"
+
+
+def db_status_active() -> bool:
+    """Return True when Postgres durable job state is the ingest-status authority.
+
+    Reuses the BATCH-K1 ``db_authority_active`` contract so this addon agrees
+    with the rest of sift-core on which plane is authoritative. When True, the
+    local status JSON files are compatibility/debug only and must not be treated
+    as the source of truth for portal/agent ingest status. Falls back to the
+    ``SIFT_DB_ACTIVE`` env flag when sift-core is not importable.
+    """
+    try:
+        from sift_core.active_case_context import db_authority_active
+
+        return db_authority_active()
+    except Exception:  # pragma: no cover - sift-core always present in deploy
+        return os.environ.get("SIFT_DB_ACTIVE", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
 
 def write_status(

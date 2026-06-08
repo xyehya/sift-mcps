@@ -599,8 +599,21 @@ class FixHostMappingOut(BaseModel):
     raw: str = Field(..., description="Raw host.name value corrected.")
     new_canonical: str = Field(..., description="Canonical host.id assigned.")
     docs_updated: int | None = Field(None, description="Documents updated by reindex.")
-    dict_path: str | None = Field(None, description="Host dictionary path.")
+    dict_path: str | None = Field(
+        None,
+        description=(
+            "Legacy host dictionary path (legacy/non-DB-active mode only; "
+            "omitted in DB-active mode where the dictionary is parser-compat)."
+        ),
+    )
     dict_saved: bool = Field(True, description="Whether the host dictionary was saved.")
+    host_identity_authority: str | None = Field(
+        None, description="Authority plane for host identity (postgres in DB-active mode)."
+    )
+    host_identity_decision_id: str | None = Field(
+        None, description="DB host-identity correction receipt id, when recorded."
+    )
+    audit_id: str | None = Field(None, description="Audit event id for the correction.")
     details: dict[str, Any] = Field(
         default_factory=dict, description="Additional behavior-compatible fields."
     )
@@ -1357,6 +1370,9 @@ async def run_opensearch_fix_host_mapping(params: FixHostMappingIn) -> ToolResul
             "docs_updated",
             "dict_path",
             "dict_saved",
+            "host_identity_authority",
+            "host_identity_decision_id",
+            "audit_id",
         }
     }
     out = FixHostMappingOut(
@@ -1366,6 +1382,9 @@ async def run_opensearch_fix_host_mapping(params: FixHostMappingIn) -> ToolResul
         docs_updated=raw.get("docs_updated"),
         dict_path=raw.get("dict_path"),
         dict_saved=bool(raw.get("dict_saved", True)),
+        host_identity_authority=raw.get("host_identity_authority"),
+        host_identity_decision_id=raw.get("host_identity_decision_id"),
+        audit_id=raw.get("audit_id"),
         details=details,
     )
     return _success_tool_result(out, meta)

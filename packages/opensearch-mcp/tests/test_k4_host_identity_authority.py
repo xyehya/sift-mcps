@@ -1,0 +1,267 @@
+"""BATCH-K4: OpenSearch ingest-status + host-identity DB authority cutover.
+
+Covers:
+- ingest_status.db_status_active reflects the K1 db_authority_active contract;
+- opensearch_ingest_status returns durable-job authority (not local JSON) in
+  DB-active mode, and tampering the local status files cannot change that;
+- opensearch_host_fix records a DB host-identity correction receipt via the
+  injected recorder and never leaks the absolute dict_path in DB-active mode;
+- the job ingest handler records per-host discovery decisions when a recorder
+  is injected;
+- host_identity_db recorders/readers stay psycopg-guarded and sanitized.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import yaml
+
+
+# ---------------------------------------------------------------------------
+# db_status_active gating
+# ---------------------------------------------------------------------------
+
+
+def test_db_status_active_follows_env_flag(monkeypatch):
+    from opensearch_mcp.ingest_status import db_status_active
+
+    monkeypatch.delenv("SIFT_DB_ACTIVE", raising=False)
+    assert db_status_active() is False
+    monkeypatch.setenv("SIFT_DB_ACTIVE", "1")
+    assert db_status_active() is True
+
+
+# ---------------------------------------------------------------------------
+# opensearch_ingest_status — DB-active is authoritative, files are not
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_status_db_active_ignores_local_files(monkeypatch, tmp_path):
+    """In DB-active mode the tool returns durable-job authority and does NOT
+    read the local status JSON, so tampering the files cannot change it."""
+    from opensearch_mcp import server
+    from opensearch_mcp.ingest_status import write_status
+
+    # Seed a tampered local status file that would otherwise surface.
+    status_dir = tmp_path / "ingest-status"
+    monkeypatch.setattr("opensearch_mcp.ingest_status._STATUS_DIR", status_dir)
+    write_status(
+        case_id="INC-DBACTIVE",
+        pid=4242,
+        run_id="tamper",
+        status="complete",
+        hosts=[{"hostname": "EVIL", "artifacts": []}],
+        totals={"indexed": 999999},
+        started="2026-06-08T00:00:00Z",
+    )
+
+    monkeypatch.setenv("SIFT_DB_ACTIVE", "1")
+    monkeypatch.setattr(server, "_get_active_case", lambda: "INC-DBACTIVE")
+
+    result = server.opensearch_ingest_status(case_id="INC-DBACTIVE")
+
+    assert result["authority"] == "postgres-durable-jobs"
+    assert result["ingests"] == []
+    # The tampered local payload must not appear.
+    assert "999999" not in repr(result)
+    assert "EVIL" not in repr(result)
+
+
+def test_ingest_status_legacy_mode_still_reads_files(monkeypatch, tmp_path):
+    """Without DB-active, the legacy file-based status path is unchanged."""
+    from opensearch_mcp import server
+    from opensearch_mcp.ingest_status import write_status
+
+    status_dir = tmp_path / "ingest-status"
+    monkeypatch.setattr("opensearch_mcp.ingest_status._STATUS_DIR", status_dir)
+    monkeypatch.delenv("SIFT_DB_ACTIVE", raising=False)
+    write_status(
+        case_id="INC-LEGACY",
+        pid=1,
+        run_id="legacy",
+        status="complete",
+        hosts=[],
+        totals={"indexed": 5},
+        started="2026-06-08T00:00:00Z",
+    )
+    monkeypatch.setattr(server, "_get_active_case", lambda: "INC-LEGACY")
+    with patch("opensearch_mcp.ingest_status._is_process_alive", return_value=False):
+        result = server.opensearch_ingest_status(case_id="INC-LEGACY")
+    assert "authority" not in result
+    assert result["ingests"], "legacy mode must still surface local status files"
+
+
+# ---------------------------------------------------------------------------
+# opensearch_host_fix — DB receipt + no path leak in DB-active mode
+# ---------------------------------------------------------------------------
+
+
+def _seed_case(tmp_path: Path, case_id: str, monkeypatch):
+    case_dir = tmp_path / case_id
+    case_dir.mkdir(parents=True)
+    (case_dir / "CASE.yaml").write_text(f"case_id: {case_id}\n")
+    (case_dir / "host-dictionary.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "domains": [],
+                "hosts": {"admin01": {"aliases": ["admin01"]}},
+                "unmapped": [],
+            }
+        )
+    )
+    monkeypatch.setenv("SIFT_CASES_DIR", str(tmp_path))
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    return case_dir
+
+
+def test_host_fix_db_active_records_receipt_and_redacts_path(tmp_path, monkeypatch):
+    from opensearch_mcp import server
+
+    _seed_case(tmp_path, "INC-FIX", monkeypatch)
+    monkeypatch.setenv("SIFT_DB_ACTIVE", "1")
+
+    recorded = {}
+
+    def _recorder(case_id, raw, canonical, decision, **kwargs):
+        recorded.update(
+            {"case_id": case_id, "raw": raw, "canonical": canonical, "decision": decision}
+        )
+        recorded.update(kwargs)
+        return "decision-123"
+
+    server.set_host_identity_recorder(_recorder)
+    try:
+        with patch("opensearch_mcp.server._get_os") as mock_get_os:
+            mock_client = MagicMock()
+            mock_client.update_by_query.return_value = {"updated": 12, "took": 30}
+            mock_client.indices.get_mapping.return_value = {}
+            mock_get_os.return_value = mock_client
+            result = server.opensearch_host_fix(raw="wksn01", new_canonical="admin01")
+    finally:
+        server.set_host_identity_recorder(None)
+
+    # No absolute dict path leaks to the agent in DB-active mode.
+    assert "dict_path" not in result
+    assert result.get("host_identity_authority") == "postgres"
+    assert result.get("host_identity_decision_id") == "decision-123"
+
+    # The DB receipt carries source/canonical/actor-tool/affected IDs.
+    assert recorded["decision"] == "correction"
+    assert recorded["source"] == "host_fix"
+    assert recorded["tool"] == "opensearch_fix_host_mapping"
+    assert recorded["canonical"] == "admin01"
+    assert recorded["docs_updated"] == 12
+    assert recorded["index_names"], "affected index names must be recorded"
+
+
+def test_host_fix_legacy_mode_keeps_dict_path(tmp_path, monkeypatch):
+    """Legacy (non-DB-active) mode keeps dict_path for CLI compatibility and
+    does not require a recorder."""
+    from opensearch_mcp import server
+
+    _seed_case(tmp_path, "INC-LEG", monkeypatch)
+    monkeypatch.delenv("SIFT_DB_ACTIVE", raising=False)
+    server.set_host_identity_recorder(None)
+
+    with patch("opensearch_mcp.server._get_os") as mock_get_os:
+        mock_client = MagicMock()
+        mock_client.update_by_query.return_value = {"updated": 1, "took": 2}
+        mock_client.indices.get_mapping.return_value = {}
+        mock_get_os.return_value = mock_client
+        result = server.opensearch_host_fix(raw="wksn01", new_canonical="admin01")
+
+    assert "dict_path" in result
+    assert result.get("host_identity_authority") is None
+
+
+# ---------------------------------------------------------------------------
+# host_identity_db helpers
+# ---------------------------------------------------------------------------
+
+
+def test_decision_token_mapping():
+    from opensearch_mcp.host_identity_db import decision_token_for
+
+    assert decision_token_for("already_mapped") == "discovery_already_mapped"
+    assert decision_token_for("auto_alias") == "discovery_auto_alias"
+    assert decision_token_for("auto_new_canonical") == "discovery_auto_new_canonical"
+    # Unknown labels degrade to the conservative new-canonical token.
+    assert decision_token_for("???") == "discovery_auto_new_canonical"
+
+
+def test_ingest_status_from_db_degrades_on_error(monkeypatch):
+    """A DB read error degrades to an empty list, never crashes the caller."""
+    from opensearch_mcp import host_identity_db
+
+    class _BoomPsycopg:
+        @staticmethod
+        def connect(dsn):
+            raise RuntimeError("db down")
+
+    monkeypatch.setitem(
+        __import__("sys").modules, "psycopg", _BoomPsycopg()
+    )
+    rows = host_identity_db.ingest_status_from_db("postgresql://x", "case-1")
+    assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# job ingest discovery-decision recording
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_handler_records_discovery_decisions(tmp_path):
+    from opensearch_mcp import job_ingest
+    from opensearch_mcp.results import ArtifactResult, HostResult, IngestResult
+
+    from sift_core.execute.job_worker import ClaimedJob, JobContext
+
+    job = ClaimedJob(
+        job_id="job-k4",
+        job_type="ingest",
+        case_id="11111111-1111-1111-1111-111111111111",
+        evidence_id=None,
+        spec_public={"hostname": "HOST01"},
+        spec_internal={"evidence_path": str(tmp_path)},
+        attempts=1,
+        max_attempts=3,
+        worker_id="w1",
+    )
+    worker = MagicMock()
+    worker._record_step = MagicMock(return_value="s")
+    worker._append_log = MagicMock(return_value="l")
+    worker._heartbeat = MagicMock(return_value=True)
+    ctx = JobContext(worker, job)
+
+    res = IngestResult(pipeline_version="opensearch-mcp-9.9.9")
+    host = HostResult(hostname="HOST01", volume_root="/should/not/leak")
+    host.artifacts.append(
+        ArtifactResult(artifact="evtx", index="case-c1-evtx-host01", indexed=3, bulk_failed=0)
+    )
+    res.hosts.append(host)
+
+    decisions: list[dict] = []
+
+    def _host_recorder(case_id, raw, canonical, decision, **kwargs):
+        decisions.append({"raw": raw, "canonical": canonical, "decision": decision, **kwargs})
+        return "d-1"
+
+    handler = job_ingest.make_ingest_job_handler(host_identity_recorder=_host_recorder)
+
+    with patch.object(job_ingest, "_resolve_evidence_path", return_value=tmp_path), patch(
+        "opensearch_mcp.ingest.discover", return_value=[object()]
+    ), patch("opensearch_mcp.ingest.ingest", return_value=res), patch(
+        "opensearch_mcp.client.get_client", return_value=MagicMock()
+    ):
+        handler(job, ctx)
+
+    assert len(decisions) == 1
+    d = decisions[0]
+    assert d["raw"] == "HOST01"
+    assert d["decision"] == "discovery_auto_new_canonical"
+    assert d["index_names"] == ["case-c1-evtx-host01"]
+    # No leaked path in the recorded decision.
+    assert "/should/not/leak" not in repr(d)

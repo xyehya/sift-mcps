@@ -775,6 +775,19 @@
         "anyOf": [
           {
             "properties": {
+              "audit_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Audit event id for the correction.",
+                "title": "Audit Id"
+              },
               "details": {
                 "additionalProperties": true,
                 "description": "Additional behavior-compatible fields.",
@@ -791,7 +804,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Host dictionary path.",
+                "description": "Legacy host dictionary path (legacy/non-DB-active mode only; omitted in DB-active mode where the dictionary is parser-compat).",
                 "title": "Dict Path"
               },
               "dict_saved": {
@@ -812,6 +825,32 @@
                 "default": null,
                 "description": "Documents updated by reindex.",
                 "title": "Docs Updated"
+              },
+              "host_identity_authority": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Authority plane for host identity (postgres in DB-active mode).",
+                "title": "Host Identity Authority"
+              },
+              "host_identity_decision_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "DB host-identity correction receipt id, when recorded.",
+                "title": "Host Identity Decision Id"
               },
               "new_canonical": {
                 "description": "Canonical host.id assigned.",
@@ -936,6 +975,19 @@
         "anyOf": [
           {
             "properties": {
+              "audit_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Audit event id for the correction.",
+                "title": "Audit Id"
+              },
               "details": {
                 "additionalProperties": true,
                 "description": "Additional behavior-compatible fields.",
@@ -952,7 +1004,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Host dictionary path.",
+                "description": "Legacy host dictionary path (legacy/non-DB-active mode only; omitted in DB-active mode where the dictionary is parser-compat).",
                 "title": "Dict Path"
               },
               "dict_saved": {
@@ -973,6 +1025,32 @@
                 "default": null,
                 "description": "Documents updated by reindex.",
                 "title": "Docs Updated"
+              },
+              "host_identity_authority": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Authority plane for host identity (postgres in DB-active mode).",
+                "title": "Host Identity Authority"
+              },
+              "host_identity_decision_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "DB host-identity correction receipt id, when recorded.",
+                "title": "Host Identity Decision Id"
               },
               "new_canonical": {
                 "description": "Canonical host.id assigned.",

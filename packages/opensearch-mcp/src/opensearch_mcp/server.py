@@ -29,6 +29,24 @@ from opensearch_mcp.host_dictionary import detect_host_id_mapping_type
 logger = logging.getLogger(__name__)
 
 
+# BATCH-K4: injectable host-identity correction recorder. In DB-active mode a
+# host-mapping correction (opensearch_fix_host_mapping) is a derived-state change
+# that must leave an authoritative Postgres receipt (source/canonical/actor/tool/
+# affected index IDs/audit id). The agent process holds no DB credentials by
+# design, so the recorder is injected by the worker/Gateway bootstrap (which owns
+# the service DSN) via :func:`set_host_identity_recorder`. When unset, the
+# correction still mutates OpenSearch + the parser-compat dict and returns a
+# structured receipt the Gateway audit envelope can persist; only the direct DB
+# write is skipped. Signature mirrors host_identity_db.HostIdentityRecorder.
+_HOST_IDENTITY_RECORDER = None
+
+
+def set_host_identity_recorder(recorder) -> None:
+    """Inject (or clear) the host-identity correction recorder. See above."""
+    global _HOST_IDENTITY_RECORDER
+    _HOST_IDENTITY_RECORDER = recorder
+
+
 def _validate_index(index: str) -> str | None:
     """Validate all index segments start with 'case-'. Returns error or None."""
     if not index or not index.strip():
@@ -2379,9 +2397,7 @@ def opensearch_ingest_status(case_id: str = "") -> dict:
     Args:
         case_id: Filter to this case (default: active case). "*" for all.
     """
-    from opensearch_mcp.ingest_status import read_active_ingests
-
-    ingests = read_active_ingests()
+    from opensearch_mcp.ingest_status import db_status_active, read_active_ingests
 
     # Filter by case (default: active case)
     filter_case = case_id or _get_active_case() or ""
@@ -2391,6 +2407,27 @@ def opensearch_ingest_status(case_id: str = "") -> dict:
             "action": "Create a case in the Examiner Portal first.",
             "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
         }
+
+    # BATCH-K4 authority cutover: in DB-active mode the durable Postgres job +
+    # provenance state is the authority for ingest/enrich status, read through
+    # the Gateway (job_status / app.opensearch_ingest_status). The agent process
+    # has no DB credentials by design, so this tool does not read the DB itself;
+    # it stops treating the tamperable local status JSON as authority and points
+    # the caller at the durable job status. This makes host/ingest-status file
+    # tampering unable to change portal/Gateway authority.
+    if db_status_active():
+        return {
+            "ingests": [],
+            "authority": "postgres-durable-jobs",
+            "message": (
+                "DB-active mode: ingest/enrich status is served from durable "
+                "Postgres job state (not local status files). Poll the durable "
+                "job via the Gateway job status (the enqueue/start response "
+                "carries the job_id) or the Examiner Portal for live progress."
+            ),
+        }
+
+    ingests = read_active_ingests()
 
     if filter_case and filter_case != "*":
         ingests = [i for i in ingests if i.get("case_id") == filter_case]
@@ -3935,15 +3972,26 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
         except Exception:
             pass
         return err_resp
+    from opensearch_mcp.ingest_status import db_status_active
+
+    _db_active = db_status_active()
+    docs_updated = result.get("updated", 0)
     resp = {
         "raw": raw,
         "new_canonical": new_canonical,
-        "docs_updated": result.get("updated", 0),
+        "docs_updated": docs_updated,
         "took_ms": result.get("took", 0),
-        "dict_path": str(dict_path),
     }
+    # In DB-active mode the local host-dictionary.yaml is a parser-compatibility
+    # artifact, not authority, and its absolute path must never reach the agent.
+    # In legacy mode keep dict_path for behavior compatibility with the CLI.
+    if _db_active:
+        resp["host_identity_authority"] = "postgres"
+    else:
+        resp["dict_path"] = str(dict_path)
+    audit_id = None
     try:
-        aid = audit.log(
+        audit_id = audit.log(
             tool="opensearch_host_fix",
             params={
                 "raw": raw,
@@ -3951,13 +3999,56 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
                 "case_id": case_id,
             },
             result_summary=(
-                f"dict updated, {resp['docs_updated']} docs reindexed on host.name={raw!r}"
+                f"dict updated, {docs_updated} docs reindexed on host.name={raw!r}"
             ),
         )
-        if aid:
-            resp["audit_id"] = aid
+        if audit_id:
+            resp["audit_id"] = audit_id
     except Exception:
         pass
+
+    # BATCH-K4: persist a host-identity correction receipt. The affected derived
+    # indices are the case-scoped index pattern this reindex touched (sanitized
+    # case-scoped names only, no paths). The recorder is injected by the worker/
+    # Gateway when a DB service DSN is configured; when unset the structured
+    # receipt fields still ride back in the response for the Gateway audit
+    # envelope to persist.
+    affected_indices: list[str] = []
+    try:
+        affected_indices = sorted(
+            str(name)
+            for name in (result.get("affected_indices") or [])
+            if isinstance(name, str) and name.startswith("case-")
+        )
+    except Exception:
+        affected_indices = []
+    if not affected_indices:
+        affected_indices = [index_pattern]
+    resp["source"] = "host_fix"
+    resp["tool"] = "opensearch_fix_host_mapping"
+    recorder = _HOST_IDENTITY_RECORDER
+    if recorder is not None:
+        try:
+            decision_id = recorder(
+                case_id,
+                raw,
+                new_canonical,
+                "correction",
+                source="host_fix",
+                tool="opensearch_fix_host_mapping",
+                index_names=affected_indices,
+                docs_updated=int(docs_updated or 0),
+                audit_event_id=audit_id,
+                metadata={"took_ms": result.get("took", 0)},
+            )
+            if decision_id:
+                resp["host_identity_decision_id"] = str(decision_id)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "host-identity correction receipt write failed (%s); "
+                "OpenSearch docs were reindexed, receipt can be retried",
+                type(exc).__name__,
+            )
     return resp
 
 

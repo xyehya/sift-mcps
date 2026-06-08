@@ -8,9 +8,9 @@
   "instructions": "Use this backend for indexed evidence search, aggregation, timeline analysis, ingest, and enrichment. It is not an independent reference source; use reference-providing backends for grounding.",
   "default_case_scoped": true,
   "data_plane": {
-    "dependencies": ["opensearch", "postgres-opensearch-provenance"],
+    "dependencies": ["opensearch", "postgres-opensearch-provenance", "postgres-host-identity"],
     "writes": true,
-    "notes": "Derived, rebuildable search plane. Indexed documents are case-scoped (case-<case_id>-<type>-<host>) and carry vhir.case_id / vhir.evidence_id / vhir.provenance_id stamped by the ingest job adapter. Index and provenance metadata are registered in authoritative Postgres (app.opensearch_indices / app.opensearch_ingest_provenance). Holds no authority over cases, evidence seal, findings, or reports."
+    "notes": "Derived, rebuildable search plane. Indexed documents are case-scoped (case-<case_id>-<type>-<host>) and carry vhir.case_id / vhir.evidence_id / vhir.provenance_id stamped by the ingest job adapter. Index and provenance metadata are registered in authoritative Postgres (app.opensearch_indices / app.opensearch_ingest_provenance). In DB-active mode, ingest/enrich status is served from durable Postgres job state (app.job_status_public / app.opensearch_ingest_status) and host-identity decisions/corrections are recorded in app.host_identity_decisions; the local ingest-status JSON and host-dictionary.yaml are parser-compatibility/debug artifacts only and cannot change DB authority. Hostname detection/index naming remains required derived parser metadata. Holds no authority over cases, evidence seal, findings, or reports."
   },
   "capabilities": {
     "provides": ["search", "ingest", "enrichment"],
@@ -189,11 +189,11 @@
       "recommended_phase": "ANALYZE"
     },
     {
-      "name": "opensearch_host_fix",
-      "description": "Correct a wrong host.id mapping across all indexed documents (reindexes affected docs). Scoped to OpenSearch index/alias state.",
+      "name": "opensearch_fix_host_mapping",
+      "description": "Correct a wrong host.id mapping across all indexed documents (reindexes affected docs). Canonical tool; the deprecated alias opensearch_host_fix is preserved by the tool registry for one cutover cycle. Scoped to OpenSearch index/alias and host-identity derived state. In DB-active mode the correction is recorded as an authoritative Postgres host-identity receipt (source/canonical/actor/tool/affected index IDs/audit id); the local host-dictionary.yaml is a parser-compatibility artifact only.",
       "when_to_use": "Use only when indexed host identity is known to be wrong and needs correction.",
       "avoid_when": "Avoid before confirming the canonical host mapping with the examiner or evidence.",
-      "output_notes": "Mutates indexed OpenSearch documents only; it does not alter original evidence.",
+      "output_notes": "Mutates indexed OpenSearch documents and host-identity derived metadata only; it does not alter original evidence, cases, findings, or reports. Returns no local filesystem paths in DB-active mode.",
       "read_only": false,
       "readOnlyHint": false,
       "evidence_class": "mutating",
