@@ -107,7 +107,27 @@ def _repo_root() -> Path:
 
 
 def _manifest_paths() -> list[Path]:
-    return sorted((_repo_root() / "packages").glob("*/sift-backend.json"))
+    # Enumerate routable backend manifests only. Library add-ons (transport
+    # "library" / standalone_server=false, e.g. forensic-knowledge) ship a
+    # sift-backend.json to declare their authority contract but are imported
+    # in-process and are not routable MCP backends.
+    paths = []
+    for path in sorted((_repo_root() / "packages").glob("*/sift-backend.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            paths.append(path)
+            continue
+        capabilities = data.get("capabilities")
+        standalone = (
+            capabilities.get("standalone_server", True)
+            if isinstance(capabilities, dict)
+            else True
+        )
+        if data.get("transport") == "library" or standalone is False:
+            continue
+        paths.append(path)
+    return paths
 
 
 def _gateway_with_fake_backends(*manifests: dict) -> Gateway:

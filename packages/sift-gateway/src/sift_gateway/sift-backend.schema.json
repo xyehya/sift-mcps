@@ -90,7 +90,12 @@
           "hidden_from_agent": { "type": "boolean" },
           "when_to_use": { "type": "string" },
           "avoid_when": { "type": "string" },
-          "output_notes": { "type": "string" }
+          "output_notes": { "type": "string" },
+          "required_scopes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          }
         },
         "required": [
           "name",
@@ -106,6 +111,22 @@
     },
     "health": {
       "type": "string"
+    },
+    "authority_contract": {
+      "type": "object",
+      "description": "Declares the add-on as a non-authoritative, query-only reference/derived plane. Advisory metadata; the Gateway remains the enforcement boundary.",
+      "properties": {
+        "non_authoritative": { "type": "boolean" },
+        "plane": { "type": "string" },
+        "query_only": { "type": "boolean" },
+        "authority_disclaimer": { "type": "string" },
+        "prohibited_operations": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": ["spec_version", "name", "version", "tier", "transport", "namespace", "capabilities", "tools", "health"],

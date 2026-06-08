@@ -235,6 +235,27 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
             "Every add-on backend must ship a conformant sift-backend.json."
         )
 
+    # Library add-ons (e.g. forensic-knowledge) ship a sift-backend.json to declare
+    # their authority contract, but are imported in-process — not routable MCP
+    # backends. They use transport "library" / standalone_server=false and do not
+    # carry the stdio/http backend schema (tools/health). Treat them as
+    # non-routable: never register, never validate against the backend schema.
+    _capabilities = manifest_data.get("capabilities")
+    _standalone = (
+        _capabilities.get("standalone_server", True)
+        if isinstance(_capabilities, dict)
+        else True
+    )
+    if manifest_data.get("transport") == "library" or _standalone is False:
+        logger.info(
+            "Manifest for %s declares a library add-on (transport=%s, standalone_server=%s); "
+            "treating as non-routable and skipping backend registration.",
+            name,
+            manifest_data.get("transport"),
+            _standalone,
+        )
+        return None
+
     # Validate against JSON schema
     try:
         if not SCHEMA_PATH.exists():
