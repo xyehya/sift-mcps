@@ -6,6 +6,12 @@
   "transport": "stdio",
   "namespace": "opensearch",
   "instructions": "Use this backend for indexed evidence search, aggregation, timeline analysis, ingest, and enrichment. It is not an independent reference source; use reference-providing backends for grounding.",
+  "default_case_scoped": true,
+  "data_plane": {
+    "dependencies": ["opensearch", "postgres-opensearch-provenance"],
+    "writes": true,
+    "notes": "Derived, rebuildable search plane. Indexed documents are case-scoped (case-<case_id>-<type>-<host>) and carry vhir.case_id / vhir.evidence_id / vhir.provenance_id stamped by the ingest job adapter. Index and provenance metadata are registered in authoritative Postgres (app.opensearch_indices / app.opensearch_ingest_provenance). Holds no authority over cases, evidence seal, findings, or reports."
+  },
   "capabilities": {
     "provides": ["search", "ingest", "enrichment"],
     "requires": ["https://localhost:9200"],

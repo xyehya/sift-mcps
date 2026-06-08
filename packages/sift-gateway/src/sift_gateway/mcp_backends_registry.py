@@ -88,6 +88,12 @@ class BackendRegistryRecord:
             "started": started,
             "available": available,
             "pending_apply": pending_apply,
+            # Derived/reference-plane metadata (BATCH-F1): surface whether the
+            # backend is case-scoped and its data-plane dependencies (e.g.
+            # OpenSearch declares its derived index/provenance plane) so the
+            # portal/registry can show that derived planes carry no authority.
+            "default_case_scoped": self.default_case_scoped,
+            "data_plane": dict(self.data_plane) if self.data_plane else None,
             "connection": dict(self.connection),
             "manifest_source": self.manifest_source,
             "manifest_sha256": self.manifest_sha256,
