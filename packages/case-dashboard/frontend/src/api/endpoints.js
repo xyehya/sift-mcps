@@ -76,6 +76,12 @@ export const postReportSave = (id) => apiPost(`/api/reports/${id}/save`, {})
 export const getReport = (id) => apiFetch(`/api/reports/${id}`)
 export const downloadReport = (id) => apiFetch(`/api/reports/${id}/download`)
 
+// --- Portal state (DB authority: seal/custody/add-on/report eligibility) ---
+export const getPortalState = () => apiFetch('/api/portal/state')
+
+// --- Jobs (D2 Gateway job/status adapter) ---
+export const getJobStatus = (jobId) => apiFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
+
 // --- Backends & Services ---
 export const getBackends = () => apiFetch('/api/backends')
 export const postRegisterBackend = (body) => apiPost('/api/backends', body)

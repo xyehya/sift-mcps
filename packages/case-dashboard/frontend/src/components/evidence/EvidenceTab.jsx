@@ -300,7 +300,29 @@ export function EvidenceTab() {
     <div className="h-full overflow-y-auto p-5 space-y-4" style={{ background: 'var(--bg-base)' }}>
       {/* Header */}
       <div className="flex justify-between items-center pb-2 border-b" style={{ borderColor: 'var(--border-faint)' }}>
-        <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>Evidence Chain</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>Evidence Chain</h1>
+          {/* Seal/custody authority badge (DB authority surfaces seal_status; file
+              authority falls back to the manifest status). */}
+          {chainStatus && (chainStatus.seal_status || chainStatus.status) && (
+            <span
+              data-testid="seal-status-badge"
+              className="px-2 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider"
+              style={{
+                background: 'var(--bg-raised)',
+                color: (chainStatus.seal_status || chainStatus.status) === 'sealed' ? 'var(--jade)'
+                  : (chainStatus.seal_status || chainStatus.status) === 'violated' ? 'var(--red)'
+                  : 'var(--amber)',
+                border: '1px solid var(--border-soft)',
+              }}
+              title={chainStatus.authority === 'db' ? 'Seal status from Postgres custody authority' : 'Seal status from file manifest'}
+            >
+              {chainStatus.seal_status || chainStatus.status}
+              {chainStatus.manifest_version != null ? ` · v${chainStatus.manifest_version}` : ''}
+              {chainStatus.authority === 'db' ? ' · db' : ''}
+            </span>
+          )}
+        </div>
         <button onClick={handleRescan} className="px-3 py-1.5 rounded text-xs font-sans transition-colors cursor-pointer hover:bg-[rgba(255,255,255,0.05)] flex items-center gap-1"
           style={{ background: 'var(--bg-raised)', color: 'var(--text-primary)', border: '1px solid var(--border-soft)' }}>
           ↺ Rescan

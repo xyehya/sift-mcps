@@ -89,10 +89,73 @@ _TOKEN_REGISTRY = None
 # imports sift_gateway; all Supabase/principal logic is reached through this.
 _SUPABASE_AUTH = None
 _ACTIVE_CASES = None
+
+# BATCH-E1 — portal DB-authority seams. The Gateway injects these (same DI
+# pattern as _ACTIVE_CASES / _SUPABASE_AUTH); case_dashboard NEVER imports
+# sift_gateway. Each is an object exposing plain-dict-returning methods. When a
+# slot is None the route falls back to the legacy file-backed path so existing
+# suites and non-gateway deployments keep working. None of these ever surface
+# absolute case/evidence/mount paths or secret material to the response.
+#
+#   _EVIDENCE_DB  -> DB evidence authority over the C1 custody RPCs
+#                    (list_evidence / custody_events / seal / ignore / retire /
+#                    verify_chain / gate_status). seal/ignore/retire/verify
+#                    require a reauth_audit_event_id produced by the portal's
+#                    existing password/HMAC re-auth.
+#   _INVESTIGATION_DB -> DB authority for findings/timeline/todos/iocs read +
+#                    todo mutations (list_findings / list_timeline / list_todos /
+#                    list_iocs / create_todo / update_todo / delete_todo).
+#                    Agent-authored rows are surfaced as proposed/draft until a
+#                    human approves them through the portal.
+#   _REPORT_DB    -> DB report metadata authority (list_reports / report_eligibility).
+#                    Report GENERATION internals stay with BATCH-J1; E1 only wires
+#                    metadata / eligibility / approval visibility.
+#   _JOB_SERVICE  -> D2 Gateway job/status adapter (job_status_public).
+_EVIDENCE_DB = None
+_INVESTIGATION_DB = None
+_REPORT_DB = None
+_JOB_SERVICE = None
 # When false, the legacy PBKDF2 challenge/login, sift_session HMAC cookie, and
 # examiner Bearer fallback are disabled. Defaults to True so existing suites and
 # non-Supabase deployments keep working; the Gateway passes the real flag.
 _LEGACY_PORTAL_SESSION_ENABLED: bool = True
+
+
+def _active_case_id() -> str | None:
+    """Resolve the active case's opaque DB id (not a path) for DB-authority calls.
+
+    Returns None when there is no DB active-case service or no active case. Never
+    returns or logs an absolute path.
+    """
+    if _ACTIVE_CASES is None:
+        return None
+    try:
+        case = _ACTIVE_CASES.get_active_case()
+        cid = case.as_dict().get("case_id")
+        return str(cid) if cid else None
+    except Exception:
+        return None
+
+
+def _db_evidence_active() -> bool:
+    """True when DB evidence authority is wired AND an active case is resolvable."""
+    return _EVIDENCE_DB is not None and _active_case_id() is not None
+
+
+def _db_investigation_active() -> bool:
+    """True when DB investigation authority is wired AND an active case is resolvable."""
+    return _INVESTIGATION_DB is not None and _active_case_id() is not None
+
+
+def _reauth_event_id(request: Request) -> str | None:
+    """Read the re-auth audit event id stamped on request.state by the re-auth path.
+
+    The portal's password/HMAC re-auth helpers record an audit event id (when a DB
+    audit sink is wired) and attach it to request.state.reauth_audit_event_id. The
+    C1 seal/ignore/retire RPCs require this id; this is the single read point.
+    """
+    eid = getattr(request.state, "reauth_audit_event_id", None)
+    return str(eid) if eid else None
 
 
 def _legacy_password_auth_disabled() -> bool:
@@ -680,22 +743,92 @@ def _verify_evidence_hmac(
     return None, derive_ledger_key(entry["hash"])
 
 
+def _record_reauth_event(request: Request, examiner: str, action: str) -> str | None:
+    """Record a successful re-auth as an audit event and return its id.
+
+    Used by the C1 seal/ignore/retire RPCs which reject a transition without a
+    reauth_audit_event_id. The DB evidence service owns the audit_events write;
+    when no DB service is wired (file-backed/tests) this returns None and the
+    file-backed path is used instead. The id is stamped on request.state so a
+    single re-auth covers the whole handler.
+    """
+    if _EVIDENCE_DB is None:
+        return None
+    recorder = getattr(_EVIDENCE_DB, "record_reauth_event", None)
+    if not callable(recorder):
+        return None
+    try:
+        eid = recorder(
+            case_id=_active_case_id(),
+            actor=_request_principal(request),
+            examiner=examiner,
+            action=action,
+        )
+    except Exception as exc:
+        logger.warning("re-auth audit event record failed: %s", exc)
+        return None
+    if eid:
+        request.state.reauth_audit_event_id = str(eid)
+    return str(eid) if eid else None
+
+
 # ---------------------------------------------------------------------------
 # Evidence chain endpoint handlers (Phase 16a)
 # ---------------------------------------------------------------------------
 
 
+def _db_evidence_chain_status() -> dict | None:
+    """Assemble the evidence chain status payload from DB authority (C1).
+
+    Returns None when no DB evidence service is wired or no active case, so the
+    caller falls back to the file-backed payload. Only relative display paths and
+    seal/custody summary fields are surfaced — never absolute mount paths.
+    """
+    if _EVIDENCE_DB is None:
+        return None
+    case_id = _active_case_id()
+    if not case_id:
+        return None
+    gate = getattr(_EVIDENCE_DB, "gate_status", None)
+    if not callable(gate):
+        return None
+    try:
+        status = gate(case_id) or {}
+    except Exception as exc:
+        logger.warning("DB evidence gate_status failed: %s", exc)
+        return None
+    return {
+        "authority": "db",
+        "status": status.get("seal_status", "unsealed"),
+        "seal_status": status.get("seal_status", "unsealed"),
+        "manifest_version": status.get("manifest_version", 0),
+        "active_count": status.get("active_count", 0),
+        "issues": status.get("issues", []),
+        "head_hash": status.get("head_hash", ""),
+        "hmac_last_verified_at": status.get("last_verified_at"),
+        "hmac_verify_needed": status.get("last_verified_at") is None,
+    }
+
+
 async def get_evidence_chain_status(request: Request) -> JSONResponse:
-    """Return evidence chain status, diff, and write-block detection. No mutation."""
+    """Return evidence chain status, diff, and write-block detection. No mutation.
+
+    Prefers DB custody authority (C1) when a DB evidence service is wired; falls
+    back to the file-backed manifest/ledger view otherwise.
+    """
     role_err = _require_portal_role(request)
     if role_err:
         return role_err
+
+    db_status = _db_evidence_chain_status()
+    if db_status is not None:
+        return JSONResponse(db_status)
 
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
 
-    return JSONResponse(_build_evidence_chain_status(case_dir))
+    return JSONResponse({"authority": "file", **_build_evidence_chain_status(case_dir)})
 
 
 async def post_evidence_chain_rescan(request: Request) -> JSONResponse:
@@ -775,7 +908,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         return role_err
 
     case_dir = _resolve_case_dir()
-    if not case_dir:
+    if not case_dir and not _db_evidence_active():
         return _no_case_response()
 
     examiner = _resolve_examiner(request)
@@ -810,6 +943,37 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     for spec in file_specs:
         if not isinstance(spec, dict) or "path" not in spec:
             return JSONResponse({"error": "Each file_spec must have a 'path' key"}, status_code=400)
+
+    # DB-authority path (C1): the seal RPC requires a reauth audit event id. The
+    # broker resolves the relative display paths to mounted bytes and computes the
+    # hashes; the portal never sends absolute paths.
+    if _EVIDENCE_DB is not None:
+        sealer = getattr(_EVIDENCE_DB, "seal", None)
+        if callable(sealer):
+            reauth_id = _record_reauth_event(request, examiner, "evidence_seal")
+            if not reauth_id:
+                return JSONResponse(
+                    {"error": "Re-auth audit event required for seal"},
+                    status_code=403,
+                )
+            try:
+                head = sealer(
+                    case_id=_active_case_id(),
+                    file_specs=file_specs,
+                    reauth_audit_event_id=reauth_id,
+                    actor=_request_principal(request),
+                    examiner=examiner,
+                )
+            except Exception as exc:
+                return _active_case_error_response(exc, default=500)
+            head = head if isinstance(head, dict) else {}
+            return JSONResponse({
+                "sealed": True,
+                "authority": "db",
+                "manifest_version": head.get("manifest_version"),
+                "seal_status": head.get("seal_status", "sealed"),
+                "files_added": [s.get("path") for s in file_specs],
+            })
 
     try:
         new_manifest = seal_manifest(case_dir, file_specs, examiner, derived_key)
@@ -865,7 +1029,7 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
         return role_err
 
     case_dir = _resolve_case_dir()
-    if not case_dir:
+    if not case_dir and not _db_evidence_active():
         return _no_case_response()
 
     examiner = _resolve_examiner(request)
@@ -898,6 +1062,28 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     )
     if err_msg:
         return JSONResponse({"error": err_msg}, status_code=401)
+
+    if _EVIDENCE_DB is not None:
+        ignorer = getattr(_EVIDENCE_DB, "ignore", None)
+        if callable(ignorer):
+            reauth_id = _record_reauth_event(request, examiner, "evidence_ignore")
+            if not reauth_id:
+                return JSONResponse(
+                    {"error": "Re-auth audit event required for ignore"},
+                    status_code=403,
+                )
+            try:
+                ignorer(
+                    case_id=_active_case_id(),
+                    display_path=rel_path,
+                    reason=reason,
+                    reauth_audit_event_id=reauth_id,
+                    actor=_request_principal(request),
+                    examiner=examiner,
+                )
+            except Exception as exc:
+                return _active_case_error_response(exc, default=500)
+            return JSONResponse({"ignored": True, "authority": "db", "path": rel_path})
 
     try:
         ignore_file(case_dir, rel_path, examiner, derived_key, reason)
@@ -937,7 +1123,7 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
         return role_err
 
     case_dir = _resolve_case_dir()
-    if not case_dir:
+    if not case_dir and not _db_evidence_active():
         return _no_case_response()
 
     examiner = _resolve_examiner(request)
@@ -970,6 +1156,28 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     )
     if err_msg:
         return JSONResponse({"error": err_msg}, status_code=401)
+
+    if _EVIDENCE_DB is not None:
+        retirer = getattr(_EVIDENCE_DB, "retire", None)
+        if callable(retirer):
+            reauth_id = _record_reauth_event(request, examiner, "evidence_retire")
+            if not reauth_id:
+                return JSONResponse(
+                    {"error": "Re-auth audit event required for retire"},
+                    status_code=403,
+                )
+            try:
+                retirer(
+                    case_id=_active_case_id(),
+                    display_path=rel_path,
+                    reason=reason,
+                    reauth_audit_event_id=reauth_id,
+                    actor=_request_principal(request),
+                    examiner=examiner,
+                )
+            except Exception as exc:
+                return _active_case_error_response(exc, default=500)
+            return JSONResponse({"retired": True, "authority": "db", "path": rel_path})
 
     try:
         retire_file(case_dir, rel_path, reason, examiner, derived_key)
@@ -1674,6 +1882,30 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
 # --- Endpoints ---
 
 
+def _db_investigation_list(method: str) -> list | None:
+    """Read findings/timeline/iocs/todos from DB authority (_INVESTIGATION_DB).
+
+    Returns None when no DB investigation service is wired or there is no active
+    case, so the caller falls back to the file-backed path. Agent-authored rows
+    keep their DB status (DRAFT/PROPOSED) so the portal renders them as proposed
+    until a human acts. Never surfaces absolute paths.
+    """
+    if _INVESTIGATION_DB is None:
+        return None
+    case_id = _active_case_id()
+    if not case_id:
+        return None
+    fn = getattr(_INVESTIGATION_DB, method, None)
+    if not callable(fn):
+        return None
+    try:
+        rows = fn(case_id)
+    except Exception as exc:
+        logger.warning("DB investigation %s failed: %s", method, exc)
+        return None
+    return rows if isinstance(rows, list) else []
+
+
 async def get_findings(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -1681,6 +1913,10 @@ async def get_findings(request: Request) -> JSONResponse:
     role_err = _require_portal_role(request)
     if role_err:
         return role_err
+
+    db_rows = _db_investigation_list("list_findings")
+    if db_rows is not None:
+        return JSONResponse(db_rows)
 
     case_dir = _resolve_case_dir()
     if not case_dir:
@@ -1718,6 +1954,10 @@ async def get_timeline(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
+    db_rows = _db_investigation_list("list_timeline")
+    if db_rows is not None:
+        return JSONResponse(db_rows)
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -1733,6 +1973,36 @@ async def get_evidence(request: Request) -> JSONResponse:
     role_err = _require_portal_role(request)
     if role_err:
         return role_err
+
+    # DB-authority path (C1): list evidence objects + custody/seal status from
+    # Postgres. Only relative display paths and seal/custody fields are returned.
+    if _EVIDENCE_DB is not None:
+        lister = getattr(_EVIDENCE_DB, "list_evidence", None)
+        case_id = _active_case_id()
+        if callable(lister) and case_id:
+            try:
+                items = lister(case_id) or []
+            except Exception as exc:
+                return _active_case_error_response(exc, default=500)
+            evidence = [
+                {
+                    "evidence_id": e.get("evidence_id") or e.get("id"),
+                    "path": e.get("display_path", ""),
+                    "display_name": e.get("display_name", ""),
+                    "sha256": e.get("current_sha256") or "",
+                    "size_bytes": e.get("current_bytes"),
+                    "source": e.get("source", ""),
+                    "description": e.get("description", ""),
+                    "status": e.get("status", "detected"),
+                    "seal_status": e.get("seal_status", "unsealed"),
+                    "registered_at": e.get("registered_at", ""),
+                    "sealed_at": e.get("sealed_at", ""),
+                    "referenced_by": e.get("referenced_by", []),
+                }
+                for e in items
+                if isinstance(e, dict)
+            ]
+            return JSONResponse(evidence)
 
     case_dir = _resolve_case_dir()
     if not case_dir:
@@ -1945,6 +2215,10 @@ async def get_todos(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
+    db_rows = _db_investigation_list("list_todos")
+    if db_rows is not None:
+        return JSONResponse(db_rows)
+
     case_dir = _resolve_case_dir()
     if not case_dir:
         return _no_case_response()
@@ -2031,7 +2305,7 @@ async def post_todo(request: Request) -> JSONResponse:
     if role_err:
         return role_err
     case_dir = _resolve_case_dir()
-    if not case_dir:
+    if not case_dir and not _db_investigation_active():
         return _no_case_response()
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -2063,6 +2337,26 @@ async def post_todo(request: Request) -> JSONResponse:
     assignee = data.get("assignee") or ""
     if not isinstance(assignee, str):
         return JSONResponse({"error": "'assignee' must be a string"}, status_code=400)
+
+    # DB-authority path: TODOs are operator-owned operational tasks. The DB
+    # service assigns the id and persists; agents never reach this route (B1).
+    if _INVESTIGATION_DB is not None:
+        creator = getattr(_INVESTIGATION_DB, "create_todo", None)
+        case_id = _active_case_id()
+        if callable(creator) and case_id:
+            try:
+                todo = creator(
+                    case_id=case_id,
+                    examiner=examiner,
+                    actor=_request_principal(request),
+                    description=description,
+                    priority=priority,
+                    assignee=assignee,
+                    related_findings=related,
+                )
+            except Exception as exc:
+                return _active_case_error_response(exc, default=500)
+            return JSONResponse(todo if isinstance(todo, dict) else {}, status_code=201)
 
     todos = _load_json(case_dir / "todos.json") or []
     if not isinstance(todos, list):
@@ -2106,7 +2400,7 @@ async def patch_todo(request: Request) -> JSONResponse:
     if role_err:
         return role_err
     case_dir = _resolve_case_dir()
-    if not case_dir:
+    if not case_dir and not _db_investigation_active():
         return _no_case_response()
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -2120,6 +2414,37 @@ async def patch_todo(request: Request) -> JSONResponse:
         return body_err
 
     todo_id = request.path_params["todo_id"]
+
+    # Validate inputs up front so the DB path and file path share one contract.
+    if "priority" in data and data["priority"] not in _TODO_PRIORITIES:
+        return JSONResponse(
+            {"error": f"'priority' must be one of {_TODO_PRIORITIES}"}, status_code=400
+        )
+    if "status" in data and data["status"] not in _TODO_STATUSES:
+        return JSONResponse(
+            {"error": f"'status' must be one of {_TODO_STATUSES}"}, status_code=400
+        )
+    if "description" in data and not (data.get("description") or "").strip():
+        return JSONResponse({"error": "'description' cannot be empty"}, status_code=400)
+
+    if _INVESTIGATION_DB is not None:
+        updater = getattr(_INVESTIGATION_DB, "update_todo", None)
+        case_id = _active_case_id()
+        if callable(updater) and case_id:
+            try:
+                todo = updater(
+                    case_id=case_id,
+                    todo_id=todo_id,
+                    examiner=examiner,
+                    actor=_request_principal(request),
+                    patch=data,
+                )
+            except Exception as exc:
+                return _active_case_error_response(exc, default=500)
+            if not todo:
+                return JSONResponse({"error": "TODO not found"}, status_code=404)
+            return JSONResponse(todo)
+
     todos = _load_json(case_dir / "todos.json") or []
     if not isinstance(todos, list):
         return JSONResponse({"error": "Corrupt todos.json"}, status_code=500)
@@ -2194,7 +2519,7 @@ async def delete_todo(request: Request) -> JSONResponse:
     if role_err:
         return role_err
     case_dir = _resolve_case_dir()
-    if not case_dir:
+    if not case_dir and not _db_investigation_active():
         return _no_case_response()
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -2204,6 +2529,24 @@ async def delete_todo(request: Request) -> JSONResponse:
         return err
 
     todo_id = request.path_params["todo_id"]
+
+    if _INVESTIGATION_DB is not None:
+        deleter = getattr(_INVESTIGATION_DB, "delete_todo", None)
+        case_id = _active_case_id()
+        if callable(deleter) and case_id:
+            try:
+                ok = deleter(
+                    case_id=case_id,
+                    todo_id=todo_id,
+                    examiner=examiner,
+                    actor=_request_principal(request),
+                )
+            except Exception as exc:
+                return _active_case_error_response(exc, default=500)
+            if not ok:
+                return JSONResponse({"error": "TODO not found"}, status_code=404)
+            return JSONResponse({"status": "deleted", "todo_id": todo_id})
+
     todos = _load_json(case_dir / "todos.json") or []
     if not isinstance(todos, list):
         return JSONResponse({"error": "Corrupt todos.json"}, status_code=500)
@@ -2227,6 +2570,10 @@ async def get_iocs(request: Request) -> JSONResponse:
     role_err = _require_portal_role(request)
     if role_err:
         return role_err
+
+    db_rows = _db_investigation_list("list_iocs")
+    if db_rows is not None:
+        return JSONResponse(db_rows)
 
     case_dir = _resolve_case_dir()
     if not case_dir:
@@ -4627,6 +4974,29 @@ def _serialize_to_markdown(report: dict) -> str:
     return "\n".join(md)
 
 
+def _report_eligibility() -> dict | None:
+    """Approved-only report eligibility from DB authority (_REPORT_DB).
+
+    Returns a dict {eligible, approved_findings, total_findings, reason?} or None
+    when no DB report service is wired. Report GENERATION internals belong to
+    BATCH-J1; E1 only surfaces eligibility/approval visibility.
+    """
+    if _REPORT_DB is None:
+        return None
+    case_id = _active_case_id()
+    if not case_id:
+        return None
+    fn = getattr(_REPORT_DB, "report_eligibility", None)
+    if not callable(fn):
+        return None
+    try:
+        elig = fn(case_id)
+    except Exception as exc:
+        logger.warning("DB report_eligibility failed: %s", exc)
+        return None
+    return elig if isinstance(elig, dict) else None
+
+
 async def get_reports(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -4634,6 +5004,17 @@ async def get_reports(request: Request) -> JSONResponse:
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
+
+    # DB-authority path: report metadata list from Postgres.
+    if _REPORT_DB is not None:
+        lister = getattr(_REPORT_DB, "list_reports", None)
+        case_id = _active_case_id()
+        if callable(lister) and case_id:
+            try:
+                rows = lister(case_id) or []
+            except Exception as exc:
+                return _active_case_error_response(exc, default=500)
+            return JSONResponse(rows if isinstance(rows, list) else [])
 
     case_dir = _resolve_case_dir()
     if not case_dir:
@@ -4669,6 +5050,21 @@ async def generate_report_route(request: Request) -> JSONResponse:
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
+
+    # Approved-only eligibility gate (DB authority). A report may only be
+    # generated when there is at least one approved finding; this keeps reports to
+    # human-approved supporting data. Falls through when no DB report service is
+    # wired (eligibility then enforced by the file-backed generator).
+    elig = _report_eligibility()
+    if elig is not None and not elig.get("eligible", False):
+        return JSONResponse(
+            {
+                "error": "No approved findings — report generation requires at "
+                "least one approved finding.",
+                "eligibility": elig,
+            },
+            status_code=409,
+        )
 
     case_dir = _resolve_case_dir()
     if not case_dir:
@@ -4862,9 +5258,107 @@ async def download_report(request: Request) -> Response:
         return Response("Failed to generate markdown report.", status_code=500)
 
 
+# ---------------------------------------------------------------------------
+# Portal state aggregation + job status (BATCH-E1)
+# ---------------------------------------------------------------------------
+
+
+async def get_job_status(request: Request) -> JSONResponse:
+    """Return sanitized status for one job via the D2 Gateway job adapter.
+
+    The adapter (sift_gateway.jobs.JobService) returns only the agent-safe
+    allow-list — never spec_internal, worker_id, lease internals, local paths, or
+    raw DB errors — and enforces case membership for the principal. When no job
+    service is wired, returns 503 so the portal can fall back to legacy status.
+    """
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
+    if _JOB_SERVICE is None:
+        return JSONResponse({"error": "Job service not wired"}, status_code=503)
+
+    job_id = request.path_params["job_id"]
+    try:
+        status = _JOB_SERVICE.job_status_public(job_id, _request_principal(request))
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
+    return JSONResponse(status if isinstance(status, dict) else {})
+
+
+async def get_portal_state(request: Request) -> JSONResponse:
+    """Aggregate operator-facing status the portal needs to render clearly:
+    evidence seal status, custody summary, add-on status, and report eligibility.
+
+    Read-only. Sourced from DB authority when wired; each block degrades to null
+    when its service is absent so the frontend can show "not wired" rather than
+    failing. Never surfaces absolute case/evidence/mount paths or secrets.
+    """
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
+    state: dict = {
+        "authority": "db" if _EVIDENCE_DB is not None else "file",
+        "evidence": None,
+        "custody": None,
+        "addons": None,
+        "report_eligibility": None,
+    }
+
+    # Evidence seal/custody status.
+    db_status = _db_evidence_chain_status()
+    if db_status is not None:
+        state["evidence"] = {
+            "seal_status": db_status.get("seal_status"),
+            "manifest_version": db_status.get("manifest_version"),
+            "active_count": db_status.get("active_count"),
+            "issues": db_status.get("issues", []),
+            "hmac_verify_needed": db_status.get("hmac_verify_needed"),
+        }
+        if _EVIDENCE_DB is not None:
+            events_fn = getattr(_EVIDENCE_DB, "custody_events", None)
+            if callable(events_fn):
+                try:
+                    state["custody"] = events_fn(_active_case_id())
+                except Exception as exc:
+                    logger.warning("DB custody_events failed: %s", exc)
+    else:
+        case_dir = _resolve_case_dir()
+        if case_dir:
+            fs = _build_evidence_chain_status(case_dir)
+            state["evidence"] = {
+                "seal_status": fs.get("status"),
+                "manifest_version": fs.get("manifest_version"),
+                "active_count": fs.get("ok_count"),
+                "issues": fs.get("issues", []),
+                "hmac_verify_needed": fs.get("hmac_verify_needed"),
+            }
+
+    # Add-on status — surfaced read-only from the backend registry when wired.
+    if _EVIDENCE_DB is not None or _INVESTIGATION_DB is not None:
+        addons_fn = getattr(_REPORT_DB, "addon_status", None)
+        if callable(addons_fn):
+            try:
+                state["addons"] = addons_fn(_active_case_id())
+            except Exception as exc:
+                logger.warning("DB addon_status failed: %s", exc)
+
+    state["report_eligibility"] = _report_eligibility()
+    return JSONResponse(state)
+
+
 def _dashboard_api_routes() -> list[Route]:
     """API routes shared by v1 and v2 dashboard apps."""
     return [
+        Route("/api/portal/state", get_portal_state, methods=["GET"]),
+        Route("/api/jobs/{job_id}", get_job_status, methods=["GET"]),
         Route("/api/reports", get_reports, methods=["GET"]),
         Route("/api/reports/generate", generate_report_route, methods=["POST"]),
         Route("/api/reports/{id}/save", save_report_route, methods=["POST"]),
@@ -5283,6 +5777,10 @@ def create_dashboard_v2_app(
     *,
     supabase_auth=None,
     active_case_service=None,
+    evidence_service=None,
+    investigation_service=None,
+    report_service=None,
+    job_service=None,
     legacy_portal_session_enabled: bool = True,
 ) -> Starlette:
     """Create the v2 dashboard sub-app for mounting on the gateway.
@@ -5316,6 +5814,23 @@ def create_dashboard_v2_app(
         active_case_service: PR03B Gateway-injected DB active-case service. When
             present, case list/create/activate/metadata use Postgres authority
             and never write active-case env/config/pointer exports.
+        evidence_service: BATCH-E1 Gateway-injected DB evidence authority over the
+            C1 custody RPCs. When present, evidence read + seal/ignore/retire use
+            Postgres authority; seal/ignore/retire pass the re-auth audit event id
+            produced by the portal's password/HMAC re-auth. When None, the legacy
+            file-backed evidence-chain path is used.
+        investigation_service: BATCH-E1 Gateway-injected DB authority for
+            findings/timeline/iocs/todos read + todo create/update/delete. Agent
+            proposals stay proposed/draft until a human approves them. When None,
+            the legacy file-backed path is used.
+        report_service: BATCH-E1 Gateway-injected DB report-metadata authority
+            (list_reports / report_eligibility / addon_status). Report GENERATION
+            internals are owned by BATCH-J1; this only wires metadata/eligibility/
+            approval visibility. When None, the legacy file-backed reports path
+            is used.
+        job_service: D2 Gateway job/status adapter (JobService). Backs
+            GET /api/jobs/{job_id} with the sanitized, case-scoped status. When
+            None, the job-status route returns 503.
         legacy_portal_session_enabled: When false, disables the legacy PBKDF2
             challenge/login, the sift_session HMAC cookie, and the examiner Bearer
             fallback. Defaults to True so existing suites and non-Supabase
@@ -5329,6 +5844,7 @@ def create_dashboard_v2_app(
     global _ON_CHAIN_MUTATION, _OVERRIDE_GET_STATUS, _OVERRIDE_ENABLE, _OVERRIDE_CANCEL
     global _ON_CASE_ACTIVATED
     global _SUPABASE_AUTH, _ACTIVE_CASES, _LEGACY_PORTAL_SESSION_ENABLED
+    global _EVIDENCE_DB, _INVESTIGATION_DB, _REPORT_DB, _JOB_SERVICE
     _SESSION_SECRET = session_secret
     _SESSION_MAX_AGE = session_max_age
     _API_KEYS = api_keys if api_keys is not None else {}
@@ -5341,6 +5857,10 @@ def create_dashboard_v2_app(
     _OVERRIDE_CANCEL = on_override_cancel
     _SUPABASE_AUTH = supabase_auth
     _ACTIVE_CASES = active_case_service
+    _EVIDENCE_DB = evidence_service
+    _INVESTIGATION_DB = investigation_service
+    _REPORT_DB = report_service
+    _JOB_SERVICE = job_service
     _LEGACY_PORTAL_SESSION_ENABLED = legacy_portal_session_enabled
     routes = _dashboard_api_routes()
     routes.append(Route("/assets/{filename:path}", serve_v2_assets, methods=["GET"]))
