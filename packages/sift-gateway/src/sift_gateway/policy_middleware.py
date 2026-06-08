@@ -22,8 +22,8 @@ from sift_core.active_case_context import (
 )
 from sift_core.agent_tools import core_tool_names
 
-from sift_gateway.audit_helpers import _extract_audit_id
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
+from sift_gateway.audit_helpers import _extract_audit_id
 from sift_gateway.evidence_gate import (
     build_block_response,
     check_evidence_gate,
@@ -183,6 +183,10 @@ def _safe_case_args(gateway: Any, name: str) -> set[str]:
     if callable(fn):
         return set(fn(name))
     return set()
+
+
+def _is_gateway_local_tool(gateway: Any, name: str) -> bool:
+    return name in (getattr(gateway, "_gateway_local_tools", None) or set())
 
 
 class ToolAuthorizationMiddleware(Middleware):
@@ -700,7 +704,11 @@ class ProxyActiveCaseMiddleware(Middleware):
 
     async def on_call_tool(self, context, call_next):
         name = _tool_name(context)
-        if name in core_tool_names() or not _is_case_scoped_tool(self.gateway, name):
+        if (
+            name in core_tool_names()
+            or _is_gateway_local_tool(self.gateway, name)
+            or not _is_case_scoped_tool(self.gateway, name)
+        ):
             return await call_next(context)
         case = _current_gateway_active_case()
         if case is None:

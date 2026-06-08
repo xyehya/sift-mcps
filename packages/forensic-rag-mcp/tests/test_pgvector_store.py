@@ -30,6 +30,7 @@ _spec.loader.exec_module(_pg)
 EMBEDDING_DIM = _pg.EMBEDDING_DIM
 PgVectorRagStore = _pg.PgVectorRagStore
 PgVectorStoreError = _pg.PgVectorStoreError
+deterministic_embedding = _pg.deterministic_embedding
 _sanitize_hit = _pg._sanitize_hit
 
 CASE_A = "11111111-1111-1111-1111-111111111111"
@@ -59,8 +60,9 @@ def _row(*, kind: str, case_id, content="ref text", title="Doc", source_ref=None
 
 
 class _FakeCursor:
-    def __init__(self, rows):
+    def __init__(self, rows, one_rows=None):
         self._rows = rows
+        self._one_rows = list(one_rows) if one_rows is not None else [("new-chunk-id",)]
         self.executed = []
 
     def execute(self, sql, params=None):
@@ -70,7 +72,9 @@ class _FakeCursor:
         return self._rows
 
     def fetchone(self):
-        return ("new-chunk-id",)
+        if self._one_rows:
+            return self._one_rows.pop(0)
+        return None
 
     def __enter__(self):
         return self
@@ -80,8 +84,8 @@ class _FakeCursor:
 
 
 class _FakeConn:
-    def __init__(self, rows):
-        self._cursor = _FakeCursor(rows)
+    def __init__(self, rows, one_rows=None):
+        self._cursor = _FakeCursor(rows, one_rows=one_rows)
         self.committed = False
 
     def cursor(self):
@@ -97,9 +101,9 @@ class _FakeConn:
         return False
 
 
-def _store_with_rows(monkeypatch, rows):
+def _store_with_rows(monkeypatch, rows, *, one_rows=None):
     store = PgVectorRagStore("postgresql://service@db/app")
-    conn = _FakeConn(rows)
+    conn = _FakeConn(rows, one_rows=one_rows)
     monkeypatch.setattr(store, "_connect", lambda: conn)
     return store, conn
 
@@ -214,3 +218,49 @@ def test_upsert_commits_and_returns_chunk_id(monkeypatch):
     assert conn.committed is True
     sql, _params = conn._cursor.executed[0]
     assert "app.rag_upsert_chunk" in sql
+
+
+# ---------------------------------------------------------------------------
+# shared knowledge population helpers
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_collection_inserts_shared_knowledge_collection(monkeypatch):
+    store, conn = _store_with_rows(monkeypatch, [], one_rows=[None, ("collection-id",)])
+    collection_id = store.ensure_collection(
+        name="Forensic Case Studies",
+        kind="knowledge",
+        case_id=None,
+        metadata={"seed_source": "test"},
+    )
+
+    assert collection_id == "collection-id"
+    insert_sql, params = conn._cursor.executed[1]
+    assert "insert into app.rag_collections" in insert_sql
+    assert params[1] == "knowledge"
+    assert params[2] is None
+    assert conn.committed is True
+
+
+def test_ensure_collection_rejects_case_bound_knowledge(monkeypatch):
+    store, _ = _store_with_rows(monkeypatch, [])
+    with pytest.raises(PgVectorStoreError):
+        store.ensure_collection(name="shared", kind="knowledge", case_id=CASE_A)
+
+
+def test_upsert_document_rejects_absolute_source_ref(monkeypatch):
+    store, _ = _store_with_rows(monkeypatch, [])
+    with pytest.raises(PgVectorStoreError):
+        store.upsert_document(
+            collection_id="collection-id",
+            title="bad",
+            kind="knowledge",
+            source_ref="/cases/secret/evidence.txt",
+        )
+
+
+def test_deterministic_embedding_is_stable_and_768_dimensional():
+    first = deterministic_embedding("credential theft case study")
+    second = deterministic_embedding("credential theft case study")
+    assert first == second
+    assert len(first) == EMBEDDING_DIM

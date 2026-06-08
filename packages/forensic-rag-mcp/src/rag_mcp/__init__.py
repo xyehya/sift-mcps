@@ -42,12 +42,25 @@ Usage:
 
 __version__ = "0.6.1"
 
-from .config import Config, get_config
-from .index import RAGIndex
-from .server import RAGServer
-
 # NOTE: ``pgvector_store`` (the BATCH-G1 Supabase pgvector RAG adapter) is a
 # dependency-light module and is intentionally NOT eagerly imported here so it
 # can be used without loading the ChromaDB knowledge index. Import it directly:
 #     from rag_mcp.pgvector_store import PgVectorRagStore
 __all__ = ["RAGIndex", "RAGServer", "get_config", "Config", "__version__"]
+
+
+def __getattr__(name: str):
+    """Lazy-load legacy Chroma-backed symbols only when callers request them."""
+    if name in {"Config", "get_config"}:
+        from .config import Config, get_config
+
+        return {"Config": Config, "get_config": get_config}[name]
+    if name == "RAGIndex":
+        from .index import RAGIndex
+
+        return RAGIndex
+    if name == "RAGServer":
+        from .server import RAGServer
+
+        return RAGServer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
