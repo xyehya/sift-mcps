@@ -6,8 +6,11 @@ import hmac as hmac_mod
 import json
 import logging
 import os
+import pwd
 import re
 import secrets
+import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -17,16 +20,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
-from starlette.routing import Route
-
 from sift_core.approval_auth import (
     _load_password_entry as _load_pw_entry,
+)
+from sift_core.approval_auth import (
     _save_password_entry as _save_pw_entry,
+)
+from sift_core.approval_auth import (
     derive_auth_key,
     derive_ledger_key,
 )
@@ -40,7 +40,6 @@ from sift_core.case_io import (
 from sift_core.evidence_chain import (
     anchor_manifest,
     chain_status,
-    retire_file,
     diff_manifest,
     get_immutable_flag,
     ignore_file,
@@ -48,10 +47,18 @@ from sift_core.evidence_chain import (
     load_anchor_proof,
     load_ledger,
     load_manifest,
+    retire_file,
     seal_manifest,
     verify_chain_hmac,
 )
 from sift_core.verification import compute_hmac, write_ledger_entry
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.routing import Route
+
 from case_dashboard.session_jwt import (
     COOKIE_NAME,
     COOKIE_PATH,
@@ -60,9 +67,9 @@ from case_dashboard.session_jwt import (
     SESSION_ENVELOPE_COOKIE_PATH,
     SESSION_ENVELOPE_COOKIE_SAME_SITE,
     generate_jwt,
-    verify_jwt,
-    revoke_jti,
     generate_session_envelope,
+    revoke_jti,
+    verify_jwt,
     verify_session_envelope,
 )
 
@@ -250,6 +257,8 @@ _ACTIVATION_CHALLENGE_TTL = 30  # seconds
 # HMAC verify state file — records when the examiner last ran a full ledger HMAC verify
 _VERIFY_STATE_FILE = "evidence-verify-state.json"
 _HMAC_VERIFY_REMIND_HOURS = 24  # remind if no verify within this window
+_MVP_REAUTH_METHOD = "local_hmac_mvp_bridge"
+_MVP_REGISTRATION_MODE = "atomic_register_and_seal"
 
 # Callback invoked after every successful evidence chain mutation (seal/ignore).
 # Set by create_dashboard_v2_app() — the gateway passes invalidate_evidence_cache.
@@ -440,6 +449,96 @@ def _active_case_error_response(exc: Exception, default: int = 500) -> JSONRespo
         status = default
     reason = getattr(exc, "reason", None) or str(exc) or "active_case_error"
     return JSONResponse({"error": reason}, status_code=status)
+
+
+def _configured_runtime_user() -> str:
+    """Return the low-privilege run_command user, or empty for same-user mode."""
+    raw = os.environ.get("SIFT_EXECUTE_AS_USER")
+    if raw is None and _GATEWAY_CONFIG_PATH is not None:
+        try:
+            config = yaml.safe_load(_GATEWAY_CONFIG_PATH.read_text()) or {}
+            execute = config.get("execute", {}) if isinstance(config, dict) else {}
+            if isinstance(execute, dict):
+                raw = execute.get("runtime_user")
+        except Exception as exc:
+            logger.warning("runtime ACL: could not read gateway config: %s", exc)
+    runtime_user = str(raw if raw is not None else "agent_runtime").strip()
+    if runtime_user == "__current__":
+        return ""
+    return runtime_user
+
+
+def _configure_agent_runtime_case_acl(case_dir: Path) -> dict:
+    """Grant the native run_command user access to a newly created case tree.
+
+    ``scripts/setup-agent-runtime.sh`` configures the host user/sudo baseline.
+    This per-case hook covers newly created directories so allowed
+    ``run_command`` executions can read sealed evidence and write only to
+    agent-owned output areas. ACL failures are logged but do not fail case
+    creation; the execution path still fails closed if the runtime user cannot
+    read/write the target at call time.
+    """
+    runtime_user = _configured_runtime_user()
+    if not runtime_user:
+        return {"status": "skipped", "reason": "same_user"}
+    try:
+        pwd.getpwnam(runtime_user)
+    except KeyError:
+        return {"status": "skipped", "reason": "runtime_user_missing", "user": runtime_user}
+    setfacl = shutil.which("setfacl")
+    if not setfacl:
+        return {"status": "skipped", "reason": "setfacl_missing", "user": runtime_user}
+
+    writable_dirs = [
+        case_dir / "agent",
+        case_dir / "agent" / "outputs",
+        case_dir / "agent" / "run_commands",
+        case_dir / "extractions",
+        case_dir / "tmp",
+    ]
+    for path in writable_dirs:
+        path.mkdir(parents=True, exist_ok=True)
+
+    commands: list[list[str]] = [
+        [setfacl, "-m", f"u:{runtime_user}:r-x", str(case_dir)],
+    ]
+    for path in writable_dirs:
+        commands.append([setfacl, "-m", f"u:{runtime_user}:rwx", str(path)])
+        commands.append([setfacl, "-d", "-m", f"u:{runtime_user}:rwx", str(path)])
+
+    evidence_dir = case_dir / "evidence"
+    if evidence_dir.is_dir():
+        commands.append([setfacl, "-m", f"u:{runtime_user}:r-x", str(evidence_dir)])
+        commands.append([setfacl, "-d", "-m", f"u:{runtime_user}:r-x", str(evidence_dir)])
+
+    protected_paths = [
+        case_dir / "audit",
+        case_dir / "approvals.jsonl",
+        case_dir / "evidence-ledger.jsonl",
+        case_dir / "evidence-manifest.json",
+        case_dir / "evidence-verify-state.json",
+    ]
+    for path in protected_paths:
+        if not path.exists():
+            continue
+        commands.append([setfacl, "-m", f"u:{runtime_user}:---", str(path)])
+        if path.is_dir():
+            commands.append([setfacl, "-d", "-m", f"u:{runtime_user}:---", str(path)])
+
+    failures = []
+    for cmd in commands:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failures.append({"cmd": cmd[:3], "stderr": (result.stderr or "").strip()})
+    if failures:
+        logger.warning("runtime ACL: %d setfacl command(s) failed", len(failures))
+        return {"status": "partial", "user": runtime_user, "failures": failures}
+    return {"status": "configured", "user": runtime_user}
 
 
 def _request_principal(request: Request) -> dict | None:
@@ -975,6 +1074,7 @@ async def get_evidence_chain_challenge(request: Request) -> JSONResponse:
         "salt": entry["salt"],
         "iterations": 600000,
         "hash_algorithm": "SHA-256",
+        "reauth_method": _MVP_REAUTH_METHOD,
     })
 
 
@@ -1055,6 +1155,8 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
             resp = {
                 "sealed": True,
                 "authority": "db",
+                "registration_mode": _MVP_REGISTRATION_MODE,
+                "reauth_method": _MVP_REAUTH_METHOD,
                 "manifest_version": head.get("manifest_version"),
                 "seal_status": head.get("seal_status", "sealed"),
                 "files_added": [s.get("path") for s in file_specs],
@@ -1100,6 +1202,8 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
 
     resp: dict = {
         "sealed": True,
+        "registration_mode": _MVP_REGISTRATION_MODE,
+        "reauth_method": _MVP_REAUTH_METHOD,
         "manifest_version": new_manifest["version"],
         "files_added": [s["path"] for s in file_specs],
     }
@@ -1173,7 +1277,12 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
                 )
             except Exception as exc:
                 return _active_case_error_response(exc, default=500)
-            return JSONResponse({"ignored": True, "authority": "db", "path": rel_path})
+            return JSONResponse({
+                "ignored": True,
+                "authority": "db",
+                "path": rel_path,
+                "reauth_method": _MVP_REAUTH_METHOD,
+            })
 
     try:
         ignore_file(case_dir, rel_path, examiner, derived_key, reason)
@@ -1193,6 +1302,7 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     return JSONResponse({
         "ignored": True,
         "path": rel_path,
+        "reauth_method": _MVP_REAUTH_METHOD,
         "manifest_version": (load_manifest(case_dir) or {}).get("version", -1),
     })
 
@@ -1267,7 +1377,12 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
                 )
             except Exception as exc:
                 return _active_case_error_response(exc, default=500)
-            return JSONResponse({"retired": True, "authority": "db", "path": rel_path})
+            return JSONResponse({
+                "retired": True,
+                "authority": "db",
+                "path": rel_path,
+                "reauth_method": _MVP_REAUTH_METHOD,
+            })
 
     try:
         retire_file(case_dir, rel_path, reason, examiner, derived_key)
@@ -1297,6 +1412,7 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     return JSONResponse({
         "retired": True,
         "path": rel_path,
+        "reauth_method": _MVP_REAUTH_METHOD,
         "deleted_from_disk": deleted,
         "manifest_version": (load_manifest(case_dir) or {}).get("version", -1),
     })
@@ -3236,7 +3352,7 @@ async def post_commit(request: Request) -> JSONResponse:
     # Apply delta (mirrors _review_mode)
     try:
         result = _apply_delta(case_dir, examiner, stored_hash)
-    except Exception as e:
+    except Exception:
         logger.exception("Commit failed")
         return JSONResponse({"error": "Commit failed — check gateway logs"}, status_code=500)
 
@@ -4038,7 +4154,7 @@ async def list_tokens(request: Request) -> JSONResponse:
         return JSONResponse({"tokens": tokens, "count": len(tokens)})
 
     tokens = []
-    for raw_token, info in _API_KEYS.items():
+    for _raw_token, info in _API_KEYS.items():
         if not isinstance(info, dict):
             continue
         if info.get("role") not in ("agent", "readonly"):
@@ -4983,6 +5099,9 @@ async def post_case_create(request: Request) -> JSONResponse:
         # Evidence chain: write evidence-manifest.json (v0) + evidence-ledger.jsonl
         init_evidence_chain(real_requested)
         case_approvals_path(real_requested).touch(exist_ok=True)
+        runtime_acl = _configure_agent_runtime_case_acl(real_requested)
+        if runtime_acl.get("status") not in {"configured", "skipped"}:
+            logger.warning("case create: runtime ACL setup incomplete: %s", runtime_acl)
 
         db_case = None
         if _ACTIVE_CASES is not None:

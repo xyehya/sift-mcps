@@ -232,6 +232,8 @@ class TestEvidenceDBAuthority:
         assert resp.status_code == 200
         body = resp.json()
         assert body["sealed"] is True and body["authority"] == "db"
+        assert body["reauth_method"] == "local_hmac_mvp_bridge"
+        assert body["registration_mode"] == "atomic_register_and_seal"
         assert ev.seal_calls and ev.seal_calls[0][2] == "audit-evt-001"
         assert ev.reauth_calls and ev.reauth_calls[0][2] == "evidence_seal"
 
@@ -273,12 +275,14 @@ class TestEvidenceDBAuthority:
             "challenge_id": "x", "response": "y", "path": "evidence/junk", "reason": "noise",
         })
         assert r1.status_code == 200 and r1.json()["authority"] == "db"
+        assert r1.json()["reauth_method"] == "local_hmac_mvp_bridge"
         assert ev.ignore_calls[0][2] == "audit-evt-001"
 
         r2 = c.post("/api/evidence/chain/retire", json={
             "challenge_id": "x", "response": "y", "path": "evidence/old", "reason": "dupe",
         })
         assert r2.status_code == 200 and r2.json()["authority"] == "db"
+        assert r2.json()["reauth_method"] == "local_hmac_mvp_bridge"
         assert ev.retire_calls[0][2] == "audit-evt-001"
 
     def test_readonly_cannot_seal(self):

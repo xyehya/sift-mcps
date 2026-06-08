@@ -4,13 +4,12 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
+import case_dashboard.routes as routes_mod
 import pytest
 import yaml
-from starlette.testclient import TestClient
-
-import case_dashboard.routes as routes_mod
 from case_dashboard.routes import create_dashboard_v2_app
 from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 
@@ -266,6 +265,89 @@ def test_case_creation_persists_optional_synopsis(client, case_env, passwords_di
     assert meta["description"].startswith("Home break-in")
 
 
+def test_case_creation_invokes_runtime_acl_setup(client, case_env, passwords_dir, monkeypatch):
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 5, 25, 14, 13, 0, tzinfo=timezone.utc)
+            return value if tz is None else value.astimezone(tz)
+
+    case_root, _cfg_path = case_env
+    monkeypatch.setattr(routes_mod, "datetime", FrozenDatetime)
+    acl_cases = []
+    monkeypatch.setattr(
+        routes_mod,
+        "_configure_agent_runtime_case_acl",
+        lambda case_dir: acl_cases.append(case_dir) or {"status": "configured"},
+    )
+    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+
+    resp = client.post("/api/case/create", json={
+        "casename": "runtime-acl",
+        "title": "Runtime ACL",
+    })
+
+    expected_dir = case_root / "case-runtime-acl-05251400"
+    assert resp.status_code == 200
+    assert acl_cases == [expected_dir]
+
+
+def test_runtime_acl_helper_sets_case_permissions(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    for subdir in ("agent", "evidence", "extractions", "audit"):
+        (case_dir / subdir).mkdir(parents=True, exist_ok=True)
+    for filename in ("approvals.jsonl", "evidence-ledger.jsonl", "evidence-manifest.json"):
+        (case_dir / filename).write_text("", encoding="utf-8")
+
+    monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "agent_runtime")
+    monkeypatch.setattr(routes_mod.pwd, "getpwnam", lambda name: object())
+    monkeypatch.setattr(routes_mod.shutil, "which", lambda name: "/usr/bin/setfacl")
+    calls = []
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return Result()
+
+    monkeypatch.setattr(routes_mod.subprocess, "run", fake_run)
+
+    result = routes_mod._configure_agent_runtime_case_acl(case_dir)
+
+    assert result == {"status": "configured", "user": "agent_runtime"}
+    assert (case_dir / "agent" / "run_commands").is_dir()
+    assert (case_dir / "tmp").is_dir()
+    assert any(cmd[-1] == str(case_dir) and "u:agent_runtime:r-x" in cmd for cmd in calls)
+    assert any(
+        cmd[-1] == str(case_dir / "agent" / "run_commands")
+        and "u:agent_runtime:rwx" in cmd
+        for cmd in calls
+    )
+    assert any(
+        cmd[-1] == str(case_dir / "evidence") and "u:agent_runtime:r-x" in cmd
+        for cmd in calls
+    )
+    assert any(
+        cmd[-1] == str(case_dir / "audit") and "u:agent_runtime:---" in cmd
+        for cmd in calls
+    )
+
+
+def test_runtime_acl_helper_skips_same_user_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "__current__")
+    monkeypatch.setattr(
+        routes_mod.subprocess,
+        "run",
+        lambda *a, **k: pytest.fail("setfacl must not run in same-user mode"),
+    )
+    assert routes_mod._configure_agent_runtime_case_acl(tmp_path) == {
+        "status": "skipped",
+        "reason": "same_user",
+    }
+
+
 def test_case_creation_rejects_oversized_synopsis(client, case_env, passwords_dir):
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
     resp = client.post("/api/case/create", json={
@@ -285,7 +367,7 @@ def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_
             return value if tz is None else value.astimezone(tz)
 
     monkeypatch.setattr(routes_mod, "datetime", FrozenDatetime)
-    case_root, cfg_path = case_env
+    _case_root, cfg_path = case_env
     activated = []
 
     app = create_dashboard_v2_app(
@@ -297,8 +379,6 @@ def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_
     client = TestClient(app, raise_server_exceptions=True)
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
 
-    # A1-BOOTSTRAP: frozen format case-<slug>-<MMDDHHSS> → "case-case-activation-05251400"
-    requested_dir = case_root / "case-case-activation-05251400"
     resp = client.post("/api/case/create", json={
         "casename": "case-activation",
         "title": "Case Activation",
@@ -425,8 +505,8 @@ def test_supabase_db_case_routes_use_active_case_service(passwords_dir, case_env
 
 
 def test_post_case_activate_success(client, case_env, passwords_dir, monkeypatch):
-    import hmac
     import hashlib
+    import hmac
 
     # 1. Setup examiner password and cookie
     examiner = "alice"
