@@ -54,7 +54,7 @@ gateway-local tools wired in
 | `get_tool_help` | Tool/workflow guidance. | read-only local |
 | `ingest_job` | Launch a parser/ingest durable job; returns `job_id`. | gateway-local, job-backed |
 | `job_status` | Poll a job by id. | gateway-local |
-| `rag_search_case` | pgvector forensic-knowledge grounding, provenance-filtered. | gateway-local, derived plane |
+| `rag_search_case` | pgvector forensic-knowledge grounding, provenance-filtered. **AUT1: absent from the live catalog unless `rag_query_service` is wired (AUT1-B2).** | gateway-local, derived plane |
 | `run_command_job` | Controlled deeper-analysis command as a durable job. | gateway-local, job-backed |
 | `run_command` | Sandboxed forensic CLI (shell=False, deny floor). | local, execution plane |
 | `record_finding` | Propose a finding (`DRAFT`) with provenance. | local, write proposal |
@@ -108,13 +108,29 @@ Live proof (`Session-Notes.md` 2026-06-08): pre-seal agent execution failed
 closed with the unsealed gate; post-seal `run_command_job 884c3641-...`
 succeeded and redacted absolute-path output.
 
+> **AUT1 caveat (2026-06-09) — orientation can disagree with the gate.** The gate
+> the agent actually hits is **DB authority** (`app.evidence_gate_status`), but
+> `case_info.evidence_chain` / `evidence_info.chain_status` are computed from the
+> **file manifest**. AUT1 observed these disagree on the live case: orientation
+> said `unsealed / ok=false / requires_examiner_action=true` while the DB gate was
+> OK and `run_command` executed. The autonomous rule is correct ("hand back on a
+> real `evidence_gate_denied` *block*"), but an agent must treat the
+> **`evidence_gate_denied` block response as authoritative**, not the
+> `evidence_chain.ok` field in `case_info`/`evidence_info`. Tracked as AUT1-B1 in
+> `agent-autonomy-assessment.md` with a recommended fix.
+
 ## How the Agent Recovers
 
 Errors are structured around the next safe action (see `interaction-model.md`
 for the full error/recovery table):
 
-- `evidence_gate_denied` -> wait; ask the operator to seal; re-orient.
-- `job_pending` -> poll `job_status` after a delay rather than relaunching.
+- `evidence_gate_denied` -> wait; ask the operator to seal; re-orient. Trust the
+  *block response*, not `case_info.evidence_chain.ok` (AUT1-B1).
+- `job_pending` -> poll `job_status` after a delay rather than relaunching. Stop
+  at the first terminal status (`succeeded`/`failed`/`cancelled`/`expired`).
+- `invalid_job_id` (AUT1) -> the id is not a durable job UUID; do not poll a
+  synchronous `run_command` `rc-<audit_id>` id. `job_not_found` -> the UUID has no
+  job; stop polling.
 - `tool_policy_denied` / `auth_denied` -> stop or choose another allowed tool;
   do not attempt side channels.
 - `input_validation_error` -> correct arguments and retry once.
