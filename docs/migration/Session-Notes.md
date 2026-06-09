@@ -13,6 +13,58 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-09 - Wave 1 product docs and security assessment integrated
+
+Status: DONE
+
+Changed:
+
+- Integrated the three Wave 1 post-MVP QA branches into root `revamp/spg-v1`:
+  - BATCH-PDOC1: worker commit `eca5b10`, merge
+    `Merge BATCH-PDOC1 product architecture docs`.
+  - BATCH-PDOC2: worker commit `d0fcc31`, merge
+    `Merge BATCH-PDOC2 API and MCP contracts`.
+  - BATCH-SEC1: worker commit `73f5d38`, merge
+    `Merge BATCH-SEC1 security assessment docs`.
+- Marked BATCH-PDOC1, BATCH-PDOC2, and BATCH-SEC1 complete in
+  `task-batches.md`.
+- Reconciled the PDOC2 interaction-model handoff into
+  `docs/product/interaction-model.md`: HMAC challenge/action loop,
+  pre-seal gate handback, DRAFT-to-portal commit boundary, phase-ordered
+  tool/job polling loop, and redaction recovery as an operator/debug-only path,
+  not an agent bypass.
+- Left BATCH-INST1 open as the independent installer/component hardening QA
+  stream.
+
+Validation:
+
+- Worker validation reported by the parallel orchestrator: PDOC1/PDOC2/SEC1
+  each passed `python3 scripts/validate_docs.py`, `git diff --check`, and
+  no-raw-secret shape checks.
+- Conductor re-ran before branch commits: PDOC1/PDOC2/SEC1 each passed
+  `python3 scripts/validate_docs.py` and `git diff --check`.
+- Root `python3 scripts/validate_docs.py`: OK.
+- Root `python3 scripts/validate_migration_docs.py`: OK.
+- Root `git diff --check`: clean.
+- Root product/migration docs secret-shape scan for DSNs, key-like tokens,
+  private-key headers, and assignment-shaped passwords: no matches after
+  excluding a false-positive short `sk-` substring in `task-batches.md`.
+
+Next:
+
+- Run BATCH-INST1 when ready: verify installer/setup idempotency, service
+  restart/health, `~/.sift/*.env` permissions, per-case `agent_runtime` ACLs,
+  OpenSearch setup, and pgvector RAG import reproducibility.
+- Launch BATCH-AUT1 after this integration validation passes. AUT1 carry-ins:
+  promote source-derived MCP tools to live-proven or file defects
+  (`evidence_info`, `capability_guide`, `get_tool_help`,
+  `list_existing_findings`); verify demo-agent scopes cover all demo-critical
+  tools; resolve `run_command` vs `run_command_job` description ambiguity;
+  assess command pipeline/redirect/stderr and evidence-write gaps; clarify
+  `capability_guide` empty results; advertise `job_status` poll/terminal-state
+  contract; score SEC-A2 challenge reset behavior and SEC-D1 regex-scanner
+  residual from the agent autonomy perspective.
+
 ### 2026-06-09 - Post-MVP QA and product documentation phase opened
 
 Status: DONE

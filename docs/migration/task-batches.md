@@ -40,9 +40,9 @@ Rules:
 - [x] BATCH-K6 - Portal/report tamper regression and file-authority removal
 - [x] BATCH-V1 - End-to-end validation and cutover
 - [x] BATCH-PQA0 - Post-MVP QA and product documentation operating model
-- [ ] BATCH-PDOC1 - Product architecture, journeys, lifecycles, and code map
-- [ ] BATCH-PDOC2 - API, MCP, and interaction contract documentation
-- [ ] BATCH-SEC1 - Security architecture and assessment baseline
+- [x] BATCH-PDOC1 - Product architecture, journeys, lifecycles, and code map
+- [x] BATCH-PDOC2 - API, MCP, and interaction contract documentation
+- [x] BATCH-SEC1 - Security architecture and assessment baseline
 - [ ] BATCH-INST1 - Installer and component hardening QA
 - [ ] BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment
 - [ ] BATCH-AUT2 - Demo-case autonomous investigation benchmark
@@ -965,6 +965,13 @@ Acceptance:
 
 Dependencies: BATCH-PQA0.
 
+Status (2026-06-09): DONE - merged `revamp/postmvp-pdoc1` as `eca5b10`
+through integration merge `Merge BATCH-PDOC1 product architecture docs`.
+Filled product architecture, data/process lifecycles, operator and AI-agent
+journeys, interaction model, and code-structure map. Validation: worker
+`python3 scripts/validate_docs.py` OK; worker `git diff --check` clean; root
+integration validation recorded in `Session-Notes.md`.
+
 Scope:
 
 - `docs/product/architecture.md`
@@ -1000,6 +1007,14 @@ Acceptance:
 
 Dependencies: BATCH-PQA0.
 
+Status (2026-06-09): DONE - merged `revamp/postmvp-pdoc2` as `d0fcc31`
+through integration merge `Merge BATCH-PDOC2 API and MCP contracts`. Filled
+REST contract groups and MCP contract inventory for demo-critical tools,
+including live-proven/source-derived labels, context budgets, provenance fields,
+parallel-safety notes, and AUT1 flags. Validation: worker
+`python3 scripts/validate_docs.py` OK; worker `git diff --check` clean; root
+integration validation recorded in `Session-Notes.md`.
+
 Scope:
 
 - `docs/product/api-contracts.md`
@@ -1032,6 +1047,13 @@ Acceptance:
 ## BATCH-SEC1 - Security architecture and assessment baseline
 
 Dependencies: BATCH-PQA0.
+
+Status (2026-06-09): DONE - merged `revamp/postmvp-sec1` as `73f5d38`
+through integration merge `Merge BATCH-SEC1 security assessment docs`. Filled
+security architecture and security assessment baseline; no open validated
+critical/high freeze blockers were reported by the worker. Validation: worker
+`python3 scripts/validate_docs.py` OK; worker `git diff --check` clean; root
+integration validation recorded in `Session-Notes.md`.
 
 Scope:
 

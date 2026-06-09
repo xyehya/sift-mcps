@@ -52,6 +52,18 @@ Handoff rules:
 The handoff is asynchronous: the agent works while the operator monitors, and the
 operator's approvals gate what can ever reach a report.
 
+Pre-seal handback is intentional. If the agent receives an
+`evidence_gate_denied` result, the correct autonomous behavior is to stop
+analysis for that case, summarize what is blocked, and hand control back to the
+operator for evidence registration/seal. The agent should not try alternate
+tools to route around the gate.
+
+Draft-to-portal commit is the core collaboration boundary. Agent calls such as
+`record_finding`, `record_timeline_event`, and `manage_todo` create or update
+proposed records with provenance. They do not make reportable truth. The portal
+review action is the commit point that turns a proposal into approved,
+human-owned report input.
+
 ## Re-Auth Gate Model
 
 Five sensitive transitions require a fresh password/HMAC re-auth (`AGENTS.md`;
@@ -75,6 +87,17 @@ Status: `needs live proof`; tracked in `known-limitations-and-improvements.md`.
 Live proof that the gates function: BATCH-V1 sealed evidence and approved
 `F-hermes-v1-gate-001` via portal HMAC re-auth (`Session-Notes.md` 2026-06-08).
 
+Re-auth challenge loop:
+
+1. Portal requests a challenge for the sensitive action.
+2. Gateway records the intended action, case, actor, and expiry in process-local
+   challenge state for the MVP bridge.
+3. Operator submits the action with the HMAC/password proof.
+4. Gateway verifies the proof, writes the DB transition and audit/custody
+   reference, then consumes the challenge.
+5. Gateway restart clears unconsumed in-process challenges. The operator can
+   request a new challenge; the sensitive action is not applied without proof.
+
 ## Agent Tool Loops
 
 The agent's interaction is a set of bounded loops, all mediated by the Gateway
@@ -92,6 +115,27 @@ Every loop returns opaque IDs and redacted, size-capped output so the agent can
 chain to the next call without context bloat. The agent polls jobs rather than
 blocking, and de-duplicates findings via `list_existing_findings` before
 recording new ones.
+
+Phase-ordered agent loop for the demo case:
+
+1. Orient: call `case_info`, `evidence_info`, and tool-help/capability guidance.
+2. Gate check: if evidence is unsealed or stale, hand back to the operator.
+3. Prepare derived data: enqueue `ingest_job` when needed.
+4. Poll: use `job_status` until a terminal state (`succeeded`, `failed`,
+   `cancelled`, or `expired`) appears; do not enqueue duplicate jobs only
+   because a job is pending.
+5. Ground: use OpenSearch and `rag_search_case` to collect evidence and forensic
+   knowledge context.
+6. Deepen: use `run_command_job` only when the allowed command adds specific
+   forensic value and can cite controlled output refs.
+7. Propose: record findings/timeline/TODOs with provenance.
+8. Hand back: let the operator review, approve, and export.
+
+Redaction recovery is not a bypass. If a useful value is redacted, the agent
+should continue with opaque IDs, provenance IDs, hashes, display paths, and saved
+artifact refs. If an operator or developer needs to inspect a redacted local
+value for troubleshooting, that belongs in an operator/debug path outside the
+agent-facing MCP contract and must not expose raw paths or secrets to the agent.
 
 ## Error and Recovery Model
 
