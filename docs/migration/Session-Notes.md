@@ -13,6 +13,105 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-09 - BATCH-AUT1 integrated and autonomy gates identified
+
+Status: DONE
+
+Changed:
+
+- Integrated BATCH-AUT1 into root `revamp/spg-v1`:
+  - Worker commit `3813033`: live MCP autonomy assessment and `job_status`
+    malformed-id/raw-error leak fix.
+  - Conductor commit `0d27706`: closed AUT1-B4/B5/B6 low-friction tool guidance
+    gaps before merge.
+  - Merge: `Merge BATCH-AUT1 agent autonomy assessment`.
+- Marked BATCH-AUT1 complete in `task-batches.md`.
+- Added or updated product documentation:
+  - `docs/product/agent-autonomy-assessment.md`: filled scorecard, per-tool
+    table, run metrics, AUT1-B1..B6 findings, carry-in resolution, and
+    AUT2-readiness decision.
+  - `docs/product/mcp-contracts.md`: promoted demo-critical tools to
+    live-proven where verified, documented `job_status` poll/terminal states,
+    recorded `rag_search_case` live-catalog absence, and clarified
+    `run_command` versus `run_command_job`.
+  - `docs/product/ai-agent-journey.md`: added orientation-versus-gate caveat,
+    RAG availability note, and job recovery hints.
+- Code fixes:
+  - `packages/sift-gateway/src/sift_gateway/job_tools.py`: `job_status` now
+    validates durable job IDs as UUIDs before DB lookup and returns typed
+    `invalid_job_id`; unexpected job-tool exceptions now return generic
+    `internal_error` to the agent while logging detail server-side.
+  - `packages/sift-core/src/sift_core/agent_tools.py`: `run_command`
+    description now states it is synchronous and returns a non-pollable `rc-*`
+    receipt; points long-running/parallel work to `run_command_job`.
+  - `packages/sift-gateway/src/sift_gateway/job_tools.py`: `run_command_job`
+    description now states it returns a pollable UUID for `job_status`.
+  - `packages/sift-core/src/sift_core/execute/security.py`: evidence-dir
+    deletion denial now tells the agent to hand back to operator/approved
+    evidence workflow, not to leave the MCP harness and run `rm` directly.
+  - `packages/sift-core/src/sift_core/execute/tools/discovery.py`: sanitized
+    `get_tool_help("run_command")` stderr-control example so response guard no
+    longer self-redacts an absolute-path example.
+
+Live AUT1 evidence:
+
+- AUT1 worker reported 17 direct Gateway MCP calls against
+  `case-v1gate-06081857` / `57a06521-c9b8-4654-92ac-42b4f2bb0915`.
+- Promoted to live-proven by MCP calls: `evidence_info`, `capability_guide`,
+  `get_tool_help`, `list_existing_findings`, `manage_todo`, `job_status`,
+  `run_command`, and `run_command_job`.
+- Surface scores: Discoverability 2, Sufficiency 2, Context efficiency 2,
+  Composability 3, Error recovery 2, Provenance 3, Security 3, Autonomy
+  friction 2.
+- Live side effects reported: one completed probe TODO (`TODO-aut1-001`),
+  benign audit entries, one succeeded `run_command_job`; no findings staged and
+  no evidence mutated.
+
+Validation:
+
+- AUT1 branch: `uv run pytest
+  packages/sift-gateway/tests/test_mvp_binding_job_tools.py`: `8 passed`.
+- AUT1 branch: `uv run pytest
+  packages/sift-gateway/tests/test_mvp_d2_jobs_and_authority.py
+  packages/sift-gateway/tests/test_mvp_b1_policy_redaction.py`: `27 passed`.
+- Conductor additions before merge:
+  `uv run pytest packages/sift-core/tests/test_execute_executor.py`: `33 passed`.
+- Conductor additions before merge:
+  `uv run pytest packages/sift-gateway/tests/test_mvp_binding_job_tools.py`:
+  `9 passed`.
+- Conductor additions before merge repeated the gateway D2/B1 suites:
+  `27 passed`.
+- AUT1 branch `python3 scripts/validate_docs.py`: OK.
+- AUT1 branch `python3 scripts/validate_migration_docs.py`: OK.
+- AUT1 branch `git diff --check`: clean.
+- Touched-file secret-shape scan: no matches.
+- Pending after this integration edit: root validators and final commit.
+
+Remaining gates before BATCH-AUT2:
+
+- AUT1-B1 (HIGH): `case_info`/`evidence_info` still use file-backed
+  evidence-chain orientation and can contradict the DB-authority evidence gate.
+  Fix by making DB-active orientation reflect `app.evidence_gate_status`, or at
+  minimum prepare the demo case so file manifest and DB gate agree before AUT2.
+- AUT1-B2 (MEDIUM): `rag_search_case` was absent from the live agent catalog in
+  the AUT1 deployment because `rag_query_service` was unwired. Before AUT2,
+  live-prove Gateway has RAG service wired and the agent principal has
+  `tool:rag_search_case` or `mcp:*`.
+- AUT1-B3/B4/B5/B6 fixes require live Gateway redeploy/restart before they are
+  live-proven.
+
+Next:
+
+- Run BATCH-INST1 / conductor remediation next, focused on live deploy and
+  readiness: sync root to the VM, restart Gateway/worker, verify
+  `rag_search_case` appears in the MCP catalog, verify pgvector corpus counts,
+  verify `job_status` invalid-id behavior is fixed live, verify env-file
+  permissions and per-case `agent_runtime` ACLs, and verify demo evidence
+  preparation path.
+- Then run BATCH-AUT2 against the hackathon E01/raw-memory demo case through MCP
+  only after portal create/activate/register/seal and portal-issued agent
+  credential handoff.
+
 ### 2026-06-09 - Wave 1 product docs and security assessment integrated
 
 Status: DONE

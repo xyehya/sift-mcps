@@ -44,7 +44,7 @@ Rules:
 - [x] BATCH-PDOC2 - API, MCP, and interaction contract documentation
 - [x] BATCH-SEC1 - Security architecture and assessment baseline
 - [ ] BATCH-INST1 - Installer and component hardening QA
-- [ ] BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment
+- [x] BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment
 - [ ] BATCH-AUT2 - Demo-case autonomous investigation benchmark
 - [ ] BATCH-FRZ1 - Final freeze rehearsal, limitations, and demo runbook
 
@@ -1116,6 +1116,15 @@ Acceptance:
 ## BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment
 
 Dependencies: BATCH-PDOC2; BATCH-PDOC1 draft architecture/journeys.
+
+Status (2026-06-09): DONE - merged `revamp/postmvp-aut1` through
+`Merge BATCH-AUT1 agent autonomy assessment`. Worker commit `3813033` filled the
+live MCP autonomy scorecard and fixed `job_status` malformed-id/raw-error
+leakage. Conductor commit `0d27706` closed low-friction AUT1 findings by
+disambiguating `run_command`/`run_command_job` descriptions, rewording
+evidence-delete denial guidance away from side-channel instructions, and
+sanitizing `get_tool_help` static examples. AUT1-B1 and AUT1-B2 remain explicit
+pre-AUT2 gates, not hidden blockers.
 
 Scope:
 
