@@ -1265,6 +1265,95 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     })
 
 
+async def post_evidence_chain_delete(request: Request) -> JSONResponse:
+    """Physically delete a non-sealed stray evidence file with HMAC confirmation.
+
+    Body: {challenge_id, response, path, reason}
+    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
+
+    Unlike ignore (which only marks the DB object dispositioned, leaving the bytes
+    on disk and still readable by the AI agent via run_command), delete removes the
+    file bytes so a planted/stray/hidden file can no longer be parsed or indexed by
+    the agent. Sealed evidence cannot be deleted (custody integrity). The removed
+    file's sha256 + size are recorded in an append-only custody event.
+    """
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+
+    err = _must_reset_check(examiner)
+    if err:
+        return err
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    challenge_id = str(body.get("challenge_id", ""))
+    response_hmac = str(body.get("response", ""))
+    rel_path = str(body.get("path", "")).strip()
+    reason = str(body.get("reason", "")).strip()
+
+    if not challenge_id or not response_hmac:
+        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
+    if not rel_path:
+        return JSONResponse({"error": "Missing path"}, status_code=400)
+    if not reason:
+        return JSONResponse({"error": "Missing reason"}, status_code=400)
+
+    err_msg, _derived_key = _verify_evidence_hmac(
+        examiner, challenge_id, response_hmac, request.client.host
+    )
+    if err_msg:
+        return JSONResponse({"error": err_msg}, status_code=401)
+
+    # DB custody authority only. No file-backed fallback; degrade gracefully.
+    deleter = getattr(_EVIDENCE_DB, "delete_object", None) if _EVIDENCE_DB is not None else None
+    if not callable(deleter):
+        return _no_case_response()
+
+    reauth_id = _record_reauth_event(request, examiner, "evidence_delete")
+    if not reauth_id:
+        return JSONResponse(
+            {"error": "Re-auth audit event required for delete"},
+            status_code=403,
+        )
+    try:
+        result = deleter(
+            case_id=_active_case_id(),
+            display_path=rel_path,
+            reason=reason,
+            reauth_audit_event_id=reauth_id,
+            actor=_request_principal(request),
+            examiner=examiner,
+        )
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
+    result = result if isinstance(result, dict) else {}
+
+    case_dir_str = _active_case_dir_str()
+    if _ON_CHAIN_MUTATION and case_dir_str:
+        try:
+            _ON_CHAIN_MUTATION(case_dir_str)
+        except Exception as exc:
+            logger.warning("evidence delete: cache invalidation failed: %s", exc)
+
+    return JSONResponse({
+        "deleted": True,
+        "authority": "db",
+        "path": rel_path,
+        "file_removed": result.get("file_removed", False),
+        "sha256": result.get("sha256"),
+        "bytes": result.get("bytes"),
+        "reauth_method": _MVP_REAUTH_METHOD,
+    })
+
+
 async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     """Retire a registered evidence file with HMAC confirmation.
 
@@ -5912,6 +6001,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/challenge", get_evidence_chain_challenge, methods=["GET"]),
         Route("/api/evidence/chain/seal", post_evidence_chain_seal, methods=["POST"]),
         Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
+        Route("/api/evidence/chain/delete", post_evidence_chain_delete, methods=["POST"]),
         Route("/api/evidence/chain/retire", post_evidence_chain_retire, methods=["POST"]),
         Route("/api/evidence/chain/verify-hmac", post_evidence_chain_verify_hmac, methods=["POST"]),
         Route("/api/evidence/chain/anchor", post_evidence_chain_anchor, methods=["POST"]),

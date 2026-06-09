@@ -58,6 +58,7 @@ class FakeEvidenceDB:
         self.seal_calls: list = []
         self.ignore_calls: list = []
         self.retire_calls: list = []
+        self.delete_calls: list = []
 
     def record_reauth_event(self, *, case_id, actor, examiner, action):
         self.reauth_calls.append((case_id, examiner, action))
@@ -89,6 +90,20 @@ class FakeEvidenceDB:
     def retire(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
         assert reauth_audit_event_id
         self.retire_calls.append((display_path, reason, reauth_audit_event_id))
+
+    def delete_object(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
+        # Endpoint-level stub. Sealed-evidence protection is enforced in the real
+        # EvidenceAuthorityService.delete_object (service-layer test).
+        assert reauth_audit_event_id, "delete must receive a re-auth audit event id"
+        self.delete_calls.append((display_path, reason, reauth_audit_event_id))
+        return {
+            "evidence_id": "ev-del",
+            "display_path": display_path,
+            "status": "ignored",
+            "file_removed": True,
+            "sha256": "sha256:deadbeef",
+            "bytes": 123,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +484,65 @@ class TestEvidenceChainSeal:
 # ---------------------------------------------------------------------------
 # ignore endpoint
 # ---------------------------------------------------------------------------
+
+
+class TestEvidenceChainDelete:
+    def test_no_auth_returns_403(self, client):
+        resp = client.post("/api/evidence/chain/delete", json={})
+        assert resp.status_code == 403
+
+    def test_missing_fields_returns_400(self, authed_client):
+        resp = authed_client.post("/api/evidence/chain/delete", json={"challenge_id": "x"})
+        assert resp.status_code == 400
+
+    def test_delete_stray_file(self, authed_client, passwords_dir, evidence_db):
+        """Deleting a stray file reaches the DB delete with a re-auth id and reports
+        the bytes were removed."""
+        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+        resp = authed_client.post(
+            "/api/evidence/chain/delete",
+            json={
+                "challenge_id": challenge_id,
+                "response": response,
+                "path": "evidence/.planted-hidden",
+                "reason": "Unauthorized hidden file, not part of acquisition",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["deleted"] is True
+        assert data["authority"] == "db"
+        assert data["file_removed"] is True
+        assert evidence_db.delete_calls
+        assert evidence_db.delete_calls[0][0] == "evidence/.planted-hidden"
+        assert evidence_db.delete_calls[0][2] == "audit-evt-001"
+
+    def test_delete_wrong_password_returns_401(self, authed_client, evidence_db):
+        resp = authed_client.get("/api/evidence/chain/challenge")
+        data = resp.json()
+        resp2 = authed_client.post(
+            "/api/evidence/chain/delete",
+            json={
+                "challenge_id": data["challenge_id"],
+                "response": "00" * 32,
+                "path": "evidence/.planted-hidden",
+                "reason": "x",
+            },
+        )
+        assert resp2.status_code == 401
+        assert not evidence_db.delete_calls
+
+    def test_delete_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
+        """No DB service: delete degrades to the no-case response, never a 500."""
+        c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
+        # Bypass HMAC so we exercise the no-DB branch, not the password check.
+        monkeypatch.setattr(routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key"))
+        resp = c.post(
+            "/api/evidence/chain/delete",
+            json={"challenge_id": "x", "response": "y", "path": "evidence/f", "reason": "r"},
+        )
+        assert resp.status_code == 404
+        assert "active case" in resp.json()["error"].lower()
 
 
 class TestEvidenceChainIgnore:

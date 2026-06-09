@@ -58,6 +58,7 @@ export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof
 export const postChainVerifyHmac = (body) => apiPost('/api/evidence/chain/verify-hmac', body, REAUTH_OPTS)
 export const postVerifyEvidence = (path) => apiPost(`/api/evidence/${encodeURIComponent(path)}/verify`, {})
 export const postChainIgnore = (body) => apiPost('/api/evidence/chain/ignore', body, REAUTH_OPTS)
+export const postChainDelete = (body) => apiPost('/api/evidence/chain/delete', body, REAUTH_OPTS)
 export const postChainRetire = (body) => apiPost('/api/evidence/chain/retire', body, REAUTH_OPTS)
 
 // --- Response guard ---

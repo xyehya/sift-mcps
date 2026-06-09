@@ -610,6 +610,94 @@ class EvidenceAuthorityService(_BasePortalDbService):
             conn.commit()
         return {"evidence_id": row[0], "display_path": row[1], "status": row[2]} if row else {}
 
+    def delete_object(
+        self,
+        *,
+        case_id: str,
+        display_path: str,
+        reason: str,
+        reauth_audit_event_id: str,
+        actor: Any,
+        examiner: str,
+    ) -> dict[str, Any]:
+        """Operator-delete a non-sealed stray file: physically unlink the bytes
+        and record an auditable disposition.
+
+        This exists because ``ignore``/``retire`` only change DB status — the file
+        bytes stay on disk and remain readable by the AI agent (which can ``cat``
+        any relative path under ``evidence/`` once the gate is OK). To actually
+        prevent agent access to a planted/stray/hidden file the operator must be
+        able to remove the bytes. Sealed evidence can never be deleted here
+        (custody integrity); use the retire path for that.
+
+        Forensic record: the file's sha256 + size are captured before unlink and
+        embedded in the append-only custody event via ``evidence_ignore``.
+        """
+        del examiner
+        self._scan_evidence(case_id)
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        del actor_type
+        path = _relative_display_path(display_path)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select id::text, status, seal_status "
+                    "from app.evidence_objects where case_id = %s and display_path = %s",
+                    (case_id, path),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise PortalServiceError("evidence_object_not_found", http_status=404)
+        evidence_id, status, seal_status = str(row[0]), row[1], row[2]
+        if status not in ("detected", "registered", "ignored") or seal_status != "unsealed":
+            # Sealed/violated evidence is custody-protected and must not be deleted.
+            raise PortalServiceError("cannot_delete_sealed_evidence", http_status=409)
+
+        # Capture a forensic record of the bytes, then remove them. The file may
+        # already be absent (e.g. a transient copy temp that was renamed away), in
+        # which case we still record the disposition.
+        file_removed = False
+        sha: str | None = None
+        size: int | None = None
+        try:
+            abspath: Path | None = self._resolve_evidence_path(case_id, path)
+        except PortalServiceError:
+            abspath = None
+        if abspath is not None:
+            try:
+                sha, size = _hash_file(abspath)
+            except OSError:
+                sha, size = None, None
+            try:
+                abspath.unlink()
+                file_removed = True
+            except OSError as exc:
+                raise PortalServiceError(
+                    "evidence_file_delete_failed", http_status=500
+                ) from exc
+
+        full_reason = (
+            f"operator_deleted_stray_file: {reason.strip()}"
+            f" | removed={file_removed} sha256={sha} bytes={size}"
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select id::text, display_path, status "
+                    "from app.evidence_ignore(%s, %s, %s, %s, %s)",
+                    (evidence_id, full_reason, reauth_audit_event_id, actor_user, actor_service),
+                )
+                disp = cur.fetchone()
+            conn.commit()
+        return {
+            "evidence_id": disp[0] if disp else evidence_id,
+            "display_path": path,
+            "status": disp[2] if disp else "ignored",
+            "file_removed": file_removed,
+            "sha256": sha,
+            "bytes": size,
+        }
+
     def _scan_evidence(self, case_id: str) -> None:
         """Reconcile the mounted evidence tree against DB custody authority.
 
@@ -637,17 +725,15 @@ class EvidenceAuthorityService(_BasePortalDbService):
         live: dict[str, int] = {}
         with self._connect() as conn:
             with conn.cursor() as cur:
+                # Detection MUST surface every real file under evidence/, including
+                # hidden/dotfiles. The AI agent can read any file in this tree via
+                # run_command (relative paths) once the gate is OK, so operator
+                # visibility must be a superset of agent access — hiding a file here
+                # would make a planted hidden file agent-readable yet operator-
+                # invisible (a backdoor). Transient copy temps are handled instead
+                # by letting the operator delete stray files from the portal.
                 for path in sorted(evidence_dir.rglob("*")):
                     if path.is_symlink() or not path.is_file():
-                        continue
-                    # In-progress copy artifacts (rsync/scp temp files, dotfiles,
-                    # partial downloads) are not evidence — never register them, or
-                    # a transient temp file would flip the gate non-OK mid-copy.
-                    if path.name.startswith("."):
-                        continue
-                    if path.name.endswith(
-                        (".tmp", ".part", ".partial", ".crdownload", ".filepart", ".swp")
-                    ):
                         continue
                     rel = path.relative_to(case_dir).as_posix()
                     try:
