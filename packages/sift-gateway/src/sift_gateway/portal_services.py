@@ -640,6 +640,15 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 for path in sorted(evidence_dir.rglob("*")):
                     if path.is_symlink() or not path.is_file():
                         continue
+                    # In-progress copy artifacts (rsync/scp temp files, dotfiles,
+                    # partial downloads) are not evidence — never register them, or
+                    # a transient temp file would flip the gate non-OK mid-copy.
+                    if path.name.startswith("."):
+                        continue
+                    if path.name.endswith(
+                        (".tmp", ".part", ".partial", ".crdownload", ".filepart", ".swp")
+                    ):
+                        continue
                     rel = path.relative_to(case_dir).as_posix()
                     try:
                         size = path.stat().st_size

@@ -39,18 +39,7 @@ from sift_core.case_io import (
     compute_content_hash,
 )
 from sift_core.evidence_chain import (
-    anchor_manifest,
-    chain_status,
-    diff_manifest,
-    get_immutable_flag,
-    ignore_file,
     init_evidence_chain,
-    load_anchor_proof,
-    load_ledger,
-    load_manifest,
-    retire_file,
-    seal_manifest,
-    verify_chain_hmac,
 )
 from sift_core.verification import compute_hmac, write_ledger_entry
 from starlette.applications import Starlette
@@ -255,9 +244,6 @@ _EVIDENCE_CHALLENGE_TTL = 30  # seconds
 _activation_challenges: dict[str, dict] = {}
 _ACTIVATION_CHALLENGE_TTL = 30  # seconds
 
-# HMAC verify state file — records when the examiner last ran a full ledger HMAC verify
-_VERIFY_STATE_FILE = "evidence-verify-state.json"
-_HMAC_VERIFY_REMIND_HOURS = 24  # remind if no verify within this window
 _MVP_REAUTH_METHOD = "local_hmac_mvp_bridge"
 _MVP_REGISTRATION_MODE = "atomic_register_and_seal"
 
@@ -728,86 +714,6 @@ def _detect_write_block(evidence_dir: Path) -> dict:
     return {"write_protected": False, "warning": _WRITE_BLOCK_WARNING}
 
 
-def _read_verify_state(case_dir: Path) -> dict:
-    """Read the HMAC verify state file. Returns {} on missing/parse error."""
-    try:
-        path = case_dir / _VERIFY_STATE_FILE
-        if path.exists():
-            return json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        pass
-    return {}
-
-
-def _hmac_verify_needed(state: dict) -> bool:
-    """Return True if last HMAC verify is absent or older than the reminder window."""
-    last = state.get("last_hmac_verified_at")
-    if not last:
-        return True
-    try:
-        from datetime import datetime, timezone
-        ts = datetime.fromisoformat(last)
-        age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-        return age_hours >= _HMAC_VERIFY_REMIND_HOURS
-    except (ValueError, TypeError):
-        return True
-
-
-def _build_evidence_chain_status(case_dir: Path) -> dict:
-    """Assemble the full evidence chain status payload for portal display."""
-    status = chain_status(case_dir)
-    manifest = load_manifest(case_dir)
-    diff: dict = {}
-    if manifest:
-        diff = diff_manifest(case_dir, manifest)
-
-    evidence_dir = case_dir / "evidence"
-    wb = _detect_write_block(evidence_dir)
-
-    verify_state = _read_verify_state(case_dir)
-    manifest_version = status["manifest_version"]
-
-    # Anchor status (Phase 16e)
-    keypair_configured = bool(os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip())
-    anchor_proof = load_anchor_proof(case_dir, manifest_version) if manifest_version > 0 else None
-    anchor_info: dict = {"anchoring_enabled": keypair_configured, "manifest_version": manifest_version}
-    if anchor_proof:
-        anchor_info.update({
-            "solana_tx": anchor_proof.get("solana_tx"),
-            "confirmed": anchor_proof.get("confirmed", False),
-            "cluster": anchor_proof.get("solana_cluster", "mainnet"),
-            "timestamp": anchor_proof.get("timestamp"),
-            "explorer_url": anchor_proof.get("explorer_url"),
-        })
-
-    # Immutable flag per ACTIVE file (Phase 17a)
-    immutable_flags: dict[str, bool | None] = {}
-    if manifest:
-        for entry in manifest.get("files", []):
-            if entry.get("status") == "ACTIVE":
-                rel = entry["path"]
-                immutable_flags[rel] = get_immutable_flag(case_dir / rel)
-
-    return {
-        "status": status["status"],
-        "issues": status["issues"],
-        "manifest_version": manifest_version,
-        "ok_count": status.get("ok_count", 0),
-        "unregistered": diff.get("unregistered", []),
-        "missing": diff.get("missing", []),
-        "modified": diff.get("modified", []),
-        "ok": diff.get("ok", []),
-        "write_protected": wb.get("write_protected", False),
-        "write_block_warning": wb.get("warning"),
-        "write_block_mount_point": wb.get("mount_point"),
-        "hmac_last_verified_at": verify_state.get("last_hmac_verified_at"),
-        "hmac_last_verified_by": verify_state.get("last_hmac_verified_by"),
-        "hmac_verify_needed": _hmac_verify_needed(verify_state),
-        "anchor": anchor_info,
-        "immutable_flags": immutable_flags,
-    }
-
-
 def _verify_evidence_hmac(
     examiner: str,
     challenge_id: str,
@@ -877,11 +783,44 @@ def _record_reauth_event(request: Request, examiner: str, action: str) -> str | 
 # ---------------------------------------------------------------------------
 
 
-def _db_evidence_chain_status() -> dict | None:
-    """Assemble the evidence chain status payload from DB authority (C1).
+def _empty_evidence_chain_status() -> dict:
+    """Graceful no-case/empty evidence chain payload (DB-authority shape).
 
-    Returns None when no DB evidence service is wired or no active case, so the
-    caller falls back to the file-backed payload. Only relative display paths and
+    Returned on a fresh install (no DB evidence service wired or no active case)
+    so the evidence APIs degrade to an empty payload with HTTP 200 instead of a
+    404/500. Carries every key the frontend contract expects, all empty/neutral.
+    """
+    keypair_configured = bool(os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip())
+    return {
+        "authority": "db",
+        "status": "no_case",
+        "seal_status": "no_case",
+        "manifest_version": 0,
+        "active_count": 0,
+        "issues": [],
+        "head_hash": "",
+        "hmac_last_verified_at": None,
+        "hmac_last_verified_by": None,
+        "hmac_verify_needed": False,
+        "anchor": {"anchoring_enabled": keypair_configured, "manifest_version": 0},
+        "unregistered": [],
+        "missing": [],
+        "modified": [],
+        "ok": [],
+        "write_protected": False,
+        "write_block_mount_point": None,
+        "write_block_warning": None,
+        "requires_examiner_action": False,
+    }
+
+
+def _db_evidence_chain_status() -> dict | None:
+    """Assemble the evidence chain status payload from DB custody authority (C1).
+
+    The single evidence-chain-status builder. DB authority is the only authority:
+    ``app.evidence_gate_status`` + ``app.evidence_objects``. Returns None when no
+    DB evidence service is wired or no active case; the caller (``_evidence_chain_status``)
+    degrades that to a graceful empty payload. Only relative display paths and
     seal/custody summary fields are surfaced — never absolute mount paths.
     """
     if _EVIDENCE_DB is None:
@@ -897,17 +836,85 @@ def _db_evidence_chain_status() -> dict | None:
     except Exception as exc:
         logger.warning("DB evidence gate_status failed: %s", exc)
         return None
+
+    seal_status = status.get("seal_status", "unsealed")
     payload = {
         "authority": "db",
-        "status": status.get("seal_status", "unsealed"),
-        "seal_status": status.get("seal_status", "unsealed"),
+        "status": seal_status,
+        "seal_status": seal_status,
         "manifest_version": status.get("manifest_version", 0),
         "active_count": status.get("active_count", 0),
         "issues": status.get("issues", []),
         "head_hash": status.get("head_hash", ""),
         "hmac_last_verified_at": status.get("last_verified_at"),
+        # The DB gate does not (yet) record the verifying examiner; surface it when
+        # the gate/reauth metadata carries it, else None.
+        "hmac_last_verified_by": status.get("last_verified_by"),
         "hmac_verify_needed": status.get("last_verified_at") is None,
     }
+
+    # Detected-vs-sealed object lists for the frontend (Seal Manifest specs,
+    # custody badges). Derived from DB custody authority — list_evidence() rescans
+    # the mounted tree → DB first, so these reflect current disk state.
+    unregistered: list[str] = []
+    missing: list[str] = []
+    modified: list[str] = []
+    ok: list[str] = []
+    lister = getattr(_EVIDENCE_DB, "list_evidence", None)
+    if callable(lister):
+        try:
+            items = lister(case_id) or []
+        except Exception as exc:
+            logger.warning("DB list_evidence for chain status failed: %s", exc)
+            items = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            dp = item.get("display_path") or ""
+            if not dp:
+                continue
+            obj_status = item.get("status")
+            obj_seal = item.get("seal_status")
+            # Operator-dispositioned objects are not actionable and must not appear
+            # in the actionable Seal-Manifest set, even though their seal_status is
+            # still "unsealed".
+            if obj_status in ("ignored", "retired"):
+                continue
+            if obj_seal == "missing":
+                missing.append(dp)
+            elif obj_seal in ("modified", "violated"):
+                modified.append(dp)
+            elif obj_status == "sealed" or obj_seal == "sealed":
+                ok.append(dp)
+            elif obj_status == "detected":
+                unregistered.append(dp)
+    # Fall back to the gate's own unregistered list when list_evidence is unavailable.
+    if not unregistered and isinstance(status.get("unregistered"), list):
+        unregistered = [str(p) for p in status["unregistered"]]
+    payload["unregistered"] = unregistered
+    payload["missing"] = missing
+    payload["modified"] = modified
+    payload["ok"] = ok
+
+    # Write-block detection is a filesystem mount read-only check (display only),
+    # not file-state authority. Resolve the evidence dir from the active case
+    # artifact path when obtainable; _detect_write_block returns a mount-point
+    # label only, never the absolute evidence path.
+    write_protected = False
+    write_block_mount_point = None
+    write_block_warning = None
+    case_dir = _resolve_case_dir()
+    if case_dir is not None:
+        wb = _detect_write_block(case_dir / "evidence")
+        write_protected = wb.get("write_protected", False)
+        write_block_mount_point = wb.get("mount_point")
+        write_block_warning = wb.get("warning")
+    payload["write_protected"] = write_protected
+    payload["write_block_mount_point"] = write_block_mount_point
+    payload["write_block_warning"] = write_block_warning
+
+    payload["requires_examiner_action"] = (seal_status != "sealed") or bool(unregistered)
+
     # Surface the latest DB-recorded proof export + Solana anchor metadata so the
     # portal anchor/proof badge works in DB-active mode. Anchor metadata is
     # external proof only; absence is reported as not-configured, never an error.
@@ -936,6 +943,21 @@ def _db_evidence_chain_status() -> dict | None:
                 })
     payload["anchor"] = anchor_info
     return payload
+
+
+def _evidence_chain_status() -> dict:
+    """Return the DB-authority evidence chain status, or a graceful empty payload.
+
+    Never returns None and never raises: a fresh install with no DB evidence
+    service or no active case degrades to ``_empty_evidence_chain_status`` (HTTP
+    200 / no_case), so the evidence cycle never 500s or blocks.
+    """
+    try:
+        db = _db_evidence_chain_status()
+    except Exception as exc:
+        logger.warning("evidence chain status failed: %s", exc)
+        db = None
+    return db if db is not None else _empty_evidence_chain_status()
 
 
 def _db_export_proof_after_seal(request, examiner):
@@ -994,33 +1016,22 @@ def _db_export_proof_after_seal(request, examiner):
 async def get_evidence_chain_status(request: Request) -> JSONResponse:
     """Return evidence chain status, diff, and write-block detection. No mutation.
 
-    Prefers DB custody authority (C1) when a DB evidence service is wired; falls
-    back to the file-backed manifest/ledger view otherwise.
+    DB custody authority only (C1). On a fresh install (no DB evidence service or
+    no active case) this degrades to a graceful empty/no_case payload with HTTP
+    200 — it never 404s or 500s.
     """
     role_err = _require_portal_role(request)
     if role_err:
         return role_err
 
-    db_status = _db_evidence_chain_status()
-    if db_status is not None:
-        return JSONResponse(db_status)
-
-    case_dir = _resolve_case_dir()
-    if not case_dir:
-        return _no_case_response()
-
-    return JSONResponse({"authority": "file", **_build_evidence_chain_status(case_dir)})
+    return JSONResponse(_evidence_chain_status())
 
 
 async def post_evidence_chain_rescan(request: Request) -> JSONResponse:
-    """Drop the evidence gate cache and return a fresh status."""
+    """Drop the evidence gate cache and return a fresh DB-authority status."""
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
-
-    case_dir = _resolve_case_dir()
-    if not case_dir:
-        return _no_case_response()
 
     case_dir_str = _active_case_dir_str()
     if _ON_CHAIN_MUTATION and case_dir_str:
@@ -1029,7 +1040,7 @@ async def post_evidence_chain_rescan(request: Request) -> JSONResponse:
         except Exception as exc:
             logger.warning("evidence rescan: cache invalidation failed: %s", exc)
 
-    return JSONResponse(_build_evidence_chain_status(case_dir))
+    return JSONResponse(_evidence_chain_status())
 
 
 async def get_evidence_chain_challenge(request: Request) -> JSONResponse:
@@ -1089,10 +1100,6 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir = _resolve_case_dir()
-    if not case_dir and not _db_evidence_active():
-        return _no_case_response()
-
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
@@ -1115,7 +1122,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     if not isinstance(file_specs, list):
         return JSONResponse({"error": "file_specs must be a list"}, status_code=400)
 
-    err_msg, derived_key = _verify_evidence_hmac(
+    err_msg, _derived_key = _verify_evidence_hmac(
         examiner, challenge_id, response_hmac, request.client.host
     )
     if err_msg:
@@ -1126,57 +1133,31 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         if not isinstance(spec, dict) or "path" not in spec:
             return JSONResponse({"error": "Each file_spec must have a 'path' key"}, status_code=400)
 
-    # DB-authority path (C1): the seal RPC requires a reauth audit event id. The
-    # broker resolves the relative display paths to mounted bytes and computes the
-    # hashes; the portal never sends absolute paths.
-    if _EVIDENCE_DB is not None:
-        sealer = getattr(_EVIDENCE_DB, "seal", None)
-        if callable(sealer):
-            reauth_id = _record_reauth_event(request, examiner, "evidence_seal")
-            if not reauth_id:
-                return JSONResponse(
-                    {"error": "Re-auth audit event required for seal"},
-                    status_code=403,
-                )
-            try:
-                head = sealer(
-                    case_id=_active_case_id(),
-                    file_specs=file_specs,
-                    reauth_audit_event_id=reauth_id,
-                    actor=_request_principal(request),
-                    examiner=examiner,
-                )
-            except Exception as exc:
-                return _active_case_error_response(exc, default=500)
-            head = head if isinstance(head, dict) else {}
-            # DB-first proof export: derive proof material from DB custody state
-            # and record metadata/hash in Postgres. Optional Solana anchoring is
-            # external proof only and must never block the seal.
-            anchor_info, proof_info = _db_export_proof_after_seal(request, examiner)
-            resp = {
-                "sealed": True,
-                "authority": "db",
-                "registration_mode": _MVP_REGISTRATION_MODE,
-                "reauth_method": _MVP_REAUTH_METHOD,
-                "manifest_version": head.get("manifest_version"),
-                "seal_status": head.get("seal_status", "sealed"),
-                "files_added": [s.get("path") for s in file_specs],
-            }
-            if proof_info is not None:
-                resp["proof_export"] = proof_info
-            if anchor_info is not None:
-                resp["anchor"] = anchor_info
-            return JSONResponse(resp)
+    # DB custody authority only (C1): the seal RPC requires a reauth audit event
+    # id. The broker resolves the relative display paths to mounted bytes and
+    # computes the hashes; the portal never sends absolute paths. Without DB
+    # authority there is no file-backed fallback — degrade gracefully to no_case.
+    sealer = getattr(_EVIDENCE_DB, "seal", None) if _EVIDENCE_DB is not None else None
+    if not callable(sealer):
+        return _no_case_response()
 
+    reauth_id = _record_reauth_event(request, examiner, "evidence_seal")
+    if not reauth_id:
+        return JSONResponse(
+            {"error": "Re-auth audit event required for seal"},
+            status_code=403,
+        )
     try:
-        new_manifest = seal_manifest(case_dir, file_specs, examiner, derived_key)
-    except FileNotFoundError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    except Exception:
-        logger.exception("Evidence seal failed")
-        return JSONResponse({"error": "Seal failed — check gateway logs"}, status_code=500)
+        head = sealer(
+            case_id=_active_case_id(),
+            file_specs=file_specs,
+            reauth_audit_event_id=reauth_id,
+            actor=_request_principal(request),
+            examiner=examiner,
+        )
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
+    head = head if isinstance(head, dict) else {}
 
     case_dir_str = _active_case_dir_str()
     if _ON_CHAIN_MUTATION and case_dir_str:
@@ -1185,29 +1166,21 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         except Exception as exc:
             logger.warning("evidence seal: cache invalidation failed: %s", exc)
 
-    # Auto-anchor on Solana if keypair is configured (non-blocking — never fails the seal)
-    anchor_info: dict | None = None
-    keypair_path = os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip() or None
-    if keypair_path:
-        try:
-            cluster = os.environ.get("SIFT_SOLANA_CLUSTER", "mainnet")
-            ledger = load_ledger(case_dir)
-            proof = anchor_manifest(case_dir, new_manifest, ledger, keypair_path=keypair_path, cluster=cluster)
-            anchor_info = {
-                "solana_tx": proof.get("solana_tx"),
-                "confirmed": proof.get("confirmed"),
-                "explorer_url": proof.get("explorer_url"),
-            }
-        except Exception as exc:
-            logger.warning("evidence seal: anchor_manifest failed: %s", exc)
-
-    resp: dict = {
+    # DB-first proof export: derive proof material from DB custody state and record
+    # metadata/hash in Postgres. Optional Solana anchoring is external proof only
+    # and must never block the seal.
+    anchor_info, proof_info = _db_export_proof_after_seal(request, examiner)
+    resp = {
         "sealed": True,
+        "authority": "db",
         "registration_mode": _MVP_REGISTRATION_MODE,
         "reauth_method": _MVP_REAUTH_METHOD,
-        "manifest_version": new_manifest["version"],
-        "files_added": [s["path"] for s in file_specs],
+        "manifest_version": head.get("manifest_version"),
+        "seal_status": head.get("seal_status", "sealed"),
+        "files_added": [s.get("path") for s in file_specs],
     }
+    if proof_info is not None:
+        resp["proof_export"] = proof_info
     if anchor_info is not None:
         resp["anchor"] = anchor_info
     return JSONResponse(resp)
@@ -1222,10 +1195,6 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
-
-    case_dir = _resolve_case_dir()
-    if not case_dir and not _db_evidence_active():
-        return _no_case_response()
 
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -1252,46 +1221,34 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     if not reason:
         return JSONResponse({"error": "Missing reason"}, status_code=400)
 
-    err_msg, derived_key = _verify_evidence_hmac(
+    err_msg, _derived_key = _verify_evidence_hmac(
         examiner, challenge_id, response_hmac, request.client.host
     )
     if err_msg:
         return JSONResponse({"error": err_msg}, status_code=401)
 
-    if _EVIDENCE_DB is not None:
-        ignorer = getattr(_EVIDENCE_DB, "ignore", None)
-        if callable(ignorer):
-            reauth_id = _record_reauth_event(request, examiner, "evidence_ignore")
-            if not reauth_id:
-                return JSONResponse(
-                    {"error": "Re-auth audit event required for ignore"},
-                    status_code=403,
-                )
-            try:
-                ignorer(
-                    case_id=_active_case_id(),
-                    display_path=rel_path,
-                    reason=reason,
-                    reauth_audit_event_id=reauth_id,
-                    actor=_request_principal(request),
-                    examiner=examiner,
-                )
-            except Exception as exc:
-                return _active_case_error_response(exc, default=500)
-            return JSONResponse({
-                "ignored": True,
-                "authority": "db",
-                "path": rel_path,
-                "reauth_method": _MVP_REAUTH_METHOD,
-            })
+    # DB custody authority only (C1). No file-backed fallback; degrade gracefully.
+    ignorer = getattr(_EVIDENCE_DB, "ignore", None) if _EVIDENCE_DB is not None else None
+    if not callable(ignorer):
+        return _no_case_response()
 
+    reauth_id = _record_reauth_event(request, examiner, "evidence_ignore")
+    if not reauth_id:
+        return JSONResponse(
+            {"error": "Re-auth audit event required for ignore"},
+            status_code=403,
+        )
     try:
-        ignore_file(case_dir, rel_path, examiner, derived_key, reason)
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    except Exception:
-        logger.exception("Evidence ignore failed")
-        return JSONResponse({"error": "Ignore failed — check gateway logs"}, status_code=500)
+        ignorer(
+            case_id=_active_case_id(),
+            display_path=rel_path,
+            reason=reason,
+            reauth_audit_event_id=reauth_id,
+            actor=_request_principal(request),
+            examiner=examiner,
+        )
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
 
     case_dir_str = _active_case_dir_str()
     if _ON_CHAIN_MUTATION and case_dir_str:
@@ -1302,9 +1259,9 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
 
     return JSONResponse({
         "ignored": True,
+        "authority": "db",
         "path": rel_path,
         "reauth_method": _MVP_REAUTH_METHOD,
-        "manifest_version": (load_manifest(case_dir) or {}).get("version", -1),
     })
 
 
@@ -1323,10 +1280,6 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir = _resolve_case_dir()
-    if not case_dir and not _db_evidence_active():
-        return _no_case_response()
-
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
@@ -1352,56 +1305,34 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     if not reason:
         return JSONResponse({"error": "Missing reason"}, status_code=400)
 
-    err_msg, derived_key = _verify_evidence_hmac(
+    err_msg, _derived_key = _verify_evidence_hmac(
         examiner, challenge_id, response_hmac, request.client.host
     )
     if err_msg:
         return JSONResponse({"error": err_msg}, status_code=401)
 
-    if _EVIDENCE_DB is not None:
-        retirer = getattr(_EVIDENCE_DB, "retire", None)
-        if callable(retirer):
-            reauth_id = _record_reauth_event(request, examiner, "evidence_retire")
-            if not reauth_id:
-                return JSONResponse(
-                    {"error": "Re-auth audit event required for retire"},
-                    status_code=403,
-                )
-            try:
-                retirer(
-                    case_id=_active_case_id(),
-                    display_path=rel_path,
-                    reason=reason,
-                    reauth_audit_event_id=reauth_id,
-                    actor=_request_principal(request),
-                    examiner=examiner,
-                )
-            except Exception as exc:
-                return _active_case_error_response(exc, default=500)
-            return JSONResponse({
-                "retired": True,
-                "authority": "db",
-                "path": rel_path,
-                "reauth_method": _MVP_REAUTH_METHOD,
-            })
+    # DB custody authority only (C1). No file-backed fallback; degrade gracefully.
+    retirer = getattr(_EVIDENCE_DB, "retire", None) if _EVIDENCE_DB is not None else None
+    if not callable(retirer):
+        return _no_case_response()
 
+    reauth_id = _record_reauth_event(request, examiner, "evidence_retire")
+    if not reauth_id:
+        return JSONResponse(
+            {"error": "Re-auth audit event required for retire"},
+            status_code=403,
+        )
     try:
-        retire_file(case_dir, rel_path, reason, examiner, derived_key)
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    except Exception:
-        logger.exception("Evidence retire failed")
-        return JSONResponse({"error": "Retire failed — check gateway logs"}, status_code=500)
-
-    # Delete the file from disk now that the immutable flag is cleared and ledger is updated
-    abs_path = case_dir / rel_path
-    deleted = False
-    if abs_path.exists():
-        try:
-            abs_path.unlink()
-            deleted = True
-        except OSError as e:
-            logger.warning("retire: file unlink failed for %s: %s", abs_path, e)
+        retirer(
+            case_id=_active_case_id(),
+            display_path=rel_path,
+            reason=reason,
+            reauth_audit_event_id=reauth_id,
+            actor=_request_principal(request),
+            examiner=examiner,
+        )
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
 
     case_dir_str = _active_case_dir_str()
     if _ON_CHAIN_MUTATION and case_dir_str:
@@ -1412,10 +1343,9 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
 
     return JSONResponse({
         "retired": True,
+        "authority": "db",
         "path": rel_path,
         "reauth_method": _MVP_REAUTH_METHOD,
-        "deleted_from_disk": deleted,
-        "manifest_version": (load_manifest(case_dir) or {}).get("version", -1),
     })
 
 
@@ -1425,22 +1355,21 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
 
 
 async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
-    """Run a full HMAC verification of every ledger event with HMAC confirmation.
+    """Re-verify sealed evidence against DB custody authority with HMAC confirmation.
 
-    Records the timestamp on success so the portal can remind the examiner when
-    more than _HMAC_VERIFY_REMIND_HOURS have elapsed since the last verify.
+    DB custody authority only (C1): ``_EVIDENCE_DB.verify`` re-hashes the sealed
+    objects and records the outcome (escalating to ``violated`` on failure); the
+    verify timestamp is surfaced via the DB gate's ``last_verified_at`` so the
+    portal can remind the examiner. No ledger/manifest file is read. Without DB
+    authority there is no file-backed fallback — degrade gracefully to no_case.
 
     Body: {challenge_id, response}
     Requires: session examiner + role examiner + must_reset_password=false + HMAC.
-    Returns: {ok, verified, failed, failed_indices, verified_at, verified_by}
+    Returns: {ok, verified, issues, verified_at, verified_by, authority}
     """
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
-
-    case_dir = _resolve_case_dir()
-    if not case_dir:
-        return _no_case_response()
 
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -1461,36 +1390,36 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
     if not challenge_id or not response_hmac:
         return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
 
-    err_msg, derived_key = _verify_evidence_hmac(
+    err_msg, _derived_key = _verify_evidence_hmac(
         examiner, challenge_id, response_hmac, request.client.host
     )
     if err_msg:
         return JSONResponse({"error": err_msg}, status_code=401)
 
+    verifier = getattr(_EVIDENCE_DB, "verify", None) if _EVIDENCE_DB is not None else None
+    if not callable(verifier):
+        return _no_case_response()
+
     try:
-        result = verify_chain_hmac(case_dir, derived_key)
-    except Exception:
-        logger.exception("verify_chain_hmac failed")
-        return JSONResponse({"error": "HMAC verify failed — check gateway logs"}, status_code=500)
+        result = verifier(case_id=_active_case_id(), actor=_request_principal(request))
+    except Exception as exc:
+        logger.warning("DB evidence verify failed: %s", type(exc).__name__)
+        return JSONResponse(
+            {"error": "HMAC verify failed — check gateway logs"}, status_code=500
+        )
+    result = result if isinstance(result, dict) else {}
+    verified = bool(result.get("verified"))
 
     from datetime import datetime, timezone
     verified_at = datetime.now(timezone.utc).isoformat()
 
-    if result.get("ok"):
-        # Record the successful verify timestamp
-        state_path = case_dir / _VERIFY_STATE_FILE
-        try:
-            state_path.write_text(json.dumps({
-                "last_hmac_verified_at": verified_at,
-                "last_hmac_verified_by": examiner,
-            }))
-        except OSError as exc:
-            logger.warning("verify_chain_hmac: failed to write state file: %s", exc)
-
     return JSONResponse({
-        **result,
+        "ok": verified,
+        "verified": verified,
+        "issues": result.get("issues", []),
         "verified_at": verified_at,
         "verified_by": examiner,
+        "authority": "db",
     })
 
 
@@ -1518,42 +1447,20 @@ async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
 
     # DB-authority path: anchor DB-derived proof material and record it in
     # app.evidence_proof_exports. No case file is read or written as authority.
-    if _db_evidence_active():
-        anchor_info, proof_info = _db_export_proof_after_seal(request, _resolve_examiner(request))
-        anchor_info = anchor_info or {}
-        return JSONResponse({
-            "authority": "db",
-            "anchored": anchor_info.get("solana_tx") is not None,
-            "manifest_version": (proof_info or {}).get("manifest_version"),
-            "solana_tx": anchor_info.get("solana_tx"),
-            "confirmed": anchor_info.get("confirmed"),
-            "explorer_url": anchor_info.get("explorer_url"),
-            "proof_export": proof_info,
-        })
-
-    case_dir = _resolve_case_dir()
-    if not case_dir:
+    # DB custody authority only; without it there is no file-backed fallback.
+    if not _db_evidence_active():
         return _no_case_response()
 
-    manifest = load_manifest(case_dir)
-    if not manifest or manifest.get("version", 0) == 0:
-        return JSONResponse({"error": "No sealed manifest to anchor"}, status_code=400)
-
-    try:
-        cluster = os.environ.get("SIFT_SOLANA_CLUSTER", "mainnet")
-        ledger = load_ledger(case_dir)
-        proof = anchor_manifest(case_dir, manifest, ledger, keypair_path=keypair_path, cluster=cluster)
-    except Exception:
-        logger.exception("manual anchor_manifest failed")
-        return JSONResponse({"error": "Anchor failed — check gateway logs"}, status_code=500)
-
+    anchor_info, proof_info = _db_export_proof_after_seal(request, _resolve_examiner(request))
+    anchor_info = anchor_info or {}
     return JSONResponse({
-        "anchored": proof.get("solana_tx") is not None,
-        "manifest_version": proof.get("manifest_version"),
-        "solana_tx": proof.get("solana_tx"),
-        "confirmed": proof.get("confirmed"),
-        "explorer_url": proof.get("explorer_url"),
-        "cluster": proof.get("solana_cluster"),
+        "authority": "db",
+        "anchored": anchor_info.get("solana_tx") is not None,
+        "manifest_version": (proof_info or {}).get("manifest_version"),
+        "solana_tx": anchor_info.get("solana_tx"),
+        "confirmed": anchor_info.get("confirmed"),
+        "explorer_url": anchor_info.get("explorer_url"),
+        "proof_export": proof_info,
     })
 
 
@@ -2322,54 +2229,10 @@ async def get_evidence(request: Request) -> JSONResponse:
             ]
             return JSONResponse(evidence)
 
-    case_dir = _resolve_case_dir()
-    if not case_dir:
-        return _no_case_response()
-    # The authoritative registered-evidence record is the SEALED manifest
-    # (evidence-manifest.json). Sealing writes files into the manifest, not into
-    # evidence.json — reading evidence.json left the table empty and made sealed
-    # files appear to "disappear" after verify+seal. Prefer the manifest's ACTIVE
-    # files, falling back to legacy evidence.json only when no manifest exists.
-    manifest = load_manifest(case_dir)
-    manifest_files = manifest.get("files", []) if manifest else []
-    active_files = [e for e in manifest_files if e.get("status", "ACTIVE") == "ACTIVE"]
-    if active_files:
-        evidence = [
-            {
-                "path": e.get("path", ""),
-                "sha256": e.get("sha256", ""),
-                "size_bytes": e.get("bytes"),
-                "source": e.get("source", ""),
-                "description": e.get("description", ""),
-                "registered_at": e.get("registered_at", ""),
-                "registered_by": e.get("registered_by") or e.get("sealed_by") or "",
-                "status": e.get("status", "ACTIVE"),
-            }
-            for e in active_files
-        ]
-    else:
-        raw = _load_json(case_dir / "evidence.json")
-        evidence = raw.get("files", []) if isinstance(raw, dict) else (raw or [])
-
-    # Build referenced_by reverse index: evidence path → finding IDs
-    findings = _load_json(case_dir / "findings.json") or []
-    ref_index: dict[str, list[str]] = {}
-    for f in findings:
-        fid = f.get("id", "")
-        if not fid:
-            continue
-        # Link via artifact source paths
-        for art in f.get("artifacts", []):
-            src = art.get("source", "")
-            if src:
-                ref_index.setdefault(src, []).append(fid)
-
-    # Enrich evidence items
-    for item in evidence:
-        path = item.get("path", "")
-        item["referenced_by"] = ref_index.get(path, [])
-
-    return JSONResponse(evidence)
+    # DB custody authority only. With no DB evidence service or no active case
+    # (fresh install) the evidence list degrades gracefully to empty — never a
+    # file read, never 404/500.
+    return JSONResponse([])
 
 
 async def get_audit_for_finding(request: Request) -> JSONResponse:
@@ -2982,9 +2845,19 @@ async def get_summary(request: Request) -> JSONResponse:
 
     findings = _load_json(case_dir / "findings.json") or []
     timeline = _load_json(case_dir / "timeline.json") or []
-    raw_ev = _load_json(case_dir / "evidence.json")
-    evidence = raw_ev.get("files", []) if isinstance(raw_ev, dict) else (raw_ev or [])
     todos = _load_json(case_dir / "todos.json") or []
+
+    # Evidence count comes from DB custody authority (never the legacy
+    # evidence.json state file). On a fresh install / no DB it is simply 0.
+    evidence_total = 0
+    if _EVIDENCE_DB is not None:
+        lister = getattr(_EVIDENCE_DB, "list_evidence", None)
+        case_id = _active_case_id()
+        if callable(lister) and case_id:
+            try:
+                evidence_total = len(lister(case_id) or [])
+            except Exception as exc:
+                logger.warning("DB list_evidence for summary failed: %s", exc)
 
     status_counts = {}
     for f in findings:
@@ -3002,7 +2875,7 @@ async def get_summary(request: Request) -> JSONResponse:
         {
             "findings": {"total": len(findings), "by_status": status_counts},
             "timeline": {"total": len(timeline), "by_status": timeline_counts},
-            "evidence": {"total": len(evidence)},
+            "evidence": {"total": evidence_total},
             "todos": {"total": len(todos), "open": open_todos},
         }
     )
@@ -3221,61 +3094,10 @@ async def verify_evidence(request: Request) -> JSONResponse:
                 }
             )
 
-    case_dir = _resolve_case_dir()
-    if not case_dir:
-        return _no_case_response()
-
-    # Look up in evidence registry — the registry is the source of truth
-    raw_ev = _load_json(case_dir / "evidence.json")
-    evidence = raw_ev.get("files", []) if isinstance(raw_ev, dict) else (raw_ev or [])
-    entry = None
-    for item in evidence:
-        if item.get("path") == req_path:
-            entry = item
-            break
-
-    if entry is None:
-        return JSONResponse(
-            {"error": f"Not in evidence registry: {req_path}"},
-            status_code=404,
-        )
-
-    stored_hash = entry.get("sha256", "")
-    file_path = (case_dir / entry["path"]).resolve()
-
-    # Path traversal protection on the registered path
-    if ".." in str(entry["path"]) or not file_path.is_relative_to(case_dir):
-        return JSONResponse({"error": "Invalid path"}, status_code=400)
-
-    if not file_path.is_file():
-        return JSONResponse(
-            {"error": f"File not found: {entry['path']}"},
-            status_code=404,
-        )
-
-    # Hash the file
-    h = hashlib.sha256()
-    try:
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                h.update(chunk)
-    except OSError as e:
-        logger.error("Cannot read evidence file %s: %s", file_path, e)
-        return JSONResponse(
-            {"error": "Cannot read file"},
-            status_code=500,
-        )
-    computed_hash = h.hexdigest()
-
-    match = computed_hash == stored_hash
-    return JSONResponse(
-        {
-            "path": entry["path"],
-            "computed_sha256": computed_hash,
-            "stored_sha256": stored_hash,
-            "status": "verified" if match else "failed",
-        }
-    )
+    # DB custody authority only. The legacy evidence.json registry / file-hash
+    # fallback has been removed; without DB authority (fresh install) there is no
+    # evidence registry to verify against, so degrade gracefully to no_case.
+    return _no_case_response()
 
 
 async def get_commit_challenge(request: Request) -> JSONResponse:
@@ -6016,41 +5838,30 @@ async def get_portal_state(request: Request) -> JSONResponse:
         return role_err
 
     state: dict = {
-        "authority": "db" if _EVIDENCE_DB is not None else "file",
+        "authority": "db",
         "evidence": None,
         "custody": None,
         "addons": None,
         "report_eligibility": None,
     }
 
-    # Evidence seal/custody status.
-    db_status = _db_evidence_chain_status()
-    if db_status is not None:
-        state["evidence"] = {
-            "seal_status": db_status.get("seal_status"),
-            "manifest_version": db_status.get("manifest_version"),
-            "active_count": db_status.get("active_count"),
-            "issues": db_status.get("issues", []),
-            "hmac_verify_needed": db_status.get("hmac_verify_needed"),
-        }
-        if _EVIDENCE_DB is not None:
-            events_fn = getattr(_EVIDENCE_DB, "custody_events", None)
-            if callable(events_fn):
-                try:
-                    state["custody"] = events_fn(_active_case_id())
-                except Exception as exc:
-                    logger.warning("DB custody_events failed: %s", exc)
-    else:
-        case_dir = _resolve_case_dir()
-        if case_dir:
-            fs = _build_evidence_chain_status(case_dir)
-            state["evidence"] = {
-                "seal_status": fs.get("status"),
-                "manifest_version": fs.get("manifest_version"),
-                "active_count": fs.get("ok_count"),
-                "issues": fs.get("issues", []),
-                "hmac_verify_needed": fs.get("hmac_verify_needed"),
-            }
+    # Evidence seal/custody status (DB custody authority only). Degrades to a
+    # graceful no_case payload on a fresh install — never reads a file.
+    db_status = _evidence_chain_status()
+    state["evidence"] = {
+        "seal_status": db_status.get("seal_status"),
+        "manifest_version": db_status.get("manifest_version"),
+        "active_count": db_status.get("active_count"),
+        "issues": db_status.get("issues", []),
+        "hmac_verify_needed": db_status.get("hmac_verify_needed"),
+    }
+    if _EVIDENCE_DB is not None:
+        events_fn = getattr(_EVIDENCE_DB, "custody_events", None)
+        if callable(events_fn):
+            try:
+                state["custody"] = events_fn(_active_case_id())
+            except Exception as exc:
+                logger.warning("DB custody_events failed: %s", exc)
 
     # Add-on status — surfaced read-only from the backend registry when wired.
     if _EVIDENCE_DB is not None or _INVESTIGATION_DB is not None:

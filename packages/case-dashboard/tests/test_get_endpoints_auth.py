@@ -40,7 +40,6 @@ class TestGetEndpointsAuth:
         "/api/findings",
         "/api/findings/f-1",
         "/api/timeline",
-        "/api/evidence",
         "/api/audit/f-1",
         "/api/delta",
         "/api/case",
@@ -52,7 +51,7 @@ class TestGetEndpointsAuth:
         # Prevent actually loading files, we just want to verify auth phase passes
         # (resulting in "no active case" 404 response).
         monkeypatch.setattr(routes_mod, "_resolve_case_dir", lambda: None)
-        
+
         cookie_val = generate_jwt("alice", "examiner", _SECRET, max_age=3600)
         client.cookies.set(COOKIE_NAME, cookie_val)
         resp = client.get(path)
@@ -64,7 +63,6 @@ class TestGetEndpointsAuth:
         "/api/findings",
         "/api/findings/f-1",
         "/api/timeline",
-        "/api/evidence",
         "/api/audit/f-1",
         "/api/delta",
         "/api/case",
@@ -74,12 +72,25 @@ class TestGetEndpointsAuth:
     ])
     def test_authenticated_readonly_passes_auth(self, client, path, monkeypatch):
         monkeypatch.setattr(routes_mod, "_resolve_case_dir", lambda: None)
-        
+
         cookie_val = generate_jwt("bob", "readonly", _SECRET, max_age=3600)
         client.cookies.set(COOKIE_NAME, cookie_val)
         resp = client.get(path)
         assert resp.status_code == 404
         assert "No active case" in resp.json().get("error", "")
+
+    @pytest.mark.parametrize("role", ["examiner", "readonly"])
+    def test_evidence_list_degrades_to_empty_on_fresh_install(self, client, role, monkeypatch):
+        # Evidence is DB-authority only; with no DB service / no active case the
+        # list endpoint degrades gracefully to an empty 200 (never a file read,
+        # never 404), so a fresh install never blocks the evidence UI.
+        monkeypatch.setattr(routes_mod, "_resolve_case_dir", lambda: None)
+
+        cookie_val = generate_jwt("alice", role, _SECRET, max_age=3600)
+        client.cookies.set(COOKIE_NAME, cookie_val)
+        resp = client.get("/api/evidence")
+        assert resp.status_code == 200
+        assert resp.json() == []
 
     @pytest.mark.parametrize("path", [
         "/api/findings",
