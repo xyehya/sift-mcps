@@ -13,6 +13,45 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-09 - Post-MVP QA and product documentation phase opened
+
+Status: DONE
+
+Changed:
+
+- Created `docs/product/**` as the product documentation workspace for
+  architecture, data/process lifecycles, operator journey, AI-agent journey,
+  interaction model, API contracts, MCP contracts, autonomy assessment, security
+  architecture, security assessment, code structure, limitations/improvements,
+  and demo runbook.
+- Kept `docs/migration` as the execution tracker/log only. No new migration
+  runbook files were added.
+- Added post-MVP batch tracking to `task-batches.md`: BATCH-PQA0, BATCH-PDOC1,
+  BATCH-PDOC2, BATCH-SEC1, BATCH-INST1, BATCH-AUT1, BATCH-AUT2, and BATCH-FRZ1.
+- Made AI-agent autonomy a first-class acceptance axis. BATCH-AUT1 will score
+  MCP tools for discoverability, sufficiency, context efficiency,
+  composability/parallel safety, error recovery, provenance, security, and
+  autonomy friction before the demo-case benchmark.
+- Locked the execution order: PQA0 first; then PDOC1/PDOC2/SEC1/INST1 in
+  parallel; then AUT1 as the serial MCP/autonomy gate; then AUT2 and remaining
+  remediation in parallel; FRZ1 last for final demo freeze.
+
+Validation:
+
+- `python3 scripts/validate_docs.py`: OK.
+- `python3 scripts/validate_migration_docs.py`: OK.
+- `git diff --check`: clean.
+
+Next:
+
+- Start Wave 1 from clean `revamp/spg-v1` worktrees: PDOC1, PDOC2, SEC1, and
+  INST1. If only three workers are available, run PDOC1/PDOC2/SEC1 first and
+  start INST1 immediately after or as a fourth independent worker.
+- Do not start AUT1 until PDOC2 has captured the live MCP inventory and PDOC1
+  has the architecture/journey draft. AUT1 is the gate that decides whether the
+  MCP surface is good enough for autonomous DFIR or needs fixes before the demo
+  benchmark.
+
 ### 2026-06-08 - Full RAG corpus pgvector import landed
 
 Status: DONE

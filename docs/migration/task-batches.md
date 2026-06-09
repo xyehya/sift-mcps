@@ -39,6 +39,14 @@ Rules:
 - [x] BATCH-K5 - run_command authority-isolation hardening
 - [x] BATCH-K6 - Portal/report tamper regression and file-authority removal
 - [x] BATCH-V1 - End-to-end validation and cutover
+- [x] BATCH-PQA0 - Post-MVP QA and product documentation operating model
+- [ ] BATCH-PDOC1 - Product architecture, journeys, lifecycles, and code map
+- [ ] BATCH-PDOC2 - API, MCP, and interaction contract documentation
+- [ ] BATCH-SEC1 - Security architecture and assessment baseline
+- [ ] BATCH-INST1 - Installer and component hardening QA
+- [ ] BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment
+- [ ] BATCH-AUT2 - Demo-case autonomous investigation benchmark
+- [ ] BATCH-FRZ1 - Final freeze rehearsal, limitations, and demo runbook
 
 ## BATCH-A0 - Freeze simplified migration operating model
 
@@ -866,6 +874,317 @@ Acceptance:
 - Security checks cover auth, authorization, access control, evidence gate,
   response guard, audit, custody, jobs, and report approval.
 - The MVP is ready to freeze for the hackathon demo.
+
+## Post-MVP QA Operating Model
+
+Status (2026-06-09): ACTIVE - BATCH-PQA0 created the product documentation
+workspace under `docs/product/**`, opened the post-MVP QA/product-documentation
+batch wave, and made AI-agent autonomy a first-class acceptance axis.
+
+Purpose:
+
+- Move from MVP cutover proof to repeatable product QA, security assessment,
+  documentation, and demo freeze.
+- Keep `docs/migration` as the tracker/log only. Product documentation lives in
+  `docs/product/**`.
+- Judge the product from the AI agent's point of view, not only from service
+  liveness. The core question is whether a scoped agent can complete a realistic
+  DFIR investigation through MCP alone, with useful context, provenance, error
+  recovery, and bounded response sizes.
+
+Parallelization:
+
+- Wave 0, sequential: BATCH-PQA0. Land the structure before parallel work so all
+  workers use the same documents and acceptance language.
+- Wave 1, parallel after PQA0: BATCH-PDOC1, BATCH-PDOC2, BATCH-SEC1, and
+  BATCH-INST1. If running only three workers, run PDOC1/PDOC2/SEC1 first;
+  INST1 is independent and can start as a fourth worker or immediately after.
+- Wave 2, serial autonomy gate: BATCH-AUT1 after PDOC2 has captured the live MCP
+  inventory and PDOC1 has the product journey draft. AUT1 may produce code/doc
+  fixes before the demo-case benchmark.
+- Wave 3, parallel after AUT1: BATCH-AUT2 and any SEC1/INST1 remediation that
+  AUT1 exposes. BATCH-FRZ1 remains last.
+
+Landing rules:
+
+- Parallel workers use clean worktrees from `revamp/spg-v1`.
+- Product-doc workers may edit only their owned `docs/product/**` files plus
+  directly related source/tests if their batch explicitly calls for proof or
+  fixes.
+- Parallel workers do not edit shared migration docs. They return a landing log;
+  the conductor updates `task-batches.md` and `Session-Notes.md` after merge.
+- Any implementation change still requires targeted tests, `git diff --check`,
+  and security-boundary notes.
+- Any product-doc claim about live behavior needs either a test reference, a
+  live evidence block in `Session-Notes.md`, or an explicit `needs live proof`
+  label.
+
+Autonomy assessment:
+
+- BATCH-AUT1 uses `docs/product/agent-autonomy-assessment.md` as the scorecard.
+- Each MCP tool is scored for discoverability, sufficiency, context efficiency,
+  composability, error recovery, provenance, security, and autonomy friction.
+- Context bloat, unclear errors, missing provenance, tool gaps, and side-channel
+  requirements are product defects, not just documentation issues.
+
+## BATCH-PQA0 - Post-MVP QA and product documentation operating model
+
+Dependencies: BATCH-V1; B-MVP-18.
+
+Status (2026-06-09): DONE - created the `docs/product/**` documentation
+workspace, added post-MVP batches, and established the parallel execution model
+plus the serial AI-agent autonomy gate.
+
+Scope:
+
+- `docs/product/**`
+- `docs/migration/task-batches.md`
+- `docs/migration/Session-Notes.md`
+
+Exact work:
+
+- Create the product documentation workspace for architecture, flows,
+  contracts, journeys, security, code structure, limitations, assessment, and
+  demo runbook material.
+- Define how post-MVP QA is tracked without adding more files under
+  `docs/migration`.
+- Define batch dependencies and parallelization.
+- Make AI-agent autonomy a first-class scorecard and acceptance axis.
+
+Acceptance:
+
+- `docs/product/**` contains jump-in-ready skeleton documents with owning
+  batches.
+- `task-batches.md` contains grep-friendly post-MVP batch checkboxes and
+  executable batch sections.
+- `Session-Notes.md` records the new phase and next execution order.
+- `python3 scripts/validate_docs.py` passes.
+- `git diff --check` is clean.
+
+## BATCH-PDOC1 - Product architecture, journeys, lifecycles, and code map
+
+Dependencies: BATCH-PQA0.
+
+Scope:
+
+- `docs/product/architecture.md`
+- `docs/product/data-flows-and-lifecycles.md`
+- `docs/product/operator-journey.md`
+- `docs/product/ai-agent-journey.md`
+- `docs/product/interaction-model.md`
+- `docs/product/code-structure.md`
+- Existing diagrams/docs only if referenced directly from these files
+
+Exact work:
+
+- Revamp the product architecture diagrams for the hackathon narrative:
+  authority plane, data plane, trust boundaries, portal journey, MCP journey,
+  worker/job journey, and report/custody proof journey.
+- Document process and data lifecycles: install, operator session, case,
+  evidence, agent credential, MCP call, durable job, RAG import/query,
+  investigation record, approval, report export, and custody proof export.
+- Document the operator journey and AI-agent journey as product workflows.
+- Produce a high/mid-level code map for future development and extension.
+
+Acceptance:
+
+- A future session can understand the product architecture and main flows from
+  `docs/product/**` without rereading implementation history.
+- Diagrams match the current Gateway/Postgres/worker/OpenSearch/RAG authority
+  model.
+- Operator and AI-agent journeys explicitly distinguish human authority from
+  MCP-only autonomy.
+- Code structure points future developers to the right packages and boundaries.
+
+## BATCH-PDOC2 - API, MCP, and interaction contract documentation
+
+Dependencies: BATCH-PQA0.
+
+Scope:
+
+- `docs/product/api-contracts.md`
+- `docs/product/mcp-contracts.md`
+- `docs/product/interaction-model.md`
+- Gateway/portal source reads needed to inventory live contracts
+- Optional narrowly scoped tests or scripts that print contract/catalog data
+
+Exact work:
+
+- Inventory Portal/Gateway REST contracts by route group, actor, auth, state
+  transition, request/response shape, re-auth need, audit behavior, failure
+  modes, and security notes.
+- Inventory the live Gateway MCP catalog exactly as the agent sees it: tool
+  names, descriptions, schemas, required scopes, inputs, outputs, errors, and
+  examples.
+- Classify each MCP tool for parallel safety, context budget, saved artifact
+  behavior, provenance fields, and recovery guidance.
+- Identify missing or misleading tool descriptions/schemas before AUT1.
+
+Acceptance:
+
+- `mcp-contracts.md` contains the verified live MCP inventory and tool contract
+  template filled for the demo-critical tools.
+- `api-contracts.md` contains the operator REST contract groups and lifecycle
+  transitions needed for portal testing.
+- Agent-visible contracts explicitly cover context management, path/secret
+  redaction, provenance, and failure recovery.
+
+## BATCH-SEC1 - Security architecture and assessment baseline
+
+Dependencies: BATCH-PQA0.
+
+Scope:
+
+- `docs/product/security-architecture.md`
+- `docs/product/security-assessment.md`
+- Security-critical source/test reads for Gateway auth/policy, response guard,
+  evidence gate, jobs, run_command, reports, Supabase migrations/RPCs, and
+  portal auth/re-auth
+- Narrow fixes only for validated high-impact security defects
+
+Exact work:
+
+- Produce the product security architecture: trust boundaries, control
+  objectives, threat areas, accepted MVP caveats, and assessment method.
+- Run a security assessment over auth/session, authorization, evidence gate,
+  response leakage, job/worker boundary, run_command, RAG/OpenSearch/add-ons,
+  and report integrity.
+- Record findings with severity, evidence, remediation, and residual risk.
+- Feed any agent-facing security observations into BATCH-AUT1.
+
+Acceptance:
+
+- Security assessment report is filled with tested findings or explicit "no
+  finding" notes per area.
+- Any critical/high validated issue is fixed or listed as a freeze blocker.
+- Accepted caveats are bounded and reflected in
+  `known-limitations-and-improvements.md`.
+
+## BATCH-INST1 - Installer and component hardening QA
+
+Dependencies: BATCH-PQA0.
+
+Scope:
+
+- `install.sh`
+- `configs/**`
+- `scripts/setup-agent-runtime.sh`
+- Gateway/worker systemd templates
+- Health checks and setup scripts
+- `docs/product/known-limitations-and-improvements.md`
+- Tests or live VM commands needed for reproducibility proof
+
+Exact work:
+
+- Re-run or simulate install/refresh paths for idempotency, environment
+  rendering, service restart, Supabase connectivity, evidence root validation,
+  OpenSearch reachability, pgvector corpus import, and worker readiness.
+- Harden setup scripts for clear failures, no secret persistence, and VM Python
+  constraints.
+- Document exact operational caveats and recovery commands in product docs
+  without storing raw secrets.
+
+Acceptance:
+
+- Installer/setup path can be repeated without manual patching.
+- Gateway and worker restart/health checks are documented and reproducible.
+- RAG download/import and OpenSearch setup behavior are covered.
+- No raw secrets are written to repo docs or generated tracked files.
+
+## BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment
+
+Dependencies: BATCH-PDOC2; BATCH-PDOC1 draft architecture/journeys.
+
+Scope:
+
+- `docs/product/agent-autonomy-assessment.md`
+- `docs/product/mcp-contracts.md`
+- `docs/product/ai-agent-journey.md`
+- Gateway MCP/tool source and tests
+- Narrow code/doc fixes for MCP descriptions, schemas, response shaping,
+  pagination/previews, typed errors, provenance, or context bloat
+
+Exact work:
+
+- Assess the live MCP surface from the AI agent's point of view.
+- Score each demo-critical tool for discoverability, sufficiency, context
+  efficiency, composability, error recovery, provenance, security, and autonomy
+  friction.
+- Verify whether multiple read/job tools can be called in parallel safely and
+  document serialized mutation points.
+- Identify response bloat, missing context management, vague errors, missing
+  fallbacks, and missing provenance.
+- Produce concrete fixes or backlog entries before the demo-case benchmark.
+
+Acceptance:
+
+- Agent autonomy scorecard is filled with evidence.
+- Demo-critical MCP tools have verified schemas, examples, error behavior,
+  context budgets, and parallel-safety class.
+- The assessment answers whether the existing tools are enough for an end-to-end
+  forensic investigation through MCP only.
+- High-impact autonomy blockers are fixed or explicitly block BATCH-AUT2.
+
+## BATCH-AUT2 - Demo-case autonomous investigation benchmark
+
+Dependencies: BATCH-AUT1; sealed demo case prepared by operator.
+
+Scope:
+
+- `docs/product/agent-autonomy-assessment.md`
+- `docs/product/ai-agent-journey.md`
+- `docs/product/demo-runbook.md`
+- Demo-case evidence and live VM validation notes in `Session-Notes.md`
+- Narrow MCP/tool fixes only for benchmark blockers
+
+Exact work:
+
+- Run the selected demo case with the agent restricted to MCP only after portal
+  case activation, evidence register/seal, and agent issuance.
+- Capture tool calls, failed calls, human interventions, largest responses,
+  context-bloat events, findings with/without provenance, missed leads, unsafe
+  attempts, and recovery behavior.
+- Verify the agent can propose findings/timeline/TODOs and the operator can
+  approve/report through the portal.
+- Turn benchmark findings into fixes, limitations, or demo caveats.
+
+Acceptance:
+
+- The agent completes the demo investigation through MCP only, or blockers are
+  documented with severity.
+- Findings have provenance suitable for operator approval and report inclusion.
+- Human intervention after agent start is limited to intended operator review
+  and approval.
+- The final autonomy score and caveats are ready for BATCH-FRZ1.
+
+## BATCH-FRZ1 - Final freeze rehearsal, limitations, and demo runbook
+
+Dependencies: BATCH-PDOC1; BATCH-PDOC2; BATCH-SEC1; BATCH-INST1; BATCH-AUT2.
+
+Scope:
+
+- `docs/product/demo-runbook.md`
+- `docs/product/known-limitations-and-improvements.md`
+- `docs/product/README.md`
+- `docs/migration/task-batches.md`
+- `docs/migration/Session-Notes.md`
+
+Exact work:
+
+- Run the final demo rehearsal from installer/service readiness through portal
+  operator flow, MCP-only agent investigation, report export, and custody proof.
+- Freeze accepted limitations and improvement backlog.
+- Produce the exact demo prompt and operator run sequence.
+- Record final readiness evidence and commit hashes.
+
+Acceptance:
+
+- Demo runbook is executable without hidden side-channel steps.
+- Known limitations are explicit, bounded, and non-fatal to the security and
+  autonomy thesis.
+- Product docs, migration tracker, and session notes agree on readiness.
+- `python3 scripts/validate_docs.py`, relevant tests, and `git diff --check`
+  pass.
 
 ## Parallel Prompt Pack
 
