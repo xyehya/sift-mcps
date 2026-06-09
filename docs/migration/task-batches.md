@@ -1101,6 +1101,19 @@ Exact work:
 - Re-run or simulate install/refresh paths for idempotency, environment
   rendering, service restart, Supabase connectivity, evidence root validation,
   OpenSearch reachability, pgvector corpus import, and worker readiness.
+- Use `Conductor.md` as the live operations runbook for host-to-VM rsync,
+  VM dependency refresh, Gateway/worker restart, installer replay, env-file
+  permission checks, `agent_runtime` ACL checks, OpenSearch checks, RAG
+  download/import repair, and pgvector count proof.
+- Close the AUT1 live-readiness gates before AUT2:
+  - redeploy and live-prove AUT1-B3/B4/B5/B6 Gateway/core fixes;
+  - make `rag_search_case` visible in the live MCP catalog and callable through
+    the configured MCP client;
+  - verify full forensic RAG corpus counts in Supabase pgvector against the
+    B-MVP-18 baseline;
+  - resolve AUT1-B1 by fixing DB-active `case_info`/`evidence_info`
+    orientation, or prove the prepared demo case has file-backed orientation and
+    DB evidence gate in agreement.
 - Harden setup scripts for clear failures, no secret persistence, and VM Python
   constraints.
 - Document exact operational caveats and recovery commands in product docs
@@ -1111,6 +1124,19 @@ Acceptance:
 - Installer/setup path can be repeated without manual patching.
 - Gateway and worker restart/health checks are documented and reproducible.
 - RAG download/import and OpenSearch setup behavior are covered.
+- `~/.sift/*.env` permissions are verified as `600`, and raw secret values stay
+  in VM-local files or local shell variables only.
+- `agent_runtime` ACLs are verified for at least one prepared case: read/traverse
+  sealed evidence, write only to approved output directories, no read/write to
+  authority files or `/var/lib/sift`.
+- Live Gateway MCP catalog includes `rag_search_case`, and a direct MCP
+  `rag_search_case` call returns pgvector-backed knowledge results without path
+  or secret leakage.
+- Live pgvector proof records total chunk count, `kind`, `case_id`, and
+  Chroma-import `seed_source` counts; any drift from the full-corpus baseline is
+  explained.
+- AUT1-B1 is fixed or operationally neutralized with live evidence before
+  BATCH-AUT2 starts.
 - No raw secrets are written to repo docs or generated tracked files.
 
 ## BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment

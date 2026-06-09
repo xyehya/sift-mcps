@@ -181,6 +181,228 @@ Do not store raw secrets in this file.
 Use local environment variables for passwords/tokens when live testing. Do not
 write them into repo files, docs, prompts, screenshots, or logs.
 
+## Live Operations Runbook
+
+This runbook is for conductor diagnostics, installer QA, and pre-AUT2
+remediation. It is allowed to reference VM-local secret file paths and shell
+variable names. It is not allowed to paste raw passwords, JWTs, DSNs,
+service-role keys, OpenSearch credentials, or private keys into tracked files.
+
+Credential handling:
+
+- Put the VM SSH password in a local host environment variable only:
+  `export SSHPASS='<test VM password from local secure channel>'`.
+- Source service credentials only on the VM:
+  `set -a; . ~/.sift/control-plane.env; set +a`.
+- Agent tokens, if needed for manual MCP client configuration, stay in
+  VM-local files such as `~/.sift/agent-token.txt` or local shell variables.
+- If a command prints secrets, redirect or redact the output before adding it to
+  notes. Store only pass/fail, counts, service status, and sanitized errors.
+
+Host-to-VM sync:
+
+```bash
+export SSHPASS='<set locally; do not commit>'
+export SIFT_VM='sansforensics@192.168.122.81'
+export SIFT_REMOTE_DIR='/home/sansforensics/sift-mcps-test'
+
+sshpass -e rsync -az --info=progress2 \
+  -e 'ssh -o StrictHostKeyChecking=no' \
+  --exclude '.git/' \
+  --exclude '.venv/' \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
+  --exclude '.mcp.json' \
+  /home/yk/AI/SIFTHACK/sift-mcps/ \
+  "${SIFT_VM}:${SIFT_REMOTE_DIR}/"
+```
+
+VM command wrapper:
+
+```bash
+sshpass -e ssh -o StrictHostKeyChecking=no "${SIFT_VM}" '<command>'
+```
+
+VM dependency refresh after sync:
+
+```bash
+cd /home/sansforensics/sift-mcps-test
+export UV_NO_MANAGED_PYTHON=1
+export UV_PYTHON_DOWNLOADS=never
+~/.local/bin/uv sync --extra full --group dev \
+  --python /usr/bin/python3.12 \
+  --no-managed-python \
+  --no-python-downloads
+```
+
+Gateway and worker restart:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart sift-gateway.service sift-job-worker.service
+systemctl --user --no-pager --full status sift-gateway.service sift-job-worker.service
+curl -sk https://localhost:4508/api/v1/health | python3 -m json.tool
+journalctl --user -u sift-gateway.service -u sift-job-worker.service -n 120 --no-pager
+```
+
+If the Gateway catalog is stale after a backend, RAG, scope, or env change,
+restart the Gateway. MCP tool registration is startup-bound.
+
+Installer/setup QA:
+
+```bash
+cd /home/sansforensics/sift-mcps-test
+bash -n install.sh
+UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never ./install.sh
+UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never ./install.sh
+stat -c '%a %U %G %n' ~/.sift/*.env
+systemctl --user list-unit-files 'sift-*'
+```
+
+The second installer run is the idempotency check. Expected sensitive-file mode
+is `600` for `~/.sift/*.env`.
+
+Agent runtime ACL QA:
+
+```bash
+cd /home/sansforensics/sift-mcps-test
+sudo scripts/setup-agent-runtime.sh \
+  --runtime-user agent_runtime \
+  --service-user sansforensics \
+  --cases-root /cases \
+  --state-root /var/lib/sift
+getfacl -p /cases | sed -n '1,80p'
+getfacl -p /var/lib/sift | sed -n '1,80p'
+```
+
+For a prepared case, confirm `agent_runtime` has read/traverse access to sealed
+evidence and write access only to `agent/`, `extractions/`, and `tmp/`, while
+authority files and `/var/lib/sift` remain denied.
+
+OpenSearch check:
+
+```bash
+set -a; . ~/.sift/control-plane.env; set +a
+curl -sk -u "${OPENSEARCH_USERNAME}:${OPENSEARCH_PASSWORD}" \
+  "${OPENSEARCH_URL:-https://localhost:9200}/_cluster/health?pretty"
+```
+
+Single-node `yellow` is acceptable for the demo if indexing/search works.
+
+RAG download/import repair:
+
+```bash
+cd /home/sansforensics/sift-mcps-test
+set -a; . ~/.sift/control-plane.env; set +a
+export UV_NO_MANAGED_PYTHON=1
+export UV_PYTHON_DOWNLOADS=never
+
+~/.local/bin/uv run --project . --extra full \
+  --python /usr/bin/python3.12 \
+  --no-managed-python \
+  --no-python-downloads \
+  python -m rag_mcp.scripts.download_index
+
+SIFT_CONTROL_PLANE_DSN="${SIFT_CONTROL_PLANE_DSN}" \
+~/.local/bin/uv run --project . --extra full \
+  --python /usr/bin/python3.12 \
+  --no-managed-python \
+  --no-python-downloads \
+  rag-mcp-import-chroma-pgvector \
+  --chroma-dir packages/forensic-rag-mcp/data/chroma
+```
+
+If the VM needs the host proxy for the RAG release or model cache, keep a host
+terminal open with a reverse tunnel:
+
+```bash
+sshpass -e ssh -N \
+  -o ExitOnForwardFailure=yes \
+  -o StrictHostKeyChecking=no \
+  -R 10809:127.0.0.1:10808 \
+  "${SIFT_VM}"
+```
+
+Then run the VM download/import commands with:
+
+```bash
+export HTTPS_PROXY='socks5h://127.0.0.1:10809'
+export HTTP_PROXY='socks5h://127.0.0.1:10809'
+```
+
+If the Python stack reports missing SOCKS support during download diagnostics:
+
+```bash
+cd /home/sansforensics/sift-mcps-test
+~/.local/bin/uv pip install --python .venv/bin/python PySocks socksio
+```
+
+RAG DB count proof:
+
+```bash
+cd /home/sansforensics/sift-mcps-test
+set -a; . ~/.sift/control-plane.env; set +a
+UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never \
+~/.local/bin/uv run --project . --extra full \
+  --python /usr/bin/python3.12 \
+  --no-managed-python \
+  --no-python-downloads \
+  python - <<'PY'
+import os
+import psycopg
+
+queries = {
+    "total_chunks": "select count(*) from app.rag_chunks",
+    "kind_case_counts": """
+        select kind, count(*) as chunks, count(case_id) as case_bound
+        from app.rag_chunks
+        group by kind
+        order by kind
+    """,
+    "seed_sources": """
+        select coalesce(metadata->>'seed_source', '<unset>') as seed_source,
+               count(*) as chunks
+        from app.rag_chunks
+        group by 1
+        order by chunks desc
+    """,
+}
+
+with psycopg.connect(os.environ["SIFT_CONTROL_PLANE_DSN"]) as conn:
+    with conn.cursor() as cur:
+        for name, sql in queries.items():
+            cur.execute(sql)
+            print(name, cur.fetchall())
+PY
+```
+
+Expected full-corpus proof is approximately the BATCH-V1/B-MVP-18 baseline:
+`app.rag_chunks=26586`, all shared rows `kind='knowledge'`, `case_id NULL`, and
+`22268` rows from `seed_source='chroma_release_pgvector'`. Drift from that
+baseline must be explained before AUT2.
+
+RAG catalog proof:
+
+- Gateway startup wires `rag_search_case` only when `SIFT_CONTROL_PLANE_DSN` is
+  available and `PgVectorRagQueryService` initializes successfully.
+- If `rag_search_case` is absent from the MCP catalog, check
+  `journalctl --user -u sift-gateway.service` for `RAG query service init
+  failed`, verify `~/.sift/control-plane.env`, rerun the full dependency sync,
+  and restart the Gateway.
+- Agent-facing proof must be a direct Gateway MCP `list_tools` and
+  `rag_search_case` call through the configured MCP client. Curl, SQL, SSH, and
+  local source reads are diagnostics only and do not count for autonomy.
+
+AUT1-B1 evidence-orientation gate:
+
+- DB authority is `app.evidence_gate_status`; Gateway policy uses
+  `check_evidence_gate_db`.
+- Before AUT2, `case_info` and `evidence_info` must not tell the agent a case is
+  unsealed when DB policy allows execution.
+- If orientation and DB gate disagree, either fix the Gateway/core orientation
+  path to use DB-active evidence status or prepare the demo case through the
+  portal register/seal/verify path so file manifest and DB gate agree.
+
 ## MCP Autonomy Rules
 
 When assessing AI-agent autonomy:

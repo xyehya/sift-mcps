@@ -1,7 +1,7 @@
 # Session Notes
 
 Status: sprint log and decision register.
-Last updated: 2026-06-08.
+Last updated: 2026-06-09.
 
 Format rules:
 
@@ -12,6 +12,39 @@ Format rules:
 - Do not create more migration runbooks.
 
 ## Current Change Log
+
+### 2026-06-09 - BATCH-INST1 live operations guidance expanded
+
+Status: DONE
+
+Changed:
+
+- Expanded root `Conductor.md` with a reusable live operations runbook for:
+  host-to-VM rsync, VM dependency refresh, Gateway/worker restart, installer
+  replay, `~/.sift/*.env` permission checks, `agent_runtime` ACL checks,
+  OpenSearch health, RAG release download/import repair, pgvector count proof,
+  MCP catalog proof for `rag_search_case`, and AUT1-B1 evidence-orientation
+  handling.
+- Updated BATCH-INST1 tracking so the next live-readiness pass must close the
+  AUT1 gates before AUT2: live-prove AUT1-B3/B4/B5/B6 after redeploy, make
+  `rag_search_case` visible/callable through MCP, verify full forensic RAG
+  pgvector counts, and fix or neutralize AUT1-B1.
+- Kept raw credentials, DSNs, service-role keys, OpenSearch credentials, and
+  agent tokens out of repo docs. The runbook references VM-local secret files
+  and local shell variables only.
+
+Validation:
+
+- `python3 scripts/validate_docs.py`: OK.
+- `python3 scripts/validate_migration_docs.py`: OK.
+- `git diff --check`: clean.
+- Secret-shape scan over touched docs: no matches.
+
+Next:
+
+- Run BATCH-INST1 / live-readiness remediation from current `revamp/spg-v1`
+  using `Conductor.md`, then launch BATCH-AUT2 only after AUT1-B1 and AUT1-B2
+  are closed or explicitly accepted with live proof.
 
 ### 2026-06-09 - BATCH-AUT1 integrated and autonomy gates identified
 
