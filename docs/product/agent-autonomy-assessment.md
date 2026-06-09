@@ -21,8 +21,10 @@ resolved or accepted before the AUT2 demo benchmark can be trusted:
    told `evidence_chain: unsealed, ok=false, requires_examiner_action=true` while
    the gate was in fact OK and mutating tools executed. An agent following the
    documented loop ("on `ok=false`, hand back to operator") would stall
-   needlessly. **Not fixed in AUT1** (cross-boundary authority plumbing; needs
-   security review) — see Recommended Fixes.
+   needlessly. **FIXED in BATCH-INST1** (2026-06-09): the Gateway now overlays the
+   DB-authority gate onto `case_info`/`evidence_info` orientation; live-proven
+   (`status=ok, ok=true, manifest_version=2, authority=db`). See
+   `docs/migration/Session-Notes.md` (BATCH-INST1).
 2. **AUT1-B2 (MEDIUM, sufficiency):** `rag_search_case` is **absent from this
    agent's live catalog** — the CORRELATE/grounding plane is unavailable to the
    agent in the assessed deployment. Demo must verify the RAG service is wired
@@ -138,7 +140,7 @@ reads ran) and source (`investigation_store.StaleVersionError`,
 
 | ID | Sev | Area | Blocker | Live evidence | Source | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| AUT1-B1 | HIGH | Orientation vs authority | `case_info`/`evidence_info` report file-backed evidence-chain status that can contradict the DB-authority gate; agent following the documented loop stalls or learns to distrust orientation. | `case_info`→`unsealed, ok=false, manifest_version=0, requires_examiner_action=true`; same session `run_command "ls -la evidence"`→`success, exit 0` (gated mutating tool ran ⇒ DB gate OK). | `agent_tools.py:360` `chain_status(case_dir)` (file) & `:397` file verify vs `evidence_gate.py check_evidence_gate_db` (DB) preferred by `policy_middleware.py:456`. | OPEN — fix recommended, not done in AUT1. |
+| AUT1-B1 | HIGH | Orientation vs authority | `case_info`/`evidence_info` report file-backed evidence-chain status that can contradict the DB-authority gate; agent following the documented loop stalls or learns to distrust orientation. | `case_info`→`unsealed, ok=false, manifest_version=0, requires_examiner_action=true`; same session `run_command "ls -la evidence"`→`success, exit 0` (gated mutating tool ran ⇒ DB gate OK). | `agent_tools.py:360` `chain_status(case_dir)` (file) & `:397` file verify vs `evidence_gate.py check_evidence_gate_db` (DB) preferred by `policy_middleware.py:456`. | **FIXED in BATCH-INST1** — `mcp_server._overlay_db_evidence_gate` overlays the DB gate onto orientation in DB-active mode; live-proven `status=ok, authority=db`. |
 | AUT1-B2 | MEDIUM | Sufficiency / discoverability | `rag_search_case` absent from the live agent catalog → CORRELATE grounding MCP-unreachable; agent cannot self-detect whether RAG is scope-filtered or unwired. | Only 12 Siftmcp tools surfaced; no `rag_search_case`. | `mcp_server.py:261` `_register_rag_tool` early-returns when `gateway.rag_query_service is None`. | OPEN — deployment/scope verification before AUT2. |
 | AUT1-B3 | MEDIUM | Error / response leakage | `job_status` returned a raw Postgres error for any non-UUID `job_id` (incl. the `rc-<audit_id>` id that `run_command` returns) — not typed, leaks backend internals, no recovery hint. | `job_status("rc-…")` and `job_status("nonexistent…")`→ `invalid input syntax for type uuid: "…" CONTEXT: unnamed portal parameter $1`. | `job_tools.py:285 _error_payload` fell back to `str(exc)`. | **FIXED in AUT1** (typed `invalid_job_id` + `internal_error`; tests added). |
 | AUT1-B4 | LOW | Discoverability | `run_command` vs `run_command_job` overlap with near-identical schemas and no guidance on when to pick sync vs durable; and `run_command`'s `provenance.job_id` (`rc-…`) is **not** pollable via `job_status`. | `run_command` returns `job_id: "rc-…"`; `job_status("rc-…")` rejected. | `agent_tools.py` run_command vs `job_tools.py` run_command_job. | **FIXED in AUT1 conductor pass** — descriptions now distinguish sync `run_command` from durable `run_command_job`; tests added. |
@@ -167,11 +169,12 @@ reads ran) and source (`investigation_store.StaleVersionError`,
    the `evidence_chain`/`chain_status` block of `case_info`/`evidence_info`
    responses before the response guard (the Gateway already holds
    `control_plane_dsn` + `check_evidence_gate_db`); core tools stay file-based for
-   legacy mode. **Not done in AUT1** — touches evidence-gate response shaping and
-   needs a security review + tests; exceeds the "narrow" bar. *Interim demo
-   mitigation:* prepare the demo case so the file manifest and DB gate agree
-   (seal through the portal, which writes both), so orientation is not
-   contradictory.
+   legacy mode. **DONE in BATCH-INST1** — implemented as
+   `mcp_server._overlay_db_evidence_gate` (fail-safe, DB-active only, adds an
+   `authority: "db"` marker), unit-tested and live-proven on the demo case.
+   *Residual:* `evidence_info`'s evidence *listing* is still file-backed (a
+   DB-sealed case with an absent local manifest shows `chain_status=ok` with an
+   empty `evidence_files`), tracked in `known-limitations-and-improvements.md`.
 2. **AUT1-B2 (MEDIUM) — guarantee `rag_search_case` is in the demo catalog.**
    Before AUT2, confirm the Gateway is started with `rag_query_service` wired and
    the demo agent's scope set includes `tool:rag_search_case` (or `mcp:*`). Add a

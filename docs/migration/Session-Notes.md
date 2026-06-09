@@ -13,6 +13,87 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-09 - BATCH-INST1 closed; AUT1-B1 fixed live; AUT2 unblocked
+
+Status: DONE
+
+Conductor remediation pass against the live VM service tree
+`/home/sansforensics/sift-mcps-test` (active unit confirmed before sync). This
+closes BATCH-INST1 and the AUT1 pre-AUT2 gates.
+
+Changed (code):
+
+- AUT1-B1 (HIGH) fixed with the recommended Gateway overlay seam. New
+  `_overlay_db_evidence_gate` in
+  `packages/sift-gateway/src/sift_gateway/mcp_server.py` rewrites the
+  `evidence_chain`/`chain_status` block of `case_info`/`evidence_info` to the
+  DB-authority gate (`app.evidence_gate_status` via `check_evidence_gate_db`)
+  when a control-plane DSN is present. Core tools stay file-based for legacy
+  mode. The overlay is fail-safe (any DB/parse error returns the original text),
+  grants no new authority, and adds an explicit `authority: "db"` marker. The
+  gate `ChainStatus` enum is emitted as its plain value (`"ok"`), matching the
+  rest of the surface.
+- Tests: `packages/sift-gateway/tests/test_mvp_binding_job_tools.py` adds four
+  overlay tests (sealed overlay for both tools, non-OK gate still surfaces
+  `ok=false`, and legacy no-DSN no-op), using the real `ChainStatus` enum to
+  guard the value-vs-repr regression.
+
+Live evidence (post sync + Gateway/worker restart, health `ok`):
+
+- AUT1-B1 resolved through the agent MCP channel: `case_info.evidence_chain` =
+  `{status: ok, ok: true, manifest_version: 2, authority: db}` and
+  `evidence_info` = `{chain_status: ok, requires_examiner_action: false,
+  manifest_version: 2, authority: db}` on demo case `case-v1gate-06081857`
+  (`57a06521-...`). Previously orientation said `unsealed/ok=false/mv=0` while
+  the DB gate was `sealed, mv=2` and tools executed - the stall trap is gone.
+- `rag_search_case` is in the live 13-tool catalog (direct `tools/list` with an
+  `mcp:*` agent) and callable: `status=ok`, knowledge results, `kind=knowledge`,
+  `case_id=null`, query-relevant SANS titles; leak scan over the payload found no
+  `/cases`, `/home`, `/var/lib/sift`, loopback, DSN, service-role, OpenSearch, or
+  JWT strings. Note: the gateway was never unwired - the AUT1 "absent" reading
+  reflected that probe's deployment; the running Gateway exposes RAG to any
+  `mcp:*` principal.
+- pgvector corpus matches the B-MVP-18 baseline: `app.rag_chunks=26586`, all
+  `kind='knowledge'`, `case_id NULL`, `seed_source='chroma_release_pgvector'`
+  =22268 (+4318 bundled seed).
+- `~/.sift/control-plane.env` mode `600`. `agent_runtime` (uid 996) ACLs on the
+  demo case: `evidence/` `r-x`, `agent/`/`extractions/`/`tmp/` `rwx`, `CASE.yaml`
+  effective `---`, `/var/lib/sift` `---`. `/cases` root is traverse-only `--x`.
+- Worker heartbeating (`worker-...`, `idle`, recent `last_heartbeat_at`);
+  OpenSearch container healthy (Docker healthcheck) with V1 ingest intact; VM
+  Python `3.12.3`, venv interpreter `/usr/bin/python3.12`. `install.sh` `bash -n`
+  OK with idempotency/Python-constraint guards present.
+
+Residual / caveats (carried to FRZ1 backlog, not AUT2 blockers):
+
+- `evidence_info` still lists evidence files from the file manifest, so a
+  DB-sealed case with an absent local manifest shows `chain_status=ok` but
+  `evidence_files=[]`. The stall-trap fields (`chain_status`,
+  `requires_examiner_action`) are now DB-correct; the evidence *listing* staying
+  file-backed is a sufficiency gap, tracked as a follow-up (DB-derived evidence
+  listing).
+- A full destructive `./install.sh` re-run was not executed on the live demo VM
+  to preserve prepared demo state, sealed evidence, and downloaded corpora;
+  idempotency was checked structurally and remains covered by the BATCH-V1
+  install.
+- For AUT2 the demo agent must be issued with `mcp:*` (or
+  `tool:rag_search_case`) so the CORRELATE/RAG plane is reachable.
+
+Validation:
+
+- `uv run pytest packages/sift-gateway/tests/` (full): all passed (incl. 4 new
+  overlay tests); `test_mvp_binding_job_tools.py` 13 passed.
+- VM `python -m py_compile` on the synced `mcp_server.py`: OK.
+- `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`,
+  `git diff --check`, touched-file secret-shape scan: recorded with this commit.
+
+Next:
+
+- Run BATCH-AUT2 against the hackathon demo case through MCP only. Prepare the
+  demo case via the portal (create/activate, register/seal, issue an `mcp:*`
+  agent), then drive orient -> gate -> ingest -> search/RAG -> record -> hand
+  back, capturing the autonomy benchmark. AUT1-B1 and AUT1-B2 are closed.
+
 ### 2026-06-09 - Conductor live-sync rule hardened
 
 Status: DONE

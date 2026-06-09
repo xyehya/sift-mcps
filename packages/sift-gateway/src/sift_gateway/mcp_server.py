@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import logging
 import os
 import socket
@@ -71,6 +72,69 @@ _CORE_TOOL_PHASES: dict[str, str] = {
 }
 
 
+_DB_ORIENTED_TOOLS: frozenset[str] = frozenset({"case_info", "evidence_info"})
+
+
+def _overlay_db_evidence_gate(gateway: Any, tool_name: str, text: str) -> str:
+    """AUT1-B1: overlay DB-authority evidence-gate status onto the file-backed
+    orientation returned by ``case_info``/``evidence_info``.
+
+    In DB-active deployments the evidence gate that actually governs execution is
+    ``app.evidence_gate_status`` (resolved by the gateway/policy path), but the
+    core orientation tools still describe the legacy file manifest. When the file
+    manifest is absent/stale these two disagree (e.g. orientation says
+    ``unsealed/ok=false`` while the DB gate is ``sealed`` and tools run), which is
+    a stall trap for an autonomous agent following the documented "ok=false → hand
+    back to operator" loop. This overlay makes orientation reflect the same DB gate
+    the agent's mutating calls hit. It is a no-op in legacy/file mode (no
+    control-plane DSN) so core tools stay file-based there.
+    """
+    dsn = getattr(gateway, "control_plane_dsn", None)
+    if not dsn:
+        return text
+    from sift_gateway.policy_middleware import _current_gateway_active_case
+
+    case = _current_gateway_active_case()
+    if case is None:
+        return text
+    try:
+        from sift_gateway.evidence_gate import check_evidence_gate_db
+
+        gate = check_evidence_gate_db(case.case_id, dsn)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("evidence-gate overlay failed for %s: %s", tool_name, exc)
+        return text
+    try:
+        obj = json.loads(text)
+    except (TypeError, ValueError):
+        return text
+    if not isinstance(obj, dict):
+        return text
+
+    # gate["status"] is a ChainStatus(str, Enum); use its plain value ("ok",
+    # "unsealed", ...) so orientation matches the rest of the API surface rather
+    # than serialising the enum repr ("ChainStatus.OK").
+    status = getattr(gate["status"], "value", gate["status"])
+    blocked = bool(gate["blocked"])
+    issues = gate["issues"]
+    manifest_version = gate["manifest_version"]
+    if tool_name == "case_info":
+        chain = obj.get("evidence_chain")
+        if isinstance(chain, dict):
+            chain["status"] = status
+            chain["ok"] = not blocked
+            chain["issues"] = issues
+            chain["manifest_version"] = manifest_version
+            chain["authority"] = "db"
+    elif tool_name == "evidence_info":
+        obj["chain_status"] = status
+        obj["issues"] = issues
+        obj["manifest_version"] = manifest_version
+        obj["requires_examiner_action"] = blocked
+        obj["authority"] = "db"
+    return json.dumps(obj, indent=2, default=str)
+
+
 class GatewayLocalTool(Tool):
     """FastMCP local tool that delegates to the existing gateway core path."""
 
@@ -101,6 +165,10 @@ class GatewayLocalTool(Tool):
                 examiner=examiner,
                 audit=self._gateway._audit,
             )
+            if self.name in _DB_ORIENTED_TOOLS and isinstance(value, str):
+                value = await asyncio.to_thread(
+                    _overlay_db_evidence_gate, self._gateway, self.name, value
+                )
         if isinstance(value, ToolResult):
             return value
         if isinstance(value, list):

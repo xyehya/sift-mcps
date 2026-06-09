@@ -11,6 +11,9 @@ Last updated: 2026-06-09.
 | OpenSearch | Single-node VM can report yellow cluster health. | Acceptable if indexing/search works. | Multi-node or replica-adjusted production profile. |
 | Pre-context denials | Some pre-context denials remain Gateway local security telemetry, not `app.audit_events`. | Accepted MVP behavior. | Hardened DB projector for attributable denials. |
 | RAG | Shared forensic knowledge is case-neutral (`case_id NULL`). | Correct for reference grounding; not case evidence. | Add case-derived chunks with provenance after ingest. |
+| Evidence listing | `evidence_info` lists evidence files from the local file manifest, so a DB-sealed case whose local manifest is absent shows `chain_status=ok` but `evidence_files=[]`. | Low: AUT1-B1 stall-trap fields (`chain_status`, `requires_examiner_action`) are DB-correct after the BATCH-INST1 overlay; only the file *listing* lags. | DB-derived evidence listing in `evidence_info` (read `app.evidence_*` instead of the file manifest). |
+| Installer re-run | A full destructive `./install.sh` re-run is not exercised on the live demo VM. | None for the demo; idempotency is checked structurally and via BATCH-V1's install. | Idempotency harness on a throwaway VM in CI. |
+| Agent RAG scope | `rag_search_case` is reachable only when the issued agent carries `mcp:*` or `tool:rag_search_case`; the agent cannot self-inspect its scopes. | Operator must issue the demo agent with the RAG scope. | Surface the issued scope set / a catalog self-check to the agent. |
 | Product docs | This directory starts as a structured skeleton. | Must be filled before final presentation. | Run PDOC/AUT/SEC batches. |
 
 ## Improvement Backlog Template

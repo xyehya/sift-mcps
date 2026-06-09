@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+from sift_core.evidence_chain import ChainStatus
+
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.job_tools import (
     gateway_job_tool_specs,
@@ -241,3 +243,122 @@ async def test_gateway_mcp_run_command_job_invokes_gateway_bound_handler(tmp_pat
     body = _payload(result.content)
     assert body == {"job_id": "job-1", "status": "queued", "job_type": "run_command"}
     assert gateway.job_service.enqueued[0]["job_type"] == "run_command"
+
+
+# --- AUT1-B1: DB-authority evidence-gate overlay on orientation tools ---
+
+_FILE_BACKED_CASE_INFO = json.dumps(
+    {
+        "case_id": "case-one",
+        "evidence_chain": {
+            "status": "unsealed",
+            "ok": False,
+            "issues": ["No sealed evidence manifest"],
+            "manifest_version": 0,
+        },
+    }
+)
+
+_FILE_BACKED_EVIDENCE_INFO = json.dumps(
+    {
+        "chain_status": "unsealed",
+        "ok_count": 0,
+        "issues": ["No sealed evidence manifest"],
+        "manifest_version": 0,
+        "requires_examiner_action": True,
+    }
+)
+
+# Use the real ChainStatus enum (str, Enum) so the overlay is exercised against
+# the exact type check_evidence_gate_db returns; the orientation field must carry
+# the plain value "ok", never the enum repr "ChainStatus.OK".
+_SEALED_GATE = {
+    "blocked": False,
+    "status": ChainStatus.OK,
+    "issues": [],
+    "manifest_version": 2,
+}
+
+
+def test_overlay_case_info_reflects_db_sealed_gate(tmp_path):
+    """When the DB gate is sealed/OK but the file manifest is absent, case_info
+    orientation must report the DB gate, not the contradictory file status."""
+    from sift_gateway import mcp_server
+
+    gateway = _Gateway(tmp_path / "case")
+    gateway.control_plane_dsn = "postgresql://x"
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(tmp_path / "case"),
+    ), patch(
+        "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
+    ):
+        out = json.loads(
+            mcp_server._overlay_db_evidence_gate(gateway, "case_info", _FILE_BACKED_CASE_INFO)
+        )
+
+    chain = out["evidence_chain"]
+    assert chain["status"] == "ok"
+    assert chain["ok"] is True
+    assert chain["manifest_version"] == 2
+    assert chain["authority"] == "db"
+
+
+def test_overlay_evidence_info_reflects_db_sealed_gate(tmp_path):
+    from sift_gateway import mcp_server
+
+    gateway = _Gateway(tmp_path / "case")
+    gateway.control_plane_dsn = "postgresql://x"
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(tmp_path / "case"),
+    ), patch(
+        "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
+    ):
+        out = json.loads(
+            mcp_server._overlay_db_evidence_gate(
+                gateway, "evidence_info", _FILE_BACKED_EVIDENCE_INFO
+            )
+        )
+
+    assert out["chain_status"] == "ok"
+    assert out["requires_examiner_action"] is False
+    assert out["manifest_version"] == 2
+    assert out["authority"] == "db"
+
+
+def test_overlay_blocks_when_db_gate_violated(tmp_path):
+    """A DB-authoritative non-OK gate must still surface as ok=false so the agent
+    correctly hands back — the overlay reflects the gate, it does not force OK."""
+    from sift_gateway import mcp_server
+
+    gateway = _Gateway(tmp_path / "case")
+    gateway.control_plane_dsn = "postgresql://x"
+    violated = {
+        "blocked": True,
+        "status": "ledger_error",
+        "issues": ["Evidence integrity violation recorded"],
+        "manifest_version": 3,
+    }
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(tmp_path / "case"),
+    ), patch(
+        "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=violated
+    ):
+        out = json.loads(
+            mcp_server._overlay_db_evidence_gate(gateway, "case_info", _FILE_BACKED_CASE_INFO)
+        )
+
+    assert out["evidence_chain"]["status"] == "ledger_error"
+    assert out["evidence_chain"]["ok"] is False
+
+
+def test_overlay_noop_in_legacy_file_mode(tmp_path):
+    """No control-plane DSN → legacy file mode; orientation is left untouched."""
+    from sift_gateway import mcp_server
+
+    gateway = _Gateway(tmp_path / "case")
+    gateway.control_plane_dsn = None
+    out = mcp_server._overlay_db_evidence_gate(gateway, "case_info", _FILE_BACKED_CASE_INFO)
+    assert out == _FILE_BACKED_CASE_INFO

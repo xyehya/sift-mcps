@@ -43,7 +43,7 @@ Rules:
 - [x] BATCH-PDOC1 - Product architecture, journeys, lifecycles, and code map
 - [x] BATCH-PDOC2 - API, MCP, and interaction contract documentation
 - [x] BATCH-SEC1 - Security architecture and assessment baseline
-- [ ] BATCH-INST1 - Installer and component hardening QA
+- [x] BATCH-INST1 - Installer and component hardening QA
 - [x] BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment
 - [ ] BATCH-AUT2 - Demo-case autonomous investigation benchmark
 - [ ] BATCH-FRZ1 - Final freeze rehearsal, limitations, and demo runbook
@@ -1085,6 +1085,25 @@ Acceptance:
 ## BATCH-INST1 - Installer and component hardening QA
 
 Dependencies: BATCH-PQA0.
+
+Status (2026-06-09): DONE - conductor remediation pass on live VM service tree
+`/home/sansforensics/sift-mcps-test`. AUT1-B1 fixed in code (Gateway overlays the
+DB-authority evidence gate onto `case_info`/`evidence_info` orientation; legacy
+file mode untouched) and live-proven through the agent MCP channel
+(`evidence_chain` now `status=ok, ok=true, manifest_version=2, authority=db` on
+the demo case, matching `app.evidence_gate_status`). `rag_search_case` confirmed
+present in the live 13-tool catalog and callable (knowledge hits, `case_id=null`,
+no path/secret leak). pgvector corpus matches the B-MVP-18 baseline
+(`app.rag_chunks=26586`, all `kind='knowledge'`, `case_id NULL`,
+`chroma_release_pgvector=22268`). `~/.sift/control-plane.env` is `600`;
+`agent_runtime` ACLs verified on the demo case (evidence `r-x`,
+`agent/extractions/tmp` `rwx`, authority files + `/var/lib/sift` denied);
+worker heartbeating; OpenSearch container healthy; VM Python `3.12.3`. Caveat: a
+full destructive `./install.sh` re-run was intentionally not executed on the live
+demo VM to preserve prepared demo state and large corpora; installer idempotency
+was checked structurally (`bash -n` + idempotency/Python-constraint guards) and
+remains covered end-to-end by the BATCH-V1 install. Landed as a single conductor
+commit on `revamp/spg-v1`; see `Session-Notes.md`.
 
 Scope:
 
