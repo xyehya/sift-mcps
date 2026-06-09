@@ -13,6 +13,63 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-09 - Portal evidence DB-authority excision + hidden-file/delete fix
+
+Status: DONE
+
+Operator-side (portal) evidence hardening discovered while preparing the AUT2
+demo case (`case-v1gate-06081857`, the Rocba memory+disk case). Two commits on
+`revamp/spg-v1` after the BATCH-INST1 commit `6ea96c9`:
+
+- `2ac667c` - Excise the file-backed "V0" evidence path from the portal. The
+  operator evidence cycle (status / rescan / list / seal / ignore / retire /
+  verify-hmac / anchor / proof-export / summary) is now **DB-authority only**
+  (`app.evidence_gate_status` + `app.evidence_objects`). Root cause of the bug
+  the operator saw: `post_evidence_chain_rescan` returned the file-backed builder
+  (empty local manifest -> "V0") while `chain/status` read the DB ("V2"), so the
+  header flapped V0<->V2 and sealed files showed unregistered. `_db_evidence_chain_status`
+  is now the single builder, extended with `unregistered`/`missing`/`modified`/
+  `ok`/write-block/`hmac_*`/anchor. Fresh-install carve-out: no DB service / no
+  active case degrades to an empty `no_case` payload at HTTP 200 (never 500/block).
+  HMAC re-auth on seal/ignore/retire preserved.
+- `cc76677` - Close a hidden-file backdoor. Detection (`_scan_evidence`) was
+  briefly changed to skip dotfiles/temp files; reverted because the AI agent can
+  read any file under `evidence/` via `run_command` (relative paths) once the gate
+  is OK, so hiding files made a planted hidden file agent-readable yet operator-
+  invisible. Detection now surfaces every file. Added a real operator **delete**
+  (`POST /api/evidence/chain/delete`, examiner role + HMAC) that physically unlinks
+  a non-sealed stray file's bytes (sealed evidence is custody-protected -> 409),
+  recording the removed file's sha256+size in the append-only custody log; new
+  Delete button/modal in the Evidence tab.
+
+Live evidence (operator API + agent MCP, after sync/restart):
+
+- The V0 flap is gone: `chain/status` and `rescan` return identical DB authority.
+- A planted hidden file `.planted-test` was detected/visible, deleted
+  (`file_removed=true`, sha256 logged, gone from disk); deleting sealed
+  `v1-gate.log` returned `409 cannot_delete_sealed_evidence`.
+- The operator then sealed the two Rocba images through the portal: demo case is
+  now **sealed at manifest_version 3**, gate OK. A fresh `mcp:*` agent sees the
+  full 13-tool catalog incl `rag_search_case`; `case_info.evidence_chain` =
+  `{status: ok, ok: true, authority: db, manifest_version: 3}`.
+- Carried-forward residual (unchanged, AUT2 to mind): the **agent** tool
+  `evidence_info.evidence_files` is still file-listing-backed, so with the local
+  file manifest absent it can show `chain_status: ok` with an empty
+  `evidence_files`. The agent should enumerate evidence via `run_command ls
+  evidence` (lists `rocba-cdrive.e01`, `Rocba-Memory.raw`, `v1-*`). This is the
+  next DB-authority follow-up (make `evidence_info` list DB evidence objects).
+
+Seal timeout fix: the portal client used a global 15s fetch timeout, so sealing
+a large image (23 GB disk) aborted client-side with "Request timed out" even
+though the backend completed the seal (the hash of the mounted bytes runs
+synchronously in the request). Added a per-call `timeoutMs` override
+(`LONG_TIMEOUT_MS` = 15 min) for the evidence-hashing operations (seal /
+proof-export / verify-hmac / delete) and an operator note in the Seal modal.
+
+Validation: case-dashboard 355 passed (5 new delete tests); gateway portal/
+proof/gate 28 passed; ruff clean; frontend rebuilt + deployed; `git diff --check`
+clean; secret-shape scan clean.
+
 ### 2026-06-09 - BATCH-INST1 closed; AUT1-B1 fixed live; AUT2 unblocked
 
 Status: DONE

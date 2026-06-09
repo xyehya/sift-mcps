@@ -1,6 +1,10 @@
-import { apiFetch, apiPost, apiPatch, apiDelete } from './client'
+import { apiFetch, apiPost, apiPatch, apiDelete, LONG_TIMEOUT_MS } from './client'
 
 const REAUTH_OPTS = { suppressUnauthorized: true }
+// Re-auth + long timeout for operations that hash mounted evidence bytes
+// synchronously (seal / proof-export / verify / delete) — large disk/memory
+// images can take minutes, well past the default 15s client timeout.
+const REAUTH_HASH_OPTS = { suppressUnauthorized: true, timeoutMs: LONG_TIMEOUT_MS }
 
 // --- Auth ---
 export const getSetupRequired = () => apiFetch('/api/auth/setup-required')
@@ -52,13 +56,13 @@ export const postCommit = (body) => apiPost('/api/commit', body, REAUTH_OPTS)
 export const getChainStatus = () => apiFetch('/api/evidence/chain/status')
 export const postChainRescan = () => apiPost('/api/evidence/chain/rescan', {})
 export const getChainChallenge = () => apiFetch('/api/evidence/chain/challenge')
-export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body, REAUTH_OPTS)
+export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body, REAUTH_HASH_OPTS)
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)
-export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body)
-export const postChainVerifyHmac = (body) => apiPost('/api/evidence/chain/verify-hmac', body, REAUTH_OPTS)
+export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body, { timeoutMs: LONG_TIMEOUT_MS })
+export const postChainVerifyHmac = (body) => apiPost('/api/evidence/chain/verify-hmac', body, REAUTH_HASH_OPTS)
 export const postVerifyEvidence = (path) => apiPost(`/api/evidence/${encodeURIComponent(path)}/verify`, {})
 export const postChainIgnore = (body) => apiPost('/api/evidence/chain/ignore', body, REAUTH_OPTS)
-export const postChainDelete = (body) => apiPost('/api/evidence/chain/delete', body, REAUTH_OPTS)
+export const postChainDelete = (body) => apiPost('/api/evidence/chain/delete', body, REAUTH_HASH_OPTS)
 export const postChainRetire = (body) => apiPost('/api/evidence/chain/retire', body, REAUTH_OPTS)
 
 // --- Response guard ---

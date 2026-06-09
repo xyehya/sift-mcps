@@ -991,6 +991,9 @@ export function EvidenceTab() {
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
               Enter password to sign and register all unregistered evidence files into the tamper-evident manifest.
             </p>
+            <p className="text-[11px]" style={{ color: 'var(--amber)' }}>
+              Large disk/memory images are hashed in full — this can take several minutes. Keep this window open until it completes.
+            </p>
 
             <form onSubmit={handleSealEvidence} className="space-y-4">
               <div className="space-y-1">

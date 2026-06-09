@@ -1,5 +1,9 @@
 const BASE = '/portal'
 const TIMEOUT_MS = 15000
+// Evidence hashing operations (seal / proof-export / verify / delete) re-hash the
+// mounted bytes synchronously and can take minutes for large disk/memory images,
+// so they opt into a much longer client timeout via opts.timeoutMs.
+export const LONG_TIMEOUT_MS = 900000 // 15 min
 
 // Emitted when any request returns 401 — App listens to redirect to login
 const LOGIN_EVENT = 'sift:unauthorized'
@@ -29,9 +33,9 @@ async function responseError(res) {
 
 export async function apiFetch(path, opts = {}) {
   const controller = new AbortController()
-  const tid = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const { suppressUnauthorized = false, timeoutMs = TIMEOUT_MS, ...fetchOpts } = opts
+  const tid = setTimeout(() => controller.abort(), timeoutMs)
 
-  const { suppressUnauthorized = false, ...fetchOpts } = opts
   const headers = { 'Content-Type': 'application/json', ...(fetchOpts.headers ?? {}) }
 
   let res
