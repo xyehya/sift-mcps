@@ -1,7 +1,7 @@
 # Task Batches
 
 Status: MVP sprint execution tracker.
-Last updated: 2026-06-08.
+Last updated: 2026-06-09.
 
 Rules:
 
@@ -45,7 +45,7 @@ Rules:
 - [x] BATCH-SEC1 - Security architecture and assessment baseline
 - [x] BATCH-INST1 - Installer and component hardening QA
 - [x] BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment
-- [ ] BATCH-AUT2 - Demo-case autonomous investigation benchmark
+- [x] BATCH-AUT2 - Demo-case autonomous investigation benchmark
 - [ ] BATCH-FRZ1 - Final freeze rehearsal, limitations, and demo runbook
 
 ## BATCH-A0 - Freeze simplified migration operating model
@@ -1236,6 +1236,30 @@ Acceptance:
 - Human intervention after agent start is limited to intended operator review
   and approval.
 - The final autonomy score and caveats are ready for BATCH-FRZ1.
+
+Result (2026-06-09):
+
+- Status: **DONE with limitations**. The demo case was live-ready and the agent
+  completed the controlled MCP-only smoke investigation through Gateway MCP. The
+  run does **not** prove full autonomous analysis of the Rocba disk and memory
+  images because primary-image ingest and deeper triage paths blocked.
+- Final autonomy score: **14/24**. The surface is safe and usable for a
+  smoke/custody demo, but insufficient for a full disk+memory DFIR demo without
+  caveats.
+- Fresh portal-issued `mcp:*` agents saw the 13-tool catalog including
+  `rag_search_case`; DB gate was OK at `manifest_version=3`; four active sealed
+  evidence objects were present.
+- Agent records: `F-codex-1-001`, `T-codex-1-002`, and `TODO-codex-1-001`.
+  The operator approval/report path was verified through the portal: approval
+  committed with DB authority, report eligibility flipped to eligible, a
+  findings-profile report was generated/saved/downloaded, and the downloaded
+  report passed the AUT2 quick secret-shape scan.
+- Required BATCH-FRZ1 caveats: `.e01`/`.raw` single-file `ingest_job` fails,
+  `run_command.evidence_refs` still depends on file-manifest resolution,
+  `record_finding` strong audit-id validation still scans the local JSONL audit
+  trail instead of DB audit authority, Volatility cannot start due cache-path
+  permissions, EWF/TSK probing is not yet usable for this image, and summary
+  counters/listing fields still have file-mirror residuals.
 
 ## BATCH-FRZ1 - Final freeze rehearsal, limitations, and demo runbook
 

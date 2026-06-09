@@ -13,6 +13,84 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-09 - BATCH-AUT2 live demo-case autonomy benchmark
+
+Status: DONE with limitations
+
+Ran the prepared demo case `case-v1gate-06081857`
+(`57a06521-c9b8-4654-92ac-42b4f2bb0915`) through the AUT2 benchmark. The case
+was not recreated. Portal/DB readiness was verified first: active case open,
+DB-authority evidence gate OK at `manifest_version=3`, four active sealed
+evidence objects (`rocba-cdrive.e01`, `Rocba-Memory.raw`, `v1-gate.log`,
+`v1-ingest.jsonl`), and the ignored hidden/temp history rows remained inactive.
+Live health was checked on the active VM service tree
+`/home/sansforensics/sift-mcps-test`; Gateway and worker were active, and RAG
+baseline remained `app.rag_chunks=26586`.
+
+Fresh portal-issued `mcp:*` agents saw the full 13-tool catalog including
+`rag_search_case`. The core benchmark used 30 fresh-client MCP calls across two
+fresh principals, plus supplemental conductor MCP calls for record staging and
+failure reproduction. Human intervention after agent start was limited to the
+intended operator portal approval/report path. RAG was callable and redacted;
+`run_command ls -la evidence` enumerated the four active sealed files, which is
+still required because the agent-facing `evidence_info.evidence_files` list is
+file-listing-backed and empty when the local file manifest is absent.
+
+Positive AUT2 results:
+
+- `case_info`/`evidence_info` orientation reflects DB gate authority
+  (`authority=db`, `status=ok`, `manifest_version=3`).
+- `rag_search_case` is present and callable for fresh `mcp:*` agents.
+- `run_command` protected delete of sealed evidence failed closed with the
+  forensic-integrity operator-workflow message.
+- The agent staged `F-codex-1-001`, `T-codex-1-002`, and
+  `TODO-codex-1-001`.
+- Portal review/report was verified: commit approved 1 finding with DB
+  authority, report eligibility flipped from `eligible=false` to
+  `eligible=true`, findings-profile report
+  `1ff91996-5666-4b36-9568-c701f5204c24` generated/saved/downloaded, and the
+  downloaded markdown passed the AUT2 quick secret-shape scan.
+
+AUT2 blockers/caveats:
+
+- `ingest_job` cannot ingest `.e01` or `.raw` single evidence files. Both Rocba
+  primary images failed terminally with `unsupported single-file evidence format
+  for ingest job`; `v1-ingest.jsonl` succeeded as a positive control.
+- `run_command.evidence_refs` still resolves against file-manifest state and
+  reported "the case has no sealed evidence" on a DB-sealed case. `input_files`
+  worked as a degraded smoke workaround only.
+- `record_finding` strong artifact provenance rejected a fresh `run_command`
+  audit id as missing because artifact validation still scans the local JSONL
+  audit trail while Gateway audit authority is DB-first. The AUT2 finding could
+  only be staged with supporting-command provenance, yielding PARTIAL/NONE
+  provenance.
+- Volatility cannot start under `run_command` due a cache-path permission error;
+  MCP policy blocked attempted env/cache-directory workarounds.
+- EWF disk triage is not yet reliable: `mmls` returned exit 1 with no useful
+  stderr, and `fls ... | head` masked an upstream failure because the final
+  pipeline stage succeeded.
+- Some summaries are still mirrors: after portal approval,
+  `list_existing_findings` saw `F-codex-1-001` as `APPROVED`, while
+  `case_info.findings` counters still showed the old draft/approved counts.
+- Context bloat remains possible from binary-memory greps despite preview caps;
+  response redaction produced benign false positives on URL-like text and an
+  `ewfinfo` heading.
+
+Final AUT2 score: **14/24**. BATCH-FRZ1 may present a controlled MCP-only
+smoke/custody demo, but must not claim full autonomous Rocba disk+memory
+analysis until the large-evidence ingest, DB-backed evidence refs, provenance,
+Volatility, and EWF-analysis issues are fixed or explicitly worked around by an
+approved operator extraction flow.
+
+Validation for this closeout: `python3 scripts/validate_docs.py` passed;
+`python3 scripts/validate_migration_docs.py` passed; `git diff --check` passed;
+targeted package-scoped pytest passed
+(`test_mvp_binding_job_tools.py`, `test_e1_portal_db_authority.py`,
+`test_mvp_k2_investigation_store.py`). A combined cross-package pytest command
+hit the repo's known top-level `tests.*` import collision, so the same targets
+were run package-by-package. Touched-doc secret-shape scan found no secret-shaped
+values.
+
 ### 2026-06-09 - Portal evidence DB-authority excision + hidden-file/delete fix
 
 Status: DONE

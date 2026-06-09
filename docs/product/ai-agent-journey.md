@@ -11,6 +11,11 @@ and the BATCH-V1 cutover evidence. It intentionally does **not** pre-empt the
 BATCH-AUT1 autonomy scorecard in `agent-autonomy-assessment.md` — AUT1 owns the
 scoring; this file owns the narrative.
 
+AUT2 update: the full demo-case benchmark is complete. The journey below is
+valid for a controlled smoke/custody demo. It is not yet valid as a claim that
+the agent can complete full Rocba disk+memory analysis through MCP alone; see
+the AUT2 blockers in `agent-autonomy-assessment.md`.
+
 ## What the Agent Is Given (and only this)
 
 Per the demo prompt shape (`Migration-Spec.md` section 3; this file's last
@@ -54,7 +59,7 @@ gateway-local tools wired in
 | `get_tool_help` | Tool/workflow guidance. | read-only local |
 | `ingest_job` | Launch a parser/ingest durable job; returns `job_id`. | gateway-local, job-backed |
 | `job_status` | Poll a job by id. | gateway-local |
-| `rag_search_case` | pgvector forensic-knowledge grounding, provenance-filtered. **AUT1: absent from the live catalog unless `rag_query_service` is wired (AUT1-B2).** | gateway-local, derived plane |
+| `rag_search_case` | pgvector forensic-knowledge grounding, provenance-filtered. **AUT2: present and callable for fresh portal-issued `mcp:*` agents; stale clients should reconnect before demo.** | gateway-local, derived plane |
 | `run_command_job` | Controlled deeper-analysis command as a durable job. | gateway-local, job-backed |
 | `run_command` | Sandboxed forensic CLI (shell=False, deny floor). | local, execution plane |
 | `record_finding` | Propose a finding (`DRAFT`) with provenance. | local, write proposal |
@@ -87,7 +92,10 @@ flowchart TD
 
 1. Orient to the active case and evidence state.
 2. Discover tools and expected workflow (`get_tool_help`).
-3. Query case/evidence summaries.
+3. Query case/evidence summaries. If `evidence_info.evidence_files` is empty
+   while the DB gate is OK, enumerate visible sealed evidence with
+   `run_command "ls evidence"`; AUT2 showed the listing field is still a mirror
+   residual.
 4. Launch or inspect ingest jobs (`ingest_job` -> `job_id`, `job_status`).
 5. Search derived OpenSearch content.
 6. Ask RAG for forensic grounding/enrichment (`rag_search_case`).
@@ -108,16 +116,16 @@ Live proof (`Session-Notes.md` 2026-06-08): pre-seal agent execution failed
 closed with the unsealed gate; post-seal `run_command_job 884c3641-...`
 succeeded and redacted absolute-path output.
 
-> **AUT1 caveat (2026-06-09) — orientation can disagree with the gate.** The gate
-> the agent actually hits is **DB authority** (`app.evidence_gate_status`), but
-> `case_info.evidence_chain` / `evidence_info.chain_status` are computed from the
-> **file manifest**. AUT1 observed these disagree on the live case: orientation
-> said `unsealed / ok=false / requires_examiner_action=true` while the DB gate was
-> OK and `run_command` executed. The autonomous rule is correct ("hand back on a
-> real `evidence_gate_denied` *block*"), but an agent must treat the
-> **`evidence_gate_denied` block response as authoritative**, not the
-> `evidence_chain.ok` field in `case_info`/`evidence_info`. Tracked as AUT1-B1 in
-> `agent-autonomy-assessment.md` with a recommended fix.
+> **AUT2 caveat (2026-06-09) - listing and counters can still be mirrors.** The
+> DB-authority gate overlay is live: `case_info.evidence_chain` and
+> `evidence_info.chain_status` reported `ok` with `authority=db`. However,
+> `evidence_info.evidence_files` was empty on the sealed demo case because the
+> evidence listing is still file-listing-backed, and `case_info.findings`
+> counters stayed stale after portal approval while `list_existing_findings` and
+> report eligibility showed the DB-approved finding. The autonomous rule is:
+> treat an actual `evidence_gate_denied` block as authoritative, but treat empty
+> listing/counter summaries as advisory and verify through DB-backed list tools
+> or `run_command ls evidence`.
 
 ## How the Agent Recovers
 
@@ -136,6 +144,16 @@ for the full error/recovery table):
 - `input_validation_error` -> correct arguments and retry once.
 - `backend_unavailable` (OpenSearch/RAG/add-on) -> report the degraded plane and
   continue with available tools if safe.
+- `unsupported single-file evidence format for ingest job` -> do not relaunch
+  the same `.e01` or `.raw` ingest job in a loop. Record a blocker/TODO and ask
+  for an approved extraction or ingest workflow.
+- `evidence_refs` says no sealed evidence while `case_info.evidence_chain` says
+  `authority=db, ok=true` -> treat this as a DB/file-manifest resolver mismatch.
+  Use only documented temporary workarounds (`input_files`) for limited smoke
+  provenance, and record the limitation.
+- Volatility cache/path `PermissionError` or blank forensic-tool failures ->
+  stop deeper memory/disk claims, record the failed command, and hand back for a
+  tooling fix or operator-approved extraction path.
 
 ## Autonomy Requirements (product-level)
 
@@ -160,6 +178,25 @@ for the full error/recovery table):
 | Tool gaps in the workflow | Agent cannot complete MCP-only. | BATCH-AUT2 |
 | Unsafe side-channel needed | Autonomy/security thesis fails. | BATCH-AUT2 |
 
+## AUT2 Benchmark Outcome
+
+The live AUT2 benchmark used a fresh portal-issued `mcp:*` agent against
+`case-v1gate-06081857`. The agent-side story that works today:
+
+- orient against a DB-sealed case;
+- enumerate evidence through `run_command ls evidence`;
+- confirm the 13-tool catalog and use `rag_search_case`;
+- stage a limited suspicious PowerShell finding, timeline event, and TODO;
+- hand back to the operator for portal approval and approved-only report
+  generation.
+
+The story that does not work today:
+
+- ingest the Rocba `.e01` or `.raw` images as single evidence files;
+- use `evidence_refs` as a DB-backed resolver for sealed evidence;
+- attach strong `run_command` audit receipts to artifacts in `record_finding`;
+- perform Volatility memory triage or reliable EWF disk triage through MCP.
+
 ## Demo Prompt Shape
 
 The final demo prompt gives the agent only: the Gateway MCP endpoint config; the
@@ -167,4 +204,5 @@ scoped agent credential; the case brief; the investigation objective; the
 MCP-only constraint. No local paths, DB instructions, OpenSearch credentials, or
 shell commands.
 
-Status of the full demo-case benchmark: `TODO` — owned by BATCH-AUT2.
+Status of the full demo-case benchmark: `DONE with limitations` — BATCH-AUT2
+scored the current surface at **14/24** and handed the caveats to BATCH-FRZ1.
