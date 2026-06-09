@@ -73,7 +73,9 @@ def gateway_job_tool_specs() -> list[dict[str, Any]]:
             "name": RUN_COMMAND_JOB_TOOL,
             "description": (
                 "Enqueue a sandboxed run_command request through the Postgres "
-                "job state machine. Returns a job_id only."
+                "job state machine for long-running or parallel work. Returns a "
+                "pollable UUID job_id only; use job_status to retrieve terminal "
+                "status and sanitized output refs."
             ),
             "parameters": {
                 "type": "object",

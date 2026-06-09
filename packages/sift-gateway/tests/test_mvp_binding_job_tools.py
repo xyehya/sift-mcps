@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.job_tools import (
+    gateway_job_tool_specs,
     handle_ingest_job,
     handle_job_status,
     handle_run_command_job,
@@ -151,6 +152,14 @@ def test_run_command_job_enqueues_public_args_and_internal_case_dir(tmp_path):
     assert call["spec_public"]["evidence_refs"] == ["evidence/disk.E01"]
     assert call["spec_internal"]["case_dir"] == str(case_dir)
     assert "case_dir" not in json.dumps(body)
+
+
+def test_run_command_job_description_advertises_pollable_uuid():
+    spec = next(item for item in gateway_job_tool_specs() if item["name"] == "run_command_job")
+    description = spec["description"]
+    assert "long-running or parallel work" in description
+    assert "pollable UUID job_id" in description
+    assert "job_status" in description
 
 
 def test_job_status_returns_sanitized_service_payload(tmp_path):

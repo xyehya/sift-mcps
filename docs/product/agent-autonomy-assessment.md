@@ -75,11 +75,11 @@ Score each category from 0 to 3.
 
 | Category | Score | Basis |
 | --- | --- | --- |
-| Discoverability | 2 | `meta.category`/`recommended_for_phase` ordering, strong schemas/examples (`record_finding`), but `run_command` vs `run_command_job` overlap is undocumented and `job_status` advertises no poll/terminal contract. |
+| Discoverability | 2 | `meta.category`/`recommended_for_phase` ordering, strong schemas/examples (`record_finding`). AUT1 found unclear `run_command`/`run_command_job` descriptions and missing `job_status` poll/terminal guidance; docs and live schema descriptions were updated, but live re-verification awaits redeploy. |
 | Sufficiency | 2 | Orient→ingest→search→deepen→record loop is complete **except** `rag_search_case` is missing from the live catalog (AUT1-B2); OpenSearch add-on tools also absent in this core-only deployment. |
 | Context efficiency | 2 | 256 KiB cap, slim summaries + saved refs (`case_file_structure.json`, `findings_list.json`), pagination — but terminal `job_status` re-emits the full job result every poll. |
 | Composability | 3 | Read tools are parallel-safe; durable jobs are independent; mutations are state-serialized server-side. Verified live (concurrent reads + parallel job poll). |
-| Error recovery | 2 | Most errors are typed and actionable (`job_not_found`, deny-floor messages, `record_finding` guidance). Pre-fix `job_status` raw leak pulled this down; fixed. One recovery hint is wrong for an MCP agent ("Exit Claude Code, run rm directly"). |
+| Error recovery | 2 | Most errors are typed and actionable (`job_not_found`, deny-floor messages, `record_finding` guidance). Pre-fix `job_status` raw leak and side-channel `rm` denial wording pulled this down; both are fixed in code/docs pending live redeploy. |
 | Provenance | 3 | `audit_id`/`job_id`/`provenance{…}` on execution; `record_finding` **enforces** provenance (rejects findings without an evidence trail). Live-proven. |
 | Security | 3 | Path/secret redaction held on every probe; deny floor blocks `bash`; evidence-dir delete blocked; opaque IDs only; agent JWT carries no authority. |
 | Autonomy friction | 2 | After seal+issue, the agent runs MCP-only with no side channel — **but** the file-vs-DB evidence-chain contradiction (AUT1-B1) is a live stall trap. |
@@ -109,15 +109,15 @@ Errors/Security were 1/2).
 | `case_info` | 3 | 2 | 3 | 3 (safe-read) | 2 | 2 | 3 | 1 | **Live-proven.** `case_dir` redacted. `evidence_chain` is **file-backed** and contradicted the DB gate (AUT1-B1) → friction. |
 | `evidence_info` | 3 | 2 | 3 | 3 (safe-read) | 2 | 2 | 3 | 1 | **Promoted to live-proven.** `chain_status`/`requires_examiner_action` are file-backed → same AUT1-B1 split-brain. |
 | `ingest_job` | 3 | 3 | 3 (receipt) | 3 (job-parallel) | 2 | 3 | 3 | 2 | Live-proven (V1: job `e6572af3…`, indexed 1) + schema verified live. Must poll for result. |
-| `job_status` | 2 | 3 | 2 | 3 (safe-read) | 2 | 3 | 3 | 2 | **Promoted to live-proven** (`b58fb7a2…` → `succeeded`). No advertised poll/terminal contract; terminal re-emits full result. Raw-uuid leak **fixed**. |
+| `job_status` | 2 | 3 | 2 | 3 (safe-read) | 2 | 3 | 3 | 2 | **Promoted to live-proven** (`b58fb7a2…` → `succeeded`). Terminal re-emits full result. Raw-uuid leak **fixed**; poll/terminal contract documented. |
 | `rag_search_case` | 0 | 0 | — | — | — | — | — | — | **Absent from live catalog** (AUT1-B2). Registered only when `gateway.rag_query_service` is wired. CORRELATE grounding MCP-unreachable in this deployment. |
-| `run_command_job` | 2 | 3 | 3 (receipt) | 3 (job-parallel) | 2 | 3 | 3 | 2 | **Promoted to live-proven** (`b58fb7a2…`). Overlaps `run_command` with no disambiguation guidance. |
-| `run_command` | 2 | 3 | 2 | 2 (serialized) | 3 | 3 | 3 | 2 | **Live-proven** (deny floor blocks `bash`; evidence `rm` blocked). `argv[0]` redacted to `[REDACTED:absolute_path]`; one recovery hint tells the agent to leave the harness (wrong for MCP). |
+| `run_command_job` | 2 | 3 | 3 (receipt) | 3 (job-parallel) | 2 | 3 | 3 | 2 | **Promoted to live-proven** (`b58fb7a2…`). Description now says durable/pollable UUID path; live re-verification awaits redeploy. |
+| `run_command` | 2 | 3 | 2 | 2 (serialized) | 3 | 3 | 3 | 2 | **Live-proven** (deny floor blocks `bash`; evidence `rm` blocked). `argv[0]` redacted to `[REDACTED:absolute_path]`; description now calls out non-pollable `rc-*` receipts and durable alternative. |
 | `record_finding` | 3 | 3 | 3 | 2 (serialized) | 3 | 3 | 3 | 2 | **Live-proven**: incomplete finding REJECTED with 3-option provenance guidance. Strong contract. |
 | `record_timeline_event` | 3 | 3 | 3 | 2 (serialized) | 2 | 3 | 3 | 2 | Live-proven (V1). Schema verified live (good example payload). |
 | `manage_todo` | 3 | 3 | 3 | 2 (list safe-read) | 3 | 2 | 3 | 3 | **Promoted to live-proven**: create→list→complete cycle clean; typed errors. |
 | `list_existing_findings` | 3 | 3 | 3 (paginated+ref) | 3 (safe-read) | 2 | 2 | 3 | 3 | **Promoted to live-proven**: returned `F-hermes-v1-gate-001`, `full_findings_path` saved ref. |
-| `get_tool_help` | 2 | 2 | 3 | 3 (safe-read) | 2 | 1 (n/a) | 2 | 2 | **Promoted to live-proven** for `run_command`. Static help embeds an absolute path that gets self-redacted into the guidance (`'>[REDACTED:absolute_path]'`), mangling a safe-alternative example. |
+| `get_tool_help` | 2 | 2 | 3 | 3 (safe-read) | 2 | 1 (n/a) | 2 | 2 | **Promoted to live-proven** for `run_command`. Static self-redacting stderr example fixed in source; live re-verification awaits redeploy. |
 | `capability_guide` | 2 | 2 | 3 | 3 (safe-read) | 3 | 1 (n/a) | 3 | 2 | **Promoted to live-proven**: empty result with explicit "expected default, not an error" note. Empty-result ambiguity is well-mitigated by the note. |
 
 ## Parallel-safety verdict (BATCH-AUT1 definitive)
@@ -141,9 +141,9 @@ reads ran) and source (`investigation_store.StaleVersionError`,
 | AUT1-B1 | HIGH | Orientation vs authority | `case_info`/`evidence_info` report file-backed evidence-chain status that can contradict the DB-authority gate; agent following the documented loop stalls or learns to distrust orientation. | `case_info`→`unsealed, ok=false, manifest_version=0, requires_examiner_action=true`; same session `run_command "ls -la evidence"`→`success, exit 0` (gated mutating tool ran ⇒ DB gate OK). | `agent_tools.py:360` `chain_status(case_dir)` (file) & `:397` file verify vs `evidence_gate.py check_evidence_gate_db` (DB) preferred by `policy_middleware.py:456`. | OPEN — fix recommended, not done in AUT1. |
 | AUT1-B2 | MEDIUM | Sufficiency / discoverability | `rag_search_case` absent from the live agent catalog → CORRELATE grounding MCP-unreachable; agent cannot self-detect whether RAG is scope-filtered or unwired. | Only 12 Siftmcp tools surfaced; no `rag_search_case`. | `mcp_server.py:261` `_register_rag_tool` early-returns when `gateway.rag_query_service is None`. | OPEN — deployment/scope verification before AUT2. |
 | AUT1-B3 | MEDIUM | Error / response leakage | `job_status` returned a raw Postgres error for any non-UUID `job_id` (incl. the `rc-<audit_id>` id that `run_command` returns) — not typed, leaks backend internals, no recovery hint. | `job_status("rc-…")` and `job_status("nonexistent…")`→ `invalid input syntax for type uuid: "…" CONTEXT: unnamed portal parameter $1`. | `job_tools.py:285 _error_payload` fell back to `str(exc)`. | **FIXED in AUT1** (typed `invalid_job_id` + `internal_error`; tests added). |
-| AUT1-B4 | LOW | Discoverability | `run_command` vs `run_command_job` overlap with near-identical schemas and no guidance on when to pick sync vs durable; and `run_command`'s `provenance.job_id` (`rc-…`) is **not** pollable via `job_status`. | `run_command` returns `job_id: "rc-…"`; `job_status("rc-…")` rejected. | `agent_tools.py` run_command vs `job_tools.py` run_command_job. | OPEN — doc fix applied to `mcp-contracts.md`; description nicety deferred. |
-| AUT1-B5 | LOW | Error recovery wording | Evidence-dir `rm` denial tells the agent to "Exit Claude Code, run the rm command directly, then return" — a host side-channel instruction an MCP agent cannot and must not follow. | `run_command "rm -f evidence/…"` → that message. | run_command protected-dir guard. | OPEN — reword to operator-action guidance. |
-| AUT1-B6 | LOW | Tool-help content | `get_tool_help` static content contains an absolute path that the response guard redacts into the returned guidance, producing an unusable safe-alternative example. | `get_tool_help("run_command")` → `"…'>[REDACTED:absolute_path]' for stderr control"`. | tool-help static data. | OPEN — sanitize examples to relative paths. |
+| AUT1-B4 | LOW | Discoverability | `run_command` vs `run_command_job` overlap with near-identical schemas and no guidance on when to pick sync vs durable; and `run_command`'s `provenance.job_id` (`rc-…`) is **not** pollable via `job_status`. | `run_command` returns `job_id: "rc-…"`; `job_status("rc-…")` rejected. | `agent_tools.py` run_command vs `job_tools.py` run_command_job. | **FIXED in AUT1 conductor pass** — descriptions now distinguish sync `run_command` from durable `run_command_job`; tests added. |
+| AUT1-B5 | LOW | Error recovery wording | Evidence-dir `rm` denial tells the agent to "Exit Claude Code, run the rm command directly, then return" — a host side-channel instruction an MCP agent cannot and must not follow. | `run_command "rm -f evidence/…"` → that message. | run_command protected-dir guard. | **FIXED in AUT1 conductor pass** — denial now tells the agent to hand back to the operator/approved evidence workflow; test added. |
+| AUT1-B6 | LOW | Tool-help content | `get_tool_help` static content contains an absolute path that the response guard redacts into the returned guidance, producing an unusable safe-alternative example. | `get_tool_help("run_command")` → `"…'>[REDACTED:absolute_path]' for stderr control"`. | tool-help static data. | **FIXED in AUT1 conductor pass** — static example now avoids absolute-path text; test added. |
 
 ### Carry-in resolutions
 
@@ -151,7 +151,7 @@ reads ran) and source (`investigation_store.StaleVersionError`,
 | --- | --- |
 | Promote `evidence_info`, `capability_guide`, `get_tool_help`, `list_existing_findings` | **Done — all four promoted to live-proven** via direct MCP calls. |
 | Verify demo-agent scopes cover every demo-critical tool; watch fail-closed catalog shrinkage | 12/13 demo-critical tools present and callable; **only `rag_search_case` missing** (AUT1-B2). Agent JWT carries no scope claims — scopes/active-case resolve server-side from DB principal rows; the agent cannot self-inspect its scopes (a silently-shrunk catalog is invisible to the agent — operator must confirm the issued scope set). |
-| `run_command` vs `run_command_job` ambiguity | AUT1-B4: durable vs sync overlap + non-pollable `rc-` job_id. Doc disambiguation added to `mcp-contracts.md`. |
+| `run_command` vs `run_command_job` ambiguity | AUT1-B4 fixed in conductor pass: docs and tool descriptions now distinguish sync `run_command` (`rc-*` receipt, not pollable) from durable `run_command_job` (pollable UUID). |
 | run_command usability/safety (argv ergonomics, pipe/redirect/stderr, evidence write-gap S-1, preview/output-ref) | argv-string form works; deny floor solid (`bash` blocked); **evidence write-gap S-1 closed for delete** — `rm evidence/…` blocked with forensic-integrity message (K5 `assert_no_authority_write_target` + protected-dir guard). Pipe/redirect reachability not re-stressed here (single-string form is honored; AUT2 to stress pipelines). `argv[0]` redaction is cosmetic noise. |
 | `capability_guide` empty-result ambiguity | Live result carries explicit "No add-on backend is registered — expected default, not an error." Well-mitigated; scored Errors=3. |
 | `job_status` poll/terminal contract | Live-confirmed terminal `succeeded` with `created_at/started_at/finished_at`, `step_count`, `steps_succeeded`; `job_not_found` for a missing UUID. Contract now documented in `mcp-contracts.md`. Context caveat: terminal re-emits full result. |
@@ -181,15 +181,15 @@ reads ran) and source (`investigation_store.StaleVersionError`,
    for non-UUID ids and `internal_error` (no raw exception text) for unexpected
    failures, across all durable-job tools. Unit-tested. Live re-verification is
    deferred until the running Gateway is redeployed with this build.
-4. **AUT1-B4 (LOW) — disambiguate run_command variants.** Add to each
-   description: sync `run_command` = quick/preview, returns inline output + a
-   non-pollable `rc-` receipt id; durable `run_command_job` = long/parallel,
-   returns a pollable UUID for `job_status`. (Doc done; description text deferred.)
-5. **AUT1-B5 (LOW) — reword evidence-dir denials** to operator-action guidance
-   ("evidence deletion requires operator action outside the agent session"),
-   never "Exit Claude Code and run it directly".
-6. **AUT1-B6 (LOW) — sanitize `get_tool_help` static examples** to relative
-   paths so the response guard does not mangle the guidance.
+4. **AUT1-B4 (LOW) — DONE in conductor pass.** Descriptions now state:
+   synchronous `run_command` returns inline output plus a non-pollable `rc-*`
+   receipt id; durable `run_command_job` returns a pollable UUID for
+   `job_status`.
+5. **AUT1-B5 (LOW) — DONE in conductor pass.** Evidence-dir deletion denials now
+   instruct the agent to hand back to the operator/approved evidence workflow,
+   never to leave the MCP harness.
+6. **AUT1-B6 (LOW) — DONE in conductor pass.** `get_tool_help` static examples
+   avoid absolute-path text that self-redacts in returned guidance.
 
 ## Is the MCP surface enough for MCP-only DFIR?
 

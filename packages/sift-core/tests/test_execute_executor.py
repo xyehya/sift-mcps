@@ -12,6 +12,7 @@ from sift_core.execute.exceptions import DeniedBinaryError, ExecutionTimeoutErro
 from sift_core.execute.executor import execute
 from sift_core.execute.security_policy import SECURITY_POLICY_ENV, policy_to_env_json
 from sift_core.execute.tools import generic
+from sift_core.execute.tools.discovery import get_tool_help
 
 
 @pytest.fixture(autouse=True)
@@ -671,11 +672,31 @@ def test_evidence_write_delete_mutation_blocked(tmp_path, monkeypatch):
             purpose="block evidence write",
         )
 
-    with pytest.raises(ValueError, match="Blocked: rm in protected directory"):
+    with pytest.raises(ValueError, match="Blocked: rm in protected directory") as rm_exc:
         generic.run_command("rm evidence/sealed.bin", purpose="block evidence delete")
+    assert "Exit Claude Code" not in str(rm_exc.value)
+    assert "run the rm command directly" not in str(rm_exc.value)
+    assert "Ask the operator" in str(rm_exc.value)
 
     with pytest.raises(ValueError, match="Move denied: path .*protected case"):
         generic.run_command("mv evidence/sealed.bin tmp/sealed.bin", purpose="block evidence move")
+
+
+def test_run_command_help_has_no_self_redacting_absolute_path_example():
+    help_data = get_tool_help("run_command")
+    text = repr(help_data)
+    assert ">/dev/null" not in text
+    assert "[REDACTED:absolute_path]" not in text
+
+
+def test_run_command_tool_description_disambiguates_sync_receipt_id():
+    from sift_core.agent_tools import CORE_TOOL_SPECS
+
+    spec = next(item for item in CORE_TOOL_SPECS if item.name == "run_command")
+    assert "synchronous" in spec.description
+    assert "rc-* receipt id is not a durable job id" in spec.description
+    assert "use run_command_job" in spec.description
+    assert "job_status" in spec.description
 
 
 def test_native_runtime_fails_when_sudo_missing(monkeypatch):

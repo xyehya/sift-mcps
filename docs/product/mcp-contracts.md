@@ -231,10 +231,13 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
   cataloged forensic tool." Input `{tool_name}` (required). Parallel-safety: safe-read.
 
 ### `run_command` — TRIAGE, mutating (live-proven)
-- Description: "Execute a validated command on this SIFT VM. Pass a single command
-  string; pipes (|), sequencing (&&/||/;), and redirects (>,>>,<,2>&1) are supported.
-  Set preview_lines to cap inline stdout and save_output for large output. Case path
-  jails, audit logging, and provenance hashing are enforced."
+- Description: quick, synchronous validated command execution on the SIFT VM.
+  Returns inline preview/receipt output. The returned `rc-*` receipt id is **not**
+  a durable job id; use `run_command_job` for long-running or parallel work that
+  should be polled with `job_status`. Pass a single command string; pipes (`|`),
+  sequencing (`&&`/`||`/`;`), and redirects (`>`,`>>`,`<`,`2>&1`) are supported.
+  Set `preview_lines` to cap inline stdout and `save_output` for large output.
+  Case path jails, audit logging, and provenance hashing are enforced.
 - Input (agent_tools.py:256): required `command, purpose`; optional `timeout,
   save_output, evidence_refs[], output_ref, input_files[] (deprecated), working_dir,
   preview_lines, skip_enrichment`.
@@ -262,8 +265,10 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
   Flag for BATCH-AUT1/SEC1, not a doc defect.
 
 ### `run_command_job` — TRIAGE, mutating (live-proven)
-- Description: "Enqueue a sandboxed run_command request through the Postgres job state
-  machine. Returns a job_id only."
+- Description: enqueue a sandboxed `run_command` request through the Postgres job
+  state machine for long-running or parallel work. Returns a pollable UUID
+  `job_id` only; use `job_status` to retrieve terminal status and sanitized
+  output refs.
 - Input (job_tools.py:69): required `command, purpose`; optional `timeout, save_output,
   evidence_refs[], output_ref, working_dir, preview_lines, skip_enrichment, priority
   (100), max_attempts (1)`.
@@ -394,22 +399,26 @@ Outcomes recorded in `agent-autonomy-assessment.md` (AUT1-B1…B6).
    scope claims (resolved server-side), so the agent cannot self-detect a shrunk
    catalog — operator must verify the issued scope set. See AUT1 live-catalog note
    above.
-2. **`run_command` vs `run_command_job` overlap.** Confirmed (AUT1-B4). Sync
+2. **`run_command` vs `run_command_job` overlap.** Confirmed and fixed in the
+   conductor pass (AUT1-B4). Sync
    `run_command` returns inline output + a **non-pollable** `rc-<audit_id>` id;
-   durable `run_command_job` returns a **pollable UUID**. Disambiguation captured
-   here; description-text nicety deferred.
+   durable `run_command_job` returns a **pollable UUID**. Disambiguation is now
+   in this contract and in the live tool descriptions after redeploy.
 3. **`run_command` flex reachability + S-1 write-gap.** Deny floor solid live
    (`bash` blocked). **S-1 (evidence write-gap) closed for delete**: `rm evidence/…`
    blocked with a forensic-integrity message (K5 `assert_no_authority_write_target`
    + protected-dir guard). Single-command-string pipes are honored; AUT2 to stress
-   multi-stage pipelines. Minor: the `rm` denial wording tells the agent to leave
-   the harness (AUT1-B5).
+   multi-stage pipelines. The bad `rm` denial wording that told the agent to
+   leave the harness is fixed in the conductor pass (AUT1-B5).
 4. **`capability_guide` empty-result ambiguity.** Resolved: live empty result
    carries an explicit "expected default, not an error" note. Scored well.
 5. **`job_status` poll loop.** Resolved: terminal-state contract verified and now
    documented (see the `job_status` contract above). The malformed-id raw leak
    (AUT1-B3) is **fixed** (typed `invalid_job_id`).
-6. **AUT1-B1 (new, HIGH).** `case_info`/`evidence_info` evidence-chain is
+6. **AUT1-B5/B6 (LOW).** Evidence-delete handback wording and the
+   self-redacting `get_tool_help` stderr example are fixed in the conductor pass;
+   live re-verification awaits redeploy.
+7. **AUT1-B1 (new, HIGH).** `case_info`/`evidence_info` evidence-chain is
    file-backed and can contradict the DB-authority gate — see the AUT1 live-catalog
    note. Highest-impact autonomy defect; fix recommended, not yet applied.
 

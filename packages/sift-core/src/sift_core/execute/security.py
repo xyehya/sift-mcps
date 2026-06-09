@@ -220,7 +220,8 @@ def validate_rm_targets(args: list[str], *, base_dir: str | Path | None = None) 
     _RM_GUIDANCE = (
         " File deletion in case/evidence directories requires human action "
         "outside the AI session (forensic integrity control). "
-        "Exit Claude Code, run the rm command directly, then return."
+        "Ask the operator to remove or retire the evidence through the portal or "
+        "approved local evidence workflow; do not attempt a side-channel delete."
     )
     path_args = [a for a in args if not a.startswith("-")]
     for arg in path_args:
