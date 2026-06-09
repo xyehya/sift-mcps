@@ -1098,6 +1098,10 @@ Scope:
 
 Exact work:
 
+- 2026-06-09 live repair note: portal re-auth/MCP-token issuance blockers were
+  fixed and live-proven from the active VM service tree
+  `/home/sansforensics/sift-mcps-test`. Future rsync/restart checks must target
+  that tree unless the systemd unit is intentionally moved.
 - Re-run or simulate install/refresh paths for idempotency, environment
   rendering, service restart, Supabase connectivity, evidence root validation,
   OpenSearch reachability, pgvector corpus import, and worker readiness.

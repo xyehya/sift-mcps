@@ -157,8 +157,9 @@ def test_supabase_login_returns_must_reset_true_when_invited():
     assert data["must_reset"] is True
 
 
-def test_supabase_login_returns_must_reset_false_when_active():
+def test_supabase_login_returns_must_reset_false_when_active(tmp_path, monkeypatch):
     """POST /api/auth/login returns must_reset=false when principal.status=='active'."""
+    monkeypatch.setattr(routes_mod, "_PASSWORDS_DIR", tmp_path)
     fake_auth = FakeSupabaseAuthInvited(status="active")
     app = create_dashboard_v2_app(
         session_secret=_SECRET,
@@ -172,6 +173,7 @@ def test_supabase_login_returns_must_reset_false_when_active():
     data = resp.json()
     assert data["ok"] is True
     assert data["must_reset"] is False
+    assert (tmp_path / "alice.json").is_file()
 
 
 # ---------------------------------------------------------------------------

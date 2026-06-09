@@ -13,6 +13,64 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-09 - Live portal reauth and MCP issuance repaired
+
+Status: DONE
+
+Changed:
+
+- Diagnosed the live VM portal issue reported after AUT1/BATCH-INST1 prep:
+  Supabase login worked, but password/HMAC confirmation prompts returned 401
+  and the frontend treated those local re-auth failures as global session
+  expiry.
+- Hot-reset the VM-local local-HMAC reauth verifier to match the working
+  Supabase operator login, then fixed the code path so successful Supabase
+  login and forced password reset sync only a salted PBKDF2 verifier into the
+  local MVP reauth bridge.
+- Updated the portal frontend client so password/HMAC confirmation endpoints
+  surface their own errors without triggering a global logout.
+- Fixed portal evidence verify for DB-active cases:
+  - slash-bearing display paths are encoded client-side;
+  - the route uses DB evidence authority before legacy filesystem fallback;
+  - the injected DB evidence adapter is called with its keyword-only
+    `case_id` contract.
+- Corrected the live deployment target: the active user service runs from
+  `/home/sansforensics/sift-mcps-test`, not the stale sibling checkout.
+
+Live evidence:
+
+- `sift-gateway.service` restarted from the active tree and remained active.
+- Portal login, evidence-chain challenge, and HMAC verify returned HTTP 200.
+- Per-file evidence verify for `evidence/v1-gate.log` returned HTTP 200 with
+  `authority=db` and `status=verified`.
+- Fresh agent principal issuance through `/portal/api/auth/principals`
+  returned HTTP 201; returned token material was written only to VM-local
+  `~/.sift/` files with mode `600`.
+- MCP initialize and `tools/list` with the fresh token returned HTTP 200 and
+  all 13 demo-critical tools, including `rag_search_case` and
+  `run_command_job`.
+
+Validation:
+
+- `uv run pytest packages/case-dashboard/tests/test_e1_portal_db_authority.py
+  packages/case-dashboard/tests/test_a1_bootstrap.py
+  packages/case-dashboard/tests/test_pr03_supabase_portal_auth.py`:
+  `67 passed`.
+- Earlier in the repair branch:
+  `uv run pytest packages/case-dashboard/tests/test_a1_bootstrap.py
+  packages/case-dashboard/tests/test_pr03_supabase_portal_auth.py`:
+  `44 passed`.
+- Earlier in the repair branch:
+  `npm --prefix packages/case-dashboard/frontend test`: `86 passed`.
+- Earlier in the repair branch:
+  `npm --prefix packages/case-dashboard/frontend run build`: OK.
+
+Next:
+
+- Keep BATCH-INST1 open for full installer idempotency, VM refresh, ACL,
+  OpenSearch, RAG, and component hardening proof; this repair closes the
+  immediate live portal reauth and MCP-token issuance blockers.
+
 ### 2026-06-09 - BATCH-INST1 live operations guidance expanded
 
 Status: DONE

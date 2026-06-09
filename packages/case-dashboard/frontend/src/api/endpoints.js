@@ -1,5 +1,7 @@
 import { apiFetch, apiPost, apiPatch, apiDelete } from './client'
 
+const REAUTH_OPTS = { suppressUnauthorized: true }
+
 // --- Auth ---
 export const getSetupRequired = () => apiFetch('/api/auth/setup-required')
 export const postSetup = (body) => apiPost('/api/auth/setup', body)
@@ -22,7 +24,7 @@ export const deletePrincipal = (type, id) => apiDelete(`/api/auth/principals/${t
 export const getCases = () => apiFetch('/api/cases')
 export const postCaseCreate = (body) => apiPost('/api/case/create', body)
 export const getCaseActivateChallenge = () => apiFetch('/api/case/activate/challenge')
-export const postCaseActivate = (body) => apiPost('/api/case/activate', body)
+export const postCaseActivate = (body) => apiPost('/api/case/activate', body, REAUTH_OPTS)
 export const getCase = () => apiFetch('/api/case')
 export const postCaseMetadata = (body) => apiPost('/api/case/metadata', body)
 
@@ -44,23 +46,23 @@ export const getDelta = () => apiFetch('/api/delta')
 export const postDelta = (body) => apiPost('/api/delta', body)
 export const deleteDelta = (id) => apiDelete(`/api/delta/${id}`)
 export const getCommitChallenge = () => apiFetch('/api/commit/challenge')
-export const postCommit = (body) => apiPost('/api/commit', body)
+export const postCommit = (body) => apiPost('/api/commit', body, REAUTH_OPTS)
 
 // --- Evidence chain ---
 export const getChainStatus = () => apiFetch('/api/evidence/chain/status')
 export const postChainRescan = () => apiPost('/api/evidence/chain/rescan', {})
 export const getChainChallenge = () => apiFetch('/api/evidence/chain/challenge')
-export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body)
+export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body, REAUTH_OPTS)
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)
 export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body)
-export const postChainVerifyHmac = (body) => apiPost('/api/evidence/chain/verify-hmac', body)
-export const postVerifyEvidence = (path) => apiPost(`/api/evidence/${path}/verify`, {})
-export const postChainIgnore = (body) => apiPost('/api/evidence/chain/ignore', body)
-export const postChainRetire = (body) => apiPost('/api/evidence/chain/retire', body)
+export const postChainVerifyHmac = (body) => apiPost('/api/evidence/chain/verify-hmac', body, REAUTH_OPTS)
+export const postVerifyEvidence = (path) => apiPost(`/api/evidence/${encodeURIComponent(path)}/verify`, {})
+export const postChainIgnore = (body) => apiPost('/api/evidence/chain/ignore', body, REAUTH_OPTS)
+export const postChainRetire = (body) => apiPost('/api/evidence/chain/retire', body, REAUTH_OPTS)
 
 // --- Response guard ---
 export const getResponseGuardStatus = () => apiFetch('/api/response-guard/status')
-export const postResponseGuardOverride = () => apiPost('/api/response-guard/override', {})
+export const postResponseGuardOverride = (body = {}) => apiPost('/api/response-guard/override', body, REAUTH_OPTS)
 export const postResponseGuardOverrideCancel = () => apiPost('/api/response-guard/override/cancel', {})
 
 // --- Agent tokens ---
@@ -73,7 +75,7 @@ export const postReactivateToken = (id) => apiPost(`/api/tokens/${id}/reactivate
 // --- Reports ---
 export const getReports = () => apiFetch('/api/reports')
 export const getReportChallenge = () => apiFetch('/api/reports/challenge')
-export const postReportGenerate = (body) => apiPost('/api/reports/generate', body)
+export const postReportGenerate = (body) => apiPost('/api/reports/generate', body, REAUTH_OPTS)
 export const postReportSave = (id) => apiPost(`/api/reports/${id}/save`, {})
 export const getReport = (id) => apiFetch(`/api/reports/${id}`)
 export const downloadReport = (id) => apiFetch(`/api/reports/${id}/download`)

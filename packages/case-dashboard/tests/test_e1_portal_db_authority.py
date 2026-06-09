@@ -51,6 +51,7 @@ class FakeEvidenceDB:
         self.seal_calls = []
         self.ignore_calls = []
         self.retire_calls = []
+        self.verify_calls = []
 
     def record_reauth_event(self, *, case_id, actor, examiner, action):
         self.reauth_calls.append((case_id, examiner, action))
@@ -81,6 +82,10 @@ class FakeEvidenceDB:
 
     def custody_events(self, case_id):
         return [{"seq": 1, "event_type": "MANIFEST_SEALED"}]
+
+    def verify(self, *, case_id, actor=None):
+        self.verify_calls.append((case_id, actor))
+        return {"verified": True, "issues": []}
 
     def seal(self, *, case_id, file_specs, reauth_audit_event_id, actor, examiner):
         assert reauth_audit_event_id, "seal must receive a re-auth audit event id"
@@ -216,6 +221,19 @@ class TestEvidenceDBAuthority:
         assert items[0]["path"] == "evidence/disk.E01"
         # No absolute path leaks.
         assert not items[0]["path"].startswith("/")
+
+    def test_verify_evidence_uses_db_authority(self):
+        ev = FakeEvidenceDB()
+        c = _examiner(_make_client(evidence_service=ev))
+        resp = c.post("/api/evidence/evidence%2Fdisk.E01/verify", json={})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["authority"] == "db"
+        assert body["path"] == "evidence/disk.E01"
+        assert body["status"] == "verified"
+        assert ev.verify_calls == [
+            ("11111111-1111-1111-1111-111111111111", None)
+        ]
 
     def test_seal_passes_reauth_event_id(self, monkeypatch):
         ev = FakeEvidenceDB()

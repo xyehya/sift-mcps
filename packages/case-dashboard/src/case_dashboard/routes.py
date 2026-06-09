@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 import yaml
 from sift_core.approval_auth import (
@@ -2610,6 +2611,42 @@ def _write_todos(case_dir: Path, todos: list) -> JSONResponse | None:
     return None
 
 
+def _sync_local_reauth_password(examiner: str | None, password: str) -> None:
+    """Keep the MVP local HMAC reauth bridge aligned with Supabase login.
+
+    Supabase is the login authority, but evidence seal/verify, review commit,
+    report inclusion, and response-guard override still use the local PBKDF2
+    challenge bridge in this MVP. Store only the salted verifier, never the raw
+    password, so the same operator password works for both login and reauth.
+    """
+    if not examiner or not password:
+        return
+    salt = secrets.token_bytes(32)
+    pw_hash = hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), salt, 600_000
+    ).hex()
+    existing = _load_pw_entry(_PASSWORDS_DIR, examiner) or {}
+    entry = {
+        **existing,
+        "hash": pw_hash,
+        "salt": salt.hex(),
+        "must_reset_password": False,
+        "role": existing.get("role", "examiner"),
+    }
+    _save_pw_entry(_PASSWORDS_DIR, examiner, entry)
+
+
+def _principal_examiner_name(principal: dict) -> str | None:
+    """Return the local examiner name used by legacy HMAC reauth files."""
+    if not isinstance(principal, dict) or principal.get("principal_type") != "operator":
+        return None
+    return (
+        principal.get("display_name")
+        or principal.get("email")
+        or principal.get("principal_id")
+    )
+
+
 async def _read_todo_body(request: Request) -> tuple[dict | None, JSONResponse | None]:
     """Size-check, read and JSON-parse a todo request body into a dict."""
     content_length = request.headers.get("content-length")
@@ -3137,10 +3174,6 @@ async def verify_evidence(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    case_dir = _resolve_case_dir()
-    if not case_dir:
-        return _no_case_response()
-
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
@@ -3148,7 +3181,49 @@ async def verify_evidence(request: Request) -> JSONResponse:
     if err:
         return err
 
-    req_path = request.path_params["path"]
+    req_path = unquote(request.path_params["path"])
+
+    if _EVIDENCE_DB is not None:
+        case_id = _active_case_id()
+        verifier = getattr(_EVIDENCE_DB, "verify", None)
+        lister = getattr(_EVIDENCE_DB, "list_evidence", None)
+        if case_id and callable(verifier) and callable(lister):
+            try:
+                registered = lister(case_id)
+                known = {
+                    str(item.get("display_path") or item.get("path") or "")
+                    for item in registered
+                    if isinstance(item, dict)
+                }
+                if req_path not in known:
+                    return JSONResponse(
+                        {"error": f"Not in evidence registry: {req_path}"},
+                        status_code=404,
+                    )
+                result = verifier(case_id=case_id, actor=_request_principal(request))
+            except Exception as exc:
+                logger.warning("DB evidence verify failed: %s", type(exc).__name__)
+                return JSONResponse(
+                    {"error": "Evidence verification failed — check gateway logs"},
+                    status_code=500,
+                )
+            issues = result.get("issues") if isinstance(result, dict) else []
+            issue_list = issues if isinstance(issues, list) else []
+            matching_issues = [str(issue) for issue in issue_list if req_path in str(issue)]
+            verified = bool(result.get("verified")) if isinstance(result, dict) else False
+            status = "failed" if matching_issues or not verified else "verified"
+            return JSONResponse(
+                {
+                    "path": req_path,
+                    "status": status,
+                    "issues": matching_issues,
+                    "authority": "db",
+                }
+            )
+
+    case_dir = _resolve_case_dir()
+    if not case_dir:
+        return _no_case_response()
 
     # Look up in evidence registry — the registry is the source of truth
     raw_ev = _load_json(case_dir / "evidence.json")
@@ -3166,10 +3241,10 @@ async def verify_evidence(request: Request) -> JSONResponse:
         )
 
     stored_hash = entry.get("sha256", "")
-    file_path = Path(entry["path"])
+    file_path = (case_dir / entry["path"]).resolve()
 
     # Path traversal protection on the registered path
-    if ".." in str(file_path):
+    if ".." in str(entry["path"]) or not file_path.is_relative_to(case_dir):
         return JSONResponse({"error": "Invalid path"}, status_code=400)
 
     if not file_path.is_file():
@@ -3591,6 +3666,11 @@ async def post_supabase_login(request: Request) -> JSONResponse:
     # screen before allowing any other action. Token material is not in the body.
     principal_status = principal.get("status", "active")
     must_reset = principal_status == "invited"
+    if not must_reset:
+        try:
+            _sync_local_reauth_password(_principal_examiner_name(principal), password)
+        except OSError as exc:
+            logger.warning("local reauth password sync failed: %s", type(exc).__name__)
 
     resp = JSONResponse({
         "ok": True,
@@ -3710,6 +3790,14 @@ async def post_supabase_forced_reset(request: Request) -> JSONResponse:
         reason = getattr(exc, "reason", None)
         msg = reason if isinstance(reason, str) and reason else "Forced reset failed"
         return JSONResponse({"error": msg}, status_code=status)
+
+    principal = getattr(request.state, "principal", None)
+    try:
+        _sync_local_reauth_password(
+            _principal_examiner_name(principal or {}), new_password
+        )
+    except OSError as exc:
+        logger.warning("local reauth password sync failed after forced reset: %s", type(exc).__name__)
 
     return JSONResponse({"ok": True, "must_reset": False})
 
