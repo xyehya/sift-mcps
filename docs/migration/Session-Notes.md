@@ -13,6 +13,32 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-09 - Conductor live-sync rule hardened
+
+Status: DONE
+
+Changed:
+
+- Expanded `Conductor.md` so live-impacting fixes must be synced by the
+  conductor to the active VM service tree, followed by Gateway/worker restart,
+  health proof, and a targeted live smoke before session closeout.
+- Added copy-paste host-to-VM rsync, dependency refresh, service restart,
+  health/log check, portal login/HMAC smoke, fresh agent-principal issuance,
+  and MCP initialize/tools-list proof commands.
+- Preserved the operational rule that large VM downloads/corpora are not
+  removed by routine sync: the standard rsync command excludes local state and
+  does not use `--delete`.
+- Kept raw passwords, tokens, DSNs, service-role keys, OpenSearch credentials,
+  and private keys out of tracked docs; the runbook uses local environment
+  variables and VM-local secret files.
+
+Validation:
+
+- `python3 scripts/validate_docs.py`: OK.
+- `python3 scripts/validate_migration_docs.py`: OK.
+- `git diff --check`: clean.
+- Secret-shape scan over touched docs: no matches.
+
 ### 2026-06-09 - Live portal reauth and MCP issuance repaired
 
 Status: DONE

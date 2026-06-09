@@ -1,7 +1,7 @@
 # SIFT Conductor Handoff
 
 Status: active conductor handoff.
-Last updated: 2026-06-09 after BATCH-AUT1 integration.
+Last updated: 2026-06-09 after live portal/MCP repair and VM sync hardening.
 Root repo: `/home/yk/AI/SIFTHACK/sift-mcps`
 Primary branch: `revamp/spg-v1`
 
@@ -162,6 +162,35 @@ AUT1 readiness decision:
 4. Launch BATCH-AUT2 only when the agent can investigate the selected demo case
    through MCP alone, without hidden curl/shell/DB/OpenSearch side channels.
 
+## Mandatory Live Sync Rule
+
+For any fix that can affect live portal, Gateway, worker, MCP, installer,
+OpenSearch, RAG, or evidence behavior, the conductor owns deployment. Do not end
+the session with "user must sync manually" as the next step.
+
+Required closeout after each live-impacting fix:
+
+1. Sync the root repo to the active VM service tree.
+2. Refresh dependencies only when source/dependency/setup changes require it.
+3. Restart `sift-gateway.service` and `sift-job-worker.service`.
+4. Prove both services are active and Gateway health is OK.
+5. Run the smallest live smoke that matches the fix: portal login/reauth,
+   per-file evidence verify, MCP initialize/tools list, RAG call, job poll, or
+   installer replay.
+6. Record sanitized results in `Session-Notes.md` when the live behavior or
+   operational procedure changed.
+
+The active systemd unit currently runs from
+`/home/sansforensics/sift-mcps-test`. Always verify the active tree before sync:
+
+```bash
+sshpass -e ssh -o StrictHostKeyChecking=no "${SIFT_VM}" \
+  "systemctl --user show -p WorkingDirectory --value sift-gateway.service"
+```
+
+Do not use the stale sibling checkout as source of truth for live service
+behavior.
+
 ## Live VM References
 
 Do not store raw secrets in this file.
@@ -192,6 +221,9 @@ Credential handling:
 
 - Put the VM SSH password in a local host environment variable only:
   `export SSHPASS='<test VM password from local secure channel>'`.
+- Put portal smoke credentials in local or VM shell variables only:
+  `export SIFT_PORTAL_EMAIL='<operator email>'` and
+  `export SIFT_PORTAL_PASSWORD='<operator password>'`.
 - Source service credentials only on the VM:
   `set -a; . ~/.sift/control-plane.env; set +a`.
 - Agent tokens, if needed for manual MCP client configuration, stay in
@@ -206,16 +238,22 @@ export SSHPASS='<set locally; do not commit>'
 export SIFT_VM='sansforensics@192.168.122.81'
 export SIFT_REMOTE_DIR='/home/sansforensics/sift-mcps-test'
 
-sshpass -e rsync -az --info=progress2 \
-  -e 'ssh -o StrictHostKeyChecking=no' \
+rsync -az --no-owner --no-group --info=progress2 \
+  -e 'sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' \
   --exclude '.git/' \
   --exclude '.venv/' \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   --exclude '.mcp.json' \
+  --exclude 'packages/case-dashboard/frontend/node_modules/' \
   /home/yk/AI/SIFTHACK/sift-mcps/ \
   "${SIFT_VM}:${SIFT_REMOTE_DIR}/"
 ```
+
+Do not add `--delete` during normal test/dev sync. The VM holds large downloaded
+forensic RAG packages, model/cache artifacts, and local diagnostic files that
+must not be removed by routine source deployment. Use an explicit reset plan
+only when the session is intentionally rebuilding the VM checkout.
 
 VM command wrapper:
 
@@ -247,6 +285,188 @@ journalctl --user -u sift-gateway.service -u sift-job-worker.service -n 120 --no
 
 If the Gateway catalog is stale after a backend, RAG, scope, or env change,
 restart the Gateway. MCP tool registration is startup-bound.
+
+Standard full sync/restart/health block from the host:
+
+```bash
+export SSHPASS='<set locally; do not commit>'
+export SIFT_VM='sansforensics@192.168.122.81'
+export SIFT_REMOTE_DIR='/home/sansforensics/sift-mcps-test'
+
+# If frontend source changed, build static assets before rsync.
+npm --prefix /home/yk/AI/SIFTHACK/sift-mcps/packages/case-dashboard/frontend run build
+
+rsync -az --no-owner --no-group --info=progress2 \
+  -e 'sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' \
+  --exclude '.git/' \
+  --exclude '.venv/' \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
+  --exclude '.mcp.json' \
+  --exclude 'packages/case-dashboard/frontend/node_modules/' \
+  /home/yk/AI/SIFTHACK/sift-mcps/ \
+  "${SIFT_VM}:${SIFT_REMOTE_DIR}/"
+
+sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "${SIFT_VM}" "
+set -euo pipefail
+cd '${SIFT_REMOTE_DIR}'
+export UV_NO_MANAGED_PYTHON=1
+export UV_PYTHON_DOWNLOADS=never
+python3 -m py_compile packages/case-dashboard/src/case_dashboard/routes.py
+systemctl --user daemon-reload
+systemctl --user restart sift-gateway.service sift-job-worker.service
+systemctl --user is-active sift-gateway.service sift-job-worker.service
+curl -sk https://127.0.0.1:4508/api/v1/health | python3 -m json.tool
+journalctl --user -u sift-gateway.service -u sift-job-worker.service \
+  --since '5 minutes ago' --no-pager |
+  grep -Ei 'ERROR|WARNING|Traceback|Exception|failed' || true
+"
+```
+
+Use dependency refresh before restart when Python dependencies, package entry
+points, install scripts, extras, lockfiles, or generated package metadata
+changed. Keep VM Python pinned and avoid managed downloads:
+
+```bash
+sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "${SIFT_VM}" "
+set -euo pipefail
+cd '${SIFT_REMOTE_DIR}'
+export UV_NO_MANAGED_PYTHON=1
+export UV_PYTHON_DOWNLOADS=never
+~/.local/bin/uv sync --extra full --group dev \
+  --python /usr/bin/python3.12 \
+  --no-managed-python \
+  --no-python-downloads
+"
+```
+
+If proxy downloads are needed later and `uv sync` removed SOCKS helpers, restore
+them in the VM venv without deleting downloaded packages:
+
+```bash
+sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "${SIFT_VM}" "
+cd '${SIFT_REMOTE_DIR}'
+~/.local/bin/uv pip install --python .venv/bin/python PySocks socksio
+"
+```
+
+Portal login + HMAC confirmation smoke from the host:
+
+```bash
+export SIFT_PORTAL_EMAIL='<operator email>'
+export SIFT_PORTAL_PASSWORD='<operator password>'
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+curl -sk --max-time 8 -c "$tmp/cj" -o "$tmp/login.json" \
+  -H 'Content-Type: application/json' \
+  --data "$(python3 - <<'PY'
+import json, os
+print(json.dumps({
+  "email": os.environ["SIFT_PORTAL_EMAIL"],
+  "password": os.environ["SIFT_PORTAL_PASSWORD"],
+}))
+PY
+)" \
+  https://192.168.122.81:4508/portal/api/auth/login
+curl -sk --max-time 8 -b "$tmp/cj" -o "$tmp/challenge.json" \
+  https://192.168.122.81:4508/portal/api/evidence/chain/challenge
+python3 - "$tmp/challenge.json" "$tmp/body.json" <<'PY'
+import hashlib, hmac, json, os, sys
+challenge = json.load(open(sys.argv[1]))
+derived = hashlib.pbkdf2_hmac(
+    "sha256",
+    os.environ["SIFT_PORTAL_PASSWORD"].encode(),
+    bytes.fromhex(challenge["salt"]),
+    int(challenge["iterations"]),
+).hex()
+response = hmac.new(bytes.fromhex(derived), challenge["nonce"].encode(), "sha256").hexdigest()
+json.dump({"challenge_id": challenge["challenge_id"], "response": response}, open(sys.argv[2], "w"))
+PY
+curl -sk --max-time 20 -b "$tmp/cj" \
+  -H 'Content-Type: application/json' \
+  --data @"$tmp/body.json" \
+  https://192.168.122.81:4508/portal/api/evidence/chain/verify-hmac |
+  python3 -m json.tool
+```
+
+Fresh agent principal + MCP catalog smoke from the VM. This stores token
+material only in VM-local `~/.sift` files:
+
+```bash
+sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "${SIFT_VM}" "
+set -euo pipefail
+tmp=\$(mktemp -d)
+trap 'rm -rf \"\$tmp\"' EXIT
+umask 077
+label=\"codex-live-\$(date -u +%m%d%H%M%S)\"
+curl -sk --max-time 8 -c \"\$tmp/cj\" -o \"\$tmp/login.json\" \
+  -H 'Content-Type: application/json' \
+  --data \"{\\\"email\\\":\\\"\${SIFT_PORTAL_EMAIL:?}\\\",\\\"password\\\":\\\"\${SIFT_PORTAL_PASSWORD:?}\\\"}\" \
+  https://127.0.0.1:4508/portal/api/auth/login
+python3 - \"\$label\" \"\$tmp/body.json\" <<'PY'
+import json, sys
+json.dump({\"kind\":\"agent\",\"display_name\":sys.argv[1],\"tool_scopes\":[\"mcp:*\"]}, open(sys.argv[2], \"w\"))
+PY
+curl -sk --max-time 20 -b \"\$tmp/cj\" -o \"\$tmp/principal.json\" \
+  -H 'Content-Type: application/json' \
+  --data @\"\$tmp/body.json\" \
+  https://127.0.0.1:4508/portal/api/auth/principals
+python3 - \"\$tmp/principal.json\" <<'PY'
+import json, os
+data=json.load(open(__import__('sys').argv[1]))
+os.makedirs(os.path.expanduser('~/.sift'), exist_ok=True)
+json.dump(data, open(os.path.expanduser('~/.sift/codex-agent-session.json'), 'w'), indent=2)
+open(os.path.expanduser('~/.sift/agent-token.txt'), 'w').write(str(data.get('access_token') or ''))
+os.chmod(os.path.expanduser('~/.sift/codex-agent-session.json'), 0o600)
+os.chmod(os.path.expanduser('~/.sift/agent-token.txt'), 0o600)
+print({k:data.get(k) for k in ['ok','principal_type','principal_id','display_name','default_case_id','expires_at']})
+PY
+"
+```
+
+Then prove the fresh token can initialize MCP and see the demo-critical catalog:
+
+```bash
+sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  "${SIFT_VM}" "
+set -euo pipefail
+tmp=\$(mktemp -d)
+trap 'rm -rf \"\$tmp\"' EXIT
+tok=\$(cat ~/.sift/agent-token.txt)
+init=\$(curl -sk --max-time 10 -D \"\$tmp/h\" -o \"\$tmp/init.json\" \
+  -w '%{http_code}' \
+  -H \"Authorization: Bearer \$tok\" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"sift-live-check\",\"version\":\"1\"}}}' \
+  https://127.0.0.1:4508/mcp/)
+sid=\$(awk 'tolower(\$1)==\"mcp-session-id:\" {print \$2}' \"\$tmp/h\" | tr -d '\r' | tail -1)
+list=\$(curl -sk --max-time 10 -o \"\$tmp/list.json\" -w '%{http_code}' \
+  -H \"Authorization: Bearer \$tok\" \
+  -H \"mcp-session-id: \$sid\" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  --data '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}' \
+  https://127.0.0.1:4508/mcp/)
+printf 'initialize_http=%s\ntools_list_http=%s\n' \"\$init\" \"\$list\"
+python3 - \"\$tmp/list.json\" <<'PY'
+import json, sys
+raw = open(sys.argv[1]).read()
+if raw.startswith('event:'):
+    raw = '\n'.join(line[5:].strip() for line in raw.splitlines() if line.startswith('data:'))
+obj = json.loads(raw)
+tools = obj.get('result', {}).get('tools', [])
+names = [tool.get('name') for tool in tools]
+print({'tools_count': len(names), 'has_rag_search_case': 'rag_search_case' in names, 'has_run_command_job': 'run_command_job' in names})
+print(names)
+PY
+"
+```
 
 Installer/setup QA:
 
