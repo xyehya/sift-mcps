@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastmcp.tools import ToolResult
+from mcp.types import TextContent
 from sift_core.evidence_chain import ChainStatus
 
 from sift_gateway.active_case import ActiveCase
@@ -75,6 +78,30 @@ class _EvidenceService:
             "display_path": "evidence/disk.E01",
             "path": self.case_dir / "evidence" / "disk.E01",
         }
+
+    def list_evidence(self, case_id):
+        return [
+            {
+                "evidence_id": "ev-1",
+                "display_name": "disk.E01",
+                "display_path": "evidence/disk.E01",
+                "description": "fixture disk",
+                "source": "fixture",
+                "status": "sealed",
+                "seal_status": "sealed",
+                "current_sha256": "0" * 64,
+                "current_bytes": 4,
+                "sealed_at": "2026-06-09T00:00:00Z",
+                "path": str(self.case_dir / "evidence" / "disk.E01"),
+            },
+            {
+                "evidence_id": "ev-2",
+                "display_name": "pending.raw",
+                "display_path": "evidence/pending.raw",
+                "status": "registered",
+                "seal_status": "unsealed",
+            },
+        ]
 
 
 class _Gateway:
@@ -151,8 +178,17 @@ def test_run_command_job_enqueues_public_args_and_internal_case_dir(tmp_path):
     assert body["job_id"] == "job-1"
     call = gateway.job_service.enqueued[0]
     assert call["job_type"] == "run_command"
+    assert call["evidence_id"] == "ev-1"
     assert call["spec_public"]["evidence_refs"] == ["evidence/disk.E01"]
     assert call["spec_internal"]["case_dir"] == str(case_dir)
+    assert call["spec_internal"]["resolved_evidence_refs"] == [
+        {
+            "ref": "evidence/disk.E01",
+            "evidence_id": "ev-1",
+            "display_path": "evidence/disk.E01",
+            "path": str(case_dir / "evidence" / "disk.E01"),
+        }
+    ]
     assert "case_dir" not in json.dumps(body)
 
 
@@ -245,6 +281,30 @@ async def test_gateway_mcp_run_command_job_invokes_gateway_bound_handler(tmp_pat
     assert gateway.job_service.enqueued[0]["job_type"] == "run_command"
 
 
+async def test_case_context_middleware_appends_only_to_orientation_tools(tmp_path):
+    from sift_gateway.policy_middleware import CaseContextMiddleware
+
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    gateway = _Gateway(case_dir)
+    middleware = CaseContextMiddleware(gateway)
+
+    async def call_next(_context):
+        return ToolResult(content=[TextContent(type="text", text='{"ok": true}')])
+
+    async def call_tool_name(name: str):
+        context = SimpleNamespace(message=SimpleNamespace(name=name, arguments={}))
+        return await middleware.on_call_tool(context, call_next)
+
+    help_result = await call_tool_name("get_tool_help")
+    guide_result = await call_tool_name("capability_guide")
+
+    help_text = "\n".join(item.text for item in help_result.content)
+    guide_text = "\n".join(item.text for item in guide_result.content)
+    assert '"case_context"' not in help_text
+    assert '"case_context"' in guide_text
+
+
 # --- AUT1-B1: DB-authority evidence-gate overlay on orientation tools ---
 
 _FILE_BACKED_CASE_INFO = json.dumps(
@@ -325,6 +385,64 @@ def test_overlay_evidence_info_reflects_db_sealed_gate(tmp_path):
     assert out["requires_examiner_action"] is False
     assert out["manifest_version"] == 2
     assert out["authority"] == "db"
+
+
+def test_overlay_evidence_info_lists_db_evidence_without_paths(tmp_path):
+    from sift_gateway import mcp_server
+
+    gateway = _Gateway(tmp_path / "case")
+    gateway.control_plane_dsn = "postgresql://x"
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(tmp_path / "case"),
+    ), patch(
+        "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
+    ):
+        out = json.loads(
+            mcp_server._overlay_db_evidence_gate(
+                gateway, "evidence_info", _FILE_BACKED_EVIDENCE_INFO
+            )
+        )
+
+    assert out["listing_authority"] == "db"
+    assert out["total_evidence_files"] == 1
+    assert out["unregistered_files"] == ["evidence/pending.raw"]
+    listed = out["evidence_files"][0]
+    assert listed["evidence_id"] == "ev-1"
+    assert listed["display_path"] == "evidence/disk.E01"
+    assert listed["sha256"] == "0" * 64
+    assert "path" not in listed
+
+
+def test_prepare_run_command_args_resolves_db_refs_and_strips_private(tmp_path):
+    from sift_gateway import mcp_server
+
+    case_dir = tmp_path / "case"
+    gateway = _Gateway(case_dir)
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(case_dir),
+    ):
+        prepared = mcp_server._prepare_core_tool_arguments(
+            gateway,
+            "run_command",
+            {
+                "command": "cat evidence/disk.E01",
+                "purpose": "hash DB ref",
+                "evidence_refs": ["ev-1"],
+                "_resolved_evidence_refs": [{"path": "/tmp/client-controlled"}],
+            },
+        )
+
+    assert prepared["_resolved_evidence_refs"] == [
+        {
+            "ref": "ev-1",
+            "evidence_id": "ev-1",
+            "display_path": "evidence/disk.E01",
+            "path": str(case_dir / "evidence" / "disk.E01"),
+        }
+    ]
+    assert "_evidence_ref_error" not in prepared
 
 
 def test_overlay_blocks_when_db_gate_violated(tmp_path):

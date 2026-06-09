@@ -79,6 +79,8 @@ _NO_INPUT_CMDS = {
     "dmesg",
     "printenv",
 }
+_INTERNAL_RESOLVED_EVIDENCE_REFS = "_resolved_evidence_refs"
+_INTERNAL_EVIDENCE_REF_ERROR = "_evidence_ref_error"
 
 
 def _schema(properties: dict[str, Any] | None = None, required: list[str] | None = None) -> dict:
@@ -326,6 +328,54 @@ def _coerce_run_command(command: Any) -> tuple[str | None, str | None]:
     return None, "command must be a string or an array of strings"
 
 
+def _trusted_internal_evidence_refs(
+    refs: Any, *, case_root: str
+) -> tuple[list[str], list[str]]:
+    """Return internal evidence paths + public refs injected by the Gateway.
+
+    This path closes the DB/file-manifest mismatch for Gateway calls while
+    keeping direct/core legacy behavior unchanged. The Gateway strips any
+    client-supplied private fields before injecting these values; core still
+    requires a DB-active AuthorityContext and validates containment as defense
+    in depth.
+    """
+    if not refs:
+        return [], []
+    try:
+        from sift_core.active_case_context import current_active_case
+
+        ctx = current_active_case()
+    except ImportError:  # pragma: no cover
+        ctx = None
+    if ctx is None or not getattr(ctx, "db_active", False):
+        raise ValueError("internal evidence refs require DB authority context")
+    if not isinstance(refs, list):
+        raise ValueError("internal evidence refs must be an array")
+
+    case_resolved = Path(case_root).resolve()
+    paths: list[str] = []
+    public_refs: list[str] = []
+    for item in refs:
+        if not isinstance(item, dict):
+            raise ValueError("internal evidence ref entries must be objects")
+        path_text = str(item.get("path") or "")
+        if not path_text:
+            raise ValueError("internal evidence ref missing path")
+        path = Path(path_text).resolve()
+        if not path.is_relative_to(case_resolved) or not path.is_file():
+            raise ValueError("internal evidence ref is unavailable")
+        paths.append(str(path))
+        public_refs.append(
+            str(
+                item.get("evidence_id")
+                or item.get("display_path")
+                or item.get("ref")
+                or ""
+            )
+        )
+    return paths, [ref for ref in public_refs if ref]
+
+
 # platform_capabilities is built declaration-driven in
 # sift_core.case_manager.build_platform_capabilities (sourced from the
 # gateway's registered+available backends, not installed packages).
@@ -563,7 +613,18 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
     # provenance hashing and never echo it back. Fail closed if a ref does not
     # match an ACTIVE sealed manifest entry.
     evidence_refs = args.get("evidence_refs") or None
+    evidence_ref_error = args.get(_INTERNAL_EVIDENCE_REF_ERROR)
+    if evidence_ref_error:
+        return build_response(
+            tool_name="run_command",
+            success=False,
+            data=None,
+            audit_id=audit_id,
+            error=str(evidence_ref_error),
+            examiner=examiner,
+        )
     resolved_evidence_paths: list[str] = []
+    public_evidence_refs: list[str] = []
     if evidence_refs:
         if not isinstance(evidence_refs, list):
             return build_response(
@@ -574,20 +635,38 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                 error="evidence_refs must be an array of strings",
                 examiner=examiner,
             )
-        for ref in evidence_refs:
-            try:
-                resolved_evidence_paths.append(
-                    resolve_evidence_ref(str(ref), case_dir=case_root)
-                )
-            except EvidenceRefError as exc:
-                return build_response(
-                    tool_name="run_command",
-                    success=False,
-                    data=None,
-                    audit_id=audit_id,
-                    error=str(exc),
-                    examiner=examiner,
-                )
+        try:
+            resolved_evidence_paths, public_evidence_refs = _trusted_internal_evidence_refs(
+                args.get(_INTERNAL_RESOLVED_EVIDENCE_REFS), case_root=case_root
+            )
+        except ValueError as exc:
+            return build_response(
+                tool_name="run_command",
+                success=False,
+                data=None,
+                audit_id=audit_id,
+                error=str(exc),
+                examiner=examiner,
+            )
+        if resolved_evidence_paths:
+            if not public_evidence_refs:
+                public_evidence_refs = [str(ref) for ref in evidence_refs]
+        else:
+            public_evidence_refs = [str(ref) for ref in evidence_refs]
+            for ref in evidence_refs:
+                try:
+                    resolved_evidence_paths.append(
+                        resolve_evidence_ref(str(ref), case_dir=case_root)
+                    )
+                except EvidenceRefError as exc:
+                    return build_response(
+                        tool_name="run_command",
+                        success=False,
+                        data=None,
+                        audit_id=audit_id,
+                        error=str(exc),
+                        examiner=examiner,
+                    )
 
     # Output ref (BATCH-I1): a logical name the agent picks; we choose the real
     # writable location under agent/run_commands/ and return it as a relative ref.
@@ -767,7 +846,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             "audit_id": audit_id,
             "input_sha256s": sorted(set(input_hashes.values())) if input_hashes else [],
             "input_count": len(input_hashes),
-            "evidence_refs": list(evidence_refs) if evidence_refs else [],
+            "evidence_refs": public_evidence_refs if evidence_refs else [],
         }
         if output_sha256:
             provenance["output_sha256"] = output_sha256

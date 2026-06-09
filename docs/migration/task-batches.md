@@ -1,7 +1,7 @@
 # Task Batches
 
 Status: MVP sprint execution tracker.
-Last updated: 2026-06-09.
+Last updated: 2026-06-10.
 
 Rules:
 
@@ -1260,6 +1260,28 @@ Result (2026-06-09):
   trail instead of DB audit authority, Volatility cannot start due cache-path
   permissions, EWF/TSK probing is not yet usable for this image, and summary
   counters/listing fields still have file-mirror residuals.
+
+Remediation result (2026-06-10):
+
+- Status: **DONE as AUT2 remediation; FRZ1 still not complete**.
+- Fresh agent credential TTL was corrected to about 48 hours by setting the
+  live self-hosted Supabase Auth expiry to `172800` seconds.
+- `evidence_info` now lists DB-authoritative sealed evidence objects instead of
+  the stale file manifest list.
+- `run_command` and `run_command_job` now resolve `evidence_refs` through DB
+  evidence authority in Gateway/worker paths, while still rejecting
+  client-supplied private resolver fields outside a DB-active context.
+- `run_command` saved outputs and durable job receipts now return reusable
+  relative `agent/run_commands/...` refs, including caller-provided logical
+  `output_ref` names.
+- Non-orientation MCP tool responses no longer repeat the active-case context
+  block; `case_info`, `evidence_info`, and `capability_guide` retain it for
+  orientation.
+- AUT2 remediation score: **17/24**.
+- Carried to BATCH-FRZ1 / next implementation pass: `.e01`/`.raw` ingest,
+  DB-audit-backed `record_finding` artifact provenance, Volatility cache
+  execution, reliable EWF triage, stale `case_info` counters, and an
+  agent-facing installed-DFIR-tool inventory.
 
 ## BATCH-FRZ1 - Final freeze rehearsal, limitations, and demo runbook
 

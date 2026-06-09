@@ -34,6 +34,9 @@ def run_command_job_handler(job: ClaimedJob, ctx: JobContext) -> JobResult:
     if not case_dir:
         raise FatalJobError("run_command job missing worker case path")
     args = dict(job.spec_public or {})
+    resolved_refs = job.spec_internal.get("resolved_evidence_refs")
+    if resolved_refs:
+        args["_resolved_evidence_refs"] = resolved_refs
     examiner = str(job.spec_internal.get("examiner") or "agent")
     audit = AuditWriter(mcp_name="sift-core-run-command-job")
     ctx.record_step(0, "run_command", status="running")
@@ -42,6 +45,7 @@ def run_command_job_handler(job: ClaimedJob, ctx: JobContext) -> JobResult:
         case_key=case_key or str(job.case_id),
         artifact_path=case_dir,
         membership_role=None,
+        db_active=True,
     )
     with use_active_case_context(context):
         result = _run_command(args, examiner, audit)

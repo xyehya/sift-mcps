@@ -1,7 +1,8 @@
 # Demo Runbook
 
-Status: rehearsal draft with AUT2 caveats. Validation owner: BATCH-FRZ1.
-Last updated: 2026-06-09.
+Status: rehearsal draft with AUT2 remediation caveats. Validation owner:
+BATCH-FRZ1.
+Last updated: 2026-06-10.
 
 ## Purpose
 
@@ -19,8 +20,9 @@ keys, OpenSearch credentials, or local VM secrets.
 5. Operator approves findings.
 6. Report export includes approved findings and custody/provenance proof.
 
-AUT2 proved this narrative for the controlled smoke/custody path, not for full
-Rocba disk+memory analysis. The final demo should say that boundary plainly.
+AUT2 plus the 2026-06-10 remediation pass proved this narrative for the
+controlled smoke/custody path, not for full Rocba disk+memory analysis. The
+final demo should say that boundary plainly.
 
 ## AUT2 Live Readiness
 
@@ -39,6 +41,11 @@ Use the prepared demo case; do not recreate it for the final rehearsal:
 - Portal approval/report smoke: one finding approved with DB authority; report
   `1ff91996-5666-4b36-9568-c701f5204c24` generated, saved, downloaded, and
   quick secret-shape scan clean.
+- AUT2 remediation smoke: fresh agent credential TTL about 48 hours; DB-backed
+  `evidence_info` lists all four sealed evidence objects; `run_command` and
+  `run_command_job` resolve DB evidence refs and return reusable
+  `agent/run_commands/...` saved-output refs; `rag_search_case` returns
+  `status=ok`.
 
 ## Demo Script Boundary
 
@@ -59,10 +66,11 @@ Demo-safe investigative path:
 1. Operator shows the prepared sealed case and DB gate OK.
 2. Operator issues a fresh scoped agent principal through the portal.
 3. Agent calls `case_info`, `evidence_info`, and `capability_guide`.
-4. Agent confirms evidence by `run_command "ls evidence"` because
-   `evidence_info.evidence_files` can still be empty under DB authority.
+4. Agent confirms sealed evidence through DB-backed `evidence_info`; use
+   `run_command "ls evidence"` only as an optional sanity check, not as the
+   primary evidence inventory.
 5. Agent runs the smoke ingest/search/RAG path and reads `v1-gate.log` /
-   `v1-ingest.jsonl` through MCP.
+   `v1-ingest.jsonl` through MCP using `evidence_refs` where applicable.
 6. Agent stages the limited suspicious PowerShell finding/timeline/TODO.
 7. Operator reviews and approves in the portal.
 8. Operator generates/saves/downloads the findings report and runs the leak
@@ -86,12 +94,12 @@ Demo-safe investigative path:
 - Security caveats are documented.
 - AUT2 caveats are presented before any primary-image investigation claim.
 
-## AUT2 Caveats for BATCH-FRZ1
+## AUT2 Remediation Caveats for BATCH-FRZ1
 
 - `ingest_job` does not ingest `.e01` or `.raw` single evidence files; it failed
   cleanly on both Rocba primary images.
-- `run_command.evidence_refs` still reports no sealed evidence on the DB-sealed
-  case; `input_files` worked only as a degraded smoke workaround.
+- `run_command.evidence_refs` is fixed for Gateway/worker paths and live-proven
+  against `v1-gate.log` and `Rocba-Memory.raw`; keep this in the final smoke.
 - `record_finding` rejected a fresh `run_command` audit id for artifacts because
   its validation still checks the local JSONL audit trail, not DB audit
   authority. The AUT2 finding was approved for report smoke, but provenance was
@@ -100,13 +108,17 @@ Demo-safe investigative path:
   policy currently blocks the attempted env/cache-directory workarounds.
 - EWF disk triage is not demo-ready: `mmls` returned exit 1 without useful
   stderr, and a piped `fls | head` masked the upstream failure.
-- Summary/listing residuals remain: `evidence_info.evidence_files` can be empty
-  even when DB gate is OK, and `case_info` counters can lag behind DB-backed
-  finding/report state.
-- Large binary grep previews can create context bloat, and response redaction
-  produced benign false positives on URL-like strings/headings.
+- Summary residuals remain: `evidence_info.evidence_files` is now DB-backed,
+  but `case_info` counters can lag behind DB-backed finding/report state.
+- Large binary grep previews can still create context bloat. Saved output refs
+  are now reusable, so the demo should prefer `save_output=true` plus
+  follow-up filtering over large inline previews.
+- `rg` is not installed on the active VM; installed `grep` works against
+  DB-sealed memory evidence. A first-class installed-DFIR-tool inventory remains
+  a next-phase improvement.
 
 ## Final Prompt Slot
 
 BATCH-FRZ1 should replace this section with the exact demo run prompt after the
-autonomy benchmark and final freeze rehearsal pass.
+remaining primary-image, provenance, Volatility/EWF, counter, and tool-inventory
+caveats are either fixed or intentionally bounded for the final rehearsal.

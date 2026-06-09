@@ -2,7 +2,7 @@
 
 Status: product-journey draft (BATCH-PDOC1). Validation owners: BATCH-AUT1 and
 BATCH-AUT2.
-Last updated: 2026-06-09.
+Last updated: 2026-06-10.
 
 This is the **product-journey draft** of the MCP-only autonomous DFIR workflow.
 It describes what the agent sees, what it can and cannot do, where the evidence
@@ -11,10 +11,11 @@ and the BATCH-V1 cutover evidence. It intentionally does **not** pre-empt the
 BATCH-AUT1 autonomy scorecard in `agent-autonomy-assessment.md` — AUT1 owns the
 scoring; this file owns the narrative.
 
-AUT2 update: the full demo-case benchmark is complete. The journey below is
-valid for a controlled smoke/custody demo. It is not yet valid as a claim that
-the agent can complete full Rocba disk+memory analysis through MCP alone; see
-the AUT2 blockers in `agent-autonomy-assessment.md`.
+AUT2 update: the full demo-case benchmark and the first autonomy-remediation
+pass are complete. The journey below is valid for a controlled smoke/custody
+demo. It is not yet valid as a claim that the agent can complete full Rocba
+disk+memory analysis through MCP alone; see the remaining blockers in
+`agent-autonomy-assessment.md`.
 
 ## What the Agent Is Given (and only this)
 
@@ -92,10 +93,10 @@ flowchart TD
 
 1. Orient to the active case and evidence state.
 2. Discover tools and expected workflow (`get_tool_help`).
-3. Query case/evidence summaries. If `evidence_info.evidence_files` is empty
-   while the DB gate is OK, enumerate visible sealed evidence with
-   `run_command "ls evidence"`; AUT2 showed the listing field is still a mirror
-   residual.
+3. Query case/evidence summaries. `evidence_info` is now DB-authoritative for
+   sealed evidence listing and should be the first evidence inventory. If a
+   summary field disagrees with a DB-backed list, trust the explicit list tool
+   and record the mismatch.
 4. Launch or inspect ingest jobs (`ingest_job` -> `job_id`, `job_status`).
 5. Search derived OpenSearch content.
 6. Ask RAG for forensic grounding/enrichment (`rag_search_case`).
@@ -116,16 +117,14 @@ Live proof (`Session-Notes.md` 2026-06-08): pre-seal agent execution failed
 closed with the unsealed gate; post-seal `run_command_job 884c3641-...`
 succeeded and redacted absolute-path output.
 
-> **AUT2 caveat (2026-06-09) - listing and counters can still be mirrors.** The
-> DB-authority gate overlay is live: `case_info.evidence_chain` and
-> `evidence_info.chain_status` reported `ok` with `authority=db`. However,
-> `evidence_info.evidence_files` was empty on the sealed demo case because the
-> evidence listing is still file-listing-backed, and `case_info.findings`
-> counters stayed stale after portal approval while `list_existing_findings` and
-> report eligibility showed the DB-approved finding. The autonomous rule is:
-> treat an actual `evidence_gate_denied` block as authoritative, but treat empty
-> listing/counter summaries as advisory and verify through DB-backed list tools
-> or `run_command ls evidence`.
+> **AUT2 remediation caveat (2026-06-10) - counters can still be mirrors.** The
+> DB-authority gate overlay and DB evidence listing are live:
+> `case_info.evidence_chain` and `evidence_info.chain_status` report `ok` with
+> `authority=db`, and `evidence_info.evidence_files` lists all sealed DB
+> evidence objects. `case_info.findings` counters can still lag behind
+> `list_existing_findings` and report state. The autonomous rule is: treat an
+> actual `evidence_gate_denied` block as authoritative, and treat aggregate
+> counters as advisory when a DB-backed list gives more precise state.
 
 ## How the Agent Recovers
 
@@ -147,10 +146,12 @@ for the full error/recovery table):
 - `unsupported single-file evidence format for ingest job` -> do not relaunch
   the same `.e01` or `.raw` ingest job in a loop. Record a blocker/TODO and ask
   for an approved extraction or ingest workflow.
-- `evidence_refs` says no sealed evidence while `case_info.evidence_chain` says
-  `authority=db, ok=true` -> treat this as a DB/file-manifest resolver mismatch.
-  Use only documented temporary workarounds (`input_files`) for limited smoke
-  provenance, and record the limitation.
+- `run_command` / `run_command_job` saved outputs -> use returned
+  `agent/run_commands/...` refs for follow-up filtering rather than requesting
+  large inline output.
+- Missing binary (`Binary 'rg' not found on this system`) -> switch to an
+  installed equivalent when appropriate, for example `grep`, and record the
+  tool-availability gap. Do not treat UNKNOWN/absent tooling as evidence.
 - Volatility cache/path `PermissionError` or blank forensic-tool failures ->
   stop deeper memory/disk claims, record the failed command, and hand back for a
   tooling fix or operator-approved extraction path.
@@ -184,8 +185,10 @@ The live AUT2 benchmark used a fresh portal-issued `mcp:*` agent against
 `case-v1gate-06081857`. The agent-side story that works today:
 
 - orient against a DB-sealed case;
-- enumerate evidence through `run_command ls evidence`;
+- enumerate sealed evidence through DB-backed `evidence_info`;
 - confirm the 13-tool catalog and use `rag_search_case`;
+- use `run_command` / `run_command_job` with DB-backed `evidence_refs` and
+  reusable saved-output refs;
 - stage a limited suspicious PowerShell finding, timeline event, and TODO;
 - hand back to the operator for portal approval and approved-only report
   generation.
@@ -193,9 +196,9 @@ The live AUT2 benchmark used a fresh portal-issued `mcp:*` agent against
 The story that does not work today:
 
 - ingest the Rocba `.e01` or `.raw` images as single evidence files;
-- use `evidence_refs` as a DB-backed resolver for sealed evidence;
 - attach strong `run_command` audit receipts to artifacts in `record_finding`;
-- perform Volatility memory triage or reliable EWF disk triage through MCP.
+- perform Volatility memory triage or reliable EWF disk triage through MCP;
+- discover every installed DFIR binary through a first-class MCP inventory.
 
 ## Demo Prompt Shape
 
@@ -205,4 +208,6 @@ MCP-only constraint. No local paths, DB instructions, OpenSearch credentials, or
 shell commands.
 
 Status of the full demo-case benchmark: `DONE with limitations` — BATCH-AUT2
-scored the current surface at **14/24** and handed the caveats to BATCH-FRZ1.
+scored the original surface at **14/24**. The 2026-06-10 remediation pass moves
+the current score to **17/24**, with the remaining caveats handed to BATCH-FRZ1
+and the next implementation pass.

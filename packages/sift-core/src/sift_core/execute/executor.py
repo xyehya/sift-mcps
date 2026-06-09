@@ -25,6 +25,18 @@ from sift_core.execute.runtime_acl import build_sandbox_env, is_authority_path
 logger = logging.getLogger(__name__)
 
 
+def _active_or_env_case_dir() -> str:
+    try:
+        from sift_core.active_case_context import current_active_case
+
+        ctx = current_active_case()
+        if ctx and ctx.case_dir is not None:
+            return str(ctx.case_dir)
+    except ImportError:  # pragma: no cover - defensive for unusual packaging
+        pass
+    return resolve_case_dir()
+
+
 def _run_isolated_worker(
     cmd_list: list[str] | list[dict[str, Any]],
     *,
@@ -196,7 +208,7 @@ def execute(
         # create) the numbered output dir lazily — only when we are actually
         # going to save — so unsaved commands don't litter agent/run_commands/
         # with empty outputN/ directories.
-        case_dir = resolve_case_dir()
+        case_dir = _active_or_env_case_dir()
         exceeds_budget = stdout_byte_count > config.response_byte_budget
 
         if (exceeds_budget and case_dir) or save_output:
@@ -318,7 +330,7 @@ def _save_output(
         raise ExecutionError(f"Refusing to write output to authority artifact: {out_dir}")
 
     # When case dir is known, restrict save_dir to agent, extractions, or tmp.
-    case_dir = resolve_case_dir() or None
+    case_dir = _active_or_env_case_dir() or None
     if case_dir:
         try:
             case_resolved = Path(case_dir).resolve()

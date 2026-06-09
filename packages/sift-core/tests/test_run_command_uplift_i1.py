@@ -13,7 +13,9 @@ import json
 
 import pytest
 
+import sift_core.agent_tools as agent_tools
 from sift_common.audit import AuditWriter
+from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.agent_tools import _run_command
 from sift_core.evidence_chain import init_evidence_chain, seal_manifest
 from sift_core.execute.catalog import clear_catalog_cache
@@ -206,6 +208,131 @@ def test_run_command_with_evidence_ref_returns_provenance_and_job_id(sealed_case
     # No absolute case path anywhere in the agent-facing payload.
     blob = json.dumps(out)
     assert str(sealed_case) not in blob
+
+
+def test_run_command_accepts_gateway_resolved_db_evidence_ref_without_manifest(
+    tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case-db-06090101"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "CASE.yaml").write_text("case_id: DB-001\nexaminer: analyst\n")
+    ev = case_dir / "evidence" / "db.txt"
+    ev.write_bytes(b"db authoritative bytes\n")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_EXAMINER", "analyst")
+
+    def _fake_execute(*_args, **_kwargs):
+        return {"exit_code": 0, "stdout": "ok\n", "stderr": "", "stdout_total_bytes": 3}
+
+    monkeypatch.setattr(agent_tools, "_execute_command", _fake_execute)
+    audit = AuditWriter(mcp_name="sift-core")
+    ctx = ActiveCaseContext(
+        case_id="11111111-1111-1111-1111-111111111111",
+        case_key="DB-001",
+        artifact_path=str(case_dir),
+        db_active=True,
+    )
+
+    with use_active_case_context(ctx):
+        out = _run_command(
+            {
+                "command": "cat evidence/db.txt",
+                "purpose": "read DB evidence via gateway ref",
+                "evidence_refs": ["ev-1"],
+                "_resolved_evidence_refs": [
+                    {
+                        "evidence_id": "ev-1",
+                        "display_path": "evidence/db.txt",
+                        "path": str(ev),
+                    }
+                ],
+            },
+            examiner="analyst",
+            audit=audit,
+        )
+
+    assert out["success"] is True
+    assert out["provenance"]["evidence_refs"] == ["ev-1"]
+    assert out["provenance"]["input_count"] == 1
+    blob = json.dumps(out)
+    assert str(case_dir) not in blob
+    assert str(ev) not in blob
+
+
+def test_run_command_saved_output_uses_db_active_case_not_stale_env(
+    tmp_path, monkeypatch
+):
+    real_case = tmp_path / "case-db-output-real"
+    stale_case = tmp_path / "case-db-output-stale"
+    for case_dir, case_id in ((real_case, "REAL"), (stale_case, "STALE")):
+        (case_dir / "agent").mkdir(parents=True)
+        (case_dir / "evidence").mkdir()
+        (case_dir / "CASE.yaml").write_text(f"case_id: {case_id}\nexaminer: analyst\n")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(stale_case))
+    monkeypatch.setenv("SIFT_EXAMINER", "analyst")
+
+    audit = AuditWriter(mcp_name="sift-core")
+    ctx = ActiveCaseContext(
+        case_id="11111111-1111-1111-1111-111111111111",
+        case_key="REAL",
+        artifact_path=str(real_case),
+        db_active=True,
+    )
+
+    with use_active_case_context(ctx):
+        out = _run_command(
+            {
+                "command": "echo ok",
+                "purpose": "save output under DB active case",
+                "save_output": True,
+                "output_ref": "dbout",
+            },
+            examiner="analyst",
+            audit=audit,
+        )
+
+    assert out["success"] is True
+    assert out["full_output_ref"].startswith("agent/run_commands/dbout/")
+    assert out["full_output_path"] == out["full_output_ref"]
+    blob = json.dumps(out)
+    assert str(real_case) not in blob
+    assert str(stale_case) not in blob
+    saved = real_case / out["full_output_ref"]
+    assert saved.is_file()
+    assert not any((stale_case / "agent" / "run_commands").glob("**/*"))
+
+
+def test_run_command_rejects_internal_evidence_refs_without_db_context(
+    tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case-db-06090102"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "CASE.yaml").write_text("case_id: DB-002\nexaminer: analyst\n")
+    ev = case_dir / "evidence" / "db.txt"
+    ev.write_bytes(b"db authoritative bytes\n")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_EXAMINER", "analyst")
+
+    audit = AuditWriter(mcp_name="sift-core")
+    out = _run_command(
+        {
+            "command": "cat evidence/db.txt",
+            "purpose": "client-supplied private refs must not work",
+            "evidence_refs": ["ev-1"],
+            "_resolved_evidence_refs": [
+                {
+                    "evidence_id": "ev-1",
+                    "display_path": "evidence/db.txt",
+                    "path": str(ev),
+                }
+            ],
+        },
+        examiner="analyst",
+        audit=audit,
+    )
+
+    assert out["success"] is False
+    assert out["error"] == "internal evidence refs require DB authority context"
 
 
 def test_run_command_unknown_evidence_ref_fails_closed(sealed_case):

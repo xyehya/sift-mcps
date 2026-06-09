@@ -1134,9 +1134,12 @@ def resolve_output_ref(ref: str, *, case_dir: str | Path | None = None) -> str:
             "No active case: an output reference can only be resolved with an "
             "active case."
         )
-    target = str(Path(case_str).resolve() / "agent" / "run_commands" / safe)
-    # Belt-and-suspenders: confirm the chosen path is inside the write-jail.
-    return validate_output_path(target, base_dir=case_str)
+    case_resolved = Path(case_str).resolve()
+    target = case_resolved / "agent" / "run_commands" / safe
+    allowed_subdirs = _case_writable_dirs(case_resolved)
+    if not any(target == subdir or target.is_relative_to(subdir) for subdir in allowed_subdirs):
+        raise EvidenceRefError("output reference resolved outside the case write jail")
+    return str(target)
 
 
 _SENSITIVE_PATH_PREFIXES = (

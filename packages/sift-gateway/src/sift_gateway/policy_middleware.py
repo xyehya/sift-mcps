@@ -142,6 +142,7 @@ def _case_text(case: ActiveCase, tool_name: str | None = None) -> TextContent:
 
 
 _READ_ONLY_NONCORE_TOOLS = frozenset({"capability_guide", "get_tool_help", "job_status"})
+_CASE_CONTEXT_RESPONSE_TOOLS = frozenset({"case_info", "evidence_info", "capability_guide"})
 
 
 def _tool_read_only(gateway: Any, name: str) -> bool:
@@ -658,10 +659,10 @@ class CaseContextMiddleware(Middleware):
         )
         with _use_gateway_active_case(case), use_active_case_context(core_context):
             result = await call_next(context)
-        if case is not None:
+        if case is not None and name in _CASE_CONTEXT_RESPONSE_TOOLS:
             result.content = list(result.content or [])
             result.content.append(_case_text(case, name))
-        elif service is None:
+        elif service is None and name in _CASE_CONTEXT_RESPONSE_TOOLS:
             result.content = _append_case_context(
                 list(result.content or []),
                 os.environ.get("SIFT_CASE_DIR", ""),

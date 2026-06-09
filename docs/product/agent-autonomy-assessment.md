@@ -2,7 +2,7 @@
 
 Status: filled (BATCH-AUT1/AUT2, live-exercised). Validation owners:
 BATCH-AUT1 (tool-surface assessment) and BATCH-AUT2 (demo-case benchmark).
-Last updated: 2026-06-09.
+Last updated: 2026-06-10.
 
 ## Assessment Question
 
@@ -40,7 +40,8 @@ resolved or accepted before the AUT2 demo benchmark can be trusted:
 smoke/custody demo in which an MCP-only agent orients, discovers evidence,
 searches RAG, records a limited finding/timeline/TODO, and hands back for portal
 approval/reporting. It is **not** ready to claim a full autonomous Rocba
-disk+memory investigation. Final score: **14/24**.
+disk+memory investigation. Original benchmark score: **14/24**. After the
+2026-06-10 autonomy remediation pass, the current score is **17/24**.
 
 ## BATCH-AUT2 Demo-Case Benchmark (2026-06-09)
 
@@ -86,17 +87,33 @@ disk+memory investigation. Final score: **14/24**.
 
 Total: **14/24**.
 
+### AUT2 Remediation Scorecard (2026-06-10)
+
+| Category | Score | Remediation basis |
+| --- | --- | --- |
+| Discoverability | 3 | `evidence_info` now lists all four sealed DB evidence objects with evidence IDs, hashes, sizes, and relative display paths. Fresh `mcp:*` agents still see the 13-tool catalog including RAG. |
+| Sufficiency | 1 | Primary-image ingest and deeper disk/memory analysis remain blocked, so full Rocba investigation is still out of scope. |
+| Context efficiency | 2 | Repeated active-case context is now limited to orientation tools, and saved outputs return reusable `agent/run_commands/...` refs. Large binary search previews still need stronger defaults. |
+| Composability | 2 | `run_command` and `run_command_job` now compose with DB evidence refs and reusable saved-output refs. Pipeline masking and some forensic-tool behavior still need work. |
+| Error recovery | 2 | DB evidence-ref failures are resolved; `rg` now fails clearly because the binary is absent. Volatility and EWF/TSK failures remain weak. |
+| Provenance | 2 | `run_command` and durable job receipts now record DB evidence IDs and input hashes for sealed evidence refs. `record_finding` still cannot validate those receipts through DB audit authority. |
+| Security | 3 | Path/secret redaction still holds; sealed evidence reads resolve internally; client-supplied private evidence resolver fields are stripped/rejected. |
+| Autonomy friction | 2 | Fresh agent TTL is now about 48 hours and core smoke no longer needs evidence-listing or `input_files` workarounds, but primary-image blockers still force handback. |
+
+Total after remediation: **17/24**.
+
 ### AUT2 Blockers and Caveats
 
 | ID | Sev | Area | Live evidence | Status for BATCH-FRZ1 |
 | --- | --- | --- | --- | --- |
 | AUT2-B1 | HIGH | Large-evidence ingest | `ingest_job evidence/rocba-cdrive.e01` and `ingest_job evidence/Rocba-Memory.raw` queued then failed with `unsupported single-file evidence format for ingest job`. Positive control `v1-ingest.jsonl` succeeded. | Must be fixed or demo must avoid claiming primary-image ingest. |
-| AUT2-B2 | HIGH | DB authority/provenance | `run_command` with `evidence_refs` for DB-sealed evidence failed before execution: "the case has no sealed evidence." The `input_files` workaround runs but bypasses DB evidence-object resolution. | Make `evidence_refs` resolve DB evidence objects, or document `input_files` as a temporary degraded path. |
+| AUT2-B2 | HIGH | DB authority/provenance | Original AUT2: `run_command` with `evidence_refs` for DB-sealed evidence failed before execution: "the case has no sealed evidence." 2026-06-10 remediation: `run_command` and `run_command_job` with `evidence_refs=["evidence/v1-gate.log"]` succeeded and returned DB evidence ID/hash provenance. `grep` also read `Rocba-Memory.raw` through DB evidence refs. | **FIXED for Gateway/worker run_command paths.** Keep regression coverage; next provenance blocker is `record_finding` DB-audit validation. |
 | AUT2-B3 | HIGH | Finding provenance | `record_finding` rejected immediately returned audit id `siftgateway-codex-1-20260609-212` as "not found in audit trail." The strong artifact-audit path still checks the local JSONL audit trail while Gateway audit authority is DB-first. | Fix before claiming provenance-grade findings from live `run_command` receipts. |
 | AUT2-B4 | HIGH | Memory analysis | `vol` cannot start under `run_command`; it raises a cache-path `PermissionError`. Attempts to set `VOLATILITY_CACHE_PATH` or create cache dirs through MCP were blocked by policy/output-path validation. | Required before using the memory image as a real demo lead source. |
 | AUT2-B5 | MEDIUM | Disk analysis | `mmls` against the EWF image returned exit 1 with no stderr; `fls -o 2048 ... | head` masked the upstream failure because the final pipeline stage succeeded. | Provide an EWF-aware approved extraction/mount workflow or improve forensic-tool error surfacing. |
-| AUT2-B6 | MEDIUM | Orientation/listing | `evidence_info` reports DB gate OK but `evidence_files=[]`; `case_info.findings` counters stayed stale after portal approval while `list_existing_findings` and report eligibility saw the DB-approved finding. | Make summary/listing fields DB-authority or label them as mirrors. |
-| AUT2-B7 | MEDIUM | Context/redaction | Binary memory greps produced huge noisy previews; response guard redacted `https://` snippets and an `ewfinfo` heading as false positives. | Tune preview strategy and false-positive redaction patterns before a polished demo. |
+| AUT2-B6 | MEDIUM | Orientation/listing | Original AUT2: `evidence_info` reported DB gate OK but `evidence_files=[]`. 2026-06-10 remediation: `evidence_info` returned all four sealed DB evidence objects with `listing_authority=db`. `case_info.findings` counters still lag behind `list_existing_findings`. | **PARTIAL.** Evidence listing fixed; summary counters still need DB-authority cleanup or mirror labeling. |
+| AUT2-B7 | MEDIUM | Context/redaction | Original AUT2: repeated context and binary previews created bloat risk. 2026-06-10 remediation: non-orientation tools no longer append `case_context`; saved outputs return reusable relative refs. Binary memory search still needs safer default preview/file-first ergonomics. | **PARTIAL.** Context repetition and saved refs fixed; preview/redaction tuning remains. |
+| AUT2-B8 | MEDIUM | Tool availability / inventory | 2026-06-10 live smoke: `rg` is not installed on the VM, while installed `grep` works against DB-sealed memory evidence. The agent has no first-class MCP tool inventory of available DFIR binaries. | Add an agent-facing installed-tool inventory and improve guidance for SIFT/DFIR tools before a polished autonomy demo. |
 
 ### Approved Demo Boundary
 

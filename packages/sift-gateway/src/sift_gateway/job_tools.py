@@ -165,13 +165,20 @@ async def handle_run_command_job(
         if not arguments.get("command") or not arguments.get("purpose"):
             raise GatewayJobToolError("command_and_purpose_required")
         job_service = _job_service(gateway)
+        resolved_evidence = _resolve_evidence_refs(
+            gateway, case, arguments.get("evidence_refs")
+        )
         spec_public = _drop_none(
             {
                 "command": str(arguments.get("command")),
                 "purpose": str(arguments.get("purpose")),
                 "timeout": int(arguments.get("timeout") or 0),
                 "save_output": bool(arguments.get("save_output", False)),
-                "evidence_refs": _string_list(arguments.get("evidence_refs")),
+                "evidence_refs": (
+                    [item["display_path"] for item in resolved_evidence]
+                    if resolved_evidence
+                    else _string_list(arguments.get("evidence_refs"))
+                ),
                 "output_ref": _optional_str(arguments.get("output_ref")),
                 "working_dir": _optional_str(arguments.get("working_dir")),
                 "preview_lines": int(arguments.get("preview_lines") or 0),
@@ -183,10 +190,16 @@ async def handle_run_command_job(
             "case_key": case.case_key,
             "examiner": examiner or getattr(identity, "principal", None) or "agent",
         }
+        if resolved_evidence:
+            spec_internal["resolved_evidence_refs"] = resolved_evidence
         result = job_service.enqueue_job(
             job_type="run_command",
             case_id=case.case_id,
-            evidence_id=None,
+            evidence_id=(
+                resolved_evidence[0].get("evidence_id")
+                if len(resolved_evidence) == 1
+                else None
+            ),
             spec_public=spec_public,
             spec_internal=spec_internal,
             priority=int(arguments.get("priority") or 100),
@@ -263,6 +276,22 @@ def _resolve_evidence(gateway: Any, case: Any, ref: str) -> dict[str, Any]:
     if not candidate.is_relative_to(case_dir) or not candidate.is_file():
         raise GatewayJobToolError("evidence_file_unavailable", http_status=404)
     return {"evidence_id": None, "display_path": display_path, "path": candidate}
+
+
+def _resolve_evidence_refs(gateway: Any, case: Any, value: Any) -> list[dict[str, str]]:
+    refs = _string_list(value) or []
+    resolved: list[dict[str, str]] = []
+    for ref in refs:
+        item = _resolve_evidence(gateway, case, ref)
+        resolved.append(
+            {
+                "ref": ref,
+                "evidence_id": str(item.get("evidence_id") or ""),
+                "display_path": str(item.get("display_path") or ref),
+                "path": str(item.get("path") or ""),
+            }
+        )
+    return resolved
 
 
 def _relative_display_path(value: str) -> str:

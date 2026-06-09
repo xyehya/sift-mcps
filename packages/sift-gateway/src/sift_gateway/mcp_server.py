@@ -73,6 +73,8 @@ _CORE_TOOL_PHASES: dict[str, str] = {
 
 
 _DB_ORIENTED_TOOLS: frozenset[str] = frozenset({"case_info", "evidence_info"})
+_INTERNAL_RESOLVED_EVIDENCE_REFS = "_resolved_evidence_refs"
+_INTERNAL_EVIDENCE_REF_ERROR = "_evidence_ref_error"
 
 
 def _overlay_db_evidence_gate(gateway: Any, tool_name: str, text: str) -> str:
@@ -132,7 +134,107 @@ def _overlay_db_evidence_gate(gateway: Any, tool_name: str, text: str) -> str:
         obj["manifest_version"] = manifest_version
         obj["requires_examiner_action"] = blocked
         obj["authority"] = "db"
+        _overlay_db_evidence_listing(gateway, obj, case.case_id)
     return json.dumps(obj, indent=2, default=str)
+
+
+def _overlay_db_evidence_listing(gateway: Any, obj: dict[str, Any], case_id: str) -> None:
+    """Replace legacy file-manifest evidence listing with DB evidence objects.
+
+    The DB service returns only portal-safe fields plus an internal path on the
+    resolver path. ``list_evidence`` has no path field, but this helper still
+    copies fields explicitly so agent-facing orientation never grows a new local
+    path by accident.
+    """
+    service = getattr(gateway, "evidence_service", None)
+    lister = getattr(service, "list_evidence", None)
+    if not callable(lister):
+        return
+    try:
+        rows = lister(case_id)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("DB evidence listing overlay failed: %s", exc)
+        return
+    sealed: list[dict[str, Any]] = []
+    unregistered: list[str] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "")
+        seal_status = str(row.get("seal_status") or "")
+        display_path = str(row.get("display_path") or "")
+        if status in {"detected", "registered"}:
+            if display_path:
+                unregistered.append(display_path)
+            continue
+        if status != "sealed" or seal_status != "sealed":
+            continue
+        sealed.append(
+            {
+                "evidence_id": row.get("evidence_id"),
+                "display_name": row.get("display_name"),
+                "display_path": display_path,
+                "description": row.get("description"),
+                "source": row.get("source"),
+                "status": status,
+                "seal_status": seal_status,
+                "sha256": row.get("current_sha256"),
+                "size_bytes": row.get("current_bytes"),
+                "sealed_at": row.get("sealed_at"),
+            }
+        )
+    obj["evidence_files"] = sealed
+    obj["total_evidence_files"] = len(sealed)
+    obj["unregistered_files"] = unregistered
+    obj["listing_authority"] = "db"
+
+
+def _prepare_core_tool_arguments(gateway: Any, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Strip private fields from client args and inject Gateway-resolved refs."""
+    prepared = dict(arguments or {})
+    prepared.pop(_INTERNAL_RESOLVED_EVIDENCE_REFS, None)
+    prepared.pop(_INTERNAL_EVIDENCE_REF_ERROR, None)
+    if tool_name != "run_command" or not prepared.get("evidence_refs"):
+        return prepared
+    try:
+        resolved = _resolve_db_evidence_refs(gateway, prepared.get("evidence_refs"))
+    except Exception as exc:  # noqa: BLE001 - return typed core error, no raw path
+        reason = getattr(exc, "reason", None) or str(exc) or "evidence_ref_resolution_failed"
+        prepared[_INTERNAL_EVIDENCE_REF_ERROR] = str(reason)
+        return prepared
+    if resolved:
+        prepared[_INTERNAL_RESOLVED_EVIDENCE_REFS] = resolved
+    return prepared
+
+
+def _resolve_db_evidence_refs(gateway: Any, evidence_refs: Any) -> list[dict[str, str]]:
+    if not evidence_refs:
+        return []
+    if isinstance(evidence_refs, str):
+        refs = [evidence_refs]
+    elif isinstance(evidence_refs, (list, tuple)):
+        refs = [str(ref) for ref in evidence_refs if str(ref).strip()]
+    else:
+        return []
+    from sift_gateway.policy_middleware import _current_gateway_active_case
+
+    case = _current_gateway_active_case()
+    service = getattr(gateway, "evidence_service", None)
+    resolver = getattr(service, "resolve_evidence_reference", None)
+    if case is None or not callable(resolver):
+        return []
+    resolved: list[dict[str, str]] = []
+    for ref in refs:
+        item = resolver(case.case_id, ref)
+        resolved.append(
+            {
+                "ref": ref,
+                "evidence_id": str(item.get("evidence_id") or ""),
+                "display_path": str(item.get("display_path") or ref),
+                "path": str(item.get("path") or ""),
+            }
+        )
+    return resolved
 
 
 class GatewayLocalTool(Tool):
@@ -158,6 +260,7 @@ class GatewayLocalTool(Tool):
         if self._handler is not None:
             value = await self._handler(arguments, examiner)
         else:
+            arguments = _prepare_core_tool_arguments(self._gateway, self.name, arguments)
             value = await asyncio.to_thread(
                 call_core_tool,
                 self.name,

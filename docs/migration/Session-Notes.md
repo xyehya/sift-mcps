@@ -1,7 +1,7 @@
 # Session Notes
 
 Status: sprint log and decision register.
-Last updated: 2026-06-09.
+Last updated: 2026-06-10.
 
 Format rules:
 
@@ -12,6 +12,69 @@ Format rules:
 - Do not create more migration runbooks.
 
 ## Current Change Log
+
+### 2026-06-10 - AUT2 autonomy remediation live smoke
+
+Status: DONE with remaining phase blockers
+
+Follow-up remediation after the AUT2 benchmark fixed several agent-autonomy
+failures on the active VM service tree
+`/home/sansforensics/sift-mcps-test`, then re-ran the proof through a fresh
+Codex MCP session using a portal-issued `mcp:*` agent. Supabase Auth JWT expiry
+was corrected for self-hosted Auth by setting both live VM-local expiry knobs to
+`172800` seconds; a fresh agent token showed about 48 hours of remaining TTL
+and expired on `2026-06-11T21:45:37Z`. Gateway and worker were synced,
+restarted, and live health returned OK after each restart.
+
+Live MCP proof after restart:
+
+- `case_info` showed the active case `case-v1gate-06081857`, DB evidence gate
+  `status=ok`, `authority=db`, `manifest_version=3`.
+- `evidence_info` now uses DB listing authority and returned all four sealed
+  evidence objects (`rocba-cdrive.e01`, `Rocba-Memory.raw`, `v1-gate.log`,
+  `v1-ingest.jsonl`) with evidence IDs, hashes, sizes, and relative display
+  paths. No local absolute evidence path was exposed.
+- Repeated case context was trimmed from non-orientation tool responses:
+  `get_tool_help`, `manage_todo`, `run_command`, `job_status`, and
+  `rag_search_case` did not append the extra `case_context` block.
+- `run_command` with `evidence_refs=["evidence/v1-gate.log"]` succeeded,
+  hashed one input, and returned provenance tied to DB evidence object
+  `b69fd920-14d4-4891-af6c-a9385667d2f7`.
+- `run_command_job` with the same DB evidence ref queued, reached `succeeded`
+  through `job_status`, and returned the same evidence ID/hash provenance.
+- Saved outputs now return reusable relative refs. The synchronous smoke
+  returned
+  `agent/run_commands/aut3-evidence-ref-wc/20260609_215106_wc_stdout.txt`, and
+  a follow-up `run_command cat <that ref>` succeeded. The durable job smoke also
+  returned a reusable `agent/run_commands/aut3-job-wc/..._stdout.txt` ref.
+- `grep -a -m 1 -i powershell evidence/Rocba-Memory.raw` succeeded against the
+  DB-sealed memory image with evidence-ref provenance. `rg` itself is not
+  installed on the VM, so the observed `rg` failure is now tool availability,
+  not DB evidence-ref/path-guard behavior.
+- `rag_search_case` returned `status=ok` with SANS/REMnux PowerShell analysis
+  knowledge hits.
+
+AUT2 remediation score: **17/24**. The score improves from 14/24 because
+discoverability/orientation, context efficiency, evidence-ref provenance, and
+saved-output composability are materially better. This still does **not** make
+the project ready for a full fresh-environment install and full Rocba
+disk+memory investigation claim.
+
+Remaining caveats before the next phase:
+
+- `.e01` and `.raw` single-file `ingest_job` remains blocked.
+- `record_finding` strong artifact/audit provenance still needs DB-audit
+  authority validation; do not claim provenance-grade findings until fixed.
+- Volatility cache permissions and EWF/TSK triage behavior remain unresolved.
+- `case_info.findings` counters are still stale/mirror-derived: live
+  `case_info` reported old draft/approved counts while `list_existing_findings`
+  showed `F-codex-1-001` as `APPROVED` and `F-hermes-v1-gate-001` as
+  `REJECTED`.
+- There is still no agent-facing installed-DFIR-tool catalog; `rg` was not
+  installed even though `grep` worked. Add a tool inventory or improve
+  `get_tool_help`/capability guidance before a polished autonomy demo.
+- Large binary searches still need stronger saved-file-first ergonomics and
+  preview defaults despite the output-ref fix.
 
 ### 2026-06-09 - BATCH-AUT2 live demo-case autonomy benchmark
 
