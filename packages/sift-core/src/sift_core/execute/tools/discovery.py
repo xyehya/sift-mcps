@@ -186,7 +186,7 @@ def get_tool_help(tool_name: str) -> dict:
                     "Use a single command string for pipelines: fls evidence/disk.E01 | grep Users",
                     "Write analysis outputs under agent/, extractions/, or tmp/",
                     "Use '< input-file' instead of heredocs",
-                    "Use '2>&1', '2> agent/file.err', or '>/dev/null' for stderr control",
+                    "Use '2>&1', '2> agent/file.err', or discard stderr with the tool's supported stderr controls",
                 ],
                 "path_restrictions": "Outputs must be under the active case agent/, extractions/, or tmp/ directories. Evidence and integrity records are read-only to the runtime user and write-blocked by policy."
             }

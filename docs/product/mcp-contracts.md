@@ -57,25 +57,50 @@ live-proven where a BATCH-V1 block names them.
 
 | Tool | Class | read_only | Required scope (example) | Status |
 | --- | --- | --- | --- | --- |
-| `case_info` | session-start / ORIENT | yes | `tool:case_info` or `mcp:*` | live-proven (BATCH-V1: redacts `case_dir`) |
-| `evidence_info` | evidence-survey / ORIENT | yes | `tool:evidence_info` | source-derived |
-| `capability_guide` | session-start / ORIENT | yes | `tool:capability_guide` | source-derived |
-| `get_tool_help` | detection / TRIAGE | yes | `tool:get_tool_help` | source-derived |
-| `run_command` | detection / TRIAGE | **no** | `tool:run_command` | live-proven (deny floor blocks `bash`, redacts paths) |
-| `run_command_job` | detection / TRIAGE | **no** | `tool:run_command_job` | live-proven (job `884c3641…` post-seal) |
+| `case_info` | session-start / ORIENT | yes | `tool:case_info` or `mcp:*` | live-proven (BATCH-V1 + AUT1: redacts `case_dir`; **AUT1-B1**: `evidence_chain` is file-backed, can disagree with DB gate) |
+| `evidence_info` | evidence-survey / ORIENT | yes | `tool:evidence_info` | **live-proven (AUT1)**; **AUT1-B1**: `chain_status`/`requires_examiner_action` file-backed, can disagree with DB gate |
+| `capability_guide` | session-start / ORIENT | yes | `tool:capability_guide` | **live-proven (AUT1)**: empty add-on list with explicit "not an error" note |
+| `get_tool_help` | detection / TRIAGE | yes | `tool:get_tool_help` | **live-proven (AUT1)** for `run_command`; **AUT1-B6**: a static abs-path example is self-redacted in the guidance |
+| `run_command` | detection / TRIAGE | **no** | `tool:run_command` | live-proven (AUT1: deny floor blocks `bash`; evidence `rm` blocked; paths redacted). Returns a **non-pollable** `rc-<audit_id>` job_id |
+| `run_command_job` | detection / TRIAGE | **no** | `tool:run_command_job` | live-proven (BATCH-V1 `884c3641…`; **AUT1** `b58fb7a2…` → pollable UUID) |
 | `ingest_job` | ingest / INGEST | **no** | `tool:ingest_job` | live-proven (job `e6572af3…`, indexed 1) |
-| `job_status` | ingest / INGEST | yes | `tool:job_status` | live-proven (V1 catalog) |
-| `rag_search_case` | knowledge-rag / CORRELATE | yes | `tool:rag_search_case` | live-proven (`status=ok, count=3`) |
-| `record_finding` | findings / FINDINGS | **no** | `tool:record_finding` | live-proven (`F-hermes-v1-gate-001`) |
+| `job_status` | ingest / INGEST | yes | `tool:job_status` | **live-proven (AUT1)**: `b58fb7a2…` → `succeeded`; `job_not_found` for missing UUID; malformed id → typed `invalid_job_id` (AUT1 fix) |
+| `rag_search_case` | knowledge-rag / CORRELATE | yes | `tool:rag_search_case` | live-proven BATCH-V1 (`status=ok`), but **AUT1-B2: ABSENT from the live agent catalog** — only registered when `gateway.rag_query_service` is wired |
+| `record_finding` | findings / FINDINGS | **no** | `tool:record_finding` | live-proven (`F-hermes-v1-gate-001`; AUT1: incomplete finding REJECTED with provenance guidance) |
 | `record_timeline_event` | findings / FINDINGS | **no** | `tool:record_timeline_event` | live-proven |
-| `manage_todo` | findings / FINDINGS | **no** | `tool:manage_todo` | live-proven |
-| `list_existing_findings` | findings / FINDINGS | yes | `tool:list_existing_findings` | source-derived |
-| add-on proxy tools (e.g. opensearch/cti/wintools) | per-manifest | per-manifest | manifest `required_scopes` | source-derived (demo-optional) |
+| `manage_todo` | findings / FINDINGS | **no** | `tool:manage_todo` | live-proven (AUT1: create→list→complete) |
+| `list_existing_findings` | findings / FINDINGS | yes | `tool:list_existing_findings` | **live-proven (AUT1)**: returns `F-hermes-v1-gate-001` + `full_findings_path` saved ref |
+| add-on proxy tools (e.g. opensearch/cti/wintools) | per-manifest | per-manifest | manifest `required_scopes` | source-derived (demo-optional; **absent in the assessed core-only deployment**) |
 
 `evidence_register` is **filtered out of the agent catalog** (`_AGENT_FILTERED_TOOLS`,
 mcp_server.py:37) and any manifest tool with `hidden_from_agent` is hidden
 (`GatewayToolCatalogMiddleware`). Registration/sealing is an operator portal action,
 not an agent tool.
+
+### AUT1 live-catalog observation (2026-06-09)
+
+The agent's **live catalog in the assessed deployment held 12 tools**:
+`case_info, capability_guide, evidence_info, get_tool_help, ingest_job,
+job_status, list_existing_findings, manage_todo, record_finding,
+record_timeline_event, run_command, run_command_job`. **`rag_search_case` was
+absent** (AUT1-B2) — it is registered only when `gateway.rag_query_service` is
+wired (`mcp_server.py:261`). The agent's JWT carried **no scope/case claims**
+(`role=authenticated` only); tool scopes and the active case are resolved
+server-side from DB principal rows (`app.principal_tool_scopes`,
+`app.active_case_state`), so the agent **cannot self-inspect its scopes** and a
+silently-shrunk catalog (fail-closed filtering) is invisible to it — the operator
+must confirm the issued scope set covers every demo-critical tool.
+
+**AUT1-B1 (file vs DB evidence-chain split-brain).** `case_info.evidence_chain`
+and `evidence_info.chain_status` are computed from the **file manifest**
+(`agent_tools.py:360` `chain_status(case_dir)`; `:397` file verify), while the
+evidence **gate** that actually governs execution reads **DB authority**
+(`evidence_gate.check_evidence_gate_db` → `app.evidence_gate_status`, preferred at
+`policy_middleware.py:456`). On the live case these disagreed: orientation
+reported `unsealed / ok=false / manifest_version=0 / requires_examiner_action=true`
+yet `run_command` (a gated mutating tool) executed successfully, proving the DB
+gate was OK. An agent obeying the documented "hand back on `ok=false`" loop would
+stall. Until fixed, prepare demo cases so the file manifest and DB gate agree.
 
 ## Scopes and authorization (what gates each tool)
 
@@ -206,10 +231,13 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
   cataloged forensic tool." Input `{tool_name}` (required). Parallel-safety: safe-read.
 
 ### `run_command` — TRIAGE, mutating (live-proven)
-- Description: "Execute a validated command on this SIFT VM. Pass a single command
-  string; pipes (|), sequencing (&&/||/;), and redirects (>,>>,<,2>&1) are supported.
-  Set preview_lines to cap inline stdout and save_output for large output. Case path
-  jails, audit logging, and provenance hashing are enforced."
+- Description: quick, synchronous validated command execution on the SIFT VM.
+  Returns inline preview/receipt output. The returned `rc-*` receipt id is **not**
+  a durable job id; use `run_command_job` for long-running or parallel work that
+  should be polled with `job_status`. Pass a single command string; pipes (`|`),
+  sequencing (`&&`/`||`/`;`), and redirects (`>`,`>>`,`<`,`2>&1`) are supported.
+  Set `preview_lines` to cap inline stdout and `save_output` for large output.
+  Case path jails, audit logging, and provenance hashing are enforced.
 - Input (agent_tools.py:256): required `command, purpose`; optional `timeout,
   save_output, evidence_refs[], output_ref, input_files[] (deprecated), working_dir,
   preview_lines, skip_enrichment`.
@@ -237,8 +265,10 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
   Flag for BATCH-AUT1/SEC1, not a doc defect.
 
 ### `run_command_job` — TRIAGE, mutating (live-proven)
-- Description: "Enqueue a sandboxed run_command request through the Postgres job state
-  machine. Returns a job_id only."
+- Description: enqueue a sandboxed `run_command` request through the Postgres job
+  state machine for long-running or parallel work. Returns a pollable UUID
+  `job_id` only; use `job_status` to retrieve terminal status and sanitized
+  output refs.
 - Input (job_tools.py:69): required `command, purpose`; optional `timeout, save_output,
   evidence_refs[], output_ref, working_dir, preview_lines, skip_enrichment, priority
   (100), max_attempts (1)`.
@@ -265,12 +295,27 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
   `e6572af3…`, provenance `3f90b65a…`, indexed `1`, bulk failures `0`, index
   `case-<uuid>-json-v1-ingest-host01`.
 
-### `job_status` — INGEST, read-only (live-proven)
+### `job_status` — INGEST, read-only (live-proven AUT1)
 - Description: "Read sanitized status for a durable Postgres job." Input `{job_id}`
-  (required). Output: `job_status_public(job_id, identity)` — sanitized status/logs,
-  path-free. Parallel-safety: **safe-read** (job-poll). Recovery: `job_id_required`,
-  `active_case_required`. Live-proven: present in V1 scoped catalog; the agent's token
-  `case_id`/`default_case_id` is accepted for the job case (BATCH-V1 fix).
+  (required, **must be a durable job UUID**). Output: `job_status_public(job_id,
+  identity)` — sanitized status/logs, path-free. Parallel-safety: **safe-read**
+  (job-poll).
+- **Poll / terminal-state contract (AUT1-verified live).** `status` advances
+  `queued → running → succeeded` (terminal set also includes `failed`,
+  `cancelled`, `expired`). A terminal record carries `created_at`, `started_at`,
+  `finished_at`, `step_count`, `steps_succeeded`, and the full `result_public`.
+  **Stop polling on any terminal status.** Live: `b58fb7a2-…` returned
+  `status=succeeded` with a 1-step success and full result.
+- **Recovery (AUT1-updated).** `job_id_required` (empty); `active_case_required`;
+  `job_not_found` (well-formed UUID, no such job — verified live); **`invalid_job_id`**
+  (non-UUID id — AUT1 fix; previously this leaked a raw psycopg
+  `invalid input syntax for type uuid … unnamed portal parameter $1`). Note the
+  `rc-<audit_id>` id returned by synchronous `run_command` is **not** a durable
+  job id and now yields `invalid_job_id` rather than a raw leak.
+- **Context caveat (AUT1).** A terminal `job_status` **re-emits the entire
+  `result_public`** (including job stdout, receipt, provenance) on every poll, so
+  repeated polling of a large-output job re-consumes context. Poll sparingly and
+  stop at the first terminal state.
 
 ### `rag_search_case` — CORRELATE, read-only (live-proven)
 - Description: "Search the case-scoped pgvector RAG plane and shared forensic knowledge.
@@ -345,28 +390,37 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
 - Any bloated response BATCH-AUT1 finds should become a contract fix, a pagination
   requirement, or a known limitation.
 
-## Flags for BATCH-AUT1 (missing / misleading schema or description)
+## Flags for BATCH-AUT1 — RESOLVED (2026-06-09 live assessment)
 
-1. **No `required_scopes`/`authority_contract` on core tools.** Core tools rely on the
-   `tool:<name>`/`mcp:*` gateway scope grammar only; the manifest `required_scopes` /
-   `prohibited_operations` machinery exists solely for add-on tools
-   (`AddonAuthorityMiddleware`). Not a defect, but AUT1 should confirm the demo agent's
-   issued `tool_scopes` actually cover every demo-critical tool, or the catalog silently
-   shrinks (fail-closed list filtering).
-2. **`run_command` vs `run_command_job` overlap.** Both exist with near-identical
-   schemas; the description does not tell the agent when to pick the synchronous vs the
-   durable variant. AUT1 should add disambiguation guidance (sync = quick/preview;
-   job = long-running/parallel).
-3. **`run_command` flex reachability (Sess 31 friction).** Pipes/redirects/stderr are
-   advertised but may be unreachable when the command arrives as an argv array (literal
-   argv), causing context bloat; and `cp`/`rm` reaching `evidence/` is an open write-gap
-   (S-1, HIGH). Schema is fine; behavior needs AUT1/SEC1 verification.
-4. **`capability_guide` empty-result ambiguity.** Description says empty is expected,
-   but an autonomous agent may still treat empty as failure. AUT1 should score
-   discoverability here.
-5. **`job_status` poll loop.** No advertised backoff/terminal-state contract in the
-   description; AUT1 should verify the agent can tell `queued`/`running`/`done`/`failed`
-   apart and knows when to stop polling.
+Outcomes recorded in `agent-autonomy-assessment.md` (AUT1-B1…B6).
+
+1. **Core-tool scopes / catalog shrinkage.** Confirmed live: 12/13 demo-critical
+   tools present; only `rag_search_case` absent (AUT1-B2). The agent JWT has no
+   scope claims (resolved server-side), so the agent cannot self-detect a shrunk
+   catalog — operator must verify the issued scope set. See AUT1 live-catalog note
+   above.
+2. **`run_command` vs `run_command_job` overlap.** Confirmed and fixed in the
+   conductor pass (AUT1-B4). Sync
+   `run_command` returns inline output + a **non-pollable** `rc-<audit_id>` id;
+   durable `run_command_job` returns a **pollable UUID**. Disambiguation is now
+   in this contract and in the live tool descriptions after redeploy.
+3. **`run_command` flex reachability + S-1 write-gap.** Deny floor solid live
+   (`bash` blocked). **S-1 (evidence write-gap) closed for delete**: `rm evidence/…`
+   blocked with a forensic-integrity message (K5 `assert_no_authority_write_target`
+   + protected-dir guard). Single-command-string pipes are honored; AUT2 to stress
+   multi-stage pipelines. The bad `rm` denial wording that told the agent to
+   leave the harness is fixed in the conductor pass (AUT1-B5).
+4. **`capability_guide` empty-result ambiguity.** Resolved: live empty result
+   carries an explicit "expected default, not an error" note. Scored well.
+5. **`job_status` poll loop.** Resolved: terminal-state contract verified and now
+   documented (see the `job_status` contract above). The malformed-id raw leak
+   (AUT1-B3) is **fixed** (typed `invalid_job_id`).
+6. **AUT1-B5/B6 (LOW).** Evidence-delete handback wording and the
+   self-redacting `get_tool_help` stderr example are fixed in the conductor pass;
+   live re-verification awaits redeploy.
+7. **AUT1-B1 (new, HIGH).** `case_info`/`evidence_info` evidence-chain is
+   file-backed and can contradict the DB-authority gate — see the AUT1 live-catalog
+   note. Highest-impact autonomy defect; fix recommended, not yet applied.
 
 ## Suggested interaction-model.md additions (owned by PDOC1 — for the conductor)
 

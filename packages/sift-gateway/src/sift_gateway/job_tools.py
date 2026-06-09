@@ -9,10 +9,14 @@ absolute evidence/case paths are resolved by the Gateway and written only into
 from __future__ import annotations
 
 import json
+import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
 from mcp.types import TextContent
+
+logger = logging.getLogger(__name__)
 
 INGEST_JOB_TOOL = "ingest_job"
 RUN_COMMAND_JOB_TOOL = "run_command_job"
@@ -69,7 +73,9 @@ def gateway_job_tool_specs() -> list[dict[str, Any]]:
             "name": RUN_COMMAND_JOB_TOOL,
             "description": (
                 "Enqueue a sandboxed run_command request through the Postgres "
-                "job state machine. Returns a job_id only."
+                "job state machine for long-running or parallel work. Returns a "
+                "pollable UUID job_id only; use job_status to retrieve terminal "
+                "status and sanitized output refs."
             ),
             "parameters": {
                 "type": "object",
@@ -202,6 +208,15 @@ async def handle_job_status(
         job_id = str(arguments.get("job_id") or "")
         if not job_id:
             raise GatewayJobToolError("job_id_required")
+        # Durable job ids are Postgres UUIDs. Reject anything else up front so a
+        # malformed id (e.g. a run_command "rc-<audit_id>" provenance id, which is
+        # NOT a durable job) returns a typed, actionable error instead of letting
+        # the raw psycopg "invalid input syntax for type uuid" message leak to the
+        # agent and reveal backend internals.
+        try:
+            uuid.UUID(job_id)
+        except (ValueError, AttributeError, TypeError):
+            raise GatewayJobToolError("invalid_job_id")
         _case, identity = _active_case(gateway)
         result = _job_service(gateway).job_status_public(job_id, identity)
     except Exception as exc:
@@ -283,10 +298,16 @@ def _drop_none(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _error_payload(exc: Exception, tool: str) -> dict[str, Any]:
-    return {
-        "error": getattr(exc, "reason", None) or str(exc) or type(exc).__name__,
-        "tool": tool,
-    }
+    # Typed gateway errors carry a safe, agent-actionable ``reason``. For any
+    # other (unexpected) exception, do NOT surface ``str(exc)`` to the agent: a
+    # raw DB/driver message can leak backend internals (e.g. psycopg portal
+    # parameter detail) that the response guard's path/secret scanner does not
+    # catch. Log the detail server-side and return a generic typed error.
+    reason = getattr(exc, "reason", None)
+    if reason:
+        return {"error": reason, "tool": tool}
+    logger.warning("job tool %s failed: %s: %s", tool, type(exc).__name__, exc)
+    return {"error": "internal_error", "tool": tool}
 
 
 def _json_text(payload: dict[str, Any]) -> list[TextContent]:

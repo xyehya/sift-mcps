@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.job_tools import (
+    gateway_job_tool_specs,
     handle_ingest_job,
     handle_job_status,
     handle_run_command_job,
@@ -153,12 +154,52 @@ def test_run_command_job_enqueues_public_args_and_internal_case_dir(tmp_path):
     assert "case_dir" not in json.dumps(body)
 
 
+def test_run_command_job_description_advertises_pollable_uuid():
+    spec = next(item for item in gateway_job_tool_specs() if item["name"] == "run_command_job")
+    description = spec["description"]
+    assert "long-running or parallel work" in description
+    assert "pollable UUID job_id" in description
+    assert "job_status" in description
+
+
 def test_job_status_returns_sanitized_service_payload(tmp_path):
     gateway = _Gateway(tmp_path / "case")
-    result = asyncio.run(handle_job_status(gateway, {"job_id": "job-1"}, "agent-1"))
+    job_id = "22222222-2222-2222-2222-222222222222"
+    result = asyncio.run(handle_job_status(gateway, {"job_id": job_id}, "agent-1"))
     body = _payload(result)
     assert body["status"] == "running"
     assert "spec_internal" not in json.dumps(body)
+
+
+def test_job_status_rejects_malformed_job_id_with_typed_error(tmp_path):
+    """AUT1: a non-UUID job_id (e.g. a run_command 'rc-<audit_id>' provenance id)
+    must return a typed invalid_job_id, never a raw psycopg uuid-syntax leak."""
+    gateway = _Gateway(tmp_path / "case")
+    result = asyncio.run(
+        handle_job_status(gateway, {"job_id": "rc-agent-20260609-001"}, "agent-1")
+    )
+    body = _payload(result)
+    assert body == {"error": "invalid_job_id", "tool": "job_status"}
+
+
+def test_job_status_internal_error_is_not_leaked(tmp_path):
+    """AUT1: an unexpected service exception must be reported as a generic typed
+    error, not as the raw exception text (which can carry backend internals)."""
+    gateway = _Gateway(tmp_path / "case")
+
+    def _boom(job_id, principal=None):
+        raise RuntimeError('invalid input syntax for type uuid: "x"\nCONTEXT: secret')
+
+    gateway.job_service.job_status_public = _boom
+    result = asyncio.run(
+        handle_job_status(
+            gateway, {"job_id": "33333333-3333-3333-3333-333333333333"}, "agent-1"
+        )
+    )
+    body = _payload(result)
+    assert body == {"error": "internal_error", "tool": "job_status"}
+    assert "CONTEXT" not in json.dumps(body)
+    assert "secret" not in json.dumps(body)
 
 
 def test_rag_search_case_rejects_wrong_embedding_dimension(tmp_path):
