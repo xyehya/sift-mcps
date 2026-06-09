@@ -262,6 +262,132 @@ def test_ingest_handler_unavailable_source_path_message_has_no_path(tmp_path):
     assert str(missing) not in str(exc.value)
 
 
+# ---------------------------------------------------------------------------
+# Forensic image ingest (AUT2-B1)
+# ---------------------------------------------------------------------------
+
+_IMG_NOISE = bytes(range(0, 32)) * 8  # 256 bytes, no printable runs
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("disk.e01", "forensic_image"),
+        ("disk.Ex01", "forensic_image"),
+        ("disk.RAW", "forensic_image"),
+        ("disk.dd", "forensic_image"),
+        ("disk.img", "forensic_image"),
+        ("disk.vmdk", "forensic_image"),
+        ("disk.vhdx", "forensic_image"),
+        ("events.jsonl", "json"),
+        ("plain.log", None),
+    ],
+)
+def test_single_file_kind_detects_forensic_images(name, expected):
+    assert job_ingest._single_file_kind(Path(name)) == expected
+
+
+def _write_raw_image(path: Path) -> tuple[bytes, bytes]:
+    ascii_payload = b"malicious-c2.example.net"
+    utf16_payload = "powershell -enc SQBFAFgA".encode("utf-16-le")
+    path.write_bytes(_IMG_NOISE + ascii_payload + _IMG_NOISE + utf16_payload + _IMG_NOISE)
+    return ascii_payload, utf16_payload
+
+
+def _run_image_job(job, ctx):
+    captured_actions = []
+
+    def _bulk(_client, actions, **_kwargs):
+        captured_actions.extend(actions)
+        return len(actions), []
+
+    with patch("opensearch_mcp.ingest.discover", side_effect=AssertionError("no dir walk")), \
+         patch("opensearch_mcp.client.get_client", return_value=MagicMock()), \
+         patch("opensearch_mcp.bulk.helpers.bulk", side_effect=_bulk):
+        result = job_ingest.ingest_job_handler(job, ctx)
+    return result, captured_actions
+
+
+def test_ingest_handler_indexes_strings_from_raw_image(tmp_path):
+    evidence_file = tmp_path / "Workstation01.raw"
+    _write_raw_image(evidence_file)
+    job = _claimed_job(evidence_file)
+    job.spec_internal["sha256"] = "ab" * 32
+    ctx = _fake_ctx(job)
+
+    result, captured_actions = _run_image_job(job, ctx)
+
+    rp = result.result_public
+    image = rp["image"]
+    assert image["kind"] == "forensic_image"
+    assert image["evidence_file"] == "Workstation01.raw"
+    assert image["strings_indexed"] == 2
+    assert image["bytes_scanned"] == evidence_file.stat().st_size
+    assert image["truncated"] is False
+    assert image["size_bytes"] == evidence_file.stat().st_size
+    assert image["sha256"] == "ab" * 32
+    assert image["index"].startswith(
+        "case-11111111-1111-1111-1111-111111111111-imgstrings-workstation01"
+    )
+    assert rp["indexed"] == 2
+    assert rp["hosts"][0]["artifacts"][0]["artifact"] == "image_strings"
+
+    # Agent-visible result carries the display name only — never a path.
+    blob = repr(rp)
+    assert str(tmp_path) not in blob
+
+    texts = {a["_source"]["text"] for a in captured_actions}
+    assert texts == {"malicious-c2.example.net", "powershell -enc SQBFAFgA"}
+    encodings = {a["_source"]["encoding"] for a in captured_actions}
+    assert encodings == {"ascii", "utf-16le"}
+    for action in captured_actions:
+        src = action["_source"]
+        assert src["source"] == "image_strings"
+        assert src["evidence_file"] == "Workstation01.raw"
+        assert isinstance(src["offset"], int)
+        assert src["job_id"] == job.job_id
+        # Job provenance is stamped through the shared bulk path.
+        assert src["vhir.case_id"] == job.case_id
+        assert src["vhir.provenance_id"] == result.provenance_id
+        assert str(tmp_path) not in repr(src)
+
+
+def test_ingest_handler_image_max_strings_cap_truncates(tmp_path):
+    evidence_file = tmp_path / "disk.dd"
+    parts = [b"string-number-%03d" % i for i in range(20)]
+    evidence_file.write_bytes(b"\xff\xfe".join(parts))
+    job = _claimed_job(evidence_file)
+    job.spec_public["max_strings"] = 5
+    ctx = _fake_ctx(job)
+
+    result, captured_actions = _run_image_job(job, ctx)
+
+    image = result.result_public["image"]
+    assert image["strings_indexed"] == 5
+    assert image["truncated"] is True
+    assert len(captured_actions) == 5
+
+
+def test_ingest_handler_e01_without_pyewf_falls_back_with_warning(tmp_path):
+    import sys
+
+    evidence_file = tmp_path / "laptop.E01"
+    _write_raw_image(evidence_file)
+    job = _claimed_job(evidence_file)
+    ctx = _fake_ctx(job)
+
+    # Force `import pyewf` to fail regardless of the local environment.
+    with patch.dict(sys.modules, {"pyewf": None}):
+        result, captured_actions = _run_image_job(job, ctx)
+
+    image = result.result_public["image"]
+    assert image["warnings"] == ["ewf_compressed_read"]
+    # Raw-byte fallback still indexes the strings instead of failing the job.
+    assert image["strings_indexed"] == 2
+    assert len(captured_actions) == 2
+    assert str(tmp_path) not in repr(result.result_public)
+
+
 def test_ingest_handler_unsupported_single_file_message_has_no_path(tmp_path):
     evidence_file = tmp_path / "plain.log"
     evidence_file.write_text("not json\n", encoding="utf-8")

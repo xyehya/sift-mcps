@@ -783,8 +783,43 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         output_format = exec_result.get("_output_format", "text")
         raw_stages = exec_result.get("stages") or []
         stdout_total_bytes = exec_result.get("stdout_total_bytes")
-        for _internal in ("stages", "_output_format", "executor", "runtime_user", "output_file", "output_sha256"):
+        for _internal in ("stages", "_output_format", "executor", "runtime_user",
+                          "output_file", "output_sha256",
+                          "stderr_file", "stderr_sha256"):
             exec_result.pop(_internal, None)
+        # Context efficiency: for a single-stage command the structured
+        # command echo pure-duplicates the response-level command string —
+        # drop it. Multi-segment commands keep original_command + per-stage
+        # argv (QA finding 5: compound command provenance contract).
+        if len(raw_stages) <= 1:
+            exec_result.pop("command", None)
+            exec_result.pop("original_command", None)
+
+        # AUT2-B5: a pipeline must not mask an upstream failure behind a
+        # succeeding final stage (`mmls ... | head` exits 0 via head while mmls
+        # failed). SIGPIPE deaths of non-final stages (rc 141 / -13) are normal
+        # when a downstream consumer closes early and stay exempt.
+        failed_stages = []
+        for idx, s in enumerate(raw_stages):
+            rc = s.get("exit_code")
+            if rc in (0, None):
+                continue
+            if rc in (141, -13) and idx < len(raw_stages) - 1:
+                continue
+            argv0 = (s.get("argv") or [""])[0]
+            entry = {
+                "binary": s.get("binary") or str(argv0).split("/")[-1],
+                "exit_code": rc,
+            }
+            if s.get("stderr_tail"):
+                entry["stderr_tail"] = s["stderr_tail"]
+            else:
+                entry["hint"] = (
+                    "stage produced no stderr; re-run it alone and consult "
+                    "get_tool_help for the binary before trusting downstream output"
+                )
+            failed_stages.append(entry)
+        pipeline_ok = exec_result["exit_code"] == 0 and not failed_stages
         fk_name = get_tool_def(first_binary).knowledge_name if get_tool_def(first_binary) else first_binary
         artifact_hint = _detect_artifact_context([command])
         resp_data = exec_result["_parsed"] if exec_result.get("_parsed") else exec_result
@@ -795,7 +830,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         )
         response = build_response(
             tool_name="run_command",
-            success=exec_result["exit_code"] == 0,
+            success=pipeline_ok,
             data=resp_data,
             audit_id=audit_id,
             output_format=output_format,
@@ -829,6 +864,13 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                 for s in raw_stages
                 if "binary" in s
             ]
+        if failed_stages:
+            response["failed_stages"] = failed_stages
+            if exec_result["exit_code"] == 0:
+                response["error"] = (
+                    "An upstream pipeline stage failed; downstream output may "
+                    "be incomplete. See failed_stages."
+                )
         if output_file_ref:
             # full_output_path keeps its documented key name but now carries a
             # case-RELATIVE ref (never an absolute path). full_output_ref is the

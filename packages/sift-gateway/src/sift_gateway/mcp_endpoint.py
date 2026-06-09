@@ -640,6 +640,51 @@ def _extract_bearer_token(scope: dict) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+_CORE_TOOLS_SUMMARY: dict | None = None
+
+
+def _core_tools_summary() -> dict:
+    """Compact availability summary of core forensic tools (cached per-process).
+
+    Installed binaries do not change mid-run, so the inventory probe runs at
+    most once per process. Never includes absolute binary paths.
+    """
+    global _CORE_TOOLS_SUMMARY
+    if _CORE_TOOLS_SUMMARY is not None:
+        return _CORE_TOOLS_SUMMARY
+    try:
+        from sift_core.execute.tools.discovery import build_tool_inventory
+
+        inventory = build_tool_inventory()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("core tool inventory unavailable: %s", exc)
+        return {"error": "core tool inventory unavailable"}
+
+    available_by_category: dict[str, list[str]] = {}
+    missing: list[str] = []
+    for tool in inventory.get("tools", []):
+        if tool.get("available"):
+            category = tool.get("category") or "uncategorized"
+            available_by_category.setdefault(category, []).append(tool["name"])
+        else:
+            missing.append(tool["name"])
+
+    _CORE_TOOLS_SUMMARY = {
+        "total_cataloged": inventory.get("total_cataloged", 0),
+        "total_available": inventory.get("total_available", 0),
+        "available_by_category": {
+            category: sorted(names)
+            for category, names in sorted(available_by_category.items())
+        },
+        "missing": sorted(missing),
+        "hint": (
+            "Full inventory incl. allowlisted-but-uncataloged binaries: "
+            "get_tool_help('inventory')."
+        ),
+    }
+    return _CORE_TOOLS_SUMMARY
+
+
 def _capability_guide(gateway: Any) -> dict:
     """Build a live manifest-derived guide for currently usable add-on tools."""
     available = set(getattr(gateway, "_available_backends", set()))
@@ -648,11 +693,13 @@ def _capability_guide(gateway: Any) -> dict:
         "platform": "sift-mcps",
         "purpose": (
             "ADD-ON backend capabilities only, from enabled requirement-satisfied "
-            "manifests. The core forensic tool catalog is NOT listed here — use "
-            "case_info or get_tool_help for core tools. Use tools/list "
+            "manifests, plus a compact core_tools availability summary. For core "
+            "tool usage details use get_tool_help; for the full installed-binary "
+            "inventory use get_tool_help('inventory'). Use tools/list "
             "for exact input schemas before calling a tool."
         ),
         "scope": "add-on backends only",
+        "core_tools": _core_tools_summary(),
         "available_backends": [],
         "unavailable_backends": [],
         "groups": {

@@ -1009,3 +1009,133 @@ def test_b_mvp9_agent_issuance_binds_default_case_but_global_scopes():
     scope_insert = executed[1]
     assert "insert into app.principal_tool_scopes" in scope_insert[0]
     assert scope_insert[1] == ("agent-db-id", None, "mcp:*")
+
+
+# ---------------------------------------------------------------------------
+# AUT2-B0 — agent credential TTL: issuance fails loudly when Supabase Auth
+# hands back a session shorter than the accepted minimum (~48h for autonomous
+# forensic runs). Source-controlled enforcement of the GOTRUE_JWT_EXP /
+# JWT_EXPIRY deployment requirement.
+# ---------------------------------------------------------------------------
+
+
+def _ttl_issuance(min_ttl, session_ttl):
+    import time as _time
+
+    from sift_gateway.supabase_auth import (
+        AgentServiceIssuance,
+        SupabaseAuthConfig,
+        SupabaseSession,
+    )
+
+    cfg = SupabaseAuthConfig(
+        enabled=True, url="http://supabase.local", anon_key="anon",
+        service_role_key="svc", min_agent_token_ttl_seconds=min_ttl,
+    )
+
+    class _TtlClient:
+        def __init__(self):
+            self.revoked = []
+
+        async def admin_create_user(self, email, password, *, user_metadata=None):
+            return "auth-agent-ttl"
+
+        async def password_grant(self, email, password):
+            return SupabaseSession(
+                access_token="tok-ttl",
+                refresh_token="refresh-ttl",
+                expires_at=int(_time.time()) + session_ttl,
+                sub="auth-agent-ttl",
+            )
+
+        async def admin_revoke_user(self, user_id, *, delete=True):
+            self.revoked.append(user_id)
+
+    issuance = AgentServiceIssuance.__new__(AgentServiceIssuance)
+    issuance._config = cfg
+    issuance._client = _TtlClient()
+    issuance._dsn = "postgresql://example"
+    audit = MagicMock()
+    audit.log = MagicMock()
+    issuance._audit = audit
+    issuance._insert_principal_row = (  # type: ignore[method-assign]
+        lambda *a, **k: "agent-ttl-id"
+    )
+    disabled = []
+    issuance._disable_principal_row = (  # type: ignore[method-assign]
+        lambda ptype, pid: disabled.append((ptype, pid)) or (True, "auth-agent-ttl")
+    )
+    return issuance, disabled
+
+
+async def test_aut2b0_issuance_rejects_short_agent_ttl():
+    from sift_gateway.supabase_auth import AgentTokenTtlError
+
+    issuance, disabled = _ttl_issuance(min_ttl=172800, session_ttl=3600)
+    creator = {"system_role": "admin", "principal_id": "op-1"}
+    with pytest.raises(AgentTokenTtlError) as exc:
+        await issuance.issue_principal(
+            creator, "agent", "hermes", None, ["mcp:*"], "case-1", None
+        )
+    assert exc.value.reason == "agent_token_ttl_below_minimum"
+    assert exc.value.http_status == 503
+    # The misconfiguration message tells the operator the deployment fix.
+    assert "GOTRUE_JWT_EXP" in str(exc.value)
+    # The doomed principal is rolled back: app row disabled + auth user deleted.
+    assert disabled == [("agent", "agent-ttl-id")]
+    assert issuance._client.revoked == ["auth-agent-ttl"]
+    # Rejection is audited with the observed and required TTLs.
+    extras = [c.kwargs.get("extra", {}) for c in issuance._audit.log.call_args_list]
+    assert any(e.get("reason") == "agent_token_ttl_below_minimum" for e in extras)
+
+
+async def test_aut2b0_issuance_accepts_48h_ttl_and_reports_it():
+    issuance, disabled = _ttl_issuance(min_ttl=172800, session_ttl=172800)
+    creator = {"system_role": "owner", "principal_id": "op-1"}
+    result = await issuance.issue_principal(
+        creator, "agent", "hermes", None, ["mcp:*"], "case-1", None
+    )
+    assert disabled == []
+    assert issuance._client.revoked == []
+    # TTL is surfaced so the portal/operator can verify the 48h window.
+    assert 172800 - 5 <= result["token_ttl_seconds"] <= 172800
+    assert result["access_token"] == "tok-ttl"
+
+
+async def test_aut2b0_min_ttl_zero_disables_check():
+    issuance, disabled = _ttl_issuance(min_ttl=0, session_ttl=3600)
+    creator = {"system_role": "owner", "principal_id": "op-1"}
+    result = await issuance.issue_principal(
+        creator, "agent", "hermes", None, ["mcp:*"], "case-1", None
+    )
+    assert disabled == []
+    assert result["token_ttl_seconds"] <= 3600
+
+
+async def test_aut2b0_service_principal_not_ttl_gated():
+    issuance, disabled = _ttl_issuance(min_ttl=172800, session_ttl=3600)
+    creator = {"system_role": "owner", "principal_id": "op-1"}
+    result = await issuance.issue_principal(
+        creator, "service", "worker", None, [], None, None
+    )
+    assert disabled == []
+    assert result["principal_type"] == "service"
+
+
+def test_aut2b0_config_default_and_override():
+    from sift_gateway.supabase_auth import load_supabase_auth_config
+
+    cfg = load_supabase_auth_config({"auth": {"supabase": {"enabled": True}}})
+    assert cfg.min_agent_token_ttl_seconds == 172800
+
+    cfg = load_supabase_auth_config(
+        {"auth": {"supabase": {"enabled": True,
+                               "min_agent_token_ttl_seconds": 3600}}}
+    )
+    assert cfg.min_agent_token_ttl_seconds == 3600
+
+    cfg = load_supabase_auth_config(
+        {"auth": {"supabase": {"enabled": True,
+                               "min_agent_token_ttl_seconds": "bogus"}}}
+    )
+    assert cfg.min_agent_token_ttl_seconds == 172800

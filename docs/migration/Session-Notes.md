@@ -13,6 +13,113 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - AUT2 blocker-fix pass (B0-B8) + run_command output/redaction revamp
+
+Status: DONE
+
+Conductor session fixed every open AUT2 blocker in source, deployed to the
+active VM service tree `/home/sansforensics/sift-mcps-test`, restarted
+Gateway/worker, and live-proved each fix through fresh Gateway MCP calls
+against `case-v1gate-06081857`. All four package suites pass locally
+(sift-core 465, sift-gateway 418, case-dashboard 355, opensearch-mcp 1015).
+
+Fixes landed (all live-proven unless noted):
+
+- AUT2-B0 agent credential TTL: `AgentServiceIssuance.issue_principal` now
+  fails loudly (`agent_token_ttl_below_minimum`, HTTP 503, principal rolled
+  back) when Supabase Auth issues an agent session below
+  `auth.supabase.min_agent_token_ttl_seconds` (default 172800); the portal
+  returns `token_ttl_seconds`; new source-controlled template
+  `configs/supabase/auth-jwt.env.template` records the GOTRUE_JWT_EXP /
+  JWT_EXPIRY=172800 deployment requirement. Live TTL proof: throwaway
+  Supabase auth user password-grant returned `expires_in=172800` (48.0h,
+  expiry 2026-06-11T22:48:25Z); live `.env` knobs confirmed at 172800.
+  Operator-portal issuance smoke was NOT run because the live operator
+  password has drifted from `~/.sift/operator-newpw.txt` (human-changed);
+  enforcement path is unit-proven (5 new tests).
+- run_command output revamp (operator directive): inline stderr capped at
+  4 KB, duplicated structured command echo dropped for single-stage commands
+  (kept for compound commands per QA finding 5 contract), and gateway
+  absolute-path redaction narrowed to SENSITIVE prefixes only (cases root,
+  /evidence, /mnt, /media, /var/lib/sift, /dev, SIFT_STATE_DIR). Benign
+  system/tool/traceback paths now pass through to the agent; in-case
+  absolutes still collapse to relative refs. This is a deliberate,
+  documented loosening of the blanket path-redaction posture in favor of
+  agent autonomy; secret redaction is unchanged.
+- AUT2-B1 primary-image ingest: `ingest_job` accepts single-file forensic
+  images (.e01/.ex01/.raw/.dd/.img/.vmdk/.vhd/.vhdx) with bounded streaming
+  strings extraction (ASCII + UTF-16LE, 4 MiB chunks, 2 GiB scan budget,
+  500k-string cap) indexed into per-evidence OpenSearch indexes with full
+  job-step and provenance recording. Live: `Rocba-Memory.raw` job
+  `08c061cf-be23-4a85-9253-7509e96ba8d3` and `rocba-cdrive.e01` job
+  `d68f9d03-8054-46c4-a106-acd6f151707f` both succeeded, 500k strings each,
+  E01 read through pyewf.
+- AUT2-B3 finding provenance: `record_finding` artifact validation accepts
+  audit ids from a multi-directory JSONL scan OR DB audit authority
+  (`app.audit_events.details->>'backend_audit_id'`), including `rc-` receipt
+  forms; rejections list recent known-good ids. Root cause was cross-process
+  audit-dir divergence plus DB authority never being consulted. Live:
+  finding `F-codex3-001` STAGED citing fresh audit id
+  `siftgateway-codex3-20260609-295`, provenance summary MCP.
+- AUT2-B4 memory triage: executor passes `cache_dir=<case>/tmp/cache`; the
+  worker exports `XDG_CACHE_HOME` (re-applied through sudo via
+  `/usr/bin/env`, no sudoers SETENV needed). Live: `vol windows.info`
+  completed its symbol-cache update with no PermissionError. Remaining gap
+  is forensic: no matching Windows symbol table for `Rocba-Memory.raw`
+  (`banners.Banners` returned no banner; operator must provision symbols or
+  validate the image).
+- AUT2-B5 pipeline masking: worker captures per-stage stderr tails; pipeline
+  responses report `success=false` + `failed_stages` (binary, exit_code,
+  stderr_tail or hint) when an upstream stage fails; SIGPIPE (141/-13) on
+  non-final stages stays exempt. Live: `mmls rocba-cdrive.e01 | head -8`
+  surfaced mmls exit 1; follow-up `ewfinfo` (newly allowlisted with
+  ewfverify/ewfexport) revealed the E01 is a LOGICAL image (no partition
+  table) - the true root cause of the AUT2 mmls mystery.
+- AUT2-B6 stale counters: `case_info` findings counters are DB-sourced
+  (core `case_status_data` DB snapshot + gateway overlay on
+  `app.investigation_findings`) and stamped `authority: db`. Live: counters
+  matched `list_existing_findings` before and after staging a new DRAFT.
+  Root cause: `case_status_data` counted from module-level file loaders,
+  bypassing the DB-aware CaseManager path.
+- AUT2-B7 binary ergonomics: binary stdout detection (NUL/replacement-char
+  heuristic) switches to saved-file-first: bytes persisted with sha256,
+  inline preview suppressed. Live: `head -c 300 Rocba-Memory.raw` returned
+  `binary_output=true`, empty inline stdout, reusable saved ref.
+- AUT2-B8 tool inventory: `get_tool_help('inventory')` returns availability
+  for 70 cataloged tools + 27 allowlisted extras (no absolute paths);
+  `capability_guide` gained a cached `core_tools` summary; `rg` 14.1.0
+  installed on the VM and added to the forensic allowlist. Live: inventory
+  returned 63/70 available; `rg` search of sealed evidence succeeded with
+  hash provenance.
+
+File-backed state still surfaced to agents (kept, documented per operator
+rule "no file state without justification"):
+
+- Artifact source registry gate in `record_finding` still checks the file
+  `evidence-manifest.json` (AUT1-B1 family) - flagged for post-FRZ1.
+- Grounding score (`_score_grounding`) checks JSONL existence only.
+- Audit summary aggregates the file JSONL mirror (labelled
+  `legacy-file-mirror` in DB mode).
+- `case_info.file_structure` and `agent/findings_list.json` snapshot dumps
+  are filesystem-derived by design.
+
+VM-local operational notes:
+
+- pyewf is symlinked from system dist-packages into the service venv
+  (`.venv/.../site-packages/pyewf.so`); re-create the symlink after any
+  `uv sync` (candidate for install.sh hardening).
+- `ripgrep` installed via apt on the VM.
+- Supabase Auth `.env` retains GOTRUE_JWT_EXP/JWT_EXPIRY=172800; the new
+  gateway-side issuance validation makes regressions loud.
+
+Known small wart (logged, not fixed): durable-job `result_public` stderr can
+carry Volatility \r progress spam (capped at 4 KB); a progress-line filter is
+a future context optimization.
+
+AUT2 score after this pass: **22/24** (was 17/24). See
+`docs/product/agent-autonomy-assessment.md` for the per-category basis.
+
+
 ### 2026-06-10 - AUT2 autonomy remediation live smoke
 
 Status: DONE with remaining phase blockers

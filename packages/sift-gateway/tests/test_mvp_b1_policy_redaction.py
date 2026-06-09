@@ -131,13 +131,24 @@ def test_path_redaction_collapses_in_case_path_to_relative():
     assert count == 2
 
 
-def test_path_redaction_redacts_foreign_absolute_paths():
+def test_path_redaction_redacts_sensitive_keeps_benign_paths():
+    # AUT2 item-0: only SENSITIVE prefixes (cases root, evidence mounts,
+    # /mnt, /media, /var/lib/sift, /dev, SIFT_STATE_DIR) are redacted. Benign
+    # system paths (tool configs, tracebacks under /usr, /etc, /opt, /tmp)
+    # pass through so the agent can diagnose tool failures autonomously.
     case = "/cases/case-acme-01020304"
-    text = "mount at /mnt/evidence/image.dd and config /etc/sift/gateway.yaml"
+    text = (
+        "mount at /mnt/evidence/image.dd and config /etc/sift/gateway.yaml "
+        "other case /cases/case-other-9/evidence/x.E01 state /var/lib/sift/db "
+        "traceback /usr/lib/python3/dist-packages/volatility3/cli.py"
+    )
     out, _ = _redact_paths_in_text(text, case)
     assert "/mnt/evidence/image.dd" not in out
-    assert "/etc/sift/gateway.yaml" not in out
-    assert out.count("[REDACTED:absolute_path]") == 2
+    assert "/cases/case-other-9" not in out
+    assert "/var/lib/sift/db" not in out
+    assert "/etc/sift/gateway.yaml" in out
+    assert "/usr/lib/python3/dist-packages/volatility3/cli.py" in out
+    assert out.count("[REDACTED:absolute_path]") == 3
 
 
 def test_path_redaction_keeps_relative_and_ids():

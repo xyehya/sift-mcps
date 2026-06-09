@@ -480,3 +480,113 @@ def test_overlay_noop_in_legacy_file_mode(tmp_path):
     gateway.control_plane_dsn = None
     out = mcp_server._overlay_db_evidence_gate(gateway, "case_info", _FILE_BACKED_CASE_INFO)
     assert out == _FILE_BACKED_CASE_INFO
+
+
+# --- AUT2-B6: DB-authority findings counters overlay on case_info ---
+
+_FILE_BACKED_CASE_INFO_WITH_FINDINGS = json.dumps(
+    {
+        "case_id": "case-one",
+        "evidence_chain": {
+            "status": "unsealed",
+            "ok": False,
+            "issues": [],
+            "manifest_version": 0,
+        },
+        "findings": {"total": 0, "draft": 0, "approved": 0},
+    }
+)
+
+
+class _FakeInvestigationStore:
+    def __init__(self, dsn):
+        self.dsn = dsn
+
+    def list_findings(self, case_id):
+        return [
+            {"id": "F-a-001", "status": "DRAFT"},
+            {"id": "F-a-002", "status": "APPROVED"},
+            {"id": "F-a-003", "status": "APPROVED"},
+        ]
+
+
+def test_overlay_case_info_findings_counters_match_db(tmp_path):
+    """case_info findings counters must mirror app.investigation_findings, the
+    same source list_existing_findings reads, and carry authority: db."""
+    from sift_gateway import mcp_server
+
+    gateway = _Gateway(tmp_path / "case")
+    gateway.control_plane_dsn = "postgresql://x"
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(tmp_path / "case"),
+    ), patch(
+        "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
+    ), patch(
+        "sift_core.investigation_store.PostgresInvestigationStore",
+        _FakeInvestigationStore,
+    ):
+        out = json.loads(
+            mcp_server._overlay_db_evidence_gate(
+                gateway, "case_info", _FILE_BACKED_CASE_INFO_WITH_FINDINGS
+            )
+        )
+
+    assert out["findings"] == {
+        "total": 3,
+        "draft": 1,
+        "approved": 2,
+        "authority": "db",
+    }
+
+
+def test_overlay_findings_counters_added_when_missing(tmp_path):
+    """Counters block is created even if the file-backed payload lacked it."""
+    from sift_gateway import mcp_server
+
+    gateway = _Gateway(tmp_path / "case")
+    gateway.control_plane_dsn = "postgresql://x"
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(tmp_path / "case"),
+    ), patch(
+        "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
+    ), patch(
+        "sift_core.investigation_store.PostgresInvestigationStore",
+        _FakeInvestigationStore,
+    ):
+        out = json.loads(
+            mcp_server._overlay_db_evidence_gate(
+                gateway, "case_info", _FILE_BACKED_CASE_INFO
+            )
+        )
+
+    assert out["findings"]["authority"] == "db"
+    assert out["findings"]["total"] == 3
+
+
+def test_overlay_findings_counters_keep_file_values_on_db_error(tmp_path):
+    """DB hiccup → counters stay file-backed (no authority marker, no crash)."""
+    from sift_gateway import mcp_server
+
+    class _Boom:
+        def __init__(self, dsn):
+            raise RuntimeError("db down")
+
+    gateway = _Gateway(tmp_path / "case")
+    gateway.control_plane_dsn = "postgresql://x"
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(tmp_path / "case"),
+    ), patch(
+        "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
+    ), patch(
+        "sift_core.investigation_store.PostgresInvestigationStore", _Boom
+    ):
+        out = json.loads(
+            mcp_server._overlay_db_evidence_gate(
+                gateway, "case_info", _FILE_BACKED_CASE_INFO_WITH_FINDINGS
+            )
+        )
+
+    assert out["findings"] == {"total": 0, "draft": 0, "approved": 0}

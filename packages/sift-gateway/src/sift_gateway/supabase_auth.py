@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 
 # Default positive-result cache TTL (seconds).
 _DEFAULT_CACHE_TTL = 30
+# AUT2-B0: minimum acceptable access-token TTL for agent principals (seconds).
+# Autonomous forensic sessions need ~48h tokens; the self-hosted Supabase Auth
+# (GoTrue) must be deployed with GOTRUE_JWT_EXP / JWT_EXPIRY >= this value (see
+# configs/supabase/auth-jwt.env.template). Issuance fails loudly when the Auth
+# service hands back a shorter-lived session.
+_DEFAULT_MIN_AGENT_TOKEN_TTL = 172800
+# Clock/issuance slop tolerated when validating the TTL of a fresh session.
+_TTL_VALIDATION_SLOP = 300
 # Bound on bearer token length (DoS guard, mirrors auth.py).
 _MAX_TOKEN_LENGTH = 8192
 # Network timeout for Supabase Auth HTTP calls.
@@ -127,6 +135,18 @@ class AdminCapabilityError(SupabaseAuthError):
     reason = "admin_capability_missing"
 
 
+class AgentTokenTtlError(SupabaseAuthError):
+    """Supabase Auth issued an agent session shorter than the accepted minimum.
+
+    AUT2-B0: a deployment misconfiguration (GOTRUE_JWT_EXP / JWT_EXPIRY too low)
+    must fail issuance loudly instead of handing the operator an agent token
+    that dies mid-investigation.
+    """
+
+    http_status = 503
+    reason = "agent_token_ttl_below_minimum"
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -147,6 +167,8 @@ class SupabaseAuthConfig:
     service_role_key: str | None = None
     validation: str = "user_api"
     principal_cache_ttl_seconds: int = _DEFAULT_CACHE_TTL
+    # AUT2-B0: agent sessions below this TTL fail issuance (0 disables check).
+    min_agent_token_ttl_seconds: int = _DEFAULT_MIN_AGENT_TOKEN_TTL
     # legacy flags
     legacy_token_fallback_enabled: bool = True
     legacy_portal_session_enabled: bool = True
@@ -160,7 +182,7 @@ class SupabaseAuthConfig:
     def __repr__(self) -> str:  # pragma: no cover - defensive, no secrets in repr
         return (
             "SupabaseAuthConfig(enabled=%r, url=%r, anon_key=%s, "
-            "service_role_key=%s, validation=%r, ttl=%r, "
+            "service_role_key=%s, validation=%r, ttl=%r, min_agent_ttl=%r, "
             "legacy_token_fallback=%r, legacy_portal_session=%r, "
             "legacy_anonymous_examiner=%r)"
             % (
@@ -170,6 +192,7 @@ class SupabaseAuthConfig:
                 "<set>" if self.service_role_key else None,
                 self.validation,
                 self.principal_cache_ttl_seconds,
+                self.min_agent_token_ttl_seconds,
                 self.legacy_token_fallback_enabled,
                 self.legacy_portal_session_enabled,
                 self.legacy_anonymous_examiner_enabled,
@@ -219,6 +242,16 @@ def load_supabase_auth_config(config: dict[str, Any]) -> SupabaseAuthConfig:
     if ttl < 0:
         ttl = 0
 
+    min_agent_ttl_raw = sb.get(
+        "min_agent_token_ttl_seconds", _DEFAULT_MIN_AGENT_TOKEN_TTL
+    )
+    try:
+        min_agent_ttl = int(min_agent_ttl_raw)
+    except (TypeError, ValueError):
+        min_agent_ttl = _DEFAULT_MIN_AGENT_TOKEN_TTL
+    if min_agent_ttl < 0:
+        min_agent_ttl = 0
+
     return SupabaseAuthConfig(
         enabled=_as_bool(sb.get("enabled"), False),
         url=url,
@@ -226,6 +259,7 @@ def load_supabase_auth_config(config: dict[str, Any]) -> SupabaseAuthConfig:
         service_role_key=service_role_key,
         validation=str(sb.get("validation") or "user_api"),
         principal_cache_ttl_seconds=ttl,
+        min_agent_token_ttl_seconds=min_agent_ttl,
         legacy_token_fallback_enabled=_as_bool(legacy.get("token_fallback_enabled"), True),
         legacy_portal_session_enabled=_as_bool(legacy.get("portal_session_enabled"), True),
         legacy_anonymous_examiner_enabled=_as_bool(
@@ -1279,6 +1313,42 @@ class AgentServiceIssuance:
         session = await self._client.password_grant(email, temp_password)
         # temp_password goes out of scope here; never stored.
 
+        # AUT2-B0: fail loudly when the Auth service issues agent sessions
+        # shorter than the accepted minimum (autonomous runs need ~48h). A
+        # short TTL means the self-hosted Supabase Auth deployment is missing
+        # GOTRUE_JWT_EXP / JWT_EXPIRY (see configs/supabase/auth-jwt.env.template).
+        token_ttl_seconds = max(0, int(session.expires_at) - int(time.time()))
+        min_ttl = self._config.min_agent_token_ttl_seconds
+        if kind == "agent" and min_ttl > 0 and (
+            token_ttl_seconds + _TTL_VALIDATION_SLOP
+        ) < min_ttl:
+            # Do not hand out a doomed principal: undo the rows we just made.
+            try:
+                await asyncio.to_thread(
+                    self._disable_principal_row, kind, principal_id
+                )
+            except Exception as exc:  # pragma: no cover - best-effort cleanup
+                logger.warning("ttl-reject principal disable failed: %s", exc)
+            try:
+                await self._client.admin_revoke_user(auth_user_id, delete=True)
+            except SupabaseAuthError as exc:  # pragma: no cover
+                logger.warning("ttl-reject auth user delete failed: %s", exc)
+            self._audit_log(
+                tool="principal_created",
+                summary="rejected: agent_token_ttl_below_minimum",
+                extra={"source_ip": source_ip, "principal_type": kind,
+                       "principal_id": principal_id,
+                       "token_ttl_seconds": token_ttl_seconds,
+                       "min_agent_token_ttl_seconds": min_ttl,
+                       "reason": "agent_token_ttl_below_minimum"},
+            )
+            raise AgentTokenTtlError(
+                "Supabase Auth issued an agent token with TTL "
+                f"{token_ttl_seconds}s, below the accepted minimum {min_ttl}s. "
+                "Set GOTRUE_JWT_EXP / JWT_EXPIRY on the Supabase Auth service "
+                "(see configs/supabase/auth-jwt.env.template) and restart it."
+            )
+
         self._audit_log(
             tool="principal_created",
             summary=f"{kind} created",
@@ -1295,6 +1365,7 @@ class AgentServiceIssuance:
             "access_token": session.access_token,
             "refresh_token": session.refresh_token,
             "expires_at": session.expires_at,
+            "token_ttl_seconds": token_ttl_seconds,
             "fingerprint": session.fingerprint,
             "display_name": display_name,
             "default_case_id": case_id if kind == "agent" else None,

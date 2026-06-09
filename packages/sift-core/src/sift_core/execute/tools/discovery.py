@@ -11,6 +11,7 @@ from forensic_knowledge import loader
 from sift_core.execute.catalog import get_tool_def, list_tools_in_catalog
 from sift_core.execute.environment import find_binary
 from sift_core.execute.response import DISCIPLINE_REMINDERS
+from sift_core.execute.security_policy import MVP_FORENSIC_ALLOWLIST
 
 # Alias mapping — common artifact names to FK artifact YAML names
 ARTIFACT_ALIASES: dict[str, list[str]] = {
@@ -167,8 +168,74 @@ def list_available_tools(category: str | None = None) -> list[dict]:
     return results
 
 
+_INVENTORY_CACHE: dict | None = None
+
+
+def build_tool_inventory() -> dict:
+    """Build the installed-tools inventory (cached per-process).
+
+    One availability probe pass over the catalog plus the run_command
+    forensic allowlist; results are cached because installed binaries do
+    not change mid-run. Deliberately compact: availability booleans only,
+    no per-tool descriptions and never any absolute binary paths.
+    """
+    global _INVENTORY_CACHE
+    if _INVENTORY_CACHE is not None:
+        return _INVENTORY_CACHE
+
+    tools: list[dict] = []
+    cataloged_keys: set[str] = set()
+    available_count = 0
+    for t in list_tools_in_catalog():
+        td = get_tool_def(t["name"])
+        binary = td.binary if td else t["name"]
+        cataloged_keys.add(t["name"].lower())
+        cataloged_keys.add(binary.lower())
+        available = find_binary(binary) is not None
+        if available:
+            available_count += 1
+        tools.append(
+            {
+                "name": t["name"],
+                "category": t.get("category", ""),
+                "available": available,
+            }
+        )
+
+    # run_command's security allowlist permits binaries beyond the catalog;
+    # surface those too so the agent does not discover gaps via failed runs.
+    allowlisted_extra = [
+        {"name": name, "available": find_binary(name) is not None}
+        for name in sorted(MVP_FORENSIC_ALLOWLIST)
+        if name.lower() not in cataloged_keys
+    ]
+
+    _INVENTORY_CACHE = {
+        "name": "inventory",
+        "total_cataloged": len(tools),
+        "total_available": available_count,
+        "tools": tools,
+        "allowlisted_extra": allowlisted_extra,
+        "hint": (
+            "run_command accepts any allowlisted binary, cataloged or not. "
+            "Cataloged tools get enriched help: get_tool_help('<name>')."
+        ),
+    }
+    return _INVENTORY_CACHE
+
+
 def get_tool_help(tool_name: str) -> dict:
-    """Get usage information for a specific tool."""
+    """Get usage information for a specific tool.
+
+    Special queries:
+    - 'inventory' (or '*'): compact installed-tools inventory — every
+      cataloged tool plus allowlisted-but-uncataloged binaries, each with
+      an availability boolean. Use this to learn what is installed instead
+      of probing via failed run_command calls.
+    - 'run_command': the execution policy card.
+    """
+    if tool_name in ("inventory", "*"):
+        return build_tool_inventory()
     if tool_name == "run_command":
         return {
             "name": "run_command",
@@ -189,11 +256,21 @@ def get_tool_help(tool_name: str) -> dict:
                     "Use '2>&1', '2> agent/file.err', or discard stderr with the tool's supported stderr controls",
                 ],
                 "path_restrictions": "Outputs must be under the active case agent/, extractions/, or tmp/ directories. Evidence and integrity records are read-only to the runtime user and write-blocked by policy."
-            }
+            },
+            "discovery": (
+                "Not sure which binaries are installed? get_tool_help('inventory') "
+                "returns every cataloged + allowlisted binary with an availability flag."
+            ),
         }
     td = get_tool_def(tool_name)
     if not td:
-        return {"error": f"Tool '{tool_name}' not in catalog. You can still run it, but run_command security policies apply."}
+        return {
+            "error": (
+                f"Tool '{tool_name}' not in catalog. You can still run it, but "
+                "run_command security policies apply. Call get_tool_help('inventory') "
+                "to see which cataloged and allowlisted binaries are installed."
+            )
+        }
 
     available = find_binary(td.binary) is not None
     result = {

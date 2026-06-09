@@ -20,7 +20,7 @@ from typing import Any
 import yaml
 from sift_common.audit import resolve_examiner
 
-from sift_core.case_io import case_audit_dir, cases_root
+from sift_core.case_io import case_audit_dir, cases_root, state_root
 from sift_core.case_ops import build_case_brief
 from sift_core.evidence_chain import load_manifest
 from sift_core.evidence_ops import list_manifest_evidence_data
@@ -77,6 +77,37 @@ def _available_backend_capabilities() -> list[dict]:
             logger.debug("backend capability provider failed", exc_info=True)
             return []
     return []
+
+
+def _db_audit_event_has_audit_id(
+    dsn: str, case_id: str | None, candidates: list[str]
+) -> bool:
+    """True when ``app.audit_events`` records one of the candidate audit ids.
+
+    The gateway envelope middleware stores each tool call's backend audit id in
+    ``details->>'backend_audit_id'`` (and some writers use ``details->>'audit_id'``).
+    Scoped to the case when the case UUID is known. Lightweight single-row probe.
+    """
+    if not candidates:
+        return False
+    import psycopg
+
+    match = (
+        "(details->>'backend_audit_id' = any(%s) or details->>'audit_id' = any(%s))"
+    )
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            if case_id:
+                cur.execute(
+                    f"select 1 from app.audit_events where case_id = %s and {match} limit 1",
+                    (case_id, candidates, candidates),
+                )
+            else:
+                cur.execute(
+                    f"select 1 from app.audit_events where {match} limit 1",
+                    (candidates, candidates),
+                )
+            return cur.fetchone() is not None
 
 
 def build_platform_capabilities() -> dict:
@@ -764,6 +795,112 @@ class CaseManager:
         elif kind == "todo":
             store.upsert_todo(case_id, item_id, record)
 
+    # --- AUT2-B3: artifact audit_id validation helpers -------------------- #
+
+    def _candidate_audit_dirs(self, case_dir: Path) -> list[Path]:
+        """Every plausible audit dir for this case, deduped.
+
+        The gateway, the durable job worker, and legacy CLI sessions resolve
+        their audit JSONL dir independently (state-root keyed by CASE.yaml
+        case_id, state-root keyed by directory name, in-case ``audit/``,
+        or an explicit ``SIFT_AUDIT_DIR``). Artifact validation must scan all
+        of them or a fresh ``run_command`` audit_id written by another process
+        is wrongly rejected.
+        """
+        dirs: list[Path] = []
+        seen: set[str] = set()
+
+        def _add(path: Path) -> None:
+            key = str(path)
+            if key not in seen:
+                seen.add(key)
+                dirs.append(path)
+
+        _add(case_audit_dir(case_dir))
+        _add(state_root(case_dir) / case_dir.name / "audit")
+        _add(case_dir / "audit")
+        env_audit = os.environ.get("SIFT_AUDIT_DIR", "").strip()
+        if env_audit:
+            _add(Path(env_audit))
+        return dirs
+
+    def _scan_audit_trail(self, case_dir: Path) -> tuple[set[str], list[dict]]:
+        """Scan all candidate audit dirs; return (audit_id set, entries).
+
+        Entries are deduped by audit_id across dirs so the downstream
+        provenance pass does not see duplicates when the same JSONL is
+        reachable through two candidate dirs.
+        """
+        eid_set: set[str] = set()
+        entries: list[dict] = []
+        for audit_dir in self._candidate_audit_dirs(case_dir):
+            if not audit_dir.is_dir():
+                continue
+            for jsonl_file in audit_dir.glob("*.jsonl"):
+                try:
+                    with open(jsonl_file, encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                entry = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            aid = entry.get("audit_id", "")
+                            if aid:
+                                if aid in eid_set:
+                                    continue
+                                eid_set.add(aid)
+                            entries.append(entry)
+                except OSError:
+                    continue
+        return eid_set, entries
+
+    @staticmethod
+    def _audit_id_candidates(aid: str) -> list[str]:
+        """Forms of an artifact audit_id to match against the audit trail.
+
+        ``run_command`` returns both the raw audit_id and an ``rc-<audit_id>``
+        receipt id; agents legitimately cite either, so match both.
+        """
+        candidates = [aid]
+        if aid.startswith("rc-") and len(aid) > 3:
+            candidates.append(aid[3:])
+        return candidates
+
+    def _resolve_known_audit_id(self, aid: str, eid_set: set[str]) -> str | None:
+        """Return the canonical audit_id if any candidate form is known."""
+        for candidate in self._audit_id_candidates(aid):
+            if candidate in eid_set:
+                return candidate
+        return None
+
+    def _db_audit_id_known(self, aid: str) -> bool:
+        """Check the DB transport audit (``app.audit_events``) for a tool audit id.
+
+        In DB-active mode the gateway durably records each tool call's
+        backend audit id in ``audit_events.details`` (``backend_audit_id``),
+        while the local JSONL mirror can lag or land in a different process's
+        audit dir. Accept ids the DB authority recorded; fail closed (False)
+        on any lookup problem so unknown ids stay rejected.
+        """
+        try:
+            from sift_core.active_case_context import db_authority_active
+            from sift_core.investigation_store import control_plane_dsn
+
+            if not db_authority_active():
+                return False
+            dsn = control_plane_dsn()
+            if not dsn:
+                return False
+            return _db_audit_event_has_audit_id(
+                dsn, self._db_case_id(), self._audit_id_candidates(aid)
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("DB audit-id lookup failed for %s: %s", aid, exc)
+            return False
+
     def get_case_status(self, case_id: str | None = None) -> dict:
         """Get investigation summary."""
         case_dir = self._resolve_case_dir(case_id)
@@ -1000,30 +1137,11 @@ class CaseManager:
         )
 
         # Validate artifact audit_ids: required and must exist in audit trail
+        # (JSONL mirror across all plausible audit dirs) OR in the DB transport
+        # audit authority (app.audit_events) in DB-active mode.
         provenance_warnings: list[str] = []
         if validated_artifacts:
-            # Build audit_id index from audit trail
-            audit_dir = case_audit_dir(case_dir)
-            eid_set: set[str] = set()
-            all_audit_entries: list[dict] = []
-            if audit_dir.is_dir():
-                for jsonl_file in audit_dir.glob("*.jsonl"):
-                    try:
-                        with open(jsonl_file, encoding="utf-8") as f:
-                            for line in f:
-                                line = line.strip()
-                                if not line:
-                                    continue
-                                try:
-                                    entry = json.loads(line)
-                                    aid = entry.get("audit_id", "")
-                                    if aid:
-                                        eid_set.add(aid)
-                                    all_audit_entries.append(entry)
-                                except json.JSONDecodeError:
-                                    continue
-                    except OSError:
-                        continue
+            eid_set, all_audit_entries = self._scan_audit_trail(case_dir)
 
             for art in validated_artifacts:
                 aid = art.get("audit_id", "")
@@ -1036,37 +1154,37 @@ class CaseManager:
                             "to record Bash commands with audit_ids)."
                         ),
                     }
-                if aid not in eid_set:
-                    # Two-strike: flush race condition — rebuild everything
+                resolved_aid = self._resolve_known_audit_id(aid, eid_set)
+                if resolved_aid is None:
+                    # Two-strike: flush race condition — rescan everything
                     time.sleep(0.1)
-                    eid_set.clear()
-                    all_audit_entries.clear()
-                    if audit_dir.is_dir():
-                        for jsonl_file in audit_dir.glob("*.jsonl"):
-                            try:
-                                with open(jsonl_file, encoding="utf-8") as f:
-                                    for line in f:
-                                        line = line.strip()
-                                        if not line:
-                                            continue
-                                        try:
-                                            entry = json.loads(line)
-                                            a = entry.get("audit_id", "")
-                                            if a:
-                                                eid_set.add(a)
-                                            all_audit_entries.append(entry)
-                                        except json.JSONDecodeError:
-                                            continue
-                            except OSError:
-                                continue
-                    if aid not in eid_set:
-                        return {
-                            "status": "REJECTED",
-                            "error": (
-                                f"audit_id '{aid}' not found in audit trail. "
-                                "Pass the audit_id from the tool response."
-                            ),
-                        }
+                    eid_set, all_audit_entries = self._scan_audit_trail(case_dir)
+                    resolved_aid = self._resolve_known_audit_id(aid, eid_set)
+                if resolved_aid is None and self._db_audit_id_known(aid):
+                    # DB audit authority recorded this tool call even though the
+                    # local JSONL mirror has not caught up (cross-process lag).
+                    resolved_aid = aid[3:] if aid.startswith("rc-") else aid
+                if resolved_aid is None:
+                    recent_ids = [
+                        e.get("audit_id")
+                        for e in all_audit_entries
+                        if e.get("audit_id")
+                    ][-3:]
+                    hint = (
+                        f" Recent valid audit_ids: {', '.join(recent_ids)}."
+                        if recent_ids
+                        else ""
+                    )
+                    return {
+                        "status": "REJECTED",
+                        "error": (
+                            f"audit_id '{aid}' not found in audit trail. "
+                            "Pass the audit_id from the tool response." + hint
+                        ),
+                    }
+                # Canonicalize (e.g. strip rc- receipt prefix) so downstream
+                # provenance resolution matches the JSONL trail entries.
+                art["audit_id"] = resolved_aid
 
             # Auto-merge artifact audit_ids into finding audit_ids
             artifact_aids = [
@@ -1898,11 +2016,12 @@ class CaseManager:
 
         Returns {"summary": tier, "mcp": [...], "hook": [...], "shell": [...], "none": [...]}.
         """
-        audit_dir = case_audit_dir(case_dir)
-
-        # Build audit_id -> source lookup from audit files
+        # Build audit_id -> source lookup from every plausible audit dir for the
+        # case (AUT2-B3: the gateway/worker/CLI can write to different dirs).
         eid_source: dict[str, str] = {}
-        if audit_dir.is_dir():
+        for audit_dir in self._candidate_audit_dirs(case_dir):
+            if not audit_dir.is_dir():
+                continue
             for jsonl_file in audit_dir.glob("*.jsonl"):
                 source = "HOOK" if jsonl_file.name == "claude-code.jsonl" else "MCP"
                 try:
@@ -1939,7 +2058,15 @@ class CaseManager:
             if not _AUDIT_ID_PATTERN.match(eid):
                 result["none"].append(eid)
                 continue
-            source = eid_source.get(eid)
+            source = None
+            for candidate in self._audit_id_candidates(eid):
+                source = eid_source.get(candidate)
+                if source:
+                    break
+            if not source and self._db_audit_id_known(eid):
+                # Recorded by the gateway DB transport audit (app.audit_events)
+                # even though the local JSONL mirror has not caught up.
+                source = "MCP"
             if source:
                 result[source.lower()].append(eid)
             else:

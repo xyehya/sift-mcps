@@ -915,3 +915,72 @@ def test_worker_merges_stderr_into_stdout(tmp_path):
     assert result["exit_code"] == 0
     assert "O" in result["stdout"] and "E" in result["stdout"]
     assert result["stderr"] == ""
+
+
+# ── AUT2-B5: pipeline upstream failures must be diagnosable ────────────────
+
+
+def test_worker_surfaces_per_stage_stderr_and_exit_codes(tmp_path):
+    result = worker._execute_payload({
+        "stages": [
+            {"argv": ["ls", str(tmp_path / "does-not-exist-xyz")], "redirects": []},
+            {"argv": ["head", "-1"], "redirects": []},
+        ],
+        "timeout": 10,
+        "max_output_bytes": 65536,
+    })
+    # Final stage (head) succeeds — exit_code alone would mask the failure.
+    assert result["exit_code"] == 0
+    stages = result["stages"]
+    assert stages[0]["exit_code"] != 0
+    assert "does-not-exist-xyz" in stages[0].get("stderr_tail", "")
+    assert stages[1]["exit_code"] == 0
+    assert "stderr_tail" not in stages[1]
+
+
+# ── AUT2-B4: writable tool cache inside the case write-jail ────────────────
+
+
+def test_worker_cache_dir_sets_xdg_cache_home(tmp_path):
+    cache = tmp_path / "tmp" / "cache"
+    result = worker._execute_payload({
+        "cmd": ["env"],
+        "timeout": 10,
+        "max_output_bytes": 65536,
+        "cache_dir": str(cache),
+    })
+    assert result["exit_code"] == 0
+    assert f"XDG_CACHE_HOME={cache}" in result["stdout"]
+    assert cache.is_dir()
+
+
+def test_sudo_wrapper_reapplies_cache_env_via_env_binary():
+    argv = worker._argv_for_runtime_user(
+        ["vol", "-f", "mem.raw"], "agent_runtime", "/usr/bin/sudo",
+        env_overrides={"XDG_CACHE_HOME": "/case/tmp/cache"},
+    )
+    assert argv[:5] == ["/usr/bin/sudo", "-n", "-u", "agent_runtime", "--"]
+    assert "/usr/bin/env" in argv
+    assert "XDG_CACHE_HOME=/case/tmp/cache" in argv
+    assert argv[-3:] == ["vol", "-f", "mem.raw"]
+
+
+# ── AUT2-B7: binary stdout switches to saved-file-first ────────────────────
+
+
+def test_binary_stdout_saved_first_and_suppressed_inline(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    (case_dir / "agent").mkdir(parents=True)
+    (case_dir / "CASE.yaml").write_text("case_id: B7-001\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+    result = execute(["dd", "if=/dev/zero", "bs=64", "count=1"], timeout=10)
+
+    assert result["exit_code"] == 0
+    assert result.get("binary_output") is True
+    assert result.get("output_file"), result
+    assert result["stdout"] == ""
+    assert "Binary output detected" in result.get("stdout_note", "")
+    saved = Path(result["output_file"])
+    assert saved.exists()
+    assert saved.stat().st_size == 64

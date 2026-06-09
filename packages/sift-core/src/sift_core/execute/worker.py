@@ -95,6 +95,21 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # a stray inherited variable. We keep PATH so binaries still resolve.
     tool_env = build_sandbox_env()
 
+    # AUT2-B4: give cache-hungry tools (volatility3 symbol cache, etc.) a
+    # writable cache under the case tmp/ write-jail. Without this, tools that
+    # default to ~/.cache fail with PermissionError under the restricted
+    # runtime user, killing memory triage before analysis starts.
+    cache_dir = str(payload.get("cache_dir") or "").strip()
+    env_overrides: dict[str, str] = {}
+    if cache_dir:
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+        except OSError:
+            cache_dir = ""
+    if cache_dir:
+        env_overrides["XDG_CACHE_HOME"] = cache_dir
+        tool_env.update(env_overrides)
+
     processes = []
     prev_stdout = None
     
@@ -102,7 +117,10 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
         for i, stage in enumerate(stages):
             original_argv = list(stage["argv"])
             stage_runtime_user = str(stage.get("runtime_user", runtime_user) or "").strip()
-            argv = _argv_for_runtime_user(original_argv, stage_runtime_user, sudo_path)
+            argv = _argv_for_runtime_user(
+                original_argv, stage_runtime_user, sudo_path,
+                env_overrides=env_overrides,
+            )
             redirects = stage["redirects"]
             
             stage_stdin = prev_stdout if prev_stdout is not None else subprocess.DEVNULL
@@ -210,13 +228,18 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
         threads.append(t)
 
     # Read stderr from all stages (skipped for stages that merged stderr into
-    # stdout via 2>&1, where proc.stderr is None).
-    for proc, _, _ in processes:
+    # stdout via 2>&1, where proc.stderr is None). AUT2-B5: capture stderr
+    # PER STAGE so a failing upstream stage's diagnostics survive instead of
+    # being lost in one aggregated blob masked by a succeeding final stage.
+    stage_stderr_chunks: dict[int, list[bytes]] = {}
+    for idx, (proc, _, _) in enumerate(processes):
         if proc.stderr is None:
             continue
+        chunks: list[bytes] = []
+        stage_stderr_chunks[idx] = chunks
         t = threading.Thread(
             target=_read_pipe,
-            args=(proc.stderr, stderr_chunks, max_bytes, total),
+            args=(proc.stderr, chunks, max_bytes, total),
         )
         t.start()
         threads.append(t)
@@ -274,20 +297,30 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
         truncated = True
 
     stdout_raw = b"".join(stdout_chunks)
-    stderr_raw = b"".join(stderr_chunks)
+    stderr_raw = b"".join(
+        b"".join(stage_stderr_chunks.get(idx, []))
+        for idx in range(len(processes))
+    ) + b"".join(stderr_chunks)
+
+    stages_out: list[dict[str, Any]] = []
+    for idx, (proc, _, original_argv) in enumerate(processes):
+        entry: dict[str, Any] = {
+            "argv": original_argv,
+            "exit_code": proc.returncode,
+        }
+        raw = b"".join(stage_stderr_chunks.get(idx, []))
+        if raw:
+            # Short tail only: enough to diagnose a failed stage without bloat.
+            entry["stderr_tail"] = raw[-2000:].decode("utf-8", errors="replace")[-400:]
+        stages_out.append(entry)
+
     result: dict[str, Any] = {
         "exit_code": last_proc.returncode,
         "stdout": stdout_raw.decode("utf-8", errors="replace"),
         "stderr": stderr_raw.decode("utf-8", errors="replace"),
         "elapsed_seconds": round(time.monotonic() - start, 2),
         "stdout_total_bytes": len(stdout_raw),
-        "stages": [
-            {
-                "argv": original_argv,
-                "exit_code": proc.returncode,
-            }
-            for proc, _, original_argv in processes
-        ],
+        "stages": stages_out,
     }
     if runtime_user:
         result["runtime_user"] = runtime_user
@@ -297,7 +330,10 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _argv_for_runtime_user(
-    argv: list[str], runtime_user: str, sudo_path: str
+    argv: list[str],
+    runtime_user: str,
+    sudo_path: str,
+    env_overrides: dict[str, str] | None = None,
 ) -> list[str]:
     if not runtime_user:
         return argv
@@ -307,7 +343,13 @@ def _argv_for_runtime_user(
         current_user = ""
     if runtime_user == current_user:
         return argv
-    return [sudo_path, "-n", "-u", runtime_user, "--", *argv]
+    wrapped = [sudo_path, "-n", "-u", runtime_user, "--"]
+    if env_overrides:
+        # sudo resets the environment for the target user; re-apply the
+        # sandbox cache overrides via /usr/bin/env so tools like volatility3
+        # see XDG_CACHE_HOME without requiring sudoers SETENV grants.
+        wrapped += ["/usr/bin/env", *[f"{k}={v}" for k, v in env_overrides.items()]]
+    return wrapped + argv
 
 
 def main() -> int:

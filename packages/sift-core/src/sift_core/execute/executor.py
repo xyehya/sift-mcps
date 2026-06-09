@@ -46,6 +46,7 @@ def _run_isolated_worker(
     memory_limit_bytes: int,
     runtime_user: str = "",
     sudo_path: str = "",
+    cache_dir: str = "",
 ) -> dict[str, Any]:
     payload = {
         "timeout": timeout,
@@ -54,6 +55,7 @@ def _run_isolated_worker(
         "memory_limit_bytes": memory_limit_bytes,
         "runtime_user": runtime_user,
         "sudo_path": sudo_path,
+        "cache_dir": cache_dir,
     }
     if cmd_list and isinstance(cmd_list[0], dict):
         payload["stages"] = cmd_list
@@ -169,6 +171,10 @@ def execute(
     runtime_user, sudo_path = _native_runtime_identity(config)
 
     start = time.monotonic()
+    case_dir = _active_or_env_case_dir()
+    # AUT2-B4: writable tool cache inside the case write-jail so cache-hungry
+    # tools (volatility3 symbol cache) survive the restricted runtime user.
+    cache_dir = str(Path(case_dir) / "tmp" / "cache") if case_dir else ""
     try:
         worker_result = _run_isolated_worker(
             cmd_list,
@@ -178,6 +184,7 @@ def execute(
             memory_limit_bytes=config.execute_memory_limit_bytes,
             runtime_user=runtime_user,
             sudo_path=sudo_path,
+            cache_dir=cache_dir,
         )
         elapsed = time.monotonic() - start
 
@@ -190,7 +197,9 @@ def execute(
         response: dict[str, Any] = {
             "exit_code": int(worker_result["exit_code"]),
             "stdout": stdout,
-            "stderr": _truncate(stderr, config.max_output_bytes // 10),
+            # Inline stderr stays a short diagnostic; the full stream is saved
+            # alongside stdout when output is persisted (context efficiency).
+            "stderr": _truncate(stderr, min(config.max_output_bytes // 10, 4000)),
             "elapsed_seconds": round(elapsed, 2),
             "command": cmd_list,
             "stdout_total_bytes": stdout_byte_count,
@@ -203,15 +212,18 @@ def execute(
         if worker_result.get("stages"):
             response["stages"] = worker_result["stages"]
 
+        # AUT2-B7: binary stdout is useless (and costly) inline — switch to a
+        # saved-file-first default: persist the bytes, suppress the inline blob.
+        binary_output = _looks_binary(stdout)
+
         # Threshold-based save: auto-save when output exceeds the response
-        # budget, or when save_output is explicitly requested. Resolve (and
-        # create) the numbered output dir lazily — only when we are actually
-        # going to save — so unsaved commands don't litter agent/run_commands/
-        # with empty outputN/ directories.
-        case_dir = _active_or_env_case_dir()
+        # budget, when stdout looks binary, or when save_output is explicitly
+        # requested. Resolve (and create) the numbered output dir lazily — only
+        # when we are actually going to save — so unsaved commands don't litter
+        # agent/run_commands/ with empty outputN/ directories.
         exceeds_budget = stdout_byte_count > config.response_byte_budget
 
-        if (exceeds_budget and case_dir) or save_output:
+        if (exceeds_budget and case_dir) or save_output or (binary_output and case_dir):
             if save_dir:
                 out_dir = save_dir
             elif case_dir:
@@ -221,6 +233,22 @@ def execute(
             else:
                 out_dir = None
             _save_output(cmd_list, stdout, stderr, out_dir, response)
+
+        if binary_output:
+            response["binary_output"] = True
+            if response.get("output_file"):
+                response["stdout"] = ""
+                response["stdout_note"] = (
+                    "Binary output detected: inline preview suppressed; full "
+                    "bytes saved to the referenced output file. Use targeted "
+                    "tools (strings, xxd, grep) against the saved file."
+                )
+            else:
+                response["stdout"] = stdout[:200]
+                response["stdout_note"] = (
+                    "Binary output detected and truncated inline; re-run with "
+                    "save_output=true or redirect to a file for full bytes."
+                )
 
         return response
 
@@ -262,6 +290,22 @@ def _format_command(cmd_list: list[str] | list[dict[str, Any]]) -> str:
     if cmd_list and isinstance(cmd_list[0], dict):
         return " | ".join(" ".join(str(part) for part in stage.get("argv", [])) for stage in cmd_list)
     return " ".join(str(part) for part in cmd_list)
+
+
+def _looks_binary(stdout: str) -> bool:
+    """Heuristic binary detection on decoded tool stdout (AUT2-B7).
+
+    The worker decodes with errors="replace", so raw binary shows up as NUL
+    bytes and a high density of U+FFFD replacement characters in the head.
+    """
+    if not stdout:
+        return False
+    head = stdout[:8192]
+    if "\x00" in head:
+        return True
+    if len(head) >= 64 and head.count("�") / len(head) > 0.05:
+        return True
+    return False
 
 
 def _truncate(text: str, max_chars: int) -> str:

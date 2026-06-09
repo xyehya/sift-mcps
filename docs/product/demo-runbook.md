@@ -46,6 +46,14 @@ Use the prepared demo case; do not recreate it for the final rehearsal:
   `run_command_job` resolve DB evidence refs and return reusable
   `agent/run_commands/...` saved-output refs; `rag_search_case` returns
   `status=ok`.
+- AUT2 blocker-fix smoke (2026-06-10): primary-image ingest works for both
+  `Rocba-Memory.raw` and `rocba-cdrive.e01` (bounded strings plane, 500k
+  strings each into per-evidence OpenSearch indexes); `record_finding`
+  staged `F-codex3-001` from a fresh run_command audit id (MCP-tier
+  provenance); `case_info` counters are DB-authoritative; pipeline failures
+  surface `failed_stages`; binary output is saved-file-first;
+  `get_tool_help('inventory')` lists installed DFIR tools; 48h TTL is
+  source-enforced at issuance.
 
 ## Demo Script Boundary
 
@@ -59,7 +67,10 @@ Approved demo claim:
 Do not claim:
 
 - The agent has completed full autonomous analysis of the Rocba disk and memory
-  images. AUT2 found blockers in the primary-image paths.
+  images. Image understanding is strings-level; Volatility lacks a matching
+  symbol table for the demo memory image, and the E01 is a logical image
+  (no partition table), so deep filesystem/memory parsing is not part of the
+  demo claim.
 
 Demo-safe investigative path:
 

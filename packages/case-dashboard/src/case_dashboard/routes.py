@@ -4613,6 +4613,7 @@ async def create_principal(request: Request) -> JSONResponse:
             "access_token": result.get("access_token"),
             "refresh_token": result.get("refresh_token"),
             "expires_at": result.get("expires_at"),
+            "token_ttl_seconds": result.get("token_ttl_seconds"),
             "token_fingerprint": result.get("fingerprint"),
             "warning": "Copy these tokens now — they cannot be recovered.",
         },

@@ -188,6 +188,7 @@ def test_capability_guide_exact_shape_and_omits_disabled_or_gated_addons():
         "platform",
         "purpose",
         "scope",
+        "core_tools",
         "available_backends",
         "unavailable_backends",
         "groups",
@@ -237,6 +238,49 @@ def test_capability_guide_exact_shape_and_omits_disabled_or_gated_addons():
             "unmet_requires": ["unknown:req"],
         }
     ]
+
+
+def test_capability_guide_core_tools_section_compact_cached_no_paths():
+    """AUT2-B8: capability_guide carries a cached core-tool availability summary."""
+    import sift_gateway.mcp_endpoint as mcp_endpoint
+    from sift_core.execute.tools import discovery as core_discovery
+
+    mcp_endpoint._CORE_TOOLS_SUMMARY = None
+    core_discovery._INVENTORY_CACHE = None
+    try:
+        gateway = Gateway({"backends": {}, **_execute_security()})
+        guide = _capability_guide(gateway)
+        core = guide["core_tools"]
+
+        assert set(core) == {
+            "total_cataloged",
+            "total_available",
+            "available_by_category",
+            "missing",
+            "hint",
+        }
+        assert core["total_cataloged"] >= core["total_available"] >= 0
+        available_names = [
+            name
+            for names in core["available_by_category"].values()
+            for name in names
+        ]
+        assert len(available_names) == core["total_available"]
+        assert len(core["missing"]) == core["total_cataloged"] - core["total_available"]
+        assert "get_tool_help('inventory')" in core["hint"]
+
+        # Never leak absolute binary paths to the agent.
+        rendered = json.dumps(core)
+        assert "/usr/" not in rendered and "/opt/" not in rendered
+        for name in available_names + core["missing"]:
+            assert not name.startswith("/")
+
+        # Cached per-process: a second guide reuses the same summary object
+        # instead of re-probing binary availability.
+        assert _capability_guide(gateway)["core_tools"] is core
+    finally:
+        mcp_endpoint._CORE_TOOLS_SUMMARY = None
+        core_discovery._INVENTORY_CACHE = None
     assert "sample_hidden" not in json.dumps(guide)
     assert "gated-addon" not in json.dumps(guide["available_backends"])
 

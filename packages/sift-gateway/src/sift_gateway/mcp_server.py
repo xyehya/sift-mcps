@@ -128,6 +128,7 @@ def _overlay_db_evidence_gate(gateway: Any, tool_name: str, text: str) -> str:
             chain["issues"] = issues
             chain["manifest_version"] = manifest_version
             chain["authority"] = "db"
+        _overlay_db_findings_counters(gateway, obj, case.case_id)
     elif tool_name == "evidence_info":
         obj["chain_status"] = status
         obj["issues"] = issues
@@ -136,6 +137,38 @@ def _overlay_db_evidence_gate(gateway: Any, tool_name: str, text: str) -> str:
         obj["authority"] = "db"
         _overlay_db_evidence_listing(gateway, obj, case.case_id)
     return json.dumps(obj, indent=2, default=str)
+
+
+def _overlay_db_findings_counters(gateway: Any, obj: dict[str, Any], case_id: str) -> None:
+    """AUT2-B6: make case_info findings counters DB-authoritative.
+
+    ``list_existing_findings`` reads ``app.investigation_findings`` in DB-active
+    deployments, while the file-backed orientation counters can lag (the case
+    JSON is only a mirror). Replace the counters with the same DB rows the list
+    tool reports and mark them ``authority: db``. Best-effort: any failure keeps
+    the file-backed counters so orientation never breaks on a DB hiccup.
+    """
+    dsn = getattr(gateway, "control_plane_dsn", None)
+    if not dsn:
+        return
+    try:
+        from sift_core.investigation_store import PostgresInvestigationStore
+
+        rows = PostgresInvestigationStore(dsn).list_findings(case_id)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("DB findings counter overlay failed: %s", exc)
+        return
+    statuses = [
+        str(row.get("status") or "") for row in rows or [] if isinstance(row, dict)
+    ]
+    counters = obj.get("findings")
+    if not isinstance(counters, dict):
+        counters = {}
+        obj["findings"] = counters
+    counters["total"] = len(statuses)
+    counters["draft"] = sum(1 for s in statuses if s == "DRAFT")
+    counters["approved"] = sum(1 for s in statuses if s == "APPROVED")
+    counters["authority"] = "db"
 
 
 def _overlay_db_evidence_listing(gateway: Any, obj: dict[str, Any], case_id: str) -> None:

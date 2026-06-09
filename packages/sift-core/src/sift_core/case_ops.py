@@ -6,6 +6,7 @@ Pure-data functions (no CLI output). Called by the core case tools and the SIFT 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -25,6 +26,8 @@ from sift_core.case_io import (
     load_todos,
 )
 from sift_core.evidence_chain import init_evidence_chain
+
+logger = logging.getLogger(__name__)
 
 # Curated case-intake fields surfaced to the agent as the "case brief" so an
 # autonomous investigator is grounded in scope + objectives (D-008). These mirror
@@ -67,6 +70,41 @@ def build_case_brief(meta: dict) -> dict:
     return brief
 
 
+def _db_investigation_snapshot(case_dir: Path) -> tuple[list, list, list] | None:
+    """Return (findings, timeline, todos) from DB authority, or None in file mode.
+
+    AUT2-B6: ``case_info`` counters must agree with the DB-backed list tools
+    (``list_existing_findings`` etc.), so in DB-active mode the status counters
+    are sourced from ``app.investigation_*`` instead of the file mirror. Only
+    used when the authority context targets this exact case dir; any failure
+    falls back to the file mirror (orientation read, not a mutating path).
+    """
+    try:
+        from sift_core.active_case_context import current_active_case
+        from sift_core.investigation_store import resolve_investigation_store
+
+        ctx = current_active_case()
+        if ctx is None or not ctx.db_active or not ctx.case_id:
+            return None
+        if ctx.case_dir is not None:
+            try:
+                if Path(case_dir).resolve() != ctx.case_dir.resolve():
+                    return None
+            except OSError:
+                return None
+        store = resolve_investigation_store()
+        if store is None:
+            return None
+        return (
+            store.list_findings(ctx.case_id),
+            store.list_timeline(ctx.case_id),
+            store.list_todos(ctx.case_id),
+        )
+    except Exception as exc:  # pragma: no cover - defensive read path
+        logger.warning("DB investigation snapshot unavailable, using files: %s", exc)
+        return None
+
+
 def case_status_data(case_dir) -> dict:
     """Return case status as structured data."""
     case_dir = Path(case_dir)
@@ -77,9 +115,15 @@ def case_status_data(case_dir) -> dict:
     with open(meta_file) as f:
         meta = yaml.safe_load(f) or {}
 
-    findings = load_findings(case_dir)
-    timeline = load_timeline(case_dir)
-    todos = load_todos(case_dir)
+    counters_authority = "file"
+    db_snapshot = _db_investigation_snapshot(case_dir)
+    if db_snapshot is not None:
+        findings, timeline, todos = db_snapshot
+        counters_authority = "db"
+    else:
+        findings = load_findings(case_dir)
+        timeline = load_timeline(case_dir)
+        todos = load_todos(case_dir)
 
     draft_f = sum(1 for f in findings if f.get("status") == "DRAFT")
     approved_f = sum(1 for f in findings if f.get("status") == "APPROVED")
@@ -107,6 +151,9 @@ def case_status_data(case_dir) -> dict:
         "timeline_approved": approved_t,
         "todo_open": open_todos,
         "todo_total": len(todos),
+        # AUT2-B6: where the finding/timeline/todo counters were sourced from
+        # ("db" = app.investigation_* authority, "file" = legacy JSON mirror).
+        "counters_authority": counters_authority,
     }
 
 

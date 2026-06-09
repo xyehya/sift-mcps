@@ -148,6 +148,7 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
         "egrep",
         "fgrep",
         "zgrep",
+        "rg",
         "sort",
         "uniq",
         "wc",
@@ -165,6 +166,11 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
         "unzip",
         "zipinfo",
         "7z",
+        # EWF (Expert Witness) image inspection/extraction — read-only probes
+        # plus export into the case write-jail (AUT2-B5 disk triage path).
+        "ewfinfo",
+        "ewfverify",
+        "ewfexport",
         # Memory / network forensics
         "vol",
         "vol3",

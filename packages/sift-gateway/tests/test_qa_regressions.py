@@ -305,3 +305,45 @@ async def test_unsaved_command_mints_no_empty_output_dir(tmp_path, monkeypatch):
     run_commands = Path(case["case_dir"]) / "agent" / "run_commands"
     dirs = list(run_commands.glob("output*")) if run_commands.exists() else []
     assert dirs == [], f"unexpected empty output dirs minted: {dirs}"
+
+
+# ── AUT2-B5: pipelines must not mask upstream failures ─────────────────────
+
+
+async def test_pipeline_upstream_failure_not_masked(tmp_path, monkeypatch):
+    gateway, _ = _make_gateway(tmp_path, monkeypatch, "PIPEFAIL")
+    payload = await _call(
+        gateway,
+        "run_command",
+        {
+            "command": "ls /nonexistent-pipe-check-xyz | head -1",
+            "purpose": "pipe masking regression",
+        },
+        examiner="alice",
+    )
+    # head exits 0; without per-stage tracking this reported success.
+    assert payload["success"] is False, payload
+    failed = payload.get("failed_stages") or []
+    assert failed, payload
+    assert failed[0]["binary"] == "ls"
+    assert failed[0]["exit_code"] != 0
+    assert "nonexistent-pipe-check-xyz" in failed[0].get("stderr_tail", "")
+    assert "upstream" in (payload.get("error") or "")
+
+
+async def test_sigpipe_upstream_exempt_pipeline_still_succeeds(tmp_path, monkeypatch):
+    gateway, case = _make_gateway(tmp_path, monkeypatch, "SIGPIPE-OK")
+    sample = Path(case["case_dir"]) / "agent" / "sample.txt"
+    sample.parent.mkdir(parents=True, exist_ok=True)
+    sample.write_text("line1\nline2\n", encoding="utf-8")
+    payload = await _call(
+        gateway,
+        "run_command",
+        {
+            "command": "cat agent/sample.txt | head -1",
+            "purpose": "sigpipe exemption sanity",
+        },
+        examiner="alice",
+    )
+    assert payload["success"] is True, payload
+    assert "failed_stages" not in payload

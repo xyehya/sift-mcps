@@ -254,19 +254,26 @@ def run_command(
                 "status": "success"
             }
 
-        # Track exit code for each stage in the current pipeline
+        # Track exit code (and AUT2-B5: the per-stage stderr tail) for each
+        # stage in the current pipeline so an upstream failure is diagnosable
+        # even when a downstream stage exits 0 and masks it.
         for idx, stage in enumerate(current_pipeline):
             exit_code = 0
+            stderr_tail = None
             if pipeline_result and "stages" in pipeline_result and idx < len(pipeline_result["stages"]):
                 exit_code = pipeline_result["stages"][idx]["exit_code"]
+                stderr_tail = pipeline_result["stages"][idx].get("stderr_tail")
             elif pipeline_result:
                 exit_code = pipeline_result["exit_code"]
-            executed_stages_info.append({
+            stage_info = {
                 "binary": stage["binary"],
                 "argv": stage["argv"],
                 "redirects": stage["redirects"],
                 "exit_code": exit_code
-            })
+            }
+            if stderr_tail:
+                stage_info["stderr_tail"] = stderr_tail
+            executed_stages_info.append(stage_info)
 
         if pipeline_result:
             p_stdout = pipeline_result.get("stdout")

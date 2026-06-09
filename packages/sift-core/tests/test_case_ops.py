@@ -391,3 +391,102 @@ class TestCaseStatusPaths:
             "agent_dir",
         ):
             assert isinstance(result[field], str), f"{field} should be a str"
+
+
+class TestCaseStatusDbCounters:
+    """AUT2-B6: case_info counters source from DB authority in DB-active mode."""
+
+    @staticmethod
+    def _make_case(tmp_path):
+        case_dir = tmp_path / "INC-DB-COUNTERS"
+        case_dir.mkdir()
+        with open(case_dir / "CASE.yaml", "w") as f:
+            yaml.dump(
+                {"case_id": "INC-DB-COUNTERS", "status": "open", "examiner": "t"}, f
+            )
+        # Stale file mirror: one draft finding only.
+        (case_dir / "findings.json").write_text(
+            '[{"id": "F-old-001", "status": "DRAFT"}]'
+        )
+        (case_dir / "timeline.json").write_text("[]")
+        (case_dir / "todos.json").write_text("[]")
+        return case_dir
+
+    class _Store:
+        def list_findings(self, case_id):
+            return [
+                {"id": "F-a-001", "status": "DRAFT"},
+                {"id": "F-a-002", "status": "DRAFT"},
+                {"id": "F-a-003", "status": "APPROVED"},
+            ]
+
+        def list_timeline(self, case_id):
+            return [{"id": "T-a-001", "status": "APPROVED"}]
+
+        def list_todos(self, case_id):
+            return [{"todo_id": "TD-1", "status": "open"}]
+
+    def _ctx(self, case_dir):
+        from sift_core.active_case_context import AuthorityContext
+
+        return AuthorityContext(
+            case_id="33333333-3333-3333-3333-333333333333",
+            case_key="INC-DB-COUNTERS",
+            artifact_path=str(case_dir),
+            db_active=True,
+        )
+
+    def test_db_active_counters_come_from_store(self, tmp_path, monkeypatch):
+        from sift_core import investigation_store
+        from sift_core.active_case_context import use_active_case_context
+
+        case_dir = self._make_case(tmp_path)
+        monkeypatch.setattr(
+            investigation_store, "resolve_investigation_store", lambda: self._Store()
+        )
+        with use_active_case_context(self._ctx(case_dir)):
+            result = case_status_data(case_dir)
+
+        assert result["counters_authority"] == "db"
+        assert result["finding_count"] == 3
+        assert result["finding_draft"] == 2
+        assert result["finding_approved"] == 1
+        assert result["timeline_count"] == 1
+        assert result["timeline_approved"] == 1
+        assert result["todo_open"] == 1
+        assert result["todo_total"] == 1
+
+    def test_file_mode_counters_unchanged(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("SIFT_DB_ACTIVE", raising=False)
+        case_dir = self._make_case(tmp_path)
+        result = case_status_data(case_dir)
+        assert result["counters_authority"] == "file"
+        assert result["finding_count"] == 1
+        assert result["finding_draft"] == 1
+
+    def test_db_context_for_other_case_falls_back_to_files(
+        self, tmp_path, monkeypatch
+    ):
+        """A DB context bound to a different case dir must not leak its counters."""
+        from sift_core import investigation_store
+        from sift_core.active_case_context import (
+            AuthorityContext,
+            use_active_case_context,
+        )
+
+        case_dir = self._make_case(tmp_path)
+        other_dir = tmp_path / "OTHER-CASE"
+        other_dir.mkdir()
+        monkeypatch.setattr(
+            investigation_store, "resolve_investigation_store", lambda: self._Store()
+        )
+        ctx = AuthorityContext(
+            case_id="44444444-4444-4444-4444-444444444444",
+            case_key="OTHER-CASE",
+            artifact_path=str(other_dir),
+            db_active=True,
+        )
+        with use_active_case_context(ctx):
+            result = case_status_data(case_dir)
+        assert result["counters_authority"] == "file"
+        assert result["finding_count"] == 1

@@ -39,9 +39,12 @@ resolved or accepted before the AUT2 demo benchmark can be trusted:
 **AUT2 verdict:** Partial. The live system is ready for a controlled
 smoke/custody demo in which an MCP-only agent orients, discovers evidence,
 searches RAG, records a limited finding/timeline/TODO, and hands back for portal
-approval/reporting. It is **not** ready to claim a full autonomous Rocba
-disk+memory investigation. Original benchmark score: **14/24**. After the
-2026-06-10 autonomy remediation pass, the current score is **17/24**.
+approval/reporting. Original benchmark score: **14/24**; first remediation pass
+**17/24**; after the 2026-06-10 blocker-fix pass (AUT2-B0..B8 all addressed,
+live-proven) the current score is **22/24**. The platform now also supports
+bounded primary-image ingest (strings plane) and surfaced-failure disk/memory
+triage; full filesystem/memory parsing depth remains the next frontier
+(Volatility symbols, partition-aware extraction).
 
 ## BATCH-AUT2 Demo-Case Benchmark (2026-06-09)
 
@@ -100,20 +103,41 @@ Total: **14/24**.
 | Security | 3 | Path/secret redaction still holds; sealed evidence reads resolve internally; client-supplied private evidence resolver fields are stripped/rejected. |
 | Autonomy friction | 2 | Fresh agent TTL is now about 48 hours and core smoke no longer needs evidence-listing or `input_files` workarounds, but primary-image blockers still force handback. |
 
-Total after remediation: **17/24**.
+Total after remediation: **17/24** (superseded by the 2026-06-10 blocker-fix
+pass below).
+
+### AUT2 Blocker-Fix Scorecard (2026-06-10, conductor pass 2)
+
+All AUT2 blockers were remediated in source, deployed to the live VM service
+tree, and re-proven through fresh Gateway MCP calls against
+`case-v1gate-06081857` (live evidence in `docs/migration/Session-Notes.md`,
+2026-06-10 blocker-remediation entry).
+
+| Category | Score | Basis |
+| --- | --- | --- |
+| Discoverability | 3 | DB-backed evidence listing plus the new installed-tool inventory: `get_tool_help('inventory')` returned 70 cataloged tools (63 available) and 27 allowlisted extras with availability booleans and no absolute paths; `capability_guide` carries a compact `core_tools` summary. |
+| Sufficiency | 2 | `ingest_job` now ingests primary images: `Rocba-Memory.raw` (500k strings indexed) and `rocba-cdrive.e01` via pyewf (500k strings from the 23.7 GB EWF) into per-evidence OpenSearch indexes with provenance. Bounded strings extraction, not full filesystem parsing; Volatility still lacks a matching symbol table for the demo memory image. |
+| Context efficiency | 3 | run_command responses drop duplicated command echoes, cap inline stderr at 4 KB, suppress binary stdout in favor of saved-file-first refs (live: `head -c 300` on the memory image returned `binary_output=true`, empty inline stdout, hash-linked saved ref), and benign tool/traceback paths are no longer mangled into `[REDACTED:absolute_path]`. |
+| Composability | 3 | Pipelines no longer mask upstream failures: `mmls ... \| head` returned `success=false` with `failed_stages=[{binary: mmls, exit_code: 1, hint}]`; per-stage stderr tails survive; durable jobs, evidence refs, and saved-output refs all compose. |
+| Error recovery | 3 | failed_stages hints, the tool inventory, and actionable rejection messages (record_finding now lists known-good recent audit ids on rejection). Live recovery proof: after the mmls failure the agent path probed `ewfinfo` (newly allowlisted) and learned the E01 is a logical image with no partition table — the actual root cause. |
+| Provenance | 3 | `record_finding` validates artifact audit ids against DB audit authority (and rc- receipt forms); live: finding `F-codex3-001` STAGED with a fresh `run_command` audit id graded MCP-tier provenance. |
+| Security | 3 | Deny floor, evidence write-jail, secret redaction, and sealed-delete protection unchanged. Note: absolute-path redaction was deliberately narrowed to sensitive prefixes (cases root, evidence mounts, /mnt, /media, /var/lib/sift, /dev, state dir) so benign system paths survive for diagnosis — an accepted, documented loosening. |
+| Autonomy friction | 2 | 48h agent-token TTL is now source-enforced at issuance (fails loudly below `min_agent_token_ttl_seconds=172800`) and live GoTrue issues 172800s tokens. Remaining friction: Volatility symbol resolution for the demo memory image needs operator-side symbol provisioning. |
+
+Total after blocker-fix pass: **22/24**.
 
 ### AUT2 Blockers and Caveats
 
 | ID | Sev | Area | Live evidence | Status for BATCH-FRZ1 |
 | --- | --- | --- | --- | --- |
-| AUT2-B1 | HIGH | Large-evidence ingest | `ingest_job evidence/rocba-cdrive.e01` and `ingest_job evidence/Rocba-Memory.raw` queued then failed with `unsupported single-file evidence format for ingest job`. Positive control `v1-ingest.jsonl` succeeded. | Must be fixed or demo must avoid claiming primary-image ingest. |
+| AUT2-B1 | HIGH | Large-evidence ingest | `ingest_job evidence/rocba-cdrive.e01` and `ingest_job evidence/Rocba-Memory.raw` queued then failed with `unsupported single-file evidence format for ingest job`. Positive control `v1-ingest.jsonl` succeeded. | **FIXED 2026-06-10.** `ingest_job` handles single-file forensic images (.e01/.ex01/.raw/.dd/.img): bounded streaming strings extraction (ASCII+UTF-16LE) indexed into OpenSearch with provenance. Live: `Rocba-Memory.raw` job `08c061cf` and `rocba-cdrive.e01` job `d68f9d03` both succeeded with 500k strings indexed; E01 read through pyewf (venv symlink to system module — re-link after `uv sync`). Bounded extraction, not full filesystem parsing. |
 | AUT2-B2 | HIGH | DB authority/provenance | Original AUT2: `run_command` with `evidence_refs` for DB-sealed evidence failed before execution: "the case has no sealed evidence." 2026-06-10 remediation: `run_command` and `run_command_job` with `evidence_refs=["evidence/v1-gate.log"]` succeeded and returned DB evidence ID/hash provenance. `grep` also read `Rocba-Memory.raw` through DB evidence refs. | **FIXED for Gateway/worker run_command paths.** Keep regression coverage; next provenance blocker is `record_finding` DB-audit validation. |
-| AUT2-B3 | HIGH | Finding provenance | `record_finding` rejected immediately returned audit id `siftgateway-codex-1-20260609-212` as "not found in audit trail." The strong artifact-audit path still checks the local JSONL audit trail while Gateway audit authority is DB-first. | Fix before claiming provenance-grade findings from live `run_command` receipts. |
-| AUT2-B4 | HIGH | Memory analysis | `vol` cannot start under `run_command`; it raises a cache-path `PermissionError`. Attempts to set `VOLATILITY_CACHE_PATH` or create cache dirs through MCP were blocked by policy/output-path validation. | Required before using the memory image as a real demo lead source. |
-| AUT2-B5 | MEDIUM | Disk analysis | `mmls` against the EWF image returned exit 1 with no stderr; `fls -o 2048 ... | head` masked the upstream failure because the final pipeline stage succeeded. | Provide an EWF-aware approved extraction/mount workflow or improve forensic-tool error surfacing. |
-| AUT2-B6 | MEDIUM | Orientation/listing | Original AUT2: `evidence_info` reported DB gate OK but `evidence_files=[]`. 2026-06-10 remediation: `evidence_info` returned all four sealed DB evidence objects with `listing_authority=db`. `case_info.findings` counters still lag behind `list_existing_findings`. | **PARTIAL.** Evidence listing fixed; summary counters still need DB-authority cleanup or mirror labeling. |
-| AUT2-B7 | MEDIUM | Context/redaction | Original AUT2: repeated context and binary previews created bloat risk. 2026-06-10 remediation: non-orientation tools no longer append `case_context`; saved outputs return reusable relative refs. Binary memory search still needs safer default preview/file-first ergonomics. | **PARTIAL.** Context repetition and saved refs fixed; preview/redaction tuning remains. |
-| AUT2-B8 | MEDIUM | Tool availability / inventory | 2026-06-10 live smoke: `rg` is not installed on the VM, while installed `grep` works against DB-sealed memory evidence. The agent has no first-class MCP tool inventory of available DFIR binaries. | Add an agent-facing installed-tool inventory and improve guidance for SIFT/DFIR tools before a polished autonomy demo. |
+| AUT2-B3 | HIGH | Finding provenance | `record_finding` rejected immediately returned audit id `siftgateway-codex-1-20260609-212` as "not found in audit trail." The strong artifact-audit path still checks the local JSONL audit trail while Gateway audit authority is DB-first. | **FIXED 2026-06-10.** Artifact validation accepts audit ids from the multi-dir JSONL scan OR DB audit authority (`app.audit_events.details->>'backend_audit_id'`), including `rc-` receipt forms; rejection messages list recent known-good ids. Live: finding `F-codex3-001` STAGED citing fresh audit id `siftgateway-codex3-20260609-295`, provenance summary MCP. |
+| AUT2-B4 | HIGH | Memory analysis | `vol` cannot start under `run_command`; it raises a cache-path `PermissionError`. Attempts to set `VOLATILITY_CACHE_PATH` or create cache dirs through MCP were blocked by policy/output-path validation. | **FIXED (cache) 2026-06-10.** Tools now get `XDG_CACHE_HOME=<case>/tmp/cache` inside the write-jail, re-applied through sudo via `/usr/bin/env`. Live: `vol windows.info` progressed through "Updating caches for 110 files... 100%" with no PermissionError. Remaining gap is forensic, not platform: no matching Windows symbol table/kernel banner for `Rocba-Memory.raw` (operator must provision symbols or validate the image). |
+| AUT2-B5 | MEDIUM | Disk analysis | `mmls` against the EWF image returned exit 1 with no stderr; `fls -o 2048 ... | head` masked the upstream failure because the final pipeline stage succeeded. | **FIXED (surfacing) 2026-06-10.** Per-stage exit codes + stderr tails; pipelines report `success=false` with `failed_stages` when an upstream stage fails (SIGPIPE-exempt). `ewfinfo`/`ewfverify`/`ewfexport` allowlisted. Live: `mmls .e01 \| head` surfaced the mmls failure, and `ewfinfo` revealed the E01 is a LOGICAL image (no partition table) — explaining the original mystery. fls/icat work directly against logical EWF content. |
+| AUT2-B6 | MEDIUM | Orientation/listing | Original AUT2: `evidence_info` reported DB gate OK but `evidence_files=[]`. 2026-06-10 remediation: `evidence_info` returned all four sealed DB evidence objects with `listing_authority=db`. `case_info.findings` counters still lag behind `list_existing_findings`. | **FIXED 2026-06-10.** `case_info` findings counters are DB-sourced (`authority: db`) via the core DB snapshot + gateway overlay on `app.investigation_findings`. Live: counters matched `list_existing_findings` exactly (total 2 → 3 after the new DRAFT). |
+| AUT2-B7 | MEDIUM | Context/redaction | Original AUT2: repeated context and binary previews created bloat risk. 2026-06-10 remediation: non-orientation tools no longer append `case_context`; saved outputs return reusable relative refs. Binary memory search still needs safer default preview/file-first ergonomics. | **FIXED 2026-06-10.** Binary stdout switches to saved-file-first (inline suppressed, hash-linked ref returned); inline stderr capped at 4 KB; duplicated command echoes dropped for single-stage commands. Live: `head -c 300` on the memory image returned `binary_output=true` with empty inline stdout and a reusable saved ref. |
+| AUT2-B8 | MEDIUM | Tool availability / inventory | 2026-06-10 live smoke: `rg` is not installed on the VM, while installed `grep` works against DB-sealed memory evidence. The agent has no first-class MCP tool inventory of available DFIR binaries. | **FIXED 2026-06-10.** `get_tool_help('inventory')` returns the catalog + allowlisted-extra availability inventory (no absolute paths); `capability_guide` gained a `core_tools` summary; `rg` 14.1.0 installed on the VM and allowlisted. Live: inventory returned 70 cataloged / 63 available, `rg` search of sealed evidence succeeded with hash provenance. |
 
 ### Approved Demo Boundary
 
@@ -123,10 +147,18 @@ For BATCH-FRZ1, the safe demo claim is:
   agent tools, RAG grounding, redaction, protected command execution, DRAFT
   proposal, operator approval, and approved-only report generation.
 
+The safe claim now additionally includes (2026-06-10 blocker-fix pass):
+bounded primary-image ingest of `.e01`/`.raw` into the OpenSearch strings
+plane, pipeline-failure surfacing with per-stage diagnostics, DB-audit-validated
+finding provenance, DB-true case counters, binary saved-file-first output, an
+installed-tool inventory, and source-enforced 48h agent credential TTL.
+
 The unsafe claim is:
 
 - A fully autonomous agent has completed substantive analysis of the Rocba disk
-  and memory images. AUT2 did not establish that.
+  and memory images. AUT2 did not establish that; image understanding is
+  strings-level, and Volatility lacks a matching symbol table for the demo
+  memory image.
 
 ## BATCH-AUT1 Tool-Surface Probe (historical)
 

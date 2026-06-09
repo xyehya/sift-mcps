@@ -159,22 +159,27 @@ def redact_tool_result(text: str, *, override_active: bool = False) -> tuple[str
 
 
 # ---------------------------------------------------------------------------
-# BATCH-B1 (F-MVP-2): agent-visible absolute-path redaction.
+# BATCH-B1 (F-MVP-2) / AUT2 item-0: agent-visible absolute-path redaction.
 #
-# The AI agent must never receive absolute case, evidence, or mount paths, nor
-# any other absolute host filesystem path (local config, secrets, scratch). It
-# MAY see opaque IDs, display names, RELATIVE display paths, size, hash, seal
-# status, and provenance IDs. This pass runs at the gateway MCP choke point
-# (agent path only) over every string value, independent of the secret-redaction
-# override — an examiner unredacting secrets in their own session must still not
-# leak host paths to a lower-trust agent.
+# The AI agent must never receive absolute case, evidence, mount, or SIFT-state
+# paths. It MAY see opaque IDs, display names, RELATIVE display paths, size,
+# hash, seal status, provenance IDs — and (AUT2 remediation) BENIGN system
+# paths such as tool/binary/traceback locations (/usr/..., /opt/..., /tmp/...).
+# Live AUT2 showed that blanket-redacting every absolute path destroys tool
+# diagnostics (volatility tracebacks, parser error locations) and breaks agent
+# autonomy; redaction is therefore scoped to SENSITIVE prefixes only, mirroring
+# the sift-core tool-boundary policy (_SENSITIVE_PATH_PREFIXES in
+# sift_core.execute.security). This pass runs at the gateway MCP choke point
+# (agent path only), independent of the secret-redaction override.
 #
 # Strategy:
 #   - Any absolute path under the active case dir collapses to a RELATIVE
 #     display path (e.g. ``/cases/case-x-01020304/evidence/d.E01`` -> ``evidence/d.E01``).
-#   - Any other absolute POSIX path token is replaced with
-#     ``[REDACTED:absolute_path]`` (covers mount points, /home, /mnt, /etc, the
-#     cases root prefix for OTHER cases, scratch dirs, etc).
+#   - Absolute paths under sensitive prefixes (cases root / evidence mounts /
+#     /mnt / /media / /var/lib/sift / /dev / SIFT_STATE_DIR) are replaced with
+#     ``[REDACTED:absolute_path]``.
+#   - All other absolute paths pass through unchanged (tool/binary/traceback
+#     locations the agent needs for diagnosis).
 # ---------------------------------------------------------------------------
 
 # Matches an absolute POSIX path token: a leading slash followed by at least one
@@ -185,12 +190,32 @@ _ABS_PATH_RE = re.compile(r'(?<![\w./])/(?:[^\s"\'<>|]+)')
 
 _PATH_REDACTION_PLACEHOLDER = "[REDACTED:absolute_path]"
 
+# Mirrors sift_core.execute.security._SENSITIVE_PATH_PREFIXES so the gateway
+# choke point and the tool boundary enforce the same policy.
+_SENSITIVE_PATH_PREFIXES = (
+    "/cases",
+    "/evidence",
+    "/mnt",
+    "/media",
+    "/var/lib/sift",
+    "/dev",
+)
+
+
+def _sensitive_path_prefixes() -> tuple[str, ...]:
+    prefixes = list(_SENSITIVE_PATH_PREFIXES)
+    state = os.environ.get("SIFT_STATE_DIR")
+    if state:
+        prefixes.append(state.rstrip("/"))
+    return tuple(prefixes)
+
 
 def _redact_paths_in_text(text: str, case_dir_resolved: str | None) -> tuple[str, int]:
     """Rewrite absolute paths in ``text`` for agent-visible output.
 
     Absolute paths under ``case_dir_resolved`` become relative display paths;
-    all other absolute paths become ``[REDACTED:absolute_path]``. Returns
+    paths under sensitive prefixes become ``[REDACTED:absolute_path]``; all
+    other absolute paths are left intact (AUT2 autonomy remediation). Returns
     ``(rewritten_text, count)`` where ``count`` is the number of substitutions.
     """
     if "/" not in text:
@@ -200,6 +225,7 @@ def _redact_paths_in_text(text: str, case_dir_resolved: str | None) -> tuple[str
     if case_dir_resolved:
         case_prefix = case_dir_resolved.rstrip("/") + "/"
 
+    sensitive = _sensitive_path_prefixes()
     count = 0
 
     def _sub(match: re.Match) -> str:
@@ -216,8 +242,10 @@ def _redact_paths_in_text(text: str, case_dir_resolved: str | None) -> tuple[str
         if case_dir_resolved and token == case_dir_resolved:
             count += 1
             return _PATH_REDACTION_PLACEHOLDER
-        count += 1
-        return _PATH_REDACTION_PLACEHOLDER
+        if any(token == p or token.startswith(p + "/") for p in sensitive):
+            count += 1
+            return _PATH_REDACTION_PLACEHOLDER
+        return token
 
     rewritten = _ABS_PATH_RE.sub(_sub, text)
     return rewritten, count

@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 # resolved by the operator/Gateway/worker before enqueue and lives ONLY here.
 _SPEC_EVIDENCE_PATH_KEYS = ("evidence_path", "scan_path", "input_path")
 _JSON_FILE_SUFFIXES = frozenset({".json", ".jsonl", ".ndjson"})
+_FORENSIC_IMAGE_SUFFIXES = frozenset(
+    {".e01", ".ex01", ".raw", ".dd", ".img", ".vmdk", ".vhd", ".vhdx"}
+)
+_EWF_SUFFIXES = frozenset({".e01", ".ex01"})
 
 # A provenance recorder persists the index/provenance metadata to Postgres via
 # the BATCH-F1 RPCs (register_opensearch_index / record_opensearch_ingest_provenance).
@@ -86,21 +90,27 @@ def _resolve_evidence_path(job: "ClaimedJob") -> Path:
 
 
 def _result(job_result_cls, *, provenance_id: str, hosts: list[dict], indexed: int,
-            bulk_failed: int) -> "JobResult":
+            bulk_failed: int, image: dict | None = None) -> "JobResult":
+    result_public: dict[str, Any] = {
+        "provenance_id": provenance_id,
+        "indexed": int(indexed),
+        "bulk_failed": int(bulk_failed),
+        "hosts": hosts,
+    }
+    if image is not None:
+        result_public["image"] = image
     return job_result_cls(
-        result_public={
-            "provenance_id": provenance_id,
-            "indexed": int(indexed),
-            "bulk_failed": int(bulk_failed),
-            "hosts": hosts,
-        },
+        result_public=result_public,
         provenance_id=provenance_id,
     )
 
 
 def _single_file_kind(path: Path) -> str | None:
-    if path.suffix.lower() in _JSON_FILE_SUFFIXES:
+    suffix = path.suffix.lower()
+    if suffix in _JSON_FILE_SUFFIXES:
         return "json"
+    if suffix in _FORENSIC_IMAGE_SUFFIXES:
+        return "forensic_image"
     return None
 
 
@@ -145,6 +155,160 @@ def _ingest_single_json_file(
     )
     result.hosts.append(host)
     return result
+
+
+def _open_image_stream(path: Path) -> tuple[Any, list[str]]:
+    """Open a forensic image for raw byte streaming.
+
+    For EWF (.e01/.ex01), prefer pyewf/libewf bindings when importable so the
+    decompressed payload is scanned. Without them, fall back to streaming the
+    container file itself — strings from compressed EWF segments are less
+    useful but better than failing the job — and flag ``ewf_compressed_read``
+    so the operator knows to extract the image for a full-fidelity scan.
+    pyewf is deliberately NOT a package dependency (system-provided on SIFT).
+    """
+    warnings: list[str] = []
+    if path.suffix.lower() in _EWF_SUFFIXES:
+        try:
+            import pyewf  # type: ignore[import-not-found]
+        except Exception:
+            warnings.append("ewf_compressed_read")
+        else:
+            handle = pyewf.handle()
+            handle.open(pyewf.glob(str(path)))
+            return handle, warnings
+    return open(path, "rb"), warnings
+
+
+def _ingest_forensic_image(
+    *,
+    evidence_path: Path,
+    client: Any,
+    case_id: str,
+    hostname: str,
+    job_id: str,
+    spec: dict[str, Any],
+    sha256: str | None,
+    ctx: "JobContext",
+) -> tuple[Any, dict[str, Any]]:
+    """Index printable strings from a disk image without mounting it.
+
+    Streams the image through :mod:`opensearch_mcp.image_strings` (bounded by
+    a byte budget + max-strings cap) and bulk-indexes one document per string
+    via the shared ``flush_bulk`` path, so job provenance stamping and the
+    circuit breaker apply exactly as for every other artifact. Returns the
+    ``IngestResult`` plus an agent-safe image summary (display name only —
+    never a path). The image is NOT hashed here; ``sha256`` comes from the
+    evidence manifest when the enqueuer supplies it.
+    """
+    import hashlib
+
+    from opensearch_mcp import __version__
+    from opensearch_mcp.bulk import flush_bulk
+    from opensearch_mcp.image_strings import (
+        DEFAULT_MAX_SCAN_BYTES,
+        DEFAULT_MAX_STRINGS,
+        DEFAULT_MIN_LENGTH,
+        StringScanStats,
+        iter_image_strings,
+    )
+    from opensearch_mcp.paths import build_index_name
+    from opensearch_mcp.results import ArtifactResult, HostResult, IngestResult
+
+    pipeline_version = f"opensearch-mcp-{__version__}"
+    index_name = build_index_name(case_id, f"imgstrings-{evidence_path.stem}", hostname)
+    size_bytes = evidence_path.stat().st_size
+
+    stream, warnings = _open_image_stream(evidence_path)
+    stats = StringScanStats()
+    indexed = bulk_failed = 0
+    batch_size = int(spec.get("batch_size") or 1000)
+    actions: list[dict] = []
+
+    ctx.record_step(2, "parse", status="running")
+    try:
+        for offset, encoding, text in iter_image_strings(
+            stream,
+            min_length=int(spec.get("min_string_length") or DEFAULT_MIN_LENGTH),
+            max_strings=int(spec.get("max_strings") or DEFAULT_MAX_STRINGS),
+            max_scan_bytes=int(spec.get("max_scan_bytes") or DEFAULT_MAX_SCAN_BYTES),
+            stats=stats,
+        ):
+            doc_id = hashlib.sha1(
+                f"{index_name}:{offset}:{encoding}:{text}".encode("utf-8", "replace")
+            ).hexdigest()
+            actions.append(
+                {
+                    "_index": index_name,
+                    "_id": doc_id,
+                    "_source": {
+                        "case_id": case_id,
+                        "evidence_file": evidence_path.name,
+                        "offset": int(offset),
+                        "encoding": encoding,
+                        "text": text,
+                        "job_id": job_id,
+                        "source": "image_strings",
+                        "pipeline_version": pipeline_version,
+                    },
+                }
+            )
+            if len(actions) >= batch_size:
+                flushed, failed = flush_bulk(client, actions)
+                indexed += flushed
+                bulk_failed += failed
+                actions = []
+                ctx.heartbeat()
+        if actions:
+            flushed, failed = flush_bulk(client, actions)
+            indexed += flushed
+            bulk_failed += failed
+    finally:
+        stream.close()
+
+    ctx.record_step(
+        2,
+        "parse",
+        status="succeeded",
+        detail={
+            "strings": stats.strings_emitted,
+            "bytes_scanned": stats.bytes_scanned,
+            "truncated": stats.truncated,
+        },
+    )
+    if warnings:
+        ctx.log(
+            "EWF image read without libewf bindings (compressed payload scanned); "
+            "extract the image for a full-fidelity strings pass",
+            level="warning",
+        )
+
+    image_summary: dict[str, Any] = {
+        "kind": "forensic_image",
+        "evidence_file": evidence_path.name,
+        "strings_indexed": int(indexed),
+        "bytes_scanned": int(stats.bytes_scanned),
+        "truncated": bool(stats.truncated),
+        "index": index_name,
+        "size_bytes": int(size_bytes),
+    }
+    if sha256:
+        image_summary["sha256"] = str(sha256)
+    if warnings:
+        image_summary["warnings"] = warnings
+
+    result = IngestResult(pipeline_version=pipeline_version)
+    host = HostResult(hostname=hostname)
+    host.artifacts.append(
+        ArtifactResult(
+            artifact="image_strings",
+            index=index_name,
+            indexed=int(indexed),
+            bulk_failed=int(bulk_failed),
+        )
+    )
+    result.hosts.append(host)
+    return result, image_summary
 
 
 def make_ingest_job_handler(
@@ -265,6 +429,7 @@ def _run_ingest_job(
         provenance_fields["vhir.evidence_id"] = str(job.evidence_id)
 
     ctx.record_step(1, "index", status="running")
+    image_summary: dict[str, Any] | None = None
     token = set_ingest_provenance(provenance_fields)
     try:
         if single_file_kind == "json":
@@ -275,6 +440,19 @@ def _run_ingest_job(
                 hostname=hostname or "single-file",
                 job_id=str(job.job_id),
                 spec=spec,
+            )
+        elif single_file_kind == "forensic_image":
+            result, image_summary = _ingest_forensic_image(
+                evidence_path=evidence_path,
+                client=client,
+                case_id=str(job.case_id),
+                hostname=hostname or "single-file",
+                job_id=str(job.job_id),
+                spec=spec,
+                # Manifest-recorded digest only — never hash a multi-GB image
+                # synchronously inside the job. spec_internal is worker-only.
+                sha256=(job.spec_internal or {}).get("sha256") or spec.get("sha256"),
+                ctx=ctx,
             )
         else:
             result = ingest(
@@ -369,6 +547,7 @@ def _run_ingest_job(
         hosts=host_summaries,
         indexed=total_indexed,
         bulk_failed=total_bulk_failed,
+        image=image_summary,
     )
 
 
