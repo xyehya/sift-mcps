@@ -1,6 +1,6 @@
 # Task Batches
 
-Status: MVP sprint execution tracker.
+Status: MVP sprint execution tracker plus OpenSearch restoration track.
 Last updated: 2026-06-10.
 
 Rules:
@@ -12,6 +12,8 @@ Rules:
   blocking decision is resolved in `Session-Notes.md`.
 - Resolve blockers on spot for dependent work. Independent batches may proceed.
 - Keep new planning in this file. Do not create more migration docs.
+- `docs/migration` is intentionally trimmed to this tracker plus
+  `Session-Notes.md`; do not restore `Migration-Spec.md`.
 - Parallel worker branches must not all edit `docs/migration`. A worker returns
   a landing log block; the integration/conductor session updates this tracker
   and `Session-Notes.md` after merge.
@@ -47,6 +49,462 @@ Rules:
 - [x] BATCH-AUT1 - AI agent autonomy and MCP tool-surface assessment
 - [x] BATCH-AUT2 - Demo-case autonomous investigation benchmark
 - [ ] BATCH-FRZ1 - Final freeze rehearsal, limitations, and demo runbook
+- [x] BATCH-OS0 - OpenSearch disappearance baseline and restoration order
+- [x] BATCH-OS1 - DB backend seed and aggregate catalog visibility
+- [x] BATCH-OS2 - Active-case proxy compatibility for OpenSearch tools
+- [x] BATCH-OS3 - Read-only OpenSearch investigation surface
+- [x] BATCH-OS4 - Job-backed ingest using standalone OpenSearch code
+- [x] BATCH-OS5 - Host identity, enrichment, and mutating-tool policy
+- [ ] BATCH-OS6 - Live VM OpenSearch proof
+- [x] BATCH-PMI0 - Installer hardening + Supabase CLI bring-up (one-session bare-SIFT)
+- [ ] BATCH-PMI1 - OpenSearch 3.5 cutover + Sigma-disable/Security-Analytics cleanup
+- [ ] BATCH-PMI2 - RAG single-home: remove standalone Chroma kb_search_* path
+- [ ] BATCH-PMI3 - FK enrichment actually fires (wire FK_DATA_DIR)
+- [ ] BATCH-PMI4 - VM proof: bare-SIFT -> live stack -> Rocba case run
+
+## OpenSearch Restoration Operating Model
+
+Decision:
+
+- OpenSearch stays standalone in `packages/opensearch-mcp/**`.
+- Gateway stays the only agent-facing policy boundary in
+  `packages/sift-gateway/**`.
+- Supabase/Postgres remains authority for cases, evidence, jobs, audit, host
+  identity receipts, and ingest provenance.
+- OpenSearch is a derived, secured, rebuildable search plane. It never
+  authorizes cases, evidence, findings, approvals, or reports.
+
+Current baseline to verify before implementation:
+
+- Live aggregate MCP catalog was last recorded with 13 Gateway tools and no
+  `opensearch_*` tools.
+- Standalone manifest already declares `opensearch-mcp` with search, ingest,
+  enrichment, host-fix, status, shard, and detection tools:
+  `packages/opensearch-mcp/sift-backend.json`.
+- Standalone registry/golden still shows the rich surface:
+  `packages/opensearch-mcp/src/opensearch_mcp/registry.py`,
+  `packages/opensearch-mcp/src/opensearch_mcp/server.py`,
+  `packages/opensearch-mcp/tests/fixtures/mcp_surface_golden.json`.
+- Gateway add-on visibility is controlled by DB registry + requirement gates:
+  `packages/sift-gateway/src/sift_gateway/mcp_backends_registry.py`,
+  `packages/sift-gateway/src/sift_gateway/server.py`,
+  `packages/sift-gateway/src/sift_gateway/mcp_server.py`.
+
+Parallel order:
+
+- OS0 is this conductor planning/baseline batch.
+- OS1 and OS2 can run in parallel after OS0; integrate OS1 first if both touch
+  backend catalog tests.
+- OS3 starts after OS1 proves OpenSearch tools can appear in the aggregate
+  catalog and OS2 proves active-case injection.
+- OS4 and OS5 can run in parallel after OS2; both must treat mutating work as
+  DB/job/audit backed or deny/redirect it.
+- OS6 is last and must run only after local tests for OS1-OS5 pass.
+
+Questions resolved before coding:
+
+- Standalone versus core: standalone. Do not move parser/search code into
+  sift-core.
+- `gateway.yaml` versus DB registry: DB registry only. Do not re-enable YAML as
+  authority.
+- Agent ingest path: prefer `ingest_job` for real writes. Direct
+  `opensearch_ingest(dry_run=False)` must be hidden, denied, or typed-redirected
+  in DB-active mode unless Gateway can provide the same evidence/job/provenance
+  envelope.
+
+## BATCH-OS0 - OpenSearch disappearance baseline and restoration order
+
+Dependencies: none.
+
+Scope:
+
+- `docs/migration/task-batches.md`
+- `docs/migration/Session-Notes.md`
+- Read-only inspection of:
+  `packages/opensearch-mcp/sift-backend.json`,
+  `packages/opensearch-mcp/src/opensearch_mcp/registry.py`,
+  `packages/opensearch-mcp/src/opensearch_mcp/server.py`,
+  `packages/sift-gateway/src/sift_gateway/mcp_server.py`,
+  `packages/sift-gateway/src/sift_gateway/server.py`,
+  `packages/sift-gateway/src/sift_gateway/mcp_backends_registry.py`,
+  `packages/sift-gateway/src/sift_gateway/policy_middleware.py`.
+
+Exact work:
+
+- Record why the OpenSearch track is reopened: agent autonomy needs indexed
+  search, count, aggregate, timeline, event fetch, ingest, enrichment, and
+  status tools through aggregate MCP.
+- Add OS1-OS6 as the executable restoration track with code references,
+  parallel order, and acceptance checks.
+- Keep the docs trimmed to this tracker plus `Session-Notes.md`.
+
+Acceptance:
+
+- `python3 scripts/validate_docs.py`
+- `python3 scripts/validate_migration_docs.py`
+- `git diff --check`
+
+## BATCH-OS1 - DB backend seed and aggregate catalog visibility
+
+Dependencies: BATCH-OS0.
+
+Scope:
+
+- `install.sh`
+- `scripts/setup-addon.sh`
+- `packages/opensearch-mcp/sift-backend.json`
+- `packages/sift-gateway/src/sift_gateway/mcp_backends_registry.py`
+- `packages/sift-gateway/src/sift_gateway/server.py`
+- `packages/sift-gateway/tests/test_f1_opensearch_backend_registry.py`
+- `packages/sift-gateway/tests/test_d22a_mcp_backends_registry.py`
+
+Exact work:
+
+- Ensure bootstrap/setup registers `opensearch-mcp` in `app.mcp_backends` when
+  OpenSearch config/dependencies are present.
+- Store non-secret connection metadata only; use env refs for URLs,
+  credentials, TLS, and runtime config.
+- Prove requirement gating: unavailable OpenSearch hides the backend; available
+  OpenSearch exposes `opensearch_*` in aggregate `/mcp tools/list`.
+- Keep `gateway.yaml` ignored as add-on authority.
+
+Acceptance:
+
+- Gateway registry tests cover OpenSearch enabled, disabled, missing
+  requirement, and no raw-secret storage.
+- Aggregate tool-list smoke shows OpenSearch namespace present without leaking
+  credentials.
+
+## BATCH-OS2 - Active-case proxy compatibility for OpenSearch tools
+
+Dependencies: BATCH-OS0. Can run parallel with OS1, but lands after catalog
+tests are reconciled.
+
+Scope:
+
+- `packages/sift-gateway/src/sift_gateway/policy_middleware.py`
+- `packages/sift-gateway/src/sift_gateway/server.py`
+- `packages/sift-gateway/src/sift_gateway/mcp_server.py`
+- `packages/opensearch-mcp/sift-backend.json`
+- Gateway proxy/policy tests near:
+  `packages/sift-gateway/tests/test_pr03b_active_case_policy.py`,
+  `packages/sift-gateway/tests/test_tool_refactor_2026.py`,
+  `packages/sift-gateway/tests/test_pr03_tool_authorization.py`
+
+Exact work:
+
+- Fix mounted FastMCP proxy calls so case-scoped OpenSearch tools receive the
+  DB active `case_id` safely.
+- Stop relying on placeholder schemas for `safe_case_argument_names`; use
+  manifest metadata or concrete Gateway logic for OpenSearch case arguments.
+- Allow safe active-case injection for `opensearch_search`,
+  `opensearch_count`, `opensearch_aggregate`, `opensearch_get_event`,
+  `opensearch_timeline`, `opensearch_field_values`,
+  `opensearch_case_summary`, `opensearch_status`,
+  `opensearch_shard_status`, and `opensearch_list_detections`.
+- Preserve denial when a client supplies a mismatched case.
+
+Acceptance:
+
+- Tests prove proxied OpenSearch tools get DB active case by default.
+- Tests prove wrong explicit case IDs fail with typed denial.
+- Evidence gate, audit envelope, response guard, and scope checks still wrap
+  backend dispatch.
+
+## BATCH-OS3 - Read-only OpenSearch investigation surface
+
+Dependencies: BATCH-OS1; BATCH-OS2.
+
+Scope:
+
+- `packages/opensearch-mcp/src/opensearch_mcp/registry.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/server.py`
+- `packages/opensearch-mcp/sift-backend.json`
+- `packages/opensearch-mcp/tests/test_opensearch_mcp_surface_snapshot.py`
+- `packages/opensearch-mcp/tests/test_server_tools.py`
+- `packages/opensearch-mcp/tests/fixtures/mcp_surface_golden.json`
+- Gateway aggregate tool-list snapshot/tests.
+
+Exact work:
+
+- Reconcile manifest, registry, golden, and aggregate Gateway catalog.
+- Restore read-only investigator tools first: search, count, aggregate, get
+  event, timeline, field values, case summary, status, shard status, and
+  detections.
+- Keep schemas as client-compatible JSON objects with concise descriptions.
+- Keep outputs capped/redacted through Gateway response guard.
+
+Acceptance:
+
+- OpenSearch surface snapshot passes.
+- Aggregate `/mcp tools/list` advertises the read-only OpenSearch tools.
+- Targeted aggregate calls cover at least `opensearch_status`,
+  `opensearch_count`, and `opensearch_search`.
+
+## BATCH-OS4 - Job-backed ingest using standalone OpenSearch code
+
+Dependencies: BATCH-OS2. Can run parallel with OS5.
+
+Scope:
+
+- `packages/opensearch-mcp/src/opensearch_mcp/job_ingest.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/ingest.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/ingest_cli.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/ingest_status.py`
+- `packages/sift-gateway/src/sift_gateway/job_tools.py`
+- Worker bootstrap/job registration paths.
+- `packages/opensearch-mcp/tests/test_job_ingest.py`
+- `packages/sift-gateway/tests/test_mvp_binding_job_tools.py`
+
+Exact work:
+
+- Keep parser, mount, discovery, mapping, bulk indexing, and client behavior in
+  `opensearch-mcp`.
+- Keep real agent-facing writes job-backed: Gateway resolves evidence refs,
+  worker resolves paths internally, and OpenSearch provenance is recorded in
+  Postgres.
+- Return only job IDs, status, counts, index names, provenance IDs, and bounded
+  summaries to agents.
+- Hide, deny, or typed-redirect direct `opensearch_ingest(dry_run=False)` in
+  DB-active mode unless it goes through the same Gateway evidence/job/provenance
+  envelope.
+- Allow dry-run/survey only if it uses opaque evidence refs and sealed-evidence
+  checks; no absolute path bypass.
+
+Acceptance:
+
+- Sealed-evidence ingest job indexes documents and writes DB provenance.
+- Agent responses contain no absolute evidence paths, mount paths, OpenSearch
+  credentials, DB DSNs, or worker file paths.
+- `ingest_job` + `job_status` integration tests pass.
+
+## BATCH-OS5 - Host identity, enrichment, and mutating-tool policy
+
+Dependencies: BATCH-OS2. Can run parallel with OS4.
+
+Scope:
+
+- `packages/opensearch-mcp/src/opensearch_mcp/server.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/host_identity_db.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/host_dictionary.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/threat_intel.py`
+- `packages/opensearch-mcp/src/opensearch_mcp/triage_remote.py`
+- `packages/opensearch-mcp/sift-backend.json`
+- `packages/opensearch-mcp/tests/test_k4_host_identity_authority.py`
+- Gateway add-on authority middleware tests.
+
+Exact work:
+
+- Keep `opensearch_fix_host_mapping` canonical; keep
+  `opensearch_host_fix` only as a deprecated alias if needed for one cutover.
+- In DB-active mode, host corrections must write DB host-identity receipts or
+  be denied/redirected with typed guidance.
+- Treat enrichment as derived-state mutation requiring explicit scopes, audit,
+  and status tracking. Enrichment cannot approve findings, alter evidence, or
+  decide reports.
+- Mark required scopes and prohibited operations in the manifest.
+
+Acceptance:
+
+- Mutating OpenSearch tools are job/DB/audit backed or fail closed with typed
+  guidance.
+- Host correction records source/canonical/actor/tool/affected IDs/audit ID and
+  leaks no `host-dictionary.yaml` absolute path.
+- Enrichment status is pollable and does not expose OpenCTI/OpenSearch secrets.
+
+## BATCH-OS6 - Live VM OpenSearch proof
+
+Dependencies: BATCH-OS1; BATCH-OS2; BATCH-OS3; BATCH-OS4; BATCH-OS5.
+
+Scope:
+
+- Deployment/smoke only.
+- `docs/migration/Session-Notes.md` closeout after proof passes.
+
+Exact work:
+
+- Sync to the active VM tree recorded in `Session-Notes.md`.
+- Restart `sift-gateway.service` and `sift-job-worker.service`.
+- Verify Gateway health, Supabase, evidence root, worker, and OpenSearch.
+- Issue a fresh portal agent principal and prove aggregate `/mcp tools/list`
+  includes restored `opensearch_*`.
+- Run one read-only OpenSearch path, then one sealed-evidence ingest job if the
+  demo case is ready.
+
+Acceptance:
+
+- Live aggregate MCP shows OpenSearch tools present and callable.
+- Search/ingest uses DB active case and sealed evidence only.
+- No path, DSN, service-role key, token, or OpenSearch credential leakage.
+- `Session-Notes.md` records command-level proof after checks pass.
+
+## OpenSearch Worker Prompts
+
+Use these from clean parallel worktrees. Worker branches do not edit
+`docs/migration`; they return a landing log for the conductor.
+
+### PROMPT-OS1 - DB backend seed and aggregate catalog visibility
+
+```text
+ROLE & MODE
+You are the BATCH-OS1 coding agent for the SIFT MVP sprint. Restore
+opensearch-mcp visibility through the Gateway aggregate MCP catalog by fixing
+DB-backed add-on registration/bootstrap. Do not move OpenSearch into sift-core.
+
+REQUIRED READING
+Read, in order: AGENTS.md; docs/migration/task-batches.md OpenSearch
+Restoration Operating Model + BATCH-OS1; latest entry in
+docs/migration/Session-Notes.md.
+
+SCOPE
+Own OS1 only. Inspect/edit only:
+- install.sh
+- scripts/setup-addon.sh
+- packages/opensearch-mcp/sift-backend.json
+- packages/sift-gateway/src/sift_gateway/mcp_backends_registry.py
+- packages/sift-gateway/src/sift_gateway/server.py
+- packages/sift-gateway/tests/test_f1_opensearch_backend_registry.py
+- packages/sift-gateway/tests/test_d22a_mcp_backends_registry.py
+
+GROUNDING FACTS
+The live aggregate catalog was last recorded with 13 Gateway tools and no
+opensearch_* tools. The standalone manifest already declares opensearch-mcp and
+the rich tool surface. Gateway add-on authority is app.mcp_backends, not
+gateway.yaml.
+
+DELIVERABLE
+Ensure a bootstrap/setup path registers opensearch-mcp in app.mcp_backends when
+OpenSearch config/dependencies are present. Store only non-secret connection
+metadata; use env refs for OpenSearch URL/credentials/TLS/runtime config. Prove
+requirement gating: unavailable OpenSearch hides the backend; available
+OpenSearch exposes opensearch_* in aggregate /mcp tools/list.
+
+HARD CONSTRAINTS
+Do not re-enable gateway.yaml as authority. Do not store raw OpenSearch
+credentials, DB DSNs, service-role keys, MCP tokens, or VM secrets in repo
+files. Do not change active-case proxy logic; that is OS2.
+
+TESTS
+Run targeted registry/bootstrap tests, at minimum:
+- pytest packages/sift-gateway/tests/test_f1_opensearch_backend_registry.py -q
+- pytest packages/sift-gateway/tests/test_d22a_mcp_backends_registry.py -q
+Also run any new/changed aggregate catalog tests.
+
+OUTPUT DISCIPLINE
+Do not edit docs/migration. End with a LANDING LOG block:
+- changed files
+- tests run and results
+- how OpenSearch is registered
+- proof no raw secrets are stored/emitted
+- whether aggregate tools/list can include opensearch_* when requirements pass
+- follow-up needed for OS2/OS3
+```
+
+### PROMPT-OS2 - Active-case proxy compatibility for OpenSearch tools
+
+```text
+ROLE & MODE
+You are the BATCH-OS2 coding agent for the SIFT MVP sprint. Fix Gateway
+active-case injection/denial for proxied OpenSearch MCP tools. Do not work on
+backend registration/bootstrap; that is OS1.
+
+REQUIRED READING
+Read, in order: AGENTS.md; docs/migration/task-batches.md OpenSearch
+Restoration Operating Model + BATCH-OS2; latest entry in
+docs/migration/Session-Notes.md.
+
+SCOPE
+Own OS2 only. Inspect/edit only:
+- packages/sift-gateway/src/sift_gateway/policy_middleware.py
+- packages/sift-gateway/src/sift_gateway/server.py
+- packages/sift-gateway/src/sift_gateway/mcp_server.py
+- packages/opensearch-mcp/sift-backend.json
+- directly related tests near:
+  packages/sift-gateway/tests/test_pr03b_active_case_policy.py
+  packages/sift-gateway/tests/test_tool_refactor_2026.py
+  packages/sift-gateway/tests/test_pr03_tool_authorization.py
+
+GROUNDING FACTS
+OpenSearch tools are case-scoped and must receive the DB active case safely
+through Gateway. Empty/placeholder schemas must not cause
+active_case_proxy_denied for safe OpenSearch tools. Explicit wrong case IDs must
+still be denied.
+
+DELIVERABLE
+Make Gateway safely inject the DB active case for proxied OpenSearch tools:
+opensearch_search, opensearch_count, opensearch_aggregate,
+opensearch_get_event, opensearch_timeline, opensearch_field_values,
+opensearch_case_summary, opensearch_status, opensearch_shard_status, and
+opensearch_list_detections. Use manifest metadata or concrete Gateway logic for
+safe case argument names; do not rely on placeholder schemas.
+
+HARD CONSTRAINTS
+Gateway remains the policy boundary. Preserve evidence gate, audit envelope,
+response guard, and scope checks before/around backend dispatch. Preserve
+fail-closed mismatch denial when a client supplies another case. Do not expose
+absolute evidence paths, case paths, mount paths, OpenSearch credentials, DB
+credentials, service-role keys, or shell access.
+
+TESTS
+Run targeted proxy/policy tests you add or touch, plus the narrow existing
+authorization/policy tests needed to prove:
+- DB active case is injected by default for safe OpenSearch tools.
+- explicit mismatched case_id is denied before backend dispatch.
+- non-OpenSearch backend tools are not accidentally widened.
+
+OUTPUT DISCIPLINE
+Do not edit docs/migration. End with a LANDING LOG block:
+- changed files
+- tests run and results
+- exact OpenSearch tools made case-injectable
+- mismatch-denial proof
+- response/audit/evidence-gate implications
+- follow-up needed for OS1/OS3
+```
+
+### PROMPT-OSX - Template for OS3 through OS6
+
+```text
+ROLE & MODE
+You are the BATCH-OS<N> coding agent for the SIFT MVP sprint. Complete only
+BATCH-OS<N> from docs/migration/task-batches.md. Do not redesign the
+architecture and do not move OpenSearch into sift-core.
+
+REQUIRED READING
+Read, in order: AGENTS.md; docs/migration/task-batches.md OpenSearch
+Restoration Operating Model + BATCH-OS<N>; latest entry in
+docs/migration/Session-Notes.md; LANDING LOGs from completed OS dependencies.
+
+SCOPE
+Use only the BATCH-OS<N> scope paths listed in task-batches.md unless a failing
+test proves one minimal adjacent change is required. If a needed fix belongs to
+another OS batch, return it as a follow-up instead of expanding scope.
+
+SECURITY INVARIANTS
+Gateway is the only agent-facing policy boundary. Supabase/Postgres is
+authority for cases, evidence, jobs, audit, host identity receipts, and ingest
+provenance. OpenSearch is derived/rebuildable and never authorizes cases,
+evidence, findings, approvals, or reports. Agents never receive absolute paths,
+DB/OpenSearch credentials, service-role keys, MCP tokens, or shell access.
+
+DELIVERABLE
+Implement the Exact work for BATCH-OS<N>. Keep responses capped/redacted and
+schemas client-compatible plain objects. For mutating work, use Gateway/DB/job
+authority or fail closed with typed guidance.
+
+TESTS
+Run the targeted tests named in BATCH-OS<N> plus any tests for changed files.
+For OS6, run live VM smoke only after OS1-OS5 local tests pass.
+
+OUTPUT DISCIPLINE
+Do not edit docs/migration from worker branches. End with a LANDING LOG block:
+- batch ID and status
+- changed files
+- tests/smoke run and results
+- acceptance evidence
+- security/leakage notes
+- unresolved blockers or next OS follow-up
+```
 
 ## BATCH-A0 - Freeze simplified migration operating model
 
@@ -1731,3 +2189,89 @@ redacted previews; denied commands fail closed and are audited; commands cannot
 read DB/service secrets or write authority state; output receipts are DB-backed
 and reportable without local paths.
 ```
+
+## Post-Migration Install & Cleanup (PMI) Track
+
+Goal: a single `./install.sh --no-windows-triage --no-opencti` on a BARE SIFT VM
+brings up everything live (Supabase via CLI, migrations, OpenSearch 3.5 + Hayabusa,
+RAG pgvector, gateway+worker+portal), then the operator runs the Rocba case.
+
+### PMI operating model (LEAN — read this first)
+- One worktree per batch off `revamp/spg-v1`; one commit per batch; scope-fenced.
+- Tests: run ONLY the targeted tests for the package(s) you touched, plus `bash -n`
+  for any shell script. DO NOT run full suites every session. The single full
+  integration check is BATCH-PMI4 (live VM) — that is where end-to-end is proven.
+- Log: one line per batch in `Session-Notes.md`. No new runbooks.
+- PMI1 and PMI2 are DISJOINT -> run in PARALLEL. PMI3 is small, touches install.sh
+  env-writing -> run after PMI1 (or solo). PMI4 is last, after PMI1/PMI2/PMI3.
+
+### Locked decisions (context for all PMI batches)
+- OpenSearch = 3.5 (Hayabusa-compatible; Sigma percolator broken on 3.5 -> Sigma
+  detectors stay DISABLED, detection is Hayabusa-during-evtx-ingest). 2.18 was a
+  stopgap; cut over to 3.5.
+- RAG has ONE home = Supabase Postgres pgvector (`app.rag_chunks`, served by core
+  `rag_search_case`). The standalone Chroma `kb_search_*` tools are a redundant
+  duplicate to delete; keep the Chroma->pgvector importer only as the load step.
+- `forensic-knowledge` (FK enrichment / anti-drift reminders) is CORE context-
+  injection, NOT a RAG — KEEP it; it just never fires because FK_DATA_DIR is unset.
+- Add-ons (opencti, windows-triage) are read-only, zero authority to mutate state/
+  config, behind the Backend Contract — unchanged here.
+- BATCH-PMI0 landed: commit `1742172` (installer hardening + Supabase CLI v2.105
+  lean stack jwt_expiry=172800 + --network-id loopback isolation + apply_db_migrations
+  + opensearch env/restart fixes + linger + hardened poll). install.sh + setup-supabase.sh
+  are `bash -n` clean; live-VM validation is PMI4.
+
+## BATCH-PMI0 - Installer hardening + Supabase CLI bring-up
+
+Landed (commit `1742172`); see "Locked decisions" above. Acceptance: `bash -n` clean on
+install.sh + setup-supabase.sh; config.toml parses; :9200 loopback. Live-VM acceptance
+is BATCH-PMI4.
+
+## BATCH-PMI1 - OpenSearch 3.5 cutover + Sigma-disable/Security-Analytics cleanup
+
+Prompt (paste as the agent task). Scope: `docker-compose.yml`, `install.sh` (start_opensearch + opensearch config
+funcs only), `packages/opensearch-mcp/**` (client/security/config + the Security
+Analytics setup), `packages/opensearch-mcp/docker/docker-compose.yml`. Reference the
+OLD working script `/home/yk/AI/SIFTHACK/opensearch-mcp/scripts/setup-opensearch.sh`
+(VHIR) for the 3.5 Security-Analytics cleanup pattern. Do: switch the OpenSearch image
+to 3.5 (the packages/opensearch-mcp/docker compose already pins 3.5.0 with
+OPENSEARCH_INITIAL_ADMIN_PASSWORD); wire the admin password into opensearch.yaml/client
+(or keep DISABLE_SECURITY_PLUGIN if that is the chosen 3.5 posture — pick one and make
+it consistent across compose + client); keep :9200 bound to 127.0.0.1; port the
+Sigma-disable + non-functional-detector/orphaned-monitor cleanup + alias setup from the
+VHIR script so install doesn't create dead detectors; confirm Hayabusa detection +
+`opensearch_list_detections`/`opensearch_aggregate` still work. Tests: opensearch-mcp
+targeted tests only + `bash -n install.sh`. Do NOT touch RAG/forensic-rag or gateway core.
+
+## BATCH-PMI2 - RAG single-home: remove standalone Chroma kb_search_* path
+
+Prompt (paste as the agent task). Scope: `packages/forensic-rag-mcp/**` (remove the Chroma kb_search backend serving +
+the `kb_search_knowledge`/`kb_list_knowledge_sources`/`kb_get_knowledge_stats` tools +
+its sift-backend.json manifest), `scripts/setup-addon.sh` (remove the RAG/`setup_rag`
+option). KEEP `rag_mcp.pgvector_store`, the Chroma->pgvector importers
+(`pgvector_chroma_import`, `pgvector_seed`), and the gateway core `rag_search_case`
+(do NOT touch `packages/sift-gateway/**`). Net result: pgvector is the only agent-facing
+RAG; Chroma remains only as an internal import source. Tests: forensic-rag-mcp targeted
+tests only. Do NOT touch OpenSearch or gateway core.
+
+## BATCH-PMI3 - FK enrichment actually fires (wire FK_DATA_DIR)
+
+Prompt (paste as the agent task). Scope: `install.sh` (env writing region) + `configs/systemd/sift-gateway.service` +
+`configs/systemd/sift-job-worker.service`; verify-only in
+`packages/forensic-knowledge/src/forensic_knowledge/loader.py` and
+`packages/sift-core/src/sift_core/execute/response.py`. Problem: FK enrichment
+(`build_response`, run_command path) never injects because FK_DATA_DIR is unset in the
+service env and the loader can't resolve the data dir under the service user. Do: resolve
+the installed `forensic-knowledge` data dir, write `FK_DATA_DIR=<that path>` into a
+gateway/worker env file (or Environment= line), and confirm the loader finds it. Keep the
+existing run_command scope + decay budget. Tests: forensic-knowledge/sift-core targeted
+tests + `bash -n install.sh`. Live confirmation is in PMI4.
+
+## BATCH-PMI4 - VM proof: bare-SIFT -> live stack -> Rocba case run
+
+Operator-run, last. On the bare SIFT VM: `./install.sh --no-windows-triage --no-opencti`; confirm
+`status:ok` (not degraded), job-worker not crash-looping, aggregate /mcp lists
+`opensearch_*` + `rag_search_case` after the post-seed restart, `app.rag_chunks`
+populated, Hayabusa detections queryable. Then portal: create case -> issue agent token
+-> register+seal Rocba disk+RAM evidence -> run the agent end-to-end. Record command-level
+proof in `Session-Notes.md`. This is the ONLY full end-to-end gate.
