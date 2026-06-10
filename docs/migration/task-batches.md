@@ -59,13 +59,13 @@ Rules:
 - [x] BATCH-PMI0 - Installer hardening + Supabase CLI bring-up (one-session bare-SIFT)
 - [x] BATCH-PMI1 - OpenSearch 3.5 cutover + Sigma-disable/Security-Analytics cleanup
 - [x] BATCH-PMI2 - RAG single-home: remove standalone Chroma kb_search_* path (decision SUPERSEDED by BATCH-OSX-RAG; see Session-Notes 2026-06-10 OSX plan)
-- [ ] BATCH-PMI3 - FK enrichment actually fires (wire FK_DATA_DIR)
+- [x] BATCH-PMI3 - FK enrichment actually fires (wire FK_DATA_DIR)
 - [ ] BATCH-PMI4 - VM proof: bare-SIFT -> live stack -> Rocba case run
-- [ ] BATCH-OSX1 - OpenSearch backend mounting fix (P1: seed-before-start race + dedupe double stdio spawn)
-- [ ] BATCH-OSX2 - OpenSearch FastMCP surface optimization (tool defs/schemas/examples/prompts; advanced-tool-use)
-- [ ] BATCH-OSX-RAG - Port forensic-rag-mcp tools to pgvector at full parity + remove rag_search_case shim
-- [ ] BATCH-OSX3 - Programmatic tool-calling / code-execution-with-MCP feasibility spike (doc-first)
-- [ ] BATCH-OSX-PURGE - Purge stale/unused (forensic-mcp, dead Chroma index modules, broken win-triage scripts)
+- [x] BATCH-OSX1 - OpenSearch backend mounting fix (P1: seed-before-start race + dedupe double stdio spawn)
+- [x] BATCH-OSX2 - OpenSearch FastMCP surface optimization (tool defs/schemas/examples/prompts; advanced-tool-use)
+- [x] BATCH-OSX-RAG - Port forensic-rag-mcp tools to pgvector at full parity + remove rag_search_case shim
+- [x] BATCH-OSX3 - Programmatic tool-calling / code-execution-with-MCP feasibility spike (doc-first)
+- [x] BATCH-OSX-PURGE - Purge stale/unused (forensic-mcp, dead Chroma index modules, broken win-triage scripts)
 
 ## OpenSearch Restoration Operating Model
 

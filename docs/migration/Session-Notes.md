@@ -13,6 +13,120 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - OSX build wave LANDED (OSX1 + OSX-RAG + OSX-PURGE + OSX2 + OSX3 + PMI3)
+
+Status: DONE (six batches landed on `revamp/spg-v1`; NOT pushed; full end-to-end stays BATCH-PMI4/OS6)
+
+Orchestrated build wave (conductor + scope-fenced agent teammates in manual worktrees off
+`revamp/spg-v1` — NOT Agent isolation:worktree). Each batch: one commit, targeted tests, conductor
+review + independent re-run. Landed commits, in order:
+
+- `e3d7414` **BATCH-OSX1** - OpenSearch backend mounting fix (P1) + double-spawn dedupe. Race fixed
+  TWO ways: (a) install.sh reordered so `seed_addon_backends` runs BEFORE `install_systemd_service`
+  (gateway's first `__init__` registry read already includes opensearch-mcp; removed the FM-1
+  post-seed restart workaround); (b) new `Gateway.reload_backend_registry()` called by
+  `_late_start_checker` every 30s re-reads `app.mcp_backends` and mounts late-seeded backends live
+  (no restart). Double-spawn confirmed real and deduped: factored `mount_single_addon_proxy()` +
+  `_mounted_proxy_backends` set; `_late_start_checker` skips eager `StdioMCPBackend.start()` for
+  proxy-served backends. Tests: 25 targeted; full gateway 450 pass.
+- `8940a32` **BATCH-OSX-RAG** - forensic-rag-mcp tools ported to pgvector at parity; `rag_search_case`
+  shim removed. Restored `kb_search_knowledge` (query, top_k≤50, source, source_ids≤20-precedence,
+  technique, platform-enum), `kb_list_knowledge_sources`, `kb_get_knowledge_stats` backed by
+  `PgVectorRagStore`; BGE query embed moved gateway->`rag_mcp/query_embedding.py`. Deleted
+  `sift-gateway/rag_bridge.py` + `_register_rag_tool` + `PgVectorRagQueryService` +
+  `_CORE_TOOL_CATEGORIES`/`_gateway_local_tools` entries. NEW append-only migration
+  `202606101100_rag_search_filters.sql` extends `app.rag_search` with
+  `p_source/p_source_ids/p_technique/p_platform` (defaulted -> backward-safe). forensic-rag re-registered
+  as a backend (install.sh seed + setup-addon.sh). `chromadb`->optional `[chroma-import]` extra;
+  `sentence-transformers` stays required. Tests: 55 forensic-rag + full gateway 450 (the 3 PMI2-era
+  manifest failures now GREEN).
+- `978bdb8` **BATCH-OSX-PURGE** - deleted dead `packages/forensic-mcp/` (whole pkg; in
+  `_RETIRED_CORE_BACKENDS`, zero importers; guard kept) + its 2 root-pyproject refs; deleted 7 dead
+  Chroma index modules in forensic-rag-mcp (`index/build/status/analyze_queries/tuning_config/fs_safety` +
+  `scripts/build_release.py`). KEPT `refresh.py`+`sources.py` (reachable from live
+  `scripts/download_index.py`, invoked by install.sh:411) and curated `tool_metadata.py`. Conservative;
+  grep proofs in commit. Tests: 55 + 450 green.
+- `38e1f65` **BATCH-OSX2** - raised all 16 OpenSearch tools to the advanced-tool-use bar
+  (when_to_use/avoid_when, output_shape, response_shaping, usage_examples, defer_loading candidacy)
+  in registry + `sift-backend.json`; regenerated golden snapshot (additive meta only). Behavior
+  unchanged. Tests: 108 opensearch-mcp.
+- `ef6e229` **BATCH-PMI3** - wired `FK_DATA_DIR=$SIFT_ENRICHMENT_DIR/forensic-knowledge` via new
+  install.sh `write_fk_env()` + `EnvironmentFile=` in both systemd units, so FK enrichment fires
+  under the service user (loader resolution step #1 honors the env var). Tests: 34 FK loader.
+- `aaa244b` **BATCH-OSX2 integration (conductor)** - extended the gateway backend-manifest schema
+  (`sift-backend.schema.json`) to permit OSX2's 5 new tool fields. Caught by the INTEGRATED sweep:
+  each batch passed in isolation, but OSX2's new manifest + the gateway's `additionalProperties:false`
+  validator failed `test_phase6` only in the combined tree. "No silent format change" — manifest
+  structure + schema contract landed together. Full gateway suite back to 450/0.
+- **BATCH-OSX3** (doc-first spike; no code commit) - feasibility verdict below.
+
+Integration testing note (why the wave needed a conductor sweep): OSX2 (opensearch manifest) and the
+gateway schema are in different scope fences, so the schema-vs-manifest mismatch only surfaced when
+all branches were combined on `revamp/spg-v1`. Per-batch suites were green; the integrated sweep was
+the gate that caught it. Landing strategy: ff the linear OSX1->OSX-RAG->OSX-PURGE stack, cherry-pick
+OSX2 + PMI3 (proven conflict-free via `git merge-tree`), then the conductor schema fix.
+
+Forks resolved this wave:
+
+- **F-MVP-OS-WIRING** RESOLVED -> implemented as P1 (OSX1: race fix both ways + double-spawn dedupe;
+  stdio add-on kept). P2/P3 remain future options, not taken.
+- **F-MVP-RAG-PORT** RESOLVED -> implemented (OSX-RAG: kb_ tools on pgvector at parity;
+  `rag_search_case` removed). SUPERSEDES BATCH-PMI2's "single-home = rag_search_case" (PMI2 entry kept
+  as history; index relabelled superseded).
+- **F-MVP-RAG-DERIVED** RESOLVED -> SAFE to drop. Probe proved case-derived RAG chunks are NEVER
+  written today (importers hardcode `kind="knowledge", case_id=None`; zero `kind="derived"` writers),
+  so `rag_search_case`'s case-scoping was a dormant no-op. Schema's `derived` branch kept dormant
+  (zero-cost). -> B-MVP-RAG-DERIVED.
+
+Backlog opened:
+
+- **B-MVP-RAG-DERIVED** (OPEN): a future case-derived RAG ingest would re-light the dormant `derived`
+  branch in `app.rag_search` (kb_search_knowledge re-enabling `include_derived` under an active case).
+  No schema change needed; only a writer + a case-scoped query path. Source: OSX-RAG / F-MVP-RAG-DERIVED.
+- **B-MVP-HASH-CONSOLIDATION** (OPEN): `compute_content_hash` has 2 diverging shapes across 5 sites.
+  Authority = `investigation_store.compute_content_hash` (19-key wide set + strips `_`-prefixed keys).
+  Narrow copies (`case_io.HASH_EXCLUDE_KEYS`, `reporting._HASH_EXCLUDE_KEYS`,
+  `case-dashboard/routes._HASH_EXCLUDE_KEYS`) omit `provenance_detail/chain/grade/gaps` and don't strip
+  `_`-prefixed keys -> can produce a different content_hash for the same item. Behavior-touching (gate
+  with a migration/re-hash plan); deferred out of the OSX-PURGE deletion pass. Source: OSX-PURGE.
+- **B-MVP-WINTRIAGE-SCRIPTS** (OPEN): `packages/windows-triage-mcp/scripts/*` (10 files) import a
+  non-existent `windows_triage_mcp_mcp` module (double find/replace bug); broken, not wired to any
+  live path (install.sh uses `src/windows_triage_mcp/scripts/download_databases.py`). Add-on/non-MVP
+  corpus-regeneration provenance. Decide: fix the token + keep, or delete. Kept untouched (conservative).
+  Source: OSX-PURGE.
+
+BATCH-OSX3 feasibility verdict (programmatic tool-calling / code-execution-with-MCP): **needs harness
+work.** API-level Programmatic Tool Calling (`allowed_callers:["code_execution_20250825"]`) + Tool
+Search (`defer_loading`) are OUT of this tree — no Anthropic Messages-API loop lives here (the repo is
+the server/tool side; the agent reaches tools via the Gateway aggregate `/mcp`), and PTC would run
+model code in Anthropic's sandbox so large OpenSearch results would transit OFF the VM (poor fit for
+"evidence bytes never leave the VM"). The right fit is the on-VM "MCP-as-code-APIs in a sandbox"
+pattern, but the existing `run_command` stack is the WRONG executor to reuse: interpreters
+(python/perl/ruby/node/bash) are deny-floored and there is no network/egress jail. Recommended path
+(smallest secure footprint): a NEW Gateway tool `opensearch_query_code` running model-written Python in
+a dedicated, network-jailed (no-egress; OpenSearch reachable only via a parent bridge), restricted
+interpreter that can ONLY import a frozen `os_api` shim over the existing read-only OS tools — reusing
+sift-core's env-scrub (`build_sandbox_env`), RLIMITs, `sanitize_paths_deep`, and `AuditWriter` belts,
+plus a NEW OS sandbox (nsjail/bubblewrap+seccomp — absent today). Only `emit()`ed, byte-budgeted output
+returns (the article's 150k->2k ≈ 98.7% saving, on-VM). Outlined as follow-on **OSX4** (new
+`sift-core/execute/code_runner.py` + `os_api` shim + one gateway tool; escape-test battery; live VM
+smoke deferred to PMI4/OS6). API-level PTC/defer_loading recorded as a separate harness/posture fork
+for the operator (where the agent's Messages-API loop runs).
+
+Validation (targeted-per-batch + a conductor INTEGRATED sweep on the landed tree):
+
+- gateway full **450 passed/0**; opensearch-mcp surface+server+tools **100+**; forensic-rag-mcp **55**;
+  forensic-knowledge loader **34**. `bash -n install.sh` + `setup-addon.sh`: OK. `git merge-tree`
+  pre-checks: all branch pairs conflict-free.
+
+Next:
+
+- **BATCH-PMI4 / OS6** is the ONLY remaining gate: operator-run VM proof. On the bare SIFT VM,
+  `./install.sh --no-windows-triage --no-opencti`; confirm `status:ok`, aggregate `/mcp` lists
+  `opensearch_*` + the forensic-rag `kb_*` tools WITHOUT a restart (OSX1 race fix), `app.rag_chunks`
+  count == the big Chroma bundle (~26,586, not the small seed), Hayabusa detections queryable; then the
+  Rocba case end-to-end. Push / PR to integrate this wave awaits operator go-ahead.
+
 ### 2026-06-10 - OSX track planned (OpenSearch excellence + RAG-port + purge); architecture discovery; hygiene
 
 Status: DONE (planning/docs/hygiene; builds handed off)
