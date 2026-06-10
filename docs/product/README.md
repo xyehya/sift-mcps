@@ -1,7 +1,7 @@
 # SIFT Product Documentation
 
-Status: post-MVP QA workspace.
-Last updated: 2026-06-09.
+Status: post-MVP QA and demo-freeze workspace.
+Last updated: 2026-06-10.
 
 This directory holds product-facing documentation for the SIFT MCP DFIR
 platform after the MVP cutover. It is separate from `docs/migration`, which
@@ -51,4 +51,3 @@ therefore explain both sides of the product:
 - MCP documentation must be written from the AI agent's point of view: what the
   agent sees, what it can infer, what it can safely call next, and how much
   context the response consumes.
-

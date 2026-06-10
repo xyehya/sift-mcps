@@ -13,6 +13,83 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - BATCH-FRZ1 portal auth clarified + fresh agent TTL verified
+
+Status: DONE
+
+Operator clarified the actual portal credentials: `examiner@operators.sift.local`
+with the current local password. Fresh live smoke confirms the portal path is
+not blocked: login returned HTTP 200 with `must_reset=false`; evidence-chain
+HMAC challenge returned HTTP 200; HMAC verify returned HTTP 200 / `ok=true`.
+The earlier "operator password blocker" was specifically the VM-local
+`~/.sift/operator-newpw.txt` smoke artifact being stale, not a real portal
+login failure.
+
+Operator issued a fresh portal GUI agent principal
+`agent/8a91de13-630b-4e41-a63e-c130ee911e2b`. JWT payload verification shows
+`iat=2026-06-10T01:42:31Z`, `exp=2026-06-12T01:42:31Z`, and
+`ttl_seconds=172800` (48 hours). The fresh token initialized MCP successfully
+and `tools/list` returned HTTP 200 with the expected 13-tool catalog including
+`rag_search_case` and `run_command_job`. Do not store the raw access or refresh
+token in repo files.
+
+New portal UX backlog from operator observation: the principal/token table shows
+all token rows as active, including expired rows, and only exposes a revoke
+button. The portal should show token type, display name, active/expired/revoked
+status, TTL remaining, and a revoke button that becomes disabled/dimmed after
+successful revoke. Logged in `known-limitations-and-improvements.md` as
+`IMP-FRZ1-01`.
+
+### 2026-06-10 - BATCH-FRZ1 MCP freeze rehearsal proof + portal password blocker
+
+Status: BLOCKED
+
+FRZ1 conductor pass refreshed the final demo docs against live state and ran the
+MCP-only readiness path on the active VM tree. Active unit working directory is
+`/home/sansforensics/sift-mcps-test`; `sift-gateway.service` and
+`sift-job-worker.service` are active; Gateway health reports `status=ok`,
+Supabase OK, and evidence root `/cases` OK.
+
+Live MCP proof used the VM-local agent token because the local `.mcp.json` token
+returned HTTP 401. `tools/list` returned the 13-tool catalog including
+`rag_search_case`, `run_command`, `run_command_job`, `job_status`,
+`record_finding`, `manage_todo`, `list_existing_findings`, `case_info`, and
+`evidence_info`. `case_info` returned `case-v1gate-06081857`, evidence chain
+`ok`, `manifest_version=4`, and DB-authoritative finding counters. `evidence_info`
+returned `chain_status=ok`, `listing_authority=db`, no required examiner action,
+and exactly four active sealed objects: `rocba-cdrive.e01`,
+`Rocba-Memory2.raw`, `v1-gate.log`, and `v1-ingest.jsonl`.
+
+DB proof via VM `psycopg` showed `app.evidence_gate_status` =
+`sealed`, `manifest_version=4`, `active_count=4`, no issues; `Rocba-Memory.raw`
+is `retired`; finding counts are APPROVED=1, DRAFT=1, REJECTED=1; and
+`app.rag_chunks=26586` with all rows `kind='knowledge'` / `case_id NULL`
+(`22268` from `chroma_release_pgvector`). `rag_search_case` returned
+`status=ok` with shared knowledge hits.
+
+Forensic-tool proof ran through MCP `run_command` with sealed `evidence_refs`:
+`cat evidence/v1-gate.log` and `cat evidence/v1-ingest.jsonl` returned saved
+output refs and audit IDs; `vol -f evidence/Rocba-Memory2.raw windows.info`
+exited 0 and identified Windows 10 build 19041 (audit
+`siftgateway-codex2-20260610-042`); `fls evidence/rocba-cdrive.e01 | head -20`
+exited 0 and listed the logical E01 filesystem root (audit
+`siftgateway-codex2-20260610-045`).
+
+Blocker: the VM-local `~/.sift/operator-newpw.txt` is stale. Portal login with
+that file returned HTTP 401 / `invalid_token`, and the current password is
+needed for HMAC re-auth, fresh portal `mcp:*` agent issuance, re-acquisition
+click proof, finding approval, and report export. BATCH-FRZ1 remains open until
+the human provides or resets the current operator password and the portal/HMAC
+path is rerun.
+
+Cut line for freeze: B2(a/d) are no longer FRZ1 blockers (`record_finding`
+artifact audit checks accept DB audit IDs in DB-active mode, and `evidence_info`
+listing is DB-backed/live-proven). Keep B1 live click proof, B0/B6 fresh portal
+issuance, and report export in-scope once the password is available. Document
+B3/B5 service-user and installer hardening, offline symbols, progress-stderr
+filtering, scope introspection, and optional `EVIDENCE_REACQUIRED` as
+post-freeze backlog.
+
 ### 2026-06-10 - Narrow sudoers allowlist for forensic disk-image mounting
 
 Status: DONE

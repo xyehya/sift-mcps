@@ -1287,6 +1287,22 @@ Remediation result (2026-06-10):
 
 Dependencies: BATCH-PDOC1; BATCH-PDOC2; BATCH-SEC1; BATCH-INST1; BATCH-AUT2.
 
+Current status (2026-06-10):
+
+- MCP-only freeze rehearsal proof is live-clean on the prepared demo case:
+  services healthy, 13-tool catalog present, DB-backed `case_info` /
+  `evidence_info` aligned to `manifest_version=4`, RAG corpus available, and
+  bounded Volatility/E01 checks work through `run_command` with sealed
+  `evidence_refs`.
+- Portal login, HMAC re-auth, and fresh portal-issued agent TTL are live-proven:
+  the new token TTL is 172800 seconds / 48 hours and the fresh token sees the
+  13-tool catalog. Do not check BATCH-FRZ1 complete until re-acquisition click
+  proof on a throwaway file, approval/report export if still required for the
+  final demo, docs validation, and `git diff --check` all pass.
+- Portal UX backlog logged: the principal/token table should show token type,
+  display name, active/expired/revoked status, TTL remaining, and a revoke
+  button that disables/dims after successful revoke.
+
 Scope:
 
 - `docs/product/demo-runbook.md`

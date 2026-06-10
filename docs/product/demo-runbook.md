@@ -1,135 +1,147 @@
 # Demo Runbook
 
-Status: rehearsal draft with AUT2 remediation caveats. Validation owner:
-BATCH-FRZ1.
+Status: freeze candidate. MCP rehearsal proof, portal login/HMAC, and fresh
+agent TTL are current; approval/export and optional re-acquisition click proof
+remain final checklist actions. Validation owner: BATCH-FRZ1.
 Last updated: 2026-06-10.
 
 ## Purpose
 
-This document will become the final hackathon demo script. It should stay
+This is the final hackathon demo script for the prepared live case. It stays
 product-facing and must not include raw passwords, tokens, DSNs, service-role
 keys, OpenSearch credentials, or local VM secrets.
 
 ## Demo Narrative
 
-1. Operator controls evidence and approvals in the portal.
+1. Operator controls cases, evidence, credentials, approvals, and report export
+   in the portal.
 2. AI agent receives only scoped MCP access.
-3. Gateway enforces case, scope, evidence, audit, and response controls.
-4. Agent investigates autonomously with search, RAG, jobs, and controlled
-   command execution.
-5. Operator approves findings.
-6. Report export includes approved findings and custody/provenance proof.
+3. Gateway enforces case binding, tool scopes, evidence gate, audit, response
+   shaping, and saved-output refs.
+4. Agent investigates autonomously with orientation, RAG, search, jobs, and
+   controlled command execution.
+5. Operator approves findings and report inclusion.
+6. Report export includes approved findings and custody/provenance proof only.
 
-AUT2 plus the 2026-06-10 remediation pass proved this narrative for the
-controlled smoke/custody path, not for full Rocba disk+memory analysis. The
-final demo should say that boundary plainly.
-
-## AUT2 Live Readiness
+## Live Readiness
 
 Use the prepared demo case; do not recreate it for the final rehearsal:
 
 - Case: `case-v1gate-06081857`
   (`57a06521-c9b8-4654-92ac-42b4f2bb0915`).
-- DB evidence gate: OK, `manifest_version=3`.
-- Active sealed evidence: `rocba-cdrive.e01`, `Rocba-Memory.raw`,
-  `v1-gate.log`, and `v1-ingest.jsonl`.
-- Fresh portal-issued `mcp:*` agents see the 13-tool catalog including
-  `rag_search_case`.
-- RAG baseline: `app.rag_chunks=26586`.
-- AUT2 agent artifacts: `F-codex-1-001`, `T-codex-1-002`,
-  `TODO-codex-1-001`.
-- Portal approval/report smoke: one finding approved with DB authority; report
-  `1ff91996-5666-4b36-9568-c701f5204c24` generated, saved, downloaded, and
-  quick secret-shape scan clean.
-- AUT2 remediation smoke: fresh agent credential TTL about 48 hours; DB-backed
-  `evidence_info` lists all four sealed evidence objects; `run_command` and
-  `run_command_job` resolve DB evidence refs and return reusable
-  `agent/run_commands/...` saved-output refs; `rag_search_case` returns
-  `status=ok`.
-- AUT2 blocker-fix smoke (2026-06-10): primary-image ingest works for both
-  `Rocba-Memory.raw` and `rocba-cdrive.e01` (bounded strings plane, 500k
-  strings each into per-evidence OpenSearch indexes); `record_finding`
-  staged `F-codex3-001` from a fresh run_command audit id (MCP-tier
-  provenance); `case_info` counters are DB-authoritative; pipeline failures
-  surface `failed_stages`; binary output is saved-file-first;
-  `get_tool_help('inventory')` lists installed DFIR tools; 48h TTL is
-  source-enforced at issuance.
+- Active service tree: `/home/sansforensics/sift-mcps-test`.
+- Gateway health: OK; Supabase health: OK; evidence root `/cases`: OK.
+- Gateway/worker services: active.
+- DB evidence gate: `sealed`, `manifest_version=4`, `active_count=4`, no
+  issues.
+- Active sealed evidence:
+  `rocba-cdrive.e01` (logical EWF image; use `fls` directly, not `mmls`),
+  `Rocba-Memory2.raw` (valid Windows 10 memory image), `v1-gate.log`, and
+  `v1-ingest.jsonl`.
+- Retired evidence: `Rocba-Memory.raw` is the corrupted original and is no
+  longer active.
+- MCP catalog: 13 tools, including `rag_search_case`, `run_command`,
+  `run_command_job`, `job_status`, `record_finding`, `manage_todo`,
+  `list_existing_findings`, `case_info`, and `evidence_info`.
+- RAG baseline: `app.rag_chunks=26586`, all `kind='knowledge'`, all
+  `case_id NULL`; `22268` rows came from `chroma_release_pgvector`.
+- MCP proof from 2026-06-10: `case_info` returned chain `ok`,
+  `manifest_version=4`, and DB-authoritative finding counters;
+  `evidence_info` listed exactly the four sealed evidence objects with
+  `listing_authority=db`; `rag_search_case` returned `status=ok`.
+- Forensic-tool proof from 2026-06-10: `vol -f evidence/Rocba-Memory2.raw
+  windows.info` exited 0 and identified Windows 10 build 19041; `fls
+  evidence/rocba-cdrive.e01 | head -20` exited 0 and listed the logical E01
+  filesystem root.
+- Current investigation records: `F-codex3-001` is DRAFT,
+  `F-codex-1-001` is APPROVED, `F-hermes-v1-gate-001` is REJECTED, and
+  `TODO-codex-1-001` remains open.
+- Portal proof from 2026-06-10: operator login with
+  `examiner@operators.sift.local` succeeded, `must_reset=false`, HMAC challenge
+  and verify succeeded, and a fresh portal-issued agent principal saw the
+  13-tool MCP catalog. The fresh agent JWT TTL is `172800` seconds / 48 hours.
 
-## Demo Script Boundary
+## Demo Boundary
 
 Approved demo claim:
 
 - The platform supports a sealed-case, MCP-only agent loop: orient, gate-check,
-  enumerate evidence, search/RAG, run controlled commands, stage DRAFT
-  investigation records, then hand back to the operator for approval and
-  approved-only reporting.
+  enumerate DB-backed evidence, query RAG, run controlled commands against
+  sealed evidence refs, stage DRAFT investigation records, then hand back to
+  the operator for approval and approved-only reporting.
+- The prepared Rocba evidence is triage-readable through controlled tools:
+  Memory2 supports Volatility `windows.info`, and the logical E01 supports
+  direct `fls` listing.
+- Re-acquisition is a real custody transition: a violated object can be
+  superseded under operator re-auth, preserving the prior hash/version in the
+  custody ledger; the corrupted original memory image was retired in favor of
+  `Rocba-Memory2.raw`.
 
 Do not claim:
 
-- The agent has completed full autonomous analysis of the Rocba disk and memory
-  images. Image understanding is strings-level; Volatility lacks a matching
-  symbol table for the demo memory image, and the E01 is a logical image
-  (no partition table), so deep filesystem/memory parsing is not part of the
-  demo claim.
+- The agent has completed full autonomous disk and memory analysis of the Rocba
+  images.
+- The E01 has a partition table. It is a logical image; use filesystem tools
+  directly.
+- The RAG corpus is case evidence. It is shared forensic knowledge unless a row
+  carries case/provenance binding.
 
-Demo-safe investigative path:
+## Operator Sequence
 
-1. Operator shows the prepared sealed case and DB gate OK.
-2. Operator issues a fresh scoped agent principal through the portal.
-3. Agent calls `case_info`, `evidence_info`, and `capability_guide`.
-4. Agent confirms sealed evidence through DB-backed `evidence_info`; use
-   `run_command "ls evidence"` only as an optional sanity check, not as the
-   primary evidence inventory.
-5. Agent runs the smoke ingest/search/RAG path and reads `v1-gate.log` /
-   `v1-ingest.jsonl` through MCP using `evidence_refs` where applicable.
-6. Agent stages the limited suspicious PowerShell finding/timeline/TODO.
-7. Operator reviews and approves in the portal.
-8. Operator generates/saves/downloads the findings report and runs the leak
-   scan.
+1. Log in to the portal with the current operator password.
+2. Confirm the active case is `case-v1gate-06081857`.
+3. Show evidence gate `sealed`, manifest version 4, and four active sealed
+   objects.
+4. Issue a fresh agent principal with `mcp:*` scope. Confirm token TTL is about
+   48 hours and store token material only in local/VM secret storage.
+5. Give the agent the prompt in the next section.
+6. Review the staged finding, timeline, and TODO. Approve only claims supported
+   by MCP audit IDs and sealed evidence refs.
+7. Generate, save, and download the report. Run the leak scan before showing
+   the output.
+8. For the custody story, show the retired `Rocba-Memory.raw` row and the
+   re-acquisition event details for `Rocba-Memory2.raw`. If a live re-acquire
+   click demo is needed, perform it on a throwaway case/file, not the prepared
+   Rocba evidence.
+
+## Agent Demo Prompt
+
+```text
+You are the SIFT demo agent. Use Gateway MCP tools only. Do not ask for local
+paths, DB credentials, service tokens, OpenSearch credentials, or shell access
+outside the MCP tools.
+
+1. Orient with case_info and evidence_info. Confirm the evidence chain is OK,
+   manifest_version is 4, listing_authority is db, and the four active sealed
+   objects are rocba-cdrive.e01, Rocba-Memory2.raw, v1-gate.log, and
+   v1-ingest.jsonl.
+2. Use rag_search_case for PowerShell investigation guidance and explain that
+   RAG hits are shared knowledge unless case-bound provenance is present.
+3. Read v1-gate.log and v1-ingest.jsonl through run_command using evidence_refs,
+   save_output=true, and small preview_lines.
+4. Optionally run these bounded tool checks through run_command with
+   evidence_refs and saved output:
+   - vol -f evidence/Rocba-Memory2.raw windows.info
+   - fls evidence/rocba-cdrive.e01 | head -20
+5. Stage one concise finding, one timeline event, and one TODO only if each
+   references MCP audit IDs from the tool responses. Keep the claim bounded to
+   the smoke evidence and do not claim full autonomous Rocba analysis.
+6. Stop after staging. Tell the operator which IDs need review and approval.
+```
 
 ## Final Rehearsal Checklist
 
-- Clean git state.
+- Clean git state except local `.mcp.json`.
 - Migrations applied.
 - Gateway and worker active.
 - Supabase health OK.
 - Evidence root OK.
 - OpenSearch reachable and indexing.
 - pgvector full forensic RAG corpus loaded.
-- Portal login works.
-- Case create/activate works.
-- Evidence register/seal works.
-- Agent credential issuance works through portal.
+- Portal login works with the current operator password.
+- HMAC re-auth challenge succeeds.
+- Fresh portal-issued `mcp:*` agent sees the 13-tool catalog.
 - MCP agent journey completes without side channels.
+- Re-acquisition click proof is run on a throwaway case/file if shown live.
 - Report export leak scan is clean.
 - Security caveats are documented.
-- AUT2 caveats are presented before any primary-image investigation claim.
-
-## AUT2 Remediation Caveats for BATCH-FRZ1
-
-- `ingest_job` does not ingest `.e01` or `.raw` single evidence files; it failed
-  cleanly on both Rocba primary images.
-- `run_command.evidence_refs` is fixed for Gateway/worker paths and live-proven
-  against `v1-gate.log` and `Rocba-Memory.raw`; keep this in the final smoke.
-- `record_finding` rejected a fresh `run_command` audit id for artifacts because
-  its validation still checks the local JSONL audit trail, not DB audit
-  authority. The AUT2 finding was approved for report smoke, but provenance was
-  only PARTIAL/NONE.
-- Volatility fails before analysis due cache-path permission errors, and MCP
-  policy currently blocks the attempted env/cache-directory workarounds.
-- EWF disk triage is not demo-ready: `mmls` returned exit 1 without useful
-  stderr, and a piped `fls | head` masked the upstream failure.
-- Summary residuals remain: `evidence_info.evidence_files` is now DB-backed,
-  but `case_info` counters can lag behind DB-backed finding/report state.
-- Large binary grep previews can still create context bloat. Saved output refs
-  are now reusable, so the demo should prefer `save_output=true` plus
-  follow-up filtering over large inline previews.
-- `rg` is not installed on the active VM; installed `grep` works against
-  DB-sealed memory evidence. A first-class installed-DFIR-tool inventory remains
-  a next-phase improvement.
-
-## Final Prompt Slot
-
-BATCH-FRZ1 should replace this section with the exact demo run prompt after the
-remaining primary-image, provenance, Volatility/EWF, counter, and tool-inventory
-caveats are either fixed or intentionally bounded for the final rehearsal.
