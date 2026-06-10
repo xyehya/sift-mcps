@@ -14,7 +14,7 @@
   },
   "capabilities": {
     "provides": ["search", "ingest", "enrichment"],
-    "requires": ["https://localhost:9200"],
+    "requires": ["http://localhost:9200"],
     "enriches_responses": false
   },
   "tools": [
@@ -28,7 +28,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "ANALYZE"
+      "recommended_phase": "ANALYZE",
+      "safe_case_argument_names": ["case_id"]
     },
     {
       "name": "opensearch_count",
@@ -39,7 +40,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "ANALYZE"
+      "recommended_phase": "ANALYZE",
+      "safe_case_argument_names": ["case_id"]
     },
     {
       "name": "opensearch_aggregate",
@@ -50,7 +52,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "ANALYZE"
+      "recommended_phase": "ANALYZE",
+      "safe_case_argument_names": ["case_id"]
     },
     {
       "name": "opensearch_get_event",
@@ -61,7 +64,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "ANALYZE"
+      "recommended_phase": "ANALYZE",
+      "safe_case_argument_names": []
     },
     {
       "name": "opensearch_timeline",
@@ -72,7 +76,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "ANALYZE"
+      "recommended_phase": "ANALYZE",
+      "safe_case_argument_names": ["case_id"]
     },
     {
       "name": "opensearch_field_values",
@@ -83,7 +88,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "ANALYZE"
+      "recommended_phase": "ANALYZE",
+      "safe_case_argument_names": ["case_id"]
     },
     {
       "name": "opensearch_status",
@@ -95,7 +101,8 @@
       "evidence_class": "read_only",
       "category": "ingest",
       "recommended_phase": "INGEST",
-      "health": true
+      "health": true,
+      "safe_case_argument_names": []
     },
     {
       "name": "opensearch_shard_status",
@@ -106,7 +113,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "admin",
-      "recommended_phase": "INGEST"
+      "recommended_phase": "INGEST",
+      "safe_case_argument_names": []
     },
     {
       "name": "opensearch_case_summary",
@@ -117,7 +125,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "ANALYZE"
+      "recommended_phase": "ANALYZE",
+      "safe_case_argument_names": ["case_id"]
     },
     {
       "name": "opensearch_inspect_container",
@@ -128,7 +137,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "evidence-survey",
-      "recommended_phase": "SURVEY"
+      "recommended_phase": "SURVEY",
+      "safe_case_argument_names": []
     },
     {
       "name": "opensearch_ingest",
@@ -140,7 +150,8 @@
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "ingest",
-      "recommended_phase": "INGEST"
+      "recommended_phase": "INGEST",
+      "safe_case_argument_names": []
     },
     {
       "name": "opensearch_ingest_status",
@@ -151,7 +162,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "ingest",
-      "recommended_phase": "INGEST"
+      "recommended_phase": "INGEST",
+      "safe_case_argument_names": ["case_id"]
     },
     {
       "name": "opensearch_enrich_intel",
@@ -163,7 +175,8 @@
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "enrichment",
-      "recommended_phase": "CORRELATE"
+      "recommended_phase": "CORRELATE",
+      "safe_case_argument_names": []
     },
     {
       "name": "opensearch_enrich_triage",
@@ -175,7 +188,8 @@
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "enrichment",
-      "recommended_phase": "CORRELATE"
+      "recommended_phase": "CORRELATE",
+      "safe_case_argument_names": []
     },
     {
       "name": "opensearch_list_detections",
@@ -186,7 +200,8 @@
       "readOnlyHint": true,
       "evidence_class": "read_only",
       "category": "search-analysis",
-      "recommended_phase": "ANALYZE"
+      "recommended_phase": "ANALYZE",
+      "safe_case_argument_names": []
     },
     {
       "name": "opensearch_fix_host_mapping",
@@ -198,7 +213,8 @@
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "admin",
-      "recommended_phase": "INGEST"
+      "recommended_phase": "INGEST",
+      "safe_case_argument_names": []
     }
   ],
   "health": "opensearch_status"

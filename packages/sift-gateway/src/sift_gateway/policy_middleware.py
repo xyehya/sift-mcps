@@ -179,11 +179,25 @@ def _is_case_scoped_tool(gateway: Any, name: str) -> bool:
     return False
 
 
-def _safe_case_args(gateway: Any, name: str) -> set[str]:
+def _safe_case_args(gateway: Any, name: str) -> set[str] | None:
+    """Return safe case argument names for injection, or None if unknown.
+
+    OS2: Gateway.safe_case_argument_names() now returns:
+      - set (possibly empty): manifest-declared; empty means case-scoped but
+        no injection argument needed — let the call through without injection.
+      - None: not declared in manifest and not found in schema — unknown; the
+        caller must deny fail-closed (original behaviour).
+
+    When the gateway method does not exist or returns None, this returns None
+    so the middleware continues to fail closed for undeclared proxy tools.
+    """
     fn = getattr(gateway, "safe_case_argument_names", None)
     if callable(fn):
-        return set(fn(name))
-    return set()
+        result = fn(name)
+        if result is None:
+            return None
+        return set(result)
+    return None
 
 
 def _is_gateway_local_tool(gateway: Any, name: str) -> bool:
@@ -715,13 +729,23 @@ class ProxyActiveCaseMiddleware(Middleware):
         if case is None:
             return await call_next(context)
         safe_args = _safe_case_args(self.gateway, name)
-        if not safe_args:
+        # OS2: safe_args == None means the tool's case-arg contract is unknown
+        # (no manifest declaration and no schema property found) — deny
+        # fail-closed to prevent an unguarded proxy from implicitly using
+        # whatever case the backend assumes from its environment.
+        # safe_args == set() (empty) means the manifest explicitly declares
+        # "no injection argument" — the tool is case-scoped but resolves the
+        # active case internally; let it through without injecting args.
+        if safe_args is None:
             await self._audit_denial(name, case, "proxy_requires_implicit_case")
             return _error_result(
                 "active_case_proxy_denied",
                 "proxied case-scoped tool does not expose a safe case_id/case_key argument",
                 tool=name,
             )
+        if not safe_args:
+            # Manifest says no injection args — pass through unmodified.
+            return await call_next(context)
         args = _tool_args(context)
         for key, expected in (("case_id", case.case_id), ("case_key", case.case_key)):
             if key not in safe_args:
