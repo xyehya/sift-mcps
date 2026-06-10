@@ -13,6 +13,44 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - Narrow sudoers allowlist for forensic disk-image mounting
+
+Status: DONE
+
+Path-B follow-up (operator-chosen) to the privilege discussion. The opensearch-mcp
+INGEST path needs root to MOUNT disk images: `containers.py` shells out to
+`sudo xmount/ewfmount/mount/ntfs-3g/losetup/qemu-nbd/modprobe nbd/partprobe/
+umount/fusermount`, and `check_sudo` requires non-interactive sudo. On the live
+VM this currently works only because `sansforensics` carries a blanket
+`ALL=(ALL) NOPASSWD: ALL` grant (`/etc/sudoers.d/sansforensics`) - i.e. the
+service relies on full admin root, the over-privilege the product thesis warns
+against. (This is the service-user path, distinct from the `run_command`
+writable-jail fix above.)
+
+Landed: `scripts/setup-ingest-mount-sudoers.sh` writes
+`/etc/sudoers.d/sift-ingest-mount` granting the gateway service user NOPASSWD
+root for ONLY the resolved mount-helper full paths - no shell/wildcards (charter
+D3); `modprobe` pinned to its exact `nbd max_part=8` args (no arbitrary module
+loads); `tee` (the optional Samba-repoint root-write primitive,
+`ingest_cli.py:_repoint_samba_if_configured`) deliberately EXCLUDED. `--print`
+mode lets the operator review the exact rule before applying; install is
+`visudo -cf`-validated and mode 0440. `scripts/setup-agent-runtime.sh` now
+cross-references it.
+
+Live: deployed + installed on the VM; `visudo -c` reports both drop-ins
+`parsed OK`; rule resolves VM paths (`/usr/sbin/losetup`, `/usr/sbin/modprobe nbd
+max_part=8`, `/usr/bin/xmount`, ...); `sudo -n /usr/sbin/losetup --version` and
+`sudo -n /usr/bin/xmount --version` run as root non-interactively; `tee` absent
+from the allowlist.
+
+Caveat / next step (the real enforcement): the narrow allowlist is **documentary
+until the broad grant is removed** - on this single-account VM the
+`sansforensics ALL=(ALL) NOPASSWD: ALL` rule still masks it. To actually enforce
+least privilege, run the gateway/worker as a DEDICATED non-admin service user
+whose only root capability is this drop-in, then drop the blanket grant for that
+user (keep it for the human admin). Tracked in known-limitations
+("Ingest mount privilege").
+
 ### 2026-06-10 - Executor writable HOME/XDG jail + unprivileged vol symbols
 
 Status: DONE

@@ -8,6 +8,7 @@ Last updated: 2026-06-09.
 | Area | Limitation | Demo impact | Improvement path |
 | --- | --- | --- | --- |
 | Re-auth | MVP uses a local HMAC/password bridge for some sensitive actions. | Acceptable if explained clearly. | Move to Supabase password re-auth/session verification. |
+| Ingest mount privilege | Disk-image ingest needs root to mount (`containers.py`: xmount/ewfmount/mount/losetup/qemu-nbd/modprobe nbd/partprobe/umount/fusermount). A narrow, audited allowlist exists (`scripts/setup-ingest-mount-sudoers.sh` → `/etc/sudoers.d/sift-ingest-mount`, full paths, modprobe pinned to nbd, tee excluded, visudo-validated), but the demo VM's gateway runs as `sansforensics` which still has a blanket `ALL=(ALL) NOPASSWD: ALL` grant that masks it. | Ingest works on the demo VM; the service just has more root than it needs. | Run the gateway/worker as a dedicated non-admin service user whose only root capability is the mount allowlist, then drop the blanket grant for that user. |
 | OpenSearch | Single-node VM can report yellow cluster health. | Acceptable if indexing/search works. | Multi-node or replica-adjusted production profile. |
 | Pre-context denials | Some pre-context denials remain Gateway local security telemetry, not `app.audit_events`. | Accepted MVP behavior. | Hardened DB projector for attributable denials. |
 | RAG | Shared forensic knowledge is case-neutral (`case_id NULL`). | Correct for reference grounding; not case evidence. | Add case-derived chunks with provenance after ingest. |

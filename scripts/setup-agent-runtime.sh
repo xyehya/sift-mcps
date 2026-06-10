@@ -30,7 +30,9 @@ the gateway service user to run commands as the low-privilege runtime user only:
   SERVICE_USER ALL=(RUNTIME_USER) NOPASSWD: ALL
 
 Root escalation for privileged forensic tools, if enabled, must be configured
-separately with narrow command-specific sudoers rules.
+separately with narrow command-specific sudoers rules. For disk-image ingest
+mounting, use scripts/setup-ingest-mount-sudoers.sh (a full-path, no-wildcard
+allowlist for the mount helpers only).
 EOF
 }
 
