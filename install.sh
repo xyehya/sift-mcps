@@ -14,6 +14,7 @@ set -Eeuo pipefail
 #   - Single uv sync path (--extra full) — no feature toggles.
 #   - Venv always matches system Python; mismatched venvs are rebuilt.
 #   - OpenCTI auto-detected when Docker + ≥14 GB RAM are available.
+#   - Supabase is external; setup-supabase.sh provisions it and writes sift-supabase.env.
 #   - Every step is idempotent.
 # =============================================================================
 
@@ -142,14 +143,26 @@ install_host_prereqs() {
   local missing=()
   command -v rg >/dev/null 2>&1 || missing+=(ripgrep)
   command -v setfacl >/dev/null 2>&1 || missing+=(acl)
-  [[ "${#missing[@]}" -eq 0 ]] && return 0
-  if ! command -v apt-get >/dev/null 2>&1; then
-    warn "Missing host tools (${missing[*]}) and apt-get is unavailable."
-    return 0
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    if ! command -v apt-get >/dev/null 2>&1; then
+      warn "Missing host tools (${missing[*]}) and apt-get is unavailable."
+    else
+      log "Installing host prerequisites: ${missing[*]}"
+      sudo_if_needed apt-get update
+      sudo_if_needed apt-get install -y "${missing[@]}"
+    fi
   fi
-  log "Installing host prerequisites: ${missing[*]}"
-  sudo_if_needed apt-get update
-  sudo_if_needed apt-get install -y "${missing[@]}"
+
+  # Docker presence check for OpenSearch (#8). We do NOT attempt to install
+  # Docker ourselves (distro-specific / risky). Just detect + warn so the
+  # operator knows what to do.  Seeding is gated in main() via OPENSEARCH_UP.
+  if [[ "${SIFT_OPENSEARCH_ENABLED:-true}" == "true" ]]; then
+    if ! command -v docker >/dev/null 2>&1; then
+      warn "Docker not found. OpenSearch requires Docker."
+      warn "  Install Docker (https://docs.docker.com/engine/install/) and re-run."
+      warn "  Continuing without OpenSearch — set SIFT_OPENSEARCH_ENABLED=false to silence this."
+    fi
+  fi
 }
 
 # =============================================================================
@@ -1051,6 +1064,55 @@ write_supabase_env() {
   chmod 600 "$supabase_env_file"
 }
 
+# =============================================================================
+# Preflight — Supabase env sourcing / auto-provisioning
+# =============================================================================
+# Integration contract (fixed — see SCOPE in install.sh header):
+#   scripts/setup-supabase.sh writes $HOME/.sift/supabase-project/sift-supabase.env
+#   containing: export SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=...
+#               export SIFT_CONTROL_PLANE_DSN=postgresql://...
+# We source that file, or invoke the script to create it, before any Supabase-dependent
+# step runs. Guarded by --core-only and --external-supabase flags.
+
+SUPABASE_PROJECT_ENV="$HOME/.sift/supabase-project/sift-supabase.env"
+
+preflight_supabase() {
+  # Not needed for core-only or when operator supplies creds externally.
+  if [[ "${SIFT_CORE_ONLY:-0}" == "1" || "${SIFT_EXTERNAL_SUPABASE:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  # Step 1: source the env file if SUPABASE_URL is absent and the file exists.
+  if [[ -z "${SUPABASE_URL:-}" && -f "$SUPABASE_PROJECT_ENV" ]]; then
+    log "Sourcing Supabase env from $SUPABASE_PROJECT_ENV"
+    # shellcheck disable=SC1090
+    source "$SUPABASE_PROJECT_ENV"
+  fi
+
+  # Step 2: env still absent → invoke setup-supabase.sh (the Supabase agent's script).
+  if [[ -z "${SUPABASE_URL:-}" && -f "$REPO_DIR/scripts/setup-supabase.sh" ]]; then
+    log "SUPABASE_URL not set — running scripts/setup-supabase.sh to provision Supabase."
+    bash "$REPO_DIR/scripts/setup-supabase.sh" \
+      || die "scripts/setup-supabase.sh failed.  Cannot continue without Supabase."
+    if [[ -f "$SUPABASE_PROJECT_ENV" ]]; then
+      # shellcheck disable=SC1090
+      source "$SUPABASE_PROJECT_ENV"
+    fi
+  fi
+
+  # Step 3: still empty → die with an actionable message.
+  if [[ -z "${SUPABASE_URL:-}" || -z "${SIFT_CONTROL_PLANE_DSN:-}" ]]; then
+    die "Supabase credentials not found.
+  Option A (auto-provision): ensure scripts/setup-supabase.sh exists in the repo.
+  Option B (external):        export SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SIFT_CONTROL_PLANE_DSN
+                               then re-run: ./install.sh --external-supabase
+  Option C (manual file):     write those exports to $SUPABASE_PROJECT_ENV and re-run."
+  fi
+
+  log "Supabase preflight OK: SUPABASE_URL=${SUPABASE_URL}"
+  export SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SIFT_CONTROL_PLANE_DSN
+}
+
 _env_file_value() {
   local file="$1" key="$2"
   [[ -f "$file" ]] || return 0
@@ -1117,6 +1179,112 @@ write_control_plane_env() {
   chmod 600 "$control_env_file"
   [[ -n "$cp_dsn" ]] && export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
   [[ -n "$token_pepper" ]] && export SIFT_TOKEN_PEPPER="$token_pepper"
+}
+
+# =============================================================================
+# DB migrations — apply supabase/migrations/*.sql against SIFT_CONTROL_PLANE_DSN
+# =============================================================================
+# Migrations are idempotent (CREATE ... IF NOT EXISTS / ADD COLUMN IF NOT EXISTS).
+# Uses psycopg3 (available in the venv) with autocommit + simple-query protocol
+# so multi-statement DDL files execute correctly (no parameter binding = no parse
+# step that would reject semicolons).
+# Guards: skips if --core-only or SIFT_CONTROL_PLANE_DSN empty.
+apply_db_migrations() {
+  if [[ "${SIFT_CORE_ONLY:-0}" == "1" ]]; then
+    log "apply_db_migrations: core-only — skipping."
+    return 0
+  fi
+
+  local cp_dsn
+  cp_dsn="$(_resolved_control_plane_dsn)"
+  if [[ -z "$cp_dsn" ]]; then
+    log "apply_db_migrations: SIFT_CONTROL_PLANE_DSN not set — skipping."
+    return 0
+  fi
+
+  local migrations_dir="$REPO_DIR/supabase/migrations"
+  if [[ ! -d "$migrations_dir" ]]; then
+    log "apply_db_migrations: no migrations directory at $migrations_dir — skipping."
+    return 0
+  fi
+
+  # Collect and sort migration files by filename (lexicographic = timestamp order).
+  local migration_files=()
+  while IFS= read -r -d '' f; do
+    migration_files+=("$f")
+  done < <(find "$migrations_dir" -maxdepth 1 -name '*.sql' -print0 | sort -z)
+
+  if [[ "${#migration_files[@]}" -eq 0 ]]; then
+    log "apply_db_migrations: no .sql files found in $migrations_dir."
+    return 0
+  fi
+
+  log "apply_db_migrations: applying ${#migration_files[@]} migration(s) via psycopg3."
+  export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
+  export MIGRATIONS_DIR="$migrations_dir"
+
+  # Pass filenames via a NUL-delimited env string.
+  local files_joined
+  files_joined="$(printf '%s\n' "${migration_files[@]}")"
+  export MIGRATION_FILES_LIST="$files_joined"
+
+  local result
+  result=$("$VENV_DIR/bin/python" - <<'PY'
+import os, sys
+from pathlib import Path
+
+dsn = os.environ["SIFT_CONTROL_PLANE_DSN"]
+files_raw = os.environ.get("MIGRATION_FILES_LIST", "")
+files = [f for f in files_raw.splitlines() if f.strip()]
+
+try:
+    import psycopg
+except ImportError as exc:
+    print(f"skip:psycopg_unavailable:{exc}", file=sys.stderr)
+    sys.exit(0)
+
+first_file = True
+for fpath in files:
+    p = Path(fpath)
+    sql_text = p.read_text(encoding="utf-8")
+    try:
+        # autocommit + no params = simple-query protocol; handles multi-statement DDL.
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute(sql_text)
+        print(f"ok:{p.name}")
+    except Exception as exc:
+        short = str(exc).split('\n')[0][:120]
+        if first_file:
+            # First/foundational migration failing likely means DB is unreachable.
+            print(f"fatal:{p.name}:{short}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            print(f"warn:{p.name}:{short}", file=sys.stderr)
+    first_file = False
+PY
+  2>&1) || {
+    warn "apply_db_migrations: foundational migration failed (DB unreachable?)."
+    warn "  $result"
+    die "Cannot continue — DB migrations required.  Fix SIFT_CONTROL_PLANE_DSN and re-run."
+  }
+
+  # Parse results and emit per-file log/warn.
+  local had_warn=0
+  while IFS= read -r line; do
+    case "$line" in
+      ok:*)   log "  migration applied: ${line#ok:}" ;;
+      warn:*) warn "  migration skipped/warned: ${line#warn:}"; had_warn=1 ;;
+      skip:*) log "  $line" ;;
+      *)      [[ -n "$line" ]] && log "  $line" ;;
+    esac
+  done <<< "$result"
+
+  if [[ "$had_warn" -eq 1 ]]; then
+    warn "apply_db_migrations: some migrations warned — schema may be partially applied."
+    warn "  This is often safe (IF NOT EXISTS clauses). Verify manually if needed."
+  else
+    log "apply_db_migrations: all migrations applied successfully."
+  fi
 }
 
 write_gateway_config() {
@@ -1248,6 +1416,29 @@ YAML
   chmod 600 "$os_config"
 }
 
+# FM-2: write gateway env file for OpenSearch env_refs so the backend process
+# receives OPENSEARCH_CONFIG and OPENSEARCH_HOST from the gateway's environment.
+# Idempotent (recreate only if missing); chmod 600 to guard the config path.
+# Called only when SIFT_OPENSEARCH_ENABLED=true; consumed by the gateway
+# service via EnvironmentFile=-%h/.sift/opensearch.env.
+write_opensearch_env() {
+  [[ "${SIFT_OPENSEARCH_ENABLED:-false}" == "true" ]] || return 0
+  local os_env_file="$SIFT_HOME/opensearch.env"
+  if [[ -f "$os_env_file" ]]; then
+    log "OpenSearch env file already exists — preserving $os_env_file."
+    return
+  fi
+  log "Writing OpenSearch gateway env file: $os_env_file"
+  install -d -m 700 "$(dirname "$os_env_file")"
+  {
+    printf '# OpenSearch env — gateway env_refs for opensearch-mcp backend\n'
+    printf '# Written by sift-mcps install.sh. Idempotent — delete to regenerate.\n'
+    printf 'OPENSEARCH_CONFIG=%s/opensearch.yaml\n' "$SIFT_HOME"
+    printf 'OPENSEARCH_HOST=http://127.0.0.1:9200\n'
+  } > "$os_env_file"
+  chmod 600 "$os_env_file"
+}
+
 # =============================================================================
 # Phase 8 — OpenSearch (Docker)
 # =============================================================================
@@ -1261,9 +1452,15 @@ _opensearch_api() {
   fi
 }
 
+# FM-1/FM-2 (#5): OPENSEARCH_UP tracks whether OpenSearch came up healthy.
+# main() reads this to gate seed_addon_backends and the post-seed restart.
+OPENSEARCH_UP=0
+
 start_opensearch() {
   if ! command -v docker >/dev/null 2>&1; then
     warn "Docker not found — skipping OpenSearch.  Install Docker and re-run."
+    warn "  opensearch-mcp backend will NOT be seeded (set SIFT_OPENSEARCH_ENABLED=false to silence)."
+    OPENSEARCH_UP=0
     return 0
   fi
   docker compose version >/dev/null 2>&1 || warn "Docker Compose v2 not available."
@@ -1272,7 +1469,11 @@ start_opensearch() {
     sudo_if_needed systemctl start docker 2>/dev/null || true
     sleep 2
   fi
-  docker ps >/dev/null 2>&1 || { warn "Docker not usable — skipping OpenSearch."; return 0; }
+  if ! docker ps >/dev/null 2>&1; then
+    warn "Docker not usable — skipping OpenSearch.  opensearch-mcp backend will NOT be seeded."
+    OPENSEARCH_UP=0
+    return 0
+  fi
 
   log "Starting OpenSearch."
   docker compose -f "$REPO_DIR/docker-compose.yml" up -d opensearch
@@ -1284,11 +1485,15 @@ start_opensearch() {
       | "$SYSTEM_PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("status","unknown"))' 2>/dev/null || true)"
     if [[ "$status" == "green" || "$status" == "yellow" ]]; then
       log "OpenSearch healthy: $status"
+      OPENSEARCH_UP=1
       break
     fi
     sleep 2
   done
-  [[ "$status" == "green" || "$status" == "yellow" ]] || warn "OpenSearch not healthy after 180 s — check docker logs."
+  if [[ "$OPENSEARCH_UP" -eq 0 ]]; then
+    warn "OpenSearch not healthy after 180 s — opensearch-mcp backend will NOT be seeded."
+    warn "  Check: docker logs opensearch  |  docker compose -f $REPO_DIR/docker-compose.yml ps"
+  fi
 }
 
 configure_opensearch_cluster() {
@@ -1507,15 +1712,48 @@ install_systemd_service() {
 # =============================================================================
 
 poll_gateway() {
-  log "Waiting for gateway health (up to 30 s)."
+  local label="${1:-initial}"
+  log "Waiting for gateway health (up to 30 s) [${label}]."
+  local body=""
   for _ in $(seq 1 30); do
-    if curl -kfsS https://127.0.0.1:4508/health >/dev/null 2>&1; then
-      log "Gateway health endpoint reachable."
-      return
+    body="$(curl -kfsS https://127.0.0.1:4508/health 2>/dev/null || true)"
+    if [[ -n "$body" ]]; then
+      break
     fi
     sleep 1
   done
-  warn "Gateway not reachable.  Check: journalctl --user -u sift-gateway -n 50"
+  if [[ -z "$body" ]]; then
+    warn "Gateway not reachable.  Check: journalctl --user -u sift-gateway -n 50"
+    return
+  fi
+
+  # Parse JSON body: verify status=ok and surface any degraded subsystems.
+  local gw_status supabase_status
+  gw_status="$("$SYSTEM_PYTHON" -c \
+    'import json,sys; d=json.loads(sys.argv[1]); print(d.get("status","unknown"))' \
+    "$body" 2>/dev/null || echo "parse_error")"
+  supabase_status="$("$SYSTEM_PYTHON" -c \
+    'import json,sys; d=json.loads(sys.argv[1]); print((d.get("supabase") or d.get("db") or {}).get("status","unknown"))' \
+    "$body" 2>/dev/null || echo "unknown")"
+
+  if [[ "$gw_status" == "ok" ]]; then
+    log "Gateway health OK [${label}]: status=$gw_status supabase=$supabase_status"
+  elif [[ "$gw_status" == "degraded" ]]; then
+    warn "Gateway is DEGRADED [${label}].  Full health body:"
+    warn "  $body"
+    # Surface the specific failing subsystem if we can parse it.
+    local reason
+    reason="$("$SYSTEM_PYTHON" -c \
+      'import json,sys; d=json.loads(sys.argv[1]); print(d.get("reason") or d.get("error") or "")' \
+      "$body" 2>/dev/null || true)"
+    [[ -n "$reason" ]] && warn "  Reason: $reason"
+    if [[ "${SIFT_CORE_ONLY:-0}" != "1" && "$supabase_status" != "ok" && "$supabase_status" != "unknown" ]]; then
+      warn "  Supabase connection is not OK ($supabase_status)."
+      warn "  Verify SUPABASE_URL/ANON_KEY/SERVICE_ROLE_KEY are set and the Supabase project is reachable."
+    fi
+  else
+    warn "Gateway returned unexpected status '$gw_status' [${label}] — body: $body"
+  fi
 }
 
 # =============================================================================
@@ -1586,6 +1824,22 @@ write_handoff() {
     else
       printf 'tokens=existing-gateway-config-preserved\n'
     fi
+    # Supabase provisioning mode (auto vs external vs missing).
+    if [[ "${SIFT_EXTERNAL_SUPABASE:-0}" == "1" ]]; then
+      printf 'supabase_provision_mode=external\n'
+    elif [[ -f "$SUPABASE_PROJECT_ENV" ]]; then
+      printf 'supabase_provision_mode=auto_provisioned\n'
+      printf 'supabase_project_env=%s\n' "$SUPABASE_PROJECT_ENV"
+    else
+      printf 'supabase_provision_mode=not_provisioned\n'
+    fi
+    # Migration apply result.
+    printf 'db_migrations_applied=%s\n' "${DB_MIGRATIONS_RESULT:-skipped}"
+    # OpenSearch backend seeding status.
+    printf 'opensearch_backend_seeded=%s\n' "${OPENSEARCH_SEEDED:-false}"
+    printf 'opensearch_available=%s\n' "${OPENSEARCH_UP:-0}"
+    # loginctl linger for --user services to survive logout.
+    printf 'loginctl_linger=enabled\n'
   } > "$MATERIALS_FILE"
   chmod 600 "$MATERIALS_FILE"
   # A1-BOOTSTRAP: clear the temp password from env now that it's in the handoff file.
@@ -1671,6 +1925,37 @@ print_summary() {
   printf 'Config:       %s\n' "$SIFT_CONFIG"
   printf 'Secrets:      %s\n' "$MATERIALS_FILE"
   printf 'Evidence root: %s\n' "$SIFT_CASES_ROOT"
+  printf '\n'
+
+  # Supabase provisioning mode.
+  if [[ "${SIFT_EXTERNAL_SUPABASE:-0}" == "1" ]]; then
+    printf 'Supabase:     external (credentials supplied by operator)\n'
+  elif [[ -f "$SUPABASE_PROJECT_ENV" ]]; then
+    printf 'Supabase:     auto-provisioned via scripts/setup-supabase.sh\n'
+    printf '              credentials: %s\n' "$SUPABASE_PROJECT_ENV"
+  elif [[ "${SIFT_CORE_ONLY:-0}" == "1" ]]; then
+    printf 'Supabase:     skipped (core-only install)\n'
+  else
+    printf 'Supabase:     NOT provisioned — re-run install.sh after running scripts/setup-supabase.sh\n'
+  fi
+
+  # DB migration result.
+  printf 'DB migrations: %s\n' "${DB_MIGRATIONS_RESULT:-skipped}"
+
+  # OpenSearch backend.
+  if [[ "${SIFT_CORE_ONLY:-0}" != "1" ]]; then
+    if [[ "${OPENSEARCH_SEEDED:-false}" == "true" ]]; then
+      printf 'OpenSearch:   backend seeded and registered in app.mcp_backends\n'
+    elif [[ "${OPENSEARCH_UP:-0}" -eq 1 ]]; then
+      printf 'OpenSearch:   running but backend seed was skipped\n'
+    else
+      printf 'OpenSearch:   not available (Docker absent or unhealthy)\n'
+    fi
+  fi
+
+  # loginctl linger.
+  printf 'Linger:       enabled (--user services survive logout/reboot)\n'
+
   printf '\n'
   printf 'Next steps:\n'
   # A1-BOOTSTRAP: Supabase-first login instructions when provisioned.
@@ -1864,28 +2149,42 @@ do_uninstall() {
 main() {
   SIFT_CORE_ONLY="${SIFT_CORE_ONLY:-0}"
   local uninstall_mode=0
-  # Parse flags
+  # Track explicit flag overrides (honored over auto-detect).
+  local flag_no_opencti=0 flag_no_windows_triage=0 flag_no_rag=0
+  SIFT_EXTERNAL_SUPABASE="${SIFT_EXTERNAL_SUPABASE:-0}"
+
+  # Parse flags (#1: new flags + existing)
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -y|--yes) ASSUME_YES=1; shift ;;
-      --core-only) SIFT_CORE_ONLY=1; shift ;;
-      --uninstall|--remove) uninstall_mode=1; shift ;;
-      --purge-data) PURGE_DATA=1; shift ;;
+      -y|--yes)               ASSUME_YES=1; shift ;;
+      --core-only)            SIFT_CORE_ONLY=1; shift ;;
+      --uninstall|--remove)   uninstall_mode=1; shift ;;
+      --purge-data)           PURGE_DATA=1; shift ;;
+      --no-opencti)           flag_no_opencti=1; shift ;;
+      --no-windows-triage)    flag_no_windows_triage=1; shift ;;
+      --no-rag)               flag_no_rag=1; shift ;;
+      --external-supabase)    SIFT_EXTERNAL_SUPABASE=1; shift ;;
       -h|--help)
-        printf 'Usage: ./install.sh [--core-only] [--uninstall [--purge-data]] [-y]\n\n'
+        printf 'Usage: ./install.sh [OPTIONS]\n\n'
         printf 'Provisions (or removes) a sift-mcps stack on SIFT Workstation.\n'
         printf 'No arguments required for install — everything is auto-detected.\n'
         printf 'Re-run safe: every install step is idempotent.\n\n'
-        printf '  --core-only     Install gateway + portal + in-process core tools only.\n'
-        printf '                  Skips all add-on backends (opensearch, rag, windows-triage,\n'
-        printf '                  opencti), OpenSearch/Docker, and forensic-tool downloads.\n'
-        printf '  --uninstall     Reverse the install: stop/remove the systemd service, venv,\n'
-        printf '                  ~/.sift (config/TLS/secrets), auditd + AppArmor configs, the\n'
-        printf '                  hayabusa symlink, and docker containers. Preserves data\n'
-        printf '                  (/var/lib/sift, /cases, docker volumes).\n'
-        printf '  --purge-data    With --uninstall, ALSO delete /var/lib/sift and /cases\n'
-        printf '                  (EVIDENCE) and docker volumes. Irreversible — prompts unless -y.\n'
-        printf '  -y, --yes       Assume yes to destructive prompts (non-interactive purge).\n'
+        printf '  --core-only          Install gateway + portal + in-process core tools only.\n'
+        printf '                       Skips all add-on backends (opensearch, rag, windows-triage,\n'
+        printf '                       opencti), OpenSearch/Docker, and forensic-tool downloads.\n'
+        printf '  --no-opencti         Disable OpenCTI even if Docker + RAM requirements are met.\n'
+        printf '  --no-windows-triage  Disable windows-triage-mcp backend.\n'
+        printf '  --no-rag             Disable forensic-rag-mcp backend.\n'
+        printf '  --external-supabase  Skip Supabase auto-provisioning.  Requires that\n'
+        printf '                       SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,\n'
+        printf '                       and SIFT_CONTROL_PLANE_DSN are already exported in env.\n'
+        printf '  --uninstall          Reverse the install: stop/remove the systemd service, venv,\n'
+        printf '                       ~/.sift (config/TLS/secrets), auditd + AppArmor configs, the\n'
+        printf '                       hayabusa symlink, and docker containers. Preserves data\n'
+        printf '                       (/var/lib/sift, /cases, docker volumes).\n'
+        printf '  --purge-data         With --uninstall, ALSO delete /var/lib/sift and /cases\n'
+        printf '                       (EVIDENCE) and docker volumes. Irreversible — prompts unless -y.\n'
+        printf '  -y, --yes            Assume yes to destructive prompts (non-interactive purge).\n'
         exit 0
         ;;
       *)
@@ -1894,6 +2193,7 @@ main() {
         ;;
     esac
   done
+  export SIFT_EXTERNAL_SUPABASE
 
   if [[ "$uninstall_mode" == "1" ]]; then
     do_uninstall
@@ -1906,7 +2206,8 @@ main() {
   require_cmd awk
   require_cmd curl
 
-  # --- backend enablement ---
+  # --- backend enablement (#1) ---
+  # Rule: explicit flags and explicit env vars take priority over auto-detect.
   if [[ "$SIFT_CORE_ONLY" == "1" ]]; then
     log "CORE-ONLY install: gateway + portal + in-process core tools; all add-on backends disabled."
     SIFT_OPENCTI_ENABLED="false"
@@ -1914,19 +2215,50 @@ main() {
     SIFT_WINDOWS_TRIAGE_ENABLED="false"
     SIFT_OPENSEARCH_ENABLED="false"
   else
-    SIFT_RAG_ENABLED="${SIFT_RAG_ENABLED:-true}"
-    SIFT_WINDOWS_TRIAGE_ENABLED="${SIFT_WINDOWS_TRIAGE_ENABLED:-true}"
-    SIFT_OPENSEARCH_ENABLED="${SIFT_OPENSEARCH_ENABLED:-true}"
-    # auto-detect OpenCTI
-    if _detect_opencti; then
-      SIFT_OPENCTI_ENABLED="true"
-      log "OpenCTI auto-detected: Docker available, sufficient RAM."
+    # RAG: --no-rag flag or explicit env=false overrides.
+    if [[ "$flag_no_rag" -eq 1 || "${SIFT_RAG_ENABLED:-}" == "false" ]]; then
+      SIFT_RAG_ENABLED="false"
+      log "RAG backend disabled (--no-rag or SIFT_RAG_ENABLED=false)."
     else
+      SIFT_RAG_ENABLED="${SIFT_RAG_ENABLED:-true}"
+    fi
+
+    # Windows triage: --no-windows-triage flag or explicit env=false overrides.
+    if [[ "$flag_no_windows_triage" -eq 1 || "${SIFT_WINDOWS_TRIAGE_ENABLED:-}" == "false" ]]; then
+      SIFT_WINDOWS_TRIAGE_ENABLED="false"
+      log "Windows triage backend disabled (--no-windows-triage or SIFT_WINDOWS_TRIAGE_ENABLED=false)."
+    else
+      SIFT_WINDOWS_TRIAGE_ENABLED="${SIFT_WINDOWS_TRIAGE_ENABLED:-true}"
+    fi
+
+    # OpenSearch: default enabled.
+    SIFT_OPENSEARCH_ENABLED="${SIFT_OPENSEARCH_ENABLED:-true}"
+
+    # OpenCTI: --no-opencti or explicit env=false → disable without auto-detect.
+    # Explicit env=true → enable without auto-detect.
+    # Neither → auto-detect via _detect_opencti.
+    if [[ "$flag_no_opencti" -eq 1 || "${SIFT_OPENCTI_ENABLED:-}" == "false" ]]; then
       SIFT_OPENCTI_ENABLED="false"
-      log "OpenCTI not enabled (requires Docker + ≥14 GB RAM)."
+      log "OpenCTI disabled (--no-opencti or SIFT_OPENCTI_ENABLED=false)."
+    elif [[ "${SIFT_OPENCTI_ENABLED:-}" == "true" ]]; then
+      log "OpenCTI enabled (SIFT_OPENCTI_ENABLED=true, explicit)."
+    else
+      # Auto-detect: Docker available + ≥14 GB RAM.
+      if _detect_opencti; then
+        SIFT_OPENCTI_ENABLED="true"
+        log "OpenCTI auto-detected: Docker available, sufficient RAM."
+      else
+        SIFT_OPENCTI_ENABLED="false"
+        log "OpenCTI not enabled (requires Docker + ≥14 GB RAM)."
+      fi
     fi
   fi
   export SIFT_CORE_ONLY SIFT_OPENCTI_ENABLED SIFT_RAG_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED SIFT_OPENSEARCH_ENABLED
+
+  # --- preflight: Supabase (integration contract) ---
+  # Must run before write_supabase_env / write_control_plane_env so those see
+  # the exported vars. Skipped for --core-only or --external-supabase.
+  preflight_supabase
 
   # --- install ---
   install_host_prereqs
@@ -1947,8 +2279,24 @@ main() {
   prepare_opencti_secrets
   write_supabase_env   # A1-BOOTSTRAP: Supabase secrets in ~/.sift/supabase.env
   write_control_plane_env
+
+  # Apply DB migrations BEFORE bootstrap_supabase_operator and seed_addon_backends
+  # so the schema is in place when those functions run (#2).
+  DB_MIGRATIONS_RESULT="skipped"
+  if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
+    if apply_db_migrations; then
+      DB_MIGRATIONS_RESULT="applied"
+    else
+      DB_MIGRATIONS_RESULT="failed"
+    fi
+  fi
+
   write_gateway_config
   prepare_enrichment_assets   # FK enrichment is core (D4: FK data is a core runtime dep)
+
+  # Track whether OpenSearch came up (set by start_opensearch).
+  OPENSEARCH_UP=0
+  OPENSEARCH_SEEDED=false
 
   if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
     download_triage_databases
@@ -1956,10 +2304,21 @@ main() {
     import_rag_pgvector
     install_hayabusa
     write_opensearch_config
-    start_opensearch
-    configure_opensearch_cluster
-    configure_geoip_pipeline
-    install_opensearch_templates
+    write_opensearch_env    # FM-2: write gateway env file for OPENSEARCH_CONFIG/OPENSEARCH_HOST (#3)
+    start_opensearch        # sets OPENSEARCH_UP=1 if healthy
+
+    # FM-1/FM-2 (#5): gate OpenSearch cluster config and seeding on real availability.
+    if [[ "$OPENSEARCH_UP" -eq 1 ]]; then
+      configure_opensearch_cluster
+      configure_geoip_pipeline
+      install_opensearch_templates
+    else
+      warn "OpenSearch not available — skipping cluster config, GeoIP pipeline, and template install."
+      warn "  opensearch-mcp backend will NOT be seeded; set SIFT_OPENSEARCH_ENABLED=false to suppress."
+      SIFT_OPENSEARCH_ENABLED="false"
+      export SIFT_OPENSEARCH_ENABLED
+    fi
+
     install_opencti
     install_opencti_feeds
     install_hayabusa_system_links
@@ -1972,10 +2331,20 @@ main() {
   validate_evidence_root
 
   install_systemd_service
+
+  # (#6) loginctl linger: ensure --user services survive logout/reboot.
+  if command -v loginctl >/dev/null 2>&1; then
+    log "Enabling loginctl linger for $(user_name)."
+    sudo_if_needed loginctl enable-linger "$(user_name)" 2>/dev/null || \
+      warn "loginctl enable-linger failed — systemd --user services may stop on logout."
+  else
+    warn "loginctl not found — systemd --user services may stop on logout."
+  fi
+
   configure_immutable_capability
   configure_auditd
   configure_apparmor
-  poll_gateway
+  poll_gateway "initial"
 
   # A1-BOOTSTRAP: Supabase operator bootstrap runs after the gateway is up
   # (Postgres must be reachable for the DB principal insert to succeed later).
@@ -1989,8 +2358,22 @@ main() {
 
   # OS1-BOOTSTRAP: seed enabled add-on backends into app.mcp_backends after
   # the gateway + DB are live (gateway was polled successfully above).
-  # Core-only skips via SIFT_OPENSEARCH_ENABLED=false set earlier in main().
+  # Gated on OPENSEARCH_UP: if OpenSearch never came healthy, SIFT_OPENSEARCH_ENABLED
+  # was set to false above, so seed_addon_backends is a no-op (#5).
   seed_addon_backends
+  if [[ "${SIFT_OPENSEARCH_ENABLED:-false}" == "true" && "$OPENSEARCH_UP" -eq 1 ]]; then
+    OPENSEARCH_SEEDED=true
+  fi
+
+  # FM-1 (#4): restart gateway after seeding so it reloads app.mcp_backends
+  # and opensearch_* backend appears in the catalog at boot.
+  if [[ "${SIFT_OPENSEARCH_ENABLED:-false}" == "true" && "$OPENSEARCH_UP" -eq 1 \
+        && "$SIFT_CORE_ONLY" != "1" ]]; then
+    log "Restarting gateway to apply opensearch-mcp backend seed (FM-1)."
+    systemctl --user restart sift-gateway.service 2>/dev/null || \
+      warn "Gateway restart failed — backend catalog may not include opensearch-mcp until next restart."
+    poll_gateway "post-seed-restart"
+  fi
 
   write_handoff
   print_summary

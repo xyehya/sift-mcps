@@ -18,6 +18,11 @@ Environment=SIFT_EXAMINER=${SIFT_EXAMINER}
 # These are left empty here; override in a drop-in: systemctl --user edit sift-gateway
 EnvironmentFile=-%h/.sift/supabase.env
 EnvironmentFile=-%h/.sift/control-plane.env
+# FM-2: OpenSearch env_refs for opensearch-mcp backend process.
+# OPENSEARCH_CONFIG and OPENSEARCH_HOST are resolved from the gateway process
+# env and forwarded to the opensearch-mcp child via env_refs in app.mcp_backends.
+# This file is written by install.sh only when SIFT_OPENSEARCH_ENABLED=true.
+EnvironmentFile=-%h/.sift/opensearch.env
 
 [Install]
 WantedBy=default.target

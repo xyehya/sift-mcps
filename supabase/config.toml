@@ -1,0 +1,197 @@
+# Supabase CLI local development config for SIFT Workstation.
+# Generated for: supabase CLI v2.105.0
+# Managed by: scripts/setup-supabase.sh  — edit here, re-run to apply.
+#
+# Only the services SIFT uses are enabled:
+#   - db (postgres)   — direct DSN for SIFT app control plane
+#   - auth (gotrue)   — operator/agent login + JWT validation via /auth/v1/*
+#   - api (kong)      — routes /auth/v1/* and the PostgREST surface (required by CLI)
+#
+# Disabled: studio, inbucket, storage, realtime, edge_runtime, analytics.
+# analytics/vector is the #1 local-stack failure point; disabling it is critical.
+
+project_id = "sift-mcps"
+
+# ── API (Kong) ─────────────────────────────────────────────────────────────────
+# The CLI's Kong handles /auth/v1/* routing automatically; we just need it up.
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[api.tls]
+enabled = false
+
+# ── Database ──────────────────────────────────────────────────────────────────
+[db]
+# Postgres 15 — CLI uses supabase/postgres:15.8.1.085 for this version.
+# SIFT_CONTROL_PLANE_DSN: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+major_version = 15
+port = 54322
+shadow_port = 54320
+health_timeout = "2m"
+
+[db.pooler]
+enabled = false
+port = 54329
+pool_mode = "transaction"
+default_pool_size = 20
+max_client_conn = 100
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[db.seed]
+# No seed file needed; install.sh bootstraps the operator row via psycopg.
+enabled = false
+sql_paths = []
+
+# ── Realtime ─────────────────────────────────────────────────────────────────
+[realtime]
+enabled = false
+
+# ── Studio ────────────────────────────────────────────────────────────────────
+[studio]
+enabled = false
+port = 54323
+api_url = "http://127.0.0.1"
+openai_api_key = "env(OPENAI_API_KEY)"
+
+# ── Inbucket (email testing) ──────────────────────────────────────────────────
+[inbucket]
+enabled = false
+port = 54324
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+[storage]
+enabled = false
+file_size_limit = "50MiB"
+
+[storage.s3_protocol]
+enabled = false
+
+[storage.analytics]
+enabled = false
+max_namespaces = 5
+max_tables = 10
+max_catalogs = 2
+
+[storage.vector]
+enabled = false
+max_buckets = 10
+max_indexes = 5
+
+# ── Auth (GoTrue) ─────────────────────────────────────────────────────────────
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:54321"
+additional_redirect_urls = []
+# AUT2-B0: 48-hour tokens for autonomous forensic agent sessions.
+# See configs/supabase/auth-jwt.env.template for the requirement rationale.
+jwt_expiry = 172800
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+enable_signup = true
+enable_anonymous_sign_ins = false
+enable_manual_linking = false
+minimum_password_length = 6
+password_requirements = ""
+
+[auth.rate_limit]
+email_sent = 2
+sms_sent = 30
+anonymous_users = 30
+token_refresh = 150
+sign_in_sign_ups = 30
+token_verifications = 30
+web3 = 30
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = false
+# No SMTP on SIFT VM — autoconfirm; operator resets password on first login.
+enable_confirmations = false
+secure_password_change = false
+max_frequency = "1s"
+otp_length = 6
+otp_expiry = 3600
+
+[auth.sms]
+enable_signup = false
+enable_confirmations = false
+template = "Your code is {{ `{{ .Code }}` }}"
+max_frequency = "5s"
+
+[auth.sms.twilio]
+enabled = false
+account_sid = ""
+message_service_sid = ""
+auth_token = "env(SUPABASE_AUTH_SMS_TWILIO_AUTH_TOKEN)"
+
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = false
+verify_enabled = false
+
+[auth.mfa.phone]
+enroll_enabled = false
+verify_enabled = false
+otp_length = 6
+template = "Your code is {{ `{{ .Code }}` }}"
+max_frequency = "5s"
+
+[auth.external.apple]
+enabled = false
+client_id = ""
+secret = "env(SUPABASE_AUTH_EXTERNAL_APPLE_SECRET)"
+redirect_uri = ""
+url = ""
+skip_nonce_check = false
+email_optional = false
+
+[auth.web3.solana]
+enabled = false
+
+[auth.third_party.firebase]
+enabled = false
+
+[auth.third_party.auth0]
+enabled = false
+
+[auth.third_party.aws_cognito]
+enabled = false
+
+[auth.third_party.clerk]
+enabled = false
+
+[auth.oauth_server]
+enabled = false
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = false
+
+# ── Edge Runtime ──────────────────────────────────────────────────────────────
+[edge_runtime]
+enabled = false
+policy = "per_worker"
+inspector_port = 8083
+deno_version = 2
+
+# ── Analytics (logflare/vector) ───────────────────────────────────────────────
+# DISABLED: this is the #1 cause of local-stack startup failure.
+[analytics]
+enabled = false
+port = 54327
+backend = "postgres"
+
+# ── Experimental ──────────────────────────────────────────────────────────────
+[experimental]
+orioledb_version = ""
+s3_host = "env(S3_HOST)"
+s3_region = "env(S3_REGION)"
+s3_access_key = "env(S3_ACCESS_KEY)"
+s3_secret_key = "env(S3_SECRET_KEY)"
