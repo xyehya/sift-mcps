@@ -148,7 +148,13 @@ class FakeSupabaseAuth:
                 "principal_id": "agent-1",
                 "display_name": "hermes",
                 "status": "active",
+                "token_type": "supabase_jwt",
+                "last_issued_at": "2026-06-10T01:42:31Z",
+                "last_issued_expires_at": "2026-06-12T01:42:31Z",
+                "last_issued_token_ttl_seconds": 172800,
+                "last_issued_fingerprint": "fp-agent",
                 "access_token": "LEAK-SHOULD-BE-STRIPPED",
+                "refresh_token": "LEAK-SHOULD-BE-STRIPPED",
             }
         ]
 
@@ -569,7 +575,11 @@ class TestPrincipalLifecycle:
         assert "LEAK-SHOULD-BE-STRIPPED" not in resp.text
         items = resp.json()["principals"]
         assert items[0]["principal_id"] == "agent-1"
+        assert items[0]["token_type"] == "supabase_jwt"
+        assert items[0]["last_issued_expires_at"] == "2026-06-12T01:42:31Z"
+        assert items[0]["last_issued_token_ttl_seconds"] == 172800
         assert "access_token" not in items[0]
+        assert "refresh_token" not in items[0]
 
 
 # ---------------------------------------------------------------------------

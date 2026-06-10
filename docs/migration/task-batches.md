@@ -1299,9 +1299,20 @@ Current status (2026-06-10):
   13-tool catalog. Do not check BATCH-FRZ1 complete until re-acquisition click
   proof on a throwaway file, approval/report export if still required for the
   final demo, docs validation, and `git diff --check` all pass.
-- Portal UX backlog logged: the principal/token table should show token type,
-  display name, active/expired/revoked status, TTL remaining, and a revoke
-  button that disables/dims after successful revoke.
+- Portal principal/session UX and MCP schema compatibility are source-fixed and
+  live-deployed: the Settings table shows Supabase JWT token type, display name,
+  active/expired/revoked status, TTL remaining, scopes, and a revoke button that
+  disables/dims after success; the normal legacy PR02 token management surface
+  was removed. `rag_search_case` now advertises a plain object schema (no
+  top-level `anyOf`) and live `tools/list` shows 13 tools with
+  `rag_search_case` callable.
+- Installer hardening source changes are landed for `rg`, post-`uv sync` `pyewf`
+  relink, worker unit install/restart, and sudoers helper wiring, but destructive
+  throwaway-VM idempotency and dedicated non-admin service-user cutover proof
+  remain open.
+- Operator-requested next-session focus: leave offline Volatility symbol
+  packaging/pre-warm and progress-stderr filtering for a fresh session; decide
+  and implement or explicitly defer those two without reopening broad FRZ1 scope.
 
 Scope:
 

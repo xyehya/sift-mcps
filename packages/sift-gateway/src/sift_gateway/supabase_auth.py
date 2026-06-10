@@ -20,11 +20,13 @@ non-secret 16-hex SHA-256 fingerprint of an access token is ever surfaced.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -48,6 +50,33 @@ _TTL_VALIDATION_SLOP = 300
 _MAX_TOKEN_LENGTH = 8192
 # Network timeout for Supabase Auth HTTP calls.
 _HTTP_TIMEOUT = httpx.Timeout(10.0, read=10.0)
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _iso_utc(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return (
+            datetime.fromtimestamp(value, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return str(value)
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +673,9 @@ class SupabasePrincipalRepository:
                         """
                         select id::text, display_name, agent_type, status,
                                auth_user_id::text, owner_user_id::text,
-                               default_case_id::text
+                               default_case_id::text,
+                               coalesce(metadata, '{}'::jsonb)::text,
+                               created_at, updated_at
                         from app.agents
                         where owner_user_id = %s
                         order by display_name, id
@@ -656,22 +687,49 @@ class SupabasePrincipalRepository:
                         """
                         select id::text, display_name, agent_type, status,
                                auth_user_id::text, owner_user_id::text,
-                               default_case_id::text
+                               default_case_id::text,
+                               coalesce(metadata, '{}'::jsonb)::text,
+                               created_at, updated_at
                         from app.agents
                         order by display_name, id
                         """
                     )
                 for row in cur.fetchall():
-                    pid, display_name, agent_type, status, auth_user_id, owner_id, default_case_id = row
+                    (
+                        pid,
+                        display_name,
+                        agent_type,
+                        status,
+                        auth_user_id,
+                        owner_id,
+                        default_case_id,
+                        metadata_raw,
+                        created_at,
+                        updated_at,
+                    ) = row
+                    metadata = _json_object(metadata_raw)
                     principals.append({
                         "principal_type": "agent",
                         "principal_id": str(pid),
                         "display_name": display_name,
                         "status": str(status),
                         "type": str(agent_type) if agent_type else None,
+                        "token_type": "supabase_jwt",
                         "auth_user_id": str(auth_user_id) if auth_user_id else None,
                         "owner_user_id": str(owner_id) if owner_id else None,
                         "default_case_id": str(default_case_id) if default_case_id else None,
+                        "created_at": _iso_utc(created_at),
+                        "updated_at": _iso_utc(updated_at),
+                        "last_issued_at": _iso_utc(metadata.get("last_issued_at")),
+                        "last_issued_expires_at": _iso_utc(
+                            metadata.get("last_issued_expires_at")
+                        ),
+                        "last_issued_token_ttl_seconds": metadata.get(
+                            "last_issued_token_ttl_seconds"
+                        ),
+                        "last_issued_fingerprint": metadata.get(
+                            "last_issued_fingerprint"
+                        ),
                         "tool_scopes": list(self._load_scopes(cur, "agent", str(pid))),
                     })
 
@@ -681,21 +739,46 @@ class SupabasePrincipalRepository:
                     cur.execute(
                         """
                         select id::text, name, service_type, status,
-                               auth_user_id::text
+                               auth_user_id::text,
+                               coalesce(metadata, '{}'::jsonb)::text,
+                               created_at, updated_at
                         from app.service_identities
                         order by name, id
                         """
                     )
                     for row in cur.fetchall():
-                        pid, name, service_type, status, auth_user_id = row
+                        (
+                            pid,
+                            name,
+                            service_type,
+                            status,
+                            auth_user_id,
+                            metadata_raw,
+                            created_at,
+                            updated_at,
+                        ) = row
+                        metadata = _json_object(metadata_raw)
                         principals.append({
                             "principal_type": "service",
                             "principal_id": str(pid),
                             "display_name": name,
                             "status": str(status),
                             "type": str(service_type) if service_type else None,
+                            "token_type": "supabase_jwt",
                             "auth_user_id": str(auth_user_id) if auth_user_id else None,
                             "owner_user_id": None,
+                            "created_at": _iso_utc(created_at),
+                            "updated_at": _iso_utc(updated_at),
+                            "last_issued_at": _iso_utc(metadata.get("last_issued_at")),
+                            "last_issued_expires_at": _iso_utc(
+                                metadata.get("last_issued_expires_at")
+                            ),
+                            "last_issued_token_ttl_seconds": metadata.get(
+                                "last_issued_token_ttl_seconds"
+                            ),
+                            "last_issued_fingerprint": metadata.get(
+                                "last_issued_fingerprint"
+                            ),
                             "tool_scopes": list(
                                 self._load_scopes(cur, "service", str(pid))
                             ),
@@ -1349,6 +1432,18 @@ class AgentServiceIssuance:
                 "(see configs/supabase/auth-jwt.env.template) and restart it."
             )
 
+        try:
+            await asyncio.to_thread(
+                self._stamp_principal_session_metadata,
+                kind,
+                principal_id,
+                session.expires_at,
+                token_ttl_seconds,
+                session.fingerprint,
+            )
+        except Exception as exc:  # pragma: no cover - keep issued token recoverable
+            logger.warning("principal session metadata stamp failed: %s", exc)
+
         self._audit_log(
             tool="principal_created",
             summary=f"{kind} created",
@@ -1370,6 +1465,38 @@ class AgentServiceIssuance:
             "display_name": display_name,
             "default_case_id": case_id if kind == "agent" else None,
         }
+
+    def _stamp_principal_session_metadata(
+        self,
+        kind: str,
+        principal_id: str,
+        expires_at: int,
+        token_ttl_seconds: int,
+        fingerprint: str,
+    ) -> None:
+        table = {"agent": "app.agents", "service": "app.service_identities"}.get(kind)
+        if table is None:
+            raise PrincipalForbiddenError("kind must be agent or service")
+        from psycopg.types.json import Jsonb
+
+        metadata = {
+            "last_issued_at": _iso_utc(time.time()),
+            "last_issued_expires_at": _iso_utc(expires_at),
+            "last_issued_token_ttl_seconds": int(token_ttl_seconds),
+            "last_issued_fingerprint": fingerprint,
+        }
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    update {table}
+                    set metadata = coalesce(metadata, '{{}}'::jsonb) || %s,
+                        updated_at = now()
+                    where id = %s
+                    """,
+                    (Jsonb(metadata), principal_id),
+                )
+            conn.commit()
 
     def _insert_principal_row(
         self,

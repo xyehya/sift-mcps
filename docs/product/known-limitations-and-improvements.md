@@ -8,10 +8,9 @@ Last updated: 2026-06-10.
 | Area | Limitation | Demo impact | Improvement path |
 | --- | --- | --- | --- |
 | Re-auth | MVP uses a local HMAC/password bridge for sensitive portal actions. | Acceptable if explained clearly; not a custody bypass because Gateway still records the re-auth event and DB transition. | Move to Supabase password re-auth/session verification. |
-| Principal/token portal table | The portal principal/token list does not clearly distinguish token type, display name, active/expired/revoked state, or TTL remaining. Expired tokens can still appear active, and the revoke action remains visually available instead of dimming/locking after revocation. | Operator can issue a correct token, but the GUI can mislead during demo cleanup or token review. | Show token type, name, status, TTL remaining, and one revoke button per row; after revoke, update status and disable/dim the button. |
 | Re-acquisition click proof | The `violated -> sealed` re-acquisition path is deployed and route/unit tested, and live service-RPC proof exists, but the portal click path has not been rerun in this FRZ1 pass. | Do not present a live re-acquire click on the prepared Rocba case unless rerun on a throwaway file first. The custody story can show the already-retired ghost and re-acquired replacement. | Run the click proof on a throwaway case/file: seal small file, modify bytes, rescan to violation, re-seal with reason/HMAC, confirm gate clears. |
 | Ingest mount privilege | Disk-image ingest needs root to mount (`containers.py`: xmount/ewfmount/mount/losetup/qemu-nbd/modprobe nbd/partprobe/umount/fusermount). A narrow audited allowlist exists, but the demo VM's gateway still runs as `sansforensics`, whose blanket `ALL=(ALL) NOPASSWD: ALL` grant masks the allowlist. | Ingest works on the demo VM, but the service identity has more root than it needs. | Run gateway/worker as a dedicated non-admin service user whose only root capability is the mount allowlist, then keep blanket sudo only for the human admin. |
-| Installer re-run | A full destructive `./install.sh` re-run has not been exercised on the live demo VM. `pyewf` symlink repair after `uv sync` and `ripgrep` installation were hand-fixed during hardening. | None for the live demo if the prepared VM is used. Risk is reinstall/idempotency drift on a fresh VM. | Add post-`uv sync` `pyewf` relink and `rg` install to `install.sh`; run a destructive idempotency pass on a throwaway VM. |
+| Installer re-run | A full destructive `./install.sh` re-run has not been exercised on a throwaway VM. Source now installs `ripgrep`/`acl`, repairs `pyewf` after `uv sync`, renders both Gateway and worker unit files, and wires the runtime + ingest sudoers helpers. | None for the live demo if the prepared VM is used. Risk is reinstall/idempotency drift on a fresh VM. | Run a destructive idempotency pass on a throwaway VM before claiming installer freeze complete. |
 | Offline memory symbols | Volatility now works unprivileged and is live-proven on `Rocba-Memory2.raw`, but a cold offline VM may need Microsoft symbols already cached or staged. | Online/cached demo is OK. Fully offline demo should warm or bundle symbols first. | Bundle common Windows ISF symbols into the install image or pre-warm the case symbol cache before the demo. |
 | run_command progress stderr | Durable forensic tools can put carriage-return progress spam in stderr; output is capped but still noisy. | Cosmetic/context cost only. It does not expose secrets or block the demo. | Filter progress lines in the worker output path while preserving real errors. |
 | Pre-context denials | Some pre-context denials remain Gateway-local security telemetry, not `app.audit_events`. | Accepted MVP behavior; it does not affect authorized demo actions or report eligibility. | Add a DB projector for attributable pre-context denials. |
@@ -26,9 +25,9 @@ Last updated: 2026-06-10.
 
 | ID | Priority | Area | Improvement | Owner batch | Status |
 | --- | --- | --- | --- | --- | --- |
-| IMP-FRZ1-01 | P1 | Portal principal UI | Show token type, display name, active/expired/revoked status, TTL remaining, and a revoke button that disables/dims after successful revoke. | Post-freeze portal polish | Open |
+| IMP-FRZ1-01 | P1 | Portal principal UI | Show token type, display name, active/expired/revoked status, TTL remaining, and a revoke button that disables/dims after successful revoke. | BATCH-FRZ1 | Done |
 | IMP-FRZ1-02 | P1 | Service identity | Move gateway/worker to a dedicated non-admin service user and enforce the narrow mount sudoers allowlist. | Post-freeze hardening | Open |
-| IMP-FRZ1-03 | P1 | Installer | Add post-sync `pyewf` relink, `rg` install, and destructive throwaway-VM idempotency coverage. | Post-freeze hardening | Open |
+| IMP-FRZ1-03 | P1 | Installer | Add post-sync `pyewf` relink, `rg` install, and destructive throwaway-VM idempotency coverage. | Post-freeze hardening | Partial: source fixed; throwaway VM proof open |
 | IMP-FRZ1-04 | P1 | Offline symbols | Bundle or pre-warm Windows ISF symbols for fully offline memory demos. | Post-freeze packaging | Open |
 | IMP-FRZ1-05 | P2 | Output polish | Filter carriage-return progress spam from durable job stderr previews. | Post-freeze polish | Open |
 | IMP-FRZ1-06 | P2 | Audit projection | Project pre-context denials into DB audit authority. | V1 audit hardening | Accepted deferred |
@@ -45,6 +44,12 @@ Last updated: 2026-06-10.
 - `case_info` finding counters are DB-authoritative.
 - Portal login, local HMAC verification, fresh agent issuance, and 48-hour
   token TTL are live-proven.
+- Portal principal/session table now shows Supabase JWT token type, display
+  name, active/expired/revoked state, TTL remaining, scopes, and disables/dims
+  revoke after success; legacy PR02 token controls are no longer shown in the
+  normal Settings page.
+- `rag_search_case` advertises a plain object schema with no top-level
+  composition keys and is live-callable through the 13-tool MCP catalog.
 - Volatility cache/HOME/XDG issues are resolved for `Rocba-Memory2.raw`.
 - Logical E01 triage is demo-ready with direct `fls`.
 - Large command outputs can be saved under `agent/run_commands/...` and cited by

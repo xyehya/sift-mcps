@@ -60,6 +60,12 @@ Use the prepared demo case; do not recreate it for the final rehearsal:
   `examiner@operators.sift.local` succeeded, `must_reset=false`, HMAC challenge
   and verify succeeded, and a fresh portal-issued agent principal saw the
   13-tool MCP catalog. The fresh agent JWT TTL is `172800` seconds / 48 hours.
+- Portal Settings now shows the post-migration principal/session table only for
+  normal operation: Supabase JWT token type, display name, status,
+  TTL remaining, scopes, and disabled/dimmed revoke after success.
+- MCP schema proof from 2026-06-10: `rag_search_case` is in the 13-tool catalog
+  with a plain object input schema and no top-level `anyOf`/`oneOf`/`allOf`;
+  a direct RAG call returned `status=ok` with two result rows.
 
 ## Demo Boundary
 

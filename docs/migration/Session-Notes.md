@@ -13,6 +13,68 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - BATCH-FRZ1 portal principal UX + MCP schema compatibility
+
+Status: IN_PROGRESS
+
+FRZ1 conductor pass landed the portal principal/session table cleanup and fixed
+a client-breaking MCP schema issue found during Codex tool-surface validation.
+The Settings page now uses the post-migration Supabase JWT principal surface only
+for normal operation: token type, display name, active/expired/revoked status,
+TTL remaining, scopes, and last issued expiry are shown in the principal table;
+the revoke button is disabled/dimmed after local success or for already-revoked
+rows. Legacy PR02 token create/rotate/reactivate controls were removed from the
+normal Settings page so operators do not see two competing token-management
+surfaces. Backend listing remains secret-safe: raw access/refresh tokens are
+still returned only at issuance time and are stripped from principal roster
+responses; non-secret last-issued expiry/fingerprint metadata is persisted on
+the app principal rows for TTL display.
+
+Live deploy/smoke: synced the repo to the active VM service tree
+`/home/sansforensics/sift-mcps-test`, restarted `sift-gateway.service` and
+`sift-job-worker.service`, retried the known startup-race health check, and got
+Gateway health `status=ok`, Supabase OK, evidence root `/cases` OK. A fresh
+portal-issued agent principal returned `token_ttl_seconds=172800`; MCP
+initialize and `tools/list` returned HTTP 200 with 13 tools including
+`rag_search_case` and `run_command_job`.
+
+RAG/schema fix: `rag_search_case_schema()` no longer emits top-level `anyOf`.
+The schema is a plain JSON object with optional `query` and `query_embedding`;
+runtime validation now returns `query_or_query_embedding_required` when neither
+is supplied and still rejects non-768-dimensional embeddings. This fixed the
+Codex/client tool-registration failure (`invalid_function_parameters` on
+top-level `anyOf`) while preserving the live Gateway contract. Live MCP proof:
+`tools/list` showed `rag_search_case` schema type `object`,
+`composition_keys=[]`, and props `include_derived`, `include_knowledge`,
+`query`, `query_embedding`, `top_k`; a direct `rag_search_case` call returned
+HTTP 200 with `status=ok` and two result rows.
+
+Installer hardening source changes landed but were not destructively replayed on
+a throwaway VM in this truncated session: `install.sh` now installs missing host
+prereqs (`ripgrep`, `acl`), repairs the system `pyewf` binding inside the venv
+after `uv sync`, renders/enables/restarts both Gateway and job-worker user unit
+files, invokes both runtime sudoers and ingest mount sudoers helpers, and uninstalls
+both unit files. The sudoers helper defaults no longer hard-code
+`sansforensics`; they default to `SIFT_GATEWAY_SERVICE_USER` or the invoking
+user. Remaining service-identity caveat: the prepared demo VM still runs the
+user services as `sansforensics`; true least-privilege enforcement still needs a
+dedicated non-admin service-user cutover/proof on a throwaway VM or planned VM
+rebuild.
+
+Validation run before handoff: `bash -n install.sh scripts/setup-agent-runtime.sh
+scripts/setup-ingest-mount-sudoers.sh`; `pytest
+packages/sift-gateway/tests/test_pr03_supabase_jwt_auth.py -q` (51 passed);
+`pytest packages/case-dashboard/tests/test_pr03_supabase_portal_auth.py -q`
+(32 passed); `pytest packages/sift-gateway/tests/test_mvp_binding_job_tools.py
+-q` (21 passed); frontend `npm --prefix packages/case-dashboard/frontend run
+build` passed with only the existing large chunk warning. Final doc validators
+and `git diff --check` were run immediately before commit.
+
+Left for the next session by operator request/context pressure: decide and
+implement, or explicitly defer, only the remaining two FRZ1 polish items:
+offline Volatility symbol packaging/pre-warm, and progress-stderr filtering for
+durable command previews. BATCH-FRZ1 remains open.
+
 ### 2026-06-10 - BATCH-FRZ1 portal auth clarified + fresh agent TTL verified
 
 Status: DONE

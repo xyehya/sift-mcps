@@ -8,7 +8,8 @@
 set -euo pipefail
 
 RUNTIME_USER="${SIFT_EXECUTE_AS_USER:-agent_runtime}"
-SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-sansforensics}"
+DEFAULT_SERVICE_USER="${SUDO_USER:-$(id -un 2>/dev/null || printf 'sift_gateway')}"
+SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-$DEFAULT_SERVICE_USER}"
 CASES_ROOT="${SIFT_CASES_ROOT:-/cases}"
 STATE_ROOT="${SIFT_STATE_DIR:-/var/lib/sift}"
 
@@ -19,7 +20,7 @@ Usage: sudo scripts/setup-agent-runtime.sh [options]
 Options:
   --runtime-user USER   Restricted execution user (default: agent_runtime)
   --service-user USER   Gateway service user allowed to sudo to runtime user
-                        (default: sansforensics, or SIFT_GATEWAY_SERVICE_USER)
+                        (default: SIFT_GATEWAY_SERVICE_USER, else invoking user)
   --cases-root PATH     Cases root containing case directories (default: /cases)
   --state-root PATH     SIFT integrity-record root (default: /var/lib/sift)
   -h, --help            Show this help
@@ -67,7 +68,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "${EUID}" -ne 0 ]]; then
-    echo "ERROR: run as root, for example: sudo $0 --service-user sansforensics" >&2
+    echo "ERROR: run as root, for example: sudo $0 --service-user ${SERVICE_USER}" >&2
     exit 1
 fi
 

@@ -20,7 +20,7 @@ from sift_gateway.job_tools import (
     handle_run_command_job,
 )
 from sift_gateway.mcp_server import create_gateway_mcp_server
-from sift_gateway.rag_bridge import handle_rag_search_case
+from sift_gateway.rag_bridge import handle_rag_search_case, rag_search_case_schema
 
 
 def _case(case_dir: Path) -> ActiveCase:
@@ -247,6 +247,23 @@ def test_rag_search_case_rejects_wrong_embedding_dimension(tmp_path):
         handle_rag_search_case(gateway, {"query_embedding": [0.1, 0.2]}, "agent-1")
     )
     assert _payload(result)["error"] == "query_embedding_must_be_768_dimensional"
+
+
+def test_rag_search_case_schema_is_plain_object_for_tool_clients():
+    schema = rag_search_case_schema()
+    assert schema["type"] == "object"
+    assert {"query", "query_embedding"} <= set(schema["properties"])
+    assert "anyOf" not in schema
+    assert "oneOf" not in schema
+    assert "allOf" not in schema
+    assert "not" not in schema
+
+
+def test_rag_search_case_requires_query_or_embedding(tmp_path):
+    gateway = _Gateway(tmp_path / "case")
+    gateway.rag_query_service = object()
+    result = asyncio.run(handle_rag_search_case(gateway, {}, "agent-1"))
+    assert _payload(result)["error"] == "query_or_query_embedding_required"
 
 
 async def test_gateway_mcp_registers_local_binding_tools(tmp_path):

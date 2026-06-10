@@ -43,7 +43,7 @@ import and print cleanly:
 ingest_job      (read_only=False) required=['evidence_ref']        cat=ingest    phase=INGEST
 run_command_job (read_only=False) required=['command','purpose']   cat=detection phase=TRIAGE
 job_status      (read_only=True)  required=['job_id']              cat=ingest    phase=INGEST
-rag_search_case props=['query','query_embedding','top_k','include_knowledge','include_derived'] anyOf=[query | query_embedding]
+rag_search_case props=['query','query_embedding','top_k','include_knowledge','include_derived'] validation=query_or_query_embedding_required
 ```
 
 `CORE_TOOL_SPECS` could not be imported in this worktree (transitive
@@ -320,9 +320,10 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
 ### `rag_search_case` — CORRELATE, read-only (live-proven)
 - Description: "Search the case-scoped pgvector RAG plane and shared forensic knowledge.
   Returns path-free, provenance-linked snippets."
-- Input (rag_bridge.py:97): `anyOf [query | query_embedding]`; optional `top_k (5),
+- Input (rag_bridge.py:97): plain object schema for client compatibility; runtime
+  validation requires either `query` or `query_embedding`. Optional `top_k (5),
   include_knowledge (true), include_derived (true)`. `query_embedding` must be a numeric
-  array of exactly **768** dims or it's rejected (`query_embedding_must_be_768_
+  array of exactly **768** dims or it is rejected (`query_embedding_must_be_768_
   dimensional`).
 - Output: store `public_dict()` — path-free, provenance-linked snippets with `kinds`
   and titles. Parallel-safety: **safe-read**. Context budget: `top_k`-bounded.

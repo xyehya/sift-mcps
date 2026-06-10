@@ -111,10 +111,6 @@ def rag_search_case_schema() -> dict[str, Any]:
             "include_knowledge": {"type": "boolean", "default": True},
             "include_derived": {"type": "boolean", "default": True},
         },
-        "anyOf": [
-            {"required": ["query"]},
-            {"required": ["query_embedding"]},
-        ],
     }
 
 
@@ -138,6 +134,13 @@ async def handle_rag_search_case(
         return [TextContent(type="text", text=json.dumps(payload))]
 
     embedding = arguments.get("query_embedding")
+    query = str(arguments.get("query") or "").strip()
+    if embedding is None and not query:
+        payload = {
+            "error": "query_or_query_embedding_required",
+            "tool": RAG_SEARCH_CASE_TOOL,
+        }
+        return [TextContent(type="text", text=json.dumps(payload))]
     if embedding is not None:
         if not isinstance(embedding, list) or not all(
             isinstance(v, int | float) for v in embedding
@@ -150,7 +153,7 @@ async def handle_rag_search_case(
     try:
         result = await rag_service.search(
             case_id=case.case_id,
-            query=str(arguments.get("query") or ""),
+            query=query,
             query_embedding=embedding,
             top_k=int(arguments.get("top_k") or 5),
             include_knowledge=bool(arguments.get("include_knowledge", True)),

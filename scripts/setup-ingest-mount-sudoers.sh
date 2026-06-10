@@ -23,7 +23,8 @@
 # drop-in. See docs/product/security-architecture.md.
 set -euo pipefail
 
-SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-sansforensics}"
+DEFAULT_SERVICE_USER="${SUDO_USER:-$(id -un 2>/dev/null || printf 'sift_gateway')}"
+SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-$DEFAULT_SERVICE_USER}"
 SUDOERS_FILE="/etc/sudoers.d/sift-ingest-mount"
 PRINT_ONLY=0
 
@@ -33,7 +34,7 @@ Usage: sudo scripts/setup-ingest-mount-sudoers.sh [options]
 
 Options:
   --service-user USER   Gateway service user granted the mount allowlist
-                        (default: sansforensics, or SIFT_GATEWAY_SERVICE_USER)
+                        (default: SIFT_GATEWAY_SERVICE_USER, else invoking user)
   --print               Print the generated sudoers content and exit (no install).
                         Use this to review the exact rule before applying it.
   -h, --help            Show this help

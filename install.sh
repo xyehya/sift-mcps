@@ -64,6 +64,7 @@ SIFT_GATEWAY_SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-$(user_name)}"
 MATERIALS_FILE="${MATERIALS_FILE:-$SIFT_TOKENS_DIR/installer-handoff.txt}"
 SYSTEMD_USER_DIR="${SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 GATEWAY_SERVICE_FILE="$SYSTEMD_USER_DIR/sift-gateway.service"
+JOB_WORKER_SERVICE_FILE="$SYSTEMD_USER_DIR/sift-job-worker.service"
 
 VENV_DIR="$REPO_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
@@ -137,6 +138,20 @@ install_uv_if_needed() {
   UV_BIN="$uv_bin"
 }
 
+install_host_prereqs() {
+  local missing=()
+  command -v rg >/dev/null 2>&1 || missing+=(ripgrep)
+  command -v setfacl >/dev/null 2>&1 || missing+=(acl)
+  [[ "${#missing[@]}" -eq 0 ]] && return 0
+  if ! command -v apt-get >/dev/null 2>&1; then
+    warn "Missing host tools (${missing[*]}) and apt-get is unavailable."
+    return 0
+  fi
+  log "Installing host prerequisites: ${missing[*]}"
+  sudo_if_needed apt-get update
+  sudo_if_needed apt-get install -y "${missing[@]}"
+}
+
 # =============================================================================
 # Phase 2 — venv integrity + sync
 # =============================================================================
@@ -208,6 +223,45 @@ sync_workspace() {
   log "Workspace sync complete."
 }
 
+repair_pyewf_venv_link() {
+  [[ -x "$VENV_PYTHON" ]] || return 0
+  if "$VENV_PYTHON" -c 'import pyewf' >/dev/null 2>&1; then
+    log "pyewf import OK in venv."
+    return 0
+  fi
+
+  local pyewf_origin
+  pyewf_origin="$("$SYSTEM_PYTHON" - <<'PY' 2>/dev/null || true
+import importlib.util
+spec = importlib.util.find_spec("pyewf")
+print(spec.origin if spec and spec.origin else "")
+PY
+)"
+  if [[ -z "$pyewf_origin" || ! -e "$pyewf_origin" ]]; then
+    warn "pyewf is not importable from system Python; install python3-libewf/libewf bindings if EWF tooling needs pyewf."
+    return 0
+  fi
+
+  local site_dir
+  site_dir="$("$VENV_PYTHON" - <<'PY'
+import site
+paths = site.getsitepackages()
+print(paths[0] if paths else "")
+PY
+)"
+  if [[ -z "$site_dir" || ! -d "$site_dir" ]]; then
+    warn "Could not locate venv site-packages for pyewf relink."
+    return 0
+  fi
+
+  ln -sfn "$pyewf_origin" "$site_dir/$(basename "$pyewf_origin")"
+  if "$VENV_PYTHON" -c 'import pyewf' >/dev/null 2>&1; then
+    log "Linked system pyewf into venv: $pyewf_origin"
+  else
+    warn "pyewf relink did not make pyewf importable in the venv."
+  fi
+}
+
 # =============================================================================
 # Phase 3 — state directories
 # =============================================================================
@@ -226,6 +280,26 @@ install_state_dirs() {
   sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_WINDOWS_TRIAGE_DB_DIR"
   sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_CASE_ROOT"
   install -d -m 700 "$SIFT_HOME" "$SIFT_TLS_DIR" "$SIFT_BACKUP_DIR"
+}
+
+ensure_gateway_service_user() {
+  local current_user
+  current_user="$(user_name)"
+  if [[ -z "${SIFT_GATEWAY_SERVICE_USER:-}" ]]; then
+    SIFT_GATEWAY_SERVICE_USER="$current_user"
+  fi
+  if id -u "$SIFT_GATEWAY_SERVICE_USER" >/dev/null 2>&1; then
+    log "Gateway service user exists: $SIFT_GATEWAY_SERVICE_USER"
+  else
+    local nologin="/usr/sbin/nologin"
+    [[ -x "$nologin" ]] || nologin="/sbin/nologin"
+    [[ -x "$nologin" ]] || nologin="/bin/false"
+    log "Creating dedicated gateway service user: $SIFT_GATEWAY_SERVICE_USER"
+    sudo_if_needed useradd -r -M -s "$nologin" "$SIFT_GATEWAY_SERVICE_USER"
+  fi
+  if [[ "$SIFT_GATEWAY_SERVICE_USER" == "$current_user" ]]; then
+    warn "Gateway service user is the installer user ($current_user). Set SIFT_GATEWAY_SERVICE_USER to a dedicated non-admin user before least-privilege enforcement testing."
+  fi
 }
 
 configure_agent_runtime() {
@@ -254,6 +328,15 @@ configure_agent_runtime() {
     --service-user "$SIFT_GATEWAY_SERVICE_USER" \
     --cases-root "$SIFT_CASES_ROOT" \
     --state-root "$SIFT_STATE_DIR"
+}
+
+configure_ingest_mount_sudoers() {
+  if ! command -v visudo >/dev/null 2>&1 && [[ ! -x /usr/sbin/visudo ]]; then
+    die "Missing required command: visudo"
+  fi
+  log "Configuring forensic ingest mount sudoers for service user: ${SIFT_GATEWAY_SERVICE_USER}."
+  sudo_if_needed "$REPO_DIR/scripts/setup-ingest-mount-sudoers.sh" \
+    --service-user "$SIFT_GATEWAY_SERVICE_USER"
 }
 
 # =============================================================================
@@ -1309,6 +1392,7 @@ install_systemd_service() {
   export SIFT_MCPS_ROOT UV_BIN PYTHON_BIN SIFT_CONFIG SIFT_EXAMINER
 
   [[ -x "$VENV_DIR/bin/sift-gateway" ]] || die "Missing gateway entrypoint: $VENV_DIR/bin/sift-gateway. Run install workspace sync first."
+  [[ -x "$VENV_DIR/bin/sift-job-worker" ]] || warn "Missing durable job worker entrypoint: $VENV_DIR/bin/sift-job-worker."
 
   if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
     log "Updating systemd user service $GATEWAY_SERVICE_FILE."
@@ -1316,6 +1400,12 @@ install_systemd_service() {
     log "Writing systemd user service $GATEWAY_SERVICE_FILE."
   fi
   _render_file "$REPO_DIR/configs/systemd/sift-gateway.service" "$GATEWAY_SERVICE_FILE" 0644
+  if [[ -f "$JOB_WORKER_SERVICE_FILE" ]]; then
+    log "Updating systemd user service $JOB_WORKER_SERVICE_FILE."
+  else
+    log "Writing systemd user service $JOB_WORKER_SERVICE_FILE."
+  fi
+  _render_file "$REPO_DIR/configs/systemd/sift-job-worker.service" "$JOB_WORKER_SERVICE_FILE" 0644
 
   if ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not found — service file written but not started."
@@ -1323,7 +1413,8 @@ install_systemd_service() {
   fi
   systemctl --user daemon-reload
   systemctl --user enable sift-gateway.service
-  systemctl --user restart sift-gateway.service
+  systemctl --user enable sift-job-worker.service
+  systemctl --user restart sift-gateway.service sift-job-worker.service
 }
 
 # =============================================================================
@@ -1552,16 +1643,19 @@ _confirm_destructive() {
 
 uninstall_systemd() {
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user stop sift-gateway.service 2>/dev/null || true
-    systemctl --user disable sift-gateway.service 2>/dev/null || true
+    systemctl --user stop sift-gateway.service sift-job-worker.service 2>/dev/null || true
+    systemctl --user disable sift-gateway.service sift-job-worker.service 2>/dev/null || true
   fi
-  if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
-    rm -f "$GATEWAY_SERVICE_FILE"
-    command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload 2>/dev/null || true
-    log "Removed systemd user service ($GATEWAY_SERVICE_FILE)."
-  else
-    log "No systemd user service to remove."
-  fi
+  local removed=0
+  for service_file in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE"; do
+    if [[ -f "$service_file" ]]; then
+      rm -f "$service_file"
+      removed=1
+      log "Removed systemd user service ($service_file)."
+    fi
+  done
+  command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload 2>/dev/null || true
+  [[ "$removed" -eq 1 ]] || log "No systemd user services to remove."
 }
 
 uninstall_docker_stacks() {
@@ -1750,14 +1844,18 @@ main() {
   export SIFT_CORE_ONLY SIFT_OPENCTI_ENABLED SIFT_RAG_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED SIFT_OPENSEARCH_ENABLED
 
   # --- install ---
+  install_host_prereqs
   install_uv_if_needed
 
   # Ensure venv integrity before sync
   _ensure_venv_integrity || true  # best-effort; sync_workspace will fix remaining issues
 
   sync_workspace
+  repair_pyewf_venv_link
   install_state_dirs
+  ensure_gateway_service_user
   configure_agent_runtime
+  configure_ingest_mount_sudoers
   configure_fuse
   generate_tls
   write_default_examiner

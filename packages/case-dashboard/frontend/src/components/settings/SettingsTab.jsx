@@ -1,40 +1,88 @@
 import { useState, useEffect } from 'react'
 import {
-  getTokens, postToken, deleteToken, postRotateToken, postReactivateToken,
   getPrincipals, postPrincipal, deletePrincipal,
 } from '../../api/endpoints'
 import { useStore } from '../../store/useStore'
 
+function dateMs(value) {
+  if (!value) return null
+  const parsed = typeof value === 'number' ? value * 1000 : Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function formatDateTime(value) {
+  const ms = dateMs(value)
+  return ms === null ? 'Not recorded' : new Date(ms).toLocaleString()
+}
+
+function formatTtl(expiresAt, nowMs) {
+  const expiresMs = dateMs(expiresAt)
+  if (expiresMs === null) return 'Not recorded'
+  const remaining = Math.max(0, expiresMs - nowMs)
+  if (remaining <= 0) return 'Expired'
+  const totalMinutes = Math.floor(remaining / 60000)
+  const days = Math.floor(totalMinutes / 1440)
+  const hours = Math.floor((totalMinutes % 1440) / 60)
+  const minutes = totalMinutes % 60
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
+function principalStatus(principal, nowMs) {
+  const raw = String(principal.status || 'active').toLowerCase()
+  if (['revoked', 'disabled', 'archived'].includes(raw)) return raw
+  const expiresMs = dateMs(principal.last_issued_expires_at)
+  if (expiresMs !== null && expiresMs <= nowMs) return 'expired'
+  return raw
+}
+
+function statusStyle(status) {
+  if (status === 'active') {
+    return { background: 'var(--jade-dim)', color: 'var(--jade)', borderColor: 'var(--jade)' }
+  }
+  if (status === 'expired') {
+    return { background: 'var(--amber-dim)', color: 'var(--amber)', borderColor: 'var(--amber)' }
+  }
+  return { background: 'var(--bg-raised)', color: 'var(--text-muted)', borderColor: 'var(--border-soft)' }
+}
+
+function tokenTypeLabel(principal) {
+  return principal.token_type === 'supabase_jwt' ? 'Supabase JWT' : (principal.token_type || 'JWT session')
+}
+
 export function SettingsTab() {
-  const [tokens, setTokens] = useState([])
-  const [legacyEnabled, setLegacyEnabled] = useState(false)
-  const [loading, setLoading] = useState(false)
-  const [agentId, setAgentId] = useState('')
-  const [label, setLabel] = useState('')
-  const [expiry, setExpiry] = useState('')
-  const [newToken, setNewToken] = useState('')
-  const [newTokenDisplay, setNewTokenDisplay] = useState(false)
   const { addToast } = useStore()
 
   // PR03A — target path: agent/service Supabase JWT principals.
   const [principals, setPrincipals] = useState([])
+  const [loadingPrincipals, setLoadingPrincipals] = useState(false)
+  const [revokingPrincipal, setRevokingPrincipal] = useState(null)
   const [pKind, setPKind] = useState('agent')
   const [pName, setPName] = useState('')
   const [pScopes, setPScopes] = useState('mcp:*')
   // Issued JWT session material — shown ONCE, never written to localStorage.
   const [issued, setIssued] = useState(null)
+  const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
     fetchPrincipals()
-    fetchTokens()
+  }, [])
+
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60000)
+    return () => clearInterval(id)
   }, [])
 
   async function fetchPrincipals() {
+    setLoadingPrincipals(true)
     try {
       const res = await getPrincipals()
       setPrincipals(res.principals || [])
     } catch (ex) {
-      // 503 = Supabase auth not wired in this deployment; not an error to surface loudly.
+      addToast(ex.message || 'Failed to load principals', 'error')
+    } finally {
+      setLoadingPrincipals(false)
     }
   }
 
@@ -58,96 +106,19 @@ export function SettingsTab() {
     if (!confirm('Revoke this principal? Its JWT session is disabled immediately and cannot be restored.')) {
       return
     }
+    const key = `${type}-${id}`
+    setRevokingPrincipal(key)
     try {
       await deletePrincipal(type, id)
+      setPrincipals((current) => current.map((p) => (
+        p.principal_type === type && p.principal_id === id ? { ...p, status: 'revoked' } : p
+      )))
       addToast('Principal revoked', 'success')
       await fetchPrincipals()
     } catch (ex) {
       addToast(ex.message || 'Failed to revoke principal', 'error')
-    }
-  }
-
-  async function fetchTokens() {
-    setLoading(true)
-    try {
-      const res = await getTokens()
-      setTokens(res.tokens || [])
-      setLegacyEnabled(true)
-    } catch (ex) {
-      // PR02 legacy tokens are a compatibility surface; absence is fine.
-      setLegacyEnabled(false)
     } finally {
-      setLoading(false)
-    }
-  }
-
-  async function handleCreateToken(e) {
-    e.preventDefault()
-    if (!agentId || !label) {
-      addToast('Agent ID and Label are required', 'warn')
-      return
-    }
-
-    try {
-      const payload = {
-        agent_id: agentId,
-        label,
-        role: 'agent',
-      }
-      if (expiry) {
-        payload.expires_at = new Date(expiry).toISOString()
-      }
-      const result = await postToken(payload)
-      setNewToken(result.token)
-      setNewTokenDisplay(true)
-      setAgentId('')
-      setLabel('')
-      setExpiry('')
-      addToast('Token created successfully', 'success')
-      await fetchTokens()
-    } catch (ex) {
-      addToast(ex.message || 'Failed to create token', 'error')
-    }
-  }
-
-  async function handleRotate(tokenId) {
-    if (!confirm('Are you sure you want to rotate this token? The old token will be revoked immediately and a new one will be displayed.')) {
-      return
-    }
-    try {
-      const result = await postRotateToken(tokenId)
-      setNewToken(result.token)
-      setNewTokenDisplay(true)
-      addToast('Token rotated successfully', 'success')
-      await fetchTokens()
-    } catch (ex) {
-      addToast(ex.message || 'Failed to rotate token', 'error')
-    }
-  }
-
-  async function handleRevoke(tokenId) {
-    if (!confirm('Are you sure you want to revoke this agent token? Any active agent using this token will be disconnected immediately.')) {
-      return
-    }
-    try {
-      await deleteToken(tokenId)
-      addToast('Token revoked successfully', 'success')
-      await fetchTokens()
-    } catch (ex) {
-      addToast(ex.message || 'Failed to revoke token', 'error')
-    }
-  }
-
-  async function handleReactivate(tokenId) {
-    if (!confirm('Are you sure you want to reactivate this agent token?')) {
-      return
-    }
-    try {
-      await postReactivateToken(tokenId)
-      addToast('Token reactivated successfully', 'success')
-      await fetchTokens()
-    } catch (ex) {
-      addToast(ex.message || 'Failed to reactivate token', 'error')
+      setRevokingPrincipal(null)
     }
   }
 
@@ -172,6 +143,9 @@ export function SettingsTab() {
             </p>
             <div className="bg-bg-surface border border-border-soft p-2.5 rounded space-y-1 text-[11px] break-all">
               <div><span className="text-text-muted">principal:</span> <span className="text-cyan">{issued.principal_type}/{issued.principal_id}</span></div>
+              <div><span className="text-text-muted">token_type:</span> <span className="text-text-primary">Supabase JWT</span></div>
+              <div><span className="text-text-muted">expires_at:</span> <span className="text-text-primary">{formatDateTime(issued.expires_at)}</span></div>
+              <div><span className="text-text-muted">ttl_remaining:</span> <span className="text-text-primary">{formatTtl(issued.expires_at, nowMs)}</span></div>
               <div><span className="text-text-muted">access_token:</span> <span className="text-cyan select-all">{issued.access_token}</span></div>
               <div><span className="text-text-muted">refresh_token:</span> <span className="text-cyan select-all">{issued.refresh_token}</span></div>
               <div><span className="text-text-muted">fingerprint:</span> <span className="text-text-primary">{issued.token_fingerprint}</span></div>
@@ -223,30 +197,61 @@ export function SettingsTab() {
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b" style={{ borderColor: 'var(--border-soft)' }}>
-                    <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">TYPE</th>
+                    <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">TOKEN TYPE</th>
                     <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">NAME</th>
                     <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">STATUS</th>
+                    <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">TTL REMAINING</th>
+                    <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">SCOPES</th>
                     <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px] text-right">ACTIONS</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {principals.length === 0 ? (
-                    <tr><td colSpan="4" className="py-8 text-center text-text-muted font-mono">No agent/service principals.</td></tr>
+                  {loadingPrincipals ? (
+                    <tr><td colSpan="6" className="py-8 text-center text-text-muted font-mono animate-pulse">Loading principals...</td></tr>
+                  ) : principals.length === 0 ? (
+                    <tr><td colSpan="6" className="py-8 text-center text-text-muted font-mono">No agent/service principals.</td></tr>
                   ) : (
-                    principals.map((p) => (
-                      <tr key={`${p.principal_type}-${p.principal_id}`} className="border-b" style={{ borderColor: 'var(--border-faint)' }}>
-                        <td className="py-3 font-mono text-text-muted">{p.principal_type}</td>
-                        <td className="py-3 font-mono font-semibold text-text-primary">{p.display_name || p.principal_id}</td>
-                        <td className="py-3 font-mono text-text-muted">{p.status || 'active'}</td>
-                        <td className="py-3 text-right">
-                          <button onClick={() => handleRevokePrincipal(p.principal_type, p.principal_id)}
-                            className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
-                            style={{ background: 'var(--crimson-dim)', color: 'var(--crimson)', borderColor: 'var(--crimson)' }}>
-                            Revoke
-                          </button>
-                        </td>
-                      </tr>
-                    ))
+                    principals.map((p) => {
+                      const status = principalStatus(p, nowMs)
+                      const revokeKey = `${p.principal_type}-${p.principal_id}`
+                      const revoked = ['revoked', 'disabled', 'archived'].includes(String(p.status || '').toLowerCase())
+                      const revokeDisabled = revoked || revokingPrincipal === revokeKey
+                      return (
+                        <tr key={revokeKey} className="border-b" style={{ borderColor: 'var(--border-faint)' }}>
+                          <td className="py-3 align-top">
+                            <div className="font-mono text-text-primary">{tokenTypeLabel(p)}</div>
+                            <div className="font-mono text-[10px] text-text-muted">{p.principal_type}</div>
+                          </td>
+                          <td className="py-3 align-top">
+                            <div className="font-mono font-semibold text-text-primary">{p.display_name || p.principal_id}</div>
+                            <div className="font-mono text-[10px] text-text-muted">{p.principal_id}</div>
+                          </td>
+                          <td className="py-3 align-top">
+                            <span className="px-1.5 py-0.5 rounded border font-mono text-[9px] font-semibold uppercase"
+                              style={statusStyle(status)}>
+                              {status}
+                            </span>
+                          </td>
+                          <td className="py-3 align-top font-mono text-[11px] text-text-muted">
+                            <div>{formatTtl(p.last_issued_expires_at, nowMs)}</div>
+                            <div className="text-[10px] text-text-ghost">{formatDateTime(p.last_issued_expires_at)}</div>
+                          </td>
+                          <td className="py-3 align-top font-mono text-[10px] text-text-muted max-w-[220px]">
+                            {(p.tool_scopes || []).length > 0 ? (p.tool_scopes || []).join(', ') : 'none'}
+                          </td>
+                          <td className="py-3 text-right align-top">
+                            <button onClick={() => handleRevokePrincipal(p.principal_type, p.principal_id)}
+                              disabled={revokeDisabled}
+                              className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed"
+                              style={revokeDisabled
+                                ? { background: 'var(--bg-raised)', color: 'var(--text-muted)', borderColor: 'var(--border-soft)' }
+                                : { background: 'var(--crimson-dim)', color: 'var(--crimson)', borderColor: 'var(--crimson)' }}>
+                              {revoked ? 'Revoked' : revokingPrincipal === revokeKey ? 'Revoking...' : 'Revoke'}
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })
                   )}
                 </tbody>
               </table>
@@ -255,149 +260,6 @@ export function SettingsTab() {
         </div>
       </div>
 
-      {/* Legacy PR02 compatibility — only when token fallback is enabled */}
-      {legacyEnabled && (
-      <p className="text-[10px] font-sans font-semibold uppercase tracking-widest pt-2" style={{ color: 'var(--amber)' }}>
-        LEGACY COMPATIBILITY — PR02 SERVICE TOKENS
-      </p>
-      )}
-
-      {/* Copy-once banner */}
-      {legacyEnabled && newTokenDisplay && (
-        <div className="p-4 rounded border text-xs font-mono space-y-2 relative"
-          style={{ background: 'var(--cyan-dim)', borderColor: 'var(--cyan)', color: 'var(--text-bright)' }}>
-          <button onClick={() => setNewTokenDisplay(false)} className="absolute top-2 right-3 text-cyan font-bold text-lg hover:text-white">&times;</button>
-          <div className="font-bold text-cyan text-sm mb-1">🔐 NEW AGENT TOKEN GENERATED</div>
-          <p className="text-text-muted leading-relaxed font-sans text-xs">
-            Copy this token now. It will not be shown again.
-          </p>
-          <div className="bg-bg-surface border border-border-soft p-2.5 rounded flex items-center justify-between gap-3 text-xs overflow-x-auto select-all">
-            <span className="text-cyan font-mono font-semibold select-all break-all">{newToken}</span>
-            <button onClick={() => {
-              navigator.clipboard.writeText(newToken)
-              addToast('Token copied to clipboard', 'success')
-            }} className="px-3 py-1 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
-              style={{ background: 'var(--bg-raised)', borderColor: 'var(--border-soft)', color: 'var(--text-primary)' }}>
-              Copy
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Grid container — legacy PR02 tokens only when fallback enabled */}
-      {legacyEnabled && (
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Token Form */}
-        <div className="lg:col-span-1 p-4 rounded border flex flex-col h-fit"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-faint)' }}>
-          <p className="text-[10px] font-sans font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--text-muted)' }}>
-            CREATE AGENT TOKEN
-          </p>
-          <form onSubmit={handleCreateToken} className="space-y-4">
-            <div>
-              <label className="block text-[10px] font-mono text-text-muted mb-1">AGENT ID *</label>
-              <input type="text" placeholder="e.g. hermes-agent" value={agentId} onChange={(e) => setAgentId(e.target.value)} required
-                className="w-full px-3 py-2 rounded text-xs focus:outline-none"
-                style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }} />
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-mono text-text-muted mb-1">LABEL *</label>
-              <input type="text" placeholder="e.g. Production investigation key" value={label} onChange={(e) => setLabel(e.target.value)} required
-                className="w-full px-3 py-2 rounded text-xs focus:outline-none"
-                style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }} />
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-mono text-text-muted mb-1">EXPIRY DATE (OPTIONAL)</label>
-              <input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)}
-                className="w-full px-3 py-2 rounded text-xs font-mono focus:outline-none"
-                style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }} />
-            </div>
-
-            <button type="submit" className="w-full py-2 rounded text-xs font-sans font-semibold hover:opacity-85 border transition-opacity"
-              style={{ background: 'var(--cyan-dim)', color: 'var(--cyan)', borderColor: 'var(--cyan)' }}>
-              Generate token
-            </button>
-          </form>
-        </div>
-
-        {/* Token Table */}
-        <div className="lg:col-span-2 p-4 rounded border flex flex-col"
-          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-faint)' }}>
-          <p className="text-[10px] font-sans font-semibold uppercase tracking-widest mb-3" style={{ color: 'var(--text-muted)' }}>
-            ACTIVE AGENT TOKENS
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="border-b" style={{ borderColor: 'var(--border-soft)' }}>
-                  <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">AGENT ID</th>
-                  <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">LABEL</th>
-                  <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px]">EXPIRY</th>
-                  <th className="py-2.5 font-semibold text-text-muted font-mono text-[10px] text-right">ACTIONS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  <tr>
-                    <td colSpan="4" className="py-8 text-center text-text-muted font-mono animate-pulse">Loading active tokens…</td>
-                  </tr>
-                ) : tokens.length === 0 ? (
-                  <tr>
-                    <td colSpan="4" className="py-8 text-center text-text-muted font-mono">No active agent tokens.</td>
-                  </tr>
-                ) : (
-                  tokens.map((t) => {
-                    const isDuplicate = tokens.filter(x => x.agent_id === t.agent_id && x.label === t.label).length > 1;
-                    return (
-                      <tr key={t.token_id} className="border-b" style={{ borderColor: 'var(--border-faint)' }}>
-                        <td className="py-3 font-mono font-semibold" style={{ color: t.revoked_at ? 'var(--text-muted)' : 'var(--text-primary)' }}>{t.agent_id}</td>
-                        <td className="py-3 animate-fade-in" style={{ color: t.revoked_at ? 'var(--text-muted)' : 'var(--text-primary)' }}>
-                          {t.label}
-                          {t.revoked_at && (
-                            <span className="px-1.5 py-0.5 ml-2 rounded font-mono text-[9px] bg-bg-raised text-text-muted border border-border-faint">
-                              INACTIVE
-                            </span>
-                          )}
-                          {isDuplicate && (
-                            <span className="text-[10px] text-text-muted ml-1.5 font-mono">
-                              ({t.created_at ? new Date(t.created_at).toLocaleString() : t.token_id.slice(0, 8)})
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 font-mono text-text-muted text-[11px]">
-                          {t.expires_at ? new Date(t.expires_at).toLocaleString() : 'Never'}
-                        </td>
-                      <td className="py-3 text-right space-x-1.5">
-                        <button onClick={() => handleRotate(t.token_id)} className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
-                          style={{ background: 'var(--amber-dim)', color: 'var(--amber)', borderColor: 'var(--amber)' }}>
-                          Rotate
-                        </button>
-                        {t.revoked_at ? (
-                          <button onClick={() => handleReactivate(t.token_id)} className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
-                            style={{ background: 'var(--jade-dim)', color: 'var(--jade)', borderColor: 'var(--jade)' }}>
-                            Reactivate
-                          </button>
-                        ) : (
-                          <button onClick={() => handleRevoke(t.token_id)} className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85"
-                            style={{ background: 'var(--crimson-dim)', color: 'var(--crimson)', borderColor: 'var(--crimson)' }}>
-                            Revoke
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-      </div>
-      )}
     </div>
   )
 }

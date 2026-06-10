@@ -927,10 +927,31 @@ def test_repository_list_principals_global_scopes_and_owner_filter():
                         "auth-ag-1",
                         "op-1",
                         "11111111-1111-1111-1111-111111111111",
+                        json.dumps(
+                            {
+                                "last_issued_at": "2026-06-10T01:42:31Z",
+                                "last_issued_expires_at": "2026-06-12T01:42:31Z",
+                                "last_issued_token_ttl_seconds": 172800,
+                                "last_issued_fingerprint": "fp-agent",
+                            }
+                        ),
+                        "2026-06-10T01:42:31Z",
+                        "2026-06-10T01:42:31Z",
                     )
                 ]
             if self._mode == "services":
-                return [("sv-1", "worker", "worker", "active", "auth-sv-1")]
+                return [
+                    (
+                        "sv-1",
+                        "worker",
+                        "worker",
+                        "active",
+                        "auth-sv-1",
+                        "{}",
+                        "2026-06-10T00:00:00Z",
+                        "2026-06-10T00:00:00Z",
+                    )
+                ]
             if self._mode == "scopes":
                 return [("mcp:*",)]
             return []
@@ -956,6 +977,11 @@ def test_repository_list_principals_global_scopes_and_owner_filter():
     assert {p["principal_type"] for p in out} == {"agent", "service"}
     assert all("mcp_tokens" not in s for s in executed)  # never touches raw tokens
     assert any("case_id is null" in s for s in executed)  # global-only scopes
+    agent = next(p for p in out if p["principal_type"] == "agent")
+    assert agent["token_type"] == "supabase_jwt"
+    assert agent["last_issued_expires_at"] == "2026-06-12T01:42:31Z"
+    assert agent["last_issued_token_ttl_seconds"] == 172800
+    assert agent["last_issued_fingerprint"] == "fp-agent"
     _assert_no_secret_keys(out)
 
 
@@ -1061,17 +1087,21 @@ def _ttl_issuance(min_ttl, session_ttl):
     issuance._insert_principal_row = (  # type: ignore[method-assign]
         lambda *a, **k: "agent-ttl-id"
     )
+    stamps = []
+    issuance._stamp_principal_session_metadata = (  # type: ignore[method-assign]
+        lambda *a, **k: stamps.append(a)
+    )
     disabled = []
     issuance._disable_principal_row = (  # type: ignore[method-assign]
         lambda ptype, pid: disabled.append((ptype, pid)) or (True, "auth-agent-ttl")
     )
-    return issuance, disabled
+    return issuance, disabled, stamps
 
 
 async def test_aut2b0_issuance_rejects_short_agent_ttl():
     from sift_gateway.supabase_auth import AgentTokenTtlError
 
-    issuance, disabled = _ttl_issuance(min_ttl=172800, session_ttl=3600)
+    issuance, disabled, stamps = _ttl_issuance(min_ttl=172800, session_ttl=3600)
     creator = {"system_role": "admin", "principal_id": "op-1"}
     with pytest.raises(AgentTokenTtlError) as exc:
         await issuance.issue_principal(
@@ -1084,13 +1114,14 @@ async def test_aut2b0_issuance_rejects_short_agent_ttl():
     # The doomed principal is rolled back: app row disabled + auth user deleted.
     assert disabled == [("agent", "agent-ttl-id")]
     assert issuance._client.revoked == ["auth-agent-ttl"]
+    assert stamps == []
     # Rejection is audited with the observed and required TTLs.
     extras = [c.kwargs.get("extra", {}) for c in issuance._audit.log.call_args_list]
     assert any(e.get("reason") == "agent_token_ttl_below_minimum" for e in extras)
 
 
 async def test_aut2b0_issuance_accepts_48h_ttl_and_reports_it():
-    issuance, disabled = _ttl_issuance(min_ttl=172800, session_ttl=172800)
+    issuance, disabled, stamps = _ttl_issuance(min_ttl=172800, session_ttl=172800)
     creator = {"system_role": "owner", "principal_id": "op-1"}
     result = await issuance.issue_principal(
         creator, "agent", "hermes", None, ["mcp:*"], "case-1", None
@@ -1100,26 +1131,32 @@ async def test_aut2b0_issuance_accepts_48h_ttl_and_reports_it():
     # TTL is surfaced so the portal/operator can verify the 48h window.
     assert 172800 - 5 <= result["token_ttl_seconds"] <= 172800
     assert result["access_token"] == "tok-ttl"
+    assert len(stamps) == 1
+    assert stamps[0][0] == "agent"
+    assert stamps[0][1] == "agent-ttl-id"
+    assert stamps[0][3] == result["token_ttl_seconds"]
 
 
 async def test_aut2b0_min_ttl_zero_disables_check():
-    issuance, disabled = _ttl_issuance(min_ttl=0, session_ttl=3600)
+    issuance, disabled, stamps = _ttl_issuance(min_ttl=0, session_ttl=3600)
     creator = {"system_role": "owner", "principal_id": "op-1"}
     result = await issuance.issue_principal(
         creator, "agent", "hermes", None, ["mcp:*"], "case-1", None
     )
     assert disabled == []
     assert result["token_ttl_seconds"] <= 3600
+    assert len(stamps) == 1
 
 
 async def test_aut2b0_service_principal_not_ttl_gated():
-    issuance, disabled = _ttl_issuance(min_ttl=172800, session_ttl=3600)
+    issuance, disabled, stamps = _ttl_issuance(min_ttl=172800, session_ttl=3600)
     creator = {"system_role": "owner", "principal_id": "op-1"}
     result = await issuance.issue_principal(
         creator, "service", "worker", None, [], None, None
     )
     assert disabled == []
     assert result["principal_type"] == "service"
+    assert len(stamps) == 1
 
 
 def test_aut2b0_config_default_and_override():
