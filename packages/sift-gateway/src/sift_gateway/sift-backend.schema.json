@@ -95,6 +95,15 @@
             "type": "array",
             "items": { "type": "string" },
             "uniqueItems": true
+          },
+          "safe_case_argument_names": {
+            "description": "OS2: argument names the Gateway may safely inject the DB active case_id into. An empty list means the tool is case-scoped but resolves the active case internally (no injection argument). Absent means unknown — the Gateway falls back to schema-property detection and denies fail-closed if nothing is found.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["case_id", "case_key"]
+            },
+            "uniqueItems": true
           }
         },
         "required": [
