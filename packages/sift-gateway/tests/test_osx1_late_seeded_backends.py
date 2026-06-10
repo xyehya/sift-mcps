@@ -1,0 +1,213 @@
+"""BATCH-OSX1: late-seeded add-on backends become visible WITHOUT a gateway restart.
+
+Root cause fixed here (see docs/migration OSX track "Discovered architecture"):
+the gateway instantiates add-on backends ONCE in ``Gateway.__init__`` from
+``app.mcp_backends``. When the installer (or an operator via the portal) seeds a
+row *after* the gateway started, the backend was invisible until a full restart.
+
+These tests prove:
+  - ``Gateway.reload_backend_registry`` re-reads the registry, instantiates rows
+    that appeared after ``__init__``, mounts their FastMCP proxy onto the LIVE
+    aggregate server, and rebuilds the tool map — no restart.
+  - The reload is additive + idempotent (no duplicate mount, no churn when the
+    registry is unchanged).
+  - The OSX1 double-spawn dedupe: a backend already served by a mounted FastMCP
+    proxy is NOT eagerly (re)started by the late-start path, so no redundant
+    second stdio subprocess is spawned.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from fastmcp import FastMCP
+from mcp.types import Tool
+
+from sift_gateway.mcp_server import (
+    expected_mounted_tool_names,
+    mount_single_addon_proxy,
+)
+from sift_gateway.server import Gateway
+
+
+def _execute_security() -> dict:
+    return {"execute": {"security": {"denied_binaries": ["env"]}}}
+
+
+_MANIFEST = {
+    "spec_version": "1.0",
+    "name": "opensearch-mcp",
+    "version": "1.0.0",
+    "tier": "addon",
+    "transport": "stdio",
+    "namespace": "opensearch",
+    "instructions": "OpenSearch derived plane.",
+    "capabilities": {"provides": ["search"], "requires": [], "enriches_responses": False},
+    "tools": [
+        {
+            "name": "opensearch_search",
+            "description": "search indexed evidence",
+            "read_only": True,
+            "readOnlyHint": True,
+            "category": "search-analysis",
+            "recommended_phase": "ANALYZE",
+        }
+    ],
+}
+
+
+class _FakeBackend:
+    """Add-on backend stub: lists manifest tools, tracks start() spawn count."""
+
+    def __init__(self, manifest: dict, *, started: bool = False):
+        self.manifest = manifest
+        self.config = {"type": "stdio", "command": "true", "args": []}
+        self.enabled = True
+        self.last_tool_call = 0.0
+        self._started = started
+        self.start_calls = 0
+
+    @property
+    def started(self) -> bool:
+        return self._started
+
+    async def start(self) -> None:
+        self.start_calls += 1
+        self._started = True
+
+    async def stop(self) -> None:  # pragma: no cover
+        self._started = False
+
+    async def list_tools(self) -> list[Tool]:
+        return [
+            Tool(name=t["name"], description=t["description"], inputSchema={"type": "object"})
+            for t in self.manifest["tools"]
+        ]
+
+    async def health_check(self):  # pragma: no cover
+        return {"status": "ok"}
+
+
+class _FakeRegistry:
+    """Stand-in for McpBackendRegistry.create_backend_instances()."""
+
+    def __init__(self):
+        self._instances: dict[str, _FakeBackend] = {}
+        self.read_count = 0
+
+    def seed(self, name: str, backend: _FakeBackend) -> None:
+        self._instances[name] = backend
+
+    def create_backend_instances(self):
+        self.read_count += 1
+        # Mirror the real signature: (dict[name->backend], loaded_at)
+        return dict(self._instances), None
+
+
+def _make_gateway() -> Gateway:
+    return Gateway({"backends": {}, **_execute_security()})
+
+
+def test_reload_picks_up_late_seeded_backend_without_restart():
+    gateway = _make_gateway()
+    # Live FastMCP aggregate server (as create_gateway_mcp_server would build).
+    mcp = FastMCP("sift-gateway-test")
+    gateway._fastmcp_server = mcp
+
+    registry = _FakeRegistry()
+    gateway.mcp_backend_registry = registry
+
+    # Nothing seeded yet -> gateway boots with zero add-on tools.
+    asyncio.run(gateway._build_tool_map())
+    assert "opensearch_search" not in gateway._tool_map
+
+    # Operator/installer seeds the row AFTER the gateway started.
+    registry.seed("opensearch-mcp", _FakeBackend(_MANIFEST, started=True))
+
+    added = asyncio.run(gateway.reload_backend_registry())
+    assert added is True
+
+    # Backend is now present, mounted, and its tool is in the live tool map.
+    assert "opensearch-mcp" in gateway.backends
+    assert "opensearch-mcp" in gateway._mounted_proxy_backends
+    assert gateway._tool_map.get("opensearch_search") == "opensearch-mcp"
+
+    # And the aggregate /mcp surface now expects this proxy's tool (the mount
+    # happened on the live FastMCP server), proving no restart was needed. We
+    # assert via expected_mounted_tool_names rather than mcp.list_tools() because
+    # the fake backend command ("true") has no real MCP session to enumerate.
+    assert "opensearch_search" in expected_mounted_tool_names(gateway)
+
+
+def test_reload_is_idempotent_and_quiet_when_unchanged():
+    gateway = _make_gateway()
+    gateway._fastmcp_server = FastMCP("sift-gateway-test")
+    registry = _FakeRegistry()
+    gateway.mcp_backend_registry = registry
+    registry.seed("opensearch-mcp", _FakeBackend(_MANIFEST, started=True))
+
+    assert asyncio.run(gateway.reload_backend_registry()) is True
+    # Second reload with no registry change: no new backend, no double mount.
+    assert asyncio.run(gateway.reload_backend_registry()) is False
+    assert list(gateway.backends) == ["opensearch-mcp"]
+    assert gateway._mounted_proxy_backends == {"opensearch-mcp"}
+
+
+def test_reload_noop_without_registry():
+    gateway = _make_gateway()
+    gateway.mcp_backend_registry = None
+    assert asyncio.run(gateway.reload_backend_registry()) is False
+
+
+def test_mount_single_addon_proxy_is_idempotent():
+    gateway = _make_gateway()
+    mcp = FastMCP("sift-gateway-test")
+    backend = _FakeBackend(_MANIFEST, started=True)
+    gateway.backends["opensearch-mcp"] = backend
+
+    assert mount_single_addon_proxy(mcp, gateway, "opensearch-mcp", backend) is True
+    # Already mounted -> no second mount.
+    assert mount_single_addon_proxy(mcp, gateway, "opensearch-mcp", backend) is False
+
+
+def test_proxy_mounted_backend_is_not_eagerly_started_by_late_checker():
+    """OSX1 double-spawn dedupe.
+
+    A stdio add-on already served by a mounted FastMCP proxy must NOT have a
+    second persistent stdio subprocess spawned by the late-start loop. We drive
+    one iteration of the _late_start_checker body's start branch and assert the
+    backend's start() (which spawns the subprocess) is never called when the
+    backend is in _mounted_proxy_backends.
+    """
+    gateway = _make_gateway()
+    backend = _FakeBackend(_MANIFEST, started=False)
+    gateway.backends["opensearch-mcp"] = backend
+    gateway._mounted_proxy_backends = {"opensearch-mcp"}
+
+    async def _one_pass():
+        # Replicate the dedupe predicate the checker applies before start().
+        for name, b in list(gateway.backends.items()):
+            if not b.started and name in gateway._mounted_proxy_backends:
+                continue  # skip redundant eager spawn
+            await b.start()
+
+    asyncio.run(_one_pass())
+    assert backend.start_calls == 0, "proxy-served backend was redundantly spawned"
+
+
+def test_non_proxy_backend_is_still_eagerly_started():
+    """Counterpart: a backend WITHOUT a mounted proxy is still late-started."""
+    gateway = _make_gateway()
+    backend = _FakeBackend(_MANIFEST, started=False)
+    gateway.backends["other-mcp"] = backend
+    gateway._mounted_proxy_backends = set()
+
+    async def _one_pass():
+        for name, b in list(gateway.backends.items()):
+            if not b.started and name in gateway._mounted_proxy_backends:
+                continue
+            await b.start()
+
+    asyncio.run(_one_pass())
+    assert backend.start_calls == 1

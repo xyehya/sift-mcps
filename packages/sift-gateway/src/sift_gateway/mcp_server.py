@@ -494,20 +494,42 @@ def _register_rag_tool(mcp: FastMCP, gateway: Any) -> None:
 
 def _mount_addon_proxies(mcp: FastMCP, gateway: Any) -> None:
     for backend_name, backend in sorted(getattr(gateway, "backends", {}).items()):
-        manifest = getattr(backend, "manifest", None)
-        if not manifest:
-            continue
-        reqs = manifest.get("capabilities", {}).get("requires", [])
-        unmet = [req for req in reqs if not gateway.evaluate_requirement(req)]
-        if unmet:
-            continue
-        proxy = _create_backend_proxy(backend_name, backend.config, manifest)
-        namespace = str(manifest.get("namespace") or "") or None
-        mcp.mount(
-            proxy,
-            namespace=namespace,
-            tool_names=_tool_rename_map(manifest),
-        )
+        mount_single_addon_proxy(mcp, gateway, backend_name, backend)
+
+
+def mount_single_addon_proxy(
+    mcp: FastMCP, gateway: Any, backend_name: str, backend: Any
+) -> bool:
+    """Mount one add-on backend's FastMCP stdio/http proxy onto ``mcp``.
+
+    Idempotent: a ``gateway._mounted_proxy_backends`` set tracks which backends
+    already have a proxy mounted so a late-seeded reload (OSX1) does not mount the
+    same backend twice. Requirement-gated backends are skipped (returns ``False``).
+
+    Returns ``True`` when a new proxy was mounted this call.
+    """
+    manifest = getattr(backend, "manifest", None)
+    if not manifest:
+        return False
+    mounted = getattr(gateway, "_mounted_proxy_backends", None)
+    if mounted is None:
+        mounted = set()
+        gateway._mounted_proxy_backends = mounted
+    if backend_name in mounted:
+        return False
+    reqs = manifest.get("capabilities", {}).get("requires", [])
+    unmet = [req for req in reqs if not gateway.evaluate_requirement(req)]
+    if unmet:
+        return False
+    proxy = _create_backend_proxy(backend_name, backend.config, manifest)
+    namespace = str(manifest.get("namespace") or "") or None
+    mcp.mount(
+        proxy,
+        namespace=namespace,
+        tool_names=_tool_rename_map(manifest),
+    )
+    mounted.add(backend_name)
+    return True
 
 
 def expected_mounted_tool_names(gateway: Any) -> set[str]:

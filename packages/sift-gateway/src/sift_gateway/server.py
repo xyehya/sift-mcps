@@ -136,6 +136,12 @@ class Gateway:
         apply_case_env(self.config)
         apply_execute_security_env(self.config)
         self.backends: dict[str, MCPBackend] = {}
+        # OSX1: FastMCP proxy mount bookkeeping. Backends whose stdio/http proxy
+        # is mounted on the live FastMCP server. Used so a late-seeded registry
+        # reload (reload_backend_registry) mounts a newly-appeared backend exactly
+        # once without a full gateway restart.
+        self._mounted_proxy_backends: set[str] = set()
+        self._fastmcp_server = None
         self._tool_map: dict[str, str] = {}  # tool_name -> backend_name
         self._tool_cache: dict[str, Tool] = {}  # tool_name -> Tool object
         self._start_locks: dict[str, asyncio.Lock] = {}
@@ -603,13 +609,92 @@ class Gateway:
             if reaped:
                 await self._build_tool_map()
 
+    async def reload_backend_registry(self) -> bool:
+        """OSX1: pick up backends seeded into app.mcp_backends after __init__.
+
+        The gateway instantiates add-on backends ONCE in ``__init__`` from
+        ``app.mcp_backends``. When the installer (or an operator via the portal)
+        seeds a row *after* the gateway started, that backend was historically
+        invisible until a full restart — the "no tools until restart" race. This
+        re-reads the registry, instantiates any enabled row not already present,
+        mounts its FastMCP proxy onto the live aggregate server, and rebuilds the
+        tool map. It is additive only (never drops a running backend here) and a
+        no-op when there is no control-plane registry.
+
+        Returns ``True`` when at least one new backend was added this call.
+        """
+        registry = self.mcp_backend_registry
+        if registry is None:
+            return False
+        try:
+            instances, loaded_at = await asyncio.to_thread(
+                registry.create_backend_instances
+            )
+        except (Exception, BaseExceptionGroup) as exc:
+            logger.warning("reload_backend_registry: registry read failed: %s", exc)
+            return False
+
+        new_names = [name for name in instances if name not in self.backends]
+        if not new_names:
+            # Keep the catalog timestamp fresh even when nothing changed.
+            if loaded_at is not None:
+                self._mcp_catalog_loaded_at = loaded_at
+            return False
+
+        from sift_gateway.mcp_server import mount_single_addon_proxy
+
+        added = False
+        for name in new_names:
+            backend = instances[name]
+            self.backends[name] = backend
+            logger.info("reload_backend_registry: discovered late-seeded backend %s", name)
+            mcp = self._fastmcp_server
+            if mcp is not None:
+                try:
+                    mount_single_addon_proxy(mcp, self, name, backend)
+                except (Exception, BaseExceptionGroup) as exc:
+                    logger.warning(
+                        "reload_backend_registry: proxy mount failed for %s: %s",
+                        name,
+                        exc,
+                    )
+            added = True
+
+        if added:
+            self._mcp_catalog_loaded_at = loaded_at
+            await self._build_tool_map()
+            logger.info(
+                "reload_backend_registry: mounted %d late-seeded backend(s): %s",
+                len(new_names),
+                ", ".join(new_names),
+            )
+        return added
+
     async def _late_start_checker(self) -> None:
-        """Periodically retry failed backends and re-sync case on started ones."""
+        """Periodically retry failed backends, pick up late-seeded ones, re-sync.
+
+        OSX1: also re-reads ``app.mcp_backends`` so a backend row seeded after the
+        gateway started (the install seed/operator-register race) becomes visible
+        WITHOUT a full restart.
+        """
         while True:
             try:
                 await asyncio.sleep(30)
-                for name, backend in self.backends.items():
+                # OSX1: discover backends seeded into the registry after boot.
+                try:
+                    await self.reload_backend_registry()
+                except (Exception, BaseExceptionGroup) as exc:
+                    logger.warning("Late registry reload failed (will retry): %s", exc)
+                for name, backend in list(self.backends.items()):
                     if not backend.started:
+                        # OSX1 dedupe: an add-on already served by a mounted
+                        # FastMCP proxy does NOT need a second, persistent stdio
+                        # subprocess started here — the agent /mcp path uses the
+                        # proxy (keep_alive=False, per-session spawn) and the REST
+                        # path lazy-starts on demand. Eagerly starting it would
+                        # spawn a redundant subprocess that nothing consumes.
+                        if name in self._mounted_proxy_backends:
+                            continue
                         try:
                             await asyncio.wait_for(backend.start(), timeout=30.0)
                             logger.info("Late-started backend: %s", name)

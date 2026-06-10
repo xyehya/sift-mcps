@@ -2439,6 +2439,21 @@ main() {
     log "CORE-ONLY: skipped add-on backends, OpenSearch/Docker, and forensic-tool downloads."
   fi
 
+  # OSX1: seed enabled add-on backends into app.mcp_backends BEFORE the gateway
+  # starts so its first registry read (Gateway.__init__) already includes
+  # opensearch-mcp. This removes the historical "no tools until restart" race —
+  # seed_addon_backends talks to Postgres directly (it does NOT need the gateway
+  # running), it only needs the schema (apply_db_migrations ran above) and a
+  # resolvable control-plane DSN. Gated on OPENSEARCH_UP: if OpenSearch never came
+  # healthy, SIFT_OPENSEARCH_ENABLED was set to false above, so this is a no-op.
+  # Belt-and-suspenders: even if a row is seeded later (operator registers via the
+  # portal), the gateway's _late_start_checker now re-reads app.mcp_backends and
+  # mounts late-seeded backends without a restart (Gateway.reload_backend_registry).
+  seed_addon_backends
+  if [[ "${SIFT_OPENSEARCH_ENABLED:-false}" == "true" && "$OPENSEARCH_UP" -eq 1 ]]; then
+    OPENSEARCH_SEEDED=true
+  fi
+
   # A1-BOOTSTRAP: validate evidence/cases root before starting services.
   validate_evidence_root
 
@@ -2468,24 +2483,12 @@ main() {
   SUPABASE_OPERATOR_TEMP_PASSWORD=""
   bootstrap_supabase_operator
 
-  # OS1-BOOTSTRAP: seed enabled add-on backends into app.mcp_backends after
-  # the gateway + DB are live (gateway was polled successfully above).
-  # Gated on OPENSEARCH_UP: if OpenSearch never came healthy, SIFT_OPENSEARCH_ENABLED
-  # was set to false above, so seed_addon_backends is a no-op (#5).
-  seed_addon_backends
-  if [[ "${SIFT_OPENSEARCH_ENABLED:-false}" == "true" && "$OPENSEARCH_UP" -eq 1 ]]; then
-    OPENSEARCH_SEEDED=true
-  fi
-
-  # FM-1 (#4): restart gateway after seeding so it reloads app.mcp_backends
-  # and opensearch_* backend appears in the catalog at boot.
-  if [[ "${SIFT_OPENSEARCH_ENABLED:-false}" == "true" && "$OPENSEARCH_UP" -eq 1 \
-        && "$SIFT_CORE_ONLY" != "1" ]]; then
-    log "Restarting gateway to apply opensearch-mcp backend seed (FM-1)."
-    systemctl --user restart sift-gateway.service 2>/dev/null || \
-      warn "Gateway restart failed — backend catalog may not include opensearch-mcp until next restart."
-    poll_gateway "post-seed-restart"
-  fi
+  # OSX1: seed_addon_backends + the post-seed gateway restart were moved to
+  # BEFORE install_systemd_service (above), so the gateway sees opensearch-mcp on
+  # its first start and the restart workaround is no longer needed. A late seed
+  # (e.g. operator registers a backend via the portal) is now picked up live by
+  # the gateway's _late_start_checker -> reload_backend_registry, also without a
+  # restart.
 
   write_handoff
   print_summary
