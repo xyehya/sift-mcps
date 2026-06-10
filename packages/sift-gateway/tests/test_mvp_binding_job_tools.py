@@ -22,7 +22,6 @@ from sift_gateway.job_tools import (
     handle_run_command_job,
 )
 from sift_gateway.mcp_server import create_gateway_mcp_server
-from sift_gateway.rag_bridge import handle_rag_search_case, rag_search_case_schema
 
 
 def _case(case_dir: Path) -> ActiveCase:
@@ -111,7 +110,6 @@ class _Gateway:
         self.active_case_service = _ActiveCaseService(_case(case_dir))
         self.job_service = _JobService()
         self.evidence_service = _EvidenceService(case_dir)
-        self.rag_query_service = None
         self._audit = None
         self._gateway_local_tools = {"ingest_job", "run_command_job", "job_status"}
         self._tool_manifest_meta = {}
@@ -242,35 +240,14 @@ def test_job_status_internal_error_is_not_leaked(tmp_path):
     assert "secret" not in json.dumps(body)
 
 
-def test_rag_search_case_rejects_wrong_embedding_dimension(tmp_path):
-    gateway = _Gateway(tmp_path / "case")
-    gateway.rag_query_service = object()
-    result = asyncio.run(
-        handle_rag_search_case(gateway, {"query_embedding": [0.1, 0.2]}, "agent-1")
-    )
-    assert _payload(result)["error"] == "query_embedding_must_be_768_dimensional"
-
-
-def test_rag_search_case_schema_is_plain_object_for_tool_clients():
-    schema = rag_search_case_schema()
-    assert schema["type"] == "object"
-    assert {"query", "query_embedding"} <= set(schema["properties"])
-    assert "anyOf" not in schema
-    assert "oneOf" not in schema
-    assert "allOf" not in schema
-    assert "not" not in schema
-
-
-def test_rag_search_case_requires_query_or_embedding(tmp_path):
-    gateway = _Gateway(tmp_path / "case")
-    gateway.rag_query_service = object()
-    result = asyncio.run(handle_rag_search_case(gateway, {}, "agent-1"))
-    assert _payload(result)["error"] == "query_or_query_embedding_required"
+# BATCH-OSX-RAG: rag_search_case was removed (gateway shim deleted). RAG now
+# lives in the forensic-rag-mcp add-on as the kb_* tools; the embedding-dimension
+# and query-required validation those old tests covered are exercised by the
+# forensic-rag-mcp test suite instead.
 
 
 async def test_gateway_mcp_registers_local_binding_tools(tmp_path):
     gateway = _Gateway(tmp_path / "case")
-    gateway.rag_query_service = object()
     with patch(
         "sift_gateway.policy_middleware.check_evidence_gate",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
@@ -278,7 +255,9 @@ async def test_gateway_mcp_registers_local_binding_tools(tmp_path):
         mcp = create_gateway_mcp_server(gateway, api_keys={})
         tools = {tool.name for tool in await mcp.list_tools()}
 
-    assert {"ingest_job", "run_command_job", "job_status", "rag_search_case"} <= tools
+    assert {"ingest_job", "run_command_job", "job_status"} <= tools
+    # The removed gateway RAG shim must not reappear as a local tool.
+    assert "rag_search_case" not in tools
 
 
 async def test_gateway_mcp_run_command_job_invokes_gateway_bound_handler(tmp_path):

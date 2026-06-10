@@ -51,7 +51,6 @@ _CORE_TOOL_CATEGORIES: dict[str, str] = {
     "manage_todo": "findings",
     "job_status": "ingest",
     "ingest_job": "ingest",
-    "rag_search_case": "knowledge-rag",
     "run_command_job": "detection",
 }
 
@@ -67,7 +66,6 @@ _CORE_TOOL_PHASES: dict[str, str] = {
     "manage_todo": "FINDINGS",
     "job_status": "INGEST",
     "ingest_job": "INGEST",
-    "rag_search_case": "CORRELATE",
     "run_command_job": "TRIAGE",
 }
 
@@ -428,7 +426,6 @@ def _register_core_tools(mcp: FastMCP, gateway: Any) -> None:
     )
 
     _register_gateway_job_tools(mcp, gateway)
-    _register_rag_tool(mcp, gateway)
 
 
 def _register_gateway_job_tools(mcp: FastMCP, gateway: Any) -> None:
@@ -459,37 +456,6 @@ def _register_gateway_job_tools(mcp: FastMCP, gateway: Any) -> None:
                 },
             )
         )
-
-
-def _register_rag_tool(mcp: FastMCP, gateway: Any) -> None:
-    if getattr(gateway, "rag_query_service", None) is None:
-        return
-    from sift_gateway.rag_bridge import (
-        RAG_SEARCH_CASE_TOOL,
-        handle_rag_search_case,
-        rag_search_case_schema,
-    )
-
-    async def _handler(arguments: dict[str, Any], examiner: str | None):
-        return await handle_rag_search_case(gateway, arguments, examiner)
-
-    mcp.add_tool(
-        GatewayLocalTool(
-            gateway=gateway,
-            handler=_handler,
-            name=RAG_SEARCH_CASE_TOOL,
-            description=(
-                "Search the case-scoped pgvector RAG plane and shared forensic "
-                "knowledge. Returns path-free, provenance-linked snippets."
-            ),
-            parameters=rag_search_case_schema(),
-            annotations=ToolAnnotations(readOnlyHint=True),
-            meta={
-                "category": _CORE_TOOL_CATEGORIES[RAG_SEARCH_CASE_TOOL],
-                "recommended_for_phase": _CORE_TOOL_PHASES[RAG_SEARCH_CASE_TOOL],
-            },
-        )
-    )
 
 
 def _mount_addon_proxies(mcp: FastMCP, gateway: Any) -> None:

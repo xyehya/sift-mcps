@@ -1,11 +1,12 @@
 """
-RAG MCP — pgvector importer/seed package.
+RAG MCP — pgvector-backed knowledge search MCP server + import/seed package.
 
-BATCH-PMI2: The three Chroma-backed agent-facing tools (kb_search_knowledge,
-kb_list_knowledge_sources, kb_get_knowledge_stats) have been removed.
-
-The agent-facing RAG surface is the gateway core tool ``rag_search_case``
-backed by Supabase pgvector (``app.rag_chunks``).
+BATCH-OSX-RAG: the three knowledge tools (kb_search_knowledge,
+kb_list_knowledge_sources, kb_get_knowledge_stats) are restored as a
+forensic-rag-mcp add-on, now backed by the Supabase pgvector store
+(``app.rag_chunks``) instead of ChromaDB. The gateway ``rag_search_case`` shim
+that PMI2 introduced has been removed; RAG has a single agent-facing home again
+in this add-on.
 
 Modules available for the knowledge load pipeline:
     pgvector_store: Supabase pgvector adapter (PgVectorRagStore)

@@ -350,12 +350,22 @@ class PgVectorRagStore:
         top_k: int = 5,
         include_knowledge: bool = True,
         include_derived: bool = True,
+        source: str | None = None,
+        source_ids: Sequence[str] | None = None,
+        technique: str | None = None,
+        platform: str | None = None,
     ) -> RagSearchResult:
         """Run a case-scoped retrieval via ``app.rag_search``.
 
         ``case_id`` is the ONLY case whose derived chunks may be returned. When
         ``case_id`` is None, derived retrieval is force-disabled so no case's
         derived data can leak; only shared knowledge is searched.
+
+        The ``source`` / ``source_ids`` / ``technique`` / ``platform`` filters
+        restrict shared-knowledge retrieval by the chunk ``metadata`` jsonb
+        (keys ``source`` / ``mitre_techniques`` / ``platform``) — the original
+        forensic-rag tool surface. ``source_ids`` (exact) takes precedence over
+        ``source`` (substring); the SQL function enforces that precedence.
         """
         if len(query_embedding) != EMBEDDING_DIM:
             raise PgVectorStoreError(
@@ -365,17 +375,27 @@ class PgVectorRagStore:
         # Defense in depth: derived retrieval is meaningless and unsafe without a
         # bound case, so disable it when no case scope is supplied.
         effective_derived = include_derived and case_id is not None
+        clean_source_ids = (
+            [str(s) for s in source_ids if str(s).strip()]
+            if source_ids
+            else None
+        ) or None
 
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "select * from app.rag_search(%s::vector, %s, %s, %s, %s)",
+                    "select * from app.rag_search("
+                    "%s::vector, %s, %s, %s, %s, %s, %s::text[], %s, %s)",
                     (
                         list(query_embedding),
                         case_id,
                         top_k,
                         include_knowledge,
                         effective_derived,
+                        source,
+                        clean_source_ids,
+                        technique,
+                        platform,
                     ),
                 )
                 rows = cur.fetchall()
@@ -391,6 +411,62 @@ class PgVectorRagStore:
         if len(safe_hits) != len(hits):  # pragma: no cover - DB enforces this
             logger.error("rag_search returned cross-case rows; dropped %d", len(hits) - len(safe_hits))
         return RagSearchResult(case_id=case_id, hits=safe_hits)
+
+    # -- knowledge introspection (shared reference corpus only) -------------
+
+    def list_knowledge_sources(self) -> list[str]:
+        """Return the distinct knowledge ``source`` labels in the corpus.
+
+        Reads the shared-knowledge chunks (``kind='knowledge'``, case-less) and
+        returns the distinct ``metadata->>'source'`` values — the same source
+        IDs the ``source`` / ``source_ids`` filters match against. Path-free.
+        """
+        sources: list[str] = []
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select distinct ch.metadata->>'source' as source
+                    from app.rag_chunks ch
+                    where ch.kind = 'knowledge'
+                      and ch.metadata->>'source' is not null
+                      and length(btrim(ch.metadata->>'source')) > 0
+                    order by 1
+                    """
+                )
+                sources = [str(r[0]) for r in cur.fetchall() if r and r[0]]
+        return sources
+
+    def knowledge_stats(self) -> dict[str, Any]:
+        """Return corpus statistics for the shared-knowledge plane.
+
+        Reports the embedded chunk count, document/collection counts, distinct
+        source count, and the embedding model contract. Path-free; no internal
+        DSN or storage detail is surfaced.
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select
+                      count(*) filter (where ch.embedding is not null),
+                      count(distinct ch.document_id),
+                      count(distinct ch.collection_id),
+                      count(distinct ch.metadata->>'source')
+                        filter (where ch.metadata->>'source' is not null)
+                    from app.rag_chunks ch
+                    where ch.kind = 'knowledge'
+                    """
+                )
+                row = cur.fetchone() or (0, 0, 0, 0)
+        return {
+            "chunk_count": int(row[0] or 0),
+            "document_count": int(row[1] or 0),
+            "collection_count": int(row[2] or 0),
+            "source_count": int(row[3] or 0),
+            "embedding_dim": EMBEDDING_DIM,
+            "embedding_model": "BAAI/bge-base-en-v1.5",
+        }
 
     # -- ingest -------------------------------------------------------------
 

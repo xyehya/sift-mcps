@@ -23,7 +23,8 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=1.26",
-    "chromadb>=1.0",
+    # sentence-transformers stays a REQUIRED runtime dependency: it embeds the
+    # query for kb_search_knowledge against the pgvector store (BATCH-OSX-RAG).
     "sentence-transformers>=2.2",
     "pyyaml>=6.0",
     "toml>=0.10",
@@ -32,9 +33,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# chromadb is only needed for the legacy Chroma->pgvector import/seed CLI path,
+# not for the runtime pgvector knowledge tools. BATCH-OSX-RAG makes it optional.
+chroma-import = [
+    "chromadb>=1.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "chromadb>=1.0",
 ]
 
 [project.scripts]

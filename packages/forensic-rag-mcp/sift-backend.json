@@ -1,15 +1,70 @@
 {
   "spec_version": "1.0",
   "name": "forensic-rag-mcp",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "tier": "addon",
   "transport": "stdio",
   "namespace": "kb",
-  "instructions": "BATCH-PMI2: All kb_search_* agent-facing tools have been removed. RAG is served exclusively by the gateway core tool rag_search_case (Supabase pgvector). This manifest is retained so the package can still be registered for pgvector import/seed CLI operations.",
+  "instructions": "Use this backend to semantically search the shared IR/DFIR knowledge corpus (Sigma, MITRE ATT&CK, Atomic Red Team, Splunk, KAPE, Velociraptor, LOLBAS, GTFOBins, and more). It is a derived/reference plane that provides grounding context only; it is NOT case evidence and holds no authority over cases, evidence seal, findings, or reports. Correlate retrieved knowledge with case artifacts before acting on it.",
+  "authority_contract": {
+    "non_authoritative": true,
+    "plane": "reference",
+    "authority_disclaimer": "This add-on is a derived/reference knowledge plane. It does not authorize cases, seal evidence, approve findings, approve reports, or bypass Gateway. All outputs are supporting context only.",
+    "prohibited_operations": [
+      "create_case",
+      "activate_case",
+      "seal_evidence",
+      "register_evidence",
+      "approve_finding",
+      "reject_finding",
+      "approve_report",
+      "include_in_report",
+      "issue_agent_credential",
+      "bypass_gateway"
+    ],
+    "query_only": true
+  },
   "capabilities": {
-    "provides": [],
+    "provides": ["reference"],
     "requires": [],
     "enriches_responses": false
   },
-  "tools": []
+  "tools": [
+    {
+      "name": "kb_search_knowledge",
+      "description": "Semantic search across the shared IR/DFIR knowledge corpus (Sigma, MITRE ATT&CK, Atomic Red Team, Splunk, KAPE, Velociraptor, LOLBAS, GTFOBins, and more). Supports source/source_ids/technique/platform filters and returns ranked, provenance-linked snippets.",
+      "when_to_use": "Use to ground analysis in forensic methodology, detection logic, or technique references; pass a MITRE technique id, source filter, or natural-language query.",
+      "avoid_when": "Avoid treating retrieved knowledge as case evidence or as attribution; it is supporting reference context only.",
+      "output_notes": "Returns provenance-linked, path-free knowledge snippets ordered by distance (lower is closer). Not case evidence.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "enrichment",
+      "recommended_phase": "CORRELATE"
+    },
+    {
+      "name": "kb_list_knowledge_sources",
+      "description": "List the distinct knowledge source labels available in the corpus.",
+      "when_to_use": "Use to discover valid values for the source / source_ids filters of kb_search_knowledge.",
+      "output_notes": "Returns source labels only; not case evidence.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "enrichment",
+      "recommended_phase": "SURVEY"
+    },
+    {
+      "name": "kb_get_knowledge_stats",
+      "description": "Get knowledge corpus statistics (chunk/document/collection/source counts, embedding model) and confirm backend health.",
+      "when_to_use": "Use to confirm the knowledge backend is loaded and to size the corpus before relying on it.",
+      "output_notes": "Statistics and model contract only; not case evidence.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "category": "enrichment",
+      "recommended_phase": "SURVEY",
+      "health": true
+    }
+  ],
+  "health": "kb_get_knowledge_stats"
 }

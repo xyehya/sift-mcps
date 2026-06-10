@@ -158,7 +158,6 @@ class Gateway:
         self.evidence_service = None
         self.investigation_service = None
         self.report_service = None
-        self.rag_query_service = None
         self._gateway_local_tools: set[str] = set()
         # BATCH-D2: Gateway adapter over the D1 durable job state machine. Built
         # in create_app() once the control-plane DSN is resolved.
@@ -873,27 +872,6 @@ class Gateway:
                         },
                     )
                 )
-        if self.rag_query_service is not None:
-            from sift_gateway.rag_bridge import (
-                RAG_SEARCH_CASE_TOOL,
-                rag_search_case_schema,
-            )
-
-            tools.append(
-                Tool(
-                    name=RAG_SEARCH_CASE_TOOL,
-                    description=(
-                        "Search the case-scoped pgvector RAG plane and shared "
-                        "forensic knowledge. Returns path-free, provenance-linked snippets."
-                    ),
-                    inputSchema=rag_search_case_schema(),
-                    annotations={"readOnlyHint": True},
-                    meta={
-                        "category": "knowledge-rag",
-                        "recommended_for_phase": "CORRELATE",
-                    },
-                )
-            )
         for mapped_name in self._tool_map:
             src = by_name.get(mapped_name)
             if src is None:
@@ -1123,21 +1101,11 @@ class Gateway:
                 self.report_service = ReportService(dsn)
             except Exception as exc:  # pragma: no cover - defensive startup
                 logger.warning("Portal DB services init failed: %s", exc)
-            try:
-                from sift_gateway.rag_bridge import PgVectorRagQueryService
-
-                self.rag_query_service = PgVectorRagQueryService(dsn)
-            except Exception as exc:  # pragma: no cover - defensive startup
-                logger.warning("RAG query service init failed: %s", exc)
         self._gateway_local_tools = set()
         if self.job_service is not None:
             from sift_gateway.job_tools import GATEWAY_JOB_TOOLS
 
             self._gateway_local_tools.update(GATEWAY_JOB_TOOLS)
-        if self.rag_query_service is not None:
-            from sift_gateway.rag_bridge import RAG_SEARCH_CASE_TOOL
-
-            self._gateway_local_tools.add(RAG_SEARCH_CASE_TOOL)
 
         # PR03A: build the shared Supabase identity resolver + portal callbacks.
         # Fail-soft: if Supabase is disabled or env/DSN is absent, the gateway

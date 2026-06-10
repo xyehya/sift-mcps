@@ -11,11 +11,12 @@ set -Eeuo pipefail
 #       ./install.sh --core-only
 #
 # and is complete on its own. Add-on backends (OpenCTI, OpenSearch,
-# windows-triage, or ANY backend a third party writes to the
-# SIFT MCP Backend Contract) are EXTERNAL, INDEPENDENT, and OPTIONAL. The three
+# windows-triage, forensic-rag, or ANY backend a third party writes to the
+# SIFT MCP Backend Contract) are EXTERNAL, INDEPENDENT, and OPTIONAL. The ones
 # shipped here are merely *reference implementations* of the contract. An
-# NOTE: forensic-rag-mcp removed as add-on (BATCH-PMI2); RAG served by the
-# gateway core tool rag_search_case (Supabase pgvector) instead.
+# NOTE (BATCH-OSX-RAG): forensic-rag-mcp is registered as the knowledge
+# reference backend (kb_search_knowledge etc.) backed by Supabase pgvector;
+# the gateway rag_search_case shim PMI2 added has been removed.
 # operator may run zero, one, or several — or bring their own.
 #
 # There is exactly ONE integration door, identical for every backend:
@@ -191,13 +192,32 @@ echo_vars_and_emit() {
 # =============================================================================
 # Reference add-on backends (examples of the contract — not special-cased core)
 # =============================================================================
-# NOTE BATCH-PMI2: forensic-rag-mcp (setup_rag) has been removed from this
-# menu.  RAG has a single agent-facing home: the gateway core tool
-# rag_search_case (Supabase pgvector).  The forensic-rag-mcp package remains
-# as a library/CLI for the Chroma->pgvector import step only; it no longer
-# has agent-facing tools and does not need to be registered as an add-on.
-# Use:  python -m rag_mcp.pgvector_chroma_import
-#       python -m rag_mcp.pgvector_seed
+# BATCH-OSX-RAG: forensic-rag-mcp is restored as the knowledge reference
+# backend (kb_search_knowledge / kb_list_knowledge_sources /
+# kb_get_knowledge_stats), backed by Supabase pgvector. The gateway
+# rag_search_case shim that PMI2 added has been removed. The Chroma->pgvector
+# importers remain as CLI helpers for the knowledge load step:
+#   python -m rag_mcp.pgvector_chroma_import
+#   python -m rag_mcp.pgvector_seed
+setup_rag() {
+  reset_payload
+  PAYLOAD_NAME="forensic-rag-mcp"
+  PAYLOAD_MANIFEST="$REPO_DIR/packages/forensic-rag-mcp/sift-backend.json"
+  log "== forensic-rag-mcp (reference backend, provides: reference; pgvector knowledge) =="
+  print_manifest_summary "$PAYLOAD_MANIFEST" || true
+  warn "This backend reads the shared knowledge corpus from Supabase pgvector."
+  warn "Ensure the knowledge corpus is loaded (rag-mcp-import-chroma-pgvector / rag-mcp-seed-pgvector)."
+  warn "It resolves the control-plane DSN from the SIFT_CONTROL_PLANE_DSN env ref;"
+  warn "no raw DSN is stored in the register payload."
+  local rag_model
+  rag_model="$(ask 'RAG_MODEL_NAME (query embedding model)' 'BAAI/bge-base-en-v1.5')"
+  stdio_args "rag-mcp"
+  PAYLOAD_COMMAND="$UV_BIN"
+  # env_refs only: the gateway maps SIFT_CONTROL_PLANE_DSN from its own env into
+  # the backend child process. RAG_MODEL_NAME is a non-secret tunable.
+  PAYLOAD_ENV=("SIFT_CONTROL_PLANE_DSN=\${SIFT_CONTROL_PLANE_DSN}" "RAG_MODEL_NAME=$rag_model")
+  echo_vars_and_emit
+}
 
 setup_wintriage() {
   reset_payload
@@ -304,14 +324,15 @@ main_menu() {
   printf '   1) windows-triage-mcp    (provides: reference, baseline)\n'
   printf '   2) opensearch-mcp        (provides: search, ingest, enrichment; needs Docker)\n'
   printf '   3) opencti-mcp           (provides: reference, threat-intel; needs Docker + RAM)\n'
-  printf '   4) custom / community backend (bring your own conformant manifest)\n'
-  printf '   a) all reference backends (1-3)\n'
+  printf '   4) forensic-rag-mcp      (provides: reference; pgvector knowledge corpus)\n'
+  printf '   5) custom / community backend (bring your own conformant manifest)\n'
+  printf '   a) all reference backends (1-4)\n'
   printf '   q) quit\n'
   hr
   local sel
   sel="$(ask 'Selection (e.g. "1 2" or "a")' '')"
   [[ -z "$sel" || "$sel" == "q" ]] && { log "Nothing selected — exiting."; exit 0; }
-  if [[ "$sel" == "a" ]]; then sel="1 2 3"; fi
+  if [[ "$sel" == "a" ]]; then sel="1 2 3 4"; fi
   sel="${sel//,/ }"
   local tok
   for tok in $sel; do
@@ -319,7 +340,8 @@ main_menu() {
       1) setup_wintriage ;;
       2) setup_opensearch ;;
       3) setup_opencti ;;
-      4) setup_custom ;;
+      4) setup_rag ;;
+      5) setup_custom ;;
       *) warn "Unknown selection: $tok (ignored)" ;;
     esac
   done

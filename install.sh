@@ -427,7 +427,7 @@ import_rag_pgvector() {
   fi
   if [[ -z "$dsn" ]]; then
     warn "SIFT_CONTROL_PLANE_DSN is not set — skipping Supabase pgvector RAG import."
-    warn "  Chroma RAG may be present, but rag_search_case will use only existing pgvector rows."
+    warn "  Chroma RAG may be present, but kb_search_knowledge will use only existing pgvector rows."
     return 0
   fi
   if [[ ! -d "$chroma_dir" ]]; then
@@ -617,38 +617,41 @@ PY
 # manifest file exists. Raw OpenSearch credentials, DSNs, and MCP tokens are NEVER
 # stored — only env-ref metadata (env_refs pointing to gateway process env vars).
 # If SIFT_CONTROL_PLANE_DSN is absent this is a no-op; core-only mode skips it.
-seed_addon_backends() {
-  local cp_dsn
-  cp_dsn="$(_resolved_control_plane_dsn)"
-  if [[ -z "$cp_dsn" ]]; then
-    log "seed_addon_backends: no control-plane DSN — skipping DB backend seeding."
-    return 0
-  fi
+# Seed one stdio add-on backend into app.mcp_backends (idempotent upsert).
+# Args: $1 = backend name, $2 = manifest path, $3 = entry-point command,
+#       $4 = JSON object of env_refs (gateway-env -> child-env), default "{}".
+# No raw secrets are stored — only env_ref names; the gateway resolves the
+# actual values from its own process environment at load time.
+_seed_one_addon_backend() {
+  local backend_name="$1"
+  local manifest_path="$2"
+  local entry_point="$3"
+  local env_refs_json="${4:-{}}"
 
-  if [[ "${SIFT_OPENSEARCH_ENABLED:-}" != "true" ]]; then
-    log "seed_addon_backends: SIFT_OPENSEARCH_ENABLED != true — skipping opensearch-mcp seeding."
-    return 0
-  fi
-
-  local manifest_path="$REPO_DIR/packages/opensearch-mcp/sift-backend.json"
   if [[ ! -f "$manifest_path" ]]; then
-    warn "seed_addon_backends: opensearch-mcp manifest not found at $manifest_path — skipping."
+    warn "seed_addon_backends: $backend_name manifest not found at $manifest_path — skipping."
     return 0
   fi
 
-  log "Seeding opensearch-mcp into app.mcp_backends (idempotent upsert)."
-  export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
+  log "Seeding $backend_name into app.mcp_backends (idempotent upsert)."
+  export SIFT_CONTROL_PLANE_DSN="$SEED_CP_DSN"
+  export SEED_BACKEND_NAME="$backend_name"
   export SEED_MANIFEST_PATH="$manifest_path"
+  export SEED_ENTRY_POINT="$entry_point"
+  export SEED_ENV_REFS_JSON="$env_refs_json"
   export SEED_UV_BIN="$UV_BIN"
   export SEED_PYTHON_BIN="$SYSTEM_PYTHON"
   export SEED_REPO_DIR="$REPO_DIR"
 
-  "$VENV_DIR/bin/python" - <<'PY' || warn "seed_addon_backends: opensearch-mcp seeding failed — operator can register via Portal -> Backends."
+  "$VENV_DIR/bin/python" - <<'PY' || warn "seed_addon_backends: $SEED_BACKEND_NAME seeding failed — operator can register via Portal -> Backends."
 import json, os, sys
 from pathlib import Path
 
 dsn = os.environ["SIFT_CONTROL_PLANE_DSN"]
+backend_name = os.environ["SEED_BACKEND_NAME"]
 manifest_path = Path(os.environ["SEED_MANIFEST_PATH"])
+entry_point = os.environ["SEED_ENTRY_POINT"]
+env_refs = json.loads(os.environ.get("SEED_ENV_REFS_JSON") or "{}")
 uv_bin = os.environ["SEED_UV_BIN"]
 python_bin = os.environ["SEED_PYTHON_BIN"]
 repo_dir = os.environ["SEED_REPO_DIR"]
@@ -661,8 +664,8 @@ except ImportError as exc:
 
 manifest = json.loads(manifest_path.read_text())
 
-# Connection config: stdio, no raw secrets — OPENSEARCH_CONFIG/OPENSEARCH_HOST
-# are env refs that the gateway process resolves at load time.
+# Connection config: stdio, no raw secrets — env_refs map gateway process env
+# vars into the backend child process env at gateway load time.
 connection = {
     "type": "stdio",
     "command": uv_bin,
@@ -670,30 +673,61 @@ connection = {
         "run", "--project", repo_dir,
         "--python", python_bin,
         "--no-managed-python", "--no-python-downloads",
-        "opensearch-mcp",
+        entry_point,
     ],
     "manifest_path": str(manifest_path),
-    # env_refs: gateway child-process env var <- gateway process env var.
-    # No raw credentials stored; gateway resolves these from its own environment.
-    "env_refs": {
-        "OPENSEARCH_CONFIG": "OPENSEARCH_CONFIG",
-        "OPENSEARCH_HOST": "OPENSEARCH_HOST",
-    },
+    "env_refs": env_refs,
 }
 
 try:
     registry = McpBackendRegistry(dsn)
     registry.register(
-        name="opensearch-mcp",
+        name=backend_name,
         config=connection,
         manifest=manifest,
         actor={"principal_type": "service", "principal_id": "install.sh"},
     )
-    print("seed_addon_backends: opensearch-mcp registered/updated in app.mcp_backends.")
+    print(f"seed_addon_backends: {backend_name} registered/updated in app.mcp_backends.")
 except Exception as exc:
     print(f"seed_addon_backends: registration error: {exc}", file=sys.stderr)
     sys.exit(1)
 PY
+}
+
+seed_addon_backends() {
+  local cp_dsn
+  cp_dsn="$(_resolved_control_plane_dsn)"
+  if [[ -z "$cp_dsn" ]]; then
+    log "seed_addon_backends: no control-plane DSN — skipping DB backend seeding."
+    return 0
+  fi
+  export SEED_CP_DSN="$cp_dsn"
+
+  # opensearch-mcp: gated by SIFT_OPENSEARCH_ENABLED. The OPENSEARCH_CONFIG/
+  # OPENSEARCH_HOST env refs are resolved by the gateway from its own env.
+  if [[ "${SIFT_OPENSEARCH_ENABLED:-}" == "true" ]]; then
+    _seed_one_addon_backend \
+      "opensearch-mcp" \
+      "$REPO_DIR/packages/opensearch-mcp/sift-backend.json" \
+      "opensearch-mcp" \
+      '{"OPENSEARCH_CONFIG": "OPENSEARCH_CONFIG", "OPENSEARCH_HOST": "OPENSEARCH_HOST"}'
+  else
+    log "seed_addon_backends: SIFT_OPENSEARCH_ENABLED != true — skipping opensearch-mcp seeding."
+  fi
+
+  # forensic-rag-mcp (BATCH-OSX-RAG): the knowledge add-on. Gated by
+  # SIFT_RAG_ENABLED. It resolves the control-plane DSN via the
+  # SIFT_CONTROL_PLANE_DSN env ref to reach the pgvector knowledge corpus; no
+  # raw DSN is stored in app.mcp_backends.
+  if [[ "${SIFT_RAG_ENABLED:-true}" == "true" ]]; then
+    _seed_one_addon_backend \
+      "forensic-rag-mcp" \
+      "$REPO_DIR/packages/forensic-rag-mcp/sift-backend.json" \
+      "rag-mcp" \
+      '{"SIFT_CONTROL_PLANE_DSN": "SIFT_CONTROL_PLANE_DSN", "RAG_MODEL_NAME": "RAG_MODEL_NAME"}'
+  else
+    log "seed_addon_backends: SIFT_RAG_ENABLED != true — skipping forensic-rag-mcp seeding."
+  fi
 }
 
 # A1-BOOTSTRAP: create the operator in Supabase Auth (Admin API) with status=invited.

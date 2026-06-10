@@ -128,11 +128,11 @@ async def test_proxied_case_tool_without_safe_case_arg_is_denied(tmp_path):
 
 async def test_gateway_local_case_tool_without_safe_case_arg_is_not_proxy_denied(tmp_path):
     ran = False
-    gw = _Gateway(_case(tmp_path), {"rag_search_case": set()}, local_tools={"rag_search_case"})
+    gw = _Gateway(_case(tmp_path), {"local_case_tool": set()}, local_tools={"local_case_tool"})
     parent = FastMCP("parent", middleware=gateway_policy_middlewares(gw))
 
-    @parent.tool(name="rag_search_case")
-    async def rag_search_case():
+    @parent.tool(name="local_case_tool")
+    async def local_case_tool():
         nonlocal ran
         ran = True
         return {"status": "ok"}
@@ -141,7 +141,7 @@ async def test_gateway_local_case_tool_without_safe_case_arg_is_not_proxy_denied
         "sift_gateway.policy_middleware.check_evidence_gate",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
-        result = await parent.call_tool("rag_search_case", {})
+        result = await parent.call_tool("local_case_tool", {})
 
     assert ran is True
     assert not result.is_error
