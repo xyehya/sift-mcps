@@ -66,6 +66,12 @@ Rules:
 - [x] BATCH-OSX-RAG - Port forensic-rag-mcp tools to pgvector at full parity + remove rag_search_case shim
 - [x] BATCH-OSX3 - Programmatic tool-calling / code-execution-with-MCP feasibility spike (doc-first)
 - [x] BATCH-OSX-PURGE - Purge stale/unused (forensic-mcp, dead Chroma index modules, broken win-triage scripts)
+- [ ] BATCH-NW1 - compute_content_hash consolidation (operator priority #1; test on fresh install)
+- [ ] BATCH-NW2 - Remove windows-triage-mcp entirely + decouple opensearch enrich-triage
+- [ ] BATCH-NW3 - Add-on Backend Contract documentation (hackathon modularity story)
+- [ ] BATCH-NW4 - RAG knowledge-only hardening (drop per-case derived RAG; privacy)
+- [x] BATCH-NW5 - opensearch run_command duplicate check (RESOLVED: none exists, no action)
+- [ ] BATCH-NW6 - Programmatic Tool Calling: enable + native-harness validation (reframed OSX3)
 
 ## OpenSearch Restoration Operating Model
 
@@ -2460,3 +2466,147 @@ commit: `scripts/test_mcp.py` (committed token) removed + `.understand-anything/
 token still needs ROTATION. Tests: targeted tests for each touched package + the full gateway
 manifest/`test_phase6` suite if any backend list changes. `chromadb` -> optional dep (coordinate
 with OSX-RAG). Be conservative; `log` anything dropped.
+
+# Next Conductor Wave (NW) Track — post-OSX cleanup + fresh-install + PTC
+
+Goal: land a small cleanup wave so the FRESH bare-SIFT install is the test bed for it, prove the
+whole stack on the VM (PMI4/OS6), then enable + validate Programmatic Tool Calling (PTC). Planned
+2026-06-10 after the OSX wave landed. Same LEAN operating model as the PMI/OSX tracks.
+
+## NW operating model + grounding (verified this session)
+
+- One worktree per batch, now off **`main`** (the OSX wave was fast-forwarded into `main` this
+  session — `main` == the integration trunk; `revamp/spg-v1` stays as the working alias). Do NOT use
+  Agent `isolation:worktree` (branches off stale origin/main). Create worktrees manually:
+  `git worktree add ../sift-mcps-<b> main`.
+- Targeted tests only per batch (touched package) + `bash -n` for shell + doc validators. Validate on
+  the root `.venv` (py3.11; `PYTHONPATH=<wt>/packages/<pkg>/src` overrides the editable installs so the
+  worktree code wins; `uv pip install --python .venv <dep>` if an optional dep is missing).
+- Workers do NOT edit `docs/migration/**`; the conductor logs after merge. One commit per batch,
+  scope-fenced. CONDUCTOR runs an INTEGRATED test sweep on the merged tree before landing (the OSX
+  wave proved per-batch greens can still fail combined — OSX2 manifest vs gateway schema).
+- Grounding verified live this session:
+  - **Gateway sanitizes agent-visible output** (live `case_info` returned `case_dir:
+    "[REDACTED:absolute_path]"`). This is why client-side PTC is safe — the agent only ever receives
+    redacted/opaque data, so model-written code running in the harness sandbox never sees raw paths.
+  - The current (pre-OSX) VM gateway reports `backends:[]` / `provides:[]` — the exact "no add-on tools"
+    symptom OSX1 fixes; the fresh install should surface `opensearch_*` + `kb_*`.
+  - **opensearch-mcp exposes NO run_command/execute/shell tool** (its 16 tools are search/count/
+    aggregate/get_event/timeline/field_values/status/shard_status/case_summary/inspect_container/
+    ingest/ingest_status/enrich_intel/enrich_triage/list_detections/fix_host_mapping). The OSX
+    restoration did NOT add a duplicate of the sift-core run_command worker. RESOLVED — no action.
+  - **windows-triage is coupled into opensearch-mcp** via `triage_remote.py` + the
+    `opensearch_enrich_triage` tool (also refs in `sift-common/instructions.py`, gateway tests,
+    pyproject, install.sh). NW2 must decouple that path, not just delete the package.
+
+## NW decisions resolved (operator, this session)
+
+- **B-MVP-RAG-DERIVED -> REJECTED (won't-do).** Operator: no per-case RAG — keep case-sensitive
+  derived text OUT of the vector store entirely. Becomes **NW4** (harden RAG to knowledge-only; remove
+  the dormant `derived` branch so no writer/reader path can ever store case data).
+- **B-MVP-HASH-CONSOLIDATION -> scheduled as NW1** (operator: "fix it — a fresh install is the best
+  time to test"). Consolidate to the `investigation_store` DB-authority hash.
+- **B-MVP-WINTRIAGE-SCRIPTS -> superseded by NW2** (operator: remove ALL of windows-triage-mcp; the
+  package was never clean post-migration. A future need is met by a fresh add-on that plugs+registers
+  via the Backend Contract — which **NW3** must document now: it's the hackathon modularity story).
+- **OSX3 reframed (operator correction): PTC runs CLIENT-SIDE in the agent harness, not on the VM**
+  (`code_execution` tool + `allowed_callers:["code_execution_20250825"]` on opt-in tools; the API turns
+  tool defs into Python fns Claude calls; tools fire as normal callbacks with a `caller` field; only
+  the code's final stdout enters context). The earlier "evidence leaves the VM" objection is moot —
+  the Gateway already sanitizes every result. Becomes **NW6**: enable PTC on the heavy read-only tools
+  + validate live with the native harness. The on-VM sandbox (old OSX4) is downgraded to a FALLBACK,
+  only if client-side PTC posture is rejected.
+
+## NW wave order / parallelization
+
+1. **Cleanup wave (run BEFORE the fresh install so the VM tests it) — NW1 ∥ NW2 ∥ NW3 ∥ NW4** are
+   file-disjoint -> run in parallel worktrees. (NW1=sift-core/dashboard hash; NW2=win-triage +
+   opensearch enrich_triage; NW3=new doc; NW4=forensic-rag + a migration.) Conductor integrated sweep,
+   then land all into `main`.
+2. **Fresh VM install + PMI4/OS6** — the full end-to-end gate, now exercising NW1/NW2/NW4. Operator-run.
+3. **NW6 (PTC)** — enable + validate AFTER install (needs the live `opensearch_*` tools). Native-harness
+   validation of the context savings on real OpenSearch results.
+
+## BATCH-NW1 - compute_content_hash consolidation (operator priority #1)
+
+Prompt (paste). Scope: `packages/sift-core/src/sift_core/{case_io.py,reporting.py,investigation_store.py,case_manager.py}`,
+`packages/case-dashboard/src/case_dashboard/routes.py` (the `_HASH_EXCLUDE_KEYS` shadow), + their
+targeted tests. Problem: `compute_content_hash` has TWO diverging shapes across 5 sites — authority =
+`investigation_store.compute_content_hash` (19-key WIDE set incl `provenance_detail/chain/grade/gaps`
+AND strips any `k.startswith("_")`); narrow copies (`case_io.HASH_EXCLUDE_KEYS`,
+`reporting._HASH_EXCLUDE_KEYS`, `case-dashboard/routes._HASH_EXCLUDE_KEYS`, 15-key, no `_`-strip)
+produce a DIFFERENT content_hash for the same item. Do: consolidate every site to a SINGLE shared
+implementation = the `investigation_store` authority (import it; do not re-declare exclude-key sets).
+Add a test asserting all call sites hash an item identically. Behavior-touching: a fresh DB has no
+pre-existing hashes, so no re-hash migration is needed for the fresh install — but DOCUMENT that
+existing deployments would need a re-hash pass (note it; do not write that migration). Tests: sift-core
++ case-dashboard targeted hash tests.
+
+## BATCH-NW2 - remove windows-triage-mcp entirely + decouple opensearch enrich-triage
+
+Prompt (paste). Scope: delete `packages/windows-triage-mcp/` (whole package); remove its refs in root
+`pyproject.toml` (workspace member + `[core]`/optional list), `install.sh`, `scripts/setup-addon.sh`,
+`packages/sift-common/src/sift_common/instructions.py`, and the gateway tests
+(`test_windows_triage_backend.py` + any win-triage rows in `test_f1_opensearch_backend_registry.py`);
+KEEP a `_RETIRED_CORE_BACKENDS`-style guard if one is warranted. **Decouple the opensearch coupling:**
+remove `packages/opensearch-mcp/src/opensearch_mcp/triage_remote.py` + the `opensearch_enrich_triage`
+tool from `server.py`/`registry.py`/`sift-backend.json` + `test_triage_remote.py`, and regenerate
+`tests/fixtures/mcp_surface_golden.json` (say so). Grep-PROVE each removal (no live importer remains).
+Operator rationale: the package was never clean post-migration; a future need is served by a fresh
+add-on that plugs+registers via the Backend Contract (documented in NW3). Tests: opensearch-mcp surface
+(golden regen) + full gateway manifest/`test_phase6` (backend-list change) + `bash -n install.sh
+setup-addon.sh`.
+
+## BATCH-NW3 - Add-on Backend Contract documentation (hackathon modularity story)
+
+Prompt (paste). Scope: ONE new reference doc — recommend `docs/backend-contract.md` (product/reference,
+NOT under `docs/migration/`; do not trip the migration two-file validator). Document the CURRENT
+contract (it changed this session — OSX2 added tool fields, schema updated in `aaa244b`): (1) the
+`sift-backend.json` manifest schema from
+`packages/sift-gateway/src/sift_gateway/sift-backend.schema.json` — `spec_version/name/version/tier/
+transport/namespace`, `capabilities.requires` (requirement gating), per-tool metadata incl the
+advanced-tool-use fields (`when_to_use/avoid_when/output_shape/response_shaping/usage_examples/
+defer_loading/recommended_phase/category`), and the `authority_contract` (`non_authoritative/
+prohibited_operations`, tool `required_scopes/scope_enforcement`). (2) The lifecycle: how
+`install.sh seed_addon_backends` + `scripts/setup-addon.sh` register a backend row (env_refs only, no
+raw secrets) into `app.mcp_backends`, and how the Gateway mounts it
+(`create_backend_instances` -> `mount_single_addon_proxy`), requirement-gates it, enforces the
+authority contract, and (OSX1) picks up late-seeded rows without a restart. (3) A WORKED EXAMPLE:
+adding a brand-new query-only add-on end to end (manifest -> seed -> mount -> tools/list), citing the
+`opensearch-mcp` and `forensic-rag-mcp` manifests as exemplars. Keep it concise and demo-ready. No code
+changes. Validator: none beyond markdown sanity; do not edit `docs/migration/**`.
+
+## BATCH-NW4 - RAG knowledge-only hardening (drop per-case derived RAG; privacy)
+
+Prompt (paste). Scope: a NEW append-only `supabase/migrations/*.sql` (neutralize the `derived` branch
+of `app.rag_search` — knowledge-only; do NOT edit existing migrations),
+`packages/forensic-rag-mcp/src/rag_mcp/{pgvector_store.py,server.py}` (remove the `include_derived`/
+case-scoped params from `search` + the kb tool; the kb tools stay shared-knowledge only), + tests.
+Operator decision (B-MVP-RAG-DERIVED REJECTED): no per-case RAG — case-sensitive derived text must
+NEVER enter the vector store. Ensure no code path can insert/select `kind='derived'`; optionally keep
+the columns but make the search path knowledge-only and assert it. Resolve the fork as won't-do in
+Session-Notes. Tests: forensic-rag-mcp targeted (knowledge-only search; no derived) + a schema test for
+the new migration. Coordinate: this builds on OSX-RAG's `202606101100_rag_search_filters.sql`.
+
+## BATCH-NW5 - opensearch run_command duplicate check
+
+RESOLVED this session (no action). opensearch-mcp exposes NO run_command/execute/shell tool; the only
+forensic exec path is the sift-core run_command worker. No duplicate to remove.
+
+## BATCH-NW6 - Programmatic Tool Calling: enable + native-harness validation (reframed OSX3)
+
+Prompt (paste; doc-first + small enablement, validate AFTER install). Goal: let the SIFT agent WRITE
+CODE that orchestrates OpenSearch tools and filters results CLIENT-SIDE (in the agent harness's code
+sandbox), so a huge `opensearch_search` result never floods context — keeping only the code's final
+summary. Reference: anthropic.com/engineering/advanced-tool-use (PTC `allowed_callers:
+["code_execution_20250825"]`) + code-execution-with-MCP. Do: (1) Decide how the SIFT agent-runtime
+(the Messages-API/Agent-SDK harness that runs the investigator — NOT this repo's server side) converts
+Gateway/MCP tool defs into Messages-API tool defs with the `code_execution` tool + `allowed_callers`
+opt-in on the heavy read-only tools (opensearch_search/aggregate/timeline/count/field_values, kb_*).
+Use OSX2's per-tool `defer_loading`/advanced metadata as the eligibility signal. (2) Confirm the
+security posture is already satisfied: Gateway response-guard sanitizes every result (proven live —
+`[REDACTED:absolute_path]`), so client-side execution leaks nothing. (3) VALIDATE live with the native
+harness (the conductor/Claude itself) once the fresh install exposes `opensearch_*`: write code that
+calls two OpenSearch tools and filters/joins locally, measure context savings vs naive tool calls.
+Deliver: enablement steps + a live validation note appended by the conductor. The on-VM Python sandbox
+(former OSX4) is a FALLBACK only if client-side PTC is rejected for posture reasons.

@@ -13,6 +13,40 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - OSX wave merged to `main`; NW track opened (operator decisions)
+
+Status: DONE (docs/planning; merge to main; NW build wave handed off)
+
+- **Merged the OSX wave into `main`** by clean fast-forward (`origin/main` dd7214d was a strict
+  ancestor of `revamp/spg-v1`; 0 commits lost, 239 ahead). `main` is now the integration trunk; the
+  fresh VM install clones `main`.
+- **Operator decisions recorded** (resolving the OSX backlog):
+  - **B-MVP-RAG-DERIVED -> REJECTED.** No per-case RAG — keep case-sensitive derived text OUT of the
+    vector store. Becomes **NW4** (harden RAG to knowledge-only; remove the dormant `derived` branch).
+  - **B-MVP-HASH-CONSOLIDATION -> NW1** (operator priority #1; fix now, fresh install is the test bed).
+  - **B-MVP-WINTRIAGE-SCRIPTS -> NW2** (remove ALL of windows-triage-mcp; future need served by a fresh
+    add-on plugging via the Backend Contract, which **NW3** documents as the hackathon modularity story).
+  - **OSX3 reframed -> NW6.** Operator correction: PTC executes CLIENT-SIDE in the agent harness (not
+    on the VM), tools fire as normal callbacks, only the code's final stdout enters context. The
+    "evidence leaves the VM" worry is moot — the Gateway already sanitizes every result (proven live
+    this session: `case_info` returned `case_dir: "[REDACTED:absolute_path]"`). NW6 = enable PTC on the
+    heavy read-only tools + validate live with the native harness; the on-VM sandbox is a FALLBACK only.
+  - **opensearch run_command duplicate check -> NW5 RESOLVED, no action:** opensearch-mcp exposes NO
+    run_command/execute/shell tool (16 tools = search/ingest/enrich/status); no duplicate of the
+    sift-core run_command worker.
+- **Grounding for NW2 scope:** windows-triage is COUPLED into opensearch-mcp via `triage_remote.py` +
+  the `opensearch_enrich_triage` tool (plus refs in `sift-common/instructions.py`, gateway tests,
+  pyproject, install.sh) — NW2 must decouple that path, not just delete the package.
+- NW track (operating model, wave order, parallelization, per-batch paste-ready prompts) is in
+  `task-batches.md` "Next Conductor Wave (NW) Track". Wave: NW1∥NW2∥NW3∥NW4 (cleanup) -> fresh VM
+  install + PMI4/OS6 -> NW6 (PTC) validated post-install.
+
+Validation: `validate_docs.py` + `validate_migration_docs.py` OK; `git diff --check` clean.
+
+Next: operator pushes `main` (enables the VM clone), then runs the NW cleanup wave and the fresh
+install. **Next:** run NW1∥NW2∥NW3∥NW4, then bare-SIFT `./install.sh --no-windows-triage --no-opencti`
+(PMI4/OS6), then NW6.
+
 ### 2026-06-10 - OSX build wave LANDED (OSX1 + OSX-RAG + OSX-PURGE + OSX2 + OSX3 + PMI3)
 
 Status: DONE (six batches landed on `revamp/spg-v1`; NOT pushed; full end-to-end stays BATCH-PMI4/OS6)
