@@ -13,9 +13,13 @@ Modules available for the knowledge load pipeline:
     pgvector_chroma_import: Chroma->pgvector batch importer
     pgvector_seed: Seed knowledge documents from the knowledge/ directory
 
-Legacy Chroma-backed modules (index, build, refresh, status, sources, ingest,
-config) remain on disk as internal helpers for the Chroma->pgvector import
-step only and are NOT part of the public API.
+Legacy Chroma-backed modules (refresh, sources, ingest, config) remain on disk
+as internal helpers for the Chroma->pgvector import/download step only (the
+bundle-fetch entrypoint ``scripts/download_index.py`` lazily re-embeds user
+docs via ``refresh``) and are NOT part of the public API. The Chroma
+index-build/refresh/analyze tooling (index, build, status, analyze_queries,
+tuning_config, fs_safety, scripts/build_release) was removed in BATCH-OSX-PURGE
+as dead after the pgvector port.
 
 Usage:
     # Import Chroma collection into pgvector
