@@ -19,3 +19,6 @@ coverage/
 # Evidence files — never commit real forensic evidence
 *.E01
 *.e01
+
+# Code knowledge-graph artifacts (understand-anything) — local tooling, not source
+.understand-anything/

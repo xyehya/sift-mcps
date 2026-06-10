@@ -13,6 +13,84 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - OSX track planned (OpenSearch excellence + RAG-port + purge); architecture discovery; hygiene
+
+Status: DONE (planning/docs/hygiene; builds handed off)
+
+This was a plan + code-discovery + hygiene session (Plan != Build). It opened the OSX track in
+`task-batches.md` (OSX1, OSX2, OSX-RAG, OSX3, OSX-PURGE) with paste-ready prompts and an
+orchestration wave, injected the verified architecture below, and did safe hygiene. No production
+behavior changed.
+
+Architecture discovered + verified (full landmarks in `task-batches.md` "Discovered architecture"):
+
+- **OpenSearch today = stdio add-on branded core, NOT worker-run.** Seeded into `app.mcp_backends`
+  (`transport=stdio`) by `install.sh seed_addon_backends`; the GATEWAY (`Gateway.__init__` ->
+  `create_backend_instances` -> `StdioMCPBackend.start`) spawns + proxies it; the job worker only
+  runs `opensearch_mcp.job_ingest` as a library for durable ingest jobs. The "no tools until
+  restart" symptom is a seed-after-`__init__` race: `_late_start_checker` never re-reads the DB.
+  Plus a likely double stdio spawn (backend instance + proxy).
+- **Worker provides** a durable Postgres job plane (`JobWorker` claim/lease/heartbeat loop) with two
+  handlers: `run_command` (sift-core sandboxed exec) and `ingest` (opensearch library). It does not
+  host the MCP surface — the gateway does.
+- **RAG: `rag_search_case` is a migration-era duplicate, not the spec.** Pre-migration
+  (`/home/yk/AI/SIFTHACK/sift-mcp/.../rag_mcp/server.py`) forensic-rag registered its OWN tools with
+  `source/technique/platform` filters; `rag_search_case` did not exist. BATCH-G1 built a thinner
+  gateway pgvector tool instead of porting; PMI2 then deleted the forensic-rag tools. **Vector
+  parity is intact** (importer copies the original BGE 768-d vectors 1:1 from the big Chroma bundle,
+  model-guarded; runtime query uses the same BGE model). Decision: keep pgvector, restore the tool
+  surface on it, remove the shim. `sentence-transformers` is a required runtime dep (query embed);
+  only `chromadb` is import-only.
+- **Structure audit:** the hub-and-spoke architecture is sound but carries consolidation debt:
+  `forensic-mcp/` is a fully dead package (`_RETIRED_CORE_BACKENDS`); forensic-rag-mcp ships dead
+  Chroma index modules + ~500MB optional-able deps; `windows-triage-mcp/scripts/*` import a
+  non-existent `windows_triage_mcp_mcp` module; `compute_content_hash` has 3 diverging copies.
+
+Decisions / forks (recorded in `task-batches.md` "OSX forks"):
+
+- F-MVP-OS-WIRING -> **P1** (fix race + dedupe spawn; keep stdio). P2/P3 deferred.
+- F-MVP-RAG-PORT -> **port forensic-rag-mcp tools to pgvector at parity + remove rag_search_case**.
+  This SUPERSEDES the BATCH-PMI2 "single-home = rag_search_case" decision (append-only; PMI2 entry
+  below stays as history, its decision relabelled superseded in the Batch Index).
+- F-MVP-RAG-DERIVED (OPEN) -> resolve in OSX-RAG whether case-derived rag chunks are used before
+  dropping that path with the shim.
+
+Reference (must-read for OSX2 + OSX3 — programmatic tool calling / context efficiency):
+
+- https://www.anthropic.com/engineering/advanced-tool-use (tool-def quality; Programmatic Tool
+  Calling `allowed_callers:["code_execution_20250825"]`; Tool Search `defer_loading`; response
+  shaping / references-over-bytes).
+- https://www.anthropic.com/engineering/code-execution-with-mcp (MCP tools as code APIs in a
+  sandbox; agent writes code that filters/transforms results locally; ~98% context savings on large
+  results; sandbox security model). OpenSearch is the prime candidate (many tools, huge idempotent
+  query results).
+
+Tooling note (understand-anything): added to the OSX operating model as an OPTIONAL lead generator
+only (`/understand`, `/understand-chat`, `/understand-dashboard`). It has a high false-positive rate
+here (misses shell calls, FastMCP/FastAPI decorators, dynamic dispatch, data-glob loaders,
+entry-points — it flagged live MCP tools and called install.sh functions as "dead"). Always verify
+candidates against real `grep`/usage. `.understand-anything/` is now gitignored (local artifact).
+
+Hygiene done this session (committed with the plan):
+
+- Removed `scripts/test_mcp.py` (git-tracked probe with a HARDCODED bearer token
+  `sift_svc_b5152…`). The token must be ROTATED separately (deletion does not invalidate it).
+- Added `.understand-anything/` to `.gitignore`.
+- (Earlier this session) crashed-team worktree debris already cleaned; tree is clean.
+
+Validation:
+
+- `python3 scripts/validate_docs.py`: OK. `python3 scripts/validate_migration_docs.py`: OK.
+- `git diff --check`: clean. No code/behavior changed; doc + hygiene only.
+
+Next:
+
+- Build sessions, in wave order: **OSX1** then **OSX-RAG** (serial — shared gateway+install fence);
+  **OSX2 ∥ OSX3 ∥ PMI3** in parallel (file-disjoint); **OSX-PURGE** after OSX-RAG+OSX2; **PMI4/OS6**
+  VM proof last. Paste-ready prompts + the orchestration wave are in `task-batches.md` "OSX Track".
+  Reminder: do NOT use Agent `isolation:worktree` here (branches off stale `origin/main`); create
+  worktrees manually off `revamp/spg-v1`.
+
 ### 2026-06-10 - BATCH-PMI1 + BATCH-PMI2 landed (OS 3.5 cutover ∥ RAG single-home); crashed-team recovery
 
 Status: DONE
