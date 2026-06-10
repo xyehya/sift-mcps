@@ -14,9 +14,11 @@ from sift_core.evidence_chain import ChainStatus
 
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.job_tools import (
+    OPENSEARCH_INGEST_TOOL,
     gateway_job_tool_specs,
     handle_ingest_job,
     handle_job_status,
+    handle_opensearch_ingest_redirect,
     handle_run_command_job,
 )
 from sift_gateway.mcp_server import create_gateway_mcp_server
@@ -607,3 +609,188 @@ def test_overlay_findings_counters_keep_file_values_on_db_error(tmp_path):
         )
 
     assert out["findings"] == {"total": 0, "draft": 0, "approved": 0}
+
+
+# ---------------------------------------------------------------------------
+# BATCH-OS4: opensearch_ingest gateway policy enforcer
+# ---------------------------------------------------------------------------
+
+
+def test_opensearch_ingest_dry_run_false_is_denied_in_db_active_mode(tmp_path):
+    """In DB-active mode (job_service wired), dry_run=False must be denied
+    with a typed redirect to ingest_job.  No subprocess-based ingest path
+    should be reachable by the agent."""
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
+    gateway = _Gateway(case_dir)
+
+    result = asyncio.run(
+        handle_opensearch_ingest_redirect(
+            gateway,
+            {"path": "evidence/disk.E01", "dry_run": False},
+            "agent-1",
+        )
+    )
+    body = _payload(result)
+    assert body["error"] == "opensearch_ingest_direct_write_denied"
+    assert body["tool"] == OPENSEARCH_INGEST_TOOL
+    assert body["redirect"]["tool"] == "ingest_job"
+    # No absolute paths in the denial response
+    assert str(case_dir) not in json.dumps(body)
+    assert "/evidence/" not in json.dumps(body)
+
+
+def test_opensearch_ingest_dry_run_false_string_is_also_denied(tmp_path):
+    """Passing dry_run as the string 'false' must also be denied (not only
+    the boolean False) to prevent trivial type-coercion bypasses."""
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
+    gateway = _Gateway(case_dir)
+
+    result = asyncio.run(
+        handle_opensearch_ingest_redirect(
+            gateway,
+            {"path": "evidence/disk.E01", "dry_run": "false"},
+            "agent-1",
+        )
+    )
+    body = _payload(result)
+    assert body["error"] == "opensearch_ingest_direct_write_denied"
+
+
+def test_opensearch_ingest_dry_run_true_allows_survey_with_sealed_evidence(tmp_path):
+    """In DB-active mode, dry_run=True (survey) is allowed after sealed-evidence
+    validation.  The response must be path-free: only the relative display path,
+    opaque evidence_id, and a redirect hint are returned."""
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
+    gateway = _Gateway(case_dir)
+
+    result = asyncio.run(
+        handle_opensearch_ingest_redirect(
+            gateway,
+            {"path": "ev-1", "dry_run": True, "hostname": "host-a"},
+            "agent-1",
+        )
+    )
+    body = _payload(result)
+    assert body["status"] == "survey"
+    # Relative display path only — no absolute path
+    assert body["evidence_ref"] == "evidence/disk.E01"
+    assert body["evidence_id"] == "ev-1"
+    assert body["case_id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["next_step"]["tool"] == "ingest_job"
+    # No absolute path leak
+    assert str(case_dir) not in json.dumps(body)
+    assert "/home/" not in json.dumps(body)
+    assert "/cases/" not in json.dumps(body)
+
+
+def test_opensearch_ingest_survey_default_dry_run_is_true(tmp_path):
+    """Omitting dry_run defaults to True (survey); the tool is read-only."""
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
+    gateway = _Gateway(case_dir)
+
+    result = asyncio.run(
+        handle_opensearch_ingest_redirect(
+            gateway,
+            {"path": "ev-1"},  # no dry_run key
+            "agent-1",
+        )
+    )
+    body = _payload(result)
+    assert body["status"] == "survey"
+
+
+def test_opensearch_ingest_missing_path_returns_typed_error(tmp_path):
+    """Omitting the path argument returns a typed evidence_ref_required error,
+    not a raw exception or a path leak."""
+    gateway = _Gateway(tmp_path / "case")
+
+    result = asyncio.run(
+        handle_opensearch_ingest_redirect(
+            gateway,
+            {},  # no path
+            "agent-1",
+        )
+    )
+    body = _payload(result)
+    assert body["error"] == "evidence_ref_required"
+    assert body["tool"] == OPENSEARCH_INGEST_TOOL
+    assert str(tmp_path) not in json.dumps(body)
+
+
+def test_opensearch_ingest_gateway_spec_is_read_only_and_registered_when_job_service_wired():
+    """The opensearch_ingest spec in gateway_job_tool_specs() must be read_only=True
+    (survey only) and the handler must be set to handle_opensearch_ingest_redirect."""
+    spec = next(
+        (s for s in gateway_job_tool_specs() if s["name"] == OPENSEARCH_INGEST_TOOL),
+        None,
+    )
+    assert spec is not None, "opensearch_ingest must appear in gateway_job_tool_specs"
+    assert spec["read_only"] is True, "opensearch_ingest gateway spec must be read_only"
+    assert spec["handler"] is handle_opensearch_ingest_redirect
+    assert "ingest_job" in spec["description"]
+    assert "dry_run" in spec["description"]
+
+
+async def test_gateway_mcp_opensearch_ingest_tool_is_registered_when_job_service_wired(tmp_path):
+    """When job_service is wired, the opensearch_ingest Gateway local tool must be
+    present in the MCP catalog — this ensures it shadows the add-on proxy."""
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    gateway = _Gateway(case_dir)
+    with patch(
+        "sift_gateway.policy_middleware.check_evidence_gate",
+        return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
+    ):
+        mcp = create_gateway_mcp_server(gateway, api_keys={})
+        tools = {tool.name for tool in await mcp.list_tools()}
+
+    assert OPENSEARCH_INGEST_TOOL in tools, (
+        "opensearch_ingest must be in the MCP catalog when job_service is wired"
+    )
+
+
+def test_opensearch_ingest_response_contains_no_absolute_paths_or_credentials(tmp_path):
+    """Comprehensive leak check: neither dry_run=False denial nor dry_run=True
+    survey responses may carry absolute paths, credentials, or DB internals."""
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "mem.raw").write_bytes(b"mem")
+    gateway = _Gateway(case_dir)
+
+    # Denial response leak check
+    denial = asyncio.run(
+        handle_opensearch_ingest_redirect(
+            gateway,
+            {"path": "evidence/mem.raw", "dry_run": False},
+            "agent-1",
+        )
+    )
+    denial_text = json.dumps(_payload(denial))
+    assert str(case_dir) not in denial_text
+    assert "postgresql" not in denial_text.lower()
+    assert "password" not in denial_text.lower()
+    assert "/home/" not in denial_text
+    assert "/cases/" not in denial_text
+
+    # Survey response leak check
+    survey = asyncio.run(
+        handle_opensearch_ingest_redirect(
+            gateway,
+            {"path": "ev-1", "dry_run": True},
+            "agent-1",
+        )
+    )
+    survey_text = json.dumps(_payload(survey))
+    assert str(case_dir) not in survey_text
+    assert "postgresql" not in survey_text.lower()
+    assert "password" not in survey_text.lower()
+    assert "/home/" not in survey_text
+    assert "/cases/" not in survey_text

@@ -407,3 +407,208 @@ def test_handler_registers_with_jobworker_as_ingest_type():
         worker_id="w1",
     )
     assert "ingest" in worker._handlers
+
+
+# ---------------------------------------------------------------------------
+# BATCH-OS4: sealed-evidence ingest + DB provenance + no-leak assertions
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_job_indexes_and_writes_db_provenance(tmp_path):
+    """(OS4-a) The job handler BOTH indexes documents AND calls the Postgres
+    provenance recorder.  Both actions are required: only-index without DB
+    registration is a security gap (no audit trail for the derived plane)."""
+    evidence_file = tmp_path / "events.jsonl"
+    evidence_file.write_text(
+        '{"timestamp":"2026-06-10T10:00:00Z","event":"login","host":"DC01"}\n',
+        encoding="utf-8",
+    )
+    job = _claimed_job(evidence_file)
+    ctx = _fake_ctx(job)
+    provenance_calls: list[dict] = []
+
+    def _recorder(**kwargs):
+        provenance_calls.append(kwargs)
+
+    handler = job_ingest.make_ingest_job_handler(provenance_recorder=_recorder)
+    captured_actions: list[dict] = []
+
+    def _bulk(_client, actions, **_kwargs):
+        captured_actions.extend(actions)
+        return len(actions), []
+
+    with patch("opensearch_mcp.ingest.discover", side_effect=AssertionError("no dir")), \
+         patch("opensearch_mcp.client.get_client", return_value=MagicMock()), \
+         patch("opensearch_mcp.bulk.helpers.bulk", side_effect=_bulk):
+        result = handler(job, ctx)
+
+    # (a-i) documents were indexed
+    assert len(captured_actions) == 1
+    source = captured_actions[0]["_source"]
+    assert source["event"] == "login"
+    # (a-ii) provenance fields stamped on the indexed doc
+    assert source["vhir.case_id"] == job.case_id
+    assert source["vhir.evidence_id"] == job.evidence_id
+    assert "vhir.provenance_id" in source
+    assert source["vhir.job_id"] == job.job_id
+    # (a-iii) DB provenance recorder was called exactly once
+    assert len(provenance_calls) == 1
+    rec = provenance_calls[0]
+    assert rec["case_id"] == job.case_id
+    assert rec["evidence_id"] == job.evidence_id
+    assert rec["job_id"] == job.job_id
+    assert rec["indexed"] == 1
+    assert rec["bulk_failed"] == 0
+
+
+def test_ingest_job_result_public_carries_no_absolute_paths_or_credentials(tmp_path):
+    """(OS4-b) The agent-visible JobResult.result_public must contain no absolute
+    paths, no OpenSearch credentials, no DB DSNs, no worker file paths, and no
+    volume roots.  Only counts, sanitized index names, and opaque IDs may appear."""
+    evidence_file = tmp_path / "ingest-data.jsonl"
+    evidence_file.write_text(
+        '{"timestamp":"2026-06-10T10:05:00Z","event":"logon","host":"WS01"}\n',
+        encoding="utf-8",
+    )
+    job = _claimed_job(evidence_file)
+    ctx = _fake_ctx(job)
+
+    def _bulk(_client, actions, **_kwargs):
+        return len(actions), []
+
+    with patch("opensearch_mcp.ingest.discover", side_effect=AssertionError("no dir")), \
+         patch("opensearch_mcp.client.get_client", return_value=MagicMock()), \
+         patch("opensearch_mcp.bulk.helpers.bulk", side_effect=_bulk):
+        result = job_ingest.ingest_job_handler(job, ctx)
+
+    blob = repr(result.result_public)
+    # No absolute paths of any kind
+    assert str(tmp_path) not in blob
+    assert str(evidence_file) not in blob
+    assert "/home/" not in blob
+    assert "/cases/" not in blob
+    assert "/mnt/" not in blob
+    # No credential-like patterns
+    assert "password" not in blob.lower()
+    assert "postgresql://" not in blob
+    assert "opensearch" not in blob.lower() or "index" in blob.lower()  # index names ok
+    # Sanitized index name (case-scoped, derived) is present
+    assert "case-11111111" in blob
+    # No source_file, volume_root paths in public result
+    assert "source_file" not in blob
+    assert "volume_root" not in blob
+
+
+def test_ingest_job_directory_result_carries_no_absolute_paths(tmp_path):
+    """(OS4-b extended) For directory-based ingest (the common case), the
+    volume_root from IngestResult is not leaked into result_public."""
+    job = _claimed_job(tmp_path)
+    ctx = _fake_ctx(job)
+
+    result_with_path = _ingest_result()  # contains volume_root="/should/not/leak"
+
+    with patch.object(job_ingest, "_resolve_evidence_path", return_value=tmp_path), \
+         patch("opensearch_mcp.ingest.discover", return_value=[object()]), \
+         patch("opensearch_mcp.ingest.ingest", return_value=result_with_path), \
+         patch("opensearch_mcp.client.get_client", return_value=MagicMock()):
+        result = job_ingest.ingest_job_handler(job, ctx)
+
+    blob = repr(result.result_public)
+    assert "/should/not/leak" not in blob
+    assert str(tmp_path) not in blob
+
+
+def test_make_ingest_job_handler_without_provenance_recorder_still_indexes(tmp_path):
+    """(OS4-a variant) When no provenance recorder is injected (e.g. legacy /
+    unit-test mode), the handler still indexes documents — the DB registration
+    step is skipped but ingest succeeds.  This keeps the package free of a
+    hard psycopg dependency."""
+    evidence_file = tmp_path / "nosql.jsonl"
+    evidence_file.write_text(
+        '{"timestamp":"2026-06-10T10:10:00Z","event":"reboot","host":"SRV01"}\n',
+        encoding="utf-8",
+    )
+    job = _claimed_job(evidence_file)
+    ctx = _fake_ctx(job)
+
+    # No provenance_recorder injected
+    handler = job_ingest.make_ingest_job_handler(provenance_recorder=None)
+    captured_actions: list[dict] = []
+
+    def _bulk(_client, actions, **_kwargs):
+        captured_actions.extend(actions)
+        return len(actions), []
+
+    with patch("opensearch_mcp.ingest.discover", side_effect=AssertionError("no dir")), \
+         patch("opensearch_mcp.client.get_client", return_value=MagicMock()), \
+         patch("opensearch_mcp.bulk.helpers.bulk", side_effect=_bulk):
+        result = handler(job, ctx)
+
+    # Documents still indexed
+    assert result.result_public["indexed"] == 1
+    assert len(captured_actions) == 1
+
+
+def test_psycopg_provenance_recorder_writes_index_and_provenance_rpcs():
+    """(OS4-a, Postgres path) psycopg_provenance_recorder executes the correct
+    RPCs: app.register_opensearch_index (one per artifact) and
+    app.record_opensearch_ingest_provenance (one per run).  Uses a mock
+    connection factory to avoid a live DB requirement."""
+    from opensearch_mcp.job_ingest import psycopg_provenance_recorder
+
+    executed: list[tuple] = []
+
+    class _MockCursor:
+        def execute(self, sql, params):
+            executed.append((sql.strip(), params))
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+
+    class _MockConn:
+        def cursor(self):
+            return _MockCursor()
+        def commit(self):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+
+    recorder = None
+
+    # Patch psycopg.connect to return our mock.
+    with patch("psycopg.connect", return_value=_MockConn()):
+        recorder = psycopg_provenance_recorder("postgresql://mock/db")
+        recorder(
+            case_id="case-aaa",
+            evidence_id="ev-bbb",
+            job_id="job-ccc",
+            provenance_id="prov-ddd",
+            pipeline_version="opensearch-mcp-9.9.9",
+            indexed=5,
+            bulk_failed=0,
+            hosts=[
+                {
+                    "hostname": "HOST01",
+                    "artifacts": [
+                        {"artifact": "evtx", "index": "case-aaa-evtx-host01", "indexed": 5},
+                    ],
+                }
+            ],
+        )
+
+    # register_opensearch_index called for each artifact
+    register_calls = [sql for sql, _ in executed if "register_opensearch_index" in sql]
+    assert len(register_calls) == 1
+    # record_opensearch_ingest_provenance called once
+    prov_calls = [sql for sql, _ in executed if "record_opensearch_ingest_provenance" in sql]
+    assert len(prov_calls) == 1
+
+    # No DSN, path, or secret exposed in the executed SQL params
+    for sql, params in executed:
+        params_str = str(params)
+        assert "postgresql://" not in params_str
+        assert "/home/" not in params_str
+        assert "/cases/" not in params_str
