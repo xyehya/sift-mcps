@@ -2834,6 +2834,12 @@ def opensearch_enrich_intel(
 
     No LLM tokens consumed — all lookups are programmatic.
 
+    Scope requirement: the caller must hold `enrichment:intel` scope
+    (SIFT_ENRICHMENT_SCOPE env contains "enrichment:intel" or "*").
+    In deploy mode this is enforced by the Gateway; in direct-MCP mode
+    it falls back to the env check. Missing scope returns a typed error
+    rather than silently running or silently denying.
+
     Args:
         case_id: Case to enrich (default: active case).
         dry_run: Extract and count IOCs without lookup (default True).
@@ -2849,9 +2855,32 @@ def opensearch_enrich_intel(
     Progress is surfaced through the existing `opensearch_ingest_status`
     tool. Enrichment runs appear alongside ingest runs with
     `artifact_name="intel"` — use that to disambiguate.
+    Poll: opensearch_ingest_status(case_id=<case_id>) — look for
+    checklist entry with artifact=="intel".
     """
     from opensearch_mcp.paths import sanitize_index_component
     from opensearch_mcp.threat_intel import extract_unique_iocs
+
+    # BATCH-OS5: scope gate for enrichment mutation.
+    # Dry-run IOC extraction is allowed without scope (read-only path).
+    # Actual enrichment (dry_run=False) requires enrichment:intel scope.
+    if not dry_run:
+        _scope_env = os.environ.get("SIFT_ENRICHMENT_SCOPE", "")
+        if _scope_env and _scope_env != "*" and "enrichment:intel" not in _scope_env:
+            return {
+                "status": "scope_denied",
+                "error": (
+                    "Enrichment mutation requires 'enrichment:intel' scope. "
+                    "The caller does not hold this scope on the current session."
+                ),
+                "required_scope": "enrichment:intel",
+                "guidance": (
+                    "Request the enrichment:intel scope from the operator or "
+                    "use the Examiner Portal to initiate threat-intel enrichment."
+                ),
+                "dry_run_available": True,
+                "isError": True,
+            }
 
     cid = case_id or _get_active_case()
     if not cid:
@@ -2865,7 +2894,7 @@ def opensearch_enrich_intel(
         client = _get_os()
         safe_case = sanitize_index_component(cid)
         iocs = extract_unique_iocs(client, f"case-{safe_case}-*", force=force)
-        return {
+        resp = {
             "status": "preview",
             "case_id": cid,
             "ips": len(iocs["ip"]),
@@ -2873,8 +2902,34 @@ def opensearch_enrich_intel(
             "domains": len(iocs["domain"]),
             "total_iocs": sum(len(v) for v in iocs.values()),
         }
+        aid = audit.log(
+            tool="opensearch_enrich_intel",
+            params={"case_id": cid, "dry_run": True, "force": force},
+            result_summary=(
+                f"dry_run: {resp['total_iocs']} IOCs extracted "
+                f"({resp['ips']} IPs, {resp['hashes']} hashes, {resp['domains']} domains)"
+            ),
+        )
+        if aid:
+            resp["audit_id"] = aid
+        return resp
 
-    return _launch_enrich_background(cid, force=force)
+    resp = _launch_enrich_background(cid, force=force)
+    # BATCH-OS5: add poll guidance so callers know how to track enrichment status.
+    if resp.get("status") == "started":
+        resp["poll_via"] = "opensearch_ingest_status"
+        resp["poll_hint"] = (
+            "Call opensearch_ingest_status() to monitor enrichment progress. "
+            "Look for checklist entry with artifact=='intel'. "
+            "No OpenCTI credentials or OpenSearch passwords are returned by this tool."
+        )
+        resp["enrichment_type"] = "threat_intel"
+        resp["prohibited_operations"] = [
+            "approve_findings",
+            "alter_evidence",
+            "decide_reports",
+        ]
+    return resp
 
 
 @server.tool()
@@ -2892,9 +2947,34 @@ def opensearch_enrich_triage(
 
     Requires gateway with windows-triage-mcp backend running.
 
+    Scope requirement: the caller must hold `enrichment:triage` scope
+    (SIFT_ENRICHMENT_SCOPE env contains "enrichment:triage" or "*").
+    In deploy mode this is enforced by the Gateway; in direct-MCP mode
+    it falls back to the env check. Missing scope returns a typed error.
+
+    Prohibited: triage enrichment cannot approve findings, alter
+    original evidence, or decide report content.
+
     Args:
         case_id: Case to enrich (default: active case).
     """
+    # BATCH-OS5: scope gate for triage enrichment mutation.
+    _scope_env = os.environ.get("SIFT_ENRICHMENT_SCOPE", "")
+    if _scope_env and _scope_env != "*" and "enrichment:triage" not in _scope_env:
+        return {
+            "status": "scope_denied",
+            "error": (
+                "Enrichment mutation requires 'enrichment:triage' scope. "
+                "The caller does not hold this scope on the current session."
+            ),
+            "required_scope": "enrichment:triage",
+            "guidance": (
+                "Request the enrichment:triage scope from the operator or "
+                "use the Examiner Portal to initiate triage enrichment."
+            ),
+            "isError": True,
+        }
+
     from opensearch_mcp.triage_remote import enrich_remote
 
     cid = case_id or _get_active_case()
@@ -2916,6 +2996,11 @@ def opensearch_enrich_triage(
         "status": "complete",
         "documents_enriched": total_enriched,
         "details": results,
+        "prohibited_operations": [
+            "approve_findings",
+            "alter_evidence",
+            "decide_reports",
+        ],
     }
     aid = audit.log(
         tool="opensearch_enrich_triage",
@@ -3859,6 +3944,35 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
             "error": f"InvalidHostnameValue: {e}",
             "raw": raw,
             "new_canonical": new_canonical,
+            "dict_saved": False,
+            "isError": True,
+        }
+
+    # BATCH-OS5: fail-closed receipt gate. In DB-active mode, a host-identity
+    # correction is an audited derived-state change that requires a Postgres
+    # receipt. The recorder is injected by the Gateway/worker bootstrap. If it
+    # is absent in DB-active mode, deny the mutation with typed guidance rather
+    # than silently proceeding without a receipt — "fail closed OR redirect".
+    from opensearch_mcp.ingest_status import db_status_active as _db_status_active
+
+    if _db_status_active() and _HOST_IDENTITY_RECORDER is None:
+        return {
+            "status": "receipt_required",
+            "error": (
+                "DB-active mode: host correction requires a Postgres host-identity receipt "
+                "recorder, but none is configured on this MCP instance. "
+                "The correction was NOT applied (no OpenSearch mutation, no dict change)."
+            ),
+            "raw": raw,
+            "new_canonical": new_canonical,
+            "guidance": (
+                "To apply this correction, use the Examiner Portal (which holds the "
+                "service DB credential) or ensure the MCP worker is started with a "
+                "DB DSN injected via set_host_identity_recorder(). "
+                "In legacy mode (SIFT_DB_ACTIVE unset), the correction proceeds "
+                "without a DB receipt."
+            ),
+            "receipt_required": True,
             "dict_saved": False,
             "isError": True,
         }

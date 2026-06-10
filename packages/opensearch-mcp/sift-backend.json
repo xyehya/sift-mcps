@@ -167,29 +167,51 @@
     },
     {
       "name": "opensearch_enrich_intel",
-      "description": "Enrich indexed evidence with OpenCTI threat intel. Async — returns immediately with a run_id.",
+      "description": "Enrich indexed evidence with OpenCTI threat intel. Async — returns immediately with a run_id. Requires enrichment:intel scope. Status is pollable via opensearch_ingest_status (artifact_name='intel').",
       "when_to_use": "Use after indexed indicators exist and CTI context would help prioritize pivots.",
       "avoid_when": "Avoid when OpenCTI is unavailable or when indicators are speculative.",
-      "output_notes": "Starts asynchronous enrichment; follow status/results before relying on output.",
+      "output_notes": "Starts asynchronous enrichment; follow status/results before relying on output. No OpenCTI credentials or OpenSearch passwords are returned. Enrichment cannot approve findings, alter evidence, or decide reports.",
       "read_only": false,
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "enrichment",
       "recommended_phase": "CORRELATE",
-      "safe_case_argument_names": []
+      "safe_case_argument_names": ["case_id"],
+      "required_scopes": ["enrichment:intel"],
+      "scope_enforcement": "gateway_primary_env_fallback",
+      "enrichment_policy": {
+        "derived_state_only": true,
+        "audit_required": true,
+        "status_pollable": true,
+        "poll_via": "opensearch_ingest_status",
+        "poll_discriminator": "artifact_name == 'intel'"
+      },
+      "prohibited_operations": ["approve_findings", "alter_evidence", "decide_reports"],
+      "secret_leak_guarantee": "No OpenCTI credentials, OpenSearch passwords, DB DSNs, or service tokens are returned in any response."
     },
     {
       "name": "opensearch_enrich_triage",
-      "description": "Run Windows baseline (windows-triage) enrichment on indexed data.",
+      "description": "Run Windows baseline (windows-triage) enrichment on indexed data. Requires enrichment:triage scope. Stamps triage.verdict on documents; cannot approve findings or alter evidence.",
       "when_to_use": "Use after indexed Windows artifacts exist and baseline context can prioritize anomalies.",
       "avoid_when": "Avoid treating UNKNOWN baseline enrichment as malicious by itself.",
-      "output_notes": "Starts enrichment over indexed data; verify interesting results against source records.",
+      "output_notes": "Enriches indexed data with triage.verdict; verify interesting results against source records. No windows-triage credentials are returned. Enrichment cannot approve findings, alter evidence, or decide reports.",
       "read_only": false,
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "enrichment",
       "recommended_phase": "CORRELATE",
-      "safe_case_argument_names": []
+      "safe_case_argument_names": ["case_id"],
+      "required_scopes": ["enrichment:triage"],
+      "scope_enforcement": "gateway_primary_env_fallback",
+      "enrichment_policy": {
+        "derived_state_only": true,
+        "audit_required": true,
+        "status_pollable": true,
+        "poll_via": "opensearch_ingest_status",
+        "poll_discriminator": "artifact_name == 'triage'"
+      },
+      "prohibited_operations": ["approve_findings", "alter_evidence", "decide_reports"],
+      "secret_leak_guarantee": "No windows-triage credentials, OpenSearch passwords, DB DSNs, or service tokens are returned in any response."
     },
     {
       "name": "opensearch_list_detections",
@@ -205,16 +227,23 @@
     },
     {
       "name": "opensearch_fix_host_mapping",
-      "description": "Correct a wrong host.id mapping across all indexed documents (reindexes affected docs). Canonical tool; the deprecated alias opensearch_host_fix is preserved by the tool registry for one cutover cycle. Scoped to OpenSearch index/alias and host-identity derived state. In DB-active mode the correction is recorded as an authoritative Postgres host-identity receipt (source/canonical/actor/tool/affected index IDs/audit id); the local host-dictionary.yaml is a parser-compatibility artifact only.",
+      "description": "Correct a wrong host.id mapping across all indexed documents (reindexes affected docs). Canonical tool; the deprecated alias opensearch_host_fix is preserved by the tool registry for one cutover cycle. Scoped to OpenSearch index/alias and host-identity derived state. In DB-active mode the correction is recorded as an authoritative Postgres host-identity receipt (source/canonical/actor/tool/affected index IDs/audit id); the local host-dictionary.yaml is a parser-compatibility artifact only. In DB-active mode WITHOUT a recorder, the correction is DENIED with typed guidance (fail closed).",
       "when_to_use": "Use only when indexed host identity is known to be wrong and needs correction.",
       "avoid_when": "Avoid before confirming the canonical host mapping with the examiner or evidence.",
-      "output_notes": "Mutates indexed OpenSearch documents and host-identity derived metadata only; it does not alter original evidence, cases, findings, or reports. Returns no local filesystem paths in DB-active mode.",
+      "output_notes": "Mutates indexed OpenSearch documents and host-identity derived metadata only; it does not alter original evidence, cases, findings, or reports. Returns no local filesystem paths in DB-active mode. DB-active mode requires receipt recorder; absence causes typed denial.",
       "read_only": false,
       "readOnlyHint": false,
       "evidence_class": "mutating",
       "category": "admin",
       "recommended_phase": "INGEST",
-      "safe_case_argument_names": []
+      "safe_case_argument_names": [],
+      "receipt_policy": {
+        "db_active_mode": "write_receipt_or_deny",
+        "receipt_fields": ["source", "canonical", "actor_type", "tool", "index_names", "docs_updated", "audit_event_id"],
+        "fail_closed": true,
+        "no_path_leak": true
+      },
+      "prohibited_operations": ["approve_findings", "alter_evidence", "decide_reports"]
     }
   ],
   "health": "opensearch_status"

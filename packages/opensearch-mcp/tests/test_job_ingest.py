@@ -554,6 +554,11 @@ def test_psycopg_provenance_recorder_writes_index_and_provenance_rpcs():
     RPCs: app.register_opensearch_index (one per artifact) and
     app.record_opensearch_ingest_provenance (one per run).  Uses a mock
     connection factory to avoid a live DB requirement."""
+    # psycopg is an OPTIONAL dependency of opensearch-mcp (imported lazily and
+    # guarded in job_ingest/host_identity_db). This test patches psycopg.connect,
+    # which requires the module to be importable — skip cleanly in environments
+    # where psycopg is not installed rather than failing on the patch target.
+    pytest.importorskip("psycopg")
     from opensearch_mcp.job_ingest import psycopg_provenance_recorder
 
     executed: list[tuple] = []
