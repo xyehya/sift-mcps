@@ -91,6 +91,23 @@
           "when_to_use": { "type": "string" },
           "avoid_when": { "type": "string" },
           "output_notes": { "type": "string" },
+          "output_shape": { "type": "string" },
+          "response_shaping": { "type": "string" },
+          "defer_loading": { "type": "boolean" },
+          "defer_loading_rationale": { "type": "string" },
+          "usage_examples": {
+            "description": "OSX2: advanced-tool-use realistic call examples (minimal/partial/full). Metadata only — does not change dispatch.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "description": { "type": "string" },
+                "arguments": { "type": "object" }
+              },
+              "required": ["arguments"],
+              "additionalProperties": false
+            }
+          },
           "required_scopes": {
             "type": "array",
             "items": { "type": "string" },
