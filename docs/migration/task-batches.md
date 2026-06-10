@@ -2475,10 +2475,14 @@ whole stack on the VM (PMI4/OS6), then enable + validate Programmatic Tool Calli
 
 ## NW operating model + grounding (verified this session)
 
-- One worktree per batch, now off **`main`** (the OSX wave was fast-forwarded into `main` this
-  session — `main` == the integration trunk; `revamp/spg-v1` stays as the working alias). Do NOT use
-  Agent `isolation:worktree` (branches off stale origin/main). Create worktrees manually:
-  `git worktree add ../sift-mcps-<b> main`.
+- One worktree per batch off **`main`** — which is now **== `revamp/spg-v1` @ `a39b170`** (same
+  commit). The OSX wave was fast-forwarded into `main` AND PUSHED this session, so `origin/main` is now
+  CURRENT — it is no longer the stale `dd7214d` (pre-sift-branding, weeks old) that caused the
+  2026-06-10 crashed-team incident. So the base-staleness hazard is RESOLVED. Still create worktrees
+  MANUALLY for predictability (`git worktree add ../sift-mcps-<b> main`, or run inline in the main
+  worktree when batches are file-disjoint); you MAY tree off `revamp/spg-v1` instead — identical commit.
+  (Historical note: the ban on Agent `isolation:worktree` existed because it branched off a then-stale
+  `origin/main`; that specific cause is gone now, but manual worktrees remain the house pattern.)
 - Targeted tests only per batch (touched package) + `bash -n` for shell + doc validators. Validate on
   the root `.venv` (py3.11; `PYTHONPATH=<wt>/packages/<pkg>/src` overrides the editable installs so the
   worktree code wins; `uv pip install --python .venv <dep>` if an optional dep is missing).
