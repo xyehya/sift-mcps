@@ -64,6 +64,9 @@ export const postVerifyEvidence = (path) => apiPost(`/api/evidence/${encodeURICo
 export const postChainIgnore = (body) => apiPost('/api/evidence/chain/ignore', body, REAUTH_OPTS)
 export const postChainDelete = (body) => apiPost('/api/evidence/chain/delete', body, REAUTH_HASH_OPTS)
 export const postChainRetire = (body) => apiPost('/api/evidence/chain/retire', body, REAUTH_OPTS)
+// Re-acquire re-hashes the mounted replacement bytes synchronously (large
+// disk/memory images) — long timeout like seal.
+export const postChainReacquire = (body) => apiPost('/api/evidence/chain/reacquire', body, REAUTH_HASH_OPTS)
 
 // --- Response guard ---
 export const getResponseGuardStatus = () => apiFetch('/api/response-guard/status')

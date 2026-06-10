@@ -18,7 +18,7 @@ human-control points and are called out inline in the journey below.
 | Gate | When | Why it matters |
 | --- | --- | --- |
 | **G1 Case activation** | Activating a case | Binds the authoritative active case in Postgres. |
-| **G2 Evidence seal/ignore/retire** | Before any analysis | Nothing agent-facing runs against unsealed evidence. |
+| **G2 Evidence seal/ignore/retire/re-acquire** | Before any analysis | Nothing agent-facing runs against unsealed evidence; a post-seal custody violation is remediated by operator re-acquire (re-seal at new bytes) or retire, both re-auth-gated. |
 | **G3 Agent credential issuance** | Before handing off to the agent | Issues a scoped, case-bound, revocable credential. |
 | **G4 Finding approval** | Reviewing agent proposals | Only human-approved findings become reportable. |
 | **G5 Report inclusion / export** | Generating/exporting a report | Locks approved-only inputs + custody appendix into the artifact. |

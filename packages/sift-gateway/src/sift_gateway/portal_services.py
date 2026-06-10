@@ -557,6 +557,81 @@ class EvidenceAuthorityService(_BasePortalDbService):
             conn.commit()
         return _chain_head_dict(row)
 
+    def reacquire(
+        self,
+        *,
+        case_id: str,
+        display_path: str,
+        reason: str,
+        reauth_audit_event_id: str,
+        actor: Any,
+        examiner: str,
+    ) -> dict[str, Any]:
+        """Re-acquire (re-seal) a sealed/violated evidence item at its new bytes.
+
+        Used when an operator legitimately re-images an evidence item whose bytes
+        changed (e.g. a corrupted acquisition is re-acquired). We hash the mounted
+        replacement, record an append-only supersession (old sha -> new sha +
+        operator reason) through ``app.evidence_reacquire``, flip the item back to
+        ``sealed``, and clear the case violation. The item must already exist and
+        be present on disk — a missing item cannot be re-acquired (retire it
+        instead). DB is the authority; no file manifest/ledger is consulted.
+        """
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        del actor_type
+        rel = _relative_display_path(display_path)
+        evidence_id = self._evidence_id_for_path(case_id, rel)
+        if not evidence_id:
+            raise PortalServiceError("evidence_object_not_found", http_status=404)
+        try:
+            path = self._resolve_evidence_path(case_id, rel)
+        except PortalServiceError as exc:
+            # A re-acquisition needs mounted bytes to hash. A missing file is a
+            # retire, not a re-acquire — tell the operator which path to take.
+            raise PortalServiceError(
+                "evidence_file_missing_cannot_reacquire", http_status=409
+            ) from exc
+        sha256, size = _hash_file(path)
+        items = [
+            {
+                "evidence_object_id": evidence_id,
+                "sha256": f"sha256:{sha256}",
+                "bytes": size,
+                "registered_by": examiner,
+            }
+        ]
+        manifest_version = self._next_manifest_version(case_id)
+        manifest_hash = _manifest_hash(case_id, manifest_version, items)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select case_id::text, manifest_version, head_seq, head_hash,
+                           manifest_hash, seal_status, active_count, issues,
+                           last_event_type, last_verified_at
+                    from app.evidence_reacquire(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        evidence_id,
+                        case_id,
+                        f"sha256:{sha256}",
+                        size,
+                        manifest_version,
+                        manifest_hash,
+                        reason,
+                        reauth_audit_event_id,
+                        actor_user,
+                        actor_service,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        result = _chain_head_dict(row)
+        result["display_path"] = rel
+        result["sha256"] = f"sha256:{sha256}"
+        result["bytes"] = size
+        return result
+
     def ignore(
         self,
         *,
@@ -1108,23 +1183,41 @@ class EvidenceAuthorityService(_BasePortalDbService):
         )
         with self._connect() as conn:
             with conn.cursor() as cur:
+                # Only the detected->registered transition is valid in
+                # app.evidence_register; it raises evidence_register_invalid_state
+                # for any other status. An item that is already sealed (or has
+                # been escalated to violated, or operator-dispositioned to
+                # ignored/retired) keeps its existing registration — re-registering
+                # it would raise and (pre-fix) crash the whole seal path. Skip the
+                # register call in that case and reuse the existing id; the
+                # re-acquisition path (app.evidence_reacquire) handles re-sealing a
+                # changed item.
                 cur.execute(
-                    """
-                    select id::text
-                    from app.evidence_register(%s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        evidence_id,
-                        display_name,
-                        description,
-                        source,
-                        actor_user_id,
-                        actor_service_identity_id,
-                    ),
+                    "select status from app.evidence_objects where id = %s",
+                    (evidence_id,),
                 )
-                row = cur.fetchone()
+                srow = cur.fetchone()
+                status = str(srow[0]) if srow and srow[0] is not None else None
+                if status in (None, "detected", "registered"):
+                    cur.execute(
+                        """
+                        select id::text
+                        from app.evidence_register(%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            evidence_id,
+                            display_name,
+                            description,
+                            source,
+                            actor_user_id,
+                            actor_service_identity_id,
+                        ),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        evidence_id = str(row[0])
             conn.commit()
-        return str(row[0]) if row else evidence_id
+        return evidence_id
 
     def _evidence_id_for_path(self, case_id: str, display_path: str) -> str | None:
         with self._connect() as conn:

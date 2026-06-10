@@ -12,7 +12,8 @@ import {
   postVerifyEvidence,
   postChainIgnore,
   postChainDelete,
-  postChainRetire
+  postChainRetire,
+  postChainReacquire
 } from '../../api/endpoints'
 import { computeSimpleChallengeResponse } from '../../api/crypto'
 import { SkeletonBlock } from '../common/Skeleton'
@@ -48,7 +49,7 @@ export function EvidenceTab() {
   const [verifyStatus, setVerifyStatus] = useState({})
 
   // Modal State
-  const [activeModal, setActiveModal] = useState(null) // 'verify_hmac' | 'seal' | 'ignore' | 'retire' | null
+  const [activeModal, setActiveModal] = useState(null) // 'verify_hmac' | 'seal' | 'ignore' | 'retire' | 'reacquire' | null
   const [pendingPath, setPendingPath] = useState(null)
   const [modalPassword, setModalPassword] = useState('')
   const [modalReason, setModalReason] = useState('')
@@ -289,6 +290,50 @@ export function EvidenceTab() {
       }
     } catch (err) {
       setModalError(err.message || 'Retire failed')
+    } finally {
+      setModalLoading(false)
+    }
+  }
+
+  async function handleReacquireEvidence(e) {
+    e.preventDefault()
+    if (!modalReason) {
+      setModalError('Reason is required.')
+      return
+    }
+    if (!modalPassword) {
+      setModalError('Password required.')
+      return
+    }
+    setModalLoading(true)
+    setModalError('')
+    setModalResult(null)
+    try {
+      const challenge = await getChainChallenge()
+      const response = await computeSimpleChallengeResponse(modalPassword, challenge)
+
+      const res = await postChainReacquire({
+        challenge_id: challenge.challenge_id,
+        response,
+        path: pendingPath,
+        reason: modalReason
+      })
+
+      if (res.reacquired) {
+        addToast(`Evidence re-acquired and re-sealed (manifest v${res.manifest_version}).`, 'success')
+        setModalResult({ success: true })
+        setTimeout(() => {
+          setActiveModal(null)
+          setModalPassword('')
+          setModalReason('')
+          setModalResult(null)
+          refreshData()
+        }, 1500)
+      } else {
+        throw new Error(res.error || 'Re-acquire failed')
+      }
+    } catch (err) {
+      setModalError(err.message || 'Re-acquire failed')
     } finally {
       setModalLoading(false)
     }
@@ -658,12 +703,49 @@ export function EvidenceTab() {
           {chainStatus.modified?.length > 0 && (
             <div className="text-xs">
               <strong className="block mb-1">Modified Files (Hash Mismatch):</strong>
+              <p className="text-[11px] opacity-80 mb-2">
+                The sealed bytes changed on disk. If this is a legitimate re-acquisition
+                (e.g. a corrupted image was re-imaged), <strong>Re-seal</strong> to supersede
+                the old hash with the new one. If the file no longer belongs in the case,
+                <strong> Retire</strong> it. Both record an append-only, re-authenticated
+                custody event — the prior sealed hash is never deleted.
+              </p>
               <ul className="list-disc pl-5 space-y-1">
                 {chainStatus.modified.map((f) => {
                   const path = typeof f === 'string' ? f : (f.path || '')
                   return (
-                    <li key={path} className="font-mono break-all">
-                      {path}
+                    <li key={path} className="font-mono">
+                      <div className="flex justify-between items-center gap-2">
+                        <span className="break-all">{path}</span>
+                        <div className="flex gap-2 shrink-0">
+                          <button
+                            onClick={() => {
+                              setPendingPath(path)
+                              setActiveModal('reacquire')
+                              setModalPassword('')
+                              setModalReason('')
+                              setModalError('')
+                              setModalResult(null)
+                            }}
+                            className="px-2 py-0.5 rounded text-[10px] bg-[rgba(0,255,148,0.12)] border border-[var(--jade)] text-[var(--jade)] hover:bg-[rgba(0,255,148,0.22)] transition-colors cursor-pointer"
+                          >
+                            Re-seal
+                          </button>
+                          <button
+                            onClick={() => {
+                              setPendingPath(path)
+                              setActiveModal('retire')
+                              setModalPassword('')
+                              setModalReason('')
+                              setModalError('')
+                              setModalResult(null)
+                            }}
+                            className="px-2 py-0.5 rounded text-[10px] bg-[rgba(255,56,100,0.15)] border border-[var(--crimson)] text-[var(--crimson)] hover:bg-[rgba(255,56,100,0.25)] transition-colors cursor-pointer"
+                          >
+                            Retire
+                          </button>
+                        </div>
+                      </div>
                     </li>
                   )
                 })}
@@ -1347,6 +1429,106 @@ export function EvidenceTab() {
                   style={{ background: 'transparent', borderColor: 'var(--border-hard)', color: 'var(--text-bright)' }}
                 >
                   Retire File
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Re-acquire (Re-seal) Modal */}
+      {activeModal === 'reacquire' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[rgba(7,9,14,0.8)] backdrop-blur-sm">
+          <div className="w-full max-w-md p-5 rounded border space-y-4" style={{ background: 'var(--bg-surface)', borderColor: 'var(--jade)' }}>
+            <h3 className="font-display font-bold text-base" style={{ color: 'var(--jade)' }}>Re-acquire &amp; Re-seal Evidence</h3>
+            <div className="space-y-1">
+              <span className="text-[10px] font-sans font-semibold uppercase tracking-wider block" style={{ color: 'var(--text-muted)' }}>
+                Target File Path
+              </span>
+              <div className="text-xs font-mono break-all p-2 rounded" style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)' }}>
+                {pendingPath}
+              </div>
+            </div>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Use this when the file's bytes legitimately changed (e.g. a corrupted acquisition was re-imaged). The replacement on disk is re-hashed in full and a new manifest version is sealed; the <strong style={{ color: 'var(--text-bright)' }}>previous sealed hash is superseded, not deleted</strong> — the old hash, new hash, and your justification are recorded in the append-only custody ledger. This clears the chain-of-custody violation. Requires examiner justification and credentials.
+            </p>
+            <p className="text-[11px]" style={{ color: 'var(--amber)' }}>
+              Large disk/memory images are hashed in full — this can take several minutes. Keep this window open until it completes.
+            </p>
+
+            <form onSubmit={handleReacquireEvidence} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-sans font-semibold uppercase tracking-wider block" style={{ color: 'var(--text-muted)' }}>
+                  Justification Reason
+                </label>
+                <input
+                  type="text"
+                  value={modalReason}
+                  onChange={(e) => setModalReason(e.target.value)}
+                  placeholder="e.g. Original acquisition corrupted; re-imaged from source drive"
+                  disabled={modalLoading}
+                  required
+                  className="w-full px-3 py-2 rounded text-xs focus:outline-none"
+                  style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-sans font-semibold uppercase tracking-wider block" style={{ color: 'var(--text-muted)' }}>
+                  Examiner Password
+                </label>
+                <input
+                  type="password"
+                  value={modalPassword}
+                  onChange={(e) => setModalPassword(e.target.value)}
+                  placeholder="Enter password..."
+                  disabled={modalLoading}
+                  required
+                  className="w-full px-3 py-2 rounded text-xs font-mono focus:outline-none"
+                  style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
+                />
+              </div>
+
+              {modalError && (
+                <div className="text-xs p-2.5 rounded bg-[rgba(255,56,100,0.06)] border border-[rgba(255,56,100,0.2)] text-[var(--crimson)]">
+                  {modalError}
+                </div>
+              )}
+
+              {modalLoading && (
+                <div className="text-xs font-mono text-[var(--text-muted)] animate-pulse">
+                  Re-hashing replacement and sealing new manifest version...
+                </div>
+              )}
+
+              {modalResult && (
+                <div className="text-xs p-3 rounded bg-[rgba(0,255,148,0.05)] border border-[rgba(0,255,148,0.2)] text-[var(--jade)]">
+                  ✓ Evidence re-acquired and re-sealed.
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveModal(null)
+                    setModalPassword('')
+                    setModalReason('')
+                    setModalResult(null)
+                    setModalError('')
+                  }}
+                  className="px-3 py-1.5 rounded text-xs font-semibold border cursor-pointer"
+                  style={{ background: 'transparent', borderColor: 'var(--border-hard)', color: 'var(--text-muted)' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={modalLoading}
+                  className="px-4 py-1.5 rounded text-xs font-semibold cursor-pointer"
+                  style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}
+                >
+                  Re-seal
                 </button>
               </div>
             </form>

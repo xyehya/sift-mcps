@@ -59,6 +59,7 @@ class FakeEvidenceDB:
         self.ignore_calls: list = []
         self.retire_calls: list = []
         self.delete_calls: list = []
+        self.reacquire_calls: list = []
 
     def record_reauth_event(self, *, case_id, actor, examiner, action):
         self.reauth_calls.append((case_id, examiner, action))
@@ -90,6 +91,18 @@ class FakeEvidenceDB:
     def retire(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
         assert reauth_audit_event_id
         self.retire_calls.append((display_path, reason, reauth_audit_event_id))
+
+    def reacquire(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
+        assert reauth_audit_event_id, "reacquire must receive a re-auth audit event id"
+        self.reacquire_calls.append((display_path, reason, reauth_audit_event_id))
+        self.seal_status = "sealed"
+        return {
+            "manifest_version": 2,
+            "seal_status": "sealed",
+            "display_path": display_path,
+            "sha256": "sha256:" + "c" * 64,
+            "bytes": 4096,
+        }
 
     def delete_object(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
         # Endpoint-level stub. Sealed-evidence protection is enforced in the real
@@ -703,6 +716,90 @@ class TestEvidenceChainRetire:
         monkeypatch.setattr(routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key"))
         resp = c.post(
             "/api/evidence/chain/retire",
+            json={"challenge_id": "x", "response": "y", "path": "evidence/x.bin", "reason": "r"},
+        )
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# reacquire (re-seal a legitimately changed evidence item) endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceChainReacquire:
+    def test_no_auth_returns_403(self, client):
+        resp = client.post("/api/evidence/chain/reacquire", json={})
+        assert resp.status_code == 403
+
+    def test_agent_role_returns_403(self, client, passwords_dir):
+        _setup_examiner(passwords_dir, "alice", "password123")
+        client.cookies[COOKIE_NAME] = _session_cookie(role="agent")
+        resp = client.post("/api/evidence/chain/reacquire", json={})
+        assert resp.status_code == 403
+
+    def test_missing_challenge_fields_returns_400(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/reacquire", json={"path": "evidence/x", "reason": "r"}
+        )
+        assert resp.status_code == 400
+
+    def test_missing_path_returns_400(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/reacquire",
+            json={"challenge_id": "x", "response": "y", "reason": "r"},
+        )
+        assert resp.status_code == 400
+
+    def test_missing_reason_returns_400(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/reacquire",
+            json={"challenge_id": "x", "response": "y", "path": "evidence/x"},
+        )
+        assert resp.status_code == 400
+
+    def test_invalid_challenge_returns_401(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/reacquire",
+            json={"challenge_id": "notreal", "response": "deadbeef" * 8,
+                  "path": "evidence/x.bin", "reason": "re-image"},
+        )
+        assert resp.status_code == 401
+
+    def test_reacquire_succeeds(self, authed_client, passwords_dir, evidence_db):
+        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+        resp = authed_client.post(
+            "/api/evidence/chain/reacquire",
+            json={"challenge_id": challenge_id, "response": response,
+                  "path": "evidence/Rocba-Memory.raw",
+                  "reason": "corrupt acquisition re-imaged"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["reacquired"] is True
+        assert data["authority"] == "db"
+        assert data["path"] == "evidence/Rocba-Memory.raw"
+        assert data["seal_status"] == "sealed"
+        assert evidence_db.reacquire_calls
+        assert evidence_db.reacquire_calls[0] == (
+            "evidence/Rocba-Memory.raw", "corrupt acquisition re-imaged", "audit-evt-001",
+        )
+
+    def test_reacquire_wrong_password_returns_401(self, authed_client, evidence_db):
+        resp = authed_client.get("/api/evidence/chain/challenge")
+        data = resp.json()
+        resp2 = authed_client.post(
+            "/api/evidence/chain/reacquire",
+            json={"challenge_id": data["challenge_id"], "response": "00" * 32,
+                  "path": "evidence/x.bin", "reason": "re-image"},
+        )
+        assert resp2.status_code == 401
+        assert not evidence_db.reacquire_calls
+
+    def test_reacquire_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
+        c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
+        monkeypatch.setattr(routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key"))
+        resp = c.post(
+            "/api/evidence/chain/reacquire",
             json={"challenge_id": "x", "response": "y", "path": "evidence/x.bin", "reason": "r"},
         )
         assert resp.status_code == 404

@@ -100,7 +100,8 @@ stateDiagram-v2
   detected --> registered: operator names + describes
   registered --> sealed: operator seals (re-auth)
   sealed --> violated: post-seal file drift
-  violated --> sealed: operator re-resolves + re-seals
+  violated --> sealed: operator re-acquires (re-auth, app.evidence_reacquire)
+  violated --> retired: operator retires superseded item (re-auth)
   registered --> ignored: operator ignores
   registered --> retired: operator retires
 ```
@@ -109,6 +110,20 @@ Per-object `status` enum (`202606081000_evidence_custody.sql`,
 `evidence_objects_status_check`): `detected | registered | sealed | ignored |
 retired | violated`. Per-object `seal_status`: `unsealed | sealed | violated`.
 Per-version `entry_status`: `ACTIVE | IGNORED | RETIRED`.
+
+The `violated -> sealed` recovery is the operator re-acquisition transition
+(`app.evidence_reacquire`, `202606101000_evidence_reacquire.sql`): when an item's
+bytes legitimately change (a corrupted acquisition is re-imaged), the operator
+re-seals it under password/HMAC re-auth with a mandatory reason. The broker
+re-hashes the mounted replacement and the RPC writes an append-only supersession
+(a `MANIFEST_SEALED` custody event with `reacquired:true`, the superseded
+sha/bytes, the new sha/bytes, and the reason), advances the manifest version, and
+clears the violation. The prior sealed hash is superseded, never deleted, so the
+custody chain stays court-defensible. A `violated` item whose bytes are gone has
+no replacement to hash and is instead retired (`app.evidence_retire`). Both paths
+are surfaced as per-file Re-seal / Retire actions on the Evidence-tab "Modified
+Files" block; without them a single post-seal drift would latch the agent
+evidence gate closed with no operator remedy (the pre-`202606101000` dead-end).
 
 ```mermaid
 sequenceDiagram

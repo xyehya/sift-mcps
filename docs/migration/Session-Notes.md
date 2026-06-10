@@ -13,6 +13,90 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - Evidence re-acquisition transition + ghost-violation unblock
+
+Status: DONE
+
+Closed a chain-of-custody dead-end found during AUT2/FRZ1 live QA: once a sealed
+evidence item's bytes changed on disk (legitimate re-imaging of a corrupted
+acquisition), the case latched to `violated` with NO operator path back to
+`sealed`. Root causes: `verify` excludes violated objects from re-hash and
+`app.evidence_recompute_seal_status` never de-escalates; the portal `seal` path
+crashed because `_ensure_registered` -> `app.evidence_register` rejects any
+status outside detected/registered; and the Evidence tab rendered "Modified
+Files" as a dead list with no action. Net effect: the agent evidence gate was
+fail-closed forever (live: `case_info` -> `blocked: evidence_chain_violation` on
+`case-v1gate-06081857`). The lifecycle doc already claimed a `violated -> sealed`
+transition (`data-flows-and-lifecycles.md`) that the code never implemented.
+
+Operator decisions (this session, via AskUserQuestion): build the full
+re-acquisition feature; and retire the live ghost (on-disk
+`evidence/Rocba-Memory.raw` was gone, its 17.7 GB replacement already sealed as
+`evidence/Rocba-Memory2.raw`).
+
+Landed (live-proven on the active VM tree `sift-mcps-test` unless noted):
+
+- DB: new `app.evidence_reacquire` RPC (migration
+  `supabase/migrations/202606101000_evidence_reacquire.sql`), re-auth-gated and
+  reason-required. Supersedes a sealed/violated item at freshly re-imaged bytes:
+  append-only `evidence_versions` snapshot + a `MANIFEST_SEALED` custody event
+  whose details carry `reacquired:true`, the superseded sha/bytes, the new
+  sha/bytes, and the operator reason; flips the item violated->sealed and
+  recomputes the gate. The prior sealed hash is superseded, never deleted.
+  Service-role grant only. Applied live via libpq (no psql on VM); function
+  installed (10 args); guard proven (`reacquire_requires_reauth` on null re-auth).
+- Gateway: `EvidenceAuthorityService.reacquire()` hashes the mounted replacement
+  and calls the RPC; missing bytes -> `evidence_file_missing_cannot_reacquire`
+  (409, "retire instead"). Hardened `_ensure_registered` to skip
+  `app.evidence_register` for already sealed/violated/ignored/retired items (the
+  crash root cause) - it registers only detected/registered now
+  (`packages/sift-gateway/src/sift_gateway/portal_services.py`).
+- Portal: `POST /api/evidence/chain/reacquire` (examiner role + must_reset + HMAC
+  + reason + reauth event), mirrors retire
+  (`packages/case-dashboard/src/case_dashboard/routes.py`).
+- Frontend: Evidence tab "Modified Files" block now offers per-file Re-seal
+  (re-acquire) and Retire actions + a re-acquire modal; new `postChainReacquire`
+  client (`components/evidence/EvidenceTab.jsx`, `api/endpoints.js`).
+- Tests: `packages/sift-gateway/tests/test_evidence_reacquire.py` (6) +
+  `TestEvidenceChainReacquire` in
+  `packages/case-dashboard/tests/test_evidence_intake.py` (9). Full suites green:
+  sift-gateway 424, case-dashboard 364.
+
+Live unblock + MCP proof:
+
+- Retired the ghost `evidence/Rocba-Memory.raw` (object `ea451498-...`, status
+  violated) via an audited service-role `app.evidence_retire` (reauth event
+  `1ad19a5a-...`; reason records the Rocba-Memory2.raw supersession). Chain head
+  -> `sealed` (manifest_version 4, active_count 4); `evidence_gate_status` ->
+  `sealed`.
+- Re-proven through fresh Gateway MCP calls: `case_info` now returns
+  `evidence_chain.status=ok` (was `blocked: evidence_chain_violation`);
+  `evidence_info` lists 4 sealed files (ghost filtered out as retired),
+  `requires_examiner_action=false`. Agent unblocked end-to-end.
+
+New finding (memory depth - operator hypothesis confirmed): durable job
+`a1a56196-...` (`vol -f evidence/Rocba-Memory2.raw windows.info`) ran cleanly
+through the job/provenance/saved-output path (409 B out, `failed_stages`
+surfaced) and shows the re-acquired image is a VALID Windows image - vol's
+PdbSignatureScanner positively identified the kernel PDB (`ntkrnlmp.pdb` GUID
+`15B12C74F0E177581B6B27DD4C5022C2`), where the old corrupted image yielded no
+banner at all. The remaining blocker is NOT corruption or a missing symbol table
+but a writable-symbols-dir permission: vol cannot write the generated/downloaded
+symbol JSON to `/opt/volatility3/.../symbols/windows/` (read-only for
+`agent_runtime`). Fix is a B4-family executor change: point vol's symbol dir to a
+case-writable path (`VOLATILITY3_SYMBOL_DIRS` / `--symbol-dirs`) alongside the
+existing `XDG_CACHE_HOME` cache_dir, then re-run windows.info. See the
+next-session prompt.
+
+Notes / still open:
+
+- The live retire and the live reacquire-guard test were executed by the
+  conductor via service RPCs (the live operator password has drifted from
+  `~/.sift`, so the portal HMAC flow was not usable this session). Both are fully
+  audited in the custody ledger. The new portal/Evidence-tab Re-seal/Retire
+  actions are unit-proven and deployed but not click-proven live for the same
+  reason - flagged for the next session that has the current operator password.
+
 ### 2026-06-10 - AUT2 blocker-fix pass (B0-B8) + run_command output/redaction revamp
 
 Status: DONE
