@@ -1390,6 +1390,599 @@ async def run_opensearch_fix_host_mapping(params: FixHostMappingIn) -> ToolResul
     return _success_tool_result(out, meta)
 
 
+# ---------------------------------------------------------------------------
+# Advanced tool-use metadata (BATCH-OSX2)
+#
+# Anthropic "advanced tool use" guidance: enumerate capabilities, document the
+# OUTPUT shape, give explicit when_to_use / avoid_when guidance, attach 1-5
+# realistic usage examples (minimal/partial/full), and flag low-frequency tools
+# as Tool-Search `defer_loading` candidates so the large OpenSearch tool set does
+# not crowd the always-loaded context. This metadata is advertised via the MCP
+# tool `meta` field; it is descriptive ONLY and changes no tool behavior. The
+# values mirror the per-tool guidance in ``sift-backend.json`` so the standalone
+# FastMCP surface and the gateway manifest stay in lockstep.
+# ---------------------------------------------------------------------------
+
+
+def _example(description: str, **arguments: Any) -> dict[str, Any]:
+    """One realistic usage example for a tool's ``meta.usage_examples``."""
+    return {"description": description, "arguments": arguments}
+
+
+# Per-tool advanced metadata, keyed by canonical tool name. Merged into
+# ``_TOOL_META`` below so pre-existing deprecation/resource markers are kept.
+_ADVANCED_META: dict[str, dict[str, Any]] = {
+    "opensearch_case_summary": {
+        "category": "search-analysis",
+        "recommended_for_phase": "ANALYZE",
+        "when_to_use": (
+            "Call FIRST in every indexed session. Returns hosts, artifact families, "
+            "per-family doc counts, time range, enrichment state, and "
+            "coverage_state.gaps with the exact ingest/enrich command to fill each "
+            "gap — the map you plan the whole investigation from."
+        ),
+        "avoid_when": (
+            "Skip only when you already hold a current summary this session; for a "
+            "single artifact's frequency use opensearch_aggregate instead."
+        ),
+        "output_shape": (
+            "CaseSummaryOut: case_id, hosts[], artifacts{family: {docs, hosts[], "
+            "indices[]}}, total_docs, time_range{earliest, latest}, enrichment{...}, "
+            "coverage_state{disk_artifacts, memory, enrichment, gaps[]}, "
+            "investigation_hints[], warnings[]. Set include_fields=True only when you "
+            "need per-artifact field/type maps to decide '.keyword' suffixes (large)."
+        ),
+        "response_shaping": (
+            "include_fields defaults False to keep the summary compact; the field map "
+            "is the bulk of the payload — request it only when picking aggregation "
+            "fields."
+        ),
+        "usage_examples": [
+            _example("Coverage map for the active case", ),
+            _example("Coverage map for a named case", case_id="rocba-drive-20260526-1417"),
+            _example(
+                "Include field/type maps to plan aggregations",
+                case_id="rocba-drive-20260526-1417",
+                include_fields=True,
+            ),
+        ],
+        "defer_loading": False,
+        "defer_loading_rationale": (
+            "High-frequency entry point; keep always-loaded so the agent can orient at "
+            "session start without a Tool-Search round trip."
+        ),
+    },
+    "opensearch_search": {
+        "category": "search-analysis",
+        "recommended_for_phase": "ANALYZE",
+        "when_to_use": (
+            "Targeted lookups by indicator, user, IP, hash, process, or field value "
+            "across already-indexed case evidence. Supports query_string syntax, "
+            "time_from/time_to bounds, sort, and offset pagination."
+        ),
+        "avoid_when": (
+            "Avoid for frequency counts (use opensearch_aggregate), activity spikes "
+            "(use opensearch_timeline), exact totals (use opensearch_count), or one "
+            "full document (use opensearch_get_event). Avoid before evidence is "
+            "ingested."
+        ),
+        "output_shape": (
+            "SearchOut: total, total_capped (true ⇒ total is a gte lower bound — call "
+            "opensearch_count for exact), returned, offset, compact, results[] of "
+            "SearchHit{id, index, fields, truncated[]}, advisories[]."
+        ),
+        "response_shaping": (
+            "compact=True (default) drops bloat fields and truncates values to 500 "
+            "chars for context efficiency; raise limit/offset to page rather than "
+            "widening the query. Use opensearch_get_event to expand a single hit."
+        ),
+        "usage_examples": [
+            _example(
+                "Minimal: find a process by name",
+                query="process.name:*powershell*"
+            ),
+            _example(
+                "Scoped + time-bounded",
+                query="event.code:4688 AND process.name:*powershell*",
+                case_id="rocba-drive-20260526-1417",
+                time_from="2026-05-26T00:00:00Z",
+                time_to="2026-05-26T23:59:59Z"
+            ),
+            _example(
+                "Full document view, second page, oldest-first",
+                query="source.ip:\"::1\"",
+                compact=False,
+                sort="@timestamp:asc",
+                limit=100,
+                offset=100,
+            ),
+        ],
+        "defer_loading": False,
+        "defer_loading_rationale": (
+            "Core analysis verb used in nearly every session; keep always-loaded."
+        ),
+    },
+    "opensearch_aggregate": {
+        "category": "search-analysis",
+        "recommended_for_phase": "ANALYZE",
+        "when_to_use": (
+            "Top-N frequency analysis: group by a field (event codes, users, hosts, "
+            "process names, IPs) with an optional query_string pre-filter."
+        ),
+        "avoid_when": (
+            "Avoid when you want the individual documents (use opensearch_search) or a "
+            "simple distinct value list without ranking (use opensearch_field_values)."
+        ),
+        "output_shape": (
+            "AggregateOut: field, total_docs (matched before bucketing), buckets[] of "
+            "{key, count}, truncated (true ⇒ more buckets than limit exist)."
+        ),
+        "response_shaping": (
+            "Returns only the requested buckets, never raw docs — the canonical "
+            "summary-over-bytes shape. CSV/registry text fields need '.keyword'; evtx "
+            "fields like event.code are already keyword."
+        ),
+        "usage_examples": [
+            _example("Top event codes in the active case", field="event.code"),
+            _example(
+                "Top file paths (text field needs .keyword), filtered",
+                field="Path.keyword",
+                query="host.name:wksn01",
+                limit=20,
+            ),
+        ],
+        "defer_loading": False,
+        "defer_loading_rationale": (
+            "Frequent pivot tool; keep always-loaded alongside search/timeline."
+        ),
+    },
+    "opensearch_timeline": {
+        "category": "search-analysis",
+        "recommended_for_phase": "ANALYZE",
+        "when_to_use": (
+            "Find activity bursts: a date histogram of event counts over time. Locate "
+            "spike windows, then scope opensearch_search with time_from/time_to."
+        ),
+        "avoid_when": (
+            "Avoid for value distributions (use opensearch_aggregate) or for the events "
+            "themselves (use opensearch_search)."
+        ),
+        "output_shape": (
+            "TimelineOut: total_docs, interval, buckets[] of {time (ISO-8601), count} "
+            "(sparse — empty buckets omitted), advisories[]. Buckets are warned at the "
+            "configured ceiling and never silently truncated."
+        ),
+        "response_shaping": (
+            "Returns bucket counts only. Narrow with time_from/time_to or widen the "
+            "interval (Ns/Nm/Nh/Nd) when an advisory flags a very large histogram."
+        ),
+        "usage_examples": [
+            _example("Hourly histogram of process creations", query="event.code:4688"),
+            _example(
+                "15-minute resolution over a known window",
+                query="host.name:wksn01",
+                interval="15m",
+                time_from="2026-05-26T08:00:00Z",
+                time_to="2026-05-26T18:00:00Z"
+            ),
+        ],
+        "defer_loading": False,
+        "defer_loading_rationale": (
+            "Frequent triage tool; keep always-loaded."
+        ),
+    },
+    "opensearch_count": {
+        "category": "search-analysis",
+        "recommended_for_phase": "ANALYZE",
+        "when_to_use": (
+            "Get an EXACT match count with no documents — verify index population or "
+            "gauge magnitude before a larger opensearch_search."
+        ),
+        "avoid_when": (
+            "Avoid when you need per-value counts (use opensearch_aggregate) or the "
+            "documents themselves (use opensearch_search)."
+        ),
+        "output_shape": "CountOut: count (exact document count for the query in scope).",
+        "response_shaping": (
+            "Cheapest possible probe — one integer, no docs. Use to decide whether a "
+            "full search is worth paging."
+        ),
+        "usage_examples": [
+            _example("Count all docs in scope", ),
+            _example("Count successful logons", query="event.code:4624"),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "Low-frequency helper; opensearch_search already reports total. Tool-Search "
+            "`defer_loading` candidate to trim the always-loaded set."
+        ),
+    },
+    "opensearch_field_values": {
+        "category": "search-analysis",
+        "recommended_for_phase": "ANALYZE",
+        "when_to_use": (
+            "Enumerate the distinct values of a field (with counts) before writing a "
+            "narrower query — e.g. discover the usernames or process names present."
+        ),
+        "avoid_when": (
+            "Use opensearch_aggregate instead when ranking/top-N matters; that path is "
+            "the same terms aggregation framed for frequency."
+        ),
+        "output_shape": (
+            "FieldValuesOut: field, values[] of {value, count}, truncated (true ⇒ more "
+            "distinct values exist than returned)."
+        ),
+        "response_shaping": (
+            "Returns the value inventory only. CSV/text fields need '.keyword'; raise "
+            "limit (hard cap 500) to widen the inventory."
+        ),
+        "usage_examples": [
+            _example(
+                "Distinct event-log providers present",
+                field="winlog.provider_name"
+            ),
+            _example(
+                "Distinct users, filtered to a host",
+                field="user.name.keyword",
+                query="host.name:wksn01",
+                limit=100,
+            ),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "Overlaps opensearch_aggregate; lower-frequency discovery helper and a "
+            "Tool-Search `defer_loading` candidate."
+        ),
+    },
+    "opensearch_get_event": {
+        "category": "search-analysis",
+        "recommended_for_phase": "ANALYZE",
+        "when_to_use": (
+            "Fetch ONE complete document by _id with every field and no truncation — "
+            "use after opensearch_search when a compact hit needs full inspection."
+        ),
+        "avoid_when": (
+            "Avoid for many documents (page opensearch_search instead) — this is a "
+            "single-doc lookup."
+        ),
+        "output_shape": (
+            "GetEventOut: id, index, fields (full, untruncated), truncated[] (empty), "
+            "note. The index MUST be the exact case-* name from the hit, not a pattern."
+        ),
+        "response_shaping": (
+            "The deliberate counterpart to compact search: pay the full-document cost "
+            "for exactly one record, identified from a prior search hit."
+        ),
+        "usage_examples": [
+            _example(
+                "Expand a specific hit",
+                event_id="abc123",
+                index="case-rocba-drive-20260526-1417-evtx-srl-forge"
+            ),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "Used only to expand a known search hit; Tool-Search `defer_loading` "
+            "candidate."
+        ),
+    },
+    "opensearch_inspect_container": {
+        "category": "evidence-survey",
+        "recommended_for_phase": "SURVEY",
+        "when_to_use": (
+            "Survey a forensic container (E01/raw/zip) WITHOUT mounting it: integrity, "
+            "size, partitions, acquisition metadata. Run during evidence survey before "
+            "deciding what to ingest."
+        ),
+        "avoid_when": (
+            "Avoid after ingest planning is done; follow this with "
+            "opensearch_ingest(dry_run=True) for the full plan."
+        ),
+        "output_shape": (
+            "InspectContainerOut: path, resolved_path, container_type "
+            "(e01|raw|file|unknown), tool_available, size_bytes, size_human, hashes{}, "
+            "partitions[], acquiry_info{}, raw_info (truncated)."
+        ),
+        "response_shaping": (
+            "raw_info is truncated fdisk/img_stat text — a preview, not the full tool "
+            "dump. Read-only; never modifies evidence."
+        ),
+        "usage_examples": [
+            _example(
+                "Preview an E01 before ingest",
+                path="evidence/rocba-cdrive.e01"
+            ),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "SURVEY-phase tool used once per evidence item; Tool-Search "
+            "`defer_loading` candidate."
+        ),
+    },
+    "opensearch_ingest": {
+        "category": "ingest",
+        "recommended_for_phase": "INGEST",
+        "when_to_use": (
+            "Discover and ingest forensic artifacts into OpenSearch after examiner "
+            "approval. dry_run=True (default) previews the plan; set dry_run=False to "
+            "write. Supports container/artifact-dir auto-detect, format override, "
+            "include/exclude artifact filters, memory tiers/plugins, and VSS."
+        ),
+        "avoid_when": (
+            "Do NOT set dry_run=False until the target evidence and plan are clear. "
+            "Use force=True only for an intentional re-ingest when the case already "
+            "has docs."
+        ),
+        "output_shape": (
+            "IngestOut: status (preview|started|containers_detected|multi_started|"
+            "already_indexed|failed), case_id, plan{}, container{}, already_indexed{}, "
+            "suggested_hostname, warning, pid, run_id, log_file, note, details{}. "
+            "Mutating; poll progress via opensearch_ingest_status."
+        ),
+        "response_shaping": (
+            "Returns a plan/run reference (run_id, log_file) rather than streaming "
+            "ingest output — poll opensearch_ingest_status for progress. The "
+            "'password' arg is a SECRET, redacted from audit/logs/results."
+        ),
+        "usage_examples": [
+            _example(
+                "Preview an auto-detected container (default dry run)",
+                path="evidence/rocba-cdrive.e01",
+                format="auto"
+            ),
+            _example(
+                "Ingest a specific delimited artifact set for one host",
+                path="evidence/triage/wksn01",
+                format="delimited",
+                hostname="wksn01",
+                include=["amcache", "shimcache"],
+                dry_run=False,
+            ),
+            _example(
+                "Deep memory analysis, write",
+                path="evidence/memdump.raw",
+                format="memory",
+                hostname="wksn01",
+                tier=3,
+                dry_run=False,
+            ),
+        ],
+        "defer_loading": False,
+        "defer_loading_rationale": (
+            "Central INGEST-phase verb; keep always-loaded."
+        ),
+    },
+    "opensearch_ingest_status": {
+        "category": "ingest",
+        "recommended_for_phase": "INGEST",
+        "when_to_use": (
+            "Poll running or recent ingest AND enrichment runs (~every 30s while "
+            "active) and present the per-host artifact checklist. Also the status "
+            "channel for async enrichment (poll with artifact_name 'intel'/'triage')."
+        ),
+        "avoid_when": (
+            "Operational status only — inspect indexed records (opensearch_search) for "
+            "evidence, not this."
+        ),
+        "output_shape": (
+            "IngestStatusOut: ingests[] of IngestRun{case_id, status, pid, elapsed, "
+            "total_indexed, bulk_failed, hosts_complete/total, "
+            "artifacts_complete/total, log_file, checklist[], message, halt_reason, "
+            "errors[], next_steps[], warnings[], details{}}, message. case_id='*' "
+            "shows all cases; default is the active case."
+        ),
+        "response_shaping": (
+            "Returns a structured progress summary plus a log_file reference, not the "
+            "raw run log."
+        ),
+        "usage_examples": [
+            _example("Poll the active case's runs", ),
+            _example("Show runs across all cases", case_id="*"),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "Used only while an ingest/enrich run is in flight; Tool-Search "
+            "`defer_loading` candidate."
+        ),
+    },
+    "opensearch_enrich_intel": {
+        "category": "enrichment",
+        "recommended_for_phase": "CORRELATE",
+        "when_to_use": (
+            "Extract unique IOCs from indexed docs and, with dry_run=False, look them "
+            "up in OpenCTI and stamp matching docs with threat_intel fields. Use after "
+            "indexed indicators exist and CTI context would help prioritize pivots. "
+            "Requires enrichment:intel scope."
+        ),
+        "avoid_when": (
+            "Avoid when OpenCTI is unavailable or indicators are speculative. Use "
+            "dry_run=True first to size the IOC corpus."
+        ),
+        "output_shape": (
+            "EnrichIntelOut: status (preview|started), case_id, ips, hashes, domains, "
+            "total_iocs (preview counts), pid, run_id, log_file, note. ASYNC on write "
+            "— returns a run reference; poll opensearch_ingest_status "
+            "(artifact_name=='intel')."
+        ),
+        "response_shaping": (
+            "Returns counts + a run reference, never IOC dumps or OpenCTI/OpenSearch "
+            "credentials. Cannot approve findings, alter evidence, or decide reports."
+        ),
+        "usage_examples": [
+            _example("Size the IOC corpus without lookup", dry_run=True),
+            _example(
+                "Launch async enrichment for a case",
+                case_id="rocba-drive-20260526-1417",
+                dry_run=False,
+            ),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "CORRELATE-phase, scope-gated, add-on-dependent (OpenCTI); Tool-Search "
+            "`defer_loading` candidate."
+        ),
+    },
+    "opensearch_enrich_triage": {
+        "category": "enrichment",
+        "recommended_for_phase": "CORRELATE",
+        "when_to_use": (
+            "Check indexed filenames/services against the Windows baseline DB and stamp "
+            "triage.verdict on documents. Use after indexed Windows artifacts exist or "
+            "after a baseline update. Requires enrichment:triage scope."
+        ),
+        "avoid_when": (
+            "Do not treat an UNKNOWN baseline verdict as malicious by itself; verify "
+            "interesting results against source records."
+        ),
+        "output_shape": (
+            "EnrichTriageOut: status ('complete'), documents_enriched, details{} "
+            "(per-artifact enriched counts). Behavior-compatible synchronous path."
+        ),
+        "response_shaping": (
+            "Returns enriched counts only, never windows-triage credentials. Cannot "
+            "approve findings, alter evidence, or decide reports."
+        ),
+        "usage_examples": [
+            _example("Run Windows baseline enrichment on the active case", ),
+            _example("Enrich a named case", case_id="rocba-drive-20260526-1417"),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "CORRELATE-phase, scope-gated, add-on-dependent (windows-triage); "
+            "Tool-Search `defer_loading` candidate."
+        ),
+    },
+    "opensearch_list_detections": {
+        "category": "search-analysis",
+        "recommended_for_phase": "ANALYZE",
+        "when_to_use": (
+            "List Security Analytics (Sigma) detection findings for triage pivots, "
+            "filtered by severity/detector_type; falls back to a Hayabusa query "
+            "suggestion when the Sigma plugin is unavailable or empty."
+        ),
+        "avoid_when": (
+            "Detection hits are leads, not conclusions — validate against source events "
+            "and surrounding context before recording a finding."
+        ),
+        "output_shape": (
+            "ListDetectionsOut: findings[] of Detection{id, timestamp, index, rules[] "
+            "of {name, tags[]}, matched_docs}, total, returned, offset, suggestion "
+            "(Hayabusa fallback when present)."
+        ),
+        "response_shaping": (
+            "Paginate with limit/offset; the per-finding payload references matched "
+            "docs by count, not by embedding them."
+        ),
+        "usage_examples": [
+            _example("All detections, first page", ),
+            _example("High-severity detections only", severity="high"),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "Depends on the optional Security Analytics plugin; lower-frequency. "
+            "Tool-Search `defer_loading` candidate."
+        ),
+    },
+    "opensearch_fix_host_mapping": {
+        "category": "admin",
+        "recommended_for_phase": "INGEST",
+        "when_to_use": (
+            "Correct a wrong host.id mapping in the active case: updates the host "
+            "dictionary and reindexes docs where host.name equals raw. host.name is "
+            "never changed. Use only when indexed host identity is known to be wrong."
+        ),
+        "avoid_when": (
+            "Avoid before confirming the canonical host mapping with the examiner or "
+            "evidence. In DB-active mode WITHOUT a receipt recorder the correction is "
+            "DENIED (fail closed)."
+        ),
+        "output_shape": (
+            "FixHostMappingOut: status ('complete'), raw, new_canonical, docs_updated, "
+            "host_identity_authority, host_identity_decision_id (DB receipt), audit_id, "
+            "dict_path/dict_saved (legacy non-DB mode only), details{}. Mutating; "
+            "returns no local filesystem paths in DB-active mode."
+        ),
+        "response_shaping": (
+            "Returns the correction receipt (decision/audit ids, docs_updated), not the "
+            "reindexed documents."
+        ),
+        "usage_examples": [
+            _example(
+                "Re-map a mis-attributed host across the case",
+                raw="wksn01",
+                new_canonical="WKSN01.corp.local"
+            ),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "Rare, sensitive admin correction; Tool-Search `defer_loading` candidate."
+        ),
+    },
+    "opensearch_status": {
+        "category": "ingest",
+        "recommended_for_phase": "INGEST",
+        "when_to_use": (
+            "Backend health/readiness check: cluster reachability plus per-case-index "
+            "document counts. Confirms which cases have data."
+        ),
+        "avoid_when": (
+            "DEPRECATED tool form — prefer the resource opensearch://cluster/status. "
+            "For one case's artifact/coverage breakdown use opensearch_case_summary."
+        ),
+        "output_shape": (
+            "StatusOut: cluster_status (single-node yellow may be annotated normal), "
+            "indices[] of {index, docs, size, status}, total_indices. Health/status "
+            "only — not case evidence."
+        ),
+        "response_shaping": (
+            "Compact cluster + index roll-up; also exposed as a read-only resource to "
+            "keep it out of the tool budget."
+        ),
+        "usage_examples": [
+            _example("Cluster + per-case index health", ),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "Deprecated tool form mirrored by a resource; Tool-Search `defer_loading` "
+            "candidate pending removal at/after D27b."
+        ),
+    },
+    "opensearch_shard_status": {
+        "category": "admin",
+        "recommended_for_phase": "INGEST",
+        "when_to_use": (
+            "Operational readiness before a large ingest (a full disk image can add "
+            "many shards) or when indexing fails: shard usage and capacity headroom."
+        ),
+        "avoid_when": (
+            "DEPRECATED tool form — prefer the resource opensearch://cluster/shards. "
+            "Administrative signal, not investigation evidence."
+        ),
+        "output_shape": (
+            "ShardStatusOut: current_shards, max_shards_per_node, data_nodes, "
+            "max_total, headroom_pct, status (ok>=10% | warning>=2% | critical<2%), "
+            "top_indices_by_shard_count[]."
+        ),
+        "response_shaping": (
+            "Capacity roll-up with only the top shard-heavy indices; also exposed as a "
+            "read-only resource."
+        ),
+        "usage_examples": [
+            _example("Check shard headroom before a large image ingest", ),
+        ],
+        "defer_loading": True,
+        "defer_loading_rationale": (
+            "Deprecated, operations-only; mirrored by a resource. Tool-Search "
+            "`defer_loading` candidate pending removal at/after D27b."
+        ),
+    },
+}
+
+
+for _name, _adv in _ADVANCED_META.items():
+    _TOOL_META[_name] = {**_adv, **_TOOL_META.get(_name, {})}
+
+
 REGISTRY.append(
     ToolDef(
         name="opensearch_search",
@@ -1663,6 +2256,7 @@ REGISTRY.append(
 )
 
 _TOOL_META["opensearch_status"] = {
+    **_TOOL_META.get("opensearch_status", {}),
     "deprecated": True,
     "resource_uri": "opensearch://cluster/status",
     "removal_horizon": "at/after D27b",
@@ -1741,6 +2335,7 @@ RESOURCE_REGISTRY.append(
 )
 
 _TOOL_META["opensearch_shard_status"] = {
+    **_TOOL_META.get("opensearch_shard_status", {}),
     "deprecated": True,
     "resource_uri": "opensearch://cluster/shards",
     "removal_horizon": "at/after D27b",
