@@ -23,6 +23,10 @@ EnvironmentFile=-%h/.sift/control-plane.env
 # env and forwarded to the opensearch-mcp child via env_refs in app.mcp_backends.
 # This file is written by install.sh only when SIFT_OPENSEARCH_ENABLED=true.
 EnvironmentFile=-%h/.sift/opensearch.env
+# BATCH-PMI3: FK_DATA_DIR points the forensic-knowledge loader at the installed
+# data dir so build_response/run_command enrichment fires under the service user.
+# Non-secret path; written by install.sh (write_fk_env).
+EnvironmentFile=-%h/.sift/forensic-knowledge.env
 
 [Install]
 WantedBy=default.target

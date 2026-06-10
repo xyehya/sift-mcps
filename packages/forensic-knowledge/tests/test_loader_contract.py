@@ -270,3 +270,56 @@ def test_loader_has_no_mutation_apis():
             assert not fn_name.startswith(pattern) and pattern not in fn_name, (
                 f"loader.{fn_name} looks like a mutation API — forensic-knowledge is read-only reference data"
             )
+
+
+# ---------------------------------------------------------------------------
+# BATCH-PMI3: FK_DATA_DIR env override resolution
+#
+# The installer writes FK_DATA_DIR into the gateway/worker service env so the
+# loader can resolve the data dir under the service user (no source tree /
+# importlib.resources data on a packaged install). These tests prove that the
+# env override is honored and takes precedence, which is the mechanism PMI3
+# relies on to make build_response/run_command enrichment fire.
+# ---------------------------------------------------------------------------
+
+# The canonical FK data dir bundled with this package — the same tree the
+# installer publishes at $SIFT_ENRICHMENT_DIR/forensic-knowledge.
+_BUNDLED_DATA_DIR = Path(__file__).resolve().parents[1] / "data"
+
+
+def test_fk_data_dir_env_override_resolves(monkeypatch):
+    """FK_DATA_DIR pointing at the installed data dir drives _find_data_dir."""
+    monkeypatch.setenv("FK_DATA_DIR", str(_BUNDLED_DATA_DIR))
+    loader.clear_cache()
+    resolved = loader._find_data_dir()
+    assert resolved == _BUNDLED_DATA_DIR, (
+        "loader must resolve the data dir from FK_DATA_DIR when set"
+    )
+    # And knowledge actually loads from that dir.
+    assert loader.get_artifact("amcache") is not None
+
+
+def test_fk_data_dir_env_override_takes_precedence(tmp_path, monkeypatch):
+    """A valid FK_DATA_DIR wins over the source-tree fallback (resolution #1)."""
+    # Build a minimal but valid data dir layout the loader understands.
+    art_dir = tmp_path / "artifacts" / "windows"
+    art_dir.mkdir(parents=True)
+    (art_dir / "pmi3_probe.yaml").write_text(
+        "name: pmi3_probe\ndescription: PMI3 env-override probe\nplatform: windows\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FK_DATA_DIR", str(tmp_path))
+    loader.clear_cache()
+    assert loader._find_data_dir() == tmp_path
+    probe = loader.get_artifact("pmi3_probe")
+    assert probe is not None and probe["name"] == "pmi3_probe", (
+        "loader must serve content from the FK_DATA_DIR override, not the source tree"
+    )
+
+
+def test_fk_data_dir_env_ignored_when_not_a_dir(tmp_path, monkeypatch):
+    """A bogus FK_DATA_DIR is skipped; loader falls through to a real dir."""
+    monkeypatch.setenv("FK_DATA_DIR", str(tmp_path / "does_not_exist"))
+    loader.clear_cache()
+    # Falls back to the bundled source tree and still resolves real knowledge.
+    assert loader.get_artifact("amcache") is not None

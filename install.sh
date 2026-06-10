@@ -1473,6 +1473,32 @@ write_opensearch_env() {
   chmod 600 "$os_env_file"
 }
 
+# BATCH-PMI3: write the gateway/worker env file that points the forensic-knowledge
+# loader at the installed data dir. Without FK_DATA_DIR in the service env, the
+# loader cannot resolve the data dir under the service user (no source tree /
+# importlib.resources data on a packaged install), so build_response and the
+# run_command path silently skip FK enrichment. FK data is a core runtime dep
+# (D4); prepare_enrichment_assets lays it down at
+# $SIFT_ENRICHMENT_DIR/forensic-knowledge, which is the path we publish here.
+# Consumed by both units via EnvironmentFile=-%h/.sift/forensic-knowledge.env.
+# Idempotent (recreate only if missing). FK_DATA_DIR is a non-secret path.
+write_fk_env() {
+  local fk_data_dir="$SIFT_ENRICHMENT_DIR/forensic-knowledge"
+  local fk_env_file="$SIFT_HOME/forensic-knowledge.env"
+  if [[ -f "$fk_env_file" ]]; then
+    log "forensic-knowledge env file already exists — preserving $fk_env_file."
+    return
+  fi
+  log "Writing forensic-knowledge env file: $fk_env_file"
+  install -d -m 700 "$(dirname "$fk_env_file")"
+  {
+    printf '# forensic-knowledge env — FK_DATA_DIR for the FK loader (core enrichment)\n'
+    printf '# Written by sift-mcps install.sh. Idempotent — delete to regenerate.\n'
+    printf 'FK_DATA_DIR=%s\n' "$fk_data_dir"
+  } > "$fk_env_file"
+  chmod 644 "$fk_env_file"
+}
+
 # =============================================================================
 # Phase 8 — OpenSearch (Docker)
 # =============================================================================
@@ -2438,6 +2464,7 @@ main() {
 
   write_gateway_config
   prepare_enrichment_assets   # FK enrichment is core (D4: FK data is a core runtime dep)
+  write_fk_env                 # BATCH-PMI3: FK_DATA_DIR in ~/.sift/forensic-knowledge.env
 
   # Track whether OpenSearch came up (set by start_opensearch).
   OPENSEARCH_UP=0

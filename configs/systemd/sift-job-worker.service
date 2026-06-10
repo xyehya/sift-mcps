@@ -18,6 +18,12 @@ StandardError=journal
 # this unit to pass secrets through to run_command — by design it cannot.
 EnvironmentFile=-%h/.sift/supabase.env
 EnvironmentFile=-%h/.sift/control-plane.env
+# BATCH-PMI3: FK_DATA_DIR points the forensic-knowledge loader at the installed
+# data dir so build_response/run_command enrichment fires under the worker user.
+# Non-secret path; written by install.sh (write_fk_env). The data dir is
+# read-only reference content, not a secret, so forwarding it here is safe and
+# does not weaken the run_command env-scrubbing isolation described above.
+EnvironmentFile=-%h/.sift/forensic-knowledge.env
 Environment=UV_NO_MANAGED_PYTHON=1
 Environment=UV_PYTHON_DOWNLOADS=never
 
