@@ -413,6 +413,23 @@ class Gateway:
                         if isinstance(required_scopes, list)
                         else []
                     )
+                    # OS2: safe_case_argument_names — manifest-declared list of
+                    # argument names that the Gateway may safely inject the DB
+                    # active case_id into without the agent's explicit input.
+                    # - list present (possibly empty): manifest knows whether this
+                    #   tool accepts a case arg; empty means "case-scoped but no
+                    #   injection argument" (allowed through without injection).
+                    # - None (key absent): legacy/unknown; falls back to schema
+                    #   property detection in safe_case_argument_names().
+                    _raw_scans = t_decl.get("safe_case_argument_names")
+                    if isinstance(_raw_scans, list):
+                        _scans_value: list[str] | None = [
+                            str(s) for s in _raw_scans
+                            if s in ("case_id", "case_key")
+                        ]
+                    else:
+                        _scans_value = None
+
                     manifest_meta[t_meta_name] = {
                         "backend": name,
                         # K1: read-only marker for the DB-first audit envelope so
@@ -433,6 +450,8 @@ class Gateway:
                         ),
                         "required_scopes": required_scopes,
                         "authority_contract": authority_contract,
+                        # OS2: None means absent/unknown; [] means declared-empty.
+                        "safe_case_argument_names": _scans_value,
                     }
 
             if backend.started:
@@ -672,11 +691,37 @@ class Gateway:
         phase = str(meta.get("recommended_phase") or "").lower()
         return bool(category or phase) and "reference" not in category
 
-    def safe_case_argument_names(self, tool_name: str) -> set[str]:
+    def safe_case_argument_names(self, tool_name: str) -> set[str] | None:
+        """Return the set of argument names safe for DB active-case injection.
+
+        OS2: manifest-declared ``safe_case_argument_names`` takes priority over
+        schema-property detection so that tools work correctly even when the
+        backend is not yet started and the schema is a placeholder ``{}``.
+
+        Return values:
+          - ``set`` (possibly empty): manifest says exactly which args receive
+            the injected case_id (empty = case-scoped but no injection arg;
+            the middleware lets the call through without injection).
+          - ``None``: no manifest declaration and no schema properties match;
+            the middleware treats this as "unknown" and denies the call to fail
+            closed (original behaviour for non-OpenSearch add-ons).
+        """
+        # OS2: prefer manifest-declared names over placeholder schema.
+        meta = self._tool_manifest_meta.get(tool_name)
+        if meta is not None:
+            manifest_names = meta.get("safe_case_argument_names")
+            if manifest_names is not None:
+                # Manifest explicitly declared (possibly empty list).
+                return set(manifest_names)
+        # Fallback: derive from live schema properties when manifest is absent
+        # or the tool entry predates the safe_case_argument_names field.
         tool = self._tool_cache.get(tool_name)
         schema = getattr(tool, "inputSchema", None) if tool else None
         props = schema.get("properties", {}) if isinstance(schema, dict) else {}
-        return {name for name in ("case_id", "case_key") if name in props}
+        found = {name for name in ("case_id", "case_key") if name in props}
+        # Return None (not an empty set) when neither manifest nor schema has
+        # an answer — the middleware must deny fail-closed in that case.
+        return found if found else None
 
     def addon_authority_for_tool(self, tool_name: str) -> dict | None:
         """Return the H1 add-on authority enforcement profile for a tool.
@@ -870,18 +915,21 @@ class Gateway:
 
         if active_case is not None and self.is_case_scoped_tool(name):
             safe_args = self.safe_case_argument_names(name)
-            if not safe_args:
+            # OS2: None = unknown/undeclared → deny fail-closed.
+            # empty set = manifest says no injection arg → pass through.
+            if safe_args is None:
                 raise RuntimeError(
                     "proxied case-scoped tool does not expose a safe case_id/case_key argument"
                 )
-            arguments = dict(arguments)
-            for key, expected in (("case_id", active_case.case_id), ("case_key", active_case.case_key)):
-                if key not in safe_args:
-                    continue
-                supplied = arguments.get(key)
-                if supplied and str(supplied) != expected:
-                    raise RuntimeError(f"client-supplied {key} does not match DB active case")
-                arguments[key] = expected
+            if safe_args:
+                arguments = dict(arguments)
+                for key, expected in (("case_id", active_case.case_id), ("case_key", active_case.case_key)):
+                    if key not in safe_args:
+                        continue
+                    supplied = arguments.get(key)
+                    if supplied and str(supplied) != expected:
+                        raise RuntimeError(f"client-supplied {key} does not match DB active case")
+                    arguments[key] = expected
 
         # Lazy recovery — restart backend if it crashed
         if not backend.started:
