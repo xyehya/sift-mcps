@@ -104,6 +104,28 @@
               "enum": ["case_id", "case_key"]
             },
             "uniqueItems": true
+          },
+          "scope_enforcement": {
+            "description": "OS5: how required_scopes are enforced for a mutating tool (e.g. 'gateway_primary_env_fallback').",
+            "type": "string"
+          },
+          "enrichment_policy": {
+            "description": "OS5: declares enrichment as audited, scope-gated, pollable derived-state mutation (derived_state_only, audit_required, status_pollable, poll_via, poll_discriminator).",
+            "type": "object"
+          },
+          "prohibited_operations": {
+            "description": "OS5: operations a mutating/enrichment tool must never perform (e.g. approve_findings, alter_evidence, decide_reports).",
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "secret_leak_guarantee": {
+            "description": "OS5: statement that the tool's agent-facing response carries no credentials/DSNs/paths.",
+            "type": "string"
+          },
+          "receipt_policy": {
+            "description": "OS5: DB-active host-correction receipt contract (db_active_mode, receipt_fields, fail_closed, no_path_leak).",
+            "type": "object"
           }
         },
         "required": [
