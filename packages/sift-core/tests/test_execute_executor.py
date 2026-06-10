@@ -965,6 +965,53 @@ def test_sudo_wrapper_reapplies_cache_env_via_env_binary():
     assert argv[-3:] == ["vol", "-f", "mem.raw"]
 
 
+# ── B4 follow-up: writable HOME/XDG jail + vol --symbol-dirs ────────────────
+
+
+def test_worker_cache_dir_provisions_writable_home_and_xdg(tmp_path):
+    cache = tmp_path / "tmp" / "cache"
+    result = worker._execute_payload({
+        "cmd": ["env"],
+        "timeout": 10,
+        "max_output_bytes": 65536,
+        "cache_dir": str(cache),
+    })
+    assert result["exit_code"] == 0
+    out = result["stdout"]
+    jail = tmp_path / "tmp"
+    home = jail / "home"
+    assert f"HOME={home}" in out
+    assert f"XDG_CONFIG_HOME={home / '.config'}" in out
+    assert f"XDG_DATA_HOME={home / '.local' / 'share'}" in out
+    assert f"XDG_STATE_HOME={home / '.local' / 'state'}" in out
+    assert f"XDG_CACHE_HOME={cache}" in out
+    # The vol symbol store is provisioned inside the same write-jail.
+    assert (jail / "vol-symbols").is_dir()
+
+
+def test_inject_vol_symbol_dir_prepends_for_vol():
+    out = worker._inject_vol_symbol_dir(
+        ["vol", "-f", "mem.raw", "windows.info"], "/case/tmp/vol-symbols"
+    )
+    assert out == [
+        "vol", "--symbol-dirs", "/case/tmp/vol-symbols", "-f", "mem.raw", "windows.info",
+    ]
+    # Resolved absolute binary path is still recognised by basename.
+    out2 = worker._inject_vol_symbol_dir(["/opt/volatility3/bin/vol", "-f", "m"], "/s")
+    assert out2[:3] == ["/opt/volatility3/bin/vol", "--symbol-dirs", "/s"]
+
+
+def test_inject_vol_symbol_dir_skips_non_vol_and_existing_flag():
+    # Non-vol command untouched.
+    assert worker._inject_vol_symbol_dir(["grep", "x", "evidence/y"], "/s") == [
+        "grep", "x", "evidence/y",
+    ]
+    # An invocation that already specifies a symbol dir is not doubled up.
+    already = ["vol", "--symbol-dirs", "/operator/dir", "-f", "m", "windows.info"]
+    assert worker._inject_vol_symbol_dir(already, "/s") == already
+    assert worker._inject_vol_symbol_dir([], "/s") == []
+
+
 # ── AUT2-B7: binary stdout switches to saved-file-first ────────────────────
 
 

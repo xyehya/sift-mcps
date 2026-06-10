@@ -95,12 +95,19 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # a stray inherited variable. We keep PATH so binaries still resolve.
     tool_env = build_sandbox_env()
 
-    # AUT2-B4: give cache-hungry tools (volatility3 symbol cache, etc.) a
-    # writable cache under the case tmp/ write-jail. Without this, tools that
-    # default to ~/.cache fail with PermissionError under the restricted
-    # runtime user, killing memory triage before analysis starts.
+    # AUT2-B4 (+ follow-up): forensic tools run as the restricted runtime user,
+    # whose real HOME and the tools' read-only install dirs are not writable. Any
+    # tool that persists under ~/.cache, ~/.config, ~/.local, or a tool data/
+    # symbol store would fail with PermissionError before analysis starts (B4 saw
+    # this for volatility3's symbol cache; it is NOT vol-specific). Give them a
+    # writable HOME + XDG base dirs and a writable Volatility symbol store, all
+    # INSIDE the case tmp/ write-jail — no root, nothing escapes the jail. This is
+    # the right answer for "tool needs to write somewhere"; a tool that needs
+    # actual kernel/device privilege is a separate, allow-listed path, never a
+    # blanket sudo. Best-effort per dir: one that cannot be created is omitted.
     cache_dir = str(payload.get("cache_dir") or "").strip()
     env_overrides: dict[str, str] = {}
+    vol_symbols_dir = ""
     if cache_dir:
         try:
             os.makedirs(cache_dir, exist_ok=True)
@@ -108,6 +115,28 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
             cache_dir = ""
     if cache_dir:
         env_overrides["XDG_CACHE_HOME"] = cache_dir
+        jail = os.path.dirname(cache_dir)  # the case tmp/ write-jail
+        home_dir = os.path.join(jail, "home")
+        for key, path in (
+            ("HOME", home_dir),
+            ("XDG_CONFIG_HOME", os.path.join(home_dir, ".config")),
+            ("XDG_DATA_HOME", os.path.join(home_dir, ".local", "share")),
+            ("XDG_STATE_HOME", os.path.join(home_dir, ".local", "state")),
+        ):
+            try:
+                os.makedirs(path, exist_ok=True)
+            except OSError:
+                continue
+            env_overrides[key] = path
+        # vol3 writes generated ISF symbols into its read-only install symbol
+        # store, not into HOME/XDG, so it needs an explicit writable --symbol-dirs
+        # (injected per-stage below) pointed here.
+        sym = os.path.join(jail, "vol-symbols")
+        try:
+            os.makedirs(sym, exist_ok=True)
+            vol_symbols_dir = sym
+        except OSError:
+            vol_symbols_dir = ""
         tool_env.update(env_overrides)
 
     processes = []
@@ -116,6 +145,8 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         for i, stage in enumerate(stages):
             original_argv = list(stage["argv"])
+            if vol_symbols_dir:
+                original_argv = _inject_vol_symbol_dir(original_argv, vol_symbols_dir)
             stage_runtime_user = str(stage.get("runtime_user", runtime_user) or "").strip()
             argv = _argv_for_runtime_user(
                 original_argv, stage_runtime_user, sudo_path,
@@ -327,6 +358,27 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if truncated:
         result["truncated"] = True
     return result
+
+
+_VOL_BINARIES = frozenset({"vol", "vol.py", "vol3", "volatility", "volatility3"})
+
+
+def _inject_vol_symbol_dir(argv: list[str], symbols_dir: str) -> list[str]:
+    """Prepend a writable ``--symbol-dirs`` to a Volatility 3 invocation.
+
+    vol3 writes generated ISF symbol files into one of the read-only
+    ``volatility3.symbols`` package paths (its install dir). Under the restricted
+    runtime user none of those are writable, so symbol generation fails even
+    though the image is valid (there is no symbol-dir env var — only this CLI
+    flag prepends a path that vol also writes to first). A writable jail dir lets
+    vol generate symbols for any image WITHOUT root. Non-vol commands, and vol
+    invocations that already carry a symbol-dir flag, are returned unchanged.
+    """
+    if not argv or os.path.basename(argv[0]) not in _VOL_BINARIES:
+        return argv
+    if any(a in ("-s", "--symbol-dirs") for a in argv[1:]):
+        return argv
+    return [argv[0], "--symbol-dirs", symbols_dir, *argv[1:]]
 
 
 def _argv_for_runtime_user(

@@ -13,6 +13,49 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - Executor writable HOME/XDG jail + unprivileged vol symbols
+
+Status: DONE
+
+Follow-up to the memory-depth finding: `run_command`/`run_command_job` forensic
+tools run as the restricted `agent_runtime` user, whose real HOME and the tools'
+read-only install dirs are not writable, so any tool that persists under
+`~/.cache`, `~/.config`, `~/.local`, or a tool symbol store fails before analysis
+(AUT2-B4 only patched `XDG_CACHE_HOME`). Volatility specifically writes generated
+ISF symbols into its read-only install symbol store (not HOME/XDG), and there is
+no symbol-dir env var - only the `--symbol-dirs` CLI flag prepends a path vol
+also writes to first.
+
+Landed (`packages/sift-core/src/sift_core/execute/worker.py`, +3 tests in
+`test_execute_executor.py`, suite 40 green):
+
+- General fix: when the case cache jail is set, the worker also provisions a
+  writable `HOME` + `XDG_CONFIG_HOME`/`XDG_DATA_HOME`/`XDG_STATE_HOME` inside
+  `<case>/tmp` and applies them through the existing sudo `/usr/bin/env` path. No
+  root; everything stays in the case write-jail. Fixes the broad "tool can't
+  write under ~" class, not just vol.
+- vol-specific: inject `--symbol-dirs <case>/tmp/vol-symbols` into Volatility
+  invocations so vol generates symbols into the jail as the unprivileged user.
+
+Live proof (rigorous): moved the operator's root-cached ISF aside to force
+regeneration, then ran `vol -f evidence/Rocba-Memory2.raw windows.info` through
+Gateway MCP (`run_command_job` `5785eb5b-...`). Result: `exit_code 0`,
+`mechanism: direct_unprivileged`, full `windows.info` (Win10 19041, 4 CPUs,
+`C:\WINDOWS`, SystemTime 2020-11-16); vol downloaded the PDB and wrote the ISF to
+`<case>/tmp/vol-symbols/windows/...` owned by `agent_runtime` (585 KB). Install
+symbol restored after the test. Closes the memory-depth caveat - see
+known-limitations "Memory analysis symbols (RESOLVED)".
+
+Scope note (architecture, operator-confirmed): this is the `run_command` (agent
+tool) path only. The opensearch-mcp INGEST path is separate - it spawns
+`opensearch_mcp.ingest_cli scan` as the service user (writable home) and its real
+privilege need is MOUNTING disk images (`containers.py` uses
+`sudo xmount/ewfmount/mount/losetup/qemu-nbd/umount/fusermount`; `check_sudo`
+requires non-interactive sudo). Next track (operator-chosen): a scoped, audited
+sudoers NOPASSWD allowlist for those specific mount helpers (not blanket sudo).
+A bubblewrap/LXC per-exec sandbox for `run_command` was discussed as a later
+hardening track.
+
 ### 2026-06-10 - Evidence re-acquisition transition + ghost-violation unblock
 
 Status: DONE
