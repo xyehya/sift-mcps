@@ -1,66 +1,35 @@
 """
-RAG MCP Server - Semantic search over IR knowledge base.
+RAG MCP — pgvector importer/seed package.
 
-This package provides an MCP server for semantic search across
-incident response knowledge from 23 authoritative online sources
-plus user-provided documents.
+BATCH-PMI2: The three Chroma-backed agent-facing tools (kb_search_knowledge,
+kb_list_knowledge_sources, kb_get_knowledge_stats) have been removed.
 
-Architecture:
-    - 23 online sources (Sigma, MITRE ATT&CK, Atomic Red Team, etc.)
-    - User documents via knowledge/ folder (auto-watched)
-    - One-time document ingestion with friendly names
-    - ChromaDB vector store with BGE embeddings
-    - Filesystem safety guardrails (sentinel-based deletion)
-    - Network fetch hardening (HTTPS, size limits, retry)
+The agent-facing RAG surface is the gateway core tool ``rag_search_case``
+backed by Supabase pgvector (``app.rag_chunks``).
 
-Modules:
-    server: MCP server exposing kb_search_knowledge, kb_list_knowledge_sources, kb_get_knowledge_stats tools
-    index: ChromaDB and embedding model wrapper
-    sources: Online source management (23 authoritative sources)
-    ingest: User document ingestion (watched and one-time)
-    build: Full index builder
-    refresh: Incremental index updates
-    status: Index status reporting
-    config: Centralized configuration management
-    fs_safety: Filesystem safety guardrails
-    constants: Project-wide constants
-    utils: Shared utility functions
+Modules available for the knowledge load pipeline:
+    pgvector_store: Supabase pgvector adapter (PgVectorRagStore)
+    pgvector_chroma_import: Chroma->pgvector batch importer
+    pgvector_seed: Seed knowledge documents from the knowledge/ directory
+
+Legacy Chroma-backed modules (index, build, refresh, status, sources, ingest,
+config) remain on disk as internal helpers for the Chroma->pgvector import
+step only and are NOT part of the public API.
 
 Usage:
-    # Run MCP server
-    python -m rag_mcp.server
+    # Import Chroma collection into pgvector
+    python -m rag_mcp.pgvector_chroma_import
 
-    # Build index (first time or full rebuild)
-    python -m rag_mcp.build
+    # Seed knowledge documents
+    python -m rag_mcp.pgvector_seed
 
-    # Incremental update
-    python -m rag_mcp.refresh
-
-    # Check status
-    python -m rag_mcp.status
+    # Use pgvector store directly
+    from rag_mcp.pgvector_store import PgVectorRagStore
 """
 
 __version__ = "0.6.1"
 
-# NOTE: ``pgvector_store`` (the BATCH-G1 Supabase pgvector RAG adapter) is a
-# dependency-light module and is intentionally NOT eagerly imported here so it
-# can be used without loading the ChromaDB knowledge index. Import it directly:
+# NOTE: ``pgvector_store`` is dependency-light and is intentionally NOT eagerly
+# imported so it can be used without loading ChromaDB. Import it directly:
 #     from rag_mcp.pgvector_store import PgVectorRagStore
-__all__ = ["RAGIndex", "RAGServer", "get_config", "Config", "__version__"]
-
-
-def __getattr__(name: str):
-    """Lazy-load legacy Chroma-backed symbols only when callers request them."""
-    if name in {"Config", "get_config"}:
-        from .config import Config, get_config
-
-        return {"Config": Config, "get_config": get_config}[name]
-    if name == "RAGIndex":
-        from .index import RAGIndex
-
-        return RAGIndex
-    if name == "RAGServer":
-        from .server import RAGServer
-
-        return RAGServer
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+__all__ = ["__version__"]

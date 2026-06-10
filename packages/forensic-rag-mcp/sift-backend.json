@@ -1,52 +1,15 @@
 {
   "spec_version": "1.0",
   "name": "forensic-rag-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "tier": "addon",
   "transport": "stdio",
   "namespace": "kb",
-  "instructions": "Use this backend for independent forensic methodology and reference grounding. Search results support analysis but do not replace evidence from the active case.",
+  "instructions": "BATCH-PMI2: All kb_search_* agent-facing tools have been removed. RAG is served exclusively by the gateway core tool rag_search_case (Supabase pgvector). This manifest is retained so the package can still be registered for pgvector import/seed CLI operations.",
   "capabilities": {
-    "provides": ["reference"],
+    "provides": [],
     "requires": [],
     "enriches_responses": false
   },
-  "tools": [
-    {
-      "name": "kb_search_knowledge",
-      "description": "Semantic search across 23K+ incident response knowledge records (Sigma, MITRE ATT&CK, Atomic Red Team, KAPE, Velociraptor, LOLBAS, GTFOBins, and more).",
-      "when_to_use": "Use when you need independent procedure, artifact interpretation, tool caveats, or corroborating reference material.",
-      "avoid_when": "Avoid treating reference matches as proof of activity in the case without case evidence.",
-      "output_notes": "Returns source-backed knowledge snippets; cite them as reference context, not primary evidence.",
-      "read_only": true,
-      "readOnlyHint": true,
-      "evidence_class": "read_only",
-      "category": "search-analysis",
-      "recommended_phase": "CORRELATE"
-    },
-    {
-      "name": "kb_list_knowledge_sources",
-      "description": "List all available knowledge sources in the RAG index.",
-      "when_to_use": "Use during orientation to understand what reference collections are available.",
-      "output_notes": "Returns source inventory and should be followed by targeted knowledge search when needed.",
-      "read_only": true,
-      "readOnlyHint": true,
-      "evidence_class": "read_only",
-      "category": "search-analysis",
-      "recommended_phase": "SURVEY"
-    },
-    {
-      "name": "kb_get_knowledge_stats",
-      "description": "Get RAG index statistics: document count, sources, and model info.",
-      "when_to_use": "Use as the backend health/readiness check or to confirm the reference index is populated.",
-      "output_notes": "Health/status output only; it is not investigation evidence.",
-      "read_only": true,
-      "readOnlyHint": true,
-      "evidence_class": "read_only",
-      "category": "search-analysis",
-      "recommended_phase": "SURVEY",
-      "health": true
-    }
-  ],
-  "health": "kb_get_knowledge_stats"
+  "tools": []
 }

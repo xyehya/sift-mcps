@@ -13,6 +13,83 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-10 - BATCH-PMI1 + BATCH-PMI2 landed (OS 3.5 cutover ∥ RAG single-home); crashed-team recovery
+
+Status: DONE
+
+Recovery context (a prior agent-teams run crashed mid-flight ~12:47-12:52):
+
+- The crash left the main worktree's index clobbered with stale `agentir`-era blobs
+  (a `sift-*`->`agentir-*` "revert" of the two OpenSearch composes + a 1294-line
+  `install.sh` shrink that dropped the PMI0 hardening). Root cause: the PMI1 agent's
+  isolated worktree had branched off `origin/HEAD` = `origin/main` (`dd7214d`, May 30),
+  which predates the entire sift-branding migration — NOT off `revamp/spg-v1` (`9a031db`).
+  Restored the main worktree to clean `9a031db`; verified the good hardened `install.sh`
+  (2388 lines, 10x `setup-supabase`) is intact.
+- The PMI2 agent's worktree HAD branched off the correct base (`9a031db`) and produced a
+  clean, scope-correct diff — salvaged it as-is (patch in `.crash-recovery/`).
+- Re-running PMI1 via the worktree-isolation path reproduced the wrong-base bug, so PMI1
+  was redone inline in the main worktree (file-disjoint from PMI2). All four crash
+  worktrees/branches removed.
+
+Changed (BATCH-PMI1 - OpenSearch 2.18->3.5 cutover, security-disabled/loopback posture):
+
+- `docker-compose.yml` (root, the one `install.sh` uses): image `2.18.0` -> `3.5.0`,
+  heap `-Xms3g/-Xmx3g` -> `-Xms4g/-Xmx4g`. KEPT `DISABLE_SECURITY_PLUGIN=true`, loopback
+  `127.0.0.1:9200`, snapshot mount, `thread_pool.search.queue_size=5000`, sift branding.
+- `packages/opensearch-mcp/docker/docker-compose.yml`: reconciled to the SAME posture -
+  dropped `OPENSEARCH_INITIAL_ADMIN_PASSWORD`, added `DISABLE_SECURITY_PLUGIN=true`
+  (it had been the only "security-enabled 3.5" artifact, contradicting the root compose).
+- `install.sh`: added `configure_opensearch_detections()` (http, NO auth - server security
+  is disabled, :9200 is loopback) ported from the package setup script's Phase-4 block -
+  keeps Sigma detectors DISABLED (3.5 percolator field-alias regression
+  opensearch-project/security-analytics#755 -> 0 findings; detection is Hayabusa during
+  evtx ingest), deletes dead `sift-` detectors + orphaned monitors, seeds the
+  `sift-sigma-{windows,linux,web,network}` aliases. Wired into `main()` right after
+  `install_opensearch_templates` (so alias templates exist), gated on `OPENSEARCH_UP`,
+  best-effort (never fails the install). `client.py` unchanged: its http + dummy
+  admin/admin config already works against a security-disabled server.
+- `packages/opensearch-mcp/scripts/setup-opensearch.sh`: reconciled this standalone helper
+  from `https`+`admin:$OS_PASSWORD` to plain `http`/no-auth (it was writing an `https`
+  `opensearch.yaml` that would have broken the client against a disabled-security server);
+  all detector/geoip/alias LOGIC preserved.
+
+Changed (BATCH-PMI2 - RAG single-home, salvaged from the crashed run):
+
+- Removed the three Chroma-backed agent-facing tools (`kb_search_knowledge`,
+  `kb_list_knowledge_sources`, `kb_get_knowledge_stats`) from `forensic-rag-mcp`:
+  `sift-backend.json` (now `provides:[]`, `tools:[]`, v2.0.0, retained only for the
+  import/seed CLI), `src/rag_mcp/{__init__.py,server.py,tool_metadata.py}` (server kept as
+  a zero-tool harness; `pgvector_store` + Chroma->pgvector importers kept). Removed
+  `setup_rag` from `scripts/setup-addon.sh` and renumbered the add-on menu. Net: pgvector
+  (`rag_search_case`, gateway core - untouched) is the only agent-facing RAG; Chroma
+  survives only as an internal import source.
+
+Fork resolved (operator decision this session):
+
+- F-MVP-OS35-SEC: OpenSearch 3.5 security posture. RESOLVED -> keep
+  `DISABLE_SECURITY_PLUGIN=true` with `:9200` bound to loopback as the boundary (plain
+  http, no TLS/admin password). Smallest consistent diff for the bare-VM one-session
+  install; the whole `install.sh` curl/config path stays unchanged. Supersedes the
+  `CLAUDE.md` component-table note "keep security enabled" for the MVP -> B-MVP-OS35-SEC.
+- B-MVP-OS35-SEC (backlog): post-MVP, evaluate enabling the 3.5 security plugin
+  (TLS + admin password + https client). Deferred; out of scope for the one-session install.
+
+Validation (targeted only, per PMI operating model; full end-to-end stays BATCH-PMI4):
+
+- `opensearch-mcp`: `1025 passed, 73 skipped` (skips = live-cluster tests), incl.
+  `test_phase4_config` which asserts the package compose + setup-script structure.
+- `forensic-rag-mcp`: `27 passed` (all pgvector; no test referenced the removed tools).
+- `bash -n install.sh` + `bash -n setup-opensearch.sh`: clean. Both composes parse as YAML.
+  `install.sh` embedded detections Python compiles (93 lines).
+
+Next:
+
+- BATCH-PMI3 (FK enrichment fires - wire `FK_DATA_DIR`): touches `install.sh` env region +
+  the two systemd units; verify-only in `forensic_knowledge/loader.py` and
+  `sift_core/execute/response.py`. Then BATCH-PMI4 (VM proof: bare-SIFT -> live stack ->
+  Rocba run) - the only full end-to-end gate. Paste-ready prompts in `task-batches.md`.
+
 ### 2026-06-10 - BATCH-PMI0 landed; PMI track opened (bare-SIFT one-session install)
 
 Status: DONE

@@ -1,26 +1,14 @@
-"""Per-tool caveats and interpretation constraints for structured responses."""
+"""Per-tool caveats and interpretation constraints for structured responses.
 
-TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {
-    "kb_search_knowledge": {
-        "caveats": [
-            "Results are reference knowledge, not case-specific evidence",
-            "Relevance scores are semantic similarity, not confidence levels",
-        ],
-        "interpretation_constraint": "Detection rules require validation in target environment",
-    },
-    "kb_list_knowledge_sources": {
-        "caveats": [
-            "Source availability depends on index build configuration",
-        ],
-        "interpretation_constraint": "Source list reflects indexed content, not all available knowledge",
-    },
-    "kb_get_knowledge_stats": {
-        "caveats": [
-            "Statistics reflect the local index state",
-        ],
-        "interpretation_constraint": "Document counts may not reflect latest upstream updates",
-    },
-}
+BATCH-PMI2: The kb_search_knowledge / kb_list_knowledge_sources /
+kb_get_knowledge_stats tool metadata entries have been removed together with
+the tools themselves.  The Chroma-backed tool surface is gone; RAG is served
+exclusively by the gateway core tool ``rag_search_case``.
+
+DEFAULT_METADATA is kept for any future tool registrations.
+"""
+
+TOOL_METADATA: dict[str, dict[str, list[str] | str]] = {}
 
 DEFAULT_METADATA: dict[str, list[str] | str] = {
     "caveats": ["No specific caveats"],

@@ -57,8 +57,8 @@ Rules:
 - [x] BATCH-OS5 - Host identity, enrichment, and mutating-tool policy
 - [ ] BATCH-OS6 - Live VM OpenSearch proof
 - [x] BATCH-PMI0 - Installer hardening + Supabase CLI bring-up (one-session bare-SIFT)
-- [ ] BATCH-PMI1 - OpenSearch 3.5 cutover + Sigma-disable/Security-Analytics cleanup
-- [ ] BATCH-PMI2 - RAG single-home: remove standalone Chroma kb_search_* path
+- [x] BATCH-PMI1 - OpenSearch 3.5 cutover + Sigma-disable/Security-Analytics cleanup
+- [x] BATCH-PMI2 - RAG single-home: remove standalone Chroma kb_search_* path
 - [ ] BATCH-PMI3 - FK enrichment actually fires (wire FK_DATA_DIR)
 - [ ] BATCH-PMI4 - VM proof: bare-SIFT -> live stack -> Rocba case run
 
@@ -2229,6 +2229,13 @@ is BATCH-PMI4.
 
 ## BATCH-PMI1 - OpenSearch 3.5 cutover + Sigma-disable/Security-Analytics cleanup
 
+LANDED 2026-06-10 (security-disabled/loopback posture; see Session-Notes). Fork
+F-MVP-OS35-SEC resolved -> `DISABLE_SECURITY_PLUGIN=true` + loopback `:9200`; "enable
+security" deferred to backlog B-MVP-OS35-SEC. Root + package composes on `3.5.0`/4g heap;
+`install.sh` gained `configure_opensearch_detections()` (http/no-auth detector+monitor
+cleanup + Sigma aliases, Sigma detectors stay disabled); package `setup-opensearch.sh`
+reconciled to http/no-auth. Tests: opensearch-mcp `1025 passed, 73 skipped`.
+
 Prompt (paste as the agent task). Scope: `docker-compose.yml`, `install.sh` (start_opensearch + opensearch config
 funcs only), `packages/opensearch-mcp/**` (client/security/config + the Security
 Analytics setup), `packages/opensearch-mcp/docker/docker-compose.yml`. Reference the
@@ -2244,6 +2251,12 @@ VHIR script so install doesn't create dead detectors; confirm Hayabusa detection
 targeted tests only + `bash -n install.sh`. Do NOT touch RAG/forensic-rag or gateway core.
 
 ## BATCH-PMI2 - RAG single-home: remove standalone Chroma kb_search_* path
+
+LANDED 2026-06-10 (see Session-Notes). Removed the three Chroma `kb_search_*` agent tools
+from `forensic-rag-mcp` (manifest now `provides:[]`/`tools:[]` v2.0.0; server is a zero-tool
+harness; `pgvector_store` + importers kept); dropped `setup_rag` from `setup-addon.sh`.
+pgvector `rag_search_case` (gateway core, untouched) is the only agent-facing RAG. Tests:
+forensic-rag-mcp `27 passed`.
 
 Prompt (paste as the agent task). Scope: `packages/forensic-rag-mcp/**` (remove the Chroma kb_search backend serving +
 the `kb_search_knowledge`/`kb_list_knowledge_sources`/`kb_get_knowledge_stats` tools +

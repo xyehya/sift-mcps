@@ -11,9 +11,11 @@ set -Eeuo pipefail
 #       ./install.sh --core-only
 #
 # and is complete on its own. Add-on backends (OpenCTI, OpenSearch,
-# windows-triage, forensic-rag, or ANY backend a third party writes to the
-# SIFT MCP Backend Contract) are EXTERNAL, INDEPENDENT, and OPTIONAL. The four
+# windows-triage, or ANY backend a third party writes to the
+# SIFT MCP Backend Contract) are EXTERNAL, INDEPENDENT, and OPTIONAL. The three
 # shipped here are merely *reference implementations* of the contract. An
+# NOTE: forensic-rag-mcp removed as add-on (BATCH-PMI2); RAG served by the
+# gateway core tool rag_search_case (Supabase pgvector) instead.
 # operator may run zero, one, or several — or bring their own.
 #
 # There is exactly ONE integration door, identical for every backend:
@@ -189,20 +191,13 @@ echo_vars_and_emit() {
 # =============================================================================
 # Reference add-on backends (examples of the contract — not special-cased core)
 # =============================================================================
-
-setup_rag() {
-  reset_payload
-  PAYLOAD_NAME="forensic-rag-mcp"
-  PAYLOAD_MANIFEST="$REPO_DIR/packages/forensic-rag-mcp/sift-backend.json"
-  log "== forensic-rag-mcp (reference backend, provides: reference) =="
-  print_manifest_summary "$PAYLOAD_MANIFEST" || true
-  if ask_yes "Provision prerequisites (RAG knowledge index, ~1-3 GB)?"; then
-    { prepare_enrichment_assets && download_rag_index; } || warn "RAG provisioning incomplete — backend may start degraded."
-  fi
-  stdio_args "rag-mcp"
-  PAYLOAD_COMMAND="$UV_BIN"
-  echo_vars_and_emit
-}
+# NOTE BATCH-PMI2: forensic-rag-mcp (setup_rag) has been removed from this
+# menu.  RAG has a single agent-facing home: the gateway core tool
+# rag_search_case (Supabase pgvector).  The forensic-rag-mcp package remains
+# as a library/CLI for the Chroma->pgvector import step only; it no longer
+# has agent-facing tools and does not need to be registered as an add-on.
+# Use:  python -m rag_mcp.pgvector_chroma_import
+#       python -m rag_mcp.pgvector_seed
 
 setup_wintriage() {
   reset_payload
@@ -306,27 +301,25 @@ main_menu() {
   hr
   log "SPG add-on integration helper — SPG core is already complete on its own."
   log "Select OPTIONAL external add-on backends to prepare (any subset, or a custom one):"
-  printf '   1) forensic-rag-mcp      (provides: reference)\n'
-  printf '   2) windows-triage-mcp    (provides: reference, baseline)\n'
-  printf '   3) opensearch-mcp        (provides: search, ingest, enrichment; needs Docker)\n'
-  printf '   4) opencti-mcp           (provides: reference, threat-intel; needs Docker + RAM)\n'
-  printf '   5) custom / community backend (bring your own conformant manifest)\n'
-  printf '   a) all reference backends (1-4)\n'
+  printf '   1) windows-triage-mcp    (provides: reference, baseline)\n'
+  printf '   2) opensearch-mcp        (provides: search, ingest, enrichment; needs Docker)\n'
+  printf '   3) opencti-mcp           (provides: reference, threat-intel; needs Docker + RAM)\n'
+  printf '   4) custom / community backend (bring your own conformant manifest)\n'
+  printf '   a) all reference backends (1-3)\n'
   printf '   q) quit\n'
   hr
   local sel
-  sel="$(ask 'Selection (e.g. "1 3" or "a")' '')"
+  sel="$(ask 'Selection (e.g. "1 2" or "a")' '')"
   [[ -z "$sel" || "$sel" == "q" ]] && { log "Nothing selected — exiting."; exit 0; }
-  if [[ "$sel" == "a" ]]; then sel="1 2 3 4"; fi
+  if [[ "$sel" == "a" ]]; then sel="1 2 3"; fi
   sel="${sel//,/ }"
   local tok
   for tok in $sel; do
     case "$tok" in
-      1) setup_rag ;;
-      2) setup_wintriage ;;
-      3) setup_opensearch ;;
-      4) setup_opencti ;;
-      5) setup_custom ;;
+      1) setup_wintriage ;;
+      2) setup_opensearch ;;
+      3) setup_opencti ;;
+      4) setup_custom ;;
       *) warn "Unknown selection: $tok (ignored)" ;;
     esac
   done
