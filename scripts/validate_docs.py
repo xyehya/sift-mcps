@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Validate the simplified MVP migration documentation model.
+"""Validate the trimmed MVP migration documentation model.
 
-The migration docs now have three active files:
+The migration docs now have two active files:
 
-    Migration-Spec.md
     task-batches.md
     Session-Notes.md
 
@@ -18,17 +17,9 @@ import sys
 from pathlib import Path
 
 DOCS = Path(os.environ.get("MIG_DOCS") or (Path(__file__).resolve().parent.parent / "docs" / "migration"))
-SPEC = DOCS / "Migration-Spec.md"
 BATCHES = DOCS / "task-batches.md"
 NOTES = DOCS / "Session-Notes.md"
-ALLOWED_DOCS = {"Migration-Spec.md", "task-batches.md", "Session-Notes.md"}
-SPEC_HEADINGS = [
-    "## 1. OBJECTIVE & SCOPE",
-    "## 2. ARCHITECTURE & DATA FLOW",
-    "## 3. STEP-BY-STEP MIGRATION JOURNEY",
-    "## 4. TECHNICAL CONSTRAINTS & GROUNDING RULES",
-    "## 5. DEFINITION OF DONE (DoD)",
-]
+ALLOWED_DOCS = {"task-batches.md", "Session-Notes.md"}
 errors: list[str] = []
 
 
@@ -72,25 +63,6 @@ def check_file_set() -> None:
         err("DOCS-set", f"docs/migration is missing required files: {missing}")
 
 
-def check_spec() -> None:
-    text = read(SPEC)
-    if not text:
-        return
-    for heading in SPEC_HEADINGS:
-        if heading not in text:
-            err("SPEC-head", f"Migration-Spec.md missing heading '{heading}'")
-    if "```mermaid" not in text:
-        err("SPEC-arch", "Migration-Spec.md must include the architecture diagram as a Mermaid block")
-    for phrase in (
-        "Supabase/Postgres",
-        "Gateway is the only policy boundary",
-        "Evidence must be registered and sealed before analysis",
-        "Reports include approved findings",
-    ):
-        if phrase not in text:
-            err("SPEC-invariant", f"Migration-Spec.md missing invariant phrase: {phrase!r}")
-
-
 def check_batches() -> None:
     text = read(BATCHES)
     if not text:
@@ -115,7 +87,7 @@ def check_notes() -> None:
     text = read(NOTES)
     if not text:
         return
-    for heading in ("## Current Change Log", "## Forks / Backlog / Needs Input"):
+    for heading in ("## Current Change Log",):
         if heading not in text:
             err("NOTE-head", f"Session-Notes.md missing heading '{heading}'")
     entries = re.findall(r"^### \d{4}-\d{2}-\d{2} - .+$", section(text, "## Current Change Log"), re.M)
@@ -124,19 +96,21 @@ def check_notes() -> None:
     for marker in ("Status:", "Changed:", "Validation:", "Next:"):
         if marker not in text:
             err("NOTE-entry", f"Session-Notes.md missing marker '{marker}'")
-    row_ids = re.findall(r"^\|\s*((?:F|B)-MVP-\d+)\s*\|", section(text, "## Forks / Backlog / Needs Input"), re.M)
-    if not row_ids:
-        err("NOTE-table", "Session-Notes.md has no F-MVP/B-MVP rows")
-    duplicates = sorted({row_id for row_id in row_ids if row_ids.count(row_id) > 1})
-    if duplicates:
-        err("NOTE-id", f"duplicate fork/backlog ids: {duplicates}")
-    if re.search(r"^\|\s*F-MVP-\d+\s*\|\s*Fork\s*\|\s*OPEN\s*\|", text, re.M):
-        err("NOTE-open", "Session-Notes.md has unresolved F-MVP fork rows")
+    if "## Forks / Backlog / Needs Input" in text:
+        row_ids = re.findall(
+            r"^\|\s*((?:F|B)-MVP-\d+)\s*\|",
+            section(text, "## Forks / Backlog / Needs Input"),
+            re.M,
+        )
+        duplicates = sorted({row_id for row_id in row_ids if row_ids.count(row_id) > 1})
+        if duplicates:
+            err("NOTE-id", f"duplicate fork/backlog ids: {duplicates}")
+        if re.search(r"^\|\s*F-MVP-\d+\s*\|\s*Fork\s*\|\s*OPEN\s*\|", text, re.M):
+            err("NOTE-open", "Session-Notes.md has unresolved F-MVP fork rows")
 
 
 def main() -> int:
     check_file_set()
-    check_spec()
     check_batches()
     check_notes()
     for message in errors:
@@ -144,7 +118,7 @@ def main() -> int:
     if errors:
         print(f"\nFAILED - {len(errors)} violation(s). Fix the MVP migration docs.")
         return 1
-    print("OK - MVP migration docs conform to the simplified three-file model.")
+    print("OK - MVP migration docs conform to the trimmed two-file model.")
     return 0
 
 

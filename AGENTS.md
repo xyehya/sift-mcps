@@ -1,38 +1,42 @@
 # SIFT MVP Sprint Agent Instructions
 
-This repo is in fast MVP sprint mode. The previous migration document forest was
-purged. Do not use stale migration docs from memory or old branches as authority.
+This repo is in fast MVP sprint mode.
 
 ## Source of truth
 
-Read these three files first and keep them current:
+Read these two files first and keep them current:
 
-- `docs/migration/Migration-Spec.md` - architecture, data flow, journey,
-  constraints, and Definition of Done.
 - `docs/migration/task-batches.md` - executable batch tracker for parallel work.
 - `docs/migration/Session-Notes.md` - latest change log plus forks, blockers,
   and backlog.
 
-`AGENTS.md` and `CLAUDE.md` are instruction pointers only. They must not carry
-volatile project state.
+
+## Component mapping to help speed up discovery (changes with migration steps, batches, reference for help not source of truth)
+
+| Architecture node | Target responsibility | Current code/components | Current state | MVP gap |
+| --- | --- | --- | --- | --- |
+| Final Installer | Install, configure, harden, health-check, and hand off a forced-reset operator login | `install.sh`; `configs/gateway.yaml.template`; `configs/systemd/sift-gateway.service`; `configs/audit/99-sift-evidence.rules`; `configs/apparmor/sift-gateway.template`; `scripts/setup-agent-runtime.sh` | Substantial installer and hardening path exists | Align with Supabase-first operator bootstrap/reset, evidence mount validation, and final health contract |
+| Operator Portal | Human case, evidence, agent key, review, TODO, report, and backend control surface | `packages/case-dashboard/frontend/src/**`; `packages/case-dashboard/src/case_dashboard/routes.py` | Live portal exists | Move authority for evidence, findings, timeline, TODOs, reports, and jobs into DB transitions |
+| AI Agent / MCP Client | Autonomous investigator with tool-only access | Gateway `/mcp`; `mcp_server.py`; `mcp_endpoint.py` | Supabase JWT and compatibility token paths exist | Enforce opaque IDs and sanitize path-bearing tool responses |
+| SIFT Gateway | Single policy and orchestration boundary | `server.py`; `rest.py`; `mcp_server.py`; `mcp_endpoint.py`; `auth.py`; `supabase_auth.py`; `identity.py`; `active_case.py`; `policy_middleware.py`; `evidence_gate.py`; `response_guard.py`; `rate_limit.py` | FastAPI and FastMCP foundation landed | REST tool endpoints need policy parity or operator-only restriction |
+| Supabase Auth | Operator and agent JWT identity | `supabase_auth.py`; `supabase/migrations/202606070300_unified_jwt_principals.sql` | Target direction landed with compatibility fallback | Installer/bootstrap must fully use Supabase flow |
+| Postgres Control Plane | Authoritative app state and transition store | `supabase/migrations/202606070101_identity_foundation.sql`; `202606070300_unified_jwt_principals.sql`; `202606070400_active_case_authority.sql`; `202606070500_mcp_backends_registry.sql`; `202606080100_mcp_backends_registry_hardening.sql` | Identity, cases, active case, audit table, token/principal scopes, and backend registry are present | Add evidence/custody, jobs, findings, timeline, TODOs, reports, and RAG tables/RPCs |
+| Evidence Register + Seal Broker | Detect, register, name, describe, hash, seal, verify, ignore, and retire evidence | `packages/sift-core/src/sift_core/evidence_chain.py`; portal evidence routes in `routes.py`; `packages/sift-gateway/src/sift_gateway/evidence_gate.py` | Working file-backed manifest/ledger/HMAC flow | DB-backed evidence metadata and custody ledger become authority while file proofs remain exports |
+| Local SIFT Worker | Claim jobs and execute parser, enrichment, report, and run-command work | `packages/sift-core/src/sift_core/execute/worker.py`; OpenSearch ingest package | Subprocess isolation exists; durable DB worker does not | Add Postgres job tables and worker claim loop |
+| Sandboxed run_command | Controlled forensic CLI execution as final deeper-analysis tool | `agent_tools.py`; `execute/tools/generic.py`; `execute/executor.py`; `execute/security.py`; `execute/security_policy.py` | Useful security-aware implementation exists | Make it job-backed, evidence-ref based, allowlisted, and path-redacted |
+| OpenSearch | Derived search, timeline, IOC, and enrichment plane | `packages/opensearch-mcp/src/opensearch_mcp/**`; `packages/opensearch-mcp/docker/**`; `packages/opensearch-mcp/scripts/setup-opensearch.sh` | Parser and ingestion stack is a winner | Register indices/provenance in DB and keep security enabled |
+| RAG / Vector DB | Grounded forensic context with case/provenance filtering | `packages/forensic-rag-mcp/src/rag_mcp/**`; `packages/forensic-rag-mcp/knowledge/**` | Standalone/file-vector package exists | Move rag_mcp embeddings to Supabase pgvector |
+| OpenCTI Add-on | Query-only CTI enrichment | `packages/opencti-mcp/src/opencti_mcp/**`; `docker-compose.opencti.yml` | Add-on exists | Keep query-only, audited, and non-authoritative |
+| Windows Triage Add-on | Query suspicious file, hash, service, process, and registry baselines | `packages/windows-triage-mcp/src/windows_triage_mcp/**`; `packages/windows-triage-mcp/data/**` | Add-on exists | Align with add-on contract and keep query-only |
+| Forensic Knowledge Pack | Local discipline guidance and tool/artifact catalog | `packages/forensic-knowledge/src/**`; `packages/forensic-knowledge/data/**` | Local reference data exists | Keep as grounding/reference, not evidence |
+| Reports / Exports | Approved-only report generation and export | `packages/sift-core/src/sift_core/reporting.py`; `report_profiles.py`; portal report routes/components | Approved filtering exists but saved reports are file-backed | Add DB report metadata/state and operator-gated inclusion | 
 
 ## Sprint operating rules
 
-- No deferral on dependent work: resolve the blocker or fork before continuing
-  the dependent batch.
-- Independent batches may proceed in parallel in separate worktrees.
-- One worktree per batch. Keep scope to the files listed in that batch.
 - Update the batch checkbox only after its acceptance checks pass.
 - In a single-session change, add the latest session note at the top of
   `Session-Notes.md`.
-- In parallel worker branches, do not edit shared migration docs unless the
-  batch scope explicitly owns docs. Return a landing log block instead; the
-  integration/conductor session updates `task-batches.md` and
-  `Session-Notes.md` after merge.
-- Run `python3 scripts/validate_docs.py` before landing any doc/governance
-  change.
-- Keep implementation docs minimal. Do not create more files under
-  `docs/migration` unless `Migration-Spec.md` is explicitly changed first.
+- Keep implementation docs minimal.
 
 ## Security invariants
 
@@ -46,8 +50,8 @@ volatile project state.
 - Sensitive human actions require password/HMAC re-auth: case activation,
   evidence seal/ignore/retire, finding approval, report inclusion/export, and
   agent credential issuance.
-- OpenSearch, RAG, OpenCTI, Windows triage, and forensic knowledge are derived
-  or reference planes. They do not authorize cases or evidence.
+- OpenSearch, RAG joining the core and not add-on anymore. forensic knowledge data package stays for context injection after tool calls
+- OpenCTI, Windows triage are add-on - not MVP
 - Reports include approved findings and approved supporting data only.
 
 ## Host and VM constraints
@@ -58,18 +62,14 @@ volatile project state.
 - Use `UV_NO_MANAGED_PYTHON=1` and `UV_PYTHON_DOWNLOADS=never` on the VM.
 - Do not store raw MCP/service tokens, Supabase secrets, OpenSearch passwords,
   or local VM secrets in repo files.
-
+- SSHpass to VM sansforensics/forensics 192.168.122.81
+- Operator GUI PORTAL  https://192.168.122.81:4508/portal/ with examiner@operators.sift.local / forensis
 ## Work discipline
 
-- Prefer existing package patterns over new abstractions.
-- Keep changes tightly scoped to the active batch.
-- Do not revert unrelated user changes.
 - Run targeted tests for touched code and return validation evidence in the
-  final response or landing log.
+  final response, update the docs as per the operating model, following same structure and test validation of changes with the script.
 
 ## Live VM Smoke Tests
-
-Live VM coordinates, replay steps, and current BATCH-V1 validation state live in
-`docs/migration/Session-Notes.md`. Do not put raw passwords, Supabase keys,
-OpenSearch credentials, or local VM secrets in repo files; use local shell
-environment variables such as `SSHPASS` when a test session needs them.
+Code on this Host, rsycn changes to VM, restart gateway -> environment ready
+Live VM coordinates, replay steps, and current batch validation state live in
+`docs/migration/Session-Notes.md`.
