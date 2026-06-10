@@ -5,7 +5,10 @@ services:
     environment:
       - discovery.type=single-node
       - OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g
-      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${SIFT_OS_PASSWORD}
+      # PMI1: security plugin disabled; :9200 is bound to loopback only (the
+      # security boundary). Plain http, no TLS/admin password. Matches the root
+      # docker-compose.yml posture and the install.sh http(no-auth) client path.
+      - DISABLE_SECURITY_PLUGIN=true
     ports:
       - "127.0.0.1:9200:9200"
     volumes:

@@ -1552,6 +1552,117 @@ configure_geoip_pipeline() {
   done
 }
 
+# PMI1: Security-Analytics hygiene for OpenSearch 3.5.
+# The 3.5 Security-Analytics percolator has a field-alias regression
+# (opensearch-project/security-analytics#755) that makes Sigma detectors emit
+# 0 findings, so detection is handled by Hayabusa during evtx ingest instead.
+# This function keeps Sigma detectors DISABLED and removes any dead detectors /
+# orphaned monitors so a fresh install does not accumulate non-functional state,
+# then seeds the Sigma alias names so templates can auto-attach them.
+# Talks to OpenSearch over plain http on loopback with NO auth (security plugin
+# is disabled; :9200 is bound to 127.0.0.1 — the loopback isolation boundary).
+# Best-effort: never fails the install. Run AFTER install_opensearch_templates
+# so the alias-bearing templates exist.
+configure_opensearch_detections() {
+  curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null 2>&1 || return 0
+  log "Configuring OpenSearch Security Analytics (Sigma detectors disabled — 3.5 regression; detection via Hayabusa)."
+  "$SYSTEM_PYTHON" - <<'PY' || warn "Security Analytics hygiene skipped (plugin may be unavailable)."
+import json, sys, time, urllib.request, urllib.error
+from collections import Counter
+
+URL = "http://127.0.0.1:9200"
+HEADERS = {"Content-Type": "application/json"}
+
+
+def api(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(URL + path, data=data, headers=HEADERS, method=method)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+# Step 1: see whether pre-packaged Sigma rules have loaded (for logging only).
+hits = []
+for attempt in range(6):
+    try:
+        resp = api("POST", "/_plugins/_security_analytics/rules/_search?pre_packaged=true",
+                   {"query": {"match_all": {}}, "size": 5000})
+        hits = resp.get("hits", {}).get("hits", [])
+        if hits:
+            break
+        if attempt < 5:
+            time.sleep(10)
+    except Exception as exc:  # noqa: BLE001
+        if attempt < 5:
+            time.sleep(10)
+        else:
+            print(f"  Security Analytics rules API not ready: {exc}")
+            sys.exit(0)
+
+cat_counts = Counter(h.get("_source", {}).get("category", "") for h in hits)
+print(f"  Sigma detectors: disabled (OpenSearch 3.5 field alias regression)")
+print(f"  Available rules: {len(hits)} ({cat_counts.get('windows', 0)} Windows)")
+print(f"  Detection via Hayabusa during evtx ingest (if installed)")
+
+# Step 2: seed indices so templates auto-attach the Sigma aliases (3.x needs an
+# alias to be backed by at least one index).
+_SEEDS = {
+    "case-seed-evtx-init": "sift-sigma-windows",
+    "case-seed-ssh-init": "sift-sigma-linux",
+    "case-seed-accesslog-init": "sift-sigma-web",
+    "case-seed-json-init": "sift-sigma-network",
+}
+for seed_idx in _SEEDS:
+    try:
+        api("PUT", f"/{seed_idx}", {"settings": {"number_of_replicas": 0}})
+    except Exception:  # noqa: BLE001
+        pass  # already exists or template not registered yet
+
+# Step 3: delete any existing sift- detectors (they produce 0 findings on 3.5).
+try:
+    existing = api("POST", "/_plugins/_security_analytics/detectors/_search",
+                   {"query": {"match_all": {}}, "size": 100})
+    for hit in existing.get("hits", {}).get("hits", []):
+        name = hit.get("_source", {}).get("name", "")
+        if name.startswith("sift-"):
+            try:
+                api("DELETE", f"/_plugins/_security_analytics/detectors/{hit['_id']}")
+                print(f"  Removed non-functional detector: {name}")
+            except Exception:  # noqa: BLE001
+                pass
+except Exception:  # noqa: BLE001
+    pass
+
+# Step 4: clean up orphaned monitors from pre-3.5 detector attempts.
+try:
+    monitors = api("GET", "/_plugins/_alerting/monitors/_search",
+                   {"query": {"match_all": {}}, "size": 50})
+    for hit in monitors.get("hits", {}).get("hits", []):
+        name = hit.get("_source", {}).get("name", "")
+        if name.startswith("sift-") or name.startswith("sigma_"):
+            try:
+                api("DELETE", f"/_plugins/_alerting/monitors/{hit['_id']}")
+                print(f"  Removed orphaned monitor: {name}")
+            except Exception:  # noqa: BLE001
+                pass
+except Exception:  # noqa: BLE001
+    pass  # alerting plugin may not be installed
+
+# Step 5: attach Sigma aliases to any existing matching indices (idempotent).
+_ALIAS_PATTERNS = {
+    "sift-sigma-windows": "case-*-evtx-*",
+    "sift-sigma-linux": "case-*-ssh-*",
+    "sift-sigma-web": "case-*-accesslog-*",
+    "sift-sigma-network": "case-*-json-*",
+}
+for alias, pattern in _ALIAS_PATTERNS.items():
+    try:
+        api("POST", "/_aliases", {"actions": [{"add": {"index": pattern, "alias": alias}}]})
+    except Exception:  # noqa: BLE001
+        pass  # no matching indices yet — aliases auto-attach via templates
+PY
+}
+
 install_opensearch_templates() {
   curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null 2>&1 || return 0
   log "Installing OpenSearch templates and pipelines."
@@ -2312,6 +2423,7 @@ main() {
       configure_opensearch_cluster
       configure_geoip_pipeline
       install_opensearch_templates
+      configure_opensearch_detections   # PMI1: keep Sigma disabled; clean dead detectors/monitors; seed aliases
     else
       warn "OpenSearch not available — skipping cluster config, GeoIP pipeline, and template install."
       warn "  opensearch-mcp backend will NOT be seeded; set SIFT_OPENSEARCH_ENABLED=false to suppress."

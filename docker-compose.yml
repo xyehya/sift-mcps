@@ -1,11 +1,11 @@
 services:
   opensearch:
-    image: opensearchproject/opensearch:2.18.0
+    image: opensearchproject/opensearch:3.5.0
     container_name: sift-opensearch
     environment:
       - discovery.type=single-node
       - DISABLE_SECURITY_PLUGIN=true
-      - OPENSEARCH_JAVA_OPTS=-Xms3g -Xmx3g
+      - OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g
       - path.repo=/usr/share/opensearch/snapshots
       # Required by OpenCTI when sharing this instance (no-op otherwise)
       - thread_pool.search.queue_size=5000
