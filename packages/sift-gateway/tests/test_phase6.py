@@ -550,13 +550,20 @@ def test_stdio_proxy_env_does_not_inherit_unreferenced_process_secrets(monkeypat
 
 
 def test_gateway_core_has_no_hardcoded_addon_names():
+    # This invariant disciplines EXTERNAL/third-party MCP add-on backends so they
+    # plug into the modular schema-registered surface without the gateway core
+    # ever knowing them by name (naming convention, no-execute, conflict-free).
+    # OpenSearch is intentionally EXEMPT: it is a first-party/core capability, so
+    # the gateway is allowed to reference it directly (e.g. the job-backed ingest
+    # policy shadow in job_tools.py). The forbidden list therefore covers only the
+    # external extensions (OpenCTI, windows-triage, forensic-rag/KB) that the
+    # add-on schema contract is designed for.
     src_root = Path(__file__).resolve().parents[1] / "src" / "sift_gateway"
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in src_root.rglob("*.py")
     )
     forbidden = [
-        "opensearch",
         "wintriage",
         "cti_",
         "kb_",
