@@ -14,7 +14,7 @@
   },
   "capabilities": {
     "provides": ["search", "ingest", "enrichment"],
-    "requires": ["https://localhost:9200"],
+    "requires": ["http://localhost:9200"],
     "enriches_responses": false
   },
   "tools": [

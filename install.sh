@@ -598,6 +598,91 @@ except BaseException:
 PY
 }
 
+# OS1-BOOTSTRAP: seed enabled add-on backends into app.mcp_backends.
+# Runs after gateway is up and DB is reachable. Idempotent via upsert (ON CONFLICT).
+# Only registers backends whose install-time enablement flag is "true" AND whose
+# manifest file exists. Raw OpenSearch credentials, DSNs, and MCP tokens are NEVER
+# stored — only env-ref metadata (env_refs pointing to gateway process env vars).
+# If SIFT_CONTROL_PLANE_DSN is absent this is a no-op; core-only mode skips it.
+seed_addon_backends() {
+  local cp_dsn
+  cp_dsn="$(_resolved_control_plane_dsn)"
+  if [[ -z "$cp_dsn" ]]; then
+    log "seed_addon_backends: no control-plane DSN — skipping DB backend seeding."
+    return 0
+  fi
+
+  if [[ "${SIFT_OPENSEARCH_ENABLED:-}" != "true" ]]; then
+    log "seed_addon_backends: SIFT_OPENSEARCH_ENABLED != true — skipping opensearch-mcp seeding."
+    return 0
+  fi
+
+  local manifest_path="$REPO_DIR/packages/opensearch-mcp/sift-backend.json"
+  if [[ ! -f "$manifest_path" ]]; then
+    warn "seed_addon_backends: opensearch-mcp manifest not found at $manifest_path — skipping."
+    return 0
+  fi
+
+  log "Seeding opensearch-mcp into app.mcp_backends (idempotent upsert)."
+  export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
+  export SEED_MANIFEST_PATH="$manifest_path"
+  export SEED_UV_BIN="$UV_BIN"
+  export SEED_PYTHON_BIN="$SYSTEM_PYTHON"
+  export SEED_REPO_DIR="$REPO_DIR"
+
+  "$VENV_DIR/bin/python" - <<'PY' || warn "seed_addon_backends: opensearch-mcp seeding failed — operator can register via Portal -> Backends."
+import json, os, sys
+from pathlib import Path
+
+dsn = os.environ["SIFT_CONTROL_PLANE_DSN"]
+manifest_path = Path(os.environ["SEED_MANIFEST_PATH"])
+uv_bin = os.environ["SEED_UV_BIN"]
+python_bin = os.environ["SEED_PYTHON_BIN"]
+repo_dir = os.environ["SEED_REPO_DIR"]
+
+try:
+    from sift_gateway.mcp_backends_registry import McpBackendRegistry, normalize_connection_config
+except ImportError as exc:
+    print(f"seed_addon_backends: sift_gateway not importable: {exc} — skipping", file=sys.stderr)
+    sys.exit(0)
+
+manifest = json.loads(manifest_path.read_text())
+
+# Connection config: stdio, no raw secrets — OPENSEARCH_CONFIG/OPENSEARCH_HOST
+# are env refs that the gateway process resolves at load time.
+connection = {
+    "type": "stdio",
+    "command": uv_bin,
+    "args": [
+        "run", "--project", repo_dir,
+        "--python", python_bin,
+        "--no-managed-python", "--no-python-downloads",
+        "opensearch-mcp",
+    ],
+    "manifest_path": str(manifest_path),
+    # env_refs: gateway child-process env var <- gateway process env var.
+    # No raw credentials stored; gateway resolves these from its own environment.
+    "env_refs": {
+        "OPENSEARCH_CONFIG": "OPENSEARCH_CONFIG",
+        "OPENSEARCH_HOST": "OPENSEARCH_HOST",
+    },
+}
+
+try:
+    registry = McpBackendRegistry(dsn)
+    registry.register(
+        name="opensearch-mcp",
+        config=connection,
+        manifest=manifest,
+        actor={"principal_type": "service", "principal_id": "install.sh"},
+    )
+    print("seed_addon_backends: opensearch-mcp registered/updated in app.mcp_backends.")
+except Exception as exc:
+    print(f"seed_addon_backends: registration error: {exc}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 # A1-BOOTSTRAP: create the operator in Supabase Auth (Admin API) with status=invited.
 # This runs AFTER gateway config is written (so SUPABASE_URL/SERVICE_ROLE_KEY are
 # available in the environment) and after the gateway is started (so the DB is live).
@@ -1901,6 +1986,11 @@ main() {
   SUPABASE_OPERATOR_EMAIL=""
   SUPABASE_OPERATOR_TEMP_PASSWORD=""
   bootstrap_supabase_operator
+
+  # OS1-BOOTSTRAP: seed enabled add-on backends into app.mcp_backends after
+  # the gateway + DB are live (gateway was polled successfully above).
+  # Core-only skips via SIFT_OPENSEARCH_ENABLED=false set earlier in main().
+  seed_addon_backends
 
   write_handoff
   print_summary
