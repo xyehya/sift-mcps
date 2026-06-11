@@ -70,6 +70,12 @@ check_deps() {
   fi
 
   if ! docker ps >/dev/null 2>&1; then
+    log "Docker daemon is not reachable — attempting: sudo systemctl start docker"
+    sudo systemctl start docker 2>/dev/null || true
+    sleep 2
+  fi
+
+  if ! docker ps >/dev/null 2>&1; then
     cat >&2 <<'DOCKERERR'
 [setup-supabase] FATAL: Docker daemon is not reachable.
   Possible causes:

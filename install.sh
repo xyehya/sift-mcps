@@ -268,6 +268,63 @@ install_host_prereqs() {
   fi
 }
 
+ensure_docker_ready_for_supabase() {
+  if [[ "${SIFT_CORE_ONLY:-0}" == "1" || "${SIFT_EXTERNAL_SUPABASE:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    die "Docker is required for local Supabase provisioning, but docker was not found.
+  Install Docker Engine and the compose plugin, then re-run:
+    sudo apt-get update
+    sudo apt-get install -y docker.io docker-compose-plugin
+    sudo usermod -aG docker $(user_name)
+  Then log out and back in, or run: newgrp docker"
+  fi
+
+  if ! docker compose version >/dev/null 2>&1; then
+    die "Docker Compose v2 is required for local Supabase provisioning.
+  Install it, then re-run:
+    sudo apt-get update
+    sudo apt-get install -y docker-compose-plugin"
+  fi
+
+  if docker ps >/dev/null 2>&1; then
+    log "Docker daemon reachable."
+    return 0
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    log "Docker daemon not reachable — attempting: sudo systemctl start docker"
+    sudo_if_needed systemctl start docker 2>/dev/null || true
+    sleep 2
+  fi
+
+  if docker ps >/dev/null 2>&1; then
+    log "Docker daemon reachable after start."
+    return 0
+  fi
+
+  local operator
+  operator="$(user_name)"
+  if getent group docker >/dev/null 2>&1 && ! id -nG "$operator" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+    die "Docker is installed but '$operator' cannot access the daemon.
+  Add the operator to the docker group and refresh the login session:
+    sudo usermod -aG docker $operator
+    newgrp docker
+  Then re-run:
+    cd $(printf '%q' "$REPO_DIR")
+    ./install.sh"
+  fi
+
+  die "Docker daemon is not reachable.
+  Try:
+    sudo systemctl status docker --no-pager
+    sudo systemctl start docker
+    docker ps
+  Then re-run ./install.sh."
+}
+
 # =============================================================================
 # Phase 2 — venv integrity + sync
 # =============================================================================
@@ -2617,6 +2674,13 @@ main() {
   require_cmd awk
   require_cmd curl
 
+  # --- install prerequisites needed by early auto-detection/preflight ---
+  install_host_prereqs
+  # Local Supabase is Docker-backed; make Docker reachable before both OpenCTI
+  # auto-detection and scripts/setup-supabase.sh. A fresh clone install can then
+  # recover when the daemon is merely stopped.
+  ensure_docker_ready_for_supabase
+
   # --- backend enablement (#1) ---
   # Rule: explicit flags and explicit env vars take priority over auto-detect.
   if [[ "$SIFT_CORE_ONLY" == "1" ]]; then
@@ -2663,7 +2727,6 @@ main() {
   preflight_supabase
 
   # --- install ---
-  install_host_prereqs
   install_uv_if_needed
 
   # Ensure venv integrity before sync

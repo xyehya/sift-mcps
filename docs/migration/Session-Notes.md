@@ -13,6 +13,21 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-12 - Installer Docker readiness before Supabase provisioning
+
+Status: DONE (host patch; operator should pull/re-clone and rerun installer)
+
+Fresh VM clone-entry install reached self-staging successfully, then failed when `scripts/setup-supabase.sh`
+found Docker installed but the daemon unreachable before local Supabase provisioning. Patched the
+installer ordering so `install_host_prereqs` + `ensure_docker_ready_for_supabase` run before OpenCTI
+auto-detection and Supabase preflight: local Supabase installs now verify Docker + Compose, attempt
+`sudo systemctl start docker` when `docker ps` fails, and stop with an actionable docker-group/login
+refresh message if the operator still cannot access the daemon. Patched `scripts/setup-supabase.sh`
+directly to attempt the same daemon start before its fatal Docker reachability message.
+
+Validation: `bash -n install.sh scripts/setup-supabase.sh` OK; `validate_docs.py` +
+`validate_migration_docs.py` OK; `git diff --check` clean.
+
 ### 2026-06-11 - Installer clone-entry self-staging
 
 Status: DONE (host installer UX patch; live proof remains PMI4/OS6)
