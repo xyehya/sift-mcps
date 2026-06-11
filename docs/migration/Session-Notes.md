@@ -15,7 +15,7 @@ Format rules:
 
 ### 2026-06-12 - Installer health contract for mounted native stdio backends
 
-Status: DONE (host patch; live VM rerun pending in this session)
+Status: DONE (host patch; live VM rerun verified)
 
 Live rerun on commit `156e3df` completed the installer and left both system services running, with
 RAG seeded directly into pgvector (`4318` chunks), OpenSearch API/Docker health OK, native
@@ -34,6 +34,17 @@ Supabase login instead of incorrectly saying bootstrap did not complete.
 Validation: `bash -n install.sh scripts/setup-addon.sh scripts/setup-supabase.sh` OK;
 `packages/sift-gateway/tests/test_a1_health.py` OK (10 passed); `validate_docs.py` and
 `validate_migration_docs.py` OK; `git diff --check` clean.
+
+Live VM proof on commit `c03a002`: cleaned stale installer probes, stopped old SIFT services before
+rerun, confirmed no OpenCTI containers/volumes/indices, and ran `./install.sh` from
+`~/sift-mcps`. Installer exited 0 with `Gateway health OK [initial]: status=ok supabase=ok`.
+Post-run `/health` returned `status=ok`, both `sift-gateway.service` and
+`sift-job-worker.service` were active, backend rows used `/opt/sift-mcps/.venv/bin/opensearch-mcp`
+and `/opt/sift-mcps/.venv/bin/rag-mcp`, and `app.rag_chunks` was populated (`26586` rows after
+idempotent reruns). Portal auth smoke succeeded via `/portal/api/auth/login` for
+`examiner@operators.sift.local` with `must_reset=true` and operator `system_role=owner`. MCP
+`tools/list` live smoke remains gated on issuing an agent/service credential from the portal; an
+operator Supabase login token correctly failed MCP auth with `invalid_token`.
 
 ### 2026-06-12 - Gateway startup with DB-seeded native backends
 
