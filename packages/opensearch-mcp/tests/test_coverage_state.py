@@ -145,7 +145,6 @@ class TestEnrichmentState:
     def test_enrichment_gaps_when_data_present_but_not_run(self):
         state = _build(artifacts={"evtx": {"docs": 1, "hosts": [], "indices": []}})
         gap_cmds = [g["command"] for g in state["gaps"]]
-        assert any("enrich_triage" in c for c in gap_cmds)
         assert any("enrich_intel" in c for c in gap_cmds)
 
     def test_no_enrichment_gaps_when_both_done(self):

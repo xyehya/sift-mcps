@@ -391,20 +391,6 @@ def test_enrich_intel_dry_run_allowed_without_scope(monkeypatch):
     assert "total_iocs" in result
 
 
-def test_enrich_triage_scope_denied_without_correct_scope(monkeypatch):
-    """opensearch_enrich_triage must deny when caller lacks enrichment:triage scope."""
-    from opensearch_mcp import server
-
-    monkeypatch.setenv("SIFT_ENRICHMENT_SCOPE", "enrichment:intel")
-    monkeypatch.setattr(server, "_get_active_case", lambda: "INC-TRIAGE")
-
-    result = server.opensearch_enrich_triage(case_id="INC-TRIAGE")
-
-    assert result.get("status") == "scope_denied", f"Expected scope_denied, got: {result}"
-    assert result.get("isError") is True
-    assert result.get("required_scope") == "enrichment:triage"
-
-
 def test_enrich_intel_execute_returns_pollable_status(monkeypatch, tmp_path):
     """opensearch_enrich_intel(dry_run=False) must return poll_via and run_id
     so callers can track enrichment status via opensearch_ingest_status."""

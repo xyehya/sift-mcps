@@ -51,7 +51,7 @@ _OPENSEARCH_TOOLS = {t["name"] for t in _MANIFEST["tools"]}
 
 
 # ---------------------------------------------------------------------------
-# Fake backend class (mirrors test_windows_triage_backend.py pattern)
+# Fake backend class
 # ---------------------------------------------------------------------------
 
 class _FakeOSBackend:

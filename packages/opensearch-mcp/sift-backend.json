@@ -303,38 +303,6 @@
       "secret_leak_guarantee": "No OpenCTI credentials, OpenSearch passwords, DB DSNs, or service tokens are returned in any response."
     },
     {
-      "name": "opensearch_enrich_triage",
-      "description": "Run Windows baseline (windows-triage) enrichment on indexed data. Requires enrichment:triage scope. Stamps triage.verdict on documents; cannot approve findings or alter evidence.",
-      "when_to_use": "Use after indexed Windows artifacts exist and baseline context can prioritize anomalies.",
-      "avoid_when": "Avoid treating UNKNOWN baseline enrichment as malicious by itself.",
-      "output_notes": "Enriches indexed data with triage.verdict; verify interesting results against source records. No windows-triage credentials are returned. Enrichment cannot approve findings, alter evidence, or decide reports.",
-      "output_shape": "EnrichTriageOut: status ('complete'), documents_enriched, details{} (per-artifact enriched counts). Behavior-compatible synchronous path.",
-      "response_shaping": "Returns enriched counts only, never windows-triage credentials.",
-      "usage_examples": [
-        {"description": "Run Windows baseline enrichment on the active case", "arguments": {}},
-        {"description": "Enrich a named case", "arguments": {"case_id": "rocba-drive-20260526-1417"}}
-      ],
-      "defer_loading": true,
-      "defer_loading_rationale": "CORRELATE-phase, scope-gated, add-on-dependent (windows-triage); Tool-Search defer_loading candidate.",
-      "read_only": false,
-      "readOnlyHint": false,
-      "evidence_class": "mutating",
-      "category": "enrichment",
-      "recommended_phase": "CORRELATE",
-      "safe_case_argument_names": ["case_id"],
-      "required_scopes": ["enrichment:triage"],
-      "scope_enforcement": "gateway_primary_env_fallback",
-      "enrichment_policy": {
-        "derived_state_only": true,
-        "audit_required": true,
-        "status_pollable": true,
-        "poll_via": "opensearch_ingest_status",
-        "poll_discriminator": "artifact_name == 'triage'"
-      },
-      "prohibited_operations": ["approve_findings", "alter_evidence", "decide_reports"],
-      "secret_leak_guarantee": "No windows-triage credentials, OpenSearch passwords, DB DSNs, or service tokens are returned in any response."
-    },
-    {
       "name": "opensearch_list_detections",
       "description": "List Security Analytics (Sigma) detection findings for triage pivots, filtered by severity/detector_type; falls back to a Hayabusa query suggestion when the Sigma plugin is unavailable or empty.",
       "when_to_use": "Use to identify indexed Sigma/Security Analytics detections for triage pivots.",

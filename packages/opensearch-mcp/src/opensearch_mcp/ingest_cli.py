@@ -1216,34 +1216,6 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     elapsed_seconds=result.elapsed_seconds,
                 )
 
-        # Post-ingest triage enrichment
-        if not getattr(args, "skip_triage", False):
-            try:
-                print("\nRunning triage enrichment...")
-                from opensearch_mcp.triage_remote import enrich_remote
-
-                def _triage_progress(event, **kw):
-                    if event == "triage_start":
-                        print(
-                            f"  {kw['artifact']}: checking {kw['unique_values']} unique values...",
-                            end=" ",
-                            flush=True,
-                        )
-                    elif event == "triage_done":
-                        print(f"{kw['enriched']} enriched")
-
-                triage_results = enrich_remote(
-                    client=client, case_id=case_id, on_progress=_triage_progress
-                )
-                if "_gateway" in triage_results:
-                    print(f"  Triage: {triage_results['_gateway']}")
-                total_enriched = sum(
-                    r.get("enriched", 0) for r in triage_results.values() if isinstance(r, dict)
-                )
-                print(f"Triage enrichment complete: {total_enriched} documents updated")
-            except Exception as e:
-                print(f"  Triage enrichment failed: {e}")
-
     finally:
         mount_ctx.cleanup()
         if tmpdir:
