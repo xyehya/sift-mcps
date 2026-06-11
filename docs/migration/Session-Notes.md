@@ -13,6 +13,20 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-12 - Supabase CLI shim installs `supabase-go` sibling
+
+Status: DONE (host patch; operator should pull and rerun installer)
+
+Fresh VM Supabase bootstrap downloaded the pinned Supabase CLI v2.105.0 tarball and installed only the
+`supabase` shim into `/usr/local/bin`; `supabase start` then failed because the shim requires the
+co-located `supabase-go` binary. Context7 official Supabase CLI docs confirm the platform package
+contains both `supabase` and `supabase-go` in the same `bin/` directory. Patched
+`scripts/setup-supabase.sh` to treat them as one package: version detection now requires the sibling
+`supabase-go`, and install copies both binaries to the same install directory.
+
+Validation: `bash -n scripts/setup-supabase.sh install.sh` OK; `validate_docs.py` +
+`validate_migration_docs.py` OK; `git diff --check` clean.
+
 ### 2026-06-12 - Installer apt update resilience for stale third-party repo keys
 
 Status: DONE (host patch; operator should pull/re-clone and rerun installer)

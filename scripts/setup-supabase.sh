@@ -94,17 +94,24 @@ DOCKERERR
 resolve_supabase_cli() {
   # 1. Already on PATH at the right version?
   if command -v supabase >/dev/null 2>&1; then
+    local supabase_path supabase_dir
+    supabase_path="$(command -v supabase)"
+    supabase_dir="$(dirname "$supabase_path")"
     local ver
     ver="$(supabase --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
-    if [[ "$ver" == "$SUPABASE_CLI_VERSION" ]]; then
+    if [[ "$ver" == "$SUPABASE_CLI_VERSION" && -x "$supabase_dir/supabase-go" ]]; then
       log "supabase CLI v${SUPABASE_CLI_VERSION} already on PATH."
       return
     fi
-    warn "supabase CLI on PATH is v${ver:-unknown}; need v${SUPABASE_CLI_VERSION}. Installing pinned version."
+    if [[ "$ver" == "$SUPABASE_CLI_VERSION" ]]; then
+      warn "supabase CLI on PATH is v${SUPABASE_CLI_VERSION}, but sibling supabase-go is missing. Reinstalling pinned package."
+    else
+      warn "supabase CLI on PATH is v${ver:-unknown}; need v${SUPABASE_CLI_VERSION}. Installing pinned version."
+    fi
   fi
 
   # 2. Already installed in our bin dir?
-  if [[ -x "$SIFT_BIN_DIR/supabase" ]]; then
+  if [[ -x "$SIFT_BIN_DIR/supabase" && -x "$SIFT_BIN_DIR/supabase-go" ]]; then
     local ver
     ver="$("$SIFT_BIN_DIR/supabase" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     if [[ "$ver" == "$SUPABASE_CLI_VERSION" ]]; then
@@ -158,17 +165,23 @@ install_supabase_cli() {
 
   tar -xzf "$tmpdir/supabase.tar.gz" -C "$tmpdir"
 
-  # The tarball may contain the binary directly or in a subdir; find it.
-  local bin_path
+  # The platform package contains two colocated binaries: supabase (shim) and
+  # supabase-go (Go CLI). Install both into the SAME directory; moving only the
+  # shim breaks `supabase start`.
+  local bin_path go_bin_path
   bin_path="$(find "$tmpdir" -type f -name 'supabase' | head -1)"
   [[ -n "$bin_path" ]] || die "supabase binary not found in tarball."
+  go_bin_path="$(find "$tmpdir" -type f -name 'supabase-go' | head -1)"
+  [[ -n "$go_bin_path" ]] || die "supabase-go binary not found in tarball."
 
   if [[ "$install_dir" == "/usr/local/bin" ]]; then
     sudo install -m 755 "$bin_path" "$install_dir/supabase"
-    log "  Installed to /usr/local/bin/supabase (via sudo)."
+    sudo install -m 755 "$go_bin_path" "$install_dir/supabase-go"
+    log "  Installed to /usr/local/bin/supabase + /usr/local/bin/supabase-go (via sudo)."
   else
     install -m 755 "$bin_path" "$install_dir/supabase"
-    log "  Installed to $install_dir/supabase."
+    install -m 755 "$go_bin_path" "$install_dir/supabase-go"
+    log "  Installed to $install_dir/supabase + $install_dir/supabase-go."
     log "  Tip: add $install_dir to your PATH permanently (e.g. in ~/.bashrc):"
     log "    export PATH=\"$install_dir:\$PATH\""
   fi
