@@ -13,6 +13,26 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-11 - Installer clone-entry self-staging
+
+Status: DONE (host installer UX patch; live proof remains PMI4/OS6)
+
+Patched `install.sh` so the operator can use the normal repo flow:
+`git clone https://github.com/xyehya/sift-mcps.git && cd sift-mcps && ./install.sh`. If the script is
+run outside `${SIFT_MCPS_INSTALL_ROOT:-/opt/sift-mcps}`, it stages the checkout into that runtime tree
+with `.git`, `.venv`, caches, `.mcp.json`, and `node_modules` excluded, then re-execs
+`/opt/sift-mcps/install.sh` with the original arguments. This keeps systemd `WorkingDirectory`, Docker
+Compose files, backend manifest paths, and venv paths anchored to the hardened runtime tree while
+preserving the familiar downloaded-repo install experience.
+
+Changed: `install.sh` (self-stage + re-exec helper, help text); `docs/status.md`,
+`docs/migration/task-batches.md`, and this note (VM install flow now clone + `./install.sh` with
+self-staging).
+
+Validation: `bash -n install.sh` OK; `validate_docs.py` + `validate_migration_docs.py` OK;
+`git diff --check` clean; Bash smoke sourced `install.sh`, staged the checkout into a temp install
+root, verified `install.sh`/`pyproject.toml` copied and `.git` excluded, and intercepted the re-exec.
+
 ### 2026-06-11 - HARD1 host build: non-admin `sift-service` cutover + shared vol3 symbol cache (decisions locked)
 
 Status: IN_PROGRESS (host code/docs landed in commit `30596a7`; live enforcement proof folds into
@@ -32,8 +52,9 @@ Decisions locked (frozen contract constants — the agreed build end-state):
   user. This replaces running the stack as `sansforensics` with a blanket `NOPASSWD: ALL`.
 - **System services** at `/etc/systemd/system/`, `User=sift-service`, managed via `sudo systemctl`
   (NOT `systemctl --user`).
-- **Deploy tree relocates to `/opt/sift-mcps`** (owned `sift-service`); the host rsync target changes
-  to `sansforensics@192.168.122.81:/opt/sift-mcps/`.
+- **Deploy tree relocates to `/opt/sift-mcps`**; operators can use the normal
+  `git clone ... && cd sift-mcps && ./install.sh` flow because `install.sh` stages the checkout into
+  `/opt/sift-mcps` and re-execs from there before provisioning services.
 - **Shared writable vol3 symbol cache** at `/var/cache/sift/volatility-symbols` (group `sift`), env
   override `SIFT_VOL_SYMBOLS`; first run warms it online — no pre-seeding. Drops the read-only
   `/opt/volatility3` chmod hack.
@@ -47,14 +68,15 @@ Work-streams (4):
 
 - **Group A — shared vol3 symbol cache:** `parse_memory` + worker point at
   `/var/cache/sift/volatility-symbols` via `SIFT_VOL_SYMBOLS`; chmod hack dropped (distributed).
-- **Group B — installer/systemd (lead-owned):** create `sift-service`, relocate the deploy tree to
+- **Group B — installer/systemd (lead-owned):** create `sift-service`, stage the cloned checkout into
   `/opt/sift-mcps`, narrow sudoers to the two grants, relocate secret env files to
   `sift-service`-readable `0600`, convert units to system services.
 - **Group C — this doc work (distributed):** `status.md` + `task-batches.md` + `Session-Notes.md`.
 - (3 distributed work-streams + the installer/systemd stream owned by the lead.)
 
 Changed: `docs/status.md` (install command de-staled in Wave Execution Order #2 + BATCH-PMI4 step 1;
-VM Quick Reference active tree/sync target → `/opt/sift-mcps`, restart via `sudo systemctl`);
+VM Quick Reference active tree/install flow → clone + `./install.sh` with self-staging to
+`/opt/sift-mcps`, restart via `sudo systemctl`);
 `docs/migration/task-batches.md` (PMI4 install command de-staled; new BATCH-HARD1 batch + HARD track);
 `docs/migration/Session-Notes.md` (this note).
 
@@ -81,7 +103,8 @@ Validation: `validate_docs.py` + `validate_migration_docs.py` OK; `git diff --ch
 opensearch-mcp symbol/tier tests 13 pass, sift-core executor/worker/k5 85 pass; `bash -n` OK on
 `install.sh`, `reset-vm-test.sh`, `setup-opensearch.sh`.
 
-Next: prove live on the fresh VM as part of PMI4/OS6 — rsync to `/opt/sift-mcps` → `./install.sh` →
+Next: prove live on the fresh VM as part of PMI4/OS6 — `git clone` → `cd sift-mcps` → `./install.sh`
+(self-stages to `/opt/sift-mcps`) →
 `status:ok`, `systemctl show sift-gateway -p User` = `sift-service`, `run_command` vol3 warms
 `/var/cache/sift/volatility-symbols`, no-restart `opensearch_*` catalog. VM-verify the two flagged
 open items: snapshots dir (`uid 1000`, no runtime writer found) and hayabusa reachability under `agent_runtime`.

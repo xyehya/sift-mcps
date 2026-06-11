@@ -8,7 +8,7 @@ _Companion to `docs/migration/task-batches.md` (batch definitions) and `docs/mig
 ## Wave Execution Order
 
 1. ~~**Cleanup wave — run BEFORE fresh install** — NW1 ∥ NW2 ∥ NW3 ∥ NW4~~ — **DONE, landed on `main` 2026-06-11** (4 parallel workers, 0 merge conflicts, integrated sweep green; doc log `1dadb03`), followed by the HARD1 host-code commit `30596a7`.
-2. **Fresh VM install + end-to-end gate** — operator runs `./install.sh` on bare SIFT VM (zero-argument; OpenCTI auto-detected, windows-triage removed in NW2) → satisfies PMI4 and OS6, **and now also proves BATCH-HARD1** (non-admin `sift-service` cutover + shared vol3 symbol cache — host code landed 2026-06-11). _Fresh VM ready (`192.168.122.81`, host key reset); repo to be rsynced to `/opt/sift-mcps`._
+2. **Fresh VM install + end-to-end gate** — operator clones the repo, runs `./install.sh` from inside the checkout, and the installer stages itself into `/opt/sift-mcps` before continuing (zero-argument; OpenCTI auto-detected, windows-triage removed in NW2) → satisfies PMI4 and OS6, **and now also proves BATCH-HARD1** (non-admin `sift-service` cutover + shared vol3 symbol cache — host code landed 2026-06-11). _Fresh VM ready (`192.168.122.81`, host key reset)._
 3. **PTC enablement** — NW6 after install proves `opensearch_*` + `kb_*` tools are live
 4. **FRZ1 close-out** — remaining demo-prep items after the full stack is proven on VM
 
@@ -55,7 +55,7 @@ Host code landed in commit `30596a7` on 2026-06-11; full detail in `task-batches
 |-------|---------|
 | A — shared vol3 symbol cache | `parse_memory` + `worker` resolve `SIFT_VOL_SYMBOLS` → `/var/cache/sift/volatility-symbols` (relocated out of the `/var/lib/sift` deny-ACL sweep; default `g:sift:rwx`); `/opt/volatility3` chmod hack dropped. |
 | B — non-admin cutover | gateway+worker = **system** services as `sift-service`; secrets → `sift-service:0600` under `/var/lib/sift/.sift`; deploy tree → `/opt/sift-mcps`; two narrow sudoers grants only; `systemctl --user`→system across installer + helpers; AppArmor updated (`/var/cache/sift`, hayabusa exec path). |
-| C — docs | install command de-staled, VM quick-ref → `/opt/sift-mcps` + `sudo systemctl`, this batch logged. |
+| C — docs | install command de-staled, VM quick-ref → clone + `./install.sh` with installer self-staging into `/opt/sift-mcps`, restart via `sudo systemctl`, this batch logged. |
 
 **VM proof (folds into PMI4/OS6):** `systemctl show sift-gateway -p User` = `sift-service`; `status:ok`; `run_command` vol3 warms `/var/cache/sift/volatility-symbols`; no-restart `opensearch_*`.
 **Two items to eyeball on VM:** snapshots dir (`uid 1000`, no runtime writer found); hayabusa reachability under `agent_runtime`.
@@ -209,8 +209,9 @@ re-litigating them.
 ## VM Quick Reference
 
 - **VM:** `sansforensics@192.168.122.81` / password: `forensics`
-- **Active service tree:** `/opt/sift-mcps` (owned by `sift-service`; HARD1 cutover)
+- **Active service tree:** `/opt/sift-mcps` (installer-staged runtime tree; services run as `sift-service`)
 - **Operator portal:** `https://192.168.122.81:4508/portal/` — `examiner@operators.sift.local`
 - **Host repo:** `/home/yk/AI/SIFTHACK/sift-mcps`
-- **Sync:** `rsync -av --exclude='.git' --exclude='node_modules' --exclude='.venv' /home/yk/AI/SIFTHACK/sift-mcps/ sansforensics@192.168.122.81:/opt/sift-mcps/`
+- **Install:** `git clone https://github.com/xyehya/sift-mcps.git && cd sift-mcps && ./install.sh`
+- **Self-stage behavior:** if run outside `/opt/sift-mcps`, `install.sh` copies the checkout there and re-execs from the staged runtime tree.
 - **Restart + health:** `sudo systemctl restart sift-gateway.service sift-job-worker.service && curl -sk https://localhost:4443/health | python3 -m json.tool`

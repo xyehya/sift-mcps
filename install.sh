@@ -66,6 +66,13 @@ svc_install_file() {
 # Paths — everything derived from REPO_DIR and system conventions
 # =============================================================================
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Runtime checkout used by systemd WorkingDirectory, Docker compose files, and
+# add-on manifests. Operators can still use the normal flow:
+#   git clone ... && cd sift-mcps && ./install.sh
+# In that case the installer stages the checkout here, then re-execs from the
+# staged tree so services are not tied to a temporary clone location.
+SIFT_MCPS_INSTALL_ROOT="${SIFT_MCPS_INSTALL_ROOT:-/opt/sift-mcps}"
+SIFT_INSTALL_REEXEC_ENV="SIFT_MCPS_INSTALL_REEXECED"
 
 # Hard-code the SIFT-native Python.  Must be ≥ 3.10.
 SYSTEM_PYTHON="/usr/bin/python3.12"
@@ -110,6 +117,61 @@ JOB_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-job-worker.service"
 
 VENV_DIR="$REPO_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
+
+_same_path() {
+  local a="$1" b="$2"
+  [[ "$(cd "$a" 2>/dev/null && pwd -P)" == "$(cd "$b" 2>/dev/null && pwd -P)" ]]
+}
+
+stage_repo_to_install_root() {
+  local src="$REPO_DIR"
+  local dst="$SIFT_MCPS_INSTALL_ROOT"
+
+  mkdir -p "$dst" 2>/dev/null || sudo_if_needed mkdir -p "$dst"
+  if _same_path "$src" "$dst"; then
+    return 0
+  fi
+  if [[ "${!SIFT_INSTALL_REEXEC_ENV:-0}" == "1" ]]; then
+    die "Installer re-execed but REPO_DIR ($src) is still not SIFT_MCPS_INSTALL_ROOT ($dst)."
+  fi
+
+  log "Staging checkout into runtime tree: $dst"
+  local owner group
+  owner="$(user_name)"
+  group="$(group_name)"
+  sudo_if_needed chown -R "$owner:$group" "$dst"
+
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude='.git' \
+      --exclude='.venv' \
+      --exclude='__pycache__' \
+      --exclude='*.pyc' \
+      --exclude='.mcp.json' \
+      --exclude='node_modules' \
+      "$src/" "$dst/"
+  else
+    (
+      cd "$src"
+      tar \
+        --exclude='./.git' \
+        --exclude='./.venv' \
+        --exclude='*/__pycache__' \
+        --exclude='*.pyc' \
+        --exclude='./.mcp.json' \
+        --exclude='*/node_modules' \
+        -cf - .
+    ) | (
+      cd "$dst"
+      tar -xf -
+    )
+  fi
+
+  log "Continuing install from staged runtime tree."
+  cd "$dst"
+  export "$SIFT_INSTALL_REEXEC_ENV=1"
+  exec "$dst/install.sh" "$@"
+}
 
 # =============================================================================
 # Phase 0 — pre-flight
@@ -2494,6 +2556,7 @@ do_uninstall() {
 # =============================================================================
 
 main() {
+  local original_args=("$@")
   SIFT_CORE_ONLY="${SIFT_CORE_ONLY:-0}"
   local uninstall_mode=0
   # Track explicit flag overrides (honored over auto-detect).
@@ -2514,6 +2577,7 @@ main() {
         printf 'Usage: ./install.sh [OPTIONS]\n\n'
         printf 'Provisions (or removes) a sift-mcps stack on SIFT Workstation.\n'
         printf 'No arguments required for install — everything is auto-detected.\n'
+        printf 'Run from a normal clone; the installer stages itself into %s before provisioning.\n' "$SIFT_MCPS_INSTALL_ROOT"
         printf 'Re-run safe: every install step is idempotent.\n\n'
         printf '  --core-only          Install gateway + portal + in-process core tools only.\n'
         printf '                       Skips all add-on backends (opensearch, rag, opencti),\n'
@@ -2544,6 +2608,8 @@ main() {
     do_uninstall
     exit 0
   fi
+
+  stage_repo_to_install_root "${original_args[@]}"
 
   # --- pre-flight ---
   check_os

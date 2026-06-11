@@ -724,7 +724,9 @@ Frozen contract (the agreed end-state):
   `sansforensics` keeps its own operator login/sudo; `agent_runtime` stays the run_command sandbox user.
 - Services become **system** services at `/etc/systemd/system/`, `User=sift-service`, managed via
   `sudo systemctl` (NOT `systemctl --user`).
-- Deploy tree relocates to `/opt/sift-mcps` (owned `sift-service`); the rsync target changes accordingly.
+- Deploy tree relocates to `/opt/sift-mcps`; operators can use the normal
+  `git clone ... && cd sift-mcps && ./install.sh` flow because the installer stages the checkout
+  into `/opt/sift-mcps` and re-execs from there before provisioning services.
 - Shared writable vol3 symbol cache at `/var/cache/sift/volatility-symbols` (group `sift`), env override
   `SIFT_VOL_SYMBOLS`; first run warms it online — no pre-seeding.
 - `install.sh` is ZERO-ARGUMENT (single `--extra full`; OpenCTI auto-detected; windows-triage removed
@@ -736,9 +738,9 @@ Scope (three parallel groups):
   `/var/cache/sift/volatility-symbols` via `SIFT_VOL_SYMBOLS`; drop the `/opt/volatility3` chmod hack.
   Touched code + targeted sift-core/worker tests.
 - **Group B — sift-service system-service cutover (installer/systemd, lead-owned):** create the
-  `sift-service` system user; relocate the deploy tree to `/opt/sift-mcps`; narrow sudoers to the two
-  grants; relocate secret env files to `sift-service`-readable `0600`; convert the units to system
-  services (`User=sift-service`, `/etc/systemd/system/`, `sudo systemctl`).
+  `sift-service` system user; stage ordinary cloned checkouts into `/opt/sift-mcps`; narrow sudoers to
+  the two grants; relocate secret env files to `sift-service`-readable `0600`; convert the units to
+  system services (`User=sift-service`, `/etc/systemd/system/`, `sudo systemctl`).
 - **Group C — this doc work:** `docs/status.md`, `docs/migration/task-batches.md`,
   `docs/migration/Session-Notes.md` (install command de-staled; VM quick reference + batch tracker
   + session log updated).
