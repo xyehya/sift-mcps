@@ -1063,7 +1063,13 @@ bootstrap_supabase_operator() {
   # Idempotency: skip if already bootstrapped
   if svc_test_f "$MATERIALS_FILE" && svc_read "$MATERIALS_FILE" | grep -q '^supabase_operator_email=' 2>/dev/null; then
     log "Supabase operator already bootstrapped — preserving."
+    SUPABASE_OPERATOR_EMAIL="$(svc_read "$MATERIALS_FILE" | awk -F= '$1=="supabase_operator_email"{sub(/^[^=]*=/,""); print; exit}' || true)"
+    if [[ -z "$SUPABASE_OPERATOR_EMAIL" ]]; then
+      SUPABASE_OPERATOR_EMAIL="${SIFT_EXAMINER}@operators.sift.local"
+    fi
     SUPABASE_OPERATOR_CREATED=0
+    SUPABASE_OPERATOR_MAPPED=1
+    export SUPABASE_OPERATOR_EMAIL SUPABASE_OPERATOR_MAPPED
     return
   fi
 

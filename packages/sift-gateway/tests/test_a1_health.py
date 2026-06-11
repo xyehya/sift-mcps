@@ -5,14 +5,16 @@ Covers _check_evidence_root: existence, permissions, write-protected detection.
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from sift_gateway.health import _check_evidence_root, _probe_supabase
+from sift_gateway.health import _check_evidence_root, _probe_supabase, health_endpoint
 
 
 # ---------------------------------------------------------------------------
@@ -128,3 +130,55 @@ async def test_supabase_probe_sends_anon_key_as_apikey(monkeypatch):
             {"apikey": "anon-test-key"},
         )
     ]
+
+
+class _StoppedBackend:
+    async def health_check(self):
+        return {"status": "stopped", "type": "stdio"}
+
+
+async def test_health_endpoint_treats_mounted_idle_stdio_proxy_as_ready(tmp_path):
+    gateway = SimpleNamespace(
+        backends={"opensearch-mcp": _StoppedBackend()},
+        _mounted_proxy_backends={"opensearch-mcp"},
+        _tool_map={"opensearch_search": "opensearch-mcp"},
+        config={
+            "auth": {"supabase": {"enabled": False}},
+            "case": {"root": str(tmp_path)},
+        },
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gateway=gateway)))
+
+    response = await health_endpoint(request)
+    payload = json.loads(response.body)
+
+    assert payload["status"] == "ok"
+    assert payload["backends"]["opensearch-mcp"] == {
+        "status": "ok",
+        "type": "stdio",
+        "state": "idle",
+        "mounted_proxy": True,
+        "detail": "FastMCP proxy is mounted; backend starts on demand",
+    }
+
+
+async def test_health_endpoint_keeps_unmounted_stopped_backend_degraded(tmp_path):
+    gateway = SimpleNamespace(
+        backends={"opensearch-mcp": _StoppedBackend()},
+        _mounted_proxy_backends=set(),
+        _tool_map={},
+        config={
+            "auth": {"supabase": {"enabled": False}},
+            "case": {"root": str(tmp_path)},
+        },
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gateway=gateway)))
+
+    response = await health_endpoint(request)
+    payload = json.loads(response.body)
+
+    assert payload["status"] == "degraded"
+    assert payload["backends"]["opensearch-mcp"] == {
+        "status": "stopped",
+        "type": "stdio",
+    }

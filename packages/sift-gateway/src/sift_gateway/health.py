@@ -23,6 +23,25 @@ _HEALTH_CHECK_TIMEOUT = 10
 _SUPABASE_PROBE_TIMEOUT = 5.0
 
 
+def _operator_backend_health(gateway, name: str, result: dict) -> dict:
+    """Translate backend-internal lifecycle state into operator health state."""
+    if (
+        result.get("status") == "stopped"
+        and name in (getattr(gateway, "_mounted_proxy_backends", None) or set())
+    ):
+        normalized = dict(result)
+        normalized.update(
+            {
+                "status": "ok",
+                "state": "idle",
+                "mounted_proxy": True,
+                "detail": "FastMCP proxy is mounted; backend starts on demand",
+            }
+        )
+        return normalized
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Evidence root validation (A1-BOOTSTRAP)
 # ---------------------------------------------------------------------------
@@ -208,7 +227,7 @@ async def health_endpoint(request: Request) -> JSONResponse:
         if isinstance(item, BaseException):
             continue
         name, result = item  # type: ignore[misc]
-        backend_health[name] = result
+        backend_health[name] = _operator_backend_health(gateway, name, result)
 
     tools_count = len(gateway._tool_map)
 

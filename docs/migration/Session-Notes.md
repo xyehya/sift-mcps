@@ -13,6 +13,28 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-12 - Installer health contract for mounted native stdio backends
+
+Status: DONE (host patch; live VM rerun pending in this session)
+
+Live rerun on commit `156e3df` completed the installer and left both system services running, with
+RAG seeded directly into pgvector (`4318` chunks), OpenSearch API/Docker health OK, native
+`opensearch-mcp` and `forensic-rag-mcp` rows registered, and `opensearch_backend_seeded=true` in the
+handoff. The remaining failure was semantic: `/health` returned `status=degraded` only because the
+mounted FastMCP proxy backends reported their internal lifecycle as `stopped`. For proxy-mounted
+stdio backends (`keep_alive=false`), idle/stopped is the expected ready state; the process starts on
+demand through the mounted proxy rather than staying alive as a persistent Gateway-owned subprocess.
+
+Changed: operator `/health` now normalizes `status=stopped` to `status=ok/state=idle` only for
+backends present in `gateway._mounted_proxy_backends`, preserving degraded status for unmounted
+stopped backends. Installer idempotent Supabase bootstrap now marks a preserved
+`supabase_operator_email` as a mapped operator, so final next-step text points at the existing
+Supabase login instead of incorrectly saying bootstrap did not complete.
+
+Validation: `bash -n install.sh scripts/setup-addon.sh scripts/setup-supabase.sh` OK;
+`packages/sift-gateway/tests/test_a1_health.py` OK (10 passed); `validate_docs.py` and
+`validate_migration_docs.py` OK; `git diff --check` clean.
+
 ### 2026-06-12 - Gateway startup with DB-seeded native backends
 
 Status: DONE (host patch; operator/agent should pull and rerun installer)
