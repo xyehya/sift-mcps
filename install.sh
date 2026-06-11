@@ -1899,19 +1899,26 @@ start_opensearch() {
   docker compose -f "$REPO_DIR/docker-compose.yml" up -d opensearch
 
   log "Waiting for OpenSearch health (up to 600 s)."
-  local status="unknown"
-  for _ in $(seq 1 300); do
-    status="$(curl -fsS http://127.0.0.1:9200/_cluster/health 2>/dev/null \
+  local api_status="unknown" docker_health="unknown" attempt
+  for attempt in $(seq 1 300); do
+    docker_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' sift-opensearch 2>/dev/null || true)"
+    api_status="$(curl -fsS --max-time 5 http://127.0.0.1:9200/_cluster/health 2>/dev/null \
       | "$SYSTEM_PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("status","unknown"))' 2>/dev/null || true)"
-    if [[ "$status" == "green" || "$status" == "yellow" ]]; then
-      log "OpenSearch healthy: $status"
+    api_status="${api_status:-unknown}"
+    docker_health="${docker_health:-unknown}"
+
+    if [[ "$api_status" == "green" || "$api_status" == "yellow" || "$docker_health" == "healthy" ]]; then
+      log "OpenSearch healthy: api=$api_status docker=$docker_health"
       OPENSEARCH_UP=1
       break
+    fi
+    if [[ "$attempt" -eq 1 || $(( attempt % 15 )) -eq 0 ]]; then
+      log "OpenSearch wait: api=$api_status docker=$docker_health"
     fi
     sleep 2
   done
   if [[ "$OPENSEARCH_UP" -eq 0 ]]; then
-    warn "OpenSearch not healthy after 600 s (last status: ${status:-unknown}) — opensearch-mcp backend will NOT be seeded."
+    warn "OpenSearch not healthy after 600 s (last api=${api_status:-unknown}, docker=${docker_health:-unknown}) — opensearch-mcp backend will NOT be seeded."
     warn "  Check: docker logs opensearch  |  docker compose -f $REPO_DIR/docker-compose.yml ps"
   fi
 }

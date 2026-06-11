@@ -13,6 +13,29 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-12 - OpenSearch installer health wait robustness
+
+Status: DONE (host patch; operator should stop the stuck installer, pull, and rerun)
+
+Fresh VM rerun on commit `a1d83b0` completed direct RAG seeding (`4318` pgvector chunks) and then
+appeared stuck at `Waiting for OpenSearch health (up to 600 s)`. Live trace showed the service itself
+was healthy: `docker inspect sift-opensearch` reported `healthy`, and a fresh
+`curl http://127.0.0.1:9200/_cluster/health` returned `status=yellow` immediately. The live installer
+process tree showed a child `curl | python3.12` health command still running under the wait loop,
+which means a single stuck health request could block the loop indefinitely because the curl had no
+request timeout.
+
+Changed: `start_opensearch` now treats OpenSearch HTTP status and Docker health as independent
+success signals, uses a bounded curl timeout, logs periodic wait state, and reports both API and
+Docker status on timeout. This makes an already-healthy `sift-opensearch` break the wait loop
+immediately and lets the installer continue to cluster setup, backend seeding, service restart, and
+handoff.
+
+Validation: `bash -n install.sh scripts/setup-addon.sh scripts/setup-supabase.sh` OK; fake
+Docker-health smoke proved `start_opensearch` sets `OPENSEARCH_UP=1` when Docker reports
+`healthy` even if the API parse path is unavailable; `validate_docs.py` and
+`validate_migration_docs.py` OK; `git diff --check` clean.
+
 ### 2026-06-12 - Fresh VM installer policy correction: OpenCTI external, direct RAG seed, portal handoff
 
 Status: DONE (host patch; operator should pull and rerun after stopping the stale live installer if it is still active)
