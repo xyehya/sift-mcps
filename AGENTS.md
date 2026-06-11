@@ -1,6 +1,6 @@
 # SIFT MVP Sprint Agent Instructions
 
-This repo is in fast MVP sprint mode.
+This repo is in fast sprint mode.
 
 ## Source of truth
 
@@ -9,6 +9,9 @@ Read these two files first and keep them current:
 - `docs/migration/task-batches.md` - executable batch tracker for parallel work.
 - `docs/migration/Session-Notes.md` - latest change log plus forks, blockers,
   and backlog.
+
+## Verification at the end of each session
+Validation: `validate_docs.py` + `validate_migration_docs.py` OK; `git diff --check` clean.
 
 
 ## Component mapping to help speed up discovery (changes with migration steps, batches, reference for help not source of truth)
@@ -36,22 +39,19 @@ Read these two files first and keep them current:
 - Update the batch checkbox only after its acceptance checks pass.
 - In a single-session change, add the latest session note at the top of
   `Session-Notes.md`.
-- Keep implementation docs minimal.
 
 ## Security invariants
 
 - Gateway is the only policy boundary for portal and AI-agent operations.
 - Supabase/Postgres is the authoritative control plane.
-- Agents use MCP only for the MVP. Portal REST is for human operators.
-- The AI agent never receives absolute evidence paths, case paths, mount paths,
-  DB credentials, OpenSearch credentials, service-role keys, or shell access.
+- Agents use MCP only. Portal REST is for human operators.
 - Evidence bytes are mounted or copied only by the operator on the SIFT VM.
 - Evidence must be registered and sealed before analysis.
 - Sensitive human actions require password/HMAC re-auth: case activation,
   evidence seal/ignore/retire, finding approval, report inclusion/export, and
   agent credential issuance.
 - OpenSearch, RAG joining the core and not add-on anymore. forensic knowledge data package stays for context injection after tool calls
-- OpenCTI, Windows triage are add-on - not MVP
+- OpenCTI, Windows triage are add-on 
 - Reports include approved findings and approved supporting data only.
 
 ## Host and VM constraints
@@ -60,10 +60,8 @@ Read these two files first and keep them current:
 - SIFT VM target Python: `/usr/bin/python3.12`.
 - Do not install or download managed Python on the SIFT VM.
 - Use `UV_NO_MANAGED_PYTHON=1` and `UV_PYTHON_DOWNLOADS=never` on the VM.
-- Do not store raw MCP/service tokens, Supabase secrets, OpenSearch passwords,
-  or local VM secrets in repo files.
 - SSHpass to VM sansforensics/forensics 192.168.122.81
-- Operator GUI PORTAL  https://192.168.122.81:4508/portal/ with examiner@operators.sift.local / forensis
+- Operator GUI PORTAL  https://192.168.122.81:4508/portal/ with examiner@operators.sift.local / forensics
 ## Work discipline
 
 - Run targeted tests for touched code and return validation evidence in the
