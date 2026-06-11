@@ -917,7 +917,7 @@ PY
 # stored — only env-ref metadata (env_refs pointing to gateway process env vars).
 # If SIFT_CONTROL_PLANE_DSN is absent this is a no-op; core-only mode skips it.
 # Seed one stdio add-on backend into app.mcp_backends (idempotent upsert).
-# Args: $1 = backend name, $2 = manifest path, $3 = entry-point command,
+# Args: $1 = backend name, $2 = manifest path, $3 = venv entry-point script,
 #       $4 = JSON object of env_refs (gateway-env -> child-env), default "{}".
 # No raw secrets are stored — only env_ref names; the gateway resolves the
 # actual values from its own process environment at load time.
@@ -952,9 +952,11 @@ backend_name = os.environ["SEED_BACKEND_NAME"]
 manifest_path = Path(os.environ["SEED_MANIFEST_PATH"])
 entry_point = os.environ["SEED_ENTRY_POINT"]
 env_refs = json.loads(os.environ.get("SEED_ENV_REFS_JSON") or "{}")
-uv_bin = os.environ["SEED_UV_BIN"]
-python_bin = os.environ["SEED_PYTHON_BIN"]
 repo_dir = os.environ["SEED_REPO_DIR"]
+entry_script = Path(repo_dir) / ".venv" / "bin" / entry_point
+if not entry_script.exists():
+    print(f"seed_addon_backends: entrypoint not found: {entry_script}", file=sys.stderr)
+    sys.exit(1)
 
 try:
     from sift_gateway.mcp_backends_registry import McpBackendRegistry, normalize_connection_config
@@ -968,13 +970,8 @@ manifest = json.loads(manifest_path.read_text())
 # vars into the backend child process env at gateway load time.
 connection = {
     "type": "stdio",
-    "command": uv_bin,
-    "args": [
-        "run", "--project", repo_dir,
-        "--python", python_bin,
-        "--no-managed-python", "--no-python-downloads",
-        entry_point,
-    ],
+    "command": str(entry_script),
+    "args": [],
     "manifest_path": str(manifest_path),
     "env_refs": env_refs,
 }
@@ -1030,7 +1027,7 @@ seed_addon_backends() {
       "forensic-rag-mcp" \
       "$REPO_DIR/packages/forensic-rag-mcp/sift-backend.json" \
       "rag-mcp" \
-      '{"SIFT_CONTROL_PLANE_DSN": "SIFT_CONTROL_PLANE_DSN", "RAG_MODEL_NAME": "RAG_MODEL_NAME"}'; then
+      '{"SIFT_CONTROL_PLANE_DSN": "SIFT_CONTROL_PLANE_DSN"}'; then
       RAG_SEEDED=true
     fi
   else

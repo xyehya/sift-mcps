@@ -13,6 +13,27 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-12 - Native backend runtime command fix for system service user
+
+Status: DONE (host patch; operator/agent should pull and rerun installer)
+
+Live rerun on commit `2bdcb35` proved OpenSearch template bootstrap and DB backend registration, but
+the system gateway crash-looped after restart. Logs showed the root cause: seeded backend rows used
+`/home/sansforensics/.local/bin/uv` as the stdio command, and the `sift-service` system user cannot
+traverse the operator home directory. The RAG row also required `RAG_MODEL_NAME` through `env_refs`,
+but the service environment does not need that variable because rag-mcp has a built-in allowlisted
+default model.
+
+Changed: native installer backend seeding now stores absolute venv entrypoints under
+`/opt/sift-mcps/.venv/bin/` (`opensearch-mcp`, `rag-mcp`) as the stdio commands, with no `uv`
+dependency at service runtime. The native RAG row now requires only `SIFT_CONTROL_PLANE_DSN`; custom
+`RAG_MODEL_NAME` remains an optional add-on/operator configuration path.
+
+Validation: `bash -n install.sh scripts/setup-addon.sh scripts/setup-supabase.sh` OK;
+`packages/sift-gateway/tests/test_f1_opensearch_backend_registry.py` and
+`test_d22a_mcp_backends_registry.py` OK (19 passed); `validate_docs.py` and
+`validate_migration_docs.py` OK; `git diff --check` clean.
+
 ### 2026-06-12 - Installer backend seeding and OpenSearch template bootstrap fix
 
 Status: DONE (host patch; operator/agent should pull and rerun installer)
