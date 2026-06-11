@@ -943,7 +943,7 @@ _seed_one_addon_backend() {
   export SEED_PYTHON_BIN="$SYSTEM_PYTHON"
   export SEED_REPO_DIR="$REPO_DIR"
 
-  "$VENV_DIR/bin/python" - <<'PY' || warn "seed_addon_backends: $SEED_BACKEND_NAME seeding failed — operator can register via Portal -> Backends."
+  if ! "$VENV_DIR/bin/python" - <<'PY'
 import json, os, sys
 from pathlib import Path
 
@@ -985,13 +985,17 @@ try:
         name=backend_name,
         config=connection,
         manifest=manifest,
-        actor={"principal_type": "service", "principal_id": "install.sh"},
+        actor=None,
     )
     print(f"seed_addon_backends: {backend_name} registered/updated in app.mcp_backends.")
 except Exception as exc:
     print(f"seed_addon_backends: registration error: {exc}", file=sys.stderr)
     sys.exit(1)
 PY
+  then
+    warn "seed_addon_backends: $SEED_BACKEND_NAME seeding failed — operator can register via Portal -> Backends."
+    return 1
+  fi
 }
 
 seed_addon_backends() {
@@ -1006,11 +1010,13 @@ seed_addon_backends() {
   # opensearch-mcp: gated by SIFT_OPENSEARCH_ENABLED. The OPENSEARCH_CONFIG/
   # OPENSEARCH_HOST env refs are resolved by the gateway from its own env.
   if [[ "${SIFT_OPENSEARCH_ENABLED:-}" == "true" ]]; then
-    _seed_one_addon_backend \
+    if _seed_one_addon_backend \
       "opensearch-mcp" \
       "$REPO_DIR/packages/opensearch-mcp/sift-backend.json" \
       "opensearch-mcp" \
-      '{"OPENSEARCH_CONFIG": "OPENSEARCH_CONFIG", "OPENSEARCH_HOST": "OPENSEARCH_HOST"}'
+      '{"OPENSEARCH_CONFIG": "OPENSEARCH_CONFIG", "OPENSEARCH_HOST": "OPENSEARCH_HOST"}'; then
+      OPENSEARCH_SEEDED=true
+    fi
   else
     log "seed_addon_backends: SIFT_OPENSEARCH_ENABLED != true — skipping opensearch-mcp seeding."
   fi
@@ -1020,11 +1026,13 @@ seed_addon_backends() {
   # SIFT_CONTROL_PLANE_DSN env ref to reach the pgvector knowledge corpus; no
   # raw DSN is stored in app.mcp_backends.
   if [[ "${SIFT_RAG_ENABLED:-true}" == "true" ]]; then
-    _seed_one_addon_backend \
+    if _seed_one_addon_backend \
       "forensic-rag-mcp" \
       "$REPO_DIR/packages/forensic-rag-mcp/sift-backend.json" \
       "rag-mcp" \
-      '{"SIFT_CONTROL_PLANE_DSN": "SIFT_CONTROL_PLANE_DSN", "RAG_MODEL_NAME": "RAG_MODEL_NAME"}'
+      '{"SIFT_CONTROL_PLANE_DSN": "SIFT_CONTROL_PLANE_DSN", "RAG_MODEL_NAME": "RAG_MODEL_NAME"}'; then
+      RAG_SEEDED=true
+    fi
   else
     log "seed_addon_backends: SIFT_RAG_ENABLED != true — skipping forensic-rag-mcp seeding."
   fi
@@ -2093,7 +2101,20 @@ PY
 install_opensearch_templates() {
   curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null 2>&1 || return 0
   log "Installing OpenSearch templates and pipelines."
-  "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads python - <<'PY' || warn "OpenSearch template bootstrap failed — opensearch-mcp retries at startup."
+  local tmp_config rc
+  tmp_config="$(mktemp)"
+  if svc_test_f "$SIFT_HOME/opensearch.yaml"; then
+    svc_read "$SIFT_HOME/opensearch.yaml" > "$tmp_config"
+  else
+    cat > "$tmp_config" <<'YAML'
+host: http://127.0.0.1:9200
+user: admin
+password: admin
+verify_certs: false
+YAML
+  fi
+  OPENSEARCH_CONFIG="$tmp_config" OPENSEARCH_HOST="http://127.0.0.1:9200" \
+    "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads python - <<'PY'
 from opensearch_mcp.client import get_client
 from opensearch_mcp.mappings import ensure_winlog_pipeline
 
@@ -2103,6 +2124,11 @@ if result.get("status") not in {"ok", "warning"}:
     raise SystemExit(result)
 print(result.get("status", "ok"))
 PY
+  rc=$?
+  rm -f "$tmp_config"
+  if [[ "$rc" -ne 0 ]]; then
+    warn "OpenSearch template bootstrap failed — opensearch-mcp retries at startup."
+  fi
 }
 
 # =============================================================================
@@ -2856,6 +2882,7 @@ main() {
   # Track whether OpenSearch came up (set by start_opensearch).
   OPENSEARCH_UP=0
   OPENSEARCH_SEEDED=false
+  RAG_SEEDED=false
 
   if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
     if [[ "${SIFT_RAG_ENABLED:-true}" == "true" ]]; then
@@ -2896,9 +2923,6 @@ main() {
   # portal), the gateway's _late_start_checker now re-reads app.mcp_backends and
   # mounts late-seeded backends without a restart (Gateway.reload_backend_registry).
   seed_addon_backends
-  if [[ "${SIFT_OPENSEARCH_ENABLED:-false}" == "true" && "$OPENSEARCH_UP" -eq 1 ]]; then
-    OPENSEARCH_SEEDED=true
-  fi
 
   # A1-BOOTSTRAP: validate evidence/cases root before starting services.
   validate_evidence_root

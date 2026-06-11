@@ -13,6 +13,34 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-12 - Installer backend seeding and OpenSearch template bootstrap fix
+
+Status: DONE (host patch; operator/agent should pull and rerun installer)
+
+Live installer run on commit `1660b0a` completed successfully through OpenSearch startup, Supabase
+operator bootstrap, and handoff generation, proving the bounded health wait fix. The monitored output
+exposed two follow-up installer bugs:
+
+- OpenSearch template bootstrap called `opensearch_mcp.client.get_client()` without `OPENSEARCH_CONFIG`,
+  so it fell back to `/home/sansforensics/.sift/opensearch.yaml` instead of the service-owned
+  `/var/lib/sift/.sift/opensearch.yaml`.
+- `seed_addon_backends` passed `actor={"principal_type": "service", "principal_id": "install.sh"}`.
+  Registry audit columns expect UUID service identities, so Postgres rejected `"install.sh"` and no
+  backend rows were registered even though OpenSearch was healthy.
+- Handoff then reported `opensearch_backend_seeded=true` because it was derived from OpenSearch
+  availability instead of the actual registration result. Gateway `/health` correctly showed
+  `backends={}` and `tools_count=0`.
+
+Changed: OpenSearch template bootstrap now uses a temporary readable copy of the installer-managed
+OpenSearch config; install-time backend seeding audits as system/no UUID; `_seed_one_addon_backend`
+returns failure on registration errors; and `OPENSEARCH_SEEDED` is set only after opensearch-mcp is
+actually registered.
+
+Validation: `bash -n install.sh scripts/setup-addon.sh scripts/setup-supabase.sh` OK;
+`packages/sift-gateway/tests/test_f1_opensearch_backend_registry.py` and
+`test_d22a_mcp_backends_registry.py` OK (19 passed); `validate_docs.py` and
+`validate_migration_docs.py` OK; `git diff --check` clean.
+
 ### 2026-06-12 - OpenSearch installer health wait robustness
 
 Status: DONE (host patch; operator should stop the stuck installer, pull, and rerun)
