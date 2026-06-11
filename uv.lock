@@ -4842,6 +4842,9 @@ version = "0.1.0"
 source = { virtual = "." }
 
 [package.optional-dependencies]
+chroma-import = [
+    { name = "rag-mcp", extra = ["chroma-import"] },
+]
 core = [
     { name = "case-dashboard" },
     { name = "forensic-knowledge" },
@@ -4858,17 +4861,18 @@ dev = [
 full = [
     { name = "case-dashboard" },
     { name = "forensic-knowledge" },
-    { name = "opencti-mcp" },
     { name = "opensearch-mcp" },
-    { name = "rag-mcp", extra = ["chroma-import"] },
+    { name = "rag-mcp" },
     { name = "sift-common" },
     { name = "sift-core" },
     { name = "sift-gateway" },
 ]
+opencti = [
+    { name = "opencti-mcp" },
+]
 standard = [
     { name = "case-dashboard" },
     { name = "forensic-knowledge" },
-    { name = "opencti-mcp" },
     { name = "opensearch-mcp" },
     { name = "sift-common" },
     { name = "sift-core" },
@@ -4885,12 +4889,13 @@ dev = [
 requires-dist = [
     { name = "case-dashboard", marker = "extra == 'core'", editable = "packages/case-dashboard" },
     { name = "forensic-knowledge", marker = "extra == 'core'", editable = "packages/forensic-knowledge" },
-    { name = "opencti-mcp", marker = "extra == 'standard'", editable = "packages/opencti-mcp" },
+    { name = "opencti-mcp", marker = "extra == 'opencti'", editable = "packages/opencti-mcp" },
     { name = "opensearch-mcp", marker = "extra == 'standard'", editable = "packages/opensearch-mcp" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "rag-mcp", extras = ["chroma-import"], marker = "extra == 'full'", editable = "packages/forensic-rag-mcp" },
+    { name = "rag-mcp", marker = "extra == 'full'", editable = "packages/forensic-rag-mcp" },
+    { name = "rag-mcp", extras = ["chroma-import"], marker = "extra == 'chroma-import'", editable = "packages/forensic-rag-mcp" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },
     { name = "sift-common", marker = "extra == 'core'", editable = "packages/sift-common" },
     { name = "sift-core", marker = "extra == 'core'", editable = "packages/sift-core" },
@@ -4898,7 +4903,7 @@ requires-dist = [
     { name = "sift-mcps", extras = ["core"], marker = "extra == 'standard'" },
     { name = "sift-mcps", extras = ["standard"], marker = "extra == 'full'" },
 ]
-provides-extras = ["core", "standard", "full", "dev"]
+provides-extras = ["core", "standard", "full", "opencti", "chroma-import", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

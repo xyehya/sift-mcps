@@ -1,13 +1,11 @@
 import { useState, useEffect } from 'react'
 import {
-  getChallenge,
   getMe,
   postSupabaseLogin,
-  postResetPassword,
+  postForcedReset,
   getSetupRequired,
   postSetup,
 } from '../../api/endpoints'
-import { computeChallengeResponse } from '../../api/crypto'
 
 function Input({ label, value, onChange, type = 'text', autoComplete }) {
   return (
@@ -65,7 +63,7 @@ function SetupForm({ onDone }) {
   )
 }
 
-function ResetPasswordForm({ examiner, currentPassword, onDone }) {
+function ResetPasswordForm({ onDone }) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [err, setErr] = useState('')
@@ -78,9 +76,7 @@ function ResetPasswordForm({ examiner, currentPassword, onDone }) {
     setLoading(true)
     setErr('')
     try {
-      const challenge = await getChallenge(examiner)
-      const response = await computeChallengeResponse(currentPassword, challenge)
-      await postResetPassword({ challenge_id: challenge.challenge_id, response, new_password: password })
+      await postForcedReset({ new_password: password })
       const session = await getMe()
       if (!session) { setErr('Password reset succeeded. Sign in again.'); return }
       onDone(session)
@@ -133,6 +129,7 @@ export function LoginCard({ onLogin }) {
       const result = await postSupabaseLogin({ email, password })
       if (!result) { setErr('Authentication failed. Check your email and password.'); return }
       if (result?.error) { setErr(result.error); return }
+      if (result?.must_reset) { setPhase('reset'); return }
       onLogin(result)
     } catch (ex) {
       console.error('Login failed:', ex)
@@ -150,7 +147,7 @@ export function LoginCard({ onLogin }) {
         {phase === 'setup' ? (
           <SetupForm onDone={() => setPhase('login')} />
         ) : phase === 'reset' ? (
-          <ResetPasswordForm examiner={email} currentPassword={password} onDone={onLogin} />
+          <ResetPasswordForm onDone={onLogin} />
         ) : (
           <form onSubmit={handleLogin} className="space-y-4">
             <div>

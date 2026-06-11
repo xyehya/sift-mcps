@@ -2,9 +2,9 @@
 
 This module seeds ``app.rag_collections`` / ``app.rag_documents`` /
 ``app.rag_chunks`` directly through :mod:`rag_mcp.pgvector_store`. It does not
-build or query the legacy Chroma index. Embeddings are deterministic local
-vectors so the live VM can prove Supabase pgvector retrieval without model
-downloads.
+build or query the legacy Chroma index. The CLI defaults to the same allowlisted
+BGE embedding model used at query time; tests may inject deterministic local
+vectors for lightweight smoke coverage.
 """
 
 from __future__ import annotations
@@ -14,14 +14,18 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .ingest import DEFAULT_KNOWLEDGE_DIR, get_document_records, scan_knowledge_folder
 from .pgvector_store import (
+    EMBEDDING_DIM,
     PgVectorRagStore,
     deterministic_embedding,
     stable_rag_uuid,
 )
+from .utils import ALLOWED_MODELS, DEFAULT_MODEL_NAME
+
+EmbedTexts = Callable[[list[str]], list[list[float]]]
 
 
 @dataclass(frozen=True)
@@ -118,6 +122,7 @@ def seed_knowledge_documents(
     documents: list[KnowledgeSeedDocument],
     *,
     dry_run: bool = False,
+    embed_texts: EmbedTexts | None = None,
 ) -> KnowledgeSeedResult:
     """Populate pgvector RAG tables from a prepared knowledge seed plan."""
     result = KnowledgeSeedResult(status="ok", dry_run=dry_run)
@@ -129,6 +134,7 @@ def seed_knowledge_documents(
     if store is None:
         raise ValueError("store is required unless dry_run=True")
 
+    embed_texts = embed_texts or _deterministic_embed_texts
     collection_ids: dict[str, str] = {}
     for doc in documents:
         collection_id = collection_ids.get(doc.collection_name)
@@ -150,12 +156,24 @@ def seed_knowledge_documents(
             source_ref=doc.source_ref,
             metadata=doc.metadata,
         )
+        embeddings = embed_texts([chunk.content for chunk in doc.chunks])
+        if len(embeddings) != len(doc.chunks):
+            raise ValueError(
+                f"embedding count mismatch for {doc.source_ref}: "
+                f"got {len(embeddings)}, expected {len(doc.chunks)}"
+            )
         for idx, chunk in enumerate(doc.chunks):
+            embedding = embeddings[idx]
+            if len(embedding) != EMBEDDING_DIM:
+                raise ValueError(
+                    f"embedding dimension mismatch for {doc.source_ref}:{idx}: "
+                    f"got {len(embedding)}, expected {EMBEDDING_DIM}"
+                )
             store.upsert_chunk(
                 document_id=document_id,
                 chunk_index=idx,
                 content=chunk.content,
-                embedding=deterministic_embedding(chunk.content),
+                embedding=embedding,
                 provenance_id=chunk.provenance_id,
                 metadata=chunk.metadata,
             )
@@ -169,6 +187,9 @@ def seed_knowledge_from_dir(
     max_files: int | None = None,
     max_records_per_file: int | None = None,
     dry_run: bool = False,
+    embedding_mode: str = "model",
+    model_name: str = DEFAULT_MODEL_NAME,
+    batch_size: int = 64,
 ) -> KnowledgeSeedResult:
     documents = plan_knowledge_seed(
         knowledge_dir,
@@ -176,7 +197,12 @@ def seed_knowledge_from_dir(
         max_records_per_file=max_records_per_file,
     )
     store = None if dry_run else PgVectorRagStore(_require_dsn(dsn))
-    return seed_knowledge_documents(store, documents, dry_run=dry_run)
+    embed_texts = None if dry_run else _embedder_for_mode(
+        embedding_mode,
+        model_name=model_name,
+        batch_size=batch_size,
+    )
+    return seed_knowledge_documents(store, documents, dry_run=dry_run, embed_texts=embed_texts)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -193,6 +219,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--max-files", type=int, default=None)
     parser.add_argument("--max-records-per-file", type=int, default=None)
+    parser.add_argument(
+        "--embedding-mode",
+        choices=("model", "deterministic"),
+        default="model",
+        help="Use the allowlisted BGE model by default; deterministic is for tests/smoke only.",
+    )
+    parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
@@ -203,6 +237,9 @@ def main(argv: list[str] | None = None) -> int:
             max_files=args.max_files,
             max_records_per_file=args.max_records_per_file,
             dry_run=args.dry_run,
+            embedding_mode=args.embedding_mode,
+            model_name=args.model_name,
+            batch_size=args.batch_size,
         )
     except Exception as exc:
         result = KnowledgeSeedResult(status="error", errors=[str(exc)])
@@ -258,6 +295,49 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(k): _json_safe(v) for k, v in value.items()}
     return str(value)
+
+
+def _deterministic_embed_texts(texts: list[str]) -> list[list[float]]:
+    return [deterministic_embedding(text) for text in texts]
+
+
+def _embedder_for_mode(
+    embedding_mode: str,
+    *,
+    model_name: str,
+    batch_size: int,
+) -> EmbedTexts:
+    if embedding_mode == "deterministic":
+        return _deterministic_embed_texts
+    if embedding_mode != "model":
+        raise ValueError(f"unsupported embedding mode: {embedding_mode}")
+    if model_name not in ALLOWED_MODELS:
+        raise ValueError(f"RAG embedding model is not allowlisted: {model_name}")
+    return _model_embed_texts(model_name=model_name, batch_size=batch_size)
+
+
+def _model_embed_texts(*, model_name: str, batch_size: int) -> EmbedTexts:
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:  # pragma: no cover - deployment dependency
+        raise RuntimeError("sentence-transformers is required for model RAG seeding") from exc
+
+    model = SentenceTransformer(model_name)
+    safe_batch_size = max(1, int(batch_size))
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        vectors = model.encode(
+            texts,
+            batch_size=safe_batch_size,
+            show_progress_bar=len(texts) >= safe_batch_size,
+        )
+        if hasattr(vectors, "tolist"):
+            raw_vectors = vectors.tolist()
+        else:
+            raw_vectors = list(vectors)
+        return [[float(value) for value in vector] for vector in raw_vectors]
+
+    return embed
 
 
 def _dsn_from_env() -> str | None:

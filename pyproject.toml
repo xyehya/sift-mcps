@@ -38,10 +38,15 @@ core = [
 standard = [
     "sift-mcps[core]",
     "opensearch-mcp",
-    "opencti-mcp",
 ]
 full = [
     "sift-mcps[standard]",
+    "rag-mcp",
+]
+opencti = [
+    "opencti-mcp",
+]
+chroma-import = [
     "rag-mcp[chroma-import]",
 ]
 dev = [

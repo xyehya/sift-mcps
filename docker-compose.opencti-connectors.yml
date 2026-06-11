@@ -1,9 +1,9 @@
-# OpenCTI public import connectors — optional, enabled via:
-#   ./install.sh --enable-opencti-feeds
+# OpenCTI public import connectors — optional reference add-on feeds, prepared via
+# scripts/setup-addon.sh after the OpenCTI platform compose is running.
 #
 # These containers fetch public CTI sources into the local OpenCTI platform.
-# They share the existing sift-net network and authenticate with the
-# installer-generated OpenCTI admin token.
+# They share the optional OpenCTI network and authenticate with the
+# add-on-generated OpenCTI admin token.
 
 services:
   connector-mitre:
@@ -11,7 +11,7 @@ services:
     container_name: sift-opencti-connector-mitre
     restart: unless-stopped
     networks:
-      - sift-net
+      - opencti-net
     environment:
       - OPENCTI_URL=http://opencti:8080
       - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
@@ -26,7 +26,7 @@ services:
     container_name: sift-opencti-connector-cisa-kev
     restart: unless-stopped
     networks:
-      - sift-net
+      - opencti-net
     environment:
       - OPENCTI_URL=http://opencti:8080
       - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
@@ -41,6 +41,6 @@ services:
       - CISA_TLP=TLP:CLEAR
 
 networks:
-  sift-net:
+  opencti-net:
     external: true
-    name: sift-net
+    name: sift-opencti-net

@@ -11,10 +11,10 @@ set -Eeuo pipefail
 #
 # Design invariants:
 #   - Uses /usr/bin/python3.12 (SIFT native).  No uv-managed Python.
-#   - Single uv sync path (--extra full) — no feature toggles.
+#   - Single native sync path (--extra full): core + OpenSearch + RAG knowledge.
 #   - Venv always matches system Python; mismatched venvs are rebuilt.
-#   - OpenCTI auto-detected when Docker + ≥14 GB RAM are available.
-#   - Supabase is external; setup-supabase.sh provisions it and writes sift-supabase.env.
+#   - OpenCTI is an external add-on; prepare/register it via scripts/setup-addon.sh.
+#   - Supabase is auto-provisioned unless external credentials are supplied.
 #   - Every step is idempotent.
 # =============================================================================
 
@@ -386,8 +386,11 @@ sync_workspace() {
   export UV_NO_MANAGED_PYTHON=1
   export UV_PYTHON_DOWNLOADS=never
 
-  # Default --extra full (RAG is a core forensic capability); core-only installs
-  # use --extra core (gateway + portal + in-process core tools, no add-on backends).
+  # Default --extra full (OpenSearch + RAG knowledge are native forensic
+  # capabilities). core-only installs use --extra core (gateway + portal +
+  # in-process core tools only). External add-ons such as OpenCTI are never
+  # pulled by the native installer; scripts/setup-addon.sh requests their extras
+  # explicitly when an operator prepares them.
   local sync_extra="full"
   [[ "${SIFT_CORE_ONLY:-0}" == "1" ]] && sync_extra="core"
   log "Workspace extra: $sync_extra"
@@ -684,6 +687,52 @@ import_rag_pgvector() {
     warn "Supabase pgvector RAG import FAILED."
     warn "  Retry: SIFT_CONTROL_PLANE_DSN='<dsn>' rag-mcp-import-chroma-pgvector --chroma-dir '$chroma_dir'"
   fi
+}
+
+seed_rag_pgvector_direct() {
+  local knowledge_dir="$REPO_DIR/packages/forensic-rag-mcp/knowledge"
+  local dsn="${SIFT_CONTROL_PLANE_DSN:-${DATABASE_URL:-${POSTGRES_DSN:-}}}"
+
+  if [[ -z "$dsn" ]]; then
+    dsn="$(_env_file_value "$SIFT_HOME/control-plane.env" "SIFT_CONTROL_PLANE_DSN")"
+  fi
+  if [[ -z "$dsn" ]]; then
+    warn "SIFT_CONTROL_PLANE_DSN is not set — skipping direct Supabase pgvector RAG seed."
+    warn "  kb_search_knowledge will use only existing pgvector rows."
+    return 0
+  fi
+  if [[ ! -d "$knowledge_dir" ]]; then
+    warn "Bundled RAG knowledge directory not found at $knowledge_dir — skipping pgvector seed."
+    return 0
+  fi
+
+  log "Seeding bundled RAG knowledge directly into Supabase pgvector."
+  if SIFT_CONTROL_PLANE_DSN="$dsn" "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads \
+    rag-mcp-seed-pgvector --knowledge-dir "$knowledge_dir" --embedding-mode model; then
+    log "Direct Supabase pgvector RAG seed completed."
+  else
+    warn "Direct Supabase pgvector RAG seed FAILED."
+    warn "  Retry: SIFT_CONTROL_PLANE_DSN='<dsn>' rag-mcp-seed-pgvector --knowledge-dir '$knowledge_dir' --embedding-mode model"
+  fi
+}
+
+load_rag_pgvector() {
+  # Default path: build embeddings from the bundled knowledge corpus directly
+  # into Supabase pgvector. The legacy Chroma release bundle remains an explicit
+  # compatibility/import path for old snapshots and larger prebuilt corpora.
+  case "${SIFT_RAG_IMPORT_SOURCE:-direct}" in
+    direct)
+      seed_rag_pgvector_direct
+      ;;
+    chroma)
+      download_rag_index
+      import_rag_pgvector
+      ;;
+    *)
+      warn "Unknown SIFT_RAG_IMPORT_SOURCE='${SIFT_RAG_IMPORT_SOURCE}' — expected direct or chroma; using direct."
+      seed_rag_pgvector_direct
+      ;;
+  esac
 }
 
 install_hayabusa() {
@@ -1027,7 +1076,7 @@ bootstrap_supabase_operator() {
 
   local create_result
   create_result=$("$VENV_DIR/bin/python" - <<'PY' 2>&1
-import json, os, sys, urllib.request, urllib.error
+import json, os, sys, time, urllib.request, urllib.error
 
 url = os.environ["SUPABASE_URL"].rstrip("/")
 key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
@@ -1046,18 +1095,33 @@ except Exception as exc:
 
 def _request(method, path, payload=None):
     body = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(
-        f"{url}{path}",
-        data=body,
-        method=method,
-        headers={
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read() or b"{}")
+    last_exc = None
+    for attempt in range(1, 7):
+        req = urllib.request.Request(
+            f"{url}{path}",
+            data=body,
+            method=method,
+            headers={
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read() or b"{}")
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 or attempt == 6:
+                raise
+            last_exc = exc
+        except urllib.error.URLError as exc:
+            if attempt == 6:
+                raise
+            last_exc = exc
+        time.sleep(min(2 * attempt, 10))
+    if last_exc is not None:
+        raise last_exc
+    return {}
 
 
 def _auth_user_by_email(conn):
@@ -1847,7 +1911,7 @@ start_opensearch() {
     sleep 2
   done
   if [[ "$OPENSEARCH_UP" -eq 0 ]]; then
-    warn "OpenSearch not healthy after 180 s — opensearch-mcp backend will NOT be seeded."
+    warn "OpenSearch not healthy after 600 s (last status: ${status:-unknown}) — opensearch-mcp backend will NOT be seeded."
     warn "  Check: docker logs opensearch  |  docker compose -f $REPO_DIR/docker-compose.yml ps"
   fi
 }
@@ -2035,19 +2099,8 @@ PY
 }
 
 # =============================================================================
-# Phase 9 — OpenCTI (auto-detected)
+# Phase 9 — Optional OpenCTI add-on helpers
 # =============================================================================
-
-_detect_opencti() {
-  # Returns 0 if OpenCTI should be enabled: Docker available + ≥ 14 GB RAM.
-  command -v docker >/dev/null 2>&1 || return 1
-  docker compose version >/dev/null 2>&1 || return 1
-  docker ps >/dev/null 2>&1 || return 1
-  local total_ram_mb
-  total_ram_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-  [[ "$total_ram_mb" -ge 14336 ]] || return 1
-  return 0
-}
 
 prepare_opencti_secrets() {
   [[ "${SIFT_OPENCTI_ENABLED:-false}" == "true" ]] || return 0
@@ -2239,11 +2292,13 @@ poll_gateway() {
 write_handoff() {
   local existing_temp_password existing_gateway_token existing_service_token
   local existing_sb_email existing_sb_pw
+  local expected_sb_email
   existing_temp_password=""
   existing_gateway_token=""
   existing_service_token=""
   existing_sb_email=""
   existing_sb_pw=""
+  expected_sb_email="${SIFT_EXAMINER}@operators.sift.local"
   # MATERIALS_FILE lives in SIFT_TOKENS_DIR (sift-service-owned 0700). Read prior
   # values via sudo; the file is (re)written below into an operator temp and
   # installed owned sift-service 0600. The operator reads it post-install with
@@ -2268,14 +2323,17 @@ write_handoff() {
     printf 'ca_cert=%s/ca-cert.pem\n' "$SIFT_TLS_DIR"
     printf 'gateway_config=%s\n' "$SIFT_CONFIG"
     printf 'examiner=%s\n' "$SIFT_EXAMINER"
+    printf 'expected_supabase_operator_email=%s\n' "$expected_sb_email"
     # A1-BOOTSTRAP: Supabase-first operator credentials (forced-reset on first login).
     if [[ "${SUPABASE_OPERATOR_CREATED:-0}" -eq 1 ]]; then
       printf 'supabase_operator_email=%s\n' "${SUPABASE_OPERATOR_EMAIL:-}"
+      printf 'portal_login_email=%s\n' "${SUPABASE_OPERATOR_EMAIL:-}"
       printf 'supabase_operator_temp_password=%s\n' "${SUPABASE_OPERATOR_TEMP_PASSWORD:-}"
       printf 'supabase_auth=enabled\n'
       printf 'supabase_forced_reset=required_on_first_login\n'
     elif [[ -n "$existing_sb_email" ]]; then
       printf 'supabase_operator_email=%s\n' "$existing_sb_email"
+      printf 'portal_login_email=%s\n' "$existing_sb_email"
       if [[ -n "$existing_sb_pw" ]]; then
         printf 'supabase_operator_temp_password=%s\n' "$existing_sb_pw"
       else
@@ -2285,11 +2343,13 @@ write_handoff() {
       printf 'supabase_forced_reset=check_if_completed\n'
     elif [[ "${SUPABASE_OPERATOR_MAPPED:-0}" -eq 1 ]]; then
       printf 'supabase_operator_email=%s\n' "${SUPABASE_OPERATOR_EMAIL:-}"
+      printf 'portal_login_email=%s\n' "${SUPABASE_OPERATOR_EMAIL:-}"
       printf 'supabase_operator_temp_password=existing-supabase-user\n'
       printf 'supabase_auth=enabled\n'
       printf 'supabase_forced_reset=check_if_completed\n'
     else
       printf 'supabase_auth=not_bootstrapped\n'
+      printf 'portal_login_email=unavailable_until_supabase_bootstrap_succeeds\n'
     fi
     # Legacy local PBKDF2 examiner password (fallback when Supabase is not configured).
     if [[ "${TEMP_PASSWORD_CREATED:-0}" -eq 1 ]]; then
@@ -2453,12 +2513,18 @@ print_summary() {
     printf '  2. After reset, create a case and activate it with your new password.\n'
     printf '  3. Mount or copy evidence into the active case evidence directory.\n'
     printf '  4. Generate an AI agent credential from Portal -> Agents.\n'
-  else
-    printf '  1. Sign into the portal as %s and reset the temporary password.\n' "$SIFT_EXAMINER"
-    printf '     (Supabase bootstrap was skipped — see %s for credentials)\n' "$MATERIALS_FILE"
+  elif [[ "${SUPABASE_OPERATOR_MAPPED:-0}" -eq 1 ]]; then
+    printf '  1. Sign into the portal with your existing Supabase operator account:\n'
+    printf '       email:    %s\n' "${SUPABASE_OPERATOR_EMAIL:-${SIFT_EXAMINER}@operators.sift.local}"
+    printf '       password: existing Supabase password\n'
     printf '  2. Create a case and activate it with password re-auth.\n'
     printf '  3. Mount or copy evidence into the active case evidence directory.\n'
     printf '  4. Generate an AI agent credential from Portal -> Agents.\n'
+  else
+    printf '  1. Supabase operator bootstrap did not complete, so portal login is not ready.\n'
+    printf '     Expected operator email after a successful bootstrap: %s@operators.sift.local\n' "$SIFT_EXAMINER"
+    printf '     Check gateway/Supabase health and re-run ./install.sh.\n'
+    printf '  2. After bootstrap, use %s -> portal_login_email and supabase_operator_temp_password.\n' "$MATERIALS_FILE"
   fi
   printf '  5. On the analyst machine, trust the CA cert or set REQUESTS_CA_BUNDLE.\n'
   printf '  6. Add-on backends are OPTIONAL and external. To integrate one, prepare it with\n'
@@ -2640,7 +2706,7 @@ main() {
   local original_args=("$@")
   SIFT_CORE_ONLY="${SIFT_CORE_ONLY:-0}"
   local uninstall_mode=0
-  # Track explicit flag overrides (honored over auto-detect).
+  # Track compatibility flags.
   local flag_no_opencti=0 flag_no_rag=0
   SIFT_EXTERNAL_SUPABASE="${SIFT_EXTERNAL_SUPABASE:-0}"
 
@@ -2657,14 +2723,14 @@ main() {
       -h|--help)
         printf 'Usage: ./install.sh [OPTIONS]\n\n'
         printf 'Provisions (or removes) a sift-mcps stack on SIFT Workstation.\n'
-        printf 'No arguments required for install — everything is auto-detected.\n'
+        printf 'No arguments required for install — native components are provisioned idempotently.\n'
         printf 'Run from a normal clone; the installer stages itself into %s before provisioning.\n' "$SIFT_MCPS_INSTALL_ROOT"
         printf 'Re-run safe: every install step is idempotent.\n\n'
         printf '  --core-only          Install gateway + portal + in-process core tools only.\n'
-        printf '                       Skips all add-on backends (opensearch, rag, opencti),\n'
-        printf '                       OpenSearch/Docker, and forensic-tool downloads.\n'
-        printf '  --no-opencti         Disable OpenCTI even if Docker + RAM requirements are met.\n'
+        printf '                       Skips OpenSearch, RAG, Docker, and forensic-tool downloads.\n'
         printf '  --no-rag             Disable forensic-rag-mcp backend.\n'
+        printf '  --no-opencti         Accepted for compatibility; OpenCTI is external and\n'
+        printf '                       never installed by install.sh. Use scripts/setup-addon.sh.\n'
         printf '  --external-supabase  Skip Supabase auto-provisioning.  Requires that\n'
         printf '                       SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,\n'
         printf '                       and SIFT_CONTROL_PLANE_DSN are already exported in env.\n'
@@ -2698,17 +2764,18 @@ main() {
   require_cmd awk
   require_cmd curl
 
-  # --- install prerequisites needed by early auto-detection/preflight ---
+  # --- install prerequisites needed by early preflight ---
   install_host_prereqs
-  # Local Supabase is Docker-backed; make Docker reachable before both OpenCTI
-  # auto-detection and scripts/setup-supabase.sh. A fresh clone install can then
-  # recover when the daemon is merely stopped.
+  # Local Supabase is Docker-backed; make Docker reachable before
+  # scripts/setup-supabase.sh. A fresh clone install can then recover when the
+  # daemon is merely stopped.
   ensure_docker_ready_for_supabase
 
-  # --- backend enablement (#1) ---
-  # Rule: explicit flags and explicit env vars take priority over auto-detect.
+  # --- native backend enablement (#1) ---
+  # OpenCTI and other external add-ons are prepared/registerable via
+  # scripts/setup-addon.sh, not installed by this native path.
   if [[ "$SIFT_CORE_ONLY" == "1" ]]; then
-    log "CORE-ONLY install: gateway + portal + in-process core tools; all add-on backends disabled."
+    log "CORE-ONLY install: gateway + portal + in-process core tools."
     SIFT_OPENCTI_ENABLED="false"
     SIFT_RAG_ENABLED="false"
     SIFT_OPENSEARCH_ENABLED="false"
@@ -2724,24 +2791,14 @@ main() {
     # OpenSearch: default enabled.
     SIFT_OPENSEARCH_ENABLED="${SIFT_OPENSEARCH_ENABLED:-true}"
 
-    # OpenCTI: --no-opencti or explicit env=false → disable without auto-detect.
-    # Explicit env=true → enable without auto-detect.
-    # Neither → auto-detect via _detect_opencti.
-    if [[ "$flag_no_opencti" -eq 1 || "${SIFT_OPENCTI_ENABLED:-}" == "false" ]]; then
-      SIFT_OPENCTI_ENABLED="false"
-      log "OpenCTI disabled (--no-opencti or SIFT_OPENCTI_ENABLED=false)."
+    if [[ "$flag_no_opencti" -eq 1 ]]; then
+      log "OpenCTI is external; --no-opencti is accepted as a no-op compatibility flag."
     elif [[ "${SIFT_OPENCTI_ENABLED:-}" == "true" ]]; then
-      log "OpenCTI enabled (SIFT_OPENCTI_ENABLED=true, explicit)."
-    else
-      # Auto-detect: Docker available + ≥14 GB RAM.
-      if _detect_opencti; then
-        SIFT_OPENCTI_ENABLED="true"
-        log "OpenCTI auto-detected: Docker available, sufficient RAM."
-      else
-        SIFT_OPENCTI_ENABLED="false"
-        log "OpenCTI not enabled (requires Docker + ≥14 GB RAM)."
-      fi
+      warn "SIFT_OPENCTI_ENABLED=true is ignored by install.sh."
+      warn "  Prepare OpenCTI with scripts/setup-addon.sh, then register it via Portal -> Backends."
     fi
+    SIFT_OPENCTI_ENABLED="false"
+    log "OpenCTI native install disabled: external add-on only (scripts/setup-addon.sh)."
   fi
   export SIFT_CORE_ONLY SIFT_OPENCTI_ENABLED SIFT_RAG_ENABLED SIFT_OPENSEARCH_ENABLED
 
@@ -2771,7 +2828,6 @@ main() {
   configure_fuse
   generate_tls
   write_default_examiner
-  prepare_opencti_secrets
   write_supabase_env   # A1-BOOTSTRAP: Supabase secrets in ~/.sift/supabase.env
   write_control_plane_env
 
@@ -2795,8 +2851,9 @@ main() {
   OPENSEARCH_SEEDED=false
 
   if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
-    download_rag_index
-    import_rag_pgvector
+    if [[ "${SIFT_RAG_ENABLED:-true}" == "true" ]]; then
+      load_rag_pgvector
+    fi
     install_hayabusa
     write_opensearch_config
     write_opensearch_env    # FM-2: write gateway env file for OPENSEARCH_CONFIG/OPENSEARCH_HOST (#3)
@@ -2815,8 +2872,6 @@ main() {
       export SIFT_OPENSEARCH_ENABLED
     fi
 
-    install_opencti
-    install_opencti_feeds
     install_hayabusa_system_links
     fix_volatility_permissions
   else

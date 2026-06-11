@@ -1,7 +1,7 @@
 # Task Batches
 
 Status: MVP sprint execution tracker.
-Last updated: 2026-06-11.
+Last updated: 2026-06-12.
 
 Rules:
 
@@ -123,7 +123,8 @@ Exact work:
 - Verify Gateway health, Supabase, evidence root, worker, and OpenSearch.
 - Issue a fresh portal agent principal and prove aggregate `/mcp tools/list`
   includes `opensearch_*` and `kb_*` WITHOUT a restart (OSX1 race fix).
-- Confirm `app.rag_chunks` == ~26,586 (full Chroma bundle) and Hayabusa detections queryable.
+- Confirm `app.rag_chunks` is populated by the direct model-backed pgvector seed and Hayabusa
+  detections are queryable.
 - Run one read-only OpenSearch path, then one sealed-evidence ingest job.
 
 Acceptance:
@@ -296,10 +297,10 @@ Acceptance:
 
 ## Post-Migration Install & Cleanup (PMI) Track
 
-Goal: a single zero-argument `./install.sh` on a BARE SIFT VM brings up (OpenCTI auto-detected;
-windows-triage removed in NW2 — `--no-windows-triage`/`--no-opencti` flags no longer exist)
-everything live (Supabase via CLI, migrations, OpenSearch 3.5 + Hayabusa, RAG pgvector,
-gateway+worker+portal), then the operator runs the Rocba case.
+Goal: a single zero-argument `./install.sh` on a BARE SIFT VM brings up the native stack
+(Supabase via CLI, migrations, OpenSearch 3.5 + Hayabusa, direct RAG pgvector seed,
+gateway+worker+portal). OpenCTI and other external add-ons are installed separately through
+`scripts/setup-addon.sh` + Portal -> Backends. Then the operator runs the Rocba case.
 
 PMI operating model (LEAN):
 - One worktree per batch off `main`; one commit per batch; scope-fenced.
@@ -348,11 +349,13 @@ Scope:
 
 Exact work:
 
-- On the bare SIFT VM: `./install.sh` (zero-argument; OpenCTI auto-detected, windows-triage removed)
+- On the bare SIFT VM: `./install.sh` (zero-argument native install; OpenCTI external,
+  windows-triage removed)
 - Confirm `status:ok` (not degraded), job-worker not crash-looping
 - Confirm aggregate `/mcp` lists `opensearch_*` + `kb_*` tools after post-seed (no restart
   needed — OSX1 race fix)
-- Confirm `app.rag_chunks` populated with full corpus (~26,586) and Hayabusa detections queryable
+- Confirm `app.rag_chunks` populated from the direct model-backed pgvector seed and Hayabusa
+  detections queryable
 - Portal: create case → issue agent token → register+seal Rocba disk+RAM evidence → run agent
   end-to-end
 - Record command-level proof in `Session-Notes.md`
@@ -361,7 +364,8 @@ Acceptance:
 
 - `status:ok` from fresh bare-SIFT install.
 - Aggregate `/mcp tools/list` advertises `opensearch_*` + `kb_*` without restart.
-- `app.rag_chunks` matches the full-corpus baseline (~26,586).
+- `app.rag_chunks` is nonzero and matches the direct bundled-knowledge seed count recorded in
+  `Session-Notes.md`.
 - Rocba case agent run completes or blockers documented with severity.
 - `Session-Notes.md` records command-level proof.
 
@@ -729,8 +733,9 @@ Frozen contract (the agreed end-state):
   into `/opt/sift-mcps` and re-execs from there before provisioning services.
 - Shared writable vol3 symbol cache at `/var/cache/sift/volatility-symbols` (group `sift`), env override
   `SIFT_VOL_SYMBOLS`; first run warms it online — no pre-seeding.
-- `install.sh` is ZERO-ARGUMENT (single `--extra full`; OpenCTI auto-detected; windows-triage removed
-  in NW2). The flags `--no-windows-triage`/`--no-opencti` do not exist.
+- `install.sh` is ZERO-ARGUMENT (single native `--extra full`; OpenCTI external via
+  `scripts/setup-addon.sh`; windows-triage removed in NW2). `--no-opencti` is accepted only as a
+  no-op compatibility flag.
 
 Scope (three parallel groups):
 

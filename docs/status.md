@@ -1,6 +1,6 @@
 # SIFT Sprint — Active Work & Open Decisions
 
-_Last updated: 2026-06-11. Single source for everything requiring action or a decision._
+_Last updated: 2026-06-12. Single source for everything requiring action or a decision._
 _Companion to `docs/migration/task-batches.md` (batch definitions) and `docs/migration/Session-Notes.md` (change log)._
 
 ---
@@ -8,7 +8,7 @@ _Companion to `docs/migration/task-batches.md` (batch definitions) and `docs/mig
 ## Wave Execution Order
 
 1. ~~**Cleanup wave — run BEFORE fresh install** — NW1 ∥ NW2 ∥ NW3 ∥ NW4~~ — **DONE, landed on `main` 2026-06-11** (4 parallel workers, 0 merge conflicts, integrated sweep green; doc log `1dadb03`), followed by the HARD1 host-code commit `30596a7`.
-2. **Fresh VM install + end-to-end gate** — operator clones the repo, runs `./install.sh` from inside the checkout, and the installer stages itself into `/opt/sift-mcps` before continuing (zero-argument; OpenCTI auto-detected, windows-triage removed in NW2) → satisfies PMI4 and OS6, **and now also proves BATCH-HARD1** (non-admin `sift-service` cutover + shared vol3 symbol cache — host code landed 2026-06-11). _Fresh VM ready (`192.168.122.81`, host key reset)._
+2. **Fresh VM install + end-to-end gate** — operator clones the repo, runs `./install.sh` from inside the checkout, and the installer stages itself into `/opt/sift-mcps` before continuing (zero-argument native stack; OpenCTI external via `scripts/setup-addon.sh`; windows-triage removed in NW2) → satisfies PMI4 and OS6, **and now also proves BATCH-HARD1** (non-admin `sift-service` cutover + shared vol3 symbol cache — host code landed 2026-06-11). _Fresh VM ready (`192.168.122.81`, host key reset)._
 3. **PTC enablement** — NW6 after install proves `opensearch_*` + `kb_*` tools are live
 4. **FRZ1 close-out** — remaining demo-prep items after the full stack is proven on VM
 
@@ -131,7 +131,7 @@ explicit and bounded; `python3 scripts/validate_docs.py` passes.
 **What to do:**
 - After install, confirm aggregate `/mcp tools/list` includes `opensearch_*` **without a restart**
   (OSX1 race fix: seed runs before gateway starts)
-- Confirm `app.rag_chunks` == ~26,586 (full Chroma bundle; NOT the small seed)
+- Confirm `app.rag_chunks` is populated from the direct model-backed bundled-knowledge seed
 - Confirm Hayabusa detections queryable
 - Run one read-only OpenSearch path + one sealed-evidence ingest job on the Rocba case
 - Record command-level proof in `Session-Notes.md`
@@ -147,10 +147,10 @@ active case and sealed evidence only; no path/DSN/credential leakage.
 **Run after NW1/NW2/NW3/NW4 land (done) so the clean install is tested.**
 
 **Steps:**
-1. Bare SIFT VM: `./install.sh` (zero-argument; OpenCTI auto-detected, windows-triage removed in NW2)
+1. Bare SIFT VM: `./install.sh` (zero-argument native install; OpenCTI external, windows-triage removed in NW2)
 2. Confirm `status:ok` (not degraded), job-worker not crash-looping
 3. Confirm aggregate `/mcp` lists `opensearch_*` + `kb_*` tools after post-seed (no restart needed)
-4. Confirm `app.rag_chunks` populated with full corpus (~26,586)
+4. Confirm `app.rag_chunks` populated from the direct model-backed bundled-knowledge seed
 5. Confirm Hayabusa detections queryable
 6. Portal: create case → issue agent token → register+seal Rocba disk+RAM evidence → agent end-to-end
 7. Record command-level proof in `Session-Notes.md`

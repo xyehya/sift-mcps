@@ -20,6 +20,7 @@ export const getMe = () => apiFetch('/api/auth/me')
 // envelope cookie. No token material is ever returned, displayed, or stored.
 export const postSupabaseLogin = (body) => apiPost('/api/auth/login', body)
 export const postAuthRefresh = () => apiPost('/api/auth/refresh', {})
+export const postForcedReset = (body) => apiPost('/api/auth/forced-reset', body)
 export const getPrincipals = () => apiFetch('/api/auth/principals')
 export const postPrincipal = (body) => apiPost('/api/auth/principals', body)
 export const deletePrincipal = (type, id) => apiDelete(`/api/auth/principals/${type}/${id}`)

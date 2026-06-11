@@ -1,9 +1,7 @@
-# OpenCTI stack — optional, enabled via: ./install.sh --enable-opencti
+# OpenCTI stack — optional reference add-on, prepared via scripts/setup-addon.sh
 #
-# Uses the shared sift-net network so it can reach sift-opensearch
-# by service name. OpenCTI's own data store IS our sift-opensearch
-# instance (index prefix "opencti" — no collision with "case-*" forensic
-# indices). See SIFT-MCPS-PLAN.md §OpenCTI Integration for analysis.
+# Uses its own Docker network and OpenSearch datastore. It must not write
+# OpenCTI platform indices into the native SIFT forensic OpenSearch cluster.
 #
 # Bring up:  OPENCTI_ADMIN_TOKEN=<uuid> docker compose -f docker-compose.opencti.yml up -d
 # Tear down: docker compose -f docker-compose.opencti.yml down
@@ -12,12 +10,42 @@
 # sift-gateway authenticates to the platform using OPENCTI_ADMIN_TOKEN.
 
 services:
+  opencti-opensearch:
+    image: opensearchproject/opensearch:3.5.0
+    container_name: sift-opencti-opensearch
+    restart: unless-stopped
+    networks:
+      - opencti-net
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g
+      - thread_pool.search.queue_size=5000
+    volumes:
+      - opencti-opensearch-data:/usr/share/opensearch/data
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf http://localhost:9200/_cluster/health | grep -v '\"status\":\"red\"'",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
   redis:
     image: redis:7.4
     container_name: sift-opencti-redis
     restart: unless-stopped
     networks:
-      - sift-net
+      - opencti-net
     volumes:
       - opencti-redis:/data
     healthcheck:
@@ -31,7 +59,7 @@ services:
     container_name: sift-opencti-rabbitmq
     restart: unless-stopped
     networks:
-      - sift-net
+      - opencti-net
     volumes:
       - opencti-rabbitmq:/var/lib/rabbitmq
     environment:
@@ -48,7 +76,7 @@ services:
     container_name: sift-opencti-minio
     restart: unless-stopped
     networks:
-      - sift-net
+      - opencti-net
     volumes:
       - opencti-minio:/data
     environment:
@@ -66,7 +94,7 @@ services:
     container_name: sift-opencti
     restart: unless-stopped
     networks:
-      - sift-net
+      - opencti-net
     ports:
       - "127.0.0.1:8080:8080"
     environment:
@@ -79,8 +107,8 @@ services:
       - APP__ENCRYPTION_KEY=${OPENCTI_ENCRYPTION_KEY}
       - APP__HEALTH_ACCESS_KEY=${OPENCTI_HEALTH_ACCESS_KEY}
       - APP__APP_LOGS__LOGS_LEVEL=error
-      # Search backend — our shared sift-opensearch instance
-      - ELASTICSEARCH__URL=http://opensearch:9200
+      # Search backend — isolated OpenCTI datastore, not the SIFT evidence cluster.
+      - ELASTICSEARCH__URL=http://opencti-opensearch:9200
       - ELASTICSEARCH__ENGINE_SELECTOR=opensearch
       - ELASTICSEARCH__INDEX_PREFIX=opencti
       - ELASTICSEARCH__NUMBER_OF_SHARDS=1
@@ -100,6 +128,8 @@ services:
       - MINIO__ACCESS_KEY=opencti
       - MINIO__SECRET_KEY=${OPENCTI_ADMIN_TOKEN}
     depends_on:
+      opencti-opensearch:
+        condition: service_healthy
       redis:
         condition: service_healthy
       rabbitmq:
@@ -121,7 +151,7 @@ services:
     image: opencti/worker:latest
     restart: unless-stopped
     networks:
-      - sift-net
+      - opencti-net
     environment:
       - OPENCTI_URL=http://opencti:8080
       - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
@@ -133,11 +163,11 @@ services:
         condition: service_healthy
 
 volumes:
+  opencti-opensearch-data:
   opencti-redis:
   opencti-rabbitmq:
   opencti-minio:
 
 networks:
-  sift-net:
-    external: true
-    name: sift-net
+  opencti-net:
+    name: sift-opencti-net

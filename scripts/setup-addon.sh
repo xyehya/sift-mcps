@@ -6,9 +6,9 @@ set -Eeuo pipefail
 # =============================================================================
 #
 # The SIFT Protocol Gateway (SPG) — core + gateway + portal + the agent's
-# in-process MCP server — is the product. It is installed by:
+# in-process MCP server — is the product. The native stack is installed by:
 #
-#       ./install.sh --core-only
+#       ./install.sh
 #
 # and is complete on its own. Add-on backends (OpenCTI, OpenSearch,
 # forensic-rag, or ANY backend a third party writes to the
@@ -99,9 +99,18 @@ reset_payload() {
 }
 
 stdio_args() {
-  # stdio_args <entry-script> -> fills PAYLOAD_ARGS with the standard uv invocation
-  PAYLOAD_ARGS=(run --project "$SIFT_MCPS_ROOT" --python "$PYTHON_BIN"
-                --no-managed-python --no-python-downloads "$1")
+  # stdio_args <entry-script> [extra ...] -> fills PAYLOAD_ARGS with the
+  # standard uv invocation. Extras let external reference add-ons stay out of
+  # the native installer while remaining runnable through the same checkout.
+  local entry_script="$1"
+  shift || true
+  PAYLOAD_ARGS=(run --project "$SIFT_MCPS_ROOT")
+  local extra
+  for extra in "$@"; do
+    PAYLOAD_ARGS+=(--extra "$extra")
+  done
+  PAYLOAD_ARGS+=(--python "$PYTHON_BIN"
+                --no-managed-python --no-python-downloads "$entry_script")
 }
 
 print_manifest_summary() {
@@ -211,7 +220,7 @@ setup_rag() {
   warn "no raw DSN is stored in the register payload."
   local rag_model
   rag_model="$(ask 'RAG_MODEL_NAME (query embedding model)' 'BAAI/bge-base-en-v1.5')"
-  stdio_args "rag-mcp"
+  stdio_args "rag-mcp" "full"
   PAYLOAD_COMMAND="$UV_BIN"
   # env_refs only: the gateway maps SIFT_CONTROL_PLANE_DSN from its own env into
   # the backend child process. RAG_MODEL_NAME is a non-secret tunable.
@@ -237,7 +246,7 @@ setup_opensearch() {
         && configure_geoip_pipeline && install_opensearch_templates; } \
       || warn "OpenSearch provisioning incomplete — check Docker and retry; backend will be UNAVAILABLE until reachable."
   fi
-  stdio_args "opensearch-mcp"
+  stdio_args "opensearch-mcp" "standard"
   PAYLOAD_COMMAND="$UV_BIN"
   PAYLOAD_ENV=("OPENSEARCH_CONFIG=$os_config" "OPENSEARCH_HOST=$os_host")
   echo_vars_and_emit
@@ -255,12 +264,13 @@ setup_opencti() {
   local octi_url octi_token
   octi_url="$(ask 'OPENCTI_URL' 'http://127.0.0.1:8080')"
   if command -v docker >/dev/null 2>&1 && ask_yes "Provision prerequisites (prepare secrets, start OpenCTI stack + feeds — needs >=14 GB RAM)?"; then
+    SIFT_OPENCTI_ENABLED=true
     { prepare_opencti_secrets && install_opencti && install_opencti_feeds; } \
       || warn "OpenCTI provisioning incomplete — backend will be UNAVAILABLE until reachable."
     octi_token="${OPENCTI_TOKEN:-}"
   fi
   octi_token="$(ask 'OPENCTI_TOKEN' "${octi_token:-}")"
-  stdio_args "opencti-mcp"
+  stdio_args "opencti-mcp" "opencti"
   PAYLOAD_COMMAND="$UV_BIN"
   PAYLOAD_ENV=("OPENCTI_URL=$octi_url" "OPENCTI_TOKEN=$octi_token")
   echo_vars_and_emit

@@ -1,7 +1,7 @@
 # Session Notes
 
 Status: sprint log and decision register.
-Last updated: 2026-06-11.
+Last updated: 2026-06-12.
 
 Format rules:
 
@@ -12,6 +12,43 @@ Format rules:
 - Do not create more migration runbooks.
 
 ## Current Change Log
+
+### 2026-06-12 - Fresh VM installer policy correction: OpenCTI external, direct RAG seed, portal handoff
+
+Status: DONE (host patch; operator should pull and rerun after stopping the stale live installer if it is still active)
+
+Fresh VM trace exposed five policy/UX issues:
+
+- FUSE warning was non-fatal: SIFT/Ubuntu may not have a literal `fuse` group, but
+  `/etc/fuse.conf user_allow_other` was enabled and the mount sudoers allowlist was installed.
+- `install.sh` still auto-detected and deployed OpenCTI despite the locked add-on decision. Live
+  proof showed OpenCTI writing `opencti_*` indices into the native `sift-opensearch` cluster.
+- RAG loaded through a Chroma release bundle and then imported into pgvector. That remains a useful
+  compatibility path, but the native installer should seed Supabase pgvector directly with the
+  allowlisted BGE model.
+- The OpenSearch warning text still said 180 s after the timeout was extended to 600 s; live VM
+  inspection showed OpenSearch healthy/yellow while the currently running installer was still active.
+- The handoff file exposed `examiner=examiner` while the portal form expects Supabase email login.
+  The pasted handoff was stale from the previous run and had `supabase_auth=not_bootstrapped`, but
+  the installer should still write an explicit `portal_login_email` and retry transient Auth failures.
+
+Changed: native `full` extra no longer installs `opencti-mcp` or `chromadb`; new explicit extras
+`opencti` and `chroma-import` keep those paths available. `install.sh` no longer auto-installs
+OpenCTI or writes OpenCTI secrets in the native path; `--no-opencti` is accepted only as a no-op
+compatibility flag. Optional OpenCTI compose now uses its own `sift-opencti-opensearch` datastore and
+`sift-opencti-net`, so it cannot contaminate the forensic OpenSearch cluster. RAG install defaults to
+`rag-mcp-seed-pgvector --embedding-mode model`; `SIFT_RAG_IMPORT_SOURCE=chroma` preserves the old
+download/import path. Supabase operator bootstrap now retries transient Admin API failures, handoff
+writes `expected_supabase_operator_email` and `portal_login_email`, and the frontend honors
+`must_reset` by calling `/api/auth/forced-reset`.
+
+Validation: `uv lock` and `uv lock --check` OK; `bash -n install.sh scripts/setup-addon.sh
+scripts/setup-supabase.sh` OK; `py_compile` OK for `rag_mcp.pgvector_seed`; targeted RAG seed/import
+pytest OK; portal frontend build OK; compose configs render OK for native OpenSearch and optional
+OpenCTI stacks; `validate_docs.py` and `validate_migration_docs.py` OK; `git diff --check` clean.
+Live recheck after host patch: no installer process remained active; native OpenSearch was
+healthy/yellow; the stale handoff still showed `supabase_auth=not_bootstrapped`; old OpenCTI
+containers and `opencti_*` indices still existed from the previous native installer behavior.
 
 ### 2026-06-12 - Fresh VM install trace: RAG import + backend seeding fixes
 
@@ -127,11 +164,9 @@ Decisions locked (frozen contract constants — the agreed build end-state):
 - **Shared writable vol3 symbol cache** at `/var/cache/sift/volatility-symbols` (group `sift`), env
   override `SIFT_VOL_SYMBOLS`; first run warms it online — no pre-seeding. Drops the read-only
   `/opt/volatility3` chmod hack.
-- **`install.sh` is ZERO-ARGUMENT** (single `--extra full`; OpenCTI auto-detected; windows-triage
-  removed in NW2). The flags `--no-windows-triage`/`--no-opencti` DO NOT EXIST. The stale
-  `./install.sh --no-windows-triage --no-opencti` command was de-staled to `./install.sh` in the
-  PMI4 step + PMI track goal (`task-batches.md`), and in `status.md` Wave Execution Order #2 +
-  BATCH-PMI4 step 1.
+- **`install.sh` is ZERO-ARGUMENT** (single native `--extra full`; OpenCTI external via
+  `scripts/setup-addon.sh`; windows-triage removed in NW2). `--no-opencti` is accepted only as a
+  no-op compatibility flag; the native operator command is still just `./install.sh`.
 
 Work-streams (4):
 
@@ -217,8 +252,8 @@ but not dropped (append-only) — future cleanup migration may DROP it once call
 
 Validation: `validate_docs.py` + `validate_migration_docs.py` OK; `git diff --check` clean.
 
-**Next:** push `main`, then Wave 2 = bare-SIFT `./install.sh --no-windows-triage --no-opencti`
-(PMI4/OS6, operator-run, the only end-to-end gate), then Wave 3 = NW6 (PTC) validated post-install.
+**Next:** push `main`, then Wave 2 = bare-SIFT `./install.sh` (PMI4/OS6, operator-run, the
+only end-to-end gate), then Wave 3 = NW6 (PTC) validated post-install.
 
 ### 2026-06-10 - OSX wave merged to `main`; NW track opened (operator decisions)
 
@@ -251,8 +286,7 @@ Status: DONE (docs/planning; merge to main; NW build wave handed off)
 Validation: `validate_docs.py` + `validate_migration_docs.py` OK; `git diff --check` clean.
 
 Next: operator pushes `main` (enables the VM clone), then runs the NW cleanup wave and the fresh
-install. Next: run NW1∥NW2∥NW3∥NW4, then bare-SIFT `./install.sh --no-windows-triage --no-opencti`
-(PMI4/OS6), then NW6.
+install. Next: run NW1∥NW2∥NW3∥NW4, then bare-SIFT `./install.sh` (PMI4/OS6), then NW6.
 
 ### 2026-06-10 - OSX build wave LANDED (OSX1 + OSX-RAG + OSX-PURGE + OSX2 + OSX3 + PMI3)
 
@@ -363,10 +397,10 @@ Validation (targeted-per-batch + a conductor INTEGRATED sweep on the landed tree
 Next:
 
 - **BATCH-PMI4 / OS6** is the ONLY remaining gate: operator-run VM proof. On the bare SIFT VM,
-  `./install.sh --no-windows-triage --no-opencti`; confirm `status:ok`, aggregate `/mcp` lists
-  `opensearch_*` + the forensic-rag `kb_*` tools WITHOUT a restart (OSX1 race fix), `app.rag_chunks`
-  count == the big Chroma bundle (~26,586, not the small seed), Hayabusa detections queryable; then the
-  Rocba case end-to-end. Push / PR to integrate this wave awaits operator go-ahead.
+  `./install.sh`; confirm `status:ok`, aggregate `/mcp` lists `opensearch_*` + the forensic-rag
+  `kb_*` tools WITHOUT a restart (OSX1 race fix), `app.rag_chunks` is populated from the direct
+  model-backed bundled-knowledge seed, Hayabusa detections queryable; then the Rocba case
+  end-to-end. Push / PR to integrate this wave awaits operator go-ahead.
 
 ### 2026-06-10 - OSX track planned (OpenSearch excellence + RAG-port + purge); architecture discovery; hygiene
 
@@ -536,7 +570,7 @@ Changed:
 Validation:
 
 - `python3 scripts/validate_docs.py`: OK. `python3 scripts/validate_migration_docs.py`: OK.
-- One-session install command: `./install.sh --no-windows-triage --no-opencti`.
+- Current one-session install command: `./install.sh`.
 
 ### 2026-06-10 - BATCH-OS5 landed (host identity + enrichment + mutating-tool policy)
 

@@ -7,7 +7,6 @@ services:
       - DISABLE_SECURITY_PLUGIN=true
       - OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g
       - path.repo=/usr/share/opensearch/snapshots
-      # Required by OpenCTI when sharing this instance (no-op otherwise)
       - thread_pool.search.queue_size=5000
     volumes:
       - opensearch-data:/usr/share/opensearch/data

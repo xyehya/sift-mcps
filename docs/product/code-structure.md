@@ -82,8 +82,8 @@ search/timeline tools).
 
 ### forensic-rag-mcp (reference plane)
 
-`pgvector_store.py` (query/store), `pgvector_chroma_import.py` +
-`pgvector_seed.py` (corpus import — Chroma is a source artifact only),
+`pgvector_store.py` (query/store), `pgvector_seed.py` (direct model-backed corpus seed) +
+`pgvector_chroma_import.py` (explicit Chroma compatibility import),
 `server.py` / `tool_metadata.py` (RAG MCP surface).
 
 ### case-dashboard (human/policy)
