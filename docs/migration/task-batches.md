@@ -703,18 +703,18 @@ offline-symbol slice of FRZ1 item 1 (Host-Only #3).
 ## HARD operating model (LEAN)
 
 - One worktree per group off `main`; scope-fenced; targeted tests only per group.
-- Live enforcement proof (run-as-user, warm cache, no-restart catalog) folds into PMI4/OS6 on the
-  fresh VM — this batch lands host code/docs now; live proof is deferred.
-- `/security-review` REQUIRED: the diff touches the service user, sudoers grants, secret/env-file
-  relocation, and systemd unit ownership.
+- Host code/docs landed in commit `30596a7`; live enforcement proof (run-as-user, warm cache,
+  no-restart catalog) folds into PMI4/OS6 on the fresh VM.
+- `/security-review` completed before land: the diff touches the service user, sudoers grants,
+  secret/env-file relocation, and systemd unit ownership.
 
 ## BATCH-HARD1 - Non-admin service-user cutover + shared vol3 symbol cache
 
 Dependencies: BATCH-PMI0 (installer/systemd hardening baseline). Live proof folds into PMI4/OS6.
 
-Current status (2026-06-11): IN_PROGRESS — host code landing this session; live proof pending a
-fresh VM. See `docs/status.md` and `Session-Notes.md` (2026-06-11 host build note) for the frozen
-contract constants. `/security-review` is required before Land.
+Current status (2026-06-11): HOST CODE DONE — commit `30596a7` landed the host installer/systemd/cache
+work; live proof is pending a fresh VM. See `docs/status.md` and `Session-Notes.md` (2026-06-11 host
+build note) for the frozen contract constants.
 
 Frozen contract (the agreed end-state):
 

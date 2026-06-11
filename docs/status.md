@@ -7,7 +7,7 @@ _Companion to `docs/migration/task-batches.md` (batch definitions) and `docs/mig
 
 ## Wave Execution Order
 
-1. ~~**Cleanup wave — run BEFORE fresh install** — NW1 ∥ NW2 ∥ NW3 ∥ NW4~~ — **DONE, landed on local `main` 2026-06-11** (4 parallel workers, 0 merge conflicts, integrated sweep green; doc log `1dadb03`). **Not yet pushed** — local `main` is 12 commits ahead of `origin/main`; operator pushes manually.
+1. ~~**Cleanup wave — run BEFORE fresh install** — NW1 ∥ NW2 ∥ NW3 ∥ NW4~~ — **DONE, landed on `main` 2026-06-11** (4 parallel workers, 0 merge conflicts, integrated sweep green; doc log `1dadb03`), followed by the HARD1 host-code commit `30596a7`.
 2. **Fresh VM install + end-to-end gate** — operator runs `./install.sh` on bare SIFT VM (zero-argument; OpenCTI auto-detected, windows-triage removed in NW2) → satisfies PMI4 and OS6, **and now also proves BATCH-HARD1** (non-admin `sift-service` cutover + shared vol3 symbol cache — host code landed 2026-06-11). _Fresh VM ready (`192.168.122.81`, host key reset); repo to be rsynced to `/opt/sift-mcps`._
 3. **PTC enablement** — NW6 after install proves `opensearch_*` + `kb_*` tools are live
 4. **FRZ1 close-out** — remaining demo-prep items after the full stack is proven on VM
@@ -18,16 +18,16 @@ _Companion to `docs/migration/task-batches.md` (batch definitions) and `docs/mig
 
 ## Host-Only Work Available Now (No Fresh VM)
 
-The fresh-VM gate (PMI4/OS6) is blocked until a clean VM exists, but a meaningful amount of work
-needs **no VM at all** (pure host: code + targeted tests + docs) or only the **existing** (non-fresh)
-VM. Ranked by value/independence:
+The fresh-VM gate (PMI4/OS6) is ready for the operator-run installer, but a meaningful amount of work
+still needs **no VM at all** (pure host: code + targeted tests + docs) or only the **existing**
+(non-fresh) VM. Ranked by value/independence:
 
 | # | Work | Needs | Source |
 |---|------|-------|--------|
 | 1 | **Progress-stderr filtering** — strip `\r` `vol`-style progress spam from durable-job `result_public` stderr in the worker. Small, self-contained, explicitly "can be done before PMI4". | Host code + sift-core targeted tests | FRZ1 item 2 |
 | 2 | **FRZ1 demo-runbook + known-limitations docs** — draft `docs/product/demo-runbook.md` and `docs/product/known-limitations-and-improvements.md` from known steps; refine after VM proof. | Host docs only | FRZ1 scope |
-| 3 | **Offline Volatility symbol pre-warm — packaging half** — pre-stage/package ISF symbols in the repo/installer so a fresh VM's first `vol windows.info` isn't slow/failing. The packaging + installer wiring is host work; only the live timing proof needs a VM. | Host installer code (live proof deferred) | FRZ1 item 1 |
-| 4 | **Non-admin service-user cutover — code half** — add the dedicated non-admin service user + drop the blanket `NOPASSWD: ALL` in `install.sh` / systemd units / sudoers. The wiring is host work; live enforcement proof needs a VM. | Host installer/systemd code (live proof deferred) | FRZ1 item 4 |
+| 3 | **Volatility symbol cache live proof** — HARD1 resolved the packaging direction: no pre-seeded symbols; first `vol3` run warms `/var/cache/sift/volatility-symbols`. Only live timing/warm-cache proof remains. | Fresh VM proof | FRZ1 item 1 / HARD1 |
+| 4 | **Non-admin service-user cutover live proof** — host code is done; verify the gateway/worker/backends run as `sift-service`, secrets are unreadable to `agent_runtime`, and only the narrow sudoers grants remain effective. | Fresh VM proof | FRZ1 item 4 / HARD1 |
 | 5 | **NW1 existing-deployment re-hash migration** — NW1 documented (did not write) the re-hash pass existing deployments need now that the hash widened to 19 keys. Write it. | Host SQL/script (apply needs a DB) | NW1 carry-forward |
 | 6 | **NW4 old-overload drop migration** — append-only migration to `DROP` the now-revoked 9-arg `app.rag_search` overload once callers are confirmed migrated. | Host SQL (apply needs a DB) | NW4 carry-forward |
 | 7 | **NW6 design / harness-conversion (non-live half)** — decide + implement how the agent-runtime converts Gateway/MCP tool defs into Messages-API defs with `code_execution` + `allowed_callers` opt-in. Only the live context-savings measurement needs live `opensearch_*`. | Host code/design | NW6 step 1–2 |
@@ -47,7 +47,7 @@ no-restart-after-fresh-seed proof, `status:ok`-from-bare-install.
 
 ### BATCH-HARD1 — Non-admin `sift-service` cutover + shared vol3 symbol cache — HOST CODE DONE, pending VM proof
 
-Host code landed (uncommitted working tree) 2026-06-11; full detail in `task-batches.md` + `Session-Notes.md`.
+Host code landed in commit `30596a7` on 2026-06-11; full detail in `task-batches.md` + `Session-Notes.md`.
 4-stream team build (3 distributed + installer/systemd lead-owned), `/security-review` PASS,
 `/code-review` (recall) caught + fixed a HIGH deny-ACL bug. Tests 13+85 green; validators OK; `git diff --check` clean.
 
@@ -64,7 +64,7 @@ Host code landed (uncommitted working tree) 2026-06-11; full detail in `task-bat
 
 ### NW Wave 1 (NW1–NW4) — DONE
 
-Landed on local `main` 2026-06-11; full per-batch detail in `task-batches.md` + `Session-Notes.md`.
+Landed on `main` 2026-06-11; full per-batch detail in `task-batches.md` + `Session-Notes.md`.
 
 | Batch | Commit | Outcome |
 |-------|--------|---------|
@@ -91,10 +91,10 @@ Landed on local `main` 2026-06-11; full per-batch detail in `task-batches.md` + 
 
 **Remaining open items** (tagged by VM dependency — see [Host-Only Work](#host-only-work-available-now-no-fresh-vm)):
 
-1. **Offline Volatility symbol packaging / pre-warm** _(host packaging now; live proof needs VM)_ —
-   operator-requested. Volatility downloads/generates ISF symbols live; a fresh VM has no cache, making
-   `vol windows.info` slow or fail on first run. Options: pre-package symbols in repo/installer, or
-   document a pre-warm runbook step.
+1. **Volatility symbol cache proof** _(live proof needs VM)_ — HARD1 chose the no-preseed path:
+   Volatility downloads/generates ISF symbols live and warms the shared cache at
+   `/var/cache/sift/volatility-symbols`. The fresh VM run must prove first-run behavior and subsequent
+   cache reuse.
 
 2. **Progress-stderr filtering** _(host code now)_ — `vol` and similar tools emit `\r`-separated progress
    spam into durable-job `result_public` stderr (capped at 4 KB but noisy). A worker-side filter cleans
@@ -103,10 +103,9 @@ Landed on local `main` 2026-06-11; full per-batch detail in `task-batches.md` + 
 3. **Throwaway-VM destructive install idempotency proof** _(BLOCKED — needs fresh VM)_ — `./install.sh`
    was not destructively replayed on a fresh throwaway VM. Done as part of PMI4.
 
-4. **Non-admin service-user cutover** _(host code now; live enforcement needs VM)_ — gateway/worker still
-   runs as `sansforensics` (blanket `ALL=(ALL) NOPASSWD: ALL`). The narrow `sift-ingest-mount` sudoers
-   rule is deployed but masked by the blanket grant. Enforcement requires a dedicated non-admin service
-   user and removal of the blanket grant.
+4. **Non-admin service-user cutover** _(host code done; live enforcement needs VM)_ — gateway/worker
+   now install as system services under dedicated `sift-service`; the fresh VM proof must show the
+   blanket operator grant is gone from the service path and only the two narrow sudoers grants remain.
 
 5. **Re-acquisition click proof** _(needs existing VM + current operator password)_ — portal Evidence-tab
    Re-seal/Retire actions are unit-proven and deployed but not click-proven live (operator password

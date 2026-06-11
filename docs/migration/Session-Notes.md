@@ -15,13 +15,13 @@ Format rules:
 
 ### 2026-06-11 - HARD1 host build: non-admin `sift-service` cutover + shared vol3 symbol cache (decisions locked)
 
-Status: IN_PROGRESS (host code/docs landing this session; live enforcement proof folds into PMI4/OS6
-on the fresh VM)
+Status: IN_PROGRESS (host code/docs landed in commit `30596a7`; live enforcement proof folds into
+PMI4/OS6 on the fresh VM)
 
-Locked the hardening end-state and opened **BATCH-HARD1**. This entry records the host-side build of
-the non-admin service-user cutover, the shared Volatility symbol cache, and the de-staling of the
-install command across the docs. Live proof (run-as-user, warm cache, no-restart catalog) is pending
-a fresh VM and folds into PMI4/OS6.
+Locked the hardening end-state and opened **BATCH-HARD1**. This entry records the landed host-side
+build of the non-admin service-user cutover, the shared Volatility symbol cache, and the de-staling
+of the install command across the docs. Live proof (run-as-user, warm cache, no-restart catalog) is
+pending a fresh VM and folds into PMI4/OS6.
 
 Decisions locked (frozen contract constants — the agreed build end-state):
 
