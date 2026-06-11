@@ -500,6 +500,7 @@ def mount_single_addon_proxy(
 
 def expected_mounted_tool_names(gateway: Any) -> set[str]:
     expected: set[str] = set()
+    local_tools = getattr(gateway, "_gateway_local_tools", None) or set()
     for backend_name, backend in sorted(getattr(gateway, "backends", {}).items()):
         manifest = getattr(backend, "manifest", None)
         if not manifest:
@@ -510,7 +511,7 @@ def expected_mounted_tool_names(gateway: Any) -> set[str]:
             continue
         for tool in manifest.get("tools", []):
             tool_name = tool.get("name")
-            if isinstance(tool_name, str) and tool_name:
+            if isinstance(tool_name, str) and tool_name and tool_name not in local_tools:
                 expected.add(tool_name)
     return expected
 

@@ -13,6 +13,28 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-12 - Gateway startup with DB-seeded native backends
+
+Status: DONE (host patch; operator/agent should pull and rerun installer)
+
+Live rerun on commit `8fe4ea2` confirmed the installer now registers native backend rows with
+service-readable venv entrypoints, but the gateway still crash-looped during FastMCP lifespan
+startup. The backends did start and list tools; the crash came from the startup assertion calling
+the public FastMCP `list_tools()` path without an MCP identity while auth middleware was installed,
+so the public catalog could be filtered before the assertion. Logs also showed the intentional
+`opensearch_ingest` duplicate between the Gateway-local DB-backed job tool and the add-on proxy; the
+Gateway-local tool must own that name in DB-active mode.
+
+Changed: Gateway tool-map construction now skips add-on tools shadowed by Gateway-local tools, so
+`opensearch_ingest` remains owned by the Gateway policy/job adapter. The startup assertion now checks
+the Gateway's built catalog (`gateway.list_tools()`) instead of invoking the public FastMCP
+middleware path without identity, and the expected mounted tool set excludes Gateway-local shadows.
+
+Validation: `bash -n install.sh scripts/setup-addon.sh scripts/setup-supabase.sh` OK;
+focused gateway suite OK (`test_phase6.py`, `test_osx1_late_seeded_backends.py`,
+`test_f1_opensearch_backend_registry.py`, `test_mvp_binding_job_tools.py`: 61 passed);
+`validate_docs.py` and `validate_migration_docs.py` OK; `git diff --check` clean.
+
 ### 2026-06-12 - Native backend runtime command fix for system service user
 
 Status: DONE (host patch; operator/agent should pull and rerun installer)

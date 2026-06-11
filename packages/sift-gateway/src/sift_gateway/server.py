@@ -109,7 +109,6 @@ from sift_gateway.config import apply_case_env, apply_execute_security_env
 from sift_gateway.health import health_routes
 from sift_gateway.mcp_endpoint import MCPAuthASGIApp
 from sift_gateway.mcp_server import (
-    assert_mounted_tool_names,
     create_gateway_mcp_server,
     expected_mounted_tool_names,
 )
@@ -466,6 +465,12 @@ class Gateway:
                     if manifest:
                         declared_names = {t["name"] for t in manifest.get("tools", [])}
                     for tool in tools:
+                        if tool.name in self._gateway_local_tools:
+                            # Gateway-local tools intentionally shadow add-on
+                            # tools when the gateway owns the policy boundary
+                            # for the operation (for example opensearch_ingest
+                            # in DB-active mode).
+                            continue
                         if manifest:
                             ns = manifest.get("namespace", "")
                             if ns and not tool.name.startswith(f"{ns}_"):
@@ -492,6 +497,8 @@ class Gateway:
                     ns = manifest.get("namespace", "")
                     for t_decl in manifest.get("tools", []):
                         t_name = t_decl["name"]
+                        if t_name in self._gateway_local_tools:
+                            continue
                         if ns and not t_name.startswith(f"{ns}_"):
                             raise ValueError(
                                 f"Tool '{t_name}' declared in manifest for backend '{name}' does not start with declared namespace prefix '{ns}_'"
@@ -1195,9 +1202,14 @@ class Gateway:
             """Start gateway metadata/background tasks around the FastAPI app."""
             import os as _os
             await gateway.start()
-            await assert_mounted_tool_names(
-                gateway_mcp, expected_mounted_tool_names(gateway)
-            )
+            expected_tools = expected_mounted_tool_names(gateway)
+            actual_tools = set((await gateway.list_tools()).keys())
+            missing_tools = expected_tools - actual_tools
+            if missing_tools:
+                raise ValueError(
+                    "Mounted proxy tools missing from gateway catalog: "
+                    f"{sorted(missing_tools)}"
+                )
             reaper_task = None
             if gateway.idle_timeout > 0:
                 reaper_task = asyncio.create_task(gateway._idle_reaper())
