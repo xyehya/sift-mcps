@@ -6,7 +6,6 @@ Local-first: each examiner owns a flat case directory. Case lifecycle
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -21,6 +20,7 @@ import yaml
 from sift_common.audit import resolve_examiner
 
 from sift_core.case_io import case_audit_dir, cases_root, state_root
+from sift_core.investigation_store import compute_content_hash as _compute_content_hash
 from sift_core.case_ops import build_case_brief
 from sift_core.evidence_chain import load_manifest
 from sift_core.evidence_ops import list_manifest_evidence_data
@@ -222,46 +222,11 @@ _PROTECTED_EVENT_FIELDS = {
     "examiner",
 }
 
-# Keys excluded from content hash — volatile/derived fields
-_HASH_EXCLUDE_KEYS = {
-    "status",
-    "approved_at",
-    "approved_by",
-    "rejected_at",
-    "rejected_by",
-    "rejection_reason",
-    "examiner_notes",
-    "examiner_modifications",
-    "content_hash",
-    "verification",
-    "modified_at",
-    "provenance",
-    "provenance_detail",
-    "provenance_chain",
-    "provenance_grade",
-    "provenance_warnings",
-    "provenance_gaps",
-    "timeline_event_id",
-    "source_evidence",
-}
-
-
-def _compute_content_hash(item: dict) -> str:
-    """SHA-256 of canonical JSON excluding volatile fields.
-
-    Local variant of the approval content hash; excludes provenance fields
-    that are specific to staged findings.
-    """
-    # Drop volatile fields and internal underscore-prefixed keys (e.g. the
-    # DB-projected ``_version`` optimistic-lock marker) so the hash is stable
-    # whether the item was just staged or round-tripped through the DB store.
-    hashable = {
-        k: v
-        for k, v in item.items()
-        if k not in _HASH_EXCLUDE_KEYS and not k.startswith("_")
-    }
-    canonical = json.dumps(hashable, sort_keys=True, default=str)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+# BATCH-NW1: _HASH_EXCLUDE_KEYS and _compute_content_hash have been removed.
+# The single shared implementation is investigation_store.compute_content_hash,
+# imported above as _compute_content_hash to preserve existing call sites within
+# this module without further changes.  See investigation_store.HASH_EXCLUDE_KEYS
+# for the authoritative 19-key exclude set and the re-hash migration note.
 
 
 def _next_seq(items: list[dict], id_field: str, prefix: str, examiner: str) -> int:
