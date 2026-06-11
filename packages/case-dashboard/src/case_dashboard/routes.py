@@ -36,11 +36,14 @@ from sift_core.case_io import (
     case_approvals_path,
     case_audit_dir,
     cases_root,
-    compute_content_hash,
 )
 from sift_core.evidence_chain import (
     init_evidence_chain,
 )
+# BATCH-NW1: compute_content_hash and HASH_EXCLUDE_KEYS are now imported from
+# investigation_store (single shared authority).  case_io re-exports them for
+# backward compatibility but routes imports directly from the source of truth.
+from sift_core.investigation_store import HASH_EXCLUDE_KEYS, compute_content_hash
 from sift_core.verification import compute_hmac, write_ledger_entry
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -166,24 +169,6 @@ def _legacy_password_auth_disabled_response() -> JSONResponse:
 # Max delta file size (1 MB)
 _MAX_DELTA_SIZE = 1_048_576
 
-# Fields excluded from content hash (must match case_io.py _HASH_EXCLUDE_KEYS)
-_HASH_EXCLUDE_KEYS = {
-    "status",
-    "approved_at",
-    "approved_by",
-    "rejected_at",
-    "rejected_by",
-    "rejection_reason",
-    "examiner_notes",
-    "examiner_modifications",
-    "content_hash",
-    "verification",
-    "modified_at",
-    "provenance",
-    "provenance_warnings",
-    "timeline_event_id",
-    "source_evidence",
-}
 
 _VALID_DELTA_KEYS = {
     "id",
@@ -2241,8 +2226,11 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
         for item in approved_items:
             _item_id = item.get("id", "")
             _item_type = "timeline" if _item_id.startswith("T-") else "finding"
+            # BATCH-NW1: use the authority HASH_EXCLUDE_KEYS (19 keys, imported
+            # from investigation_store) so HMAC coverage matches content_hash.
             _description = json.dumps(
-                {k: v for k, v in item.items() if k not in _HASH_EXCLUDE_KEYS},
+                {k: v for k, v in item.items()
+                 if k not in HASH_EXCLUDE_KEYS and not k.startswith("_")},
                 sort_keys=True,
                 default=str,
             )

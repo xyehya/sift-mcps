@@ -137,10 +137,27 @@ class InvestigationAuthorityStore(ABC):
 
 
 # --------------------------------------------------------------------------- #
-# Content hash (shared with case_manager / case_io so DB + file agree)
+# Content hash — single shared implementation used by ALL call sites.
+#
+# HASH_EXCLUDE_KEYS is the authoritative exclude set (19 keys).  Every module
+# that previously redeclared its own narrow copy (case_io, case_manager,
+# reporting, routes) now imports this set directly (BATCH-NW1).
+#
+# EXISTING DEPLOYMENTS NOTE: if you have stored content_hash values that were
+# produced by the old narrow exclude set (15 keys — missing provenance_detail,
+# provenance_chain, provenance_grade, provenance_gaps), those hashes will
+# differ from hashes produced by this implementation.  A fresh database has no
+# pre-existing hashes so no migration is needed for new installs.  For existing
+# deployments a re-hash pass is required:
+#   1. For each approved finding/timeline event row in the DB, call
+#      compute_content_hash(row_payload) and write the result back to the
+#      content_hash column (and the payload JSON's "content_hash" key).
+#   2. For file-backed case dirs, recompute each finding/timeline content_hash
+#      and re-write findings.json / timeline.json.
+# No migration script is provided here; it belongs in a separate BATCH.
 # --------------------------------------------------------------------------- #
 
-_HASH_EXCLUDE_KEYS = {
+HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({
     "status",
     "approved_at",
     "approved_by",
@@ -160,16 +177,27 @@ _HASH_EXCLUDE_KEYS = {
     "provenance_gaps",
     "timeline_event_id",
     "source_evidence",
-}
+})
+
+# Private alias kept for internal use within this module.
+_HASH_EXCLUDE_KEYS = HASH_EXCLUDE_KEYS
 
 
 def compute_content_hash(item: dict[str, Any]) -> str:
+    """Canonical SHA-256 content hash for an investigation item.
+
+    Excludes all volatile/provenance fields (see HASH_EXCLUDE_KEYS) and any
+    internal ``_``-prefixed projection keys added by the DB store (e.g.
+    ``_version``).  This is the single authoritative implementation used by
+    every call site — case_io, case_manager, reporting, and the portal routes
+    all delegate here (BATCH-NW1).
+    """
     import hashlib
 
     hashable = {
         k: v
         for k, v in item.items()
-        if k not in _HASH_EXCLUDE_KEYS and not k.startswith("_")
+        if k not in HASH_EXCLUDE_KEYS and not k.startswith("_")
     }
     canonical = json.dumps(hashable, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()

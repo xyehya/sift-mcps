@@ -5,7 +5,6 @@ Local-first: flat case directory. Collaboration via export/merge.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -454,33 +453,26 @@ def find_draft_item(
     return None
 
 
-HASH_EXCLUDE_KEYS = {
-    "status",
-    "approved_at",
-    "approved_by",
-    "rejected_at",
-    "rejected_by",
-    "rejection_reason",
-    "examiner_notes",
-    "examiner_modifications",
-    "content_hash",
-    "verification",
-    "modified_at",
-    "provenance",
-    "provenance_warnings",
-    "timeline_event_id",
-    "source_evidence",
-}
-
-
-def compute_content_hash(item: dict) -> str:
-    """SHA-256 of canonical JSON excluding volatile fields."""
-    hashable = {k: v for k, v in item.items() if k not in HASH_EXCLUDE_KEYS}
-    canonical = json.dumps(hashable, sort_keys=True, default=str)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+# BATCH-NW1: HASH_EXCLUDE_KEYS and compute_content_hash are now the single
+# shared implementation in investigation_store.  This module re-exports them
+# for backward compatibility (existing importers such as tests that import from
+# sift_core.case_io continue to work without changes).
+#
+# EXISTING DEPLOYMENTS NOTE: the old narrow exclude set (15 keys) has been
+# replaced by the wider 19-key authority set.  See investigation_store.py for
+# the full re-hash migration note.
+from sift_core.investigation_store import (  # noqa: E402
+    HASH_EXCLUDE_KEYS,
+    compute_content_hash,
+)
 
 
 def hmac_text(item: dict) -> str:
+    """Return canonical JSON of substantive fields for HMAC signing.
+
+    Uses the same exclude set as compute_content_hash so HMAC and hash cover
+    identical content.
+    """
     hashable = {k: v for k, v in item.items() if k not in HASH_EXCLUDE_KEYS}
     return json.dumps(hashable, sort_keys=True, default=str)
 

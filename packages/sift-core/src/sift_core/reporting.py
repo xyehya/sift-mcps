@@ -31,27 +31,13 @@ from sift_core.evidence_ops import list_evidence_data
 from sift_core.report_profiles import PROFILES, STRIPPED_FINDING_FIELDS
 from sift_core.verification import VERIFICATION_DIR
 from sift_core.active_case_context import db_authority_active
-from sift_core.investigation_store import compute_content_hash
+from sift_core.investigation_store import HASH_EXCLUDE_KEYS, compute_content_hash
 
-# Substantive-field exclusion used when reconciling an approved item against
-# its verification ledger snapshot. Mirrors sift_core.case_io.hmac_text intent.
-_HASH_EXCLUDE_KEYS = {
-    "status",
-    "approved_at",
-    "approved_by",
-    "rejected_at",
-    "rejected_by",
-    "rejection_reason",
-    "examiner_notes",
-    "examiner_modifications",
-    "content_hash",
-    "verification",
-    "modified_at",
-    "provenance",
-    "provenance_warnings",
-    "timeline_event_id",
-    "source_evidence",
-}
+# BATCH-NW1: the old narrow _HASH_EXCLUDE_KEYS (15 keys) has been removed.
+# HASH_EXCLUDE_KEYS imported from investigation_store is the single authoritative
+# 19-key exclude set.  reconcile_verification() below now uses compute_content_hash
+# (the authority function) for the content snapshot, so the HMAC ledger and DB
+# hash are guaranteed to cover identical fields.
 
 
 WRITING_GUIDANCE = """Report Writing Guidance (forensic-specific):
@@ -779,8 +765,16 @@ def reconcile_verification(
             )
             results.append({"id": item_id, "status": status})
         elif item and entry:
-            # Reconstruct hmac_text: canonical JSON of all substantive fields
-            hashable = {k: v for k, v in item.items() if k not in _HASH_EXCLUDE_KEYS}
+            # Reconstruct the canonical JSON snapshot using the authority exclude
+            # set (BATCH-NW1).  content_snapshot entries written by the portal
+            # before BATCH-NW1 used the old 15-key set; those will produce a
+            # COUNT_MISMATCH / DESCRIPTION_MISMATCH until a re-hash pass is run
+            # on existing deployments (see investigation_store.py migration note).
+            hashable = {
+                k: v
+                for k, v in item.items()
+                if k not in HASH_EXCLUDE_KEYS and not k.startswith("_")
+            }
             live_text = json.dumps(hashable, sort_keys=True, default=str)
             if live_text != entry.get("content_snapshot", ""):
                 results.append({"id": item_id, "status": "DESCRIPTION_MISMATCH"})
