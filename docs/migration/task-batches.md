@@ -68,6 +68,7 @@ Rules:
 - [x] BATCH-NW4 - RAG knowledge-only hardening (drop per-case derived RAG; privacy)
 - [x] BATCH-NW5 - opensearch run_command duplicate check (RESOLVED: none exists, no action)
 - [ ] BATCH-NW6 - Programmatic Tool Calling: enable + native-harness validation (reframed OSX3)
+- [ ] BATCH-HARD1 - Non-admin service-user cutover + shared vol3 symbol cache
 
 ## OpenSearch Restoration (OS Track) — Locked Decisions
 
@@ -295,7 +296,8 @@ Acceptance:
 
 ## Post-Migration Install & Cleanup (PMI) Track
 
-Goal: a single `./install.sh --no-windows-triage --no-opencti` on a BARE SIFT VM brings up
+Goal: a single zero-argument `./install.sh` on a BARE SIFT VM brings up (OpenCTI auto-detected;
+windows-triage removed in NW2 — `--no-windows-triage`/`--no-opencti` flags no longer exist)
 everything live (Supabase via CLI, migrations, OpenSearch 3.5 + Hayabusa, RAG pgvector,
 gateway+worker+portal), then the operator runs the Rocba case.
 
@@ -346,7 +348,7 @@ Scope:
 
 Exact work:
 
-- On the bare SIFT VM: `./install.sh --no-windows-triage --no-opencti`
+- On the bare SIFT VM: `./install.sh` (zero-argument; OpenCTI auto-detected, windows-triage removed)
 - Confirm `status:ok` (not degraded), job-worker not crash-looping
 - Confirm aggregate `/mcp` lists `opensearch_*` + `kb_*` tools after post-seed (no restart
   needed — OSX1 race fix)
@@ -689,3 +691,64 @@ measure context savings vs naive tool calls. Deliver: enablement steps + a live 
 appended by the conductor in Session-Notes.md. The on-VM Python sandbox (former OSX4) is a FALLBACK
 only if client-side PTC is rejected for posture reasons. End with a LANDING LOG.
 ```
+
+# Hardening (HARD) Track — non-admin service user + shared symbol cache
+
+Goal: stop running the gateway/worker/backends as the `sansforensics` operator with a blanket
+`NOPASSWD: ALL`. Cut over to a dedicated non-admin system user, relocate the deploy tree to
+`/opt/sift-mcps`, and warm the Volatility symbol cache from a shared writable location instead of
+chmod-hacking the read-only `/opt/volatility3` tree. Resolves FRZ1 item 4 (Host-Only #4) and the
+offline-symbol slice of FRZ1 item 1 (Host-Only #3).
+
+## HARD operating model (LEAN)
+
+- One worktree per group off `main`; scope-fenced; targeted tests only per group.
+- Live enforcement proof (run-as-user, warm cache, no-restart catalog) folds into PMI4/OS6 on the
+  fresh VM — this batch lands host code/docs now; live proof is deferred.
+- `/security-review` REQUIRED: the diff touches the service user, sudoers grants, secret/env-file
+  relocation, and systemd unit ownership.
+
+## BATCH-HARD1 - Non-admin service-user cutover + shared vol3 symbol cache
+
+Dependencies: BATCH-PMI0 (installer/systemd hardening baseline). Live proof folds into PMI4/OS6.
+
+Current status (2026-06-11): IN_PROGRESS — host code landing this session; live proof pending a
+fresh VM. See `docs/status.md` and `Session-Notes.md` (2026-06-11 host build note) for the frozen
+contract constants. `/security-review` is required before Land.
+
+Frozen contract (the agreed end-state):
+
+- Dedicated non-admin service user `sift-service` (system user, `nologin`, home `/var/lib/sift`) runs
+  the gateway + worker + all stdio backends. It holds ONLY two narrow sudoers grants:
+  `sift-ingest-mount` (mount helpers) and `sift-agent-runtime` (the `agent_runtime` sandbox).
+  `sansforensics` keeps its own operator login/sudo; `agent_runtime` stays the run_command sandbox user.
+- Services become **system** services at `/etc/systemd/system/`, `User=sift-service`, managed via
+  `sudo systemctl` (NOT `systemctl --user`).
+- Deploy tree relocates to `/opt/sift-mcps` (owned `sift-service`); the rsync target changes accordingly.
+- Shared writable vol3 symbol cache at `/var/cache/sift/volatility-symbols` (group `sift`), env override
+  `SIFT_VOL_SYMBOLS`; first run warms it online — no pre-seeding.
+- `install.sh` is ZERO-ARGUMENT (single `--extra full`; OpenCTI auto-detected; windows-triage removed
+  in NW2). The flags `--no-windows-triage`/`--no-opencti` do not exist.
+
+Scope (three parallel groups):
+
+- **Group A — shared vol3 symbol cache:** point `parse_memory` + the worker at
+  `/var/cache/sift/volatility-symbols` via `SIFT_VOL_SYMBOLS`; drop the `/opt/volatility3` chmod hack.
+  Touched code + targeted sift-core/worker tests.
+- **Group B — sift-service system-service cutover (installer/systemd, lead-owned):** create the
+  `sift-service` system user; relocate the deploy tree to `/opt/sift-mcps`; narrow sudoers to the two
+  grants; relocate secret env files to `sift-service`-readable `0600`; convert the units to system
+  services (`User=sift-service`, `/etc/systemd/system/`, `sudo systemctl`).
+- **Group C — this doc work:** `docs/status.md`, `docs/migration/task-batches.md`,
+  `docs/migration/Session-Notes.md` (install command de-staled; VM quick reference + batch tracker
+  + session log updated).
+
+Acceptance:
+
+- Fresh-install proof shows `status:ok`.
+- `ps -o user= -C` (or `systemctl show`) confirms gateway/worker run as `sift-service`, NOT
+  `sansforensics`.
+- A vol3 ingest warms `/var/cache/sift/volatility-symbols` on first run (no pre-seeding).
+- OS6 `tools/list` shows `opensearch_*` without a restart.
+- `/security-review` clean (secret/env relocation + sudoers + service user); `validate_docs.py` +
+  `validate_migration_docs.py` OK; `git diff --check` clean.

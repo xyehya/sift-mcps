@@ -13,6 +13,79 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-11 - HARD1 host build: non-admin `sift-service` cutover + shared vol3 symbol cache (decisions locked)
+
+Status: IN_PROGRESS (host code/docs landing this session; live enforcement proof folds into PMI4/OS6
+on the fresh VM)
+
+Locked the hardening end-state and opened **BATCH-HARD1**. This entry records the host-side build of
+the non-admin service-user cutover, the shared Volatility symbol cache, and the de-staling of the
+install command across the docs. Live proof (run-as-user, warm cache, no-restart catalog) is pending
+a fresh VM and folds into PMI4/OS6.
+
+Decisions locked (frozen contract constants — the agreed build end-state):
+
+- **Single dedicated non-admin service user `sift-service`** — system user, `nologin`, home
+  `/var/lib/sift`; runs the gateway + worker + all stdio backends. Holds ONLY two narrow sudoers
+  grants: `sift-ingest-mount` (mount helpers) and `sift-agent-runtime` (the `agent_runtime` sandbox).
+  `sansforensics` keeps its own operator login/sudo; `agent_runtime` stays the run_command sandbox
+  user. This replaces running the stack as `sansforensics` with a blanket `NOPASSWD: ALL`.
+- **System services** at `/etc/systemd/system/`, `User=sift-service`, managed via `sudo systemctl`
+  (NOT `systemctl --user`).
+- **Deploy tree relocates to `/opt/sift-mcps`** (owned `sift-service`); the host rsync target changes
+  to `sansforensics@192.168.122.81:/opt/sift-mcps/`.
+- **Shared writable vol3 symbol cache** at `/var/cache/sift/volatility-symbols` (group `sift`), env
+  override `SIFT_VOL_SYMBOLS`; first run warms it online — no pre-seeding. Drops the read-only
+  `/opt/volatility3` chmod hack.
+- **`install.sh` is ZERO-ARGUMENT** (single `--extra full`; OpenCTI auto-detected; windows-triage
+  removed in NW2). The flags `--no-windows-triage`/`--no-opencti` DO NOT EXIST. The stale
+  `./install.sh --no-windows-triage --no-opencti` command was de-staled to `./install.sh` in the
+  PMI4 step + PMI track goal (`task-batches.md`), and in `status.md` Wave Execution Order #2 +
+  BATCH-PMI4 step 1.
+
+Work-streams (4):
+
+- **Group A — shared vol3 symbol cache:** `parse_memory` + worker point at
+  `/var/cache/sift/volatility-symbols` via `SIFT_VOL_SYMBOLS`; chmod hack dropped (distributed).
+- **Group B — installer/systemd (lead-owned):** create `sift-service`, relocate the deploy tree to
+  `/opt/sift-mcps`, narrow sudoers to the two grants, relocate secret env files to
+  `sift-service`-readable `0600`, convert units to system services.
+- **Group C — this doc work (distributed):** `status.md` + `task-batches.md` + `Session-Notes.md`.
+- (3 distributed work-streams + the installer/systemd stream owned by the lead.)
+
+Changed: `docs/status.md` (install command de-staled in Wave Execution Order #2 + BATCH-PMI4 step 1;
+VM Quick Reference active tree/sync target → `/opt/sift-mcps`, restart via `sudo systemctl`);
+`docs/migration/task-batches.md` (PMI4 install command de-staled; new BATCH-HARD1 batch + HARD track);
+`docs/migration/Session-Notes.md` (this note).
+
+Security: **`/security-review` PASS** — no high-confidence exploitable issue. Verified line-by-line:
+every secret lands `sift-service:sift-service 0600` under `SIFT_HOME` (`0700`); group `sift` is applied
+ONLY to the symbol cache, so `agent_runtime` (in `sift`, not `sift-service`) cannot read secrets;
+`%h`→absolute `${SIFT_HOME}` is correct for a system service. Noted (not a vuln, DFIR integrity): the
+shared writable symbol cache lets an adversarial agent plant a bogus ISF a later trusted `vol3` run
+reads — backlog item, not a blocker.
+
+Review fixes (from `/code-review`, recall pass — caught a real HIGH the security review missed):
+- **HIGH — shared symbol cache was DOA.** `setup-agent-runtime.sh` stamps a recursive
+  `u:agent_runtime:---` deny ACL over all of `/var/lib/sift`, which overrode the `sift`-group grant and
+  made the cache unwritable by the `run_command` runtime user. **Fixed: relocated the cache to
+  `/var/cache/sift/volatility-symbols`** (outside the deny sweep, FHS-correct) + default `g:sift:rwx` ACL
+  for bidirectional writes; added `/var/cache/sift/** rwk` to the AppArmor profile.
+- AppArmor `/home/*/.sift/bin/* rix` (hayabusa exec) repointed to `/var/lib/sift/.sift/bin/*` (the
+  `/var/lib/sift/** rw` rule grants no exec).
+- `setup-opensearch.sh` restart was still `systemctl --user` (no-op post-cutover) → system `sudo systemctl`.
+- `reset-vm-test.sh` had a stale `~/.sift/gateway.yaml` path and read/wrote it as the operator → repointed
+  to `${SIFT_HOME}` and made the read/write `sudo`+ownership-preserving.
+
+Validation: `validate_docs.py` + `validate_migration_docs.py` OK; `git diff --check` clean;
+opensearch-mcp symbol/tier tests 13 pass, sift-core executor/worker/k5 85 pass; `bash -n` OK on
+`install.sh`, `reset-vm-test.sh`, `setup-opensearch.sh`.
+
+Next: prove live on the fresh VM as part of PMI4/OS6 — rsync to `/opt/sift-mcps` → `./install.sh` →
+`status:ok`, `systemctl show sift-gateway -p User` = `sift-service`, `run_command` vol3 warms
+`/var/cache/sift/volatility-symbols`, no-restart `opensearch_*` catalog. VM-verify the two flagged
+open items: snapshots dir (`uid 1000`, no runtime writer found) and hayabusa reachability under `agent_runtime`.
+
 ### 2026-06-11 - NW cleanup Wave 1 (NW1∥NW2∥NW3∥NW4) LANDED on `main`
 
 Status: DONE (four batches built in parallel scope-fenced worktrees, integrated, and fast-forwarded

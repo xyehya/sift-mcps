@@ -1031,3 +1031,62 @@ def test_binary_stdout_saved_first_and_suppressed_inline(tmp_path, monkeypatch):
     saved = Path(result["output_file"])
     assert saved.exists()
     assert saved.stat().st_size == 64
+
+
+# ── Shared vol symbol cache: SIFT_VOL_SYMBOLS preferred over per-case jail ───
+
+
+def test_worker_prefers_shared_symbol_dir_when_env_writable(tmp_path, monkeypatch):
+    """SIFT_VOL_SYMBOLS set + writable -> shared cache used; per-case jail dir
+    is NOT created (we did not fall through to it)."""
+    shared = tmp_path / "shared-symbols"
+    monkeypatch.setenv("SIFT_VOL_SYMBOLS", str(shared))
+    cache = tmp_path / "tmp" / "cache"
+    result = worker._execute_payload({
+        "cmd": ["env"],
+        "timeout": 10,
+        "max_output_bytes": 65536,
+        "cache_dir": str(cache),
+    })
+    assert result["exit_code"] == 0
+    jail = tmp_path / "tmp"
+    assert shared.is_dir()
+    # Shared cache was chosen, so the per-case fallback dir is never provisioned.
+    assert not (jail / "vol-symbols").exists()
+
+
+def test_worker_falls_back_to_jail_when_env_unset(tmp_path, monkeypatch):
+    """No SIFT_VOL_SYMBOLS -> existing per-case write-jail dir is used."""
+    monkeypatch.delenv("SIFT_VOL_SYMBOLS", raising=False)
+    cache = tmp_path / "tmp" / "cache"
+    result = worker._execute_payload({
+        "cmd": ["env"],
+        "timeout": 10,
+        "max_output_bytes": 65536,
+        "cache_dir": str(cache),
+    })
+    assert result["exit_code"] == 0
+    jail = tmp_path / "tmp"
+    assert (jail / "vol-symbols").is_dir()
+
+
+def test_worker_falls_back_to_jail_when_shared_unwritable(tmp_path, monkeypatch):
+    """SIFT_VOL_SYMBOLS pointing at an unwritable location -> per-case jail used,
+    preserving K5 isolation rather than silently failing."""
+    blocked = tmp_path / "ro" / "symbols"
+    (tmp_path / "ro").mkdir()
+    (tmp_path / "ro").chmod(0o500)  # no write -> makedirs of child fails
+    monkeypatch.setenv("SIFT_VOL_SYMBOLS", str(blocked))
+    cache = tmp_path / "tmp" / "cache"
+    try:
+        result = worker._execute_payload({
+            "cmd": ["env"],
+            "timeout": 10,
+            "max_output_bytes": 65536,
+            "cache_dir": str(cache),
+        })
+    finally:
+        (tmp_path / "ro").chmod(0o700)  # restore so tmp_path cleanup works
+    assert result["exit_code"] == 0
+    jail = tmp_path / "tmp"
+    assert (jail / "vol-symbols").is_dir()

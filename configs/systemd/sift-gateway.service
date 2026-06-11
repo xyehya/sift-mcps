@@ -4,6 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
+# Runs as the dedicated non-admin service user (sift-service). Its primary group
+# is the per-user group of the same name. The aggregated stdio backend MCPs
+# (opensearch-mcp/rag/opencti) are spawned as subprocesses and inherit this user.
+User=${SIFT_GATEWAY_SERVICE_USER}
+Group=${SIFT_GATEWAY_SERVICE_USER}
 ExecStart=${SIFT_MCPS_ROOT}/.venv/bin/sift-gateway --config ${SIFT_CONFIG}
 WorkingDirectory=${SIFT_MCPS_ROOT}
 Restart=on-failure
@@ -11,22 +16,30 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 Environment=SIFT_EXAMINER=${SIFT_EXAMINER}
+# Shared Volatility3 symbol cache (mode 2775, group `sift`) — written by both the
+# gateway/worker (sift-service) and run_command's runtime user (agent_runtime).
+Environment=SIFT_VOL_SYMBOLS=${SIFT_VOL_SYMBOLS}
 # A1-BOOTSTRAP: Supabase environment variables — secrets are read from the
 # process environment only, never stored in the gateway config file.
 # Set SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY in
-# the systemd drop-in or ~/.config/environment.d/ before starting the service.
-# These are left empty here; override in a drop-in: systemctl --user edit sift-gateway
-EnvironmentFile=-%h/.sift/supabase.env
-EnvironmentFile=-%h/.sift/control-plane.env
+# the systemd drop-in before starting the service.
+# IMPORTANT: %h is NOT usable here. For a SYSTEM service, %h resolves to /root
+# (the system manager's home) and is explicitly NOT influenced by User= (see
+# systemd.unit(5)). So we use the absolute SIFT_HOME path, which install.sh
+# substitutes to /var/lib/sift/.sift (sift-service's passwd home + /.sift).
+# These files are written by install.sh owned sift-service 0600; override
+# secrets in a drop-in via:  sudo systemctl edit sift-gateway
+EnvironmentFile=-${SIFT_HOME}/supabase.env
+EnvironmentFile=-${SIFT_HOME}/control-plane.env
 # FM-2: OpenSearch env_refs for opensearch-mcp backend process.
 # OPENSEARCH_CONFIG and OPENSEARCH_HOST are resolved from the gateway process
 # env and forwarded to the opensearch-mcp child via env_refs in app.mcp_backends.
 # This file is written by install.sh only when SIFT_OPENSEARCH_ENABLED=true.
-EnvironmentFile=-%h/.sift/opensearch.env
+EnvironmentFile=-${SIFT_HOME}/opensearch.env
 # BATCH-PMI3: FK_DATA_DIR points the forensic-knowledge loader at the installed
 # data dir so build_response/run_command enrichment fires under the service user.
 # Non-secret path; written by install.sh (write_fk_env).
-EnvironmentFile=-%h/.sift/forensic-knowledge.env
+EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

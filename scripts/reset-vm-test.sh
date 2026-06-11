@@ -24,7 +24,9 @@
 set -euo pipefail
 
 OPENSEARCH_URL="http://localhost:9200"
-GATEWAY_YAML="${HOME}/.sift/gateway.yaml"
+# SIFT_HOME moved under the service user's home in the non-admin cutover; the
+# config is owned sift-service 0600, so reads/writes below go through sudo.
+GATEWAY_YAML="${SIFT_HOME:-/var/lib/sift/.sift}/gateway.yaml"
 CASE_ID=""
 WIPE_CASE=false
 CASE_DIR_DELETED=false
@@ -54,10 +56,10 @@ done
 
 # Resolve case_id from gateway.yaml if not provided
 if [[ -z "$CASE_ID" ]]; then
-    [[ -f "$GATEWAY_YAML" ]] || die "gateway.yaml not found at $GATEWAY_YAML"
-    CASE_DIR=$(python3 -c "
-import yaml
-c = yaml.safe_load(open('$GATEWAY_YAML'))
+    sudo test -f "$GATEWAY_YAML" || die "gateway.yaml not found at $GATEWAY_YAML"
+    CASE_DIR=$(sudo cat "$GATEWAY_YAML" | python3 -c "
+import yaml, sys
+c = yaml.safe_load(sys.stdin)
 print(c.get('case', {}).get('dir', ''))
 " 2>/dev/null || true)
     [[ -n "$CASE_DIR" ]] && CASE_ID=$(basename "$CASE_DIR")
@@ -99,9 +101,9 @@ fi
 # Step 2: Optionally wipe the case directory
 # -------------------------------------------------------------------------
 if $WIPE_CASE; then
-    CASES_ROOT=$(python3 -c "
-import yaml
-c = yaml.safe_load(open('$GATEWAY_YAML'))
+    CASES_ROOT=$(sudo cat "$GATEWAY_YAML" | python3 -c "
+import yaml, sys
+c = yaml.safe_load(sys.stdin)
 print(c.get('case', {}).get('root', '/cases'))
 " 2>/dev/null || echo "/cases")
     TARGET_DIR="${CASES_ROOT}/${CASE_ID}"
@@ -118,14 +120,23 @@ print(c.get('case', {}).get('root', '/cases'))
             rm -rf "$TARGET_DIR"
             CASE_DIR_DELETED=true
             info "Case directory deleted."
-            # Clear case.dir in gateway.yaml so gateway starts in no-case mode
-            python3 -c "
-import yaml
-p = '$GATEWAY_YAML'
-c = yaml.safe_load(open(p))
+            # Clear case.dir in gateway.yaml so gateway starts in no-case mode.
+            # The config is owned sift-service 0600: render to a temp, then
+            # sudo-install back preserving sift-service ownership/mode.
+            _RVT_TMP=$(mktemp)
+            if sudo cat "$GATEWAY_YAML" | python3 -c "
+import yaml, sys
+c = yaml.safe_load(sys.stdin)
 c.setdefault('case', {})['dir'] = ''
-open(p, 'w').write(yaml.dump(c, default_flow_style=False))
-" 2>/dev/null && info "gateway.yaml case.dir cleared." || info "WARNING: Could not update gateway.yaml"
+sys.stdout.write(yaml.dump(c, default_flow_style=False))
+" > "$_RVT_TMP" 2>/dev/null && [[ -s "$_RVT_TMP" ]]; then
+                sudo install -o sift-service -g sift-service -m 600 "$_RVT_TMP" "$GATEWAY_YAML" \
+                    && info "gateway.yaml case.dir cleared." \
+                    || info "WARNING: Could not write gateway.yaml"
+            else
+                info "WARNING: Could not update gateway.yaml"
+            fi
+            rm -f "$_RVT_TMP"
         else
             info "Skipped case directory deletion."
         fi
@@ -136,19 +147,20 @@ open(p, 'w').write(yaml.dump(c, default_flow_style=False))
 fi
 
 # -------------------------------------------------------------------------
-# Step 3: Restart gateway (systemd user service — matches install.sh)
+# Step 3: Restart gateway (systemd system service — matches install.sh)
 # -------------------------------------------------------------------------
 info "Restarting gateway..."
 
-# install.sh ships the gateway as a systemd --user service that runs the venv
-# binary directly (.venv/bin/sift-gateway). Prefer restarting that unit so we
-# match the production service path; fall back to launching the venv binary
-# directly only if the unit is absent.
-if systemctl --user list-unit-files sift-gateway.service >/dev/null 2>&1 \
-   && systemctl --user cat sift-gateway.service >/dev/null 2>&1; then
-    systemctl --user restart sift-gateway.service \
-        && info "Restarted sift-gateway.service (systemd --user)." \
-        || info "WARNING: systemctl --user restart sift-gateway.service failed."
+# install.sh ships the gateway as a systemd system service (running as the
+# dedicated non-admin user sift-service) that runs the venv binary directly
+# (.venv/bin/sift-gateway). Prefer restarting that unit so we match the
+# production service path; fall back to launching the venv binary directly
+# only if the unit is absent.
+if systemctl list-unit-files sift-gateway.service >/dev/null 2>&1 \
+   && systemctl cat sift-gateway.service >/dev/null 2>&1; then
+    sudo systemctl restart sift-gateway.service \
+        && info "Restarted sift-gateway.service (systemd system)." \
+        || info "WARNING: sudo systemctl restart sift-gateway.service failed."
 else
     info "No sift-gateway.service unit found — falling back to direct venv binary."
     GATEWAY_PIDS=$(pgrep -f "sift-gateway" 2>/dev/null || true)

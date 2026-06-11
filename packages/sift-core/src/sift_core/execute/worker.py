@@ -130,13 +130,27 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
             env_overrides[key] = path
         # vol3 writes generated ISF symbols into its read-only install symbol
         # store, not into HOME/XDG, so it needs an explicit writable --symbol-dirs
-        # (injected per-stage below) pointed here.
-        sym = os.path.join(jail, "vol-symbols")
-        try:
-            os.makedirs(sym, exist_ok=True)
-            vol_symbols_dir = sym
-        except OSError:
-            vol_symbols_dir = ""
+        # (injected per-stage below). PREFER the shared, group-writable symbol
+        # cache when SIFT_VOL_SYMBOLS points at a writable dir — that lets the
+        # service user and the agent_runtime sandbox user share generated symbols
+        # instead of re-deriving them per case. Otherwise fall back to the
+        # per-case write-jail dir so K5 isolation still holds with no shared cache.
+        shared_sym = str(os.environ.get("SIFT_VOL_SYMBOLS") or "").strip()
+        vol_symbols_dir = ""
+        if shared_sym:
+            try:
+                os.makedirs(shared_sym, exist_ok=True)
+                if os.access(shared_sym, os.W_OK):
+                    vol_symbols_dir = shared_sym
+            except OSError:
+                vol_symbols_dir = ""
+        if not vol_symbols_dir:
+            sym = os.path.join(jail, "vol-symbols")
+            try:
+                os.makedirs(sym, exist_ok=True)
+                vol_symbols_dir = sym
+            except OSError:
+                vol_symbols_dir = ""
         tool_env.update(env_overrides)
 
     processes = []

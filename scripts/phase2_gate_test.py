@@ -298,7 +298,7 @@ def setup_case_and_restart() -> None:
     # Restart gateway
     print(f"  Restarting sift-gateway service...")
     subprocess.run(
-        ["systemctl", "--user", "restart", "sift-gateway.service"],
+        ["sudo", "systemctl", "restart", "sift-gateway.service"],
         check=True, capture_output=True,
     )
     print(f"  Waiting for gateway health (up to {GATEWAY_START_TIMEOUT}s — uv run is slow)...")

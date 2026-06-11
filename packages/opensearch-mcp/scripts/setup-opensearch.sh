@@ -397,9 +397,9 @@ else
 fi
 
 # --- 10. Restart gateway if running ---
-if systemctl --user is-active --quiet sift-gateway 2>/dev/null; then
+if systemctl is-active --quiet sift-gateway 2>/dev/null; then
     echo "Restarting gateway to pick up opensearch-mcp..."
-    systemctl --user restart sift-gateway
+    sudo systemctl restart sift-gateway
     echo "  Gateway restarted."
 elif pgrep -f "sift.gateway" >/dev/null 2>&1; then
     echo "Note: Gateway is running but not via systemd."

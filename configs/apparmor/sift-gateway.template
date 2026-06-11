@@ -23,13 +23,19 @@
   /home/*/.local/share/uv/                   r,
   /home/*/.local/bin/uv                      rix,
 
-  # TLS material (read-only)
-  /home/*/.sift/                          r,
-  /home/*/.sift/**                        r,
+  # TLS material + secrets/config live under SIFT_HOME=/var/lib/sift/.sift
+  # (covered read+write by the /var/lib/sift/** rule below; listed here for
+  # clarity since the gateway now runs as sift-service, not the operator home).
+  /var/lib/sift/.sift/                    r,
+  /var/lib/sift/.sift/**                  r,
 
   # sift state directory (read + write for passwords, tokens, verification)
   /var/lib/sift/                          rw,
   /var/lib/sift/**                        rw,
+
+  # Shared Volatility3 symbol cache (regenerable; written by inline vol3 ingest)
+  /var/cache/sift/                        rw,
+  /var/cache/sift/**                      rwk,
 
   # Cases root — HARD DENY writes to evidence files; allow reads for hashing
   /cases/                                    r,
@@ -96,7 +102,7 @@
   /bin/fusermount                            rix,
   /bin/fuser                                 rix,
   /usr/bin/python3*                          rix,
-  /home/*/.sift/bin/*                     rix,
+  /var/lib/sift/.sift/bin/*               rix,
   /usr/sbin/partprobe                        rix,
   /usr/sbin/modprobe                         rix,
   /usr/bin/qemu-nbd                          rix,

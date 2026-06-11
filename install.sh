@@ -38,6 +38,30 @@ require_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing required command
 
 random_hex() { openssl rand -hex "$1"; }
 
+# --- service-user ownership helpers ------------------------------------------
+# The installer runs as the operator (who keeps NOPASSWD root via sudo_if_needed),
+# but the gateway/worker run as the dedicated non-admin user sift-service. The
+# secret/config tree (SIFT_HOME = /var/lib/sift/.sift) and the runtime state dirs
+# are owned by sift-service so the SERVICE can read/write them at runtime. Because
+# the operator is NOT sift-service, install-time writes/reads/stat of those
+# 0600/0700 paths cross an ownership boundary and must go through sudo.
+
+# Read a (possibly sift-service-owned 0600) file as the operator.
+svc_read() { sudo_if_needed cat "$1" 2>/dev/null || true; }
+
+# Test for a (possibly sift-service-owned) file's existence as the operator.
+svc_test_f() { sudo_if_needed test -f "$1"; }
+
+# Install $1 (a temp file the operator created) to $2 owned sift-service with
+# mode $3. Atomic (install(1) does temp+rename). Used for every secret/config
+# file that lands under SIFT_HOME so the running service can read it while the
+# operator cannot leave it operator-owned.
+svc_install_file() {
+  local src="$1" dst="$2" mode="$3"
+  sudo_if_needed install -o "$SIFT_GATEWAY_SERVICE_USER" -g "$SIFT_GATEWAY_SERVICE_USER" \
+    -m "$mode" "$src" "$dst"
+}
+
 # =============================================================================
 # Paths — everything derived from REPO_DIR and system conventions
 # =============================================================================
@@ -46,25 +70,43 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Hard-code the SIFT-native Python.  Must be ≥ 3.10.
 SYSTEM_PYTHON="/usr/bin/python3.12"
 
-SIFT_HOME="${SIFT_HOME:-$HOME/.sift}"
+SIFT_STATE_DIR="${SIFT_STATE_DIR:-/var/lib/sift}"
+# SIFT_HOME (secrets + gateway.yaml + TLS + backups) lives UNDER the service
+# user's passwd home (/var/lib/sift) as /var/lib/sift/.sift. Owned by sift-service.
+# NOTE: the system units reference this by its ABSOLUTE path (${SIFT_HOME}), not
+# %h — for a SYSTEM service %h resolves to /root, not User='s home (systemd.unit(5)).
+SIFT_HOME="${SIFT_HOME:-$SIFT_STATE_DIR/.sift}"
 SIFT_TLS_DIR="${SIFT_TLS_DIR:-$SIFT_HOME/tls}"
 SIFT_BACKUP_DIR="${SIFT_BACKUP_DIR:-$SIFT_HOME/backups}"
 SIFT_CONFIG="${SIFT_CONFIG:-$SIFT_HOME/gateway.yaml}"
 SIFT_CASES_ROOT="${SIFT_CASES_ROOT:-${SIFT_CASE_ROOT:-/cases}}"
 SIFT_CASE_ROOT="${SIFT_CASE_ROOT:-$SIFT_CASES_ROOT}"
-SIFT_STATE_DIR="${SIFT_STATE_DIR:-/var/lib/sift}"
 SIFT_PASSWORDS_DIR="${SIFT_PASSWORDS_DIR:-$SIFT_STATE_DIR/passwords}"
 SIFT_VERIFICATION_DIR="${SIFT_VERIFICATION_DIR:-$SIFT_STATE_DIR/verification}"
 SIFT_TOKENS_DIR="${SIFT_TOKENS_DIR:-$SIFT_STATE_DIR/tokens}"
 SIFT_SNAPSHOTS_DIR="${SIFT_SNAPSHOTS_DIR:-$SIFT_STATE_DIR/snapshots}"
 SIFT_ENRICHMENT_DIR="${SIFT_ENRICHMENT_DIR:-$SIFT_STATE_DIR/enrichment}"
+# Shared Volatility3 symbol cache: setgid (2775) group `sift` so BOTH the
+# service user (sift-service) and the run_command runtime user (agent_runtime)
+# can populate/share it. Exported into both systemd units as SIFT_VOL_SYMBOLS.
+# Lives under /var/cache (FHS: regenerable cached data), deliberately NOT under
+# $SIFT_STATE_DIR — setup-agent-runtime.sh stamps a recursive `u:agent_runtime:---`
+# deny ACL over all of /var/lib/sift, which would override the `sift` group grant
+# and make the cache unwritable by the runtime user. /var/cache/sift is outside
+# that deny sweep so both users can share it.
+SIFT_VOL_SYMBOLS="${SIFT_VOL_SYMBOLS:-/var/cache/sift/volatility-symbols}"
 SIFT_EXAMINER="${SIFT_EXAMINER:-examiner}"
 SIFT_EXECUTE_AS_USER="${SIFT_EXECUTE_AS_USER:-agent_runtime}"
-SIFT_GATEWAY_SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-$(user_name)}"
+# Dedicated non-admin system user that the gateway + durable job worker run as.
+# Its PRIMARY group is its own per-user group (sift-service). The `sift` group
+# below is ONLY the shared vol-symbol-cache group — keep the two distinct.
+SIFT_GATEWAY_SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-sift-service}"
+SIFT_GATEWAY_SERVICE_GROUP="${SIFT_GATEWAY_SERVICE_GROUP:-sift}"
 MATERIALS_FILE="${MATERIALS_FILE:-$SIFT_TOKENS_DIR/installer-handoff.txt}"
-SYSTEMD_USER_DIR="${SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
-GATEWAY_SERVICE_FILE="$SYSTEMD_USER_DIR/sift-gateway.service"
-JOB_WORKER_SERVICE_FILE="$SYSTEMD_USER_DIR/sift-job-worker.service"
+# System (not --user) systemd services: gateway + worker run as sift-service.
+SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
+GATEWAY_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-gateway.service"
+JOB_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-job-worker.service"
 
 VENV_DIR="$REPO_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
@@ -279,37 +321,106 @@ PY
 # =============================================================================
 
 install_state_dirs() {
-  local owner group
-  owner="$(user_name)"
-  group="$(group_name)"
-  log "Creating SIFT state directories."
-  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_STATE_DIR"
-  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_PASSWORDS_DIR"
-  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_VERIFICATION_DIR"
-  sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_TOKENS_DIR"
+  # Runtime state is owned by sift-service so the SERVICE can read/write it. The
+  # installer runs as the operator, so every mkdir/chown crosses the boundary via
+  # sudo. The service user + `sift` group must already exist (ensure_gateway_service_user).
+  local svc="$SIFT_GATEWAY_SERVICE_USER"
+  log "Creating SIFT state directories (owned by service user: $svc)."
+
+  # /var/lib/sift itself must be world-traversable (0755) so the service can
+  # reach its SIFT_HOME/state children and the world-readable symbol-cache parent
+  # is reachable; its sensitive children keep tight modes below.
+  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_STATE_DIR"
+  sudo_if_needed install -d -m 700 -o "$svc" -g "$svc" "$SIFT_PASSWORDS_DIR"
+  sudo_if_needed install -d -m 700 -o "$svc" -g "$svc" "$SIFT_VERIFICATION_DIR"
+  sudo_if_needed install -d -m 700 -o "$svc" -g "$svc" "$SIFT_TOKENS_DIR"
+  # REVIEW: snapshots kept at uid/gid 1000 (the operator) as before — snapshot
+  # tooling historically writes them as the interactive operator, not the service.
   sudo_if_needed install -d -m 755 -o 1000 -g 1000 "$SIFT_SNAPSHOTS_DIR"
-  sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_ENRICHMENT_DIR"
-  sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_CASE_ROOT"
-  install -d -m 700 "$SIFT_HOME" "$SIFT_TLS_DIR" "$SIFT_BACKUP_DIR"
+  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_ENRICHMENT_DIR"
+  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_CASE_ROOT"
+
+  # SIFT_HOME (secrets + gateway.yaml + TLS + backups): 0700 owned sift-service.
+  # NOT group `sift` — secrets must NOT be readable by agent_runtime.
+  sudo_if_needed install -d -m 700 -o "$svc" -g "$svc" "$SIFT_HOME"
+  sudo_if_needed install -d -m 700 -o "$svc" -g "$svc" "$SIFT_TLS_DIR"
+  sudo_if_needed install -d -m 700 -o "$svc" -g "$svc" "$SIFT_BACKUP_DIR"
+
+  # Shared Volatility3 symbol cache under /var/cache (NOT $SIFT_STATE_DIR — see
+  # the SIFT_VOL_SYMBOLS definition: /var/lib/sift carries a recursive
+  # agent_runtime deny ACL). 2775 (setgid) group `sift` so both sift-service and
+  # agent_runtime inherit the group and can share PDB symbols. The group-write
+  # default ACL (so cached files are group-writable, not just group-readable) is
+  # asserted in join_shared_symbol_group, after configure_agent_runtime ensures acl.
+  sudo_if_needed install -d -m 0755 "$(dirname "$SIFT_VOL_SYMBOLS")"
+  sudo_if_needed install -d -m 2775 -o "$svc" -g "$SIFT_GATEWAY_SERVICE_GROUP" "$SIFT_VOL_SYMBOLS"
+  # Re-assert setgid bit (install -m may be masked by umask on some coreutils).
+  sudo_if_needed chmod 2775 "$SIFT_VOL_SYMBOLS"
 }
 
 ensure_gateway_service_user() {
-  local current_user
-  current_user="$(user_name)"
   if [[ -z "${SIFT_GATEWAY_SERVICE_USER:-}" ]]; then
-    SIFT_GATEWAY_SERVICE_USER="$current_user"
+    SIFT_GATEWAY_SERVICE_USER="sift-service"
   fi
-  if id -u "$SIFT_GATEWAY_SERVICE_USER" >/dev/null 2>&1; then
-    log "Gateway service user exists: $SIFT_GATEWAY_SERVICE_USER"
+  local svc="$SIFT_GATEWAY_SERVICE_USER"
+
+  # Primary per-user group (sift-service) — distinct from the shared `sift` group.
+  if ! getent group "$svc" >/dev/null 2>&1; then
+    log "Creating gateway service primary group: $svc"
+    sudo_if_needed groupadd -r "$svc"
+  fi
+
+  # Shared symbol-cache group (`sift`) — supplementary group for sift-service and
+  # (later) agent_runtime. Used ONLY for the 2775 volatility-symbols cache.
+  if ! getent group "$SIFT_GATEWAY_SERVICE_GROUP" >/dev/null 2>&1; then
+    log "Creating shared symbol-cache group: $SIFT_GATEWAY_SERVICE_GROUP"
+    sudo_if_needed groupadd -r "$SIFT_GATEWAY_SERVICE_GROUP"
+  fi
+
+  if id -u "$svc" >/dev/null 2>&1; then
+    log "Gateway service user exists: $svc"
   else
     local nologin="/usr/sbin/nologin"
     [[ -x "$nologin" ]] || nologin="/sbin/nologin"
     [[ -x "$nologin" ]] || nologin="/bin/false"
-    log "Creating dedicated gateway service user: $SIFT_GATEWAY_SERVICE_USER"
-    sudo_if_needed useradd -r -M -s "$nologin" "$SIFT_GATEWAY_SERVICE_USER"
+    log "Creating dedicated gateway service user: $svc (home=$SIFT_STATE_DIR, group=$svc)"
+    sudo_if_needed useradd -r -M -s "$nologin" -d "$SIFT_STATE_DIR" -g "$svc" "$svc"
   fi
-  if [[ "$SIFT_GATEWAY_SERVICE_USER" == "$current_user" ]]; then
-    warn "Gateway service user is the installer user ($current_user). Set SIFT_GATEWAY_SERVICE_USER to a dedicated non-admin user before least-privilege enforcement testing."
+
+  # Idempotently add the service user to the shared symbol group.
+  if ! id -nG "$svc" 2>/dev/null | tr ' ' '\n' | grep -qx "$SIFT_GATEWAY_SERVICE_GROUP"; then
+    log "Adding $svc to shared symbol group: $SIFT_GATEWAY_SERVICE_GROUP"
+    sudo_if_needed usermod -aG "$SIFT_GATEWAY_SERVICE_GROUP" "$svc"
+  fi
+}
+
+# Add agent_runtime to the shared `sift` group so it can write the shared
+# Volatility3 symbol cache. Idempotent. Grants NOTHING else — `sift` gates only
+# the 2775 vol-symbols dir; agent_runtime gains no access to SIFT_HOME secrets
+# (those stay group sift-service, mode 0700/0600).
+join_shared_symbol_group() {
+  # Group-write default ACL on the shared symbol cache: setgid alone propagates
+  # group ownership but new files still land 0644 (group read-only), so a symbol
+  # generated by one user can't be rewritten by the other. A default ACL grants
+  # group `sift` rwx on the dir and on inherited files. Runs here (not in
+  # install_state_dirs) because configure_agent_runtime has ensured `acl` by now.
+  if command -v setfacl >/dev/null 2>&1 && [[ -d "$SIFT_VOL_SYMBOLS" ]]; then
+    sudo_if_needed setfacl -m "g:${SIFT_GATEWAY_SERVICE_GROUP}:rwx" \
+      -d -m "g:${SIFT_GATEWAY_SERVICE_GROUP}:rwx" "$SIFT_VOL_SYMBOLS" 2>/dev/null \
+      || warn "Could not set group-write ACL on $SIFT_VOL_SYMBOLS — cross-user symbol caching may be read-only."
+  fi
+
+  local rt="${SIFT_EXECUTE_AS_USER:-}"
+  if [[ -z "$rt" || "$rt" == "__current__" ]]; then
+    return 0
+  fi
+  if ! id -u "$rt" >/dev/null 2>&1; then
+    warn "join_shared_symbol_group: runtime user '$rt' not found — skipping vol-symbol group membership."
+    return 0
+  fi
+  if ! id -nG "$rt" 2>/dev/null | tr ' ' '\n' | grep -qx "$SIFT_GATEWAY_SERVICE_GROUP"; then
+    log "Adding $rt to shared symbol group: $SIFT_GATEWAY_SERVICE_GROUP"
+    sudo_if_needed usermod -aG "$SIFT_GATEWAY_SERVICE_GROUP" "$rt"
   fi
 }
 
@@ -372,13 +483,16 @@ configure_fuse() {
 }
 
 prepare_enrichment_assets() {
+  # SIFT_ENRICHMENT_DIR is sift-service-owned 0755 (install_state_dirs); the
+  # operator must create the symlink/subdir via sudo. The symlink target is the
+  # world-readable repo data dir under /opt, which the service reads through it.
   log "Preparing enrichment asset pointers."
   if [[ -d "$REPO_DIR/packages/forensic-knowledge/data" ]]; then
-    ln -sfn "$REPO_DIR/packages/forensic-knowledge/data" "$SIFT_ENRICHMENT_DIR/forensic-knowledge"
+    sudo_if_needed ln -sfn "$REPO_DIR/packages/forensic-knowledge/data" "$SIFT_ENRICHMENT_DIR/forensic-knowledge"
   else
     warn "forensic-knowledge data directory not found."
   fi
-  install -d -m 755 "$SIFT_ENRICHMENT_DIR/forensic-rag"
+  sudo_if_needed install -d -m 755 -o "$SIFT_GATEWAY_SERVICE_USER" -g "$SIFT_GATEWAY_SERVICE_USER" "$SIFT_ENRICHMENT_DIR/forensic-rag"
 }
 
 download_rag_index() {
@@ -432,13 +546,15 @@ import_rag_pgvector() {
 
 install_hayabusa() {
   log "Installing hayabusa detection engine."
+  # binary_dir/rules_dir live under SIFT_HOME (sift-service-owned 0700). The
+  # operator downloads/extracts into an operator temp, then installs the artifacts
+  # owned sift-service so the service (and run_command via the runtime user, which
+  # invokes the system-wide /usr/local/bin/hayabusa symlink) can execute them.
   local binary_dir="$SIFT_HOME/bin"
   local rules_dir="$SIFT_HOME/hayabusa-rules"
 
-  if [[ -x "$binary_dir/hayabusa" ]]; then
-    local ver
-    ver=$("$binary_dir/hayabusa" help 2>&1 | head -1 || true)
-    log "hayabusa already installed: $ver"
+  if sudo_if_needed test -x "$binary_dir/hayabusa"; then
+    log "hayabusa already installed (preserving $binary_dir/hayabusa)."
     return
   fi
 
@@ -480,14 +596,15 @@ install_hayabusa() {
     return
   fi
 
-  install -d -m 755 "$binary_dir"
-  install -m 755 "$extracted" "$binary_dir/hayabusa"
-  log "hayabusa installed: $("$binary_dir/hayabusa" help 2>&1 | head -1)"
+  sudo_if_needed install -d -m 755 -o "$SIFT_GATEWAY_SERVICE_USER" -g "$SIFT_GATEWAY_SERVICE_USER" "$binary_dir"
+  svc_install_file "$extracted" "$binary_dir/hayabusa" 755
+  log "hayabusa installed: $(sudo_if_needed "$binary_dir/hayabusa" help 2>&1 | head -1)"
 
   if [[ -d "$tmpd/extracted/rules" ]]; then
-    rm -rf "$rules_dir"
-    cp -r "$tmpd/extracted/rules" "$rules_dir"
-    log "hayabusa rules installed: $(find "$rules_dir" -name '*.yml' | wc -l) YAML files"
+    sudo_if_needed rm -rf "$rules_dir"
+    sudo_if_needed cp -r "$tmpd/extracted/rules" "$rules_dir"
+    sudo_if_needed chown -R "$SIFT_GATEWAY_SERVICE_USER:$SIFT_GATEWAY_SERVICE_USER" "$rules_dir"
+    log "hayabusa rules installed: $(sudo_if_needed find "$rules_dir" -name '*.yml' | wc -l) YAML files"
   else
     warn "Bundled rules not found in release archive."
   fi
@@ -496,23 +613,20 @@ install_hayabusa() {
 
 install_hayabusa_system_links() {
   local binary="$SIFT_HOME/bin/hayabusa"
-  [[ -x "$binary" ]] || return 0
+  sudo_if_needed test -x "$binary" || return 0
   sudo_if_needed ln -sf "$binary" /usr/local/bin/hayabusa 2>/dev/null || true
 }
 
 fix_volatility_permissions() {
-  # Volatility 3 downloads PDB symbol files at runtime into its package dir.
-  # If /opt/volatility3 is root-owned the gateway user can't write the cache
-  # and every vol3 plugin exits 1 with "Cannot write necessary symbol file".
-  local vol_base="/opt/volatility3"
-  [[ -d "$vol_base" ]] || return 0
-  local symbols_dir
-  symbols_dir=$(find "$vol_base" -type d -name "symbols" 2>/dev/null | head -1)
-  [[ -n "$symbols_dir" ]] || return 0
-  log "Fixing Volatility 3 symbol directory write permissions: $symbols_dir"
-  sudo_if_needed chmod -R a+w "$symbols_dir" 2>/dev/null || \
-    sudo_if_needed chown -R "$(id -u):$(id -g)" "$symbols_dir" 2>/dev/null || \
-    warn "Could not fix Volatility 3 symbol permissions — memory ingest may fail on first plugin run."
+  # NO-OP (intentional). Volatility3 symbols no longer go to /opt/volatility3.
+  # They now live in the shared, group-writable cache at
+  # $SIFT_VOL_SYMBOLS (= /var/cache/sift/volatility-symbols, mode 2775, group
+  # `sift`), created by install_state_dirs and exported into both systemd units
+  # as SIFT_VOL_SYMBOLS. parse_memory.py / worker.py read SIFT_VOL_SYMBOLS and
+  # write symbols there, shared between sift-service and agent_runtime.
+  # The old `chmod -R a+w /opt/volatility3` hack is removed so /opt/volatility3
+  # is NOT left world-writable.
+  return 0
 }
 
 # =============================================================================
@@ -521,33 +635,44 @@ fix_volatility_permissions() {
 
 generate_tls() {
   require_cmd openssl
-  install -d -m 700 "$SIFT_TLS_DIR"
-  if [[ -f "$SIFT_TLS_DIR/ca-cert.pem" && -f "$SIFT_TLS_DIR/gateway-cert.pem" && -f "$SIFT_TLS_DIR/gateway-key.pem" ]]; then
+  # SIFT_TLS_DIR is sift-service-owned 0700 (created by install_state_dirs). The
+  # operator generates the material in an operator-owned temp dir, then installs
+  # each file owned sift-service so the running gateway can read its key/cert.
+  if svc_test_f "$SIFT_TLS_DIR/ca-cert.pem" \
+     && svc_test_f "$SIFT_TLS_DIR/gateway-cert.pem" \
+     && svc_test_f "$SIFT_TLS_DIR/gateway-key.pem"; then
     log "TLS material already exists — preserving."
     return
   fi
 
   log "Generating self-signed CA and gateway certificate."
-  local first_ip san_file
+  local first_ip san_file tmpd
   first_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   [[ -n "$first_ip" ]] || first_ip="127.0.0.1"
-  san_file="$(mktemp)"
+  tmpd="$(mktemp -d)"
+  san_file="$tmpd/san.cnf"
   printf 'subjectAltName=IP:%s,IP:127.0.0.1,DNS:%s,DNS:localhost\n' \
     "$first_ip" "$(hostname)" > "$san_file"
 
-  openssl genrsa -out "$SIFT_TLS_DIR/ca-key.pem" 4096 >/dev/null 2>&1
-  openssl req -new -x509 -days 3650 -key "$SIFT_TLS_DIR/ca-key.pem" \
-    -out "$SIFT_TLS_DIR/ca-cert.pem" -subj "/CN=sift-mcps-CA" >/dev/null 2>&1
-  openssl genrsa -out "$SIFT_TLS_DIR/gateway-key.pem" 4096 >/dev/null 2>&1
-  openssl req -new -key "$SIFT_TLS_DIR/gateway-key.pem" \
-    -out "$SIFT_TLS_DIR/gateway-csr.pem" -subj "/CN=$(hostname)" >/dev/null 2>&1
-  openssl x509 -req -days 730 -in "$SIFT_TLS_DIR/gateway-csr.pem" \
-    -CA "$SIFT_TLS_DIR/ca-cert.pem" -CAkey "$SIFT_TLS_DIR/ca-key.pem" \
-    -CAcreateserial -out "$SIFT_TLS_DIR/gateway-cert.pem" \
+  openssl genrsa -out "$tmpd/ca-key.pem" 4096 >/dev/null 2>&1
+  openssl req -new -x509 -days 3650 -key "$tmpd/ca-key.pem" \
+    -out "$tmpd/ca-cert.pem" -subj "/CN=sift-mcps-CA" >/dev/null 2>&1
+  openssl genrsa -out "$tmpd/gateway-key.pem" 4096 >/dev/null 2>&1
+  openssl req -new -key "$tmpd/gateway-key.pem" \
+    -out "$tmpd/gateway-csr.pem" -subj "/CN=$(hostname)" >/dev/null 2>&1
+  openssl x509 -req -days 730 -in "$tmpd/gateway-csr.pem" \
+    -CA "$tmpd/ca-cert.pem" -CAkey "$tmpd/ca-key.pem" \
+    -CAcreateserial -out "$tmpd/gateway-cert.pem" \
     -extfile "$san_file" >/dev/null 2>&1
-  rm -f "$san_file"
-  chmod 600 "$SIFT_TLS_DIR/"*-key.pem
-  chmod 644 "$SIFT_TLS_DIR/"*-cert.pem
+
+  # Private keys -> 0600 sift-service; certs -> 0644 sift-service (world-readable
+  # cert is fine — only the matching private key is sensitive). The ca-cert is
+  # also handed to analysts (handoff references $SIFT_TLS_DIR/ca-cert.pem).
+  svc_install_file "$tmpd/ca-key.pem"      "$SIFT_TLS_DIR/ca-key.pem"      600
+  svc_install_file "$tmpd/gateway-key.pem" "$SIFT_TLS_DIR/gateway-key.pem" 600
+  svc_install_file "$tmpd/ca-cert.pem"     "$SIFT_TLS_DIR/ca-cert.pem"     644
+  svc_install_file "$tmpd/gateway-cert.pem" "$SIFT_TLS_DIR/gateway-cert.pem" 644
+  rm -rf "$tmpd"
 }
 
 # =============================================================================
@@ -555,8 +680,11 @@ generate_tls() {
 # =============================================================================
 
 write_default_examiner() {
+  # SIFT_PASSWORDS_DIR is sift-service-owned 0700. The operator hashes the temp
+  # password into an operator-owned temp JSON, then installs it owned sift-service
+  # 0600 so the gateway can read the legacy PBKDF2 fallback credential.
   local password_file="$SIFT_PASSWORDS_DIR/$SIFT_EXAMINER.json"
-  if [[ -f "$password_file" ]]; then
+  if svc_test_f "$password_file"; then
     log "Default examiner password already exists — preserving."
     TEMP_PASSWORD_CREATED=0
     TEMP_PASSWORD=""
@@ -564,14 +692,15 @@ write_default_examiner() {
   fi
   TEMP_PASSWORD="Agentir-$(random_hex 12)"
   TEMP_PASSWORD_CREATED=1
-  export SIFT_PASSWORDS_DIR SIFT_EXAMINER TEMP_PASSWORD
+  local tmp
+  tmp="$(mktemp)"
+  export SIFT_EXAMINER TEMP_PASSWORD EXAMINER_TMP_OUT="$tmp"
   "$SYSTEM_PYTHON" - <<'PY'
-import hashlib, json, os, secrets, tempfile
-from pathlib import Path
+import hashlib, json, os, secrets
 
-passwords_dir = Path(os.environ["SIFT_PASSWORDS_DIR"])
 examiner = os.environ["SIFT_EXAMINER"]
 password = os.environ["TEMP_PASSWORD"]
+out = os.environ["EXAMINER_TMP_OUT"]
 salt = secrets.token_bytes(32)
 entry = {
     "hash": hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000).hex(),
@@ -579,20 +708,15 @@ entry = {
     "must_reset_password": True,
     "created_by": "sift-mcps install.sh",
 }
-passwords_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-fd, tmp = tempfile.mkstemp(dir=str(passwords_dir), suffix=".tmp")
-try:
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        json.dump(entry, handle)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, passwords_dir / f"{examiner}.json")
-except BaseException:
-    try: os.unlink(tmp)
-    except OSError: pass
-    raise
+with open(out, "w") as handle:
+    os.chmod(out, 0o600)
+    json.dump(entry, handle)
+    handle.flush()
+    os.fsync(handle.fileno())
 PY
+  svc_install_file "$tmp" "$password_file" 600
+  rm -f "$tmp"
+  unset EXAMINER_TMP_OUT
 }
 
 # OS1-BOOTSTRAP: seed enabled add-on backends into app.mcp_backends.
@@ -740,7 +864,7 @@ bootstrap_supabase_operator() {
   fi
 
   # Idempotency: skip if already bootstrapped
-  if [[ -f "$MATERIALS_FILE" ]] && grep -q '^supabase_operator_email=' "$MATERIALS_FILE" 2>/dev/null; then
+  if svc_test_f "$MATERIALS_FILE" && svc_read "$MATERIALS_FILE" | grep -q '^supabase_operator_email=' 2>/dev/null; then
     log "Supabase operator already bootstrapped — preserving."
     SUPABASE_OPERATOR_CREATED=0
     return
@@ -986,7 +1110,10 @@ validate_evidence_root() {
   log "Validating evidence root: $SIFT_CASES_ROOT"
   if [[ ! -d "$SIFT_CASES_ROOT" ]]; then
     warn "Evidence root '$SIFT_CASES_ROOT' does not exist — creating."
-    sudo_if_needed install -d -m 755 -o "$(user_name)" -g "$(group_name)" "$SIFT_CASES_ROOT" || \
+    # Owned by the service user to match install_state_dirs (the gateway
+    # reads/registers evidence here). Normally install_state_dirs already created
+    # it; this is the defensive fallback.
+    sudo_if_needed install -d -m 755 -o "$SIFT_GATEWAY_SERVICE_USER" -g "$SIFT_GATEWAY_SERVICE_USER" "$SIFT_CASES_ROOT" || \
       warn "Could not create '$SIFT_CASES_ROOT' — operator must create it manually."
     return
   fi
@@ -1004,10 +1131,16 @@ validate_evidence_root() {
 # =============================================================================
 
 _render_file() {
-  local src="$1" dst="$2" mode="$3"
+  # Render $src (env-var substituted) to $dst with mode $3. Optional $4 = owner:
+  #   service (default) -> dst lands owned sift-service (SIFT_HOME secrets/config)
+  #   root              -> dst lands owned root:root via sudo (/etc/systemd/system units)
+  # The substitution always happens in an operator-writable temp; we then cross
+  # the ownership boundary with a single sudo install, so the operator never has
+  # to write directly into a sift-service- or root-owned directory.
+  local src="$1" dst="$2" mode="$3" owner="${4:-service}"
   export SIFT_HOME SIFT_TLS_DIR SIFT_CONFIG SIFT_CASES_ROOT SIFT_CASE_ROOT
   export SIFT_GATEWAY_TOKEN SIFT_SERVICE_TOKEN SIFT_PORTAL_SESSION_SECRET
-  export SIFT_EXECUTE_AS_USER
+  export SIFT_EXECUTE_AS_USER SIFT_VOL_SYMBOLS SIFT_GATEWAY_SERVICE_USER
   export SIFT_EXAMINER SIFT_MCPS_ROOT UV_BIN PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
   export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_OPENSEARCH_ENABLED
 
@@ -1020,31 +1153,31 @@ _render_file() {
   SIFT_OPENSEARCH_ENABLED="${SIFT_OPENSEARCH_ENABLED:-true}"
   SIFT_OPENCTI_ENABLED="${SIFT_OPENCTI_ENABLED:-false}"
 
-  "$SYSTEM_PYTHON" - "$src" "$dst" "$mode" <<'PY'
-import os, stat, sys, tempfile
+  local rendered
+  rendered="$(mktemp)"
+  "$SYSTEM_PYTHON" - "$src" "$rendered" "$mode" <<'PY'
+import os, sys
 from pathlib import Path
 
 src = Path(sys.argv[1])
-dst = Path(sys.argv[2])
+dst = Path(sys.argv[2])  # operator-owned temp; final install is done in bash
 mode = int(sys.argv[3], 8)
 text = src.read_text()
 for key, value in os.environ.items():
     text = text.replace("${" + key + "}", value)
-dst.parent.mkdir(parents=True, exist_ok=True)
-fd, tmp = tempfile.mkstemp(dir=str(dst.parent), suffix=".tmp")
-try:
-    os.fchmod(fd, mode)
-    with os.fdopen(fd, "w") as handle:
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, dst)
-    os.chmod(dst, mode)
-except BaseException:
-    try: os.unlink(tmp)
-    except OSError: pass
-    raise
+with open(dst, "w") as handle:
+    handle.write(text)
+    handle.flush()
+    os.fsync(handle.fileno())
+os.chmod(dst, mode)
 PY
+
+  if [[ "$owner" == "root" ]]; then
+    sudo_if_needed install -o root -g root -m "$mode" "$rendered" "$dst"
+  else
+    svc_install_file "$rendered" "$dst" "$mode"
+  fi
+  rm -f "$rendered"
 }
 
 # A1-BOOTSTRAP: write the Supabase env file that the systemd service reads.
@@ -1063,21 +1196,26 @@ write_supabase_env() {
     return
   fi
 
-  if [[ -f "$supabase_env_file" ]]; then
+  if svc_test_f "$supabase_env_file"; then
     log "Supabase env file already exists — preserving $supabase_env_file."
     return
   fi
 
   log "Writing Supabase env file: $supabase_env_file"
-  install -d -m 700 "$(dirname "$supabase_env_file")"
+  # Write to an operator-owned temp, then install it owned sift-service 0600 so
+  # the running service can read it but it never lives operator-owned. SIFT_HOME
+  # is created by install_state_dirs (owned sift-service 0700).
+  local tmp
+  tmp="$(mktemp)"
   {
     printf '# Supabase environment — managed by sift-mcps install.sh\n'
     printf '# Secrets are stored here, not in gateway.yaml.\n'
     [[ -n "$sb_url" ]]     && printf 'SUPABASE_URL=%s\n' "$sb_url"
     [[ -n "$sb_anon" ]]    && printf 'SUPABASE_ANON_KEY=%s\n' "$sb_anon"
     [[ -n "$sb_service" ]] && printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$sb_service"
-  } > "$supabase_env_file"
-  chmod 600 "$supabase_env_file"
+  } > "$tmp"
+  svc_install_file "$tmp" "$supabase_env_file" 600
+  rm -f "$tmp"
 }
 
 # =============================================================================
@@ -1130,9 +1268,11 @@ preflight_supabase() {
 }
 
 _env_file_value() {
+  # The env files live under SIFT_HOME and are sift-service-owned 0600, so the
+  # operator must read them via sudo. svc_read returns empty for a missing file.
   local file="$1" key="$2"
-  [[ -f "$file" ]] || return 0
-  awk -F= -v k="$key" '$1 == k {sub(/^[^=]*=/, ""); print; exit}' "$file" 2>/dev/null || true
+  svc_test_f "$file" || return 0
+  svc_read "$file" | awk -F= -v k="$key" '$1 == k {sub(/^[^=]*=/, ""); print; exit}' || true
 }
 
 _resolved_control_plane_dsn() {
@@ -1185,14 +1325,17 @@ write_control_plane_env() {
   [[ -n "$existing_pepper" ]] && token_pepper="$existing_pepper"
 
   log "Writing control-plane env file: $control_env_file"
-  install -d -m 700 "$(dirname "$control_env_file")"
+  # Operator-owned temp -> sift-service-owned 0600 (see write_supabase_env).
+  local tmp
+  tmp="$(mktemp)"
   {
     printf '# SIFT control-plane environment — managed by sift-mcps install.sh\n'
     printf '# Secrets are stored here, not in gateway.yaml.\n'
     [[ -n "$cp_dsn" ]] && printf 'SIFT_CONTROL_PLANE_DSN=%s\n' "$cp_dsn"
     [[ -n "$token_pepper" ]] && printf 'SIFT_TOKEN_PEPPER=%s\n' "$token_pepper"
-  } > "$control_env_file"
-  chmod 600 "$control_env_file"
+  } > "$tmp"
+  svc_install_file "$tmp" "$control_env_file" 600
+  rm -f "$tmp"
   [[ -n "$cp_dsn" ]] && export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
   [[ -n "$token_pepper" ]] && export SIFT_TOKEN_PEPPER="$token_pepper"
 }
@@ -1304,7 +1447,9 @@ PY
 }
 
 write_gateway_config() {
-  if [[ -f "$SIFT_CONFIG" ]]; then
+  # SIFT_CONFIG lives under SIFT_HOME (sift-service-owned 0700/0600), so the
+  # existence check must use sudo.
+  if svc_test_f "$SIFT_CONFIG"; then
     log "Gateway config exists — preserving $SIFT_CONFIG."
     CONFIG_CREATED=0
     SIFT_GATEWAY_TOKEN=""
@@ -1324,7 +1469,19 @@ write_gateway_config() {
 
 _migrate_gateway_config() {
   log "Checking gateway config compatibility."
-  export SIFT_CONFIG SIFT_MCPS_ROOT PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
+  # SIFT_CONFIG is sift-service-owned 0600. The operator runs the (uv) migration,
+  # so it reads/writes operator-owned temps and the result is installed back
+  # owned sift-service. Read the live config into a temp via sudo.
+  local cfg_src cfg_out
+  cfg_src="$(mktemp)"
+  cfg_out="$(mktemp)"
+  if ! sudo_if_needed cat "$SIFT_CONFIG" > "$cfg_src" 2>/dev/null; then
+    warn "_migrate_gateway_config: could not read $SIFT_CONFIG — skipping migration."
+    rm -f "$cfg_src" "$cfg_out"
+    return 0
+  fi
+  export SIFT_CONFIG_SRC="$cfg_src" SIFT_CONFIG_OUT="$cfg_out"
+  export SIFT_MCPS_ROOT PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
   export SIFT_EXECUTE_AS_USER
   export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED
   SIFT_MCPS_ROOT="$REPO_DIR"
@@ -1335,12 +1492,13 @@ _migrate_gateway_config() {
   OPENCTI_TOKEN="${OPENCTI_TOKEN:-}"
 
   "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads python - <<'PY'
-import os, tempfile
+import os, sys
 from pathlib import Path
 import yaml
 
-path = Path(os.environ["SIFT_CONFIG"])
-cfg = yaml.safe_load(path.read_text()) or {}
+src = Path(os.environ["SIFT_CONFIG_SRC"])
+out = Path(os.environ["SIFT_CONFIG_OUT"])
+cfg = yaml.safe_load(src.read_text()) or {}
 changed = False
 
 # Normalise TLS key names
@@ -1399,59 +1557,69 @@ for backend in (cfg.get("backends") or {}).values():
     changed = True
 
 if changed:
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w") as handle:
-            yaml.safe_dump(cfg, handle, sort_keys=False)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-        os.chmod(path, 0o600)
-    except BaseException:
-        try: os.unlink(tmp)
-        except OSError: pass
-        raise
+    with open(out, "w") as handle:
+        os.chmod(out, 0o600)
+        yaml.safe_dump(cfg, handle, sort_keys=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    print("changed")
+else:
+    print("unchanged")
 PY
+
+  # Install the migrated config back, owned sift-service 0600, only if changed.
+  if [[ -s "$cfg_out" ]]; then
+    log "Gateway config migrated — installing updated $SIFT_CONFIG (owned $SIFT_GATEWAY_SERVICE_USER)."
+    svc_install_file "$cfg_out" "$SIFT_CONFIG" 600
+  fi
+  rm -f "$cfg_src" "$cfg_out"
 }
 
 write_opensearch_config() {
+  # OPENSEARCH_CONFIG (opensearch.env) points the opensearch-mcp backend at this
+  # file, so it must be sift-service-readable. SIFT_HOME is sift-service-owned
+  # 0700 — write to an operator temp, then install owned sift-service 0600.
   local os_config="$SIFT_HOME/opensearch.yaml"
-  if [[ -f "$os_config" ]]; then
+  if svc_test_f "$os_config"; then
     log "OpenSearch client config exists — preserving $os_config."
     return
   fi
-  umask 077
-  cat > "$os_config" <<'YAML'
+  local tmp
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'YAML'
 host: http://127.0.0.1:9200
 user: admin
 password: admin
 verify_certs: false
 YAML
-  chmod 600 "$os_config"
+  svc_install_file "$tmp" "$os_config" 600
+  rm -f "$tmp"
 }
 
 # FM-2: write gateway env file for OpenSearch env_refs so the backend process
 # receives OPENSEARCH_CONFIG and OPENSEARCH_HOST from the gateway's environment.
 # Idempotent (recreate only if missing); chmod 600 to guard the config path.
 # Called only when SIFT_OPENSEARCH_ENABLED=true; consumed by the gateway
-# service via EnvironmentFile=-%h/.sift/opensearch.env.
+# service via EnvironmentFile=-${SIFT_HOME}/opensearch.env.
 write_opensearch_env() {
   [[ "${SIFT_OPENSEARCH_ENABLED:-false}" == "true" ]] || return 0
   local os_env_file="$SIFT_HOME/opensearch.env"
-  if [[ -f "$os_env_file" ]]; then
+  if svc_test_f "$os_env_file"; then
     log "OpenSearch env file already exists — preserving $os_env_file."
     return
   fi
   log "Writing OpenSearch gateway env file: $os_env_file"
-  install -d -m 700 "$(dirname "$os_env_file")"
+  # Operator-owned temp -> sift-service-owned 0600 (see write_supabase_env).
+  local tmp
+  tmp="$(mktemp)"
   {
     printf '# OpenSearch env — gateway env_refs for opensearch-mcp backend\n'
     printf '# Written by sift-mcps install.sh. Idempotent — delete to regenerate.\n'
     printf 'OPENSEARCH_CONFIG=%s/opensearch.yaml\n' "$SIFT_HOME"
     printf 'OPENSEARCH_HOST=http://127.0.0.1:9200\n'
-  } > "$os_env_file"
-  chmod 600 "$os_env_file"
+  } > "$tmp"
+  svc_install_file "$tmp" "$os_env_file" 600
+  rm -f "$tmp"
 }
 
 # BATCH-PMI3: write the gateway/worker env file that points the forensic-knowledge
@@ -1461,23 +1629,27 @@ write_opensearch_env() {
 # run_command path silently skip FK enrichment. FK data is a core runtime dep
 # (D4); prepare_enrichment_assets lays it down at
 # $SIFT_ENRICHMENT_DIR/forensic-knowledge, which is the path we publish here.
-# Consumed by both units via EnvironmentFile=-%h/.sift/forensic-knowledge.env.
+# Consumed by both units via EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env.
 # Idempotent (recreate only if missing). FK_DATA_DIR is a non-secret path.
 write_fk_env() {
   local fk_data_dir="$SIFT_ENRICHMENT_DIR/forensic-knowledge"
   local fk_env_file="$SIFT_HOME/forensic-knowledge.env"
-  if [[ -f "$fk_env_file" ]]; then
+  if svc_test_f "$fk_env_file"; then
     log "forensic-knowledge env file already exists — preserving $fk_env_file."
     return
   fi
   log "Writing forensic-knowledge env file: $fk_env_file"
-  install -d -m 700 "$(dirname "$fk_env_file")"
+  # Non-secret path file: install owned sift-service, mode 0644. (SIFT_HOME is
+  # 0700 sift-service, so only the service can traverse to it regardless.)
+  local tmp
+  tmp="$(mktemp)"
   {
     printf '# forensic-knowledge env — FK_DATA_DIR for the FK loader (core enrichment)\n'
     printf '# Written by sift-mcps install.sh. Idempotent — delete to regenerate.\n'
     printf 'FK_DATA_DIR=%s\n' "$fk_data_dir"
-  } > "$fk_env_file"
-  chmod 644 "$fk_env_file"
+  } > "$tmp"
+  svc_install_file "$tmp" "$fk_env_file" 644
+  rm -f "$tmp"
 }
 
 # =============================================================================
@@ -1737,32 +1909,36 @@ _detect_opencti() {
 prepare_opencti_secrets() {
   [[ "${SIFT_OPENCTI_ENABLED:-false}" == "true" ]] || return 0
 
+  # OpenCTI secret/id files live under SIFT_HOME (sift-service-owned 0700). Read
+  # them via sudo and (re)create them owned sift-service. _svc_write_secret_line
+  # writes a single value to an operator temp and installs it owned sift-service.
+  local tmp
   if [[ -z "${OPENCTI_TOKEN:-}" ]]; then
-    if [[ -f "$SIFT_HOME/opencti-token" ]]; then
-      OPENCTI_TOKEN="$(< "$SIFT_HOME/opencti-token")"
+    if svc_test_f "$SIFT_HOME/opencti-token"; then
+      OPENCTI_TOKEN="$(svc_read "$SIFT_HOME/opencti-token")"
       log "OpenCTI admin token already exists."
     else
       OPENCTI_TOKEN=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-      printf '%s\n' "$OPENCTI_TOKEN" > "$SIFT_HOME/opencti-token"
-      chmod 600 "$SIFT_HOME/opencti-token"
+      tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_TOKEN" > "$tmp"
+      svc_install_file "$tmp" "$SIFT_HOME/opencti-token" 600; rm -f "$tmp"
       log "OpenCTI admin token saved."
     fi
   fi
 
-  if [[ -f "$SIFT_HOME/opencti-encryption-key" ]]; then
-    OPENCTI_ENCRYPTION_KEY="$(< "$SIFT_HOME/opencti-encryption-key")"
+  if svc_test_f "$SIFT_HOME/opencti-encryption-key"; then
+    OPENCTI_ENCRYPTION_KEY="$(svc_read "$SIFT_HOME/opencti-encryption-key")"
   else
     OPENCTI_ENCRYPTION_KEY="$(openssl rand -base64 32)"
-    printf '%s\n' "$OPENCTI_ENCRYPTION_KEY" > "$SIFT_HOME/opencti-encryption-key"
-    chmod 600 "$SIFT_HOME/opencti-encryption-key"
+    tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_ENCRYPTION_KEY" > "$tmp"
+    svc_install_file "$tmp" "$SIFT_HOME/opencti-encryption-key" 600; rm -f "$tmp"
   fi
 
-  if [[ -f "$SIFT_HOME/opencti-health-key" ]]; then
-    OPENCTI_HEALTH_ACCESS_KEY="$(< "$SIFT_HOME/opencti-health-key")"
+  if svc_test_f "$SIFT_HOME/opencti-health-key"; then
+    OPENCTI_HEALTH_ACCESS_KEY="$(svc_read "$SIFT_HOME/opencti-health-key")"
   else
     OPENCTI_HEALTH_ACCESS_KEY=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-    printf '%s\n' "$OPENCTI_HEALTH_ACCESS_KEY" > "$SIFT_HOME/opencti-health-key"
-    chmod 600 "$SIFT_HOME/opencti-health-key"
+    tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_HEALTH_ACCESS_KEY" > "$tmp"
+    svc_install_file "$tmp" "$SIFT_HOME/opencti-health-key" 600; rm -f "$tmp"
   fi
 
   export OPENCTI_TOKEN OPENCTI_ENCRYPTION_KEY OPENCTI_HEALTH_ACCESS_KEY
@@ -1791,23 +1967,25 @@ install_opencti() {
 install_opencti_feeds() {
   [[ "${SIFT_OPENCTI_ENABLED:-false}" == "true" ]] || return 0
 
-  local id_file
+  # Connector id files under SIFT_HOME (sift-service-owned 0700): read via sudo,
+  # (re)create owned sift-service.
+  local id_file tmp
   id_file="$SIFT_HOME/opencti-connector-mitre-id"
-  if [[ -f "$id_file" ]]; then
-    OPENCTI_CONNECTOR_MITRE_ID="$(< "$id_file")"
+  if svc_test_f "$id_file"; then
+    OPENCTI_CONNECTOR_MITRE_ID="$(svc_read "$id_file")"
   else
     OPENCTI_CONNECTOR_MITRE_ID=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-    printf '%s\n' "$OPENCTI_CONNECTOR_MITRE_ID" > "$id_file"
-    chmod 600 "$id_file"
+    tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_CONNECTOR_MITRE_ID" > "$tmp"
+    svc_install_file "$tmp" "$id_file" 600; rm -f "$tmp"
   fi
 
   id_file="$SIFT_HOME/opencti-connector-cisa-kev-id"
-  if [[ -f "$id_file" ]]; then
-    OPENCTI_CONNECTOR_CISA_KEV_ID="$(< "$id_file")"
+  if svc_test_f "$id_file"; then
+    OPENCTI_CONNECTOR_CISA_KEV_ID="$(svc_read "$id_file")"
   else
     OPENCTI_CONNECTOR_CISA_KEV_ID=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-    printf '%s\n' "$OPENCTI_CONNECTOR_CISA_KEV_ID" > "$id_file"
-    chmod 600 "$id_file"
+    tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_CONNECTOR_CISA_KEV_ID" > "$tmp"
+    svc_install_file "$tmp" "$id_file" 600; rm -f "$tmp"
   fi
 
   export OPENCTI_CONNECTOR_MITRE_ID OPENCTI_CONNECTOR_CISA_KEV_ID
@@ -1823,40 +2001,43 @@ install_opencti_feeds() {
 # =============================================================================
 
 install_systemd_service() {
-  install -d -m 700 "$SYSTEMD_USER_DIR"
+  # SYSTEM (not --user) services: the gateway + durable worker run as the
+  # dedicated non-admin user sift-service via [Service] User=/Group=. Unit files
+  # are root-owned 0644 in /etc/systemd/system; the operator installs them via
+  # sudo. SIFT_VOL_SYMBOLS (shared symbol cache) and SIFT_HOME (absolute, used in
+  # the units' EnvironmentFile lines instead of %h) are rendered into both units.
   SIFT_GATEWAY_TOKEN=""
   SIFT_SERVICE_TOKEN=""
   SIFT_PORTAL_SESSION_SECRET=""
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
-  SIFT_CONFIG="$SIFT_CONFIG"
   SIFT_EXAMINER="$SIFT_EXAMINER"
   export SIFT_MCPS_ROOT UV_BIN PYTHON_BIN SIFT_CONFIG SIFT_EXAMINER
+  export SIFT_GATEWAY_SERVICE_USER SIFT_VOL_SYMBOLS
 
   [[ -x "$VENV_DIR/bin/sift-gateway" ]] || die "Missing gateway entrypoint: $VENV_DIR/bin/sift-gateway. Run install workspace sync first."
   [[ -x "$VENV_DIR/bin/sift-job-worker" ]] || warn "Missing durable job worker entrypoint: $VENV_DIR/bin/sift-job-worker."
 
-  if [[ -f "$GATEWAY_SERVICE_FILE" ]]; then
-    log "Updating systemd user service $GATEWAY_SERVICE_FILE."
+  if sudo_if_needed test -f "$GATEWAY_SERVICE_FILE"; then
+    log "Updating systemd system service $GATEWAY_SERVICE_FILE."
   else
-    log "Writing systemd user service $GATEWAY_SERVICE_FILE."
+    log "Writing systemd system service $GATEWAY_SERVICE_FILE."
   fi
-  _render_file "$REPO_DIR/configs/systemd/sift-gateway.service" "$GATEWAY_SERVICE_FILE" 0644
-  if [[ -f "$JOB_WORKER_SERVICE_FILE" ]]; then
-    log "Updating systemd user service $JOB_WORKER_SERVICE_FILE."
+  _render_file "$REPO_DIR/configs/systemd/sift-gateway.service" "$GATEWAY_SERVICE_FILE" 0644 root
+  if sudo_if_needed test -f "$JOB_WORKER_SERVICE_FILE"; then
+    log "Updating systemd system service $JOB_WORKER_SERVICE_FILE."
   else
-    log "Writing systemd user service $JOB_WORKER_SERVICE_FILE."
+    log "Writing systemd system service $JOB_WORKER_SERVICE_FILE."
   fi
-  _render_file "$REPO_DIR/configs/systemd/sift-job-worker.service" "$JOB_WORKER_SERVICE_FILE" 0644
+  _render_file "$REPO_DIR/configs/systemd/sift-job-worker.service" "$JOB_WORKER_SERVICE_FILE" 0644 root
 
   if ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not found — service file written but not started."
     return
   fi
-  systemctl --user daemon-reload
-  systemctl --user enable sift-gateway.service
-  systemctl --user enable sift-job-worker.service
-  systemctl --user restart sift-gateway.service sift-job-worker.service
+  sudo_if_needed systemctl daemon-reload
+  sudo_if_needed systemctl enable sift-gateway.service sift-job-worker.service
+  sudo_if_needed systemctl restart sift-gateway.service sift-job-worker.service
 }
 
 # =============================================================================
@@ -1875,7 +2056,7 @@ poll_gateway() {
     sleep 1
   done
   if [[ -z "$body" ]]; then
-    warn "Gateway not reachable.  Check: journalctl --user -u sift-gateway -n 50"
+    warn "Gateway not reachable.  Check: sudo journalctl -u sift-gateway -n 50"
     return
   fi
 
@@ -1920,13 +2101,21 @@ write_handoff() {
   existing_service_token=""
   existing_sb_email=""
   existing_sb_pw=""
-  if [[ -f "$MATERIALS_FILE" ]]; then
-    existing_temp_password="$(awk -F= '$1=="temporary_examiner_password"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
-    existing_gateway_token="$(awk -F= '$1=="examiner_fallback_token"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
-    existing_service_token="$(awk -F= '$1=="hermes_service_token"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
-    existing_sb_email="$(awk -F= '$1=="supabase_operator_email"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
-    existing_sb_pw="$(awk -F= '$1=="supabase_operator_temp_password"{sub(/^[^=]*=/,""); print; exit}' "$MATERIALS_FILE" || true)"
+  # MATERIALS_FILE lives in SIFT_TOKENS_DIR (sift-service-owned 0700). Read prior
+  # values via sudo; the file is (re)written below into an operator temp and
+  # installed owned sift-service 0600. The operator reads it post-install with
+  # `sudo cat "$MATERIALS_FILE"` (print_summary points here).
+  if svc_test_f "$MATERIALS_FILE"; then
+    local _mat
+    _mat="$(svc_read "$MATERIALS_FILE")"
+    existing_temp_password="$(printf '%s\n' "$_mat" | awk -F= '$1=="temporary_examiner_password"{sub(/^[^=]*=/,""); print; exit}' || true)"
+    existing_gateway_token="$(printf '%s\n' "$_mat" | awk -F= '$1=="examiner_fallback_token"{sub(/^[^=]*=/,""); print; exit}' || true)"
+    existing_service_token="$(printf '%s\n' "$_mat" | awk -F= '$1=="hermes_service_token"{sub(/^[^=]*=/,""); print; exit}' || true)"
+    existing_sb_email="$(printf '%s\n' "$_mat" | awk -F= '$1=="supabase_operator_email"{sub(/^[^=]*=/,""); print; exit}' || true)"
+    existing_sb_pw="$(printf '%s\n' "$_mat" | awk -F= '$1=="supabase_operator_temp_password"{sub(/^[^=]*=/,""); print; exit}' || true)"
   fi
+  local _handoff_tmp
+  _handoff_tmp="$(mktemp)"
   umask 077
   {
     printf 'sift-mcps installer handoff\n'
@@ -1990,10 +2179,12 @@ write_handoff() {
     # OpenSearch backend seeding status.
     printf 'opensearch_backend_seeded=%s\n' "${OPENSEARCH_SEEDED:-false}"
     printf 'opensearch_available=%s\n' "${OPENSEARCH_UP:-0}"
-    # loginctl linger for --user services to survive logout.
-    printf 'loginctl_linger=enabled\n'
-  } > "$MATERIALS_FILE"
-  chmod 600 "$MATERIALS_FILE"
+    # System services (User=sift-service) — start at boot via multi-user.target.
+    printf 'service_scope=system\n'
+    printf 'service_user=%s\n' "$SIFT_GATEWAY_SERVICE_USER"
+  } > "$_handoff_tmp"
+  svc_install_file "$_handoff_tmp" "$MATERIALS_FILE" 600
+  rm -f "$_handoff_tmp"
   # A1-BOOTSTRAP: clear the temp password from env now that it's in the handoff file.
   unset SUPABASE_OPERATOR_TEMP_PASSWORD
 }
@@ -2075,7 +2266,7 @@ print_summary() {
   printf 'MCP endpoint: https://%s:4508/mcp\n' "$ip"
   printf 'CA cert:      %s/ca-cert.pem\n' "$SIFT_TLS_DIR"
   printf 'Config:       %s\n' "$SIFT_CONFIG"
-  printf 'Secrets:      %s\n' "$MATERIALS_FILE"
+  printf 'Secrets:      %s   (read with: sudo cat)\n' "$MATERIALS_FILE"
   printf 'Evidence root: %s\n' "$SIFT_CASES_ROOT"
   printf '\n'
 
@@ -2105,8 +2296,8 @@ print_summary() {
     fi
   fi
 
-  # loginctl linger.
-  printf 'Linger:       enabled (--user services survive logout/reboot)\n'
+  # Service scope.
+  printf 'Services:     system (run as %s; start at boot via multi-user.target)\n' "$SIFT_GATEWAY_SERVICE_USER"
 
   printf '\n'
   printf 'Next steps:\n'
@@ -2164,20 +2355,21 @@ _confirm_destructive() {
 }
 
 uninstall_systemd() {
+  # System (not --user) services now: stop/disable/remove via sudo.
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user stop sift-gateway.service sift-job-worker.service 2>/dev/null || true
-    systemctl --user disable sift-gateway.service sift-job-worker.service 2>/dev/null || true
+    sudo_if_needed systemctl stop sift-gateway.service sift-job-worker.service 2>/dev/null || true
+    sudo_if_needed systemctl disable sift-gateway.service sift-job-worker.service 2>/dev/null || true
   fi
   local removed=0
   for service_file in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE"; do
-    if [[ -f "$service_file" ]]; then
-      rm -f "$service_file"
+    if sudo_if_needed test -f "$service_file"; then
+      sudo_if_needed rm -f "$service_file"
       removed=1
-      log "Removed systemd user service ($service_file)."
+      log "Removed systemd system service ($service_file)."
     fi
   done
-  command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload 2>/dev/null || true
-  [[ "$removed" -eq 1 ]] || log "No systemd user services to remove."
+  command -v systemctl >/dev/null 2>&1 && sudo_if_needed systemctl daemon-reload 2>/dev/null || true
+  [[ "$removed" -eq 1 ]] || log "No systemd system services to remove."
 }
 
 uninstall_docker_stacks() {
@@ -2234,8 +2426,11 @@ uninstall_runtime() {
     rm -rf "$VENV_DIR"
     log "Removed venv ($VENV_DIR)."
   fi
-  if [[ -d "$SIFT_HOME" ]]; then
-    rm -rf "$SIFT_HOME"
+  # SIFT_HOME (=/var/lib/sift/.sift) is sift-service-owned 0700 — remove via sudo.
+  # This removes config/TLS/secrets/hayabusa but leaves the rest of
+  # /var/lib/sift (state) intact; that is only wiped by --purge-data.
+  if sudo_if_needed test -d "$SIFT_HOME"; then
+    sudo_if_needed rm -rf "$SIFT_HOME"
     log "Removed $SIFT_HOME (config, TLS, secrets, backups, hayabusa)."
   fi
 }
@@ -2410,9 +2605,15 @@ main() {
 
   sync_workspace
   repair_pyewf_venv_link
-  install_state_dirs
+  # The service user + shared `sift` group must exist before install_state_dirs
+  # chowns the state/secret tree to sift-service.
   ensure_gateway_service_user
+  install_state_dirs
   configure_agent_runtime
+  # agent_runtime is created by configure_agent_runtime (setup-agent-runtime.sh);
+  # add it to the shared `sift` group AFTER, so it can write the vol symbol cache.
+  # This grants NOTHING else — `sift` is used only for that 2775 cache dir.
+  join_shared_symbol_group
   configure_ingest_mount_sudoers
   configure_fuse
   generate_tls
@@ -2489,14 +2690,9 @@ main() {
 
   install_systemd_service
 
-  # (#6) loginctl linger: ensure --user services survive logout/reboot.
-  if command -v loginctl >/dev/null 2>&1; then
-    log "Enabling loginctl linger for $(user_name)."
-    sudo_if_needed loginctl enable-linger "$(user_name)" 2>/dev/null || \
-      warn "loginctl enable-linger failed — systemd --user services may stop on logout."
-  else
-    warn "loginctl not found — systemd --user services may stop on logout."
-  fi
+  # NOTE: loginctl linger removed — the gateway/worker are now SYSTEM services
+  # (User=sift-service, WantedBy=multi-user.target), so they start at boot and
+  # survive operator logout without per-user lingering.
 
   configure_immutable_capability
   configure_auditd

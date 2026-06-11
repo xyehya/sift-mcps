@@ -4,28 +4,37 @@ After=network.target sift-gateway.service
 
 [Service]
 Type=simple
+# Runs as the dedicated non-admin service user (sift-service), same as the gateway.
+User=${SIFT_GATEWAY_SERVICE_USER}
+Group=${SIFT_GATEWAY_SERVICE_USER}
 ExecStart=${SIFT_MCPS_ROOT}/.venv/bin/sift-job-worker
 WorkingDirectory=${SIFT_MCPS_ROOT}
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+# Shared Volatility3 symbol cache (mode 2775, group `sift`) — parse_memory.py /
+# worker.py read SIFT_VOL_SYMBOLS and write symbols there, shared with agent_runtime.
+Environment=SIFT_VOL_SYMBOLS=${SIFT_VOL_SYMBOLS}
 # The worker holds the control-plane DSN and Supabase/service-role secrets it
 # needs for DB job claims. These secrets MUST NOT reach a sandboxed
 # run_command subprocess: that isolation is enforced in code at the execution
 # boundary (sift_core.execute.runtime_acl.build_sandbox_env scrubs the env of
 # both the execution worker and the forensic tool it spawns). Do not rely on
 # this unit to pass secrets through to run_command — by design it cannot.
-EnvironmentFile=-%h/.sift/supabase.env
-EnvironmentFile=-%h/.sift/control-plane.env
+# IMPORTANT: %h would resolve to /root for a system service (NOT influenced by
+# User=, see systemd.unit(5)), so we use the absolute SIFT_HOME path that
+# install.sh substitutes to /var/lib/sift/.sift.
+EnvironmentFile=-${SIFT_HOME}/supabase.env
+EnvironmentFile=-${SIFT_HOME}/control-plane.env
 # BATCH-PMI3: FK_DATA_DIR points the forensic-knowledge loader at the installed
 # data dir so build_response/run_command enrichment fires under the worker user.
 # Non-secret path; written by install.sh (write_fk_env). The data dir is
 # read-only reference content, not a secret, so forwarding it here is safe and
 # does not weaken the run_command env-scrubbing isolation described above.
-EnvironmentFile=-%h/.sift/forensic-knowledge.env
+EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env
 Environment=UV_NO_MANAGED_PYTHON=1
 Environment=UV_PYTHON_DOWNLOADS=never
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

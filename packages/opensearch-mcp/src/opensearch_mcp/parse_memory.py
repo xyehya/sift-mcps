@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -178,17 +179,39 @@ def _plugin_to_index_suffix(plugin: str) -> str:
     return f"vol-{parts[-1]}"
 
 
-def _user_symbol_dir() -> Path:
-    """Return a user-writable Volatility 3 symbol cache directory.
+_DEFAULT_SHARED_SYMBOL_DIR = Path("/var/cache/sift/volatility-symbols")
 
-    The system vol install at /opt/volatility3 is root-owned so the ingest
-    subprocess (running as sansforensics) cannot write downloaded symbols there.
-    Using a user-writable directory via -s lets vol cache symbol files without
-    requiring elevated permissions.
+
+def _user_symbol_dir() -> Path:
+    """Return a writable Volatility 3 symbol cache directory.
+
+    This is a SHARED, env-overridable symbol cache, consumed via ``-s`` so vol
+    can cache generated/downloaded ISF symbols without needing write access to
+    its read-only install dir. The same cache is written by both the
+    ``sift-service`` service user and the ``agent_runtime`` sandbox user, which
+    is why the on-VM default lives in a group-writable shared location rather
+    than per-user.
+
+    Resolution order:
+      1. ``SIFT_VOL_SYMBOLS`` env var, if set, is used verbatim.
+      2. otherwise the shared default ``/var/cache/sift/volatility-symbols``.
+      3. if the chosen dir cannot be created or is not writable, fall back to
+         ``~/.cache/volatility3/symbols`` so host dev/tests still work.
+
+    The returned dir is always created (``mkdir(parents=True, exist_ok=True)``).
     """
-    cache = Path.home() / ".cache" / "volatility3" / "symbols"
-    cache.mkdir(parents=True, exist_ok=True)
-    return cache
+    env_override = os.environ.get("SIFT_VOL_SYMBOLS", "").strip()
+    chosen = Path(env_override) if env_override else _DEFAULT_SHARED_SYMBOL_DIR
+    try:
+        chosen.mkdir(parents=True, exist_ok=True)
+        if os.access(chosen, os.W_OK):
+            return chosen
+    except OSError:
+        pass
+
+    fallback = Path.home() / ".cache" / "volatility3" / "symbols"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
 
 
 def run_vol3_plugin(
