@@ -1,7 +1,7 @@
 # Task Batches
 
 Status: MVP sprint execution tracker.
-Last updated: 2026-06-10.
+Last updated: 2026-06-11.
 
 Rules:
 
@@ -62,10 +62,10 @@ Rules:
 - [x] BATCH-OSX-RAG - Port forensic-rag-mcp tools to pgvector at full parity + remove rag_search_case shim
 - [x] BATCH-OSX3 - Programmatic tool-calling / code-execution-with-MCP feasibility spike (doc-first)
 - [x] BATCH-OSX-PURGE - Purge stale/unused (forensic-mcp, dead Chroma index modules, broken win-triage scripts)
-- [ ] BATCH-NW1 - compute_content_hash consolidation (operator priority #1; test on fresh install)
-- [ ] BATCH-NW2 - Remove windows-triage-mcp entirely + decouple opensearch enrich-triage
-- [ ] BATCH-NW3 - Add-on Backend Contract documentation (hackathon modularity story)
-- [ ] BATCH-NW4 - RAG knowledge-only hardening (drop per-case derived RAG; privacy)
+- [x] BATCH-NW1 - compute_content_hash consolidation (operator priority #1; test on fresh install)
+- [x] BATCH-NW2 - Remove windows-triage-mcp entirely + decouple opensearch enrich-triage
+- [x] BATCH-NW3 - Add-on Backend Contract documentation (hackathon modularity story)
+- [x] BATCH-NW4 - RAG knowledge-only hardening (drop per-case derived RAG; privacy)
 - [x] BATCH-NW5 - opensearch run_command duplicate check (RESOLVED: none exists, no action)
 - [ ] BATCH-NW6 - Programmatic Tool Calling: enable + native-harness validation (reframed OSX3)
 
@@ -434,6 +434,12 @@ the VM (PMI4/OS6), then enable + validate Programmatic Tool Calling (NW6).
 
 ## BATCH-NW1 - compute_content_hash consolidation (operator priority #1)
 
+DONE (commit `a9602f0`; landed on `main` in NW Wave 1, 2026-06-11). Every call site now imports the
+`investigation_store` authority (19-key WIDE set; strips `_`-prefixed keys); the narrow 15-key copies
+in `case_io`/`reporting`/`case-dashboard routes` removed. New test asserts all call sites hash an item
+identically. Existing-deployment re-hash need documented in code (no migration written). Tests: 23
+hash + 84 adjacent pass.
+
 Dependencies: none. Run BEFORE fresh install.
 
 Scope:
@@ -475,6 +481,14 @@ changed files, tests run, acceptance status.
 ```
 
 ## BATCH-NW2 - Remove windows-triage-mcp entirely + decouple opensearch enrich-triage
+
+DONE (commit `77dfb58`; landed on `main` in NW Wave 1, 2026-06-11). Whole `windows-triage-mcp` package
+deleted (32 files); refs removed from root `pyproject.toml`/`uv.lock`, `install.sh`,
+`scripts/setup-addon.sh`, `sift-common/instructions.py`, and gateway tests. OpenSearch coupling severed:
+`triage_remote.py` + `opensearch_enrich_triage` removed from server/registry/`sift-backend.json`;
+`mcp_surface_golden.json` regenerated. Grep-proven no live importers. Conductor follow-up `c32a291`
+dropped the stale `wintriage_check_artifact` hint from sift-core `_RELATED_TOOLS` (outside both NW1/NW2
+fences). Tests: opensearch surface 40 + gateway phase6/f1 29 pass; `bash -n` clean; `uv lock --check` OK.
 
 Dependencies: none. Run BEFORE fresh install.
 
@@ -524,6 +538,12 @@ change) + bash -n install.sh setup-addon.sh. Do not edit docs/migration. End wit
 
 ## BATCH-NW3 - Add-on Backend Contract documentation (hackathon modularity story)
 
+DONE (commit `a200f66`; landed on `main` in NW Wave 1, 2026-06-11). New `docs/backend-contract.md`
+(361 lines) documents the `sift-backend.json` manifest schema (incl OSX2 advanced-tool-use fields +
+authority_contract), the seed/mount/requirement-gate/late-seed lifecycle (OSX1 reload), and a worked
+end-to-end add-on example citing opensearch-mcp + forensic-rag-mcp. Grounded with source citations.
+`validate_docs.py` OK (docs/migration untouched); `git diff --check` clean.
+
 Dependencies: none. Docs-only; no code.
 
 Scope:
@@ -571,6 +591,14 @@ Do not edit docs/migration. End with a LANDING LOG.
 ```
 
 ## BATCH-NW4 - RAG knowledge-only hardening (drop per-case derived RAG; privacy)
+
+DONE (commit `068e5c6`; landed on `main` in NW Wave 1, 2026-06-11). New append-only migration
+`202606111200_rag_knowledge_only.sql` makes `app.rag_search` knowledge-only (6-arg overload; revokes
+the old 9-arg from service_role) and adds BEFORE-INSERT triggers blocking `kind='derived'` at the DB
+layer. `pgvector_store.search` + kb tools drop `case_id`/`include_derived`/`include_knowledge`; a Python
+guard rejects derived. Tests: 56 pass (incl SQL static-analysis schema assertions; no live DB needed).
+Note: the old 9-arg `app.rag_search` overload is revoked but not dropped (append-only) — a future
+cleanup migration may DROP it once callers are confirmed migrated.
 
 Dependencies: BATCH-OSX-RAG (landed; `202606101100_rag_search_filters.sql` exists).
 

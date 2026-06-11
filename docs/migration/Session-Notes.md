@@ -1,7 +1,7 @@
 # Session Notes
 
 Status: sprint log and decision register.
-Last updated: 2026-06-10.
+Last updated: 2026-06-11.
 
 Format rules:
 
@@ -12,6 +12,48 @@ Format rules:
 - Do not create more migration runbooks.
 
 ## Current Change Log
+
+### 2026-06-11 - NW cleanup Wave 1 (NW1∥NW2∥NW3∥NW4) LANDED on `main`
+
+Status: DONE (four batches built in parallel scope-fenced worktrees, integrated, and fast-forwarded
+to `main`; full end-to-end stays BATCH-PMI4/OS6)
+
+Conductor ran NW1∥NW2∥NW3∥NW4 as four parallel workers, one manual worktree per batch off `main`
+(`git worktree add ../sift-mcps-nwN main` — NOT Agent isolation:worktree). File-disjoint by design;
+all four merged into an integration branch with ZERO conflicts, then fast-forwarded to `main`. Landed
+commits, in order:
+
+- `a9602f0` **BATCH-NW1** - `compute_content_hash` consolidated to the single `investigation_store`
+  authority (19-key WIDE set, strips `_`-keys); narrow 15-key copies removed from `case_io`/`reporting`/
+  `case-dashboard routes`. New test proves all call sites hash identically. Existing-deployment re-hash
+  need documented in code; no migration written (fresh DB needs none). Tests: 23 + 84 adjacent.
+- `068e5c6` **BATCH-NW4** - RAG hardened knowledge-only (B-MVP-RAG-DERIVED REJECTED). New append-only
+  `202606111200_rag_knowledge_only.sql`: `app.rag_search` 6-arg knowledge-only overload, old 9-arg
+  revoked from service_role, BEFORE-INSERT triggers block `kind='derived'` at the DB layer.
+  `pgvector_store.search`/kb tools drop `case_id`/`include_derived`/`include_knowledge`. Tests: 56.
+- `77dfb58` **BATCH-NW2** - `windows-triage-mcp` deleted entirely (32 files); refs purged from
+  `pyproject.toml`/`uv.lock`, `install.sh`, `setup-addon.sh`, `sift-common/instructions.py`, gateway
+  tests. OpenSearch coupling severed: `triage_remote.py` + `opensearch_enrich_triage` removed;
+  `mcp_surface_golden.json` regenerated. Grep-proven no live importers. Tests: opensearch surface 40 +
+  gateway phase6/f1 29; `bash -n` clean.
+- `a200f66` **BATCH-NW3** - new `docs/backend-contract.md` (manifest schema incl OSX2 advanced-tool-use
+  fields + authority_contract; seed/mount/late-seed lifecycle; worked add-on example). Docs-only.
+- `c32a291` **conductor follow-up** - dropped the stale `wintriage_check_artifact` hint from sift-core
+  `execute/response.py` `_RELATED_TOOLS` (NW2 flagged it; outside both NW1/NW2 fences).
+
+Integrated sweep on the merged tree (root `.venv`): NW1 23 + NW4 56 + opensearch 40 + gateway 29 +
+execute 47 all pass; `validate_docs.py` + `validate_migration_docs.py` OK; `bash -n install.sh
+setup-addon.sh` clean; `git diff --check` clean; `uv lock --check` resolved 222 pkgs (lock coherent).
+
+Carry-forward: NW2 left two intentional/cosmetic windows-triage strings — `case_ops.py:349` docstring
+(`"No-op: windows-triage support has been dropped."`, correct as-is) and `forensic-knowledge/data/*.yaml`
+reference data (out of scope; non-functional cross-refs). NW4's old 9-arg `app.rag_search` is revoked
+but not dropped (append-only) — future cleanup migration may DROP it once callers confirmed migrated.
+
+Validation: `validate_docs.py` + `validate_migration_docs.py` OK; `git diff --check` clean.
+
+**Next:** push `main`, then Wave 2 = bare-SIFT `./install.sh --no-windows-triage --no-opencti`
+(PMI4/OS6, operator-run, the only end-to-end gate), then Wave 3 = NW6 (PTC) validated post-install.
 
 ### 2026-06-10 - OSX wave merged to `main`; NW track opened (operator decisions)
 
@@ -44,7 +86,7 @@ Status: DONE (docs/planning; merge to main; NW build wave handed off)
 Validation: `validate_docs.py` + `validate_migration_docs.py` OK; `git diff --check` clean.
 
 Next: operator pushes `main` (enables the VM clone), then runs the NW cleanup wave and the fresh
-install. **Next:** run NW1∥NW2∥NW3∥NW4, then bare-SIFT `./install.sh --no-windows-triage --no-opencti`
+install. Next: run NW1∥NW2∥NW3∥NW4, then bare-SIFT `./install.sh --no-windows-triage --no-opencti`
 (PMI4/OS6), then NW6.
 
 ### 2026-06-10 - OSX build wave LANDED (OSX1 + OSX-RAG + OSX-PURGE + OSX2 + OSX3 + PMI3)
