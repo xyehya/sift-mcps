@@ -1,16 +1,18 @@
-"""Supabase pgvector RAG store (BATCH-G1).
+"""Supabase pgvector RAG store (BATCH-G1, hardened BATCH-NW4).
 
 Authoritative metadata + embedding store for the forensic RAG plane, backed by
 the ``app.rag_collections`` / ``app.rag_documents`` / ``app.rag_chunks`` schema
-and the ``app.rag_search`` / ``app.rag_upsert_chunk`` RPCs added in
-``202606081400_rag_pgvector.sql``.
+and the ``app.rag_search`` / ``app.rag_upsert_chunk`` RPCs.
 
 Authority / isolation contract (Migration-Spec invariants):
-    - RAG is a DERIVED / REFERENCE plane. This module never mutates evidence,
-      approvals, jobs, findings, or reports — it only reads/writes RAG tables.
-    - A retrieval is ALWAYS bound to one querying case. It returns that case's
-      derived chunks UNION the shared knowledge chunks. Another case's derived
-      data is unreachable both in ``app.rag_search`` and here.
+    - RAG is a REFERENCE-ONLY plane (BATCH-NW4: B-MVP-RAG-DERIVED REJECTED).
+      This module never mutates evidence, approvals, jobs, findings, or reports
+      — it only reads/writes RAG tables.
+    - KNOWLEDGE ONLY: derived (per-case) RAG data is permanently rejected.
+      Case-sensitive derived text must never enter or exit the vector store.
+      Both this Python layer and the ``app.rag_search`` DB function (BATCH-NW4
+      migration) enforce knowledge-only retrieval. The DB also has BEFORE INSERT
+      triggers that block kind='derived' inserts at the SQL level.
     - Output is provenance-linked and PATH-FREE: every returned hit carries a
       provenance_id and document/collection labels, never an absolute
       evidence/case/mount path. A defensive sanitizer drops any path-shaped or
@@ -18,8 +20,8 @@ Authority / isolation contract (Migration-Spec invariants):
 
 The Gateway worker connects with a service DSN; agents never reach this module
 directly. Knowledge data is stored as reference (``kind='knowledge'``,
-``case_id`` NULL); derived case context is stored case-scoped
-(``kind='derived'``, ``case_id`` set).
+``case_id`` NULL). The ``kind='derived'`` value is rejected by ingest helpers
+and blocked by a DB trigger.
 """
 
 from __future__ import annotations
@@ -346,20 +348,17 @@ class PgVectorRagStore:
         self,
         *,
         query_embedding: Sequence[float],
-        case_id: str | None,
         top_k: int = 5,
-        include_knowledge: bool = True,
-        include_derived: bool = True,
         source: str | None = None,
         source_ids: Sequence[str] | None = None,
         technique: str | None = None,
         platform: str | None = None,
     ) -> RagSearchResult:
-        """Run a case-scoped retrieval via ``app.rag_search``.
+        """Run a knowledge-only retrieval via ``app.rag_search`` (BATCH-NW4).
 
-        ``case_id`` is the ONLY case whose derived chunks may be returned. When
-        ``case_id`` is None, derived retrieval is force-disabled so no case's
-        derived data can leak; only shared knowledge is searched.
+        BATCH-NW4 (B-MVP-RAG-DERIVED REJECTED): this method is KNOWLEDGE ONLY.
+        There is no ``case_id``, no ``include_derived``, and no ``include_knowledge``
+        parameter — the DB function enforces kind='knowledge' unconditionally.
 
         The ``source`` / ``source_ids`` / ``technique`` / ``platform`` filters
         restrict shared-knowledge retrieval by the chunk ``metadata`` jsonb
@@ -372,9 +371,6 @@ class PgVectorRagStore:
                 f"query embedding must be {EMBEDDING_DIM}-dim, got {len(query_embedding)}"
             )
         top_k = max(1, min(int(top_k), MAX_TOP_K))
-        # Defense in depth: derived retrieval is meaningless and unsafe without a
-        # bound case, so disable it when no case scope is supplied.
-        effective_derived = include_derived and case_id is not None
         clean_source_ids = (
             [str(s) for s in source_ids if str(s).strip()]
             if source_ids
@@ -385,13 +381,10 @@ class PgVectorRagStore:
             with conn.cursor() as cur:
                 cur.execute(
                     "select * from app.rag_search("
-                    "%s::vector, %s, %s, %s, %s, %s, %s::text[], %s, %s)",
+                    "%s::vector, %s, %s, %s::text[], %s, %s)",
                     (
                         list(query_embedding),
-                        case_id,
                         top_k,
-                        include_knowledge,
-                        effective_derived,
                         source,
                         clean_source_ids,
                         technique,
@@ -401,16 +394,16 @@ class PgVectorRagStore:
                 rows = cur.fetchall()
 
         hits = [_row_to_hit(r) for r in rows]
-        # Final hard guarantee: strip any derived hit not belonging to the
-        # querying case, regardless of what the DB returned.
-        safe_hits = [
-            h
-            for h in hits
-            if h.kind == "knowledge" or (h.case_id is not None and h.case_id == case_id)
-        ]
+        # Final hard guarantee: strip any non-knowledge hit regardless of what
+        # the DB returned.  The BATCH-NW4 migration makes derived rows unreachable
+        # at the SQL level; this Python check fails closed defensively.
+        safe_hits = [h for h in hits if h.kind == "knowledge"]
         if len(safe_hits) != len(hits):  # pragma: no cover - DB enforces this
-            logger.error("rag_search returned cross-case rows; dropped %d", len(hits) - len(safe_hits))
-        return RagSearchResult(case_id=case_id, hits=safe_hits)
+            logger.error(
+                "rag_search returned non-knowledge rows; dropped %d",
+                len(hits) - len(safe_hits),
+            )
+        return RagSearchResult(case_id=None, hits=safe_hits)
 
     # -- knowledge introspection (shared reference corpus only) -------------
 
@@ -519,9 +512,15 @@ def _jsonb_param(value: dict[str, Any]):
 
 
 def _validate_kind_case(kind: str, case_id: str | None) -> None:
-    if kind not in {"knowledge", "derived"}:
-        raise PgVectorStoreError("kind must be 'knowledge' or 'derived'")
-    if kind == "knowledge" and case_id is not None:
+    """Validate RAG kind and case_id.
+
+    BATCH-NW4 (B-MVP-RAG-DERIVED REJECTED): only kind='knowledge' is accepted.
+    kind='derived' is permanently blocked — the RAG store is shared-knowledge only.
+    """
+    if kind != "knowledge":
+        raise PgVectorStoreError(
+            "RAG store is knowledge-only (B-MVP-RAG-DERIVED REJECTED). "
+            "kind must be 'knowledge'; kind='derived' is permanently blocked."
+        )
+    if case_id is not None:
         raise PgVectorStoreError("knowledge RAG rows must not carry case_id")
-    if kind == "derived" and case_id is None:
-        raise PgVectorStoreError("derived RAG rows require case_id")

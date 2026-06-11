@@ -1,10 +1,13 @@
 """BATCH-G1 unit tests for the pgvector RAG store.
 
-These exercise case isolation and provenance-only / path-free output without a
-live Postgres: a fake connection records the SQL/params and returns scripted
-rows. The DB-side guarantees (RLS, the rag_search UNION, CHECK constraints) live
-in the migration; here we verify the Python adapter's contract and its
-defense-in-depth scrubbing.
+Updated for BATCH-NW4 (B-MVP-RAG-DERIVED REJECTED): the store is knowledge-only.
+Tests that assumed case_id / include_derived params have been updated to reflect
+the new knowledge-only API.
+
+These exercise provenance-only / path-free output without a live Postgres: a fake
+connection records the SQL/params and returns scripted rows. The DB-side guarantees
+(triggers, the knowledge-only rag_search function) live in the migration; here we
+verify the Python adapter's contract and its defense-in-depth scrubbing.
 """
 
 from __future__ import annotations
@@ -109,44 +112,39 @@ def _store_with_rows(monkeypatch, rows, *, one_rows=None):
 
 
 # ---------------------------------------------------------------------------
-# case isolation
+# BATCH-NW4: knowledge-only — no case_id / derived params on search()
 # ---------------------------------------------------------------------------
 
 
-def test_search_with_case_passes_case_scope_to_rpc(monkeypatch):
-    store, conn = _store_with_rows(monkeypatch, [_row(kind="derived", case_id=CASE_A)])
-    store.search(query_embedding=_emb(), case_id=CASE_A, top_k=3)
+def test_search_uses_six_arg_rpc(monkeypatch):
+    """BATCH-NW4: search() calls the 6-arg knowledge-only app.rag_search."""
+    store, conn = _store_with_rows(monkeypatch, [_row(kind="knowledge", case_id=None)])
+    store.search(query_embedding=_emb(), top_k=3)
     sql, params = conn._cursor.executed[0]
     assert "app.rag_search" in sql
-    # params: (embedding, case_id, top_k, include_knowledge, include_derived)
-    assert params[1] == CASE_A
-    assert params[2] == 3
-    assert params[4] is True  # derived enabled with a case
+    # params: (embedding, top_k, source, source_ids, technique, platform) — 6 args
+    assert len(params) == 6
+    assert params[1] == 3  # top_k at position 1
 
 
-def test_search_without_case_forces_derived_off(monkeypatch):
-    store, conn = _store_with_rows(monkeypatch, [_row(kind="knowledge", case_id=None)])
-    store.search(query_embedding=_emb(), case_id=None)
-    _sql, params = conn._cursor.executed[0]
-    assert params[1] is None
-    assert params[4] is False  # derived retrieval force-disabled without a case
-
-
-def test_cross_case_derived_rows_are_dropped(monkeypatch):
-    # Even if the DB somehow returned case B's derived chunk while querying case A,
-    # the adapter drops it. (The DB-side rag_search makes this unreachable; this is
-    # the belt-and-suspenders Python guard.)
+def test_search_returns_only_knowledge_hits(monkeypatch):
+    """BATCH-NW4: any non-knowledge row the DB returns is dropped."""
     rows = [
         _row(kind="knowledge", case_id=None),
-        _row(kind="derived", case_id=CASE_A),
-        _row(kind="derived", case_id=CASE_B),  # foreign case — must be dropped
+        _row(kind="derived", case_id=CASE_A),  # should be dropped
     ]
     store, _ = _store_with_rows(monkeypatch, rows)
-    result = store.search(query_embedding=_emb(), case_id=CASE_A)
-    kinds_cases = {(h.kind, h.case_id) for h in result.hits}
-    assert ("derived", CASE_B) not in kinds_cases
-    assert ("derived", CASE_A) in kinds_cases
-    assert ("knowledge", None) in kinds_cases
+    result = store.search(query_embedding=_emb())
+    kinds = [h.kind for h in result.hits]
+    assert "derived" not in kinds
+    assert "knowledge" in kinds
+
+
+def test_search_result_has_no_case_id(monkeypatch):
+    """BATCH-NW4: result.case_id is always None (knowledge-only)."""
+    store, _ = _store_with_rows(monkeypatch, [_row(kind="knowledge", case_id=None)])
+    result = store.search(query_embedding=_emb())
+    assert result.case_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +154,7 @@ def test_cross_case_derived_rows_are_dropped(monkeypatch):
 
 def test_hits_carry_provenance_ids(monkeypatch):
     store, _ = _store_with_rows(monkeypatch, [_row(kind="knowledge", case_id=None)])
-    result = store.search(query_embedding=_emb(), case_id=CASE_A)
+    result = store.search(query_embedding=_emb())
     pub = result.public_dict()
     assert pub["status"] == "ok"
     assert pub["results"][0]["provenance_id"] == "prov-chunk"
@@ -165,7 +163,7 @@ def test_hits_carry_provenance_ids(monkeypatch):
 
 def test_output_has_no_embedding_field(monkeypatch):
     store, _ = _store_with_rows(monkeypatch, [_row(kind="knowledge", case_id=None)])
-    result = store.search(query_embedding=_emb(), case_id=CASE_A)
+    result = store.search(query_embedding=_emb())
     for hit in result.public_dict()["results"]:
         assert "embedding" not in hit
 
@@ -198,7 +196,7 @@ def test_windows_abs_path_in_content_is_scrubbed():
 def test_search_rejects_wrong_embedding_dim(monkeypatch):
     store, _ = _store_with_rows(monkeypatch, [])
     with pytest.raises(PgVectorStoreError):
-        store.search(query_embedding=[0.1, 0.2, 0.3], case_id=CASE_A)
+        store.search(query_embedding=[0.1, 0.2, 0.3])
 
 
 def test_upsert_rejects_wrong_embedding_dim(monkeypatch):

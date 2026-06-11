@@ -1,16 +1,32 @@
-"""BATCH-OSX-RAG: forensic-rag-mcp kb_ tool surface tests.
+"""BATCH-OSX-RAG / BATCH-NW4: forensic-rag-mcp kb_ tool surface tests.
 
 Exercises the restored knowledge tools (kb_search_knowledge,
 kb_list_knowledge_sources, kb_get_knowledge_stats) through the RAGServer tool
 bodies with a mocked BGE embedder and a mocked PgVectorRagStore — no model
-download, no live Postgres. Verifies parity with the original tool surface:
-filter plumbing, top_k clamp, validation, response shape, and that the corpus
-is queried as shared knowledge only (case_id None, derived off).
+download, no live Postgres.
+
+BATCH-NW4 update: store.search() no longer takes case_id / include_derived /
+include_knowledge params.  The _FakeStore.search() signature reflects this.
 """
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
+
+# Ensure the worktree's rag_mcp package takes precedence over any installed copy.
+# This is necessary because uv/pip may have the old (pre-NW4) package installed in
+# the root venv; we must test against the edited source in this worktree.
+_WORKTREE_SRC = str(Path(__file__).resolve().parents[1] / "src")
+if _WORKTREE_SRC not in sys.path:
+    sys.path.insert(0, _WORKTREE_SRC)
+
+# Evict any already-cached rag_mcp modules so sys.path insert takes effect.
+for _key in list(sys.modules):
+    if _key == "rag_mcp" or _key.startswith("rag_mcp."):
+        del sys.modules[_key]
 
 pytest.importorskip("mcp.server.fastmcp")
 
@@ -90,11 +106,11 @@ def test_search_returns_ok_shape_and_queries_knowledge_only(server):
     assert out["results"][0]["provenance_id"] == "prov-1"
     assert "embedding" not in out["results"][0]
     assert embedder.queries == ["credential dumping"]
-    # Shared knowledge only: no case scope, derived disabled.
+    # BATCH-NW4: knowledge-only store — no case_id / include_derived kwargs.
     call = store.calls[0]
-    assert call["case_id"] is None
-    assert call["include_knowledge"] is True
-    assert call["include_derived"] is False
+    assert "case_id" not in call
+    assert "include_derived" not in call
+    assert "include_knowledge" not in call
 
 
 def test_search_forwards_source_filter(server):
