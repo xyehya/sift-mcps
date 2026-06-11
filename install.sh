@@ -58,7 +58,6 @@ SIFT_VERIFICATION_DIR="${SIFT_VERIFICATION_DIR:-$SIFT_STATE_DIR/verification}"
 SIFT_TOKENS_DIR="${SIFT_TOKENS_DIR:-$SIFT_STATE_DIR/tokens}"
 SIFT_SNAPSHOTS_DIR="${SIFT_SNAPSHOTS_DIR:-$SIFT_STATE_DIR/snapshots}"
 SIFT_ENRICHMENT_DIR="${SIFT_ENRICHMENT_DIR:-$SIFT_STATE_DIR/enrichment}"
-SIFT_WINDOWS_TRIAGE_DB_DIR="${SIFT_WINDOWS_TRIAGE_DB_DIR:-$SIFT_STATE_DIR/windows-triage}"
 SIFT_EXAMINER="${SIFT_EXAMINER:-examiner}"
 SIFT_EXECUTE_AS_USER="${SIFT_EXECUTE_AS_USER:-agent_runtime}"
 SIFT_GATEWAY_SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-$(user_name)}"
@@ -290,7 +289,6 @@ install_state_dirs() {
   sudo_if_needed install -d -m 700 -o "$owner" -g "$group" "$SIFT_TOKENS_DIR"
   sudo_if_needed install -d -m 755 -o 1000 -g 1000 "$SIFT_SNAPSHOTS_DIR"
   sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_ENRICHMENT_DIR"
-  sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_WINDOWS_TRIAGE_DB_DIR"
   sudo_if_needed install -d -m 755 -o "$owner" -g "$group" "$SIFT_CASE_ROOT"
   install -d -m 700 "$SIFT_HOME" "$SIFT_TLS_DIR" "$SIFT_BACKUP_DIR"
 }
@@ -370,20 +368,6 @@ configure_fuse() {
     fi
   else
     echo 'user_allow_other' | sudo_if_needed tee "$fuse_conf" >/dev/null
-  fi
-}
-
-download_triage_databases() {
-  log "Downloading triage baseline databases."
-  if [[ -f "$SIFT_WINDOWS_TRIAGE_DB_DIR/known_good.db" && -f "$SIFT_WINDOWS_TRIAGE_DB_DIR/context.db" ]]; then
-    log "Triage databases already present — skipping."
-    return
-  fi
-  if "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads \
-    python -m windows_triage_mcp.scripts.download_databases --dest "$SIFT_WINDOWS_TRIAGE_DB_DIR"; then
-    log "Triage databases downloaded."
-  else
-    warn "Triage database download FAILED.  windows-triage-mcp will run in degraded mode."
   fi
 }
 
@@ -1022,11 +1006,10 @@ validate_evidence_root() {
 _render_file() {
   local src="$1" dst="$2" mode="$3"
   export SIFT_HOME SIFT_TLS_DIR SIFT_CONFIG SIFT_CASES_ROOT SIFT_CASE_ROOT
-  export SIFT_WINDOWS_TRIAGE_DB_DIR
   export SIFT_GATEWAY_TOKEN SIFT_SERVICE_TOKEN SIFT_PORTAL_SESSION_SECRET
   export SIFT_EXECUTE_AS_USER
   export SIFT_EXAMINER SIFT_MCPS_ROOT UV_BIN PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
-  export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED SIFT_OPENSEARCH_ENABLED
+  export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_OPENSEARCH_ENABLED
 
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
@@ -1034,7 +1017,6 @@ _render_file() {
   OPENCTI_TOKEN="${OPENCTI_TOKEN:-}"
   # Honor flags already set by main() (e.g. core-only); default to enabled.
   SIFT_RAG_ENABLED="${SIFT_RAG_ENABLED:-true}"
-  SIFT_WINDOWS_TRIAGE_ENABLED="${SIFT_WINDOWS_TRIAGE_ENABLED:-true}"
   SIFT_OPENSEARCH_ENABLED="${SIFT_OPENSEARCH_ENABLED:-true}"
   SIFT_OPENCTI_ENABLED="${SIFT_OPENCTI_ENABLED:-false}"
 
@@ -1344,11 +1326,10 @@ _migrate_gateway_config() {
   log "Checking gateway config compatibility."
   export SIFT_CONFIG SIFT_MCPS_ROOT PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
   export SIFT_EXECUTE_AS_USER
-  export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED
+  export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
   SIFT_RAG_ENABLED="true"
-  SIFT_WINDOWS_TRIAGE_ENABLED="true"
   SIFT_OPENCTI_ENABLED="${SIFT_OPENCTI_ENABLED:-false}"
   OPENCTI_URL="${OPENCTI_URL:-http://127.0.0.1:8080}"
   OPENCTI_TOKEN="${OPENCTI_TOKEN:-}"
@@ -2321,7 +2302,7 @@ main() {
   SIFT_CORE_ONLY="${SIFT_CORE_ONLY:-0}"
   local uninstall_mode=0
   # Track explicit flag overrides (honored over auto-detect).
-  local flag_no_opencti=0 flag_no_windows_triage=0 flag_no_rag=0
+  local flag_no_opencti=0 flag_no_rag=0
   SIFT_EXTERNAL_SUPABASE="${SIFT_EXTERNAL_SUPABASE:-0}"
 
   # Parse flags (#1: new flags + existing)
@@ -2332,7 +2313,6 @@ main() {
       --uninstall|--remove)   uninstall_mode=1; shift ;;
       --purge-data)           PURGE_DATA=1; shift ;;
       --no-opencti)           flag_no_opencti=1; shift ;;
-      --no-windows-triage)    flag_no_windows_triage=1; shift ;;
       --no-rag)               flag_no_rag=1; shift ;;
       --external-supabase)    SIFT_EXTERNAL_SUPABASE=1; shift ;;
       -h|--help)
@@ -2341,10 +2321,9 @@ main() {
         printf 'No arguments required for install — everything is auto-detected.\n'
         printf 'Re-run safe: every install step is idempotent.\n\n'
         printf '  --core-only          Install gateway + portal + in-process core tools only.\n'
-        printf '                       Skips all add-on backends (opensearch, rag, windows-triage,\n'
-        printf '                       opencti), OpenSearch/Docker, and forensic-tool downloads.\n'
+        printf '                       Skips all add-on backends (opensearch, rag, opencti),\n'
+        printf '                       OpenSearch/Docker, and forensic-tool downloads.\n'
         printf '  --no-opencti         Disable OpenCTI even if Docker + RAM requirements are met.\n'
-        printf '  --no-windows-triage  Disable windows-triage-mcp backend.\n'
         printf '  --no-rag             Disable forensic-rag-mcp backend.\n'
         printf '  --external-supabase  Skip Supabase auto-provisioning.  Requires that\n'
         printf '                       SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,\n'
@@ -2383,7 +2362,6 @@ main() {
     log "CORE-ONLY install: gateway + portal + in-process core tools; all add-on backends disabled."
     SIFT_OPENCTI_ENABLED="false"
     SIFT_RAG_ENABLED="false"
-    SIFT_WINDOWS_TRIAGE_ENABLED="false"
     SIFT_OPENSEARCH_ENABLED="false"
   else
     # RAG: --no-rag flag or explicit env=false overrides.
@@ -2392,14 +2370,6 @@ main() {
       log "RAG backend disabled (--no-rag or SIFT_RAG_ENABLED=false)."
     else
       SIFT_RAG_ENABLED="${SIFT_RAG_ENABLED:-true}"
-    fi
-
-    # Windows triage: --no-windows-triage flag or explicit env=false overrides.
-    if [[ "$flag_no_windows_triage" -eq 1 || "${SIFT_WINDOWS_TRIAGE_ENABLED:-}" == "false" ]]; then
-      SIFT_WINDOWS_TRIAGE_ENABLED="false"
-      log "Windows triage backend disabled (--no-windows-triage or SIFT_WINDOWS_TRIAGE_ENABLED=false)."
-    else
-      SIFT_WINDOWS_TRIAGE_ENABLED="${SIFT_WINDOWS_TRIAGE_ENABLED:-true}"
     fi
 
     # OpenSearch: default enabled.
@@ -2424,7 +2394,7 @@ main() {
       fi
     fi
   fi
-  export SIFT_CORE_ONLY SIFT_OPENCTI_ENABLED SIFT_RAG_ENABLED SIFT_WINDOWS_TRIAGE_ENABLED SIFT_OPENSEARCH_ENABLED
+  export SIFT_CORE_ONLY SIFT_OPENCTI_ENABLED SIFT_RAG_ENABLED SIFT_OPENSEARCH_ENABLED
 
   # --- preflight: Supabase (integration contract) ---
   # Must run before write_supabase_env / write_control_plane_env so those see
@@ -2471,7 +2441,6 @@ main() {
   OPENSEARCH_SEEDED=false
 
   if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
-    download_triage_databases
     download_rag_index
     import_rag_pgvector
     install_hayabusa

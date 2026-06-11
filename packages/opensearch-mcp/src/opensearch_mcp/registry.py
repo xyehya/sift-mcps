@@ -543,16 +543,6 @@ class EnrichIntelOut(BaseModel):
     note: str | None = Field(None, description="Polling note.")
 
 
-class EnrichTriageIn(BaseModel):
-    case_id: str = Field("", description="Case to enrich; default active.")
-
-
-class EnrichTriageOut(BaseModel):
-    status: Literal["complete"] = Field(..., description="Triage enrichment status.")
-    documents_enriched: int = Field(..., description="Total documents enriched.")
-    details: dict[str, Any] = Field(..., description="Per-artifact enriched counts.")
-
-
 class ListDetectionsIn(BaseModel):
     severity: Literal["", "critical", "high", "medium", "low"] = Field(
         "", description="Severity filter; empty returns all severities."
@@ -1156,24 +1146,6 @@ async def run_opensearch_enrich_intel(params: EnrichIntelIn) -> ToolResult:
         run_id=raw.get("run_id"),
         log_file=raw.get("log_file"),
         note=raw.get("note") or raw.get("message"),
-    )
-    return _success_tool_result(out, meta)
-
-
-async def run_opensearch_enrich_triage(params: EnrichTriageIn) -> ToolResult:
-    raw = _legacy_server().opensearch_enrich_triage(**params.model_dump())
-    if "error" in raw:
-        default = (
-            ErrorCode.no_active_case
-            if "No active case" in str(raw.get("error"))
-            else ErrorCode.upstream_unavailable
-        )
-        return _legacy_error(raw, default_code=default)
-    meta = _meta_from_raw(raw)
-    out = EnrichTriageOut(
-        status=raw.get("status", "complete"),
-        documents_enriched=int(raw.get("documents_enriched", 0)),
-        details=dict(raw.get("details") or {}),
     )
     return _success_tool_result(out, meta)
 
@@ -1822,36 +1794,6 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "`defer_loading` candidate."
         ),
     },
-    "opensearch_enrich_triage": {
-        "category": "enrichment",
-        "recommended_for_phase": "CORRELATE",
-        "when_to_use": (
-            "Check indexed filenames/services against the Windows baseline DB and stamp "
-            "triage.verdict on documents. Use after indexed Windows artifacts exist or "
-            "after a baseline update. Requires enrichment:triage scope."
-        ),
-        "avoid_when": (
-            "Do not treat an UNKNOWN baseline verdict as malicious by itself; verify "
-            "interesting results against source records."
-        ),
-        "output_shape": (
-            "EnrichTriageOut: status ('complete'), documents_enriched, details{} "
-            "(per-artifact enriched counts). Behavior-compatible synchronous path."
-        ),
-        "response_shaping": (
-            "Returns enriched counts only, never windows-triage credentials. Cannot "
-            "approve findings, alter evidence, or decide reports."
-        ),
-        "usage_examples": [
-            _example("Run Windows baseline enrichment on the active case", ),
-            _example("Enrich a named case", case_id="rocba-drive-20260526-1417"),
-        ],
-        "defer_loading": True,
-        "defer_loading_rationale": (
-            "CORRELATE-phase, scope-gated, add-on-dependent (windows-triage); "
-            "Tool-Search `defer_loading` candidate."
-        ),
-    },
     "opensearch_list_detections": {
         "category": "search-analysis",
         "recommended_for_phase": "ANALYZE",
@@ -2111,23 +2053,6 @@ REGISTRY.append(
             "new_canonical='wksn01')."
         ),
         deprecated_aliases=["opensearch_host_fix"],
-    )
-)
-
-REGISTRY.append(
-    ToolDef(
-        name="opensearch_enrich_triage",
-        fn=run_opensearch_enrich_triage,
-        in_model=EnrichTriageIn,
-        out_model=EnrichTriageOut,
-        annotations=_write_annotations("Enrich: Windows Baseline Triage"),
-        title="Enrich: Windows Baseline Triage",
-        description=(
-            "Check indexed filenames and services against the Windows baseline DB "
-            "and stamp triage verdict fields. Use after ingest or after a baseline "
-            "update. This remains behavior-compatible with the current synchronous "
-            "path. Example: opensearch_enrich_triage()."
-        ),
     )
 )
 

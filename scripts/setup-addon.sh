@@ -11,7 +11,7 @@ set -Eeuo pipefail
 #       ./install.sh --core-only
 #
 # and is complete on its own. Add-on backends (OpenCTI, OpenSearch,
-# windows-triage, forensic-rag, or ANY backend a third party writes to the
+# forensic-rag, or ANY backend a third party writes to the
 # SIFT MCP Backend Contract) are EXTERNAL, INDEPENDENT, and OPTIONAL. The ones
 # shipped here are merely *reference implementations* of the contract. An
 # NOTE (BATCH-OSX-RAG): forensic-rag-mcp is registered as the knowledge
@@ -219,22 +219,6 @@ setup_rag() {
   echo_vars_and_emit
 }
 
-setup_wintriage() {
-  reset_payload
-  PAYLOAD_NAME="windows-triage-mcp"
-  PAYLOAD_MANIFEST="$REPO_DIR/packages/windows-triage-mcp/sift-backend.json"
-  log "== windows-triage-mcp (reference backend, provides: reference, baseline) =="
-  print_manifest_summary "$PAYLOAD_MANIFEST" || true
-  SIFT_WINDOWS_TRIAGE_DB_DIR="$(ask 'Triage baseline DB dir' "$SIFT_WINDOWS_TRIAGE_DB_DIR")"
-  if ask_yes "Provision prerequisites (download triage baseline databases)?"; then
-    download_triage_databases || warn "Triage DB download incomplete — backend may start degraded."
-  fi
-  stdio_args "windows-triage-mcp"
-  PAYLOAD_COMMAND="$UV_BIN"
-  PAYLOAD_ENV=("SIFT_WINDOWS_TRIAGE_DB_DIR=$SIFT_WINDOWS_TRIAGE_DB_DIR")
-  echo_vars_and_emit
-}
-
 setup_opensearch() {
   reset_payload
   PAYLOAD_NAME="opensearch-mcp"
@@ -321,27 +305,25 @@ main_menu() {
   hr
   log "SPG add-on integration helper — SPG core is already complete on its own."
   log "Select OPTIONAL external add-on backends to prepare (any subset, or a custom one):"
-  printf '   1) windows-triage-mcp    (provides: reference, baseline)\n'
-  printf '   2) opensearch-mcp        (provides: search, ingest, enrichment; needs Docker)\n'
-  printf '   3) opencti-mcp           (provides: reference, threat-intel; needs Docker + RAM)\n'
-  printf '   4) forensic-rag-mcp      (provides: reference; pgvector knowledge corpus)\n'
-  printf '   5) custom / community backend (bring your own conformant manifest)\n'
-  printf '   a) all reference backends (1-4)\n'
+  printf '   1) opensearch-mcp        (provides: search, ingest, enrichment; needs Docker)\n'
+  printf '   2) opencti-mcp           (provides: reference, threat-intel; needs Docker + RAM)\n'
+  printf '   3) forensic-rag-mcp      (provides: reference; pgvector knowledge corpus)\n'
+  printf '   4) custom / community backend (bring your own conformant manifest)\n'
+  printf '   a) all reference backends (1-3)\n'
   printf '   q) quit\n'
   hr
   local sel
   sel="$(ask 'Selection (e.g. "1 2" or "a")' '')"
   [[ -z "$sel" || "$sel" == "q" ]] && { log "Nothing selected — exiting."; exit 0; }
-  if [[ "$sel" == "a" ]]; then sel="1 2 3 4"; fi
+  if [[ "$sel" == "a" ]]; then sel="1 2 3"; fi
   sel="${sel//,/ }"
   local tok
   for tok in $sel; do
     case "$tok" in
-      1) setup_wintriage ;;
-      2) setup_opensearch ;;
-      3) setup_opencti ;;
-      4) setup_rag ;;
-      5) setup_custom ;;
+      1) setup_opensearch ;;
+      2) setup_opencti ;;
+      3) setup_rag ;;
+      4) setup_custom ;;
       *) warn "Unknown selection: $tok (ignored)" ;;
     esac
   done

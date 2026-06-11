@@ -13,7 +13,6 @@ resolution-markers = [
 members = [
     "case-dashboard",
     "forensic-knowledge",
-    "forensic-mcp",
     "opencti-mcp",
     "opensearch-mcp",
     "rag-mcp",
@@ -21,7 +20,6 @@ members = [
     "sift-core",
     "sift-gateway",
     "sift-mcps",
-    "windows-triage-mcp",
 ]
 
 [[package]]
@@ -1083,15 +1081,6 @@ wheels = [
 ]
 
 [[package]]
-name = "enum-compat"
-version = "0.0.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/41/46/8ed2368976d934652d8f33f1fdd86f5580fab45e890c90a848e83097a093/enum-compat-0.0.3.tar.gz", hash = "sha256:3677daabed56a6f724451d585662253d8fb4e5569845aafa8bb0da36b1a8751e", size = 1389, upload-time = "2019-10-14T18:48:35.264Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/55/ae/467bc4509246283bb59746e21a1a2f5a8aecbef56b1fa6eaca78cd438c8b/enum_compat-0.0.3-py3-none-any.whl", hash = "sha256:88091b617c7fc3bbbceae50db5958023c48dc40b50520005aa3bf27f8f7ea157", size = 1322, upload-time = "2019-10-14T18:48:37.663Z" },
-]
-
-[[package]]
 name = "events"
 version = "0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1253,38 +1242,6 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-]
-provides-extras = ["dev"]
-
-[[package]]
-name = "forensic-mcp"
-version = "0.6.1"
-source = { editable = "packages/forensic-mcp" }
-dependencies = [
-    { name = "forensic-knowledge" },
-    { name = "mcp" },
-    { name = "pyyaml" },
-    { name = "sift-common" },
-    { name = "sift-core" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "forensic-knowledge", editable = "packages/forensic-knowledge" },
-    { name = "mcp", specifier = ">=1.26" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "sift-common", editable = "packages/sift-common" },
-    { name = "sift-core", editable = "packages/sift-core" },
 ]
 provides-extras = ["dev"]
 
@@ -3971,19 +3928,6 @@ wheels = [
 ]
 
 [[package]]
-name = "python-registry"
-version = "1.3.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "enum-compat" },
-    { name = "unicodecsv" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a4/82/c9ae8e9764eae863a4d63c05d5f2d767e392b523c2976c16c56f9a3b17b4/python-registry-1.3.1.tar.gz", hash = "sha256:99185f67d5601be3e7843e55902d5769aea1740869b0882f34ff1bd4b43b1eb2", size = 20336, upload-time = "2019-05-08T19:47:00.918Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f1/0f/2605f98bb9c7ef92f926fdf3295583363fe42fc6e8f64cf38b24a029e767/python_registry-1.3.1-py3-none-any.whl", hash = "sha256:b5b8ae07c271dce12dacd24e16af8aa8d56167ebdb360112a4f152b6d04a4ca9", size = 23553, upload-time = "2019-05-08T19:46:59.5Z" },
-]
-
-[[package]]
 name = "pytz"
 version = "2026.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4092,7 +4036,6 @@ name = "rag-mcp"
 version = "0.6.1"
 source = { editable = "packages/forensic-rag-mcp" }
 dependencies = [
-    { name = "chromadb" },
     { name = "mcp" },
     { name = "pyyaml" },
     { name = "sentence-transformers" },
@@ -4102,14 +4045,19 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+chroma-import = [
+    { name = "chromadb" },
+]
 dev = [
+    { name = "chromadb" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "chromadb", specifier = ">=1.0" },
+    { name = "chromadb", marker = "extra == 'chroma-import'", specifier = ">=1.0" },
+    { name = "chromadb", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "mcp", specifier = ">=1.26" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
@@ -4119,7 +4067,7 @@ requires-dist = [
     { name = "toml", specifier = ">=0.10" },
     { name = "zstandard", specifier = ">=0.20" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["chroma-import", "dev"]
 
 [[package]]
 name = "referencing"
@@ -4897,7 +4845,6 @@ source = { virtual = "." }
 core = [
     { name = "case-dashboard" },
     { name = "forensic-knowledge" },
-    { name = "forensic-mcp" },
     { name = "sift-common" },
     { name = "sift-core" },
     { name = "sift-gateway" },
@@ -4911,25 +4858,21 @@ dev = [
 full = [
     { name = "case-dashboard" },
     { name = "forensic-knowledge" },
-    { name = "forensic-mcp" },
     { name = "opencti-mcp" },
     { name = "opensearch-mcp" },
     { name = "rag-mcp" },
     { name = "sift-common" },
     { name = "sift-core" },
     { name = "sift-gateway" },
-    { name = "windows-triage-mcp" },
 ]
 standard = [
     { name = "case-dashboard" },
     { name = "forensic-knowledge" },
-    { name = "forensic-mcp" },
     { name = "opencti-mcp" },
     { name = "opensearch-mcp" },
     { name = "sift-common" },
     { name = "sift-core" },
     { name = "sift-gateway" },
-    { name = "windows-triage-mcp" },
 ]
 
 [package.dev-dependencies]
@@ -4942,7 +4885,6 @@ dev = [
 requires-dist = [
     { name = "case-dashboard", marker = "extra == 'core'", editable = "packages/case-dashboard" },
     { name = "forensic-knowledge", marker = "extra == 'core'", editable = "packages/forensic-knowledge" },
-    { name = "forensic-mcp", marker = "extra == 'core'", editable = "packages/forensic-mcp" },
     { name = "opencti-mcp", marker = "extra == 'standard'", editable = "packages/opencti-mcp" },
     { name = "opensearch-mcp", marker = "extra == 'standard'", editable = "packages/opensearch-mcp" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
@@ -4955,7 +4897,6 @@ requires-dist = [
     { name = "sift-gateway", marker = "extra == 'core'", editable = "packages/sift-gateway" },
     { name = "sift-mcps", extras = ["core"], marker = "extra == 'standard'" },
     { name = "sift-mcps", extras = ["standard"], marker = "extra == 'full'" },
-    { name = "windows-triage-mcp", marker = "extra == 'standard'", editable = "packages/windows-triage-mcp" },
 ]
 provides-extras = ["core", "standard", "full", "dev"]
 
@@ -5420,12 +5361,6 @@ wheels = [
 ]
 
 [[package]]
-name = "unicodecsv"
-version = "0.14.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6f/a4/691ab63b17505a26096608cc309960b5a6bdf39e4ba1a793d5f9b1a53270/unicodecsv-0.14.1.tar.gz", hash = "sha256:018c08037d48649a0412063ff4eda26eaa81eff1546dbffa51fa5293276ff7fc", size = 10267, upload-time = "2015-09-22T22:00:19.516Z" }
-
-[[package]]
 name = "urllib3"
 version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5696,38 +5631,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/9a/3f/f70e03f40ffc9a30d817eef7da1be72ee4956ba8d7255c399a01b135902a/websockets-16.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:a653aea902e0324b52f1613332ddf50b00c06fdaf7e92624fbf8c77c78fa5767", size = 178735, upload-time = "2026-01-10T09:23:42.259Z" },
     { url = "https://files.pythonhosted.org/packages/6f/28/258ebab549c2bf3e64d2b0217b973467394a9cea8c42f70418ca2c5d0d2e/websockets-16.0-py3-none-any.whl", hash = "sha256:1637db62fad1dc833276dded54215f2c7fa46912301a24bd94d45d46a011ceec", size = 171598, upload-time = "2026-01-10T09:23:45.395Z" },
 ]
-
-[[package]]
-name = "windows-triage-mcp"
-version = "0.1.0"
-source = { editable = "packages/windows-triage-mcp" }
-dependencies = [
-    { name = "fastmcp" },
-    { name = "mcp" },
-    { name = "python-registry" },
-    { name = "pyyaml" },
-    { name = "sift-common" },
-    { name = "zstandard" },
-]
-
-[package.optional-dependencies]
-test = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastmcp", specifier = ">=3" },
-    { name = "mcp", specifier = ">=1.26" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21" },
-    { name = "python-registry", specifier = ">=1.3" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "sift-common", editable = "packages/sift-common" },
-    { name = "zstandard", specifier = ">=0.20" },
-]
-provides-extras = ["test"]
 
 [[package]]
 name = "yarl"

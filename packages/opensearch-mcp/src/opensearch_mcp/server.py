@@ -286,15 +286,6 @@ def _build_coverage_state(
             "warning": None,
         })
 
-    if enrichment_state["triage"] == "not_run" and art_keys:
-        gaps.append({
-            "coverage_gap": "Triage enrichment not run — file/service/registry baselines not checked.",
-            "when_to_run": "After initial ingest completes.",
-            "command": "opensearch_enrich_triage()",
-            "output_path": None,
-            "next_mcp_step": "opensearch_case_summary to verify enrichment.triage counts",
-            "warning": None,
-        })
 
     if enrichment_state["threat_intel"] == "not_run" and art_keys:
         gaps.append({
@@ -1891,8 +1882,7 @@ def opensearch_ingest(
 
     Ingest can add baseline context automatically for supported artifacts.
     Keep enrichment decisions explicit after ingest: use opensearch_case_summary to
-    inspect coverage, then opensearch_enrich_triage or opensearch_enrich_intel when baseline
-    or threat-intel enrichment needs rerun.
+    inspect coverage, then opensearch_enrich_intel when threat-intel enrichment needs rerun.
 
     Args:
         path: Evidence path under the active case. Bare filenames resolve to
@@ -2930,87 +2920,6 @@ def opensearch_enrich_intel(
             "decide_reports",
         ]
     return resp
-
-
-@server.tool()
-def opensearch_enrich_triage(
-    case_id: str = "",
-) -> dict:
-    """Run triage baseline enrichment on already-indexed data.
-
-    Checks indexed filenames and services against the Windows baseline
-    database (known_good.db) via the gateway. Stamps documents with
-    triage.verdict (EXPECTED, SUSPICIOUS, UNKNOWN, EXPECTED_LOLBIN).
-
-    Use this after ingesting evidence to add baseline context, or to
-    re-enrich after the triage database is updated.
-
-    Requires gateway with windows-triage-mcp backend running.
-
-    Scope requirement: the caller must hold `enrichment:triage` scope
-    (SIFT_ENRICHMENT_SCOPE env contains "enrichment:triage" or "*").
-    In deploy mode this is enforced by the Gateway; in direct-MCP mode
-    it falls back to the env check. Missing scope returns a typed error.
-
-    Prohibited: triage enrichment cannot approve findings, alter
-    original evidence, or decide report content.
-
-    Args:
-        case_id: Case to enrich (default: active case).
-    """
-    # BATCH-OS5: scope gate for triage enrichment mutation.
-    _scope_env = os.environ.get("SIFT_ENRICHMENT_SCOPE", "")
-    if _scope_env and _scope_env != "*" and "enrichment:triage" not in _scope_env:
-        return {
-            "status": "scope_denied",
-            "error": (
-                "Enrichment mutation requires 'enrichment:triage' scope. "
-                "The caller does not hold this scope on the current session."
-            ),
-            "required_scope": "enrichment:triage",
-            "guidance": (
-                "Request the enrichment:triage scope from the operator or "
-                "use the Examiner Portal to initiate triage enrichment."
-            ),
-            "isError": True,
-        }
-
-    from opensearch_mcp.triage_remote import enrich_remote
-
-    cid = case_id or _get_active_case()
-    if not cid:
-        return {
-            "error": "No active case.",
-            "action": "Create a case in the Examiner Portal first.",
-            "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
-        }
-
-    client = _get_os()
-    results = enrich_remote(client, cid)
-
-    if "error" in results:
-        return results
-
-    total_enriched = sum(r.get("enriched", 0) for r in results.values() if isinstance(r, dict))
-    resp = {
-        "status": "complete",
-        "documents_enriched": total_enriched,
-        "details": results,
-        "prohibited_operations": [
-            "approve_findings",
-            "alter_evidence",
-            "decide_reports",
-        ],
-    }
-    aid = audit.log(
-        tool="opensearch_enrich_triage",
-        params={"case_id": cid},
-        result_summary=f"{total_enriched} docs enriched",
-    )
-    if aid:
-        resp["audit_id"] = aid
-    return resp
-
 
 _MAX_CONCURRENT_INGESTS = 3
 

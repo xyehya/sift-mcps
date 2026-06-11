@@ -13,7 +13,6 @@ opensearch-mcp = { workspace = true }
 rag-mcp = { workspace = true }
 opencti-mcp = { workspace = true }
 case-dashboard = { workspace = true }
-windows-triage-mcp = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -39,7 +38,6 @@ core = [
 standard = [
     "sift-mcps[core]",
     "opensearch-mcp",
-    "windows-triage-mcp",
     "opencti-mcp",
 ]
 full = [

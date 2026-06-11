@@ -291,7 +291,6 @@ def test_all_shipped_manifests_validate_with_guidance_fields():
         "forensic-rag-mcp",
         "opencti-mcp",
         "opensearch-mcp",
-        "windows-triage-mcp",
     }
 
     for path in paths:
@@ -321,7 +320,6 @@ def test_opensearch_is_not_reference_but_other_reference_manifests_drive_groundi
     assert reference_backends == {
         "forensic-rag-mcp",
         "opencti-mcp",
-        "windows-triage-mcp",
     }
     assert "opensearch-mcp" not in reference_backends
 
