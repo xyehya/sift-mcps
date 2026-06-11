@@ -242,6 +242,20 @@ install_uv_if_needed() {
   UV_BIN="$uv_bin"
 }
 
+apt_install_packages() {
+  local packages=("$@")
+  [[ "${#packages[@]}" -gt 0 ]] || return 0
+  if ! command -v apt-get >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if ! sudo_if_needed apt-get update; then
+    warn "apt-get update failed, likely due to an unrelated third-party apt source."
+    warn "Continuing with existing package indexes and attempting: apt-get install -y ${packages[*]}"
+  fi
+  sudo_if_needed apt-get install -y "${packages[@]}"
+}
+
 install_host_prereqs() {
   local missing=()
   command -v rg >/dev/null 2>&1 || missing+=(ripgrep)
@@ -251,8 +265,18 @@ install_host_prereqs() {
       warn "Missing host tools (${missing[*]}) and apt-get is unavailable."
     else
       log "Installing host prerequisites: ${missing[*]}"
-      sudo_if_needed apt-get update
-      sudo_if_needed apt-get install -y "${missing[@]}"
+      apt_install_packages "${missing[@]}" || warn "Host prerequisite package install failed: ${missing[*]}"
+      local still_missing=()
+      command -v setfacl >/dev/null 2>&1 || still_missing+=(acl)
+      # ripgrep is useful for investigator workflows but not required to finish
+      # provisioning. Do not let a stale third-party apt key block the stack.
+      command -v rg >/dev/null 2>&1 || warn "ripgrep is still missing; install it later with: sudo apt-get install -y ripgrep"
+      if [[ "${#still_missing[@]}" -gt 0 ]]; then
+        die "Required host tools are still missing after apt install attempt: ${still_missing[*]}.
+  If apt is blocked by a third-party repository key, fix or disable that source, then re-run:
+    sudo apt-get update
+    sudo apt-get install -y ${still_missing[*]}"
+      fi
     fi
   fi
 
@@ -552,8 +576,7 @@ configure_agent_runtime() {
   if ! command -v setfacl >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
       log "Installing acl package for run_command native user isolation."
-      sudo_if_needed apt-get update
-      sudo_if_needed apt-get install -y acl
+      apt_install_packages acl || true
     fi
   fi
 

@@ -13,6 +13,20 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-12 - Installer apt update resilience for stale third-party repo keys
+
+Status: DONE (host patch; operator should pull/re-clone and rerun installer)
+
+Fresh VM install progressed past clone self-staging and then failed in `install_host_prereqs` while
+installing `ripgrep`: `apt-get update` was blocked by an unrelated GitHub CLI apt source with missing
+public key `23F3D4EA75716059`. Patched `install.sh` so host package installs warn on `apt-get update`
+failure, continue with existing package indexes, and attempt the package install anyway. `acl` remains
+required for run_command native-user isolation; `ripgrep` is useful but no longer blocks provisioning
+if the third-party apt source prevents installation.
+
+Validation: `bash -n install.sh` OK; `validate_docs.py` + `validate_migration_docs.py` OK;
+`git diff --check` clean.
+
 ### 2026-06-12 - Installer Docker readiness before Supabase provisioning
 
 Status: DONE (host patch; operator should pull/re-clone and rerun installer)
