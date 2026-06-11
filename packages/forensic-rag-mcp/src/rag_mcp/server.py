@@ -2,27 +2,18 @@
 """
 forensic-rag-mcp — semantic search over the shared IR/DFIR knowledge corpus.
 
-BATCH-OSX-RAG: the original forensic-rag tool surface is restored, but now
-backed by the Supabase **pgvector** store (``PgVectorRagStore``) instead of the
-local ChromaDB index. PMI2 had removed these tools and routed RAG through a
-thinner gateway core tool (``rag_search_case``); OSX-RAG ports the richer,
-filterable knowledge query back to this add-on at full parity and the gateway
-shim is removed.
+BATCH-OSX-RAG: the original forensic-rag tool surface is restored, now backed
+by the Supabase pgvector store (PgVectorRagStore).
+
+BATCH-NW4 (B-MVP-RAG-DERIVED REJECTED): the store is KNOWLEDGE ONLY. There is
+no per-case derived RAG. Case-sensitive derived text must never enter or exit
+the vector store. The kb tools here query shared knowledge only — no case_id,
+no include_derived parameter, no derived path exists.
 
 Agent-facing tools (registered under the manifest ``kb`` namespace):
     kb_search_knowledge       semantic search with source/source_ids/technique/platform filters
     kb_list_knowledge_sources list distinct knowledge source labels
     kb_get_knowledge_stats    corpus statistics (also the backend health probe)
-
-The corpus is the shared knowledge plane only (``kind='knowledge'``,
-``case_id`` NULL); the original tool never had case-scoped retrieval and this
-port keeps that contract. The query is embedded with the allowlisted BGE model
-(``query_embedding.QueryEmbedder``, the runtime embedder moved here from the
-gateway ``rag_bridge``). ``sentence-transformers`` stays a runtime dependency;
-only ``chromadb`` is optional (import/seed CLI only).
-
-The Chroma->pgvector importers (pgvector_chroma_import, pgvector_seed) remain
-importable as CLI modules for the knowledge load step.
 
 Configuration:
     SIFT_CONTROL_PLANE_DSN / DATABASE_URL / POSTGRES_DSN: Postgres service DSN.
@@ -33,6 +24,8 @@ Security:
     - Input length / list-size limits prevent DoS.
     - Output is provenance-linked and PATH-FREE (the pgvector store sanitizes
       hits before they leave the process); internal DSN/paths are never returned.
+    - The DB function app.rag_search (BATCH-NW4 migration) enforces
+      kind='knowledge' unconditionally; derived content is unreachable at SQL level.
 """
 
 from __future__ import annotations
@@ -239,12 +232,10 @@ class RAGServer:
         except RuntimeError as exc:
             return {"error": str(exc), "message": "knowledge store unavailable"}
 
+        # BATCH-NW4: store.search is knowledge-only; no case_id / include_derived.
         result = store.search(
             query_embedding=embedding,
-            case_id=None,  # shared knowledge only; original tool had no case scope
             top_k=top_k,
-            include_knowledge=True,
-            include_derived=False,
             source=source or None,
             source_ids=clean_source_ids,
             technique=technique or None,

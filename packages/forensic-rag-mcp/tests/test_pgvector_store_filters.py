@@ -1,10 +1,14 @@
-"""BATCH-OSX-RAG: pgvector store knowledge-filter + introspection tests.
+"""BATCH-OSX-RAG / BATCH-NW4: pgvector store knowledge-filter + introspection tests.
 
-These verify that ``PgVectorRagStore.search`` forwards the restored
-forensic-rag filters (source / source_ids / technique / platform) to the
-extended ``app.rag_search`` RPC, and that ``list_knowledge_sources`` /
-``knowledge_stats`` query the shared-knowledge plane. A fake connection records
-SQL/params and returns scripted rows (no live Postgres).
+Updated for BATCH-NW4 (B-MVP-RAG-DERIVED REJECTED): the store is knowledge-only.
+The 9-arg app.rag_search is replaced by a 6-arg knowledge-only function:
+  (embedding, top_k, source, source_ids, technique, platform)
+
+These verify that ``PgVectorRagStore.search`` forwards the restored forensic-rag
+filters (source / source_ids / technique / platform) to the 6-arg
+``app.rag_search`` RPC, and that ``list_knowledge_sources`` / ``knowledge_stats``
+query the shared-knowledge plane. A fake connection records SQL/params and
+returns scripted rows (no live Postgres).
 """
 
 from __future__ import annotations
@@ -91,67 +95,66 @@ def _store(monkeypatch, rows):
     return store, conn
 
 
-# The 9-arg app.rag_search params:
-# (embedding, case_id, top_k, include_knowledge, include_derived,
-#  source, source_ids, technique, platform)
+# BATCH-NW4: 6-arg app.rag_search params:
+# (embedding, top_k, source, source_ids, technique, platform)
+# positions: [0]      [1]    [2]     [3]          [4]         [5]
 
 
 def test_search_forwards_source_filter(monkeypatch):
     store, conn = _store(monkeypatch, [_row()])
-    store.search(query_embedding=_emb(), case_id=None, source="sigma")
+    store.search(query_embedding=_emb(), source="sigma")
     _sql, params = conn._cursor.executed[0]
-    assert params[5] == "sigma"
-    assert params[6] is None  # source_ids
+    assert params[2] == "sigma"
+    assert params[3] is None  # source_ids
 
 
 def test_search_forwards_source_ids_and_drops_blanks(monkeypatch):
     store, conn = _store(monkeypatch, [_row()])
     store.search(
         query_embedding=_emb(),
-        case_id=None,
         source="sigma",
         source_ids=["mitre_attack", "", "  ", "lolbas"],
     )
     _sql, params = conn._cursor.executed[0]
     # source_ids cleaned of blank entries.
-    assert params[6] == ["mitre_attack", "lolbas"]
+    assert params[3] == ["mitre_attack", "lolbas"]
     # The SQL itself enforces source_ids precedence over source; both are passed.
-    assert params[5] == "sigma"
+    assert params[2] == "sigma"
 
 
 def test_search_empty_source_ids_becomes_null(monkeypatch):
     store, conn = _store(monkeypatch, [_row()])
-    store.search(query_embedding=_emb(), case_id=None, source_ids=["", "  "])
+    store.search(query_embedding=_emb(), source_ids=["", "  "])
     _sql, params = conn._cursor.executed[0]
-    assert params[6] is None
+    assert params[3] is None
 
 
 def test_search_forwards_technique_and_platform(monkeypatch):
     store, conn = _store(monkeypatch, [_row()])
     store.search(
         query_embedding=_emb(),
-        case_id=None,
         technique="T1003",
         platform="windows",
     )
     _sql, params = conn._cursor.executed[0]
-    assert params[7] == "T1003"
-    assert params[8] == "windows"
+    assert params[4] == "T1003"
+    assert params[5] == "windows"
 
 
 def test_search_clamps_top_k(monkeypatch):
     store, conn = _store(monkeypatch, [_row()])
-    store.search(query_embedding=_emb(), case_id=None, top_k=999)
+    store.search(query_embedding=_emb(), top_k=999)
     _sql, params = conn._cursor.executed[0]
-    assert params[2] == 50  # MAX_TOP_K clamp
+    assert params[1] == 50  # MAX_TOP_K clamp
 
 
-def test_search_uses_nine_arg_rag_search(monkeypatch):
+def test_search_uses_six_arg_rag_search(monkeypatch):
+    """BATCH-NW4: 6-arg knowledge-only signature."""
     store, conn = _store(monkeypatch, [_row()])
-    store.search(query_embedding=_emb(), case_id=None)
+    store.search(query_embedding=_emb())
     sql, params = conn._cursor.executed[0]
     assert "app.rag_search(" in sql
-    assert len(params) == 9
+    assert len(params) == 6
 
 
 def test_list_knowledge_sources(monkeypatch):
