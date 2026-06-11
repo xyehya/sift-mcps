@@ -42,7 +42,6 @@ _SUGGESTION_GROUPS: dict[str, set[str]] = {
 _RELATED_TOOLS: dict[str, list[str]] = {
     "binary_analysis": [
         "remnux-mcp upload_from_host + analyze_file: Analyze suspicious binaries",
-        "windows-triage wintriage_check_artifact: Validate files, hashes, LOLBins, and DLLs against local baselines",
         "opencti-mcp cti_lookup_ioc: Check hash/filename against threat intel",
     ],
     "persistence": [
