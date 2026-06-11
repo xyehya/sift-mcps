@@ -876,7 +876,8 @@ _seed_one_addon_backend() {
   local backend_name="$1"
   local manifest_path="$2"
   local entry_point="$3"
-  local env_refs_json="${4:-{}}"
+  local env_refs_json="${4:-}"
+  [[ -n "$env_refs_json" ]] || env_refs_json="{}"
 
   if [[ ! -f "$manifest_path" ]]; then
     warn "seed_addon_backends: $backend_name manifest not found at $manifest_path — skipping."
@@ -1555,12 +1556,12 @@ for fpath in files:
         print(f"ok:{p.name}")
     except Exception as exc:
         short = str(exc).split('\n')[0][:120]
-        if first_file:
+        duplicate_ok = "already exists" in short or "Duplicate" in type(exc).__name__
+        if first_file and not duplicate_ok:
             # First/foundational migration failing likely means DB is unreachable.
             print(f"fatal:{p.name}:{short}", file=sys.stderr)
             sys.exit(1)
-        else:
-            print(f"warn:{p.name}:{short}", file=sys.stderr)
+        print(f"warn:{p.name}:{short}", file=sys.stderr)
     first_file = False
 PY
   2>&1) || {
@@ -1833,9 +1834,9 @@ start_opensearch() {
   log "Starting OpenSearch."
   docker compose -f "$REPO_DIR/docker-compose.yml" up -d opensearch
 
-  log "Waiting for OpenSearch health (up to 180 s)."
+  log "Waiting for OpenSearch health (up to 600 s)."
   local status="unknown"
-  for _ in $(seq 1 90); do
+  for _ in $(seq 1 300); do
     status="$(curl -fsS http://127.0.0.1:9200/_cluster/health 2>/dev/null \
       | "$SYSTEM_PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("status","unknown"))' 2>/dev/null || true)"
     if [[ "$status" == "green" || "$status" == "yellow" ]]; then

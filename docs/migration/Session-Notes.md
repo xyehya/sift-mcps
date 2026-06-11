@@ -13,6 +13,32 @@ Format rules:
 
 ## Current Change Log
 
+### 2026-06-12 - Fresh VM install trace: RAG import + backend seeding fixes
+
+Status: DONE (host patch; operator should pull and rerun installer)
+
+Fresh VM install now reaches service provisioning. Live trace showed Supabase healthy, gateway/worker
+running as `sift-service`, and `/health status=ok`, but the acceptance surface was incomplete:
+`app.mcp_backends` loaded 0 add-on backends, RAG import had 0 chunks, and the installer had timed out
+OpenSearch before it later became healthy. Root causes:
+
+- `full` installed `rag-mcp` without the `chroma-import` extra, while `download_index` and
+  `rag-mcp-import-chroma-pgvector` require `chromadb` for the Chroma release bundle path.
+- `_seed_one_addon_backend` used `local env_refs_json="${4:-{}}"`; Bash parsed the default expression
+  so a supplied JSON object gained one extra `}`, exactly matching the live `JSONDecodeError: Extra data`.
+- OpenSearch first-start on the VM took longer than the installer's 180 s wait, then later became
+  healthy/yellow.
+- Supabase CLI had already applied migrations during `supabase start`; the installer reapply path
+  printed a scary `fatal:` on duplicate foundational constraints.
+
+Changed: root `pyproject.toml` `full` now depends on `rag-mcp[chroma-import]`; `uv.lock` refreshed;
+`install.sh` fixes the Bash JSON default, treats duplicate first migration DDL as a warning, and
+extends OpenSearch health wait to 600 s.
+
+Validation: `uv lock` + `uv lock --check` OK; `bash -n install.sh scripts/setup-supabase.sh` OK;
+`validate_docs.py` + `validate_migration_docs.py` OK; `git diff --check` clean; shell reproduction
+confirmed `_seed_one_addon_backend` env JSON stays length 88 and parses without the extra brace.
+
 ### 2026-06-12 - Supabase CLI shim installs `supabase-go` sibling
 
 Status: DONE (host patch; operator should pull and rerun installer)

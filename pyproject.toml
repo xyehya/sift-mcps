@@ -42,7 +42,7 @@ standard = [
 ]
 full = [
     "sift-mcps[standard]",
-    "rag-mcp",
+    "rag-mcp[chroma-import]",
 ]
 dev = [
     "pytest>=9.0",
