@@ -25,7 +25,13 @@ MITRE_ID_PATTERN = re.compile(r"\b(T\d{4}(?:\.\d{3})?)\b", re.IGNORECASE)
 # Shared Constants
 # =============================================================================
 
-# Allowed embedding models (security: prevent arbitrary model loading)
+# Allowed embedding models (security: prevent arbitrary model loading).
+#
+# B-MVP-015: the live 26,586-chunk corpus is embedded with BAAI/bge-base-en-v1.5
+# (768-dim). That canonical model is the only one consistent with the existing
+# pgvector rows — re-embedding with another model would be required to change it.
+# The other entries are accepted ONLY for a deliberate, from-scratch re-seed; the
+# default and the canonical pin below stay bge-base-en-v1.5.
 ALLOWED_MODELS = frozenset(
     {
         "BAAI/bge-base-en-v1.5",
@@ -38,6 +44,68 @@ ALLOWED_MODELS = frozenset(
 
 # Default embedding model
 DEFAULT_MODEL_NAME = "BAAI/bge-base-en-v1.5"
+
+# B-MVP-004 (D3) / B-MVP-015: canonical revision (git commit on Hugging Face Hub)
+# for the default model, so the downloaded weights are reproducible and pinned.
+# The installer exports SIFT_RAG_MODEL_REVISION (same value); RAG_MODEL_REVISION is
+# the runtime override the gateway/worker units carry. Only applied when the
+# resolved model is the canonical default — a deliberate alternate model has its
+# own (unpinned) revision unless the operator pins one.
+CANONICAL_MODEL_NAME = "BAAI/bge-base-en-v1.5"
+CANONICAL_MODEL_REVISION = "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a"
+
+
+def resolve_model_revision(model_name: str) -> str | None:
+    """Return the pinned revision for ``model_name``, or None if unpinned.
+
+    Resolution order: explicit ``RAG_MODEL_REVISION`` env override, then the
+    canonical pin when the model is the canonical default. Any other allowlisted
+    model is unpinned (returns None) unless the operator sets the env override.
+    """
+    override = os.environ.get("RAG_MODEL_REVISION", "").strip()
+    if override:
+        return override
+    if model_name == CANONICAL_MODEL_NAME:
+        return CANONICAL_MODEL_REVISION
+    return None
+
+
+def _hf_offline() -> bool:
+    """True when Hugging Face Hub access is disabled (offline/air-gapped install)."""
+    return os.environ.get("HF_HUB_OFFLINE", "0") in ("1", "true", "TRUE") or (
+        os.environ.get("TRANSFORMERS_OFFLINE", "0") in ("1", "true", "TRUE")
+    )
+
+
+def load_sentence_transformer(model_name: str):
+    """Load an allowlisted SentenceTransformer, revision-pinned and offline-aware.
+
+    Centralises model loading for the seed, query, and refresh paths so the
+    revision pin (B-MVP-004 D3) and ``local_files_only`` under offline mode
+    (B-MVP-015) are applied consistently. Raises ValueError for a non-allowlisted
+    model. Verifies the loaded revision against the pin when the hub reports one.
+    """
+    if model_name not in ALLOWED_MODELS:
+        raise ValueError(f"RAG embedding model is not allowlisted: {model_name}")
+    from sentence_transformers import SentenceTransformer
+
+    revision = resolve_model_revision(model_name)
+    kwargs: dict[str, Any] = {}
+    if revision:
+        kwargs["revision"] = revision
+    if _hf_offline():
+        kwargs["local_files_only"] = True
+    try:
+        model = SentenceTransformer(model_name, **kwargs)
+    except TypeError:
+        # Older sentence-transformers that do not accept revision/local_files_only.
+        logger.warning(
+            "sentence-transformers does not support revision/local_files_only "
+            "kwargs; loading %s without a pinned revision.",
+            model_name,
+        )
+        model = SentenceTransformer(model_name)
+    return model
 
 # Search limits
 MAX_TOP_K = int(os.environ.get("RAG_MAX_TOP_K", "50"))  # Maximum results to return

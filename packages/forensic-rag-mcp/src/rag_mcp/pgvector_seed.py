@@ -318,11 +318,12 @@ def _embedder_for_mode(
 
 def _model_embed_texts(*, model_name: str, batch_size: int) -> EmbedTexts:
     try:
-        from sentence_transformers import SentenceTransformer
+        from .utils import load_sentence_transformer
     except ImportError as exc:  # pragma: no cover - deployment dependency
         raise RuntimeError("sentence-transformers is required for model RAG seeding") from exc
 
-    model = SentenceTransformer(model_name)
+    # B-MVP-004/B-MVP-015: revision-pinned, offline-aware load via the shared loader.
+    model = load_sentence_transformer(model_name)
     safe_batch_size = max(1, int(batch_size))
 
     def embed(texts: list[str]) -> list[list[float]]:

@@ -33,12 +33,16 @@ should also appear `status:"ok"` in `/health`.
 
 ### 1.2 Embedding model
 
-- Default: `BAAI/bge-base-en-v1.5` (768-dim). Override with `RAG_MODEL_NAME`.
+- Default / canonical: `BAAI/bge-base-en-v1.5` (768-dim), **revision-pinned** to
+  `a5beb1e3e68b9ab74eb54cfd186867f64f240e1a` (B-MVP-004 D3 / B-MVP-015). Override
+  the model with `RAG_MODEL_NAME` and the revision with `RAG_MODEL_REVISION`.
 - Allowlisted models only (`bge-base/small/large-en-v1.5`,
   `all-MiniLM-L6-v2`, `all-mpnet-base-v2`) — arbitrary models are refused.
-- Weights download from Hugging Face on first use into the service user's HF
-  cache (`/var/lib/sift/.cache/huggingface/hub/`). The download is **unpinned /
-  unauthenticated** (hardening ledger D3 / B-MVP-004).
+- Weights download from Hugging Face on first use into an **explicit** HF cache
+  under the service home: `HF_HOME=/var/lib/sift/.cache/huggingface` (wired into
+  both systemd units and the seed step). The canonical model is loaded at the
+  pinned revision; in offline mode the loader uses `local_files_only` and never
+  reaches the hub. The installer creates and owns this cache (`sift-service`).
 
 ### 1.3 Re-seed from the bundled corpus (idempotent)
 
@@ -100,9 +104,17 @@ embedding fields stripped) and the DB function `app.rag_search` hard-codes
 
 The pgvector store is on-VM and needs no internet after seeding. The only
 network steps are the embedding-model download (pre-warm the HF cache from an
-online host and copy it to `/var/lib/sift/.cache/huggingface/`) and the optional
-legacy Chroma bundle. The bundled JSONL corpus ships in the repo. Air-gap policy
-is open as B-MVP-004.
+online host and copy it to `/var/lib/sift/.cache/huggingface/`, the wired
+`HF_HOME`) and the optional legacy Chroma bundle. The bundled JSONL corpus ships
+in the repo.
+
+Run the installer with `./install.sh --offline` (or `SIFT_OFFLINE=1`) for a
+hardened/air-gapped install: every download step (uv, hayabusa, the HF model
+cache, the Supabase CLI) short-circuits with an actionable message pointing at
+the operator-staged artifact path it expects, and the model loader runs with
+`local_files_only` so a cold cache fails loudly instead of reaching the hub
+(B-MVP-004). Stage the HF cache for the pinned revision
+`a5beb1e3e68b9ab74eb54cfd186867f64f240e1a` before going offline.
 
 ---
 

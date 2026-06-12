@@ -49,12 +49,14 @@ class QueryEmbedder:
         with self._lock:
             if self._model is None:
                 try:
-                    from sentence_transformers import SentenceTransformer
+                    from .utils import load_sentence_transformer
+
+                    # B-MVP-004/B-MVP-015: revision-pinned, offline-aware load.
+                    self._model = load_sentence_transformer(self._model_name)
                 except ImportError as exc:  # pragma: no cover - deployment env
                     raise QueryEmbeddingError(
                         "rag_embedding_model_unavailable"
                     ) from exc
-                self._model = SentenceTransformer(self._model_name)
         return self._model
 
     def embed(self, query: str) -> list[float]:

@@ -116,7 +116,10 @@ def refresh(
     model = None
     if not check_only:
         logger.info(f"Loading embedding model: {model_name}")
-        model = SentenceTransformer(model_name)
+        # B-MVP-004/B-MVP-015: revision-pinned, offline-aware load.
+        from .utils import load_sentence_transformer
+
+        model = load_sentence_transformer(model_name)
 
     # =========================================================================
     # Phase 1: Online Sources
