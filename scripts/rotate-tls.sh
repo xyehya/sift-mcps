@@ -42,6 +42,17 @@ log()  { printf '[rotate-tls] %s\n' "$*"; }
 warn() { printf '[rotate-tls] WARNING: %s\n' "$*" >&2; }
 die()  { printf '[rotate-tls] ERROR: %s\n' "$*" >&2; exit 1; }
 
+# Single operator-owned scratch dir for all openssl work, wiped on EXIT. Using a
+# module-level var + EXIT trap (not a per-function RETURN trap) keeps cleanup
+# correct under `set -u` even after a function returns.
+WORKDIR=""
+cleanup() { [[ -n "$WORKDIR" && -d "$WORKDIR" ]] && rm -rf "$WORKDIR"; return 0; }
+trap cleanup EXIT
+mkworkdir() {
+  WORKDIR="$(mktemp -d)"
+  chmod 700 "$WORKDIR"
+}
+
 sudo_if_needed() {
   if [[ "$(id -u)" -eq 0 ]]; then
     "$@"
@@ -161,9 +172,8 @@ renew_leaf() {
   require_ca
   log "Renewing gateway LEAF against the existing CA (clients keep their trust)."
   local tmpd
-  tmpd="$(mktemp -d)"
-  chmod 700 "$tmpd"
-  trap 'rm -rf "$tmpd"' RETURN
+  mkworkdir
+  tmpd="$WORKDIR"
   svc_copy_out "$SIFT_TLS_DIR/ca-cert.pem" "$tmpd/ca-cert.pem"
   svc_copy_out "$SIFT_TLS_DIR/ca-key.pem"  "$tmpd/ca-key.pem"
   chmod 600 "$tmpd/ca-key.pem"
@@ -186,9 +196,8 @@ rotate_ca() {
   warn "re-import the new ca-cert.pem. Proceeding in 3s (Ctrl-C to abort)..."
   sleep 3
   local tmpd
-  tmpd="$(mktemp -d)"
-  chmod 700 "$tmpd"
-  trap 'rm -rf "$tmpd"' RETURN
+  mkworkdir
+  tmpd="$WORKDIR"
   # CA extensions via -addext (openssl req does NOT accept -extfile).
   openssl genrsa -out "$tmpd/ca-key.pem" 4096 >/dev/null 2>&1
   openssl req -new -x509 -days "$SIFT_TLS_CA_DAYS" -key "$tmpd/ca-key.pem" \
