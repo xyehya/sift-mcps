@@ -84,7 +84,11 @@ UV_BIN="$(resolve_uv)"
 [[ -n "$UV_BIN" ]] || die "uv not found. Run ./install.sh --core-only first."
 SIFT_MCPS_ROOT="$REPO_DIR"
 PYTHON_BIN="$SYSTEM_PYTHON"
-REGISTER_DIR="$SIFT_HOME/addon-register"
+# AD2 live fix: SIFT_HOME is the sift-service-owned state dir
+# (/var/lib/sift/.sift after the HR3 hardening) which the OPERATOR running this
+# script cannot write. The register payload is operator material (it is pasted
+# into the portal/REST door), so write it under the operator's own home.
+REGISTER_DIR="${SIFT_ADDON_REGISTER_DIR:-$HOME/.sift/addon-register}"
 install -d -m 700 "$REGISTER_DIR"
 
 # Payload globals (reset per backend).
