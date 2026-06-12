@@ -56,9 +56,18 @@ export function Header({ onLogout }) {
     setActivating(true)
     try {
       const challenge = await getCaseActivateChallenge()
-      const response = await computeSimpleChallengeResponse(activatePassword, challenge)
+      // DB/Supabase authority mode returns {required:false, authority:'postgres'}
+      // — case activation is gated by the Supabase session, not the local HMAC
+      // re-auth bridge, so there is no challenge nonce to answer.
+      const dbAuthority = challenge?.required === false
+      const payload = { case_id: activatingCase.id }
+      if (!dbAuthority) {
+        const response = await computeSimpleChallengeResponse(activatePassword, challenge)
+        payload.challenge_id = challenge.challenge_id
+        payload.response = response
+      }
       setActivatePassword('')
-      await postCaseActivate({ case_id: activatingCase.id, challenge_id: challenge.challenge_id, response })
+      await postCaseActivate(payload)
       setActivatingCase(null)
       setActivating(false)
       // Reset all case-scoped data; next poll will pick up the new case
@@ -256,12 +265,14 @@ export function Header({ onLogout }) {
             </h2>
             {activateErr && <p className="text-xs" style={{ color: 'var(--crimson)' }}>{activateErr}</p>}
             <label className="block">
-              <span className="text-xs font-sans uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Password</span>
+              <span className="text-xs font-sans uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                Password <span className="normal-case text-text-ghost">(re-auth; skipped under Supabase authority)</span>
+              </span>
               <input type="password" value={activatePassword}
                 onChange={(e) => setActivatePassword(e.target.value)}
                 className="mt-1 w-full px-3 py-2 rounded text-sm font-sans"
                 style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }}
-                autoFocus required />
+                autoFocus />
             </label>
             <div className="flex gap-2">
               <button type="submit" disabled={activating}

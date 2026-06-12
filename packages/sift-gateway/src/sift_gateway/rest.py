@@ -1162,6 +1162,61 @@ async def unregister_backend(request: Request) -> JSONResponse:
     )
 
 
+async def set_backend_enabled(request: Request) -> JSONResponse:
+    """POST /api/v1/backends/{name}/enabled — enable or disable a backend row.
+
+    PT1/WI5: operator add-on enable/disable. Flips the ``enabled`` column on the
+    registry row via ``registry.set_enabled``; it never edits the DB directly
+    from the frontend. Like register/unregister (D34), this is a catalog change
+    that the served /mcp aggregate applies on Gateway restart, so it reports
+    ``restart_required``. Body: {"enabled": bool}.
+    """
+    gateway = request.app.state.gateway
+    name = request.path_params["name"]
+    registry = getattr(gateway, "mcp_backend_registry", None)
+    if registry is None:
+        return JSONResponse(
+            {"name": name, "error": "mcp backend registry unavailable"},
+            status_code=503,
+        )
+
+    if _registry_record_by_name(gateway, name) is None:
+        return JSONResponse({"error": f"Unknown backend: {name}"}, status_code=404)
+
+    body, error = await _read_json_body(request)
+    if error:
+        return error
+    assert body is not None
+    if "enabled" not in body or not isinstance(body.get("enabled"), bool):
+        return JSONResponse(
+            {"error": "Body must include boolean 'enabled'"}, status_code=400
+        )
+    enabled = bool(body["enabled"])
+
+    actor = getattr(request.state, "identity", None)
+    try:
+        record = registry.set_enabled(name, enabled, actor=actor)
+    except Exception as exc:
+        http_status = getattr(exc, "http_status", None)
+        if http_status == 404:
+            return JSONResponse({"error": f"Unknown backend: {name}"}, status_code=404)
+        logger.warning("mcp backend set_enabled failed for %s: %s", name, exc)
+        return JSONResponse(
+            {"name": name, "error": "mcp backend registry write failed"},
+            status_code=503,
+        )
+
+    return JSONResponse(
+        {
+            "name": record.name,
+            "enabled": record.enabled,
+            "status": "enabled_pending_restart" if record.enabled else "disabled_pending_restart",
+            "pending_apply": True,
+            "restart_required": True,
+        }
+    )
+
+
 def rest_routes() -> list[Route]:
     """Return REST API v1 routes."""
     return [
@@ -1170,6 +1225,7 @@ def rest_routes() -> list[Route]:
         Route("/api/v1/backends", list_backends, methods=["GET"]),
         Route("/api/v1/backends", register_backend, methods=["POST"]),
         Route("/api/v1/backends/{name}", unregister_backend, methods=["DELETE"]),
+        Route("/api/v1/backends/{name}/enabled", set_backend_enabled, methods=["POST"]),
         Route("/api/v1/backends/validate", validate_backend, methods=["POST"]),
         Route("/api/v1/backends/reload", reload_backends, methods=["POST"]),
         Route("/api/v1/services", list_services, methods=["GET"]),

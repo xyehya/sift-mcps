@@ -11,6 +11,8 @@ vi.mock('../api/endpoints', () => ({
   postStartService: vi.fn(),
   postStopService: vi.fn(),
   postRestartService: vi.fn(),
+  postSetBackendEnabled: vi.fn(),
+  getHealth: vi.fn(),
   getCommitChallenge: vi.fn(),
 }))
 

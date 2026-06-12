@@ -5805,10 +5805,13 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/cases", get_cases, methods=["GET"]),
         Route("/api/case/activate/challenge", get_case_activate_challenge, methods=["GET"]),
         Route("/api/case/activate", post_case_activate, methods=["POST"]),
+        # PT1/WI4: operator health panel feed (proxies the gateway /health probe).
+        Route("/api/health", get_health_route, methods=["GET"]),
         # Phase 6.3: Portal Backends & Services Proxy Routes
         Route("/api/backends", get_backends_route, methods=["GET"]),
         Route("/api/backends", register_backend_route, methods=["POST"]),
         Route("/api/backends/{name}", unregister_backend_route, methods=["DELETE"]),
+        Route("/api/backends/{name}/enabled", set_backend_enabled_route, methods=["POST"]),
         Route("/api/backends/validate", validate_backend_route, methods=["POST"]),
         Route("/api/backends/reload", reload_backends_route, methods=["POST"]),
         Route("/api/services/{name}/start", start_service_route, methods=["POST"]),
@@ -5888,6 +5891,30 @@ async def get_backends_route(request: Request) -> JSONResponse:
     from sift_gateway.rest import list_backends
     request.app.state.gateway = gateway
     return await list_backends(request)
+
+
+async def get_health_route(request: Request) -> JSONResponse:
+    """PT1/WI4 — operator health panel feed.
+
+    Proxies the Gateway's own ``/health`` probe (the single source of truth for
+    backend/Supabase/evidence-root health) so the portal panel does not have to
+    reach a second origin. Idle mounted stdio backends are normalized to ``ok``
+    by ``health_endpoint`` (sift_gateway.health._operator_backend_health), so the
+    panel shows them as ready rather than "stopped". Operator/readonly only; the
+    response carries no token, key, or DSN material.
+    """
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+    from sift_gateway.health import health_endpoint
+    request.app.state.gateway = gateway
+    return await health_endpoint(request)
 
 
 async def validate_backend_route(request: Request) -> JSONResponse:
@@ -6010,6 +6037,44 @@ async def reload_backends_route(request: Request) -> JSONResponse:
     from sift_gateway.rest import reload_backends
     request.app.state.gateway = gateway
     return await reload_backends(request)
+
+
+async def set_backend_enabled_route(request: Request) -> JSONResponse:
+    """PT1/WI5 — operator enable/disable of an add-on backend (re-auth gated).
+
+    Proxies the registry ``set_enabled`` write via the gateway REST helper. Never
+    edits the DB directly from the frontend; the registry owns the write and the
+    change applies to the served /mcp catalog on Gateway restart.
+    """
+    examiner = getattr(request.state, "examiner", None)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    origin_err = _verify_origin(request)
+    if origin_err:
+        return origin_err
+    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
+    if not gateway:
+        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    examiner_name = _resolve_examiner(request)
+    if not examiner_name:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    client_host = request.client.host if request.client else "unknown"
+    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    if challenge_err:
+        return challenge_err
+
+    from sift_gateway.rest import set_backend_enabled
+    request.app.state.gateway = gateway
+    return await set_backend_enabled(request)
 
 
 async def start_service_route(request: Request) -> JSONResponse:

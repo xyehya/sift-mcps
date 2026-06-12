@@ -88,10 +88,14 @@ export const getPortalState = () => apiFetch('/api/portal/state')
 // --- Jobs (D2 Gateway job/status adapter) ---
 export const getJobStatus = (jobId) => apiFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
 
+// --- Health panel (PT1/WI4) — proxies the gateway /health probe ---
+export const getHealth = () => apiFetch('/api/health')
+
 // --- Backends & Services ---
 export const getBackends = () => apiFetch('/api/backends')
 export const postRegisterBackend = (body) => apiPost('/api/backends', body)
 export const deleteBackend = (name, body) => apiDelete(`/api/backends/${encodeURIComponent(name)}`, body)
+export const postSetBackendEnabled = (name, body) => apiPost(`/api/backends/${encodeURIComponent(name)}/enabled`, body)
 export const postValidateBackend = (body) => apiPost('/api/backends/validate', body)
 export const postReloadBackends = (body) => apiPost('/api/backends/reload', body)
 export const postStartService = (name, body) => apiPost(`/api/services/${name}/start`, body)

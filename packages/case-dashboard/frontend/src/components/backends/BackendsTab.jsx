@@ -8,10 +8,12 @@ import {
   postStartService,
   postStopService,
   postRestartService,
+  postSetBackendEnabled,
   getCommitChallenge
 } from '../../api/endpoints'
 import { computeSimpleChallengeResponse } from '../../api/crypto'
 import { useStore } from '../../store/useStore'
+import { HealthPanel } from './HealthPanel'
 
 export function BackendsTab() {
   const { addToast } = useStore()
@@ -241,6 +243,22 @@ export function BackendsTab() {
     })
   }
 
+  // WI5 — operator enable/disable of an add-on backend (re-auth gated; the
+  // registry owns the write, never a direct DB edit from the frontend).
+  function handleToggleEnabled(bName, nextEnabled) {
+    const verb = nextEnabled ? 'Enable' : 'Disable'
+    openChallenge(`${verb} Backend: ${bName}`, async (challengeParams) => {
+      const res = await postSetBackendEnabled(bName, { enabled: nextEnabled, ...challengeParams })
+      addToast(
+        res.restart_required
+          ? `Backend ${nextEnabled ? 'enabled' : 'disabled'}; Gateway restart required`
+          : `Backend ${nextEnabled ? 'enabled' : 'disabled'}`,
+        res.restart_required ? 'warn' : 'success'
+      )
+      await fetchBackends()
+    })
+  }
+
   const updateEnv = (index, field, val) => {
     const next = [...envList]
     next[index][field] = val
@@ -271,6 +289,9 @@ export function BackendsTab() {
           Apply Status
         </button>
       </div>
+
+      {/* WI4: operator system-health panel */}
+      <HealthPanel />
 
       {/* Grid container */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
@@ -370,6 +391,16 @@ export function BackendsTab() {
                           )}
                         </td>
                         <td className="py-3 text-right space-x-1.5">
+                          <button
+                            onClick={() => handleToggleEnabled(b.name, !b.enabled)}
+                            className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 transition-opacity"
+                            style={b.enabled
+                              ? { background: 'var(--bg-raised)', color: 'var(--text-muted)', borderColor: 'var(--border-soft)' }
+                              : { background: 'var(--jade-dim)', color: 'var(--jade)', borderColor: 'var(--jade)' }}
+                            title={b.enabled ? 'Disable this backend (registry row)' : 'Enable this backend (registry row)'}
+                          >
+                            {b.enabled ? 'Disable' : 'Enable'}
+                          </button>
                           <button
                             onClick={() => handleStart(b.name)}
                             disabled={!canStart}

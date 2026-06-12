@@ -93,6 +93,18 @@ class _Registry:
         self.unregistered.append(name)
         self.records = [record for record in self.records if record.name != name]
 
+    def set_enabled(self, name, enabled, *, actor=None):
+        del actor
+        for record in self.records:
+            if record.name == name:
+                record.enabled = enabled
+                self.enabled_changes = getattr(self, "enabled_changes", [])
+                self.enabled_changes.append((name, enabled))
+                return record
+        exc = Exception(f"Unknown backend: {name}")
+        exc.http_status = 404
+        raise exc
+
 
 @pytest.fixture()
 def passwords_dir(tmp_path, monkeypatch):
@@ -430,3 +442,83 @@ class TestBackendsPortal:
         assert stop_resp.status_code == 200
         assert stop_resp.json()["status"] == "stopped"
         assert active_bk.stop.called
+
+
+class TestBackendEnableDisable:
+    """PT1/WI5 — operator enable/disable of a backend registry row (re-auth gated)."""
+
+    def test_enable_disable_requires_auth_role_and_origin(self, client, passwords_dir):
+        # Unauthenticated
+        assert client.post("/api/backends/test/enabled", json={"enabled": False}).status_code == 401
+        # Readonly role
+        _setup_cookie(client, examiner="bob", role="readonly", passwords_dir=passwords_dir)
+        assert client.post(
+            "/api/backends/test/enabled",
+            json={"enabled": False},
+            headers={"origin": "http://testserver"},
+        ).status_code == 403
+        # Examiner but missing Origin
+        _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+        assert client.post("/api/backends/test/enabled", json={"enabled": False}).status_code == 400
+
+    def test_disable_backend_flips_registry_row(self, client, passwords_dir, mock_gateway):
+        _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+        mock_gateway.mcp_backend_registry = _Registry(
+            [_RegistryRecord("opencti-mcp", enabled=True)]
+        )
+        headers = {"origin": "http://testserver"}
+        challenge_id, response = _get_challenge_response(client, passwords_dir)
+        resp = client.post(
+            "/api/backends/opencti-mcp/enabled",
+            json={"enabled": False, "challenge_id": challenge_id, "response": response},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["enabled"] is False
+        assert body["restart_required"] is True
+        assert ("opencti-mcp", False) in mock_gateway.mcp_backend_registry.enabled_changes
+
+    def test_enable_unknown_backend_404(self, client, passwords_dir, mock_gateway):
+        _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+        mock_gateway.mcp_backend_registry = _Registry([])
+        headers = {"origin": "http://testserver"}
+        challenge_id, response = _get_challenge_response(client, passwords_dir)
+        resp = client.post(
+            "/api/backends/ghost/enabled",
+            json={"enabled": True, "challenge_id": challenge_id, "response": response},
+            headers=headers,
+        )
+        assert resp.status_code == 404
+
+    def test_enable_rejects_non_boolean(self, client, passwords_dir, mock_gateway):
+        _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+        mock_gateway.mcp_backend_registry = _Registry(
+            [_RegistryRecord("opencti-mcp", enabled=True)]
+        )
+        headers = {"origin": "http://testserver"}
+        challenge_id, response = _get_challenge_response(client, passwords_dir)
+        resp = client.post(
+            "/api/backends/opencti-mcp/enabled",
+            json={"enabled": "yes", "challenge_id": challenge_id, "response": response},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+
+
+class TestHealthPanelRoute:
+    """PT1/WI4 — portal health feed proxies the gateway /health probe."""
+
+    def test_health_requires_auth(self, client):
+        assert client.get("/api/health").status_code == 401
+
+    def test_health_readonly_allowed(self, client, passwords_dir, mock_gateway):
+        _setup_cookie(client, examiner="bob", role="readonly", passwords_dir=passwords_dir)
+        mock_gateway.backends = {}
+        mock_gateway._tool_map = {}
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "backends" in body
+        assert "supabase" in body
+        assert "evidence_root" in body
