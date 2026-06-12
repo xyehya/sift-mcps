@@ -1,0 +1,521 @@
+# Operator Maintenance Guide (Protocol SIFT Gateway)
+
+**BATCH-OR3** — operator manual for a real installed SIFT VM.
+Last updated: 2026-06-12.
+
+This guide lets a new operator run, inspect, recover, and maintain an installed
+deployment **without reading source code**. It is derived from the verified
+discovery docs:
+
+- `docs/inventory/sift-tool-inventory.md` — live paths, services, Docker, modes.
+- `docs/operator/state-authority-map.md` — what the DB owns vs files/exports.
+- `docs/operator/reference-data-provenance.md` — RAG/FK/Hayabusa provenance.
+
+Companion docs in this set (split for size, same batch):
+
+- `docs/operator/config-and-secrets.md` — the full variable dictionary, every
+  environment file / installer variable / DB-backed setting, and the
+  **"what not to edit manually"** list.
+- `docs/operator/rag-and-search-maintenance.md` — RAG, OpenSearch, and Hayabusa
+  day-to-day maintenance.
+
+## Safety conventions used in this guide
+
+- Commands are **safe (read-only / non-destructive) by default.**
+- A block marked **`DANGER`** performs an irreversible or service-affecting
+  action; its line states exactly what it destroys or changes.
+- Secret **values are never printed here.** Paths, file modes, and key **names**
+  appear; any value is shown as `<redacted>`.
+- Replace `<VM_IP>` with the VM address (the live lab VM is `192.168.122.81`).
+- Service-owned files under `/var/lib/sift/.sift/` are mode `0600`/`0700` and
+  owned by `sift-service`; read them with `sudo` as the login user.
+
+## Quick reference (verified live 2026-06-12)
+
+| Fact | Value |
+| --- | --- |
+| Portal URL | `https://<VM_IP>:4508/portal/` |
+| MCP endpoint | `https://<VM_IP>:4508/mcp` |
+| Operator login email | `examiner@operators.sift.local` |
+| Services | `sift-gateway.service`, `sift-job-worker.service` (both run as `sift-service`) |
+| Runtime root | `/opt/sift-mcps` (services' `WorkingDirectory`) |
+| Service config dir | `/var/lib/sift/.sift/` (mode `0700`, `sift-service`) |
+| Gateway config | `/var/lib/sift/.sift/gateway.yaml` |
+| Handoff (temp creds) | `/var/lib/sift/tokens/installer-handoff.txt` (mode `0600`) |
+| Evidence root | `/cases` |
+| Health | `GET https://127.0.0.1:4508/health` -> `status=ok` |
+
+---
+
+## 1. First login, password discovery, forced reset, rotation
+
+### 1.1 Discover the first-login password
+
+The installer writes a one-time operator password into the handoff file. Read it
+with `sudo` (it is `0600` and owned by `sift-service`):
+
+```bash
+# Read-only: lists the handoff key/value pairs.
+sudo cat /var/lib/sift/tokens/installer-handoff.txt
+```
+
+The keys you care about for first login (key **names** only — values are
+secret):
+
+| Key | Meaning |
+| --- | --- |
+| `portal_login_email` | the email to sign in with (normally `examiner@operators.sift.local`) |
+| `supabase_operator_temp_password` | one-time portal password (Supabase Auth path) |
+| `supabase_forced_reset` | `required_on_first_login` when a reset is pending |
+| `temporary_examiner_password` | legacy local-auth fallback password (only if Supabase was not bootstrapped) |
+| `portal_url`, `gateway_mcp_url`, `ca_cert`, `gateway_config` | endpoints / paths |
+
+The installer's own end-of-run summary also points here:
+`Secrets: /var/lib/sift/tokens/installer-handoff.txt (read with: sudo cat)`.
+
+### 1.2 First login and the forced reset
+
+1. Browse to `https://<VM_IP>:4508/portal/` (accept the lab CA / import the CA
+   cert — see §11).
+2. Sign in with `portal_login_email` and `supabase_operator_temp_password`.
+3. The account is created with `status=invited` /
+   `supabase_forced_reset=required_on_first_login`, so the portal **forces a
+   password reset on first login** (`must_reset=true`). Set a new password.
+
+After the reset succeeds, the temporary password is dead.
+
+### 1.3 Password recoverability — read this carefully
+
+> **The operator password is recoverable from the handoff file ONLY before the
+> first forced reset. After you reset it, the new password is NOT stored in any
+> file on the VM and cannot be recovered from the handoff or any config.**
+
+After reset, the handoff file is stale: on a re-run the installer rewrites
+`supabase_operator_temp_password=already-reset` (or `existing-supabase-user`)
+rather than a usable password. Treat the post-reset operator password like any
+production credential.
+
+### 1.4 Rotating / resetting the operator password later
+
+Supabase Auth is the authority for operator credentials
+(`app.operator_profiles.auth_user_id` maps to Supabase `auth.users`; there is no
+file-backed session store). Rotate or reset through the **supported operator /
+Supabase path**, not by editing a file:
+
+- **Operator-initiated (knows current password):** change it in the portal
+  account flow (the portal calls Supabase Auth password update).
+- **Lost password (admin reset):** re-issue a temporary password through the
+  Supabase Auth admin path so the operator gets another forced-reset login. This
+  is the same mechanism the installer uses to bootstrap the invited operator.
+
+Do **not** try to recover a password by editing `gateway.yaml`,
+`supabase.env`, or the handoff file — those do not hold the live operator
+password, and editing generated config can break startup (see §1.5 and the
+"what not to edit" list in `config-and-secrets.md`).
+
+### 1.5 Legacy local password fallback (informational)
+
+A legacy PBKDF2 fallback hash may exist at
+`/var/lib/sift/passwords/examiner.json` (mode `0600`, `0700` dir). In a
+Supabase-active deployment this is a **fallback only**, not the live authority;
+its retention is an open hardening question (FORK-1 in the state-authority map).
+Do not hand-edit it. To rotate, use the Supabase path above; the legacy file is
+not the operator's working credential when Supabase Auth is enabled.
+
+---
+
+## 2. Service status and restarts
+
+Both are **system** services (run as `sift-service`, start at boot via
+`multi-user.target`). Confirmed live: both `active running`.
+
+### 2.1 Status (read-only)
+
+```bash
+# Status of both core services.
+sudo systemctl status sift-gateway.service sift-job-worker.service
+
+# Confirm identity, working dir, and which env files they load.
+sudo systemctl show sift-gateway.service \
+  -p User -p Group -p WorkingDirectory -p ExecStart -p EnvironmentFiles
+```
+
+Expected: `User=sift-service`, `WorkingDirectory=/opt/sift-mcps`,
+`ExecStart=/opt/sift-mcps/.venv/bin/sift-gateway --config /var/lib/sift/.sift/gateway.yaml`.
+
+### 2.2 Restart (service-affecting, not destructive)
+
+```bash
+# Restarting drops in-flight MCP/portal connections briefly. No data loss:
+# durable jobs are in app.jobs and are reclaimed by the worker on restart.
+sudo systemctl restart sift-gateway.service sift-job-worker.service
+```
+
+Restart the **gateway** after changing `gateway.yaml`, TLS material, env files,
+or after registering/disabling a backend. Restart the **worker** to recover a
+wedged job-processing loop (`app.expire_stale_jobs()` reclaims leases).
+
+### 2.3 Enable/disable at boot
+
+```bash
+sudo systemctl is-enabled sift-gateway.service sift-job-worker.service   # read-only
+# DANGER: the following stops the platform until re-enabled/started.
+# sudo systemctl disable --now sift-gateway.service sift-job-worker.service
+```
+
+---
+
+## 3. Health checks
+
+### 3.1 Gateway health (authoritative liveness)
+
+```bash
+curl -sk https://127.0.0.1:4508/health
+```
+
+A healthy response (verified live) is `{"status":"ok", ...}` with:
+
+- `backends.forensic-rag-mcp` and `backends.opensearch-mcp` -> `status:"ok"`,
+  `state:"idle"`, `mounted_proxy:true` (stdio backends mount idle and start on
+  demand — idle is healthy, not degraded).
+- `supabase.status:"ok"` with the control-plane URL.
+- `tools_count` > 0 (live count was 17 aggregate tools).
+
+If `status` is not `ok`, check the failing backend's `detail`, then service logs
+(§9). `app.mcp_backends.health_status` is recomputed by the gateway probe — it is
+not authoritative state, so a restart re-derives it.
+
+### 3.2 OpenSearch health and indices
+
+```bash
+# Cluster health. Single-node clusters report "yellow" (unassigned replicas) —
+# that is expected and healthy here, NOT an error.
+curl -s http://127.0.0.1:9200/_cluster/health
+
+# List indices (read-only).
+curl -s 'http://127.0.0.1:9200/_cat/indices?v'
+```
+
+Verified live: `status=yellow`, 1 node, 15 active primaries, 2 unassigned
+replicas, 9 indices. See `rag-and-search-maintenance.md` for index/template
+detail.
+
+### 3.3 RAG and control-plane row counts (redacted)
+
+The RAG knowledge plane lives in Supabase pgvector. Check population by **row
+count only** (never select content). Run inside the Supabase Postgres container:
+
+```bash
+# Read-only counts. Key NAMES/counts only; never dump rows.
+docker exec supabase_db_sift-mcps psql -U postgres -d postgres -tA -c \
+  "select 'rag_chunks', count(*) from app.rag_chunks
+   union all select 'mcp_backends', count(*) from app.mcp_backends
+   union all select 'cases', count(*) from app.cases
+   union all select 'evidence_objects', count(*) from app.evidence_objects
+   union all select 'jobs', count(*) from app.jobs;"
+```
+
+Expected shape (OR1 baseline): `rag_chunks` populated (~26,586 on the reference
+VM), `mcp_backends` = 2 (the two core stdio backends). A `rag_chunks` count of 0
+means RAG was never seeded — see `rag-and-search-maintenance.md` §1.
+
+> Do not paste the DSN on the command line. The container's `psql` already
+> authenticates locally; if you must connect from outside the container, read
+> the DSN from `/var/lib/sift/.sift/control-plane.env` into a shell variable and
+> never echo it.
+
+---
+
+## 4. Backup and restore
+
+Authority lives in two places: **Supabase/Postgres** (the control plane — almost
+all mutable state) and **operator-managed evidence bytes** under `/cases`. The
+file mirrors (`CASE.yaml`, `findings.json`, `evidence-manifest.json`,
+`evidence-ledger.jsonl`, per-case `audit/*.jsonl`) are **export/proof, not
+authority** — restoring them does not restore truth; restore the database.
+
+### 4.1 What to back up
+
+| Target | Why | Authority class |
+| --- | --- | --- |
+| Supabase Postgres database | cases, evidence custody/hashes, findings, jobs, audit, RAG vectors, backends, tokens | **db (primary backup target)** |
+| Supabase Auth users | operator/agent login identities | db (Supabase Auth) |
+| `/var/lib/sift/.sift/` (0700) | gateway.yaml, env files, TLS keys, hayabusa, backups | secret/config |
+| `/var/lib/sift/passwords/`, `/var/lib/sift/tokens/` (0700) | legacy fallback hash, handoff | secret/config |
+| `/cases/*` evidence bytes + `/var/lib/sift/snapshots` | the actual forensic data the DB only hashes | **operator-managed file (out-of-band)** |
+
+Caches and rebuildables you do **not** need to back up: `.venv`,
+`/opt/sift-mcps` checkout (rebuild via reinstall / `uv sync`),
+`/var/cache/sift/volatility-symbols`, OpenSearch index data (rebuildable by
+re-ingesting sealed evidence), Hugging Face model cache.
+
+### 4.2 Database backup (read-only dump)
+
+```bash
+# Logical dump of the control plane. Writes a dump file; does not alter the DB.
+docker exec supabase_db_sift-mcps pg_dump -U postgres -d postgres -Fc \
+  > "sift-control-plane-$(date -u +%Y%m%dT%H%M%SZ).dump"
+```
+
+Store the dump securely (it contains hashed secrets and case metadata). The
+RAG pgvector data is included in this dump.
+
+### 4.3 Secret/config backup
+
+```bash
+# Read-only archive of the secret/config tree. Treat the archive as SECRET
+# (it contains TLS private keys and env files with credentials).
+sudo tar -C /var/lib/sift -czf "sift-config-$(date -u +%Y%m%dT%H%M%SZ).tgz" \
+  .sift passwords tokens
+```
+
+### 4.4 Restore (service-affecting)
+
+> **DANGER (DB restore):** restoring the database **overwrites all current
+> control-plane state** — cases, custody chain, findings, jobs, audit. Do this
+> only onto an intended target.
+
+```bash
+# DANGER: overwrites the control-plane database with the dump's contents.
+# docker exec -i supabase_db_sift-mcps pg_restore -U postgres -d postgres \
+#   --clean --if-exists < sift-control-plane-<stamp>.dump
+sudo systemctl restart sift-gateway.service sift-job-worker.service
+```
+
+Restore order: (1) Supabase DB + Auth, (2) `/var/lib/sift/.sift` secrets/TLS,
+(3) evidence bytes into `/cases`, (4) restart services, (5) re-verify with §3.
+Evidence integrity is re-provable because the DB holds the sealed
+`current_sha256` / chain head hashes; re-hash the restored bytes and compare.
+
+---
+
+## 5. Evidence mount and seal workflow
+
+**Invariant:** evidence bytes are **mounted or copied by the operator on the VM**
+and must be **registered and sealed before analysis.** The DB
+(`app.evidence_objects`, `app.evidence_chain_heads`,
+`app.evidence_custody_events`) owns custody metadata and hashes; the
+`evidence-manifest.json` / `evidence-ledger.jsonl` files are export/proof only.
+
+### 5.1 Operator steps
+
+1. **Activate a case** (re-auth gated). In the portal: create/select a case and
+   activate it. Activation requires password re-auth and is recorded in
+   `app.audit_events`.
+2. **Place evidence bytes.** Copy or mount the disk/memory image into the active
+   case's evidence directory under `/cases/<case>/...`. This is a manual VM-side
+   file operation by the operator; agents never place bytes.
+3. **Register** the evidence object (portal evidence flow ->
+   `app.evidence_register`). This records the object and computes its hash.
+4. **Seal** the evidence (re-auth gated -> `app.evidence_seal`). Sealing is the
+   gate: analysis tools treat sealed evidence as read-only. On seal the byte
+   files are set read-only (`chmod 0444`) and the custody chain head advances.
+
+Re-auth is required for **case activation, evidence seal/ignore/retire, finding
+approval, report inclusion/export, and agent credential issuance.** These are
+sensitive human actions and each records a re-auth audit event.
+
+### 5.2 Verifying custody (read-only)
+
+```bash
+# Row counts / status only — never dump custody event content here.
+docker exec supabase_db_sift-mcps psql -U postgres -d postgres -tA -c \
+  "select status, seal_status, count(*) from app.evidence_objects
+   group by status, seal_status order by 1,2;"
+```
+
+The exported `evidence-ledger.jsonl` (HMAC chain) and
+`evidence-anchor-v{N}.json` are offline court-proof artifacts; the gate consults
+the DB (`app.evidence_gate_status` via `evidence_gate.check_evidence_gate_db`),
+not the files.
+
+> **DANGER (seal/ignore/retire):** sealing makes bytes read-only and advances an
+> append-only custody chain; ignore/retire change evidence usability. These are
+> re-auth-gated and append-only — they cannot be silently undone.
+
+---
+
+## 6. RAG maintenance (summary)
+
+Full procedures are in `docs/operator/rag-and-search-maintenance.md` §1. RAG is
+**knowledge/reference-only** in pgvector; case-derived embedding is blocked by
+design (Python layer + DB trigger). Quick operator facts:
+
+- Check population: §3.3 row count of `app.rag_chunks`.
+- Re-seed from the bundled JSONL corpus (idempotent): see the search-maintenance
+  doc. Requires the control-plane DSN and may download the embedding model on
+  first run.
+- Disable: `SIFT_RAG_ENABLED=false` at install time, or disable the backend row
+  and restart the gateway.
+
+---
+
+## 7. OpenSearch index checks (summary)
+
+Full procedures in `rag-and-search-maintenance.md` §2. Quick checks:
+
+```bash
+curl -s 'http://127.0.0.1:9200/_cat/indices?v'                  # indices + doc counts
+curl -s 'http://127.0.0.1:9200/_index_template?pretty' | less   # templates present
+curl -s 'http://127.0.0.1:9200/_cat/indices/case-*-hayabusa-*?v' # hayabusa detections
+```
+
+OpenSearch index data is **derived/rebuildable**; the registry
+(`app.opensearch_indices`) and provenance (`app.opensearch_ingest_provenance`)
+are the DB authority. To rebuild, re-run ingest against sealed evidence.
+
+---
+
+## 8. Add-on registration
+
+Core backends (OpenSearch, RAG, forensic-knowledge, Hayabusa) install with the
+core installer. **External add-ons (OpenCTI, future Windows-triage) are not part
+of the core installer** and must register separately through the add-on
+contract.
+
+### 8.1 Register an add-on
+
+```bash
+# Validates the add-on manifest (sift-backend.json) and writes a register
+# payload, then records it into app.mcp_backends. Run from the repo checkout.
+scripts/setup-addon.sh <addon-path-or-name>
+# Apply: the gateway picks up the registered backend on restart.
+sudo systemctl restart sift-gateway.service
+```
+
+The manifest is validated against
+`packages/sift-gateway/.../sift-backend.schema.json`, hashed
+(`manifest_sha256`), and stored in `app.mcp_backends`. Raw secrets in a manifest
+are rejected by a DB CHECK and validators. Add-on register payloads land
+transiently under `$SIFT_HOME/addon-register/*.json`; authority is the DB row.
+
+### 8.2 List / disable backends (read-only + DB edit)
+
+```bash
+# List registered backends (names/namespace/enabled only).
+docker exec supabase_db_sift-mcps psql -U postgres -d postgres -tA -c \
+  "select name, namespace, transport, enabled, health_status from app.mcp_backends order by name;"
+```
+
+To disable an add-on: set its `app.mcp_backends.enabled=false` (or remove the
+row) and restart the gateway. Core backend rows should not be removed casually.
+
+> **Add-on image lifecycle note (B-OR1-a):** OpenCTI + redis/rabbitmq/minio
+> Docker images (~4.4 GB) can linger on a core VM with no OpenCTI containers
+> running. They are add-on artifacts; `docker image rm` them if the add-on is
+> not in use (does not affect core). Verify nothing is running first:
+> `docker ps`.
+
+---
+
+## 9. Logs
+
+### 9.1 systemd journal (primary)
+
+```bash
+# Live tail of the gateway. Read-only.
+sudo journalctl -u sift-gateway.service -f
+# Last 200 lines, both services, since boot.
+sudo journalctl -u sift-gateway.service -u sift-job-worker.service -n 200 --no-pager
+```
+
+### 9.2 Service JSONL logs
+
+Verified present under `/var/lib/sift/.sift/logs/` (mode `0700` dir):
+
+| File | Contents |
+| --- | --- |
+| `sift-gateway.jsonl` | gateway structured log |
+| `forensic-rag-mcp.jsonl` | RAG backend structured log |
+
+```bash
+# Read-only. Pretty-print the last lines with jq.
+sudo tail -n 50 /var/lib/sift/.sift/logs/sift-gateway.jsonl | jq .
+```
+
+Logs are redacted by `response_guard` / audit redaction in code; still, do not
+copy log lines containing tokens, DSNs, or full case paths into shared docs.
+
+---
+
+## 10. Audit checks
+
+The audit log is **DB-authoritative**: `app.audit_events`. Per-case
+`audit/*.jsonl` files are a labelled file-mirror (`legacy-file-mirror` vs
+`db-audit-events`), not the authority.
+
+```bash
+# Recent audit activity by action type (counts only — no payloads).
+docker exec supabase_db_sift-mcps psql -U postgres -d postgres -tA -c \
+  "select action, count(*) from app.audit_events
+   group by action order by count(*) desc limit 25;"
+```
+
+Sensitive-action audit trail to expect: re-auth events for case activation,
+evidence seal/ignore/retire, finding approval, report inclusion/export, and
+agent credential issuance (`reauth.<action>` rows written by
+`record_reauth_event`). A required audit write that fails raises
+`AuditPersistError` (fail-closed) — if tool calls start failing with that, the
+DB is unreachable; see §12.
+
+---
+
+## 11. TLS / CA trust
+
+The installer generates a self-signed lab CA and gateway cert under
+`/var/lib/sift/.sift/tls/`:
+
+| File | Mode | Role |
+| --- | --- | --- |
+| `ca-cert.pem` | `0644` | local CA certificate (public — give to clients) |
+| `ca-key.pem` | `0600` | CA private key — **secret, never distribute** |
+| `gateway-cert.pem` | `0644` | gateway TLS certificate (public) |
+| `gateway-key.pem` | `0600` | gateway TLS private key — **secret** |
+
+To trust the portal/MCP without `-k`, import the **CA cert** (`ca-cert.pem`,
+also referenced in the handoff as `ca_cert=`) into the client trust store. Never
+distribute `ca-key.pem` or `gateway-key.pem`.
+
+> The certificate/trust profile (IP-only lab CA vs domain) is an open design
+> item (BATCH-TLS1 / B-MVP-001). This guide documents the current self-signed
+> lab posture only.
+
+---
+
+## 12. Failure recovery
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| `/health` not `status=ok`; a backend `degraded` | stdio backend failed to mount / crashed | check `journalctl -u sift-gateway`; restart gateway (§2.2) |
+| `/health` shows `supabase.status` not ok; tools fail with `AuditPersistError` | Supabase/Postgres down | `docker ps` (expect `supabase_db_sift-mcps` healthy); `docker compose` / `supabase start` per setup; restart gateway |
+| Portal login fails for the temp password | already reset, or wrong key read | use the post-reset password; if lost, admin-reset via Supabase (§1.4) — not recoverable from files |
+| Jobs stuck / not progressing | worker wedged or lease held | restart `sift-job-worker.service`; `app.expire_stale_jobs()` reclaims stale leases |
+| OpenSearch `red` (not `yellow`) | container down / disk | `docker ps` for `sift-opensearch`; check container logs; restart container |
+| `hayabusa` looks "missing" to the login user | symlink target only traversable as `sift-service` | not a fault; verify as `sift-service`/root (OR1 §6), do not "fix" |
+| MCP `/mcp` rejects an operator Supabase token (`invalid_token`) | expected — operator login token is not an MCP credential | issue a portal agent/service credential for MCP; operator REST is human-only |
+| Service restart but config change ignored | edited a generated file the wrong way / wrong file | re-check the path in `config-and-secrets.md`; some values are inline in `gateway.yaml`, some are env-indirected |
+
+### Recovery order of operations
+
+1. `curl -sk https://127.0.0.1:4508/health` — narrow to gateway vs backend vs DB.
+2. `docker ps` — confirm `supabase_db_sift-mcps` and `sift-opensearch` are up
+   and healthy.
+3. `sudo journalctl -u sift-gateway.service -n 200` — read the actual error.
+4. Restart the affected service (§2.2). Durable jobs survive restarts.
+5. If state looks corrupt, restore from backup (§4.4) onto an intended target.
+6. Record sanitized proof of the recovery in `docs/migration/Session-Notes.md`.
+
+---
+
+## 13. "What not to edit manually" (pointer)
+
+Several files are **generated by the installer** and must not be hand-edited —
+doing so risks startup failure, drift from the DB, or a broken handoff. The full
+list with reasons is in `docs/operator/config-and-secrets.md` §"Do not hand-edit"
+and includes:
+`~/.sift/supabase-project/sift-supabase.env`,
+`/var/lib/sift/.sift/*.env`,
+`/var/lib/sift/.sift/gateway.yaml`,
+`/var/lib/sift/.sift/opensearch.yaml`,
+`/var/lib/sift/.sift/forensic-knowledge.env`,
+`/var/lib/sift/tokens/installer-handoff.txt`, and the TLS material.
