@@ -66,6 +66,8 @@ OpenSearch/RAG tool smoke.
 - [x] BATCH-PT1 - Portal operator workflow and health features
 - [ ] BATCH-PT2 - Portal RAG document management flow
 - [ ] BATCH-TLS1 - Installer certificate and trust strategy
+- [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets
+- [ ] BATCH-CL3 - Retire legacy file-HMAC re-auth plane
 - [ ] BATCH-RG1 - Regenerate documentation modernization pass
 - [ ] BATCH-LV1 - End-to-end live VM validation and Rocba proof
 
@@ -662,6 +664,57 @@ Acceptance:
 - Renewal/replacement is documented.
 - No private key material is printed to handoff or logs.
 
+## BATCH-SB1 - Self-managed Supabase compose with generated secrets
+
+Dependencies: BATCH-HR3. Decided in B-MVP-012 (2026-06-12).
+
+Scope:
+
+- `scripts/setup-supabase.sh`, new compose file(s), `install.sh` Supabase
+  bootstrap path, generated env files, operator docs sections 5/5.1.
+
+Exact work:
+
+- Replace the Supabase CLI-managed local stack with a repo-owned
+  docker-compose that generates GOTRUE_JWT_SECRET, anon/service-role JWTs,
+  and a random non-default Postgres password at install time.
+- Preserve idempotent rerun, existing operator mapping, loopback-only binds,
+  and the clone-entry installer flow.
+- Provide a migration path for an existing CLI-stack VM (export/import or
+  documented clean re-init) and a rotation procedure.
+
+Acceptance:
+
+- Fresh install runs with non-demo secrets (`iss` != supabase-demo, non-default
+  DB password); `/health` ok; portal + MCP auth work end to end.
+- Rerun is idempotent; rotation procedure proven once live.
+- No secret values in repo, logs, or handoff beyond the designed handoff.
+
+## BATCH-CL3 - Retire legacy file-HMAC re-auth plane
+
+Dependencies: BATCH-PT1; BATCH-HR3. Decided in B-MVP-017 (2026-06-12).
+
+Scope:
+
+- `packages/case-dashboard/**` (local re-auth bridge, sift_session middleware),
+  `packages/sift-core/**` (`verification.py` writer funcs, `backup_ops.py`
+  ledger copy), tests.
+
+Exact work:
+
+- Remove `_sync_local_reauth_password` and file-authority HMAC challenges for
+  commit/evidence/report/case-activate; DB/Supabase authority becomes the only
+  re-auth path with fail-closed errors.
+- Remove the orphaned `sift_session` cookie verification middleware (nothing
+  mints it) after confirming the test/agent harness has a replacement.
+- Delete `verification.py` writer functions and the ledger copy in
+  `backup_ops.py` once the last consumer is gone; drop their tests.
+
+Acceptance:
+
+- No file-HMAC write path remains; targeted suites green; portal sensitive
+  actions still re-auth correctly under DB authority (live smoke).
+
 ## BATCH-RG1 - Regenerate documentation modernization pass
 
 Dependencies: BATCH-OR2; BATCH-OR3; BATCH-OR4; BATCH-AD1; BATCH-HR2.
@@ -701,7 +754,7 @@ Acceptance:
 
 ## BATCH-LV1 - End-to-end live VM validation and Rocba proof
 
-Dependencies: BATCH-OR3; BATCH-HR3; BATCH-AD2; BATCH-PT1; BATCH-TLS1.
+Dependencies: BATCH-OR3; BATCH-HR3; BATCH-AD2; BATCH-PT1; BATCH-TLS1; BATCH-SB1; BATCH-CL3.
 
 Scope:
 
