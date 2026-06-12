@@ -124,3 +124,102 @@ def test_registry_function_count_matches_backend_json():
     assert registry_tool_names == backend_tool_names, (
         f"Registry tools {registry_tool_names} must match sift-backend.json tools {backend_tool_names}"
     )
+
+
+# ---------------------------------------------------------------------------
+# BATCH-AD2: manifest provably conforms to the gateway Backend Contract end to
+# end — it validates through the SAME loader the registration door uses, its
+# namespace is consistent, and the gateway derives a query-only, scope-gated,
+# non-authoritative authority profile from it.
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_validates_through_gateway_loader():
+    """The shipped manifest passes the gateway's load_and_validate_manifest —
+    the exact path the portal/REST registration door runs. This is stronger
+    than field-by-field assertions: it proves schema + cross-field contract."""
+    from sift_gateway.backends import load_and_validate_manifest
+
+    loaded = load_and_validate_manifest(
+        "opencti-mcp",
+        {"type": "stdio", "command": "true", "manifest_path": str(SIFT_BACKEND_JSON)},
+    )
+    assert loaded is not None
+    assert loaded["namespace"] == "cti"
+
+
+def test_manifest_namespace_consistent_with_every_tool():
+    data = json.loads(SIFT_BACKEND_JSON.read_text(encoding="utf-8"))
+    ns = data["namespace"]
+    assert ns
+    for tool in data["tools"]:
+        assert tool["name"].startswith(f"{ns}_"), (
+            f"tool {tool['name']!r} must start with namespace prefix {ns}_"
+        )
+
+
+def test_manifest_declares_standard_non_authoritative_prohibited_operations():
+    """Per spec §2.5, a non-authoritative add-on declares the full standard
+    prohibited-operations set. OpenCTI is the reference add-on; it must carry
+    all of them so the gateway denies any authority operation fail-closed."""
+    data = json.loads(SIFT_BACKEND_JSON.read_text(encoding="utf-8"))
+    prohibited = set(data["authority_contract"]["prohibited_operations"])
+    standard = {
+        "create_case",
+        "activate_case",
+        "seal_evidence",
+        "register_evidence",
+        "approve_finding",
+        "reject_finding",
+        "approve_report",
+        "include_in_report",
+        "issue_agent_credential",
+        "bypass_gateway",
+    }
+    missing = standard - prohibited
+    assert not missing, f"non-authoritative add-on missing prohibited ops: {sorted(missing)}"
+
+
+def test_manifest_uses_no_raw_secret_fields():
+    """The manifest must never carry raw secrets — secrets are supplied via
+    env_refs in the connection config (resolved from gateway env), never in
+    sift-backend.json. Guard the whole file text."""
+    text = SIFT_BACKEND_JSON.read_text(encoding="utf-8")
+    lowered = text.lower()
+    for forbidden in ("token", "password", "api_key", "secret", "bearer"):
+        # 'token' may legitimately appear in prose; assert no JSON key uses it.
+        assert f'"{forbidden}"' not in lowered, (
+            f"manifest must not declare a raw {forbidden!r} field"
+        )
+
+
+def test_gateway_derives_query_only_scope_gated_authority_profile():
+    """The gateway, after building its tool map from the shipped manifest,
+    exposes a per-tool authority profile that is non-authoritative, carries the
+    cti:read required scope, and inherits the prohibited-operation set."""
+    import asyncio
+
+    from sift_gateway.server import Gateway
+
+    manifest = json.loads(SIFT_BACKEND_JSON.read_text(encoding="utf-8"))
+
+    class _FakeBackend:
+        started = False
+
+        def __init__(self, m):
+            self.manifest = m
+            self.config = {"type": "stdio", "command": "true"}
+            self.enabled = True
+
+    gateway = Gateway(
+        {"backends": {}, "execute": {"security": {"denied_binaries": ["env"]}}}
+    )
+    gateway.backends["opencti-mcp"] = _FakeBackend(manifest)
+    asyncio.run(gateway._build_tool_map())
+
+    profile = gateway.addon_authority_for_tool("cti_search_threat_intel")
+    assert profile is not None
+    assert profile["non_authoritative"] is True
+    assert profile["required_scopes"] == ["cti:read"]
+    assert "seal_evidence" in profile["prohibited_operations"]
+    assert "bypass_gateway" in profile["prohibited_operations"]

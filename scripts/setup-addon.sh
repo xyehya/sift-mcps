@@ -90,12 +90,18 @@ install -d -m 700 "$REGISTER_DIR"
 # Payload globals (reset per backend).
 PAYLOAD_NAME="" PAYLOAD_TYPE="stdio" PAYLOAD_COMMAND="" PAYLOAD_URL="" PAYLOAD_MANIFEST=""
 declare -a PAYLOAD_ARGS=()
-declare -a PAYLOAD_ENV=()
+# AD2: PAYLOAD_ENV_REFS holds CHILD_ENV=GATEWAY_ENV name->name pairs. The
+# register payload must carry env_refs (the only env shape the gateway registry
+# accepts), NEVER a raw `env` map — normalize_connection_config rejects raw
+# secret fields including "env". The gateway resolves each gateway-env name from
+# its OWN process environment at backend startup, so no secret value is ever
+# written to ~/.sift/addon-register/<name>.json or stored in app.mcp_backends.
+declare -a PAYLOAD_ENV_REFS=()
 
 reset_payload() {
   PAYLOAD_NAME="" PAYLOAD_TYPE="stdio" PAYLOAD_COMMAND="" PAYLOAD_URL="" PAYLOAD_MANIFEST=""
   PAYLOAD_ARGS=()
-  PAYLOAD_ENV=()
+  PAYLOAD_ENV_REFS=()
 }
 
 stdio_args() {
@@ -135,14 +141,15 @@ PY
 
 write_payload() {
   local out="$REGISTER_DIR/${PAYLOAD_NAME}.json"
-  local args_str env_str
+  local args_str env_refs_str
   args_str="$(printf '%s\n' "${PAYLOAD_ARGS[@]:-}")"
-  env_str="$(printf '%s\n' "${PAYLOAD_ENV[@]:-}")"
+  # AD2: emit env_refs (CHILD=GATEWAY name->name), never a raw env value map.
+  env_refs_str="$(printf '%s\n' "${PAYLOAD_ENV_REFS[@]:-}")"
   PAYLOAD_NAME="$PAYLOAD_NAME" PAYLOAD_TYPE="$PAYLOAD_TYPE" PAYLOAD_COMMAND="$PAYLOAD_COMMAND" \
   PAYLOAD_URL="$PAYLOAD_URL" PAYLOAD_MANIFEST="$PAYLOAD_MANIFEST" \
-  PAYLOAD_ARGS_STR="$args_str" PAYLOAD_ENV_STR="$env_str" \
+  PAYLOAD_ARGS_STR="$args_str" PAYLOAD_ENV_REFS_STR="$env_refs_str" \
   "$SYSTEM_PYTHON" - "$out" <<'PY'
-import json, os, sys
+import json, os, re, sys
 out = sys.argv[1]
 config = {"type": os.environ.get("PAYLOAD_TYPE", "stdio"), "enabled": True}
 if os.environ.get("PAYLOAD_COMMAND"):
@@ -152,14 +159,24 @@ if os.environ.get("PAYLOAD_URL"):
 args = [a for a in os.environ.get("PAYLOAD_ARGS_STR", "").splitlines() if a]
 if args:
     config["args"] = args
-env = {}
-for line in os.environ.get("PAYLOAD_ENV_STR", "").splitlines():
+# env_refs: each line is CHILD_ENV_NAME=GATEWAY_ENV_NAME. Both sides must be
+# valid env identifiers; the gateway resolves GATEWAY_ENV_NAME from its own
+# process environment at backend startup. No secret VALUES live in this file.
+_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+env_refs = {}
+for line in os.environ.get("PAYLOAD_ENV_REFS_STR", "").splitlines():
     if not line.strip() or "=" not in line:
         continue
-    k, v = line.split("=", 1)
-    env[k] = v
-if env:
-    config["env"] = env
+    child, gateway_var = line.split("=", 1)
+    child, gateway_var = child.strip(), gateway_var.strip()
+    if not (_NAME.match(child) and _NAME.match(gateway_var)):
+        raise SystemExit(
+            f"env_refs entry {child!r}->{gateway_var!r} is not a valid "
+            "CHILD_ENV=GATEWAY_ENV identifier pair"
+        )
+    env_refs[child] = gateway_var
+if env_refs:
+    config["env_refs"] = env_refs
 if os.environ.get("PAYLOAD_MANIFEST"):
     config["manifest_path"] = os.environ["PAYLOAD_MANIFEST"]
 doc = {"name": os.environ["PAYLOAD_NAME"], "config": config}
@@ -180,10 +197,10 @@ echo_vars_and_emit() {
   if [[ ${#PAYLOAD_ARGS[@]} -gt 0 ]]; then
     printf '  args        : %s\n' "${PAYLOAD_ARGS[*]}"
   fi
-  if [[ ${#PAYLOAD_ENV[@]} -gt 0 ]]; then
-    printf '  env:\n'
+  if [[ ${#PAYLOAD_ENV_REFS[@]} -gt 0 ]]; then
+    printf '  env_refs (child <- gateway env var; values resolved from gateway env, not stored):\n'
     local kv
-    for kv in "${PAYLOAD_ENV[@]}"; do printf '    %s\n' "$kv"; done
+    for kv in "${PAYLOAD_ENV_REFS[@]}"; do printf '    %s\n' "$kv"; done
   fi
   [[ -n "$PAYLOAD_MANIFEST" ]] && printf '  manifest    : %s\n' "$PAYLOAD_MANIFEST"
   local out
@@ -218,13 +235,16 @@ setup_rag() {
   warn "Ensure the knowledge corpus is loaded (rag-mcp-import-chroma-pgvector / rag-mcp-seed-pgvector)."
   warn "It resolves the control-plane DSN from the SIFT_CONTROL_PLANE_DSN env ref;"
   warn "no raw DSN is stored in the register payload."
-  local rag_model
-  rag_model="$(ask 'RAG_MODEL_NAME (query embedding model)' 'BAAI/bge-base-en-v1.5')"
+  warn "RAG_MODEL_NAME (query embedding model) is read from the gateway's own"
+  warn "environment; set it there (default BAAI/bge-base-en-v1.5) before registering."
   stdio_args "rag-mcp" "full"
   PAYLOAD_COMMAND="$UV_BIN"
-  # env_refs only: the gateway maps SIFT_CONTROL_PLANE_DSN from its own env into
-  # the backend child process. RAG_MODEL_NAME is a non-secret tunable.
-  PAYLOAD_ENV=("SIFT_CONTROL_PLANE_DSN=\${SIFT_CONTROL_PLANE_DSN}" "RAG_MODEL_NAME=$rag_model")
+  # env_refs only (CHILD=GATEWAY name->name): the gateway resolves both names
+  # from its OWN process env at backend startup. No raw DSN or value is stored.
+  PAYLOAD_ENV_REFS=(
+    "SIFT_CONTROL_PLANE_DSN=SIFT_CONTROL_PLANE_DSN"
+    "RAG_MODEL_NAME=RAG_MODEL_NAME"
+  )
   echo_vars_and_emit
 }
 
@@ -238,17 +258,22 @@ setup_opensearch() {
     warn "Docker not found. This backend declares requires:[\"https://localhost:9200\"];"
     warn "without a reachable OpenSearch the portal will register it but mark it UNAVAILABLE (core stays up)."
   fi
-  local os_config os_host
-  os_config="$(ask 'OPENSEARCH_CONFIG path' "$SIFT_HOME/opensearch.yaml")"
-  os_host="$(ask 'OPENSEARCH_HOST' 'http://127.0.0.1:9200')"
   if command -v docker >/dev/null 2>&1 && ask_yes "Provision prerequisites (write config, start OpenSearch via Docker, configure cluster/geoip/templates)?"; then
     { write_opensearch_config && start_opensearch && configure_opensearch_cluster \
         && configure_geoip_pipeline && install_opensearch_templates; } \
       || warn "OpenSearch provisioning incomplete — check Docker and retry; backend will be UNAVAILABLE until reachable."
   fi
+  warn "OPENSEARCH_CONFIG / OPENSEARCH_HOST are resolved from the gateway's own"
+  warn "environment (matching install.sh seed_addon_backends). Set them there"
+  warn "(e.g. OPENSEARCH_CONFIG=$SIFT_HOME/opensearch.yaml,"
+  warn " OPENSEARCH_HOST=http://127.0.0.1:9200) before registering."
   stdio_args "opensearch-mcp" "standard"
   PAYLOAD_COMMAND="$UV_BIN"
-  PAYLOAD_ENV=("OPENSEARCH_CONFIG=$os_config" "OPENSEARCH_HOST=$os_host")
+  # env_refs only: name->name, resolved from gateway env. Matches install.sh.
+  PAYLOAD_ENV_REFS=(
+    "OPENSEARCH_CONFIG=OPENSEARCH_CONFIG"
+    "OPENSEARCH_HOST=OPENSEARCH_HOST"
+  )
   echo_vars_and_emit
 }
 
@@ -261,18 +286,23 @@ setup_opencti() {
   if ! command -v docker >/dev/null 2>&1; then
     warn "Docker not found — OpenCTI's own stack cannot be started here. You can still point at an external OpenCTI."
   fi
-  local octi_url octi_token
-  octi_url="$(ask 'OPENCTI_URL' 'http://127.0.0.1:8080')"
   if command -v docker >/dev/null 2>&1 && ask_yes "Provision prerequisites (prepare secrets, start OpenCTI stack + feeds — needs >=14 GB RAM)?"; then
     SIFT_OPENCTI_ENABLED=true
     { prepare_opencti_secrets && install_opencti && install_opencti_feeds; } \
       || warn "OpenCTI provisioning incomplete — backend will be UNAVAILABLE until reachable."
-    octi_token="${OPENCTI_TOKEN:-}"
   fi
-  octi_token="$(ask 'OPENCTI_TOKEN' "${octi_token:-}")"
+  warn "OpenCTI credentials are NEVER written to the register payload. The child"
+  warn "OPENCTI_URL / OPENCTI_TOKEN are resolved by the gateway from its OWN env"
+  warn "vars SIFT_OPENCTI_URL / SIFT_OPENCTI_TOKEN at backend startup. Set those"
+  warn "in the gateway environment (systemd EnvironmentFile) before registering."
   stdio_args "opencti-mcp" "opencti"
   PAYLOAD_COMMAND="$UV_BIN"
-  PAYLOAD_ENV=("OPENCTI_URL=$octi_url" "OPENCTI_TOKEN=$octi_token")
+  # env_refs only (spec §4.3): CHILD=GATEWAY name->name. The raw token never
+  # touches this file or app.mcp_backends; the registry rejects a raw `env` map.
+  PAYLOAD_ENV_REFS=(
+    "OPENCTI_URL=SIFT_OPENCTI_URL"
+    "OPENCTI_TOKEN=SIFT_OPENCTI_TOKEN"
+  )
   echo_vars_and_emit
 }
 
@@ -296,13 +326,15 @@ setup_custom() {
     fi
     PAYLOAD_MANIFEST="$(ask 'Manifest path (local sift-backend.json the gateway can read)')"
   fi
-  log "Add env vars (KEY=VALUE). Blank line to finish."
+  log "Add env_refs as CHILD_ENV=GATEWAY_ENV (the child var <- the gateway env"
+  log "var the gateway resolves it from). Secrets stay in the gateway env, never"
+  log "in the payload. Blank line to finish."
   while true; do
     local kv
-    kv="$(ask '  env' '')"
+    kv="$(ask '  env_ref (CHILD=GATEWAY)' '')"
     [[ -z "$kv" ]] && break
-    [[ "$kv" == *=* ]] || { warn "  expected KEY=VALUE; skipped"; continue; }
-    PAYLOAD_ENV+=("$kv")
+    [[ "$kv" == *=* ]] || { warn "  expected CHILD_ENV=GATEWAY_ENV; skipped"; continue; }
+    PAYLOAD_ENV_REFS+=("$kv")
   done
   echo_vars_and_emit
 }

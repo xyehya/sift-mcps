@@ -92,6 +92,13 @@ def validate_manifest_contract(manifest: dict, manifest_path: Path | None = None
     _validate_manifest_instructions(manifest, manifest_path)
 
     namespace = manifest.get("namespace", "")
+    # AD2 (B-MVP-016 sweep): the spec (§2.1/§10) declares a non-empty namespace
+    # is mandatory — it is the only thing that ties every tool name to this
+    # backend and prevents arbitrary tool-name shadowing. The JSON schema types
+    # it as a plain string (no minLength), so enforce non-emptiness here in the
+    # cross-field contract, fail-closed, before any prefix check is skipped.
+    if not isinstance(namespace, str) or not namespace.strip():
+        raise ValueError("Manifest namespace must be a non-empty string.")
     tools = manifest.get("tools", [])
     if not tools:
         raise ValueError("Manifest must declare at least one tool.")
