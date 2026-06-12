@@ -13,6 +13,34 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-12 - Operator decisions recorded for open needs-input rows
+
+Status: DONE (decisions captured; implementation stays with owner batches)
+
+The operator resolved the open decision rows. Summary (full text in the table
+below):
+
+- B-MVP-001 TLS: internal/local CA profile with a documented client trust
+  bundle; ACME/domain profile deferred. Owner BATCH-TLS1.
+- B-MVP-002 rename: rename GitHub repo/docs to ProtocolSiftGateway; keep the
+  `/opt/sift-mcps` runtime path and Python package import names. Owner CL2.
+- B-MVP-003 Windows triage: stays an author-guide example only; AD2 proves the
+  add-on contract with OpenCTI alone. RESOLVED, no build.
+- B-MVP-004 downloads: pin + SHA-256 verify all live downloads (Supabase CLI
+  check upgraded warn-to-die as the pattern), GeoIP off by default, plus an
+  offline mode using operator-staged artifacts. Owner HR3.
+- B-MVP-005 OpenSearch: accept security-plugin-disabled on loopback for the
+  single-node lab; harden the container instead (cap_drop, no-new-privileges,
+  digest pin, non-root) and document snapshot policy. Revisit only if
+  OpenSearch leaves loopback. Owner HR3.
+- B-MVP-010..013 defaults approved: env-indirect the gateway session secret
+  (HR3); verify-then-retire legacy file fallbacks (CL1); verify Supabase demo
+  keys on the VM (HR2) and rotate if present (HR3); verify RLS posture
+  read-only (HR2) with no schema change without a separate go-ahead.
+
+Next: Run BATCH-HR2, BATCH-AD1, and BATCH-CL1 in parallel worktrees; HR3 and
+TLS1 follow with the decisions above as their contract.
+
 ### 2026-06-12 - BATCH-OR3 operator maintenance manual landed
 
 Status: DONE (committed to local main; not pushed)
@@ -167,16 +195,16 @@ after portal reset/credential issuance.
 
 | ID | Type | Status | Decision / Input Needed | Owner Batch |
 | --- | --- | --- | --- | --- |
-| B-MVP-001 | Needs input | OPEN | Certificate profile: public DNS plus Let's Encrypt/ACME, or internal/local CA for lab IP-only VM. | BATCH-TLS1 |
-| B-MVP-002 | Needs input | OPEN | Repo rename details: GitHub remote/name, runtime install path compatibility (`/opt/sift-mcps` vs `/opt/ProtocolSiftGateway`), and whether Python package names stay unchanged. | BATCH-CL2 |
-| B-MVP-003 | Backlog | OPEN | Windows triage is currently not core. Decide whether to rebuild it now as an external add-on or leave it as an author-guide example. | BATCH-AD2 |
-| B-MVP-004 | Needs input | OPEN | Hardened/offline download policy: allow live Hugging Face/GitHub downloads during install, pre-bundle/cache artifacts, or require operator-provided artifacts. | BATCH-OR4 / BATCH-HR2 |
-| B-MVP-005 | Backlog | OPEN | Decide production OpenSearch posture beyond single-node lab/yellow health: replica settings, security plugin, auth, snapshot policy, and multi-node option. | BATCH-HR2 / BATCH-HR3 |
+| B-MVP-001 | Needs input | OPEN | DECIDED 2026-06-12: internal/local CA profile for the IP-only lab VM; handoff documents client trust-bundle import, SAN verification, and rotation. ACME/domain profile deferred. Implementation in BATCH-TLS1. | BATCH-TLS1 |
+| B-MVP-002 | Needs input | OPEN | DECIDED 2026-06-12: rename GitHub repo/docs to `ProtocolSiftGateway`; keep `/opt/sift-mcps` runtime path and Python package import names unchanged. Implementation in BATCH-CL2. | BATCH-CL2 |
+| B-MVP-003 | Backlog | RESOLVED | DECIDED 2026-06-12: Windows triage stays an author-guide example only; no rebuild now. AD2 proves the add-on contract with OpenCTI alone. | BATCH-AD1 / BATCH-AD2 |
+| B-MVP-004 | Needs input | OPEN | DECIDED 2026-06-12: keep live downloads but pin versions + SHA-256 verify all of D1-D6 (upgrade the Supabase CLI check from warn to die as the pattern), GeoIP off by default, and add an offline mode that requires operator-staged artifacts and skips all network fetches. Implementation in BATCH-HR3. | BATCH-HR3 |
+| B-MVP-005 | Backlog | OPEN | DECIDED 2026-06-12: accept security-plugin-disabled on loopback for the single-node lab (Gateway is the sole policy boundary); HR3 hardens the container instead (cap_drop, no-new-privileges, digest pin, non-root) and documents snapshot policy and replica limits. Revisit only if OpenSearch leaves loopback. | BATCH-HR3 |
 | B-MVP-006 | Backlog | OPEN | Portal RAG document management must decide whether operator-added docs are global knowledge only or can create case-derived chunks with strict provenance. | BATCH-PT2 |
-| B-MVP-010 | Needs input | OPEN | `gateway.yaml` stores `portal.session_secret` as an inline literal (file is 0600/sift-service). Decide whether to env-indirect it like the DSN/pepper. | BATCH-HR3 |
-| B-MVP-011 | Needs input | OPEN | Retire legacy file-mode fallbacks: `examiner.json` PBKDF2 auth fallback and the file-mode HMAC verification ledger (superseded by DB `content_hash`). Confirm dead on live VM first. | BATCH-CL1 / BATCH-HR3 |
-| B-MVP-012 | Needs input | OPEN | Verify whether installed VMs still run Supabase CLI demo JWT keys/default DB password; decide rotation path for production posture. | BATCH-HR2 / BATCH-HR3 |
-| B-MVP-013 | Needs input | OPEN | RLS enable/FORCE posture on `app.*` control-plane tables is unconfirmed; enabling is a schema change beyond HR3's safe-installer scope. Verify in HR2, then decide. | BATCH-HR2 |
+| B-MVP-010 | Needs input | OPEN | DECIDED 2026-06-12: env-indirect `portal.session_secret` in `gateway.yaml` like the DSN/pepper. Implementation in BATCH-HR3. | BATCH-HR3 |
+| B-MVP-011 | Needs input | OPEN | DECIDED 2026-06-12: CL1 verifies on the live VM (read-only) that the `examiner.json` PBKDF2 fallback and file-mode HMAC verification ledger are dead, then retires them. If live evidence shows either is still exercised, stop and report instead. | BATCH-CL1 |
+| B-MVP-012 | Needs input | OPEN | DECIDED 2026-06-12: HR2 verifies (without printing values) whether the VM runs Supabase CLI demo JWT keys/default DB password; if so HR3 adds a rotation step.  | BATCH-HR2 / BATCH-HR3 |
+| B-MVP-013 | Needs input | OPEN | DECIDED 2026-06-12: HR2 verifies RLS enable/FORCE posture on `app.*` read-only and reports findings; no schema change without a separate operator go-ahead. | BATCH-HR2 |
 | B-MVP-007 | Backlog | OPEN | ~4.4 GB of OpenCTI add-on images sit on the core VM unused. Document add-on image lifecycle/cleanup so core installs do not silently carry add-on payloads. | BATCH-AD2 |
 | B-MVP-008 | Backlog | OPEN | Volatility symbol cache is empty (on-demand fetch). Document symbol provisioning for air-gapped operation. | BATCH-OR3 / BATCH-HR3 |
 | B-MVP-009 | Backlog | OPEN | Installer staging hygiene: exclude `.DS_Store` from `/opt/sift-mcps`; verify no code references the literal `vol3` or a `yara` CLI (neither exists on the VM). | BATCH-CL1 |
