@@ -484,23 +484,100 @@ DB is unreachable; see §12.
 
 ## 11. TLS / CA trust
 
-The installer generates a self-signed lab CA and gateway cert under
-`/var/lib/sift/.sift/tls/`:
+**Profile: internal/local CA (BATCH-TLS1 / B-MVP-001).** The IP-only lab VM uses
+a long-lived local certificate authority that signs the gateway's serving
+certificate. This is the right profile for a libvirt VM reachable only by IP —
+public ACME/Let's Encrypt certs require a DNS name and a reachable challenge
+(see "Deferred: ACME / domain profile" below).
+
+The installer (`generate_tls` in `install.sh`) creates the material under
+`/var/lib/sift/.sift/tls/` (dir `0700`, `sift-service`):
 
 | File | Mode | Role |
 | --- | --- | --- |
 | `ca-cert.pem` | `0644` | local CA certificate (public — give to clients) |
 | `ca-key.pem` | `0600` | CA private key — **secret, never distribute** |
-| `gateway-cert.pem` | `0644` | gateway TLS certificate (public) |
+| `gateway-cert.pem` | `0644` | gateway TLS certificate / leaf (public) |
 | `gateway-key.pem` | `0600` | gateway TLS private key — **secret** |
 
-To trust the portal/MCP without `-k`, import the **CA cert** (`ca-cert.pem`,
-also referenced in the handoff as `ca_cert=`) into the client trust store. Never
-distribute `ca-key.pem` or `gateway-key.pem`.
+Certificate facts:
 
-> The certificate/trust profile (IP-only lab CA vs domain) is an open design
-> item (BATCH-TLS1 / B-MVP-001). This guide documents the current self-signed
-> lab posture only.
+- **CA** `CN=Protocol SIFT Gateway local CA`, RSA-4096, valid **10 years**,
+  `basicConstraints=critical,CA:TRUE`, `keyUsage=keyCertSign,cRLSign`.
+- **Leaf** RSA-4096, valid **2 years**, `CA:FALSE`,
+  `extendedKeyUsage=serverAuth` (required by Chrome/modern clients), and a
+  **derived** SAN list: the VM's primary IP (from `hostname -I`) + `127.0.0.1` +
+  the hostname + `localhost`. SANs are not hardcoded; they follow the VM's IP.
+- The CA outlives every leaf it signs, so the leaf can be renewed without
+  re-trusting the CA.
+
+### 11.1 Trust the CA on a client (do this ONCE)
+
+Copy the **CA cert** to the client (`ca-cert.pem`, also in the handoff as
+`ca_cert=`). Never copy `ca-key.pem` or `gateway-key.pem`.
+
+```bash
+# On the VM: stage a copy you can scp off-box.
+sudo cp /var/lib/sift/.sift/tls/ca-cert.pem /tmp/sift-ca.pem
+sudo chmod 644 /tmp/sift-ca.pem
+# Then from the client:  scp sansforensics@<VM_IP>:/tmp/sift-ca.pem ./sift-ca.pem
+```
+
+- **Firefox:** Settings → Privacy & Security → Certificates → View Certificates →
+  Authorities → Import → select `sift-ca.pem` → trust for websites.
+- **Chrome/Chromium:** Settings → Privacy and security → Security → Manage
+  certificates → Authorities → Import → `sift-ca.pem`.
+- **Python / MCP clients (requests, httpx, etc.):**
+  `export REQUESTS_CA_BUNDLE=/path/to/sift-ca.pem`
+  and `export SSL_CERT_FILE=/path/to/sift-ca.pem`.
+- **curl:** `curl --cacert /path/to/sift-ca.pem https://<VM_IP>:4508/health`.
+
+On-box checks use loopback, which is in the SAN list, so
+`curl --cacert /var/lib/sift/.sift/tls/ca-cert.pem https://127.0.0.1:4508/health`
+verifies without `-k`. (Operator runbooks still use `curl -sk` for brevity.)
+
+### 11.2 Renewing the leaf (safe — no client re-trust)
+
+When the leaf nears expiry, or the VM's primary IP changed, renew the leaf
+against the **existing** CA. Clients that already trust the CA keep working.
+
+```bash
+sudo ./scripts/rotate-tls.sh --renew-leaf
+```
+
+This issues a fresh `gateway-key.pem`/`gateway-cert.pem` with SANs re-derived
+from the current IP, installs them `sift-service`-owned (`0600`/`0644`), restarts
+`sift-gateway.service`, verifies `/health`, and prints a sanitized cert summary.
+No private key material is printed. The CA fingerprint is unchanged.
+
+### 11.3 Rotating the CA (DANGER — all clients lose trust)
+
+Only if the CA key is compromised or expiring. **Every** client must re-import
+the new `ca-cert.pem` afterward, or TLS fails closed.
+
+```bash
+sudo ./scripts/rotate-tls.sh --rotate-ca --i-understand-clients-lose-trust
+```
+
+The confirmation flag is mandatory; the script refuses `--rotate-ca` without it.
+After rotation, redistribute the new `ca-cert.pem` (§11.1) to every client.
+
+> The same CA also backs the gateway's OpenSearch client trust
+> (`gateway.yaml` → `opensearch.ca_cert_path: .../tls/ca-cert.pem`). A CA
+> rotation is picked up by the gateway restart that `rotate-tls.sh` performs.
+
+### 11.4 Deferred: ACME / domain profile (future)
+
+A public ACME/Let's Encrypt certificate is **not** built in this profile and is
+deferred (B-MVP-001). Prerequisites before it could be adopted:
+
+- a real DNS name pointing at the gateway (not an IP-only libvirt VM);
+- a reachable ACME challenge path (HTTP-01 on port 80, or DNS-01 with API access);
+- a renewal daemon (`certbot`/`acme.sh`) writing into `SIFT_TLS_DIR` with the
+  same `certfile`/`keyfile` names `gateway.yaml` already references, plus a
+  deploy hook that restarts `sift-gateway.service`.
+
+Until those exist, the local-CA profile above is the supported path.
 
 ---
 

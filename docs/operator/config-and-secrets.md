@@ -35,13 +35,19 @@ Primary service config dir: `/var/lib/sift/.sift/` — mode `0700`, owner
 | `opencti-connector-mitre-id` | `0600` | `sift-service` | add-on connector id `<redacted>` | yes (add-on) |
 | `opencti-connector-cisa-kev-id` | `0600` | `sift-service` | add-on connector id `<redacted>` | yes (add-on) |
 
-TLS / CA material — `/var/lib/sift/.sift/tls/` (dir `0700`, `sift-service`):
+TLS / CA material — `/var/lib/sift/.sift/tls/` (dir `0700`, `sift-service`).
+Profile: internal/local CA (BATCH-TLS1 / B-MVP-001). CA RSA-4096 / 10y
+(`critical,CA:TRUE`); leaf RSA-4096 / 2y (`serverAuth`, SANs derived from the
+VM's primary IP + loopback + hostname). Renew the leaf with
+`scripts/rotate-tls.sh --renew-leaf` (keeps CA — no client re-trust); rotate the
+CA only with `--rotate-ca --i-understand-clients-lose-trust`. See
+maintenance-guide §11.
 
 | File | Mode | Role |
 | --- | --- | --- |
-| `ca-cert.pem` | `0644` | local CA cert (public) |
+| `ca-cert.pem` | `0644` | local CA cert (public — import into client trust store) |
 | `ca-key.pem` | `0600` | CA private key — **secret** |
-| `gateway-cert.pem` | `0644` | gateway TLS cert (public) |
+| `gateway-cert.pem` | `0644` | gateway TLS leaf cert (public) |
 | `gateway-key.pem` | `0600` | gateway TLS private key — **secret** |
 
 Token / handoff and legacy fallback:
@@ -305,7 +311,7 @@ operator path, or the DB — then restart services.
 | `/var/lib/sift/.sift/gateway.yaml` | startup config incl. inline session secret + fallback tokens; malformed YAML fails startup | edit via `write_gateway_config` (installer) + gateway restart |
 | `/var/lib/sift/tokens/installer-handoff.txt` | generated summary; stale after first reset; editing does not change real creds | do not edit; rotate via Supabase |
 | `/var/lib/sift/passwords/examiner.json` | legacy PBKDF2 fallback hash | rotate via Supabase path; do not edit the hash |
-| `/var/lib/sift/.sift/tls/*.pem` | installer-generated CA/cert/keys | regenerate via installer / BATCH-TLS1; never hand-edit keys |
+| `/var/lib/sift/.sift/tls/*.pem` | installer-generated local CA + leaf | renew leaf: `scripts/rotate-tls.sh --renew-leaf` (keeps CA); rotate CA: `--rotate-ca --i-understand-clients-lose-trust`; never hand-edit keys |
 | `app.mcp_backends` rows (DB) | backend registry; hand-DB-edits bypass manifest validation/hashing | register via `scripts/setup-addon.sh` |
 | OpenSearch index data | derived/rebuildable | re-run ingest, not manual index writes |
 
