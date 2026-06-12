@@ -54,7 +54,7 @@ OpenSearch/RAG tool smoke.
 - [x] BATCH-OR0 - Rebase docs operating model around operator-hardening track
 - [x] BATCH-OR1 - Live VM inventory and SIFT tool path map
 - [x] BATCH-OR2 - File-state versus database-authority discovery map
-- [ ] BATCH-OR3 - Full operator maintenance manual and variable dictionary
+- [x] BATCH-OR3 - Full operator maintenance manual and variable dictionary
 - [x] BATCH-OR4 - RAG, forensic knowledge, and Hayabusa provenance manual
 - [x] BATCH-HR1 - Official hardening research matrix
 - [ ] BATCH-HR2 - Component hardening audit guides

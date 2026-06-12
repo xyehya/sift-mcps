@@ -13,6 +13,45 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-12 - BATCH-OR3 operator maintenance manual landed
+
+Status: DONE (committed to local main; not pushed)
+
+Changed: Wrote the operator manual as a three-doc set under `docs/operator/`,
+synthesized from the OR1/OR2/OR4 discovery docs plus live read-only VM
+verification:
+
+- `maintenance-guide.md` - login, handoff password discovery, forced reset and
+  rotation (post-reset password is explicitly unrecoverable from any file),
+  service status/restart, health checks, backup/restore, evidence mount/seal,
+  add-on registration, logs, audit, TLS trust, and failure recovery, with
+  DANGER markers on destructive steps.
+- `config-and-secrets.md` - full variable dictionary (env files, installer
+  variables, Supabase exports, gateway.yaml, DB-backed settings, OpenSearch,
+  RAG/FK/Hayabusa, Docker, systemd) plus the do-not-hand-edit table.
+- `rag-and-search-maintenance.md` - RAG seed/re-seed/query-smoke/offline,
+  OpenSearch health/index/template/rebuild, and Hayabusa run/query/refresh
+  procedures.
+
+Live-verified facts recorded: `/health` `status=ok` with 17 tools and both
+stdio backends mounted; OpenSearch yellow single-node with 9 indices; gateway
+unit loads four env files while the worker loads three (no `opensearch.env`,
+consistent with worker scope); handoff file key names confirmed without
+reading values.
+
+Gaps flagged for later batches: no supported one-command backup/restore
+(manual pg_dump/tar documented; HR3 candidate), no admin CLI for operator
+password reset (PT1 candidate), lab-CA-only TLS trust (BATCH-TLS1/B-MVP-001),
+download pinning and OpenSearch posture already tracked as B-MVP-004/005.
+
+Validation: `python3 scripts/validate_docs.py` OK;
+`python3 scripts/validate_migration_docs.py` OK; `git diff --check` clean;
+independent secret-pattern scan of all three docs clean.
+
+Next: Start BATCH-HR2 (component hardening audit guides) from the HR1 matrix
+plus OR1/OR2 facts; AD1 and CL1 are also unblocked. Operator input still
+needed on B-MVP-001..013 before TLS1/CL2/HR3 decision points.
+
 ### 2026-06-12 - Discovery wave landed: OR1, OR2, OR4, HR1
 
 Status: DONE (four parallel worktree batches merged to local main; not pushed)
