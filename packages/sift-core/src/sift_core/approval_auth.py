@@ -335,8 +335,10 @@ def reset_password(
 ) -> None:
     """Reset password. Requires current password first.
 
-    After changing the password, re-signs all verification ledger entries
-    for this analyst with the new key.
+    B-MVP-011: the post-reset re-signing of the file-mode HMAC verification
+    ledger has been retired. DB ``content_hash`` is the sole verification
+    authority and is independent of the analyst password, so a password change no
+    longer needs to (and no longer does) rewrite any local ledger file.
     """
     if not has_password(config_path, analyst, passwords_dir=passwords_dir):
         raise AuthError(f"No password configured for analyst '{analyst}'. Use setup_password first.")
@@ -345,26 +347,7 @@ def reset_password(
     if not verify_password(config_path, analyst, current, passwords_dir=passwords_dir):
         raise AuthError("Incorrect current password.")
 
-    old_salt = get_analyst_salt(config_path, analyst, passwords_dir=passwords_dir)
-    new_password = setup_password(config_path, analyst, passwords_dir=passwords_dir)
-    new_salt = get_analyst_salt(config_path, analyst, passwords_dir=passwords_dir)
-
-    try:
-        from sift_core.verification import VERIFICATION_DIR, derive_hmac_key, rehmac_entries
-
-        if VERIFICATION_DIR.is_dir():
-            old_key = derive_hmac_key(current, old_salt)
-            new_key = derive_hmac_key(new_password, new_salt)
-            for ledger_file in VERIFICATION_DIR.glob("*.jsonl"):
-                case_id = ledger_file.stem
-                count = rehmac_entries(
-                    case_id, analyst, current, old_salt, new_password, new_salt,
-                    old_key=old_key, new_key=new_key,
-                )
-                if count:
-                    print(f"  Re-signed {count} ledger entry/entries for case {case_id}.")
-    except (ImportError, OSError) as e:
-        print(f"  Warning: could not re-sign ledger entries: {e}", file=sys.stderr)
+    setup_password(config_path, analyst, passwords_dir=passwords_dir)
 
 
 def _load_config(config_path: Path) -> dict:

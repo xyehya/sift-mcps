@@ -52,8 +52,9 @@ def _run_generate(case_dir: Path, chain_status_result: dict, manifest: dict | No
         patch("sift_core.reporting._ev_chain_status", return_value=chain_status_result),
         patch("sift_core.reporting.load_manifest", return_value=manifest),
         patch("sift_core.reporting.list_evidence_data", return_value={"evidence": []}),
-        patch("sift_core.reporting.reconcile_verification", return_value=[]),
     ):
+        # B-MVP-011: the legacy file-ledger reconcile path was retired; nothing to
+        # patch — non-DB mode now reports verification_authority="unavailable".
         return generate_report_data("status", case_dir)
 
 
@@ -152,7 +153,6 @@ class TestChainStatusError:
             patch("sift_core.reporting._ev_chain_status", side_effect=RuntimeError("boom")),
             patch("sift_core.reporting.load_manifest", return_value=None),
             patch("sift_core.reporting.list_evidence_data", return_value={"evidence": []}),
-            patch("sift_core.reporting.reconcile_verification", return_value=[]),
         ):
             result = generate_report_data("status", case_dir)
 
@@ -167,7 +167,6 @@ class TestChainStatusError:
             patch("sift_core.reporting._ev_chain_status", return_value=_chain_result(ChainStatus.OK)),
             patch("sift_core.reporting.load_manifest", side_effect=OSError("stat fail")),
             patch("sift_core.reporting.list_evidence_data", return_value={"evidence": []}),
-            patch("sift_core.reporting.reconcile_verification", return_value=[]),
         ):
             result = generate_report_data("status", case_dir)
 

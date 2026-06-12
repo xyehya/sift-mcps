@@ -162,6 +162,50 @@ Keys: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
 The handoff records `supabase_provision_mode` as `external`,
 `auto_provisioned` (with `supabase_project_env` path), or `not_provisioned`.
 
+### 5.1 Supabase secret posture and rotation (B-MVP-012)
+
+**Finding (HR2/HR3, 2026-06-12).** When the local control plane is provisioned by
+`scripts/setup-supabase.sh` (the default lab path), the three Supabase secrets are
+the **publicly known Supabase CLI demo values**:
+
+- `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` are demo JWTs with
+  `iss=supabase-demo`, signed by the CLI's fixed demo `GOTRUE_JWT_SECRET`
+  (`super-secret-jwt-token-with-at-least-32-characters-long`).
+- The control-plane DSN uses the default `postgres` database password.
+
+These are safe **only** because the entire stack is bound to `127.0.0.1` and only
+`sift-service` processes reach it (the Gateway is the sole policy boundary). If the
+DSN or keys ever leave the host they are trivially reusable.
+
+**Why automatic rotation is not yet wired (remainder).** The `supabase start`
+local development stack does **not** expose a supported way (in CLI v2.105.0) to
+set a custom symmetric JWT secret with matching anon/service-role keys, nor a
+custom Postgres password, via `config.toml`. The CLI injects `GOTRUE_JWT_SECRET`
+and the demo keys directly into the managed containers; the db/auth/rest/kong
+containers all share the demo DB password through CLI-managed wiring. Rotating any
+one of them in isolation breaks the others. Real rotation therefore requires
+**replacing the CLI-managed local stack with a self-managed compose** that owns
+`GOTRUE_JWT_SECRET`, regenerates the anon/service-role JWTs from it, and sets a
+non-default `POSTGRES_PASSWORD` consistently across db/auth/rest/kong — a control-
+plane redesign beyond an installer hardening delta. Tracked as a backlog item.
+
+**Operator rotation procedure available today (manual, for an external/production
+Supabase project, not the local demo stack):**
+
+1. In the Supabase project, generate a new JWT secret and regenerate the anon and
+   service-role keys (Project Settings -> API), and rotate the database password
+   (Project Settings -> Database).
+2. Update `~/.sift/supabase-project/sift-supabase.env` with the new
+   `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and DSN password.
+3. Re-run `./install.sh` so it rewrites `supabase.env` / `control-plane.env`
+   (`0600`, `sift-service`-owned), then restart the services.
+4. Re-issue any agent/service credentials whose JWTs were signed with the old
+   secret (old tokens are invalidated by the secret change).
+
+Until rotation lands, treat the demo-keyed local stack as **lab-only**: never
+expose `:54321`/`:54322` beyond loopback, never copy the DSN/keys off-host, and
+never reuse them in a production-framed deployment.
+
 ---
 
 ## 6. DB-backed settings (authority lives in Postgres, not files)

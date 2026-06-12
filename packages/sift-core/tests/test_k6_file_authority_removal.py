@@ -107,11 +107,9 @@ class TestReportDbVerificationAuthority:
         approved = _finding("F-1", "db authoritative observation")
         inputs = {"findings": [approved], "timeline": [], "iocs": []}
 
-        def _boom(*_a, **_k):  # file-ledger reconciliation must NOT be called
-            raise AssertionError("file verification ledger was consulted in DB mode")
-
-        with patch("sift_core.reporting.reconcile_verification", side_effect=_boom):
-            result = _gen(case_dir, investigation_inputs=inputs)
+        # B-MVP-011: the file-ledger reconcile path was retired entirely, so DB
+        # mode reading it is now structurally impossible (nothing to patch out).
+        result = _gen(case_dir, investigation_inputs=inputs)
 
         assert result["verification_authority"] == "db-content-hash"
         # Verification derives purely from the DB content hash.
@@ -130,11 +128,16 @@ class TestReportDbVerificationAuthority:
         )
         assert "integrity_warning" in result
 
-    def test_legacy_mode_labels_file_ledger(self, case_dir):
-        # No investigation_inputs and DB authority not active -> legacy file path.
-        with patch("sift_core.reporting.reconcile_verification", return_value=[]):
-            result = _gen(case_dir)
-        assert result["verification_authority"] == "legacy-file-ledger"
+    def test_non_db_mode_marks_verification_unavailable(self, case_dir):
+        # B-MVP-011: the legacy file-ledger path is retired. With no
+        # investigation_inputs and DB authority inactive, verification authority
+        # is reported as unavailable (no silent file-ledger fallback).
+        result = _gen(case_dir)
+        assert result["verification_authority"] == "unavailable"
+        assert any(
+            a.get("alert") == "VERIFICATION_UNAVAILABLE"
+            for a in result.get("verification_alerts", [])
+        )
 
 
 # --------------------------------------------------------------------------

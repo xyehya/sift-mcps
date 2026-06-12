@@ -29,15 +29,13 @@ from sift_core.evidence_chain import (
 )
 from sift_core.evidence_ops import list_evidence_data
 from sift_core.report_profiles import PROFILES, STRIPPED_FINDING_FIELDS
-from sift_core.verification import VERIFICATION_DIR
 from sift_core.active_case_context import db_authority_active
 from sift_core.investigation_store import HASH_EXCLUDE_KEYS, compute_content_hash
 
 # BATCH-NW1: the old narrow _HASH_EXCLUDE_KEYS (15 keys) has been removed.
 # HASH_EXCLUDE_KEYS imported from investigation_store is the single authoritative
-# 19-key exclude set.  reconcile_verification() below now uses compute_content_hash
-# (the authority function) for the content snapshot, so the HMAC ledger and DB
-# hash are guaranteed to cover identical fields.
+# 19-key exclude set, shared with compute_content_hash so DB content-hash
+# verification (the sole authority after B-MVP-011) covers a stable field set.
 
 
 WRITING_GUIDANCE = """Report Writing Guidance (forensic-specific):
@@ -626,13 +624,12 @@ def generate_report_data(
             "Register and seal evidence in the Examiner Portal before finalizing this report."
         )
 
-    # Verification reconciliation. In DB-active mode the verification authority is
-    # the per-row DB ``content_hash`` recorded at approval (BATCH-K2), not the
-    # local verification JSONL ledger — so report integrity cannot be spoofed by
-    # tampering, deleting, or staling the ledger file. The file-ledger path
-    # (``reconcile_verification``) is retained only for legacy non-DB mode
-    # (BATCH-K6 file-authority removal).
-    case_id = metadata.get("case_id", "")
+    # Verification reconciliation. B-MVP-011: the per-row DB ``content_hash``
+    # recorded at approval (BATCH-K2) is now the ONLY verification authority — so
+    # report integrity cannot be spoofed by tampering, deleting, or staling a
+    # local file. The legacy file-mode HMAC ledger path has been retired; when the
+    # DB control plane is unavailable, reconciliation reports that cleanly rather
+    # than falling back to a file ledger.
     _db_mode = investigation_inputs is not None or db_authority_active()
     if _db_mode:
         result["verification_authority"] = "db-content-hash"
@@ -652,27 +649,20 @@ def generate_report_data(
                     "including in report. Mismatched findings may contain "
                     "unauthorized changes."
                 )
-    elif case_id:
-        result["verification_authority"] = "legacy-file-ledger"
-        try:
-            alerts = reconcile_verification(
-                case_id, approved_findings, approved_timeline
-            )
-            if alerts:
-                result["verification_alerts"] = alerts
-                has_mismatch = any(
-                    a.get("status") == "DESCRIPTION_MISMATCH" for a in alerts
-                )
-                if has_mismatch:
-                    result["integrity_warning"] = (
-                        "One or more approved findings have been modified since "
-                        "approval. Verify integrity before including in report. "
-                        "Mismatched findings may contain unauthorized changes."
-                    )
-        except Exception as e:
-            result["verification_alerts"] = [
-                {"alert": "RECONCILIATION_ERROR", "detail": str(e)}
-            ]
+    else:
+        # No DB control plane: verification authority is unavailable. The retired
+        # file ledger is no longer consulted.
+        result["verification_authority"] = "unavailable"
+        result["verification_alerts"] = [
+            {
+                "alert": "VERIFICATION_UNAVAILABLE",
+                "detail": (
+                    "DB content-hash verification authority is not active and the "
+                    "legacy file-ledger plane has been retired (B-MVP-011). "
+                    "Finalize reports with the Supabase control plane configured."
+                ),
+            }
+        ]
 
     # Custody / provenance appendix (F-MVP-4). Built from the full approved
     # findings (with provenance/content_hash/audit ids intact) BEFORE they were
@@ -723,79 +713,7 @@ def reconcile_verification_db(
     return results
 
 
-def reconcile_verification(
-    case_id: str,
-    approved_findings: list[dict],
-    approved_timeline: list[dict],
-) -> list[dict]:
-    """Bidirectional check: approved items vs verification ledger.
-
-    No password needed — this checks structural consistency (item counts,
-    description text matches) not cryptographic HMAC validity.
-    """
-    ledger_path = VERIFICATION_DIR / f"{case_id}.jsonl"
-    if not ledger_path.exists():
-        return [{"alert": "NO_VERIFICATION_LEDGER", "detail": "No ledger found"}]
-
-    ledger_entries: list[dict] = []
-    try:
-        for line in ledger_path.read_text().splitlines():
-            if line.strip():
-                ledger_entries.append(json.loads(line))
-    except (OSError, json.JSONDecodeError):
-        return [{"alert": "LEDGER_READ_ERROR", "detail": "Could not read ledger"}]
-
-    ledger_by_id = {e["finding_id"]: e for e in ledger_entries}
-    all_approved = approved_findings + approved_timeline
-    items_by_id = {i["id"]: i for i in all_approved}
-    all_ids = set(items_by_id) | set(ledger_by_id)
-
-    results: list[dict] = []
-    for item_id in sorted(all_ids):
-        item = items_by_id.get(item_id)
-        entry = ledger_by_id.get(item_id)
-        if item and not entry:
-            results.append({"id": item_id, "status": "APPROVED_NO_VERIFICATION"})
-        elif entry and not item:
-            # IOCs and auto-extracted items have ledger entries but no standalone finding
-            status = (
-                "EXTRACTED_FROM_FINDING"
-                if item_id.startswith("IOC-")
-                else "VERIFICATION_NO_FINDING"
-            )
-            results.append({"id": item_id, "status": status})
-        elif item and entry:
-            # Reconstruct the canonical JSON snapshot using the authority exclude
-            # set (BATCH-NW1).  content_snapshot entries written by the portal
-            # before BATCH-NW1 used the old 15-key set; those will produce a
-            # COUNT_MISMATCH / DESCRIPTION_MISMATCH until a re-hash pass is run
-            # on existing deployments (see investigation_store.py migration note).
-            hashable = {
-                k: v
-                for k, v in item.items()
-                if k not in HASH_EXCLUDE_KEYS and not k.startswith("_")
-            }
-            live_text = json.dumps(hashable, sort_keys=True, default=str)
-            if live_text != entry.get("content_snapshot", ""):
-                results.append({"id": item_id, "status": "DESCRIPTION_MISMATCH"})
-            else:
-                results.append({"id": item_id, "status": "VERIFIED"})
-
-    # Compare counts excluding auto-extracted IOCs (they don't go through approval)
-    non_ioc_ledger = [
-        e for e in ledger_entries if not e.get("id", "").startswith("IOC-")
-    ]
-    if len(all_approved) != len(non_ioc_ledger):
-        ioc_count = len(ledger_entries) - len(non_ioc_ledger)
-        results.append(
-            {
-                "id": "_summary",
-                "status": "COUNT_MISMATCH",
-                "detail": (
-                    f"approved={len(all_approved)}, "
-                    f"ledger={len(non_ioc_ledger)} "
-                    f"(+{ioc_count} auto-extracted IOCs excluded)"
-                ),
-            }
-        )
-    return results
+# B-MVP-011: ``reconcile_verification`` (the file-mode HMAC ledger reconciliation)
+# has been retired. DB ``content_hash`` (``reconcile_verification_db`` above) is now
+# the sole verification authority. The verification JSONL ledger is no longer read
+# for report integrity.

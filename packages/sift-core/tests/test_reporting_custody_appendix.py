@@ -80,7 +80,7 @@ def _gen(case_dir: Path, profile="full", **kwargs):
             return_value={"manifest_hash": "manifest-hash-xyz"},
         ),
         patch("sift_core.reporting.list_evidence_data", return_value={"evidence": []}),
-        patch("sift_core.reporting.reconcile_verification", return_value=[]),
+        # B-MVP-011: file-ledger reconcile path retired; nothing to patch.
     ):
         return generate_report_data(profile, case_dir, **kwargs)
 
