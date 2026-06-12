@@ -973,6 +973,69 @@ fix_volatility_permissions() {
 # Phase 5 — TLS
 # =============================================================================
 
+# BATCH-TLS1 / B-MVP-001: internal/local-CA profile for the IP-only lab VM.
+#
+# Trust model: one long-lived local CA ("Protocol SIFT Gateway local CA") signs
+# the gateway leaf. Clients trust the CA *once* (import ca-cert.pem); the leaf can
+# then be renewed without re-trusting anything. The CA is NEVER rotated by a
+# normal rerun (clients would lose trust) — only `scripts/rotate-tls.sh --rotate-ca`
+# does that, with explicit DANGER labelling.
+#
+# CA validity (10y) > leaf validity (2y), so the signer outlives every leaf it
+# issues. ACME/domain certs are a deferred future profile (see docs §11) and are
+# not built here.
+SIFT_TLS_CA_DAYS="${SIFT_TLS_CA_DAYS:-3650}"
+SIFT_TLS_LEAF_DAYS="${SIFT_TLS_LEAF_DAYS:-730}"
+SIFT_TLS_CA_CN="${SIFT_TLS_CA_CN:-Protocol SIFT Gateway local CA}"
+
+# _tls_san_value -> "IP:<primary>,IP:127.0.0.1,DNS:<hostname>,DNS:localhost"
+# SANs are DERIVED from the VM's real primary IP and hostname, never hardcoded.
+# Loopback (127.0.0.1 / localhost) is always included so on-box `/health` and
+# OpenSearch loopback checks verify cleanly. The primary IP falls back to
+# 127.0.0.1 only when `hostname -I` yields nothing.
+_tls_san_value() {
+  local first_ip host
+  first_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [[ -n "$first_ip" ]] || first_ip="127.0.0.1"
+  host="$(hostname 2>/dev/null)"
+  [[ -n "$host" ]] || host="localhost"
+  if [[ "$first_ip" == "127.0.0.1" ]]; then
+    printf 'IP:127.0.0.1,DNS:%s,DNS:localhost' "$host"
+  else
+    printf 'IP:%s,IP:127.0.0.1,DNS:%s,DNS:localhost' "$first_ip" "$host"
+  fi
+}
+
+# _tls_write_leaf_ext <file> — x509 v3 extensions for the gateway LEAF cert:
+# not-a-CA, server auth EKU (Chrome/modern clients require it), and the derived
+# SAN list. Written to a caller-owned temp.
+_tls_write_leaf_ext() {
+  local out="$1"
+  {
+    printf 'basicConstraints=CA:FALSE\n'
+    printf 'keyUsage=critical,digitalSignature,keyEncipherment\n'
+    printf 'extendedKeyUsage=serverAuth\n'
+    printf 'subjectAltName=%s\n' "$(_tls_san_value)"
+  } > "$out"
+}
+
+# _tls_sign_leaf <tmpd> <ca-cert> <ca-key> — generate a fresh leaf KEY + cert
+# signed by the EXISTING CA, leaving $tmpd/gateway-key.pem and
+# $tmpd/gateway-cert.pem. Used by both first-install and leaf-renewal so the two
+# paths cannot drift. Operates only in the caller's temp dir; never touches the
+# live tree (the caller installs the results).
+_tls_sign_leaf() {
+  local tmpd="$1" ca_cert="$2" ca_key="$3"
+  local ext="$tmpd/leaf-ext.cnf"
+  _tls_write_leaf_ext "$ext"
+  openssl genrsa -out "$tmpd/gateway-key.pem" 4096 >/dev/null 2>&1
+  openssl req -new -key "$tmpd/gateway-key.pem" \
+    -out "$tmpd/gateway-csr.pem" -subj "/CN=$(hostname)" >/dev/null 2>&1
+  openssl x509 -req -days "$SIFT_TLS_LEAF_DAYS" -in "$tmpd/gateway-csr.pem" \
+    -CA "$ca_cert" -CAkey "$ca_key" -CAcreateserial \
+    -out "$tmpd/gateway-cert.pem" -extfile "$ext" >/dev/null 2>&1
+}
+
 generate_tls() {
   require_cmd openssl
   # SIFT_TLS_DIR is sift-service-owned 0700 (created by install_state_dirs). The
@@ -981,29 +1044,26 @@ generate_tls() {
   if svc_test_f "$SIFT_TLS_DIR/ca-cert.pem" \
      && svc_test_f "$SIFT_TLS_DIR/gateway-cert.pem" \
      && svc_test_f "$SIFT_TLS_DIR/gateway-key.pem"; then
-    log "TLS material already exists — preserving."
+    # Idempotent rerun: PRESERVE the CA and leaf. Clients keep their trust; a
+    # rerun must never silently rotate the CA. Leaf renewal is an explicit
+    # operator action via scripts/rotate-tls.sh.
+    log "TLS material already exists — preserving CA and gateway cert."
     return
   fi
 
-  log "Generating self-signed CA and gateway certificate."
-  local first_ip san_file tmpd
-  first_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  [[ -n "$first_ip" ]] || first_ip="127.0.0.1"
+  log "Generating local CA and gateway certificate (internal-CA lab profile)."
+  local tmpd
   tmpd="$(mktemp -d)"
-  san_file="$tmpd/san.cnf"
-  printf 'subjectAltName=IP:%s,IP:127.0.0.1,DNS:%s,DNS:localhost\n' \
-    "$first_ip" "$(hostname)" > "$san_file"
-
+  # CA extensions via -addext (openssl req does NOT accept -extfile; only the
+  # `openssl x509` leaf-signing step does). basicConstraints critical CA:TRUE so
+  # clients accept it as an issuer; keyUsage limited to cert/CRL signing.
   openssl genrsa -out "$tmpd/ca-key.pem" 4096 >/dev/null 2>&1
-  openssl req -new -x509 -days 3650 -key "$tmpd/ca-key.pem" \
-    -out "$tmpd/ca-cert.pem" -subj "/CN=sift-mcps-CA" >/dev/null 2>&1
-  openssl genrsa -out "$tmpd/gateway-key.pem" 4096 >/dev/null 2>&1
-  openssl req -new -key "$tmpd/gateway-key.pem" \
-    -out "$tmpd/gateway-csr.pem" -subj "/CN=$(hostname)" >/dev/null 2>&1
-  openssl x509 -req -days 730 -in "$tmpd/gateway-csr.pem" \
-    -CA "$tmpd/ca-cert.pem" -CAkey "$tmpd/ca-key.pem" \
-    -CAcreateserial -out "$tmpd/gateway-cert.pem" \
-    -extfile "$san_file" >/dev/null 2>&1
+  openssl req -new -x509 -days "$SIFT_TLS_CA_DAYS" -key "$tmpd/ca-key.pem" \
+    -out "$tmpd/ca-cert.pem" -subj "/CN=$SIFT_TLS_CA_CN" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" >/dev/null 2>&1
+
+  _tls_sign_leaf "$tmpd" "$tmpd/ca-cert.pem" "$tmpd/ca-key.pem"
 
   # Private keys -> 0600 sift-service; certs -> 0644 sift-service (world-readable
   # cert is fine — only the matching private key is sensitive). The ca-cert is
@@ -2570,6 +2630,15 @@ write_handoff() {
     printf 'portal_url=https://%s:4508/portal/\n' "$(hostname -I 2>/dev/null | awk '{print $1}')"
     printf 'gateway_mcp_url=https://%s:4508/mcp\n' "$(hostname -I 2>/dev/null | awk '{print $1}')"
     printf 'ca_cert=%s/ca-cert.pem\n' "$SIFT_TLS_DIR"
+    printf 'tls_profile=internal-local-ca\n'
+    # Client trust steps (no private key material is ever written here). The CA
+    # cert is public; copy it to the client and import it once. Renewal of the
+    # gateway LEAF keeps this same CA, so clients do NOT re-import on renewal.
+    printf 'tls_trust_copy=sudo cp %s/ca-cert.pem /tmp/sift-ca.pem  # then scp to client\n' "$SIFT_TLS_DIR"
+    printf 'tls_trust_browser=import /tmp/sift-ca.pem as a trusted Authority (Firefox: Settings>Certificates>Authorities>Import; Chrome: Settings>Privacy>Security>Manage certificates>Authorities>Import)\n'
+    printf 'tls_trust_python=export REQUESTS_CA_BUNDLE=/path/to/sift-ca.pem SSL_CERT_FILE=/path/to/sift-ca.pem  # MCP/Python clients\n'
+    printf 'tls_trust_curl=curl --cacert /path/to/sift-ca.pem https://%s:4508/health\n' "$(hostname -I 2>/dev/null | awk '{print $1}')"
+    printf 'tls_renewal=sudo ./scripts/rotate-tls.sh --renew-leaf   # renews leaf, keeps CA (no client re-trust); see maintenance-guide §11\n'
     printf 'gateway_config=%s\n' "$SIFT_CONFIG"
     printf 'examiner=%s\n' "$SIFT_EXAMINER"
     printf 'expected_supabase_operator_email=%s\n' "$expected_sb_email"
@@ -2808,7 +2877,12 @@ print_summary() {
     printf '     Check gateway/Supabase health and re-run ./install.sh.\n'
     printf '  2. After bootstrap, use %s -> portal_login_email and supabase_operator_temp_password.\n' "$MATERIALS_FILE"
   fi
-  printf '  5. On the analyst machine, trust the CA cert or set REQUESTS_CA_BUNDLE.\n'
+  printf '  5. Trust the local CA on the analyst machine (do this ONCE):\n'
+  printf '       copy   %s/ca-cert.pem to the client\n' "$SIFT_TLS_DIR"
+  printf '       browser: import it as a trusted Authority (Firefox/Chrome)\n'
+  printf '       python : export REQUESTS_CA_BUNDLE=<ca-cert.pem> SSL_CERT_FILE=<ca-cert.pem>\n'
+  printf '       curl   : curl --cacert <ca-cert.pem> https://%s:4508/health\n' "$ip"
+  printf '     Leaf renewal (sudo ./scripts/rotate-tls.sh --renew-leaf) keeps this CA, so no re-trust.\n'
   printf '  6. Add-on backends are OPTIONAL and external. To integrate one, prepare it with\n'
   printf '     scripts/setup-addon.sh, then register it from Portal -> Backends\n'
   printf '     (validate -> register -> hot-reload). The core ships with none enabled.\n'
