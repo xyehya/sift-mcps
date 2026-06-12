@@ -113,14 +113,28 @@ Do **not** try to recover a password by editing `gateway.yaml`,
 password, and editing generated config can break startup (see §1.5 and the
 "what not to edit" list in `config-and-secrets.md`).
 
-### 1.5 Legacy local password fallback (informational)
+### 1.5 Login is Supabase-only (legacy fallback removed)
 
-A legacy PBKDF2 fallback hash may exist at
-`/var/lib/sift/passwords/examiner.json` (mode `0600`, `0700` dir). In a
-Supabase-active deployment this is a **fallback only**, not the live authority;
-its retention is an open hardening question (FORK-1 in the state-authority map).
-Do not hand-edit it. To rotate, use the Supabase path above; the legacy file is
-not the operator's working credential when Supabase Auth is enabled.
+Since BATCH-PT1 (2026-06-12), portal login is **Supabase Auth only**. The
+legacy `examiner.json` PBKDF2 login fallback and its local setup/challenge/
+reset endpoints were removed. If the control plane is unreachable, login fails
+closed with HTTP 503 ("Control plane unavailable") — the fix is to restore
+Supabase/control-plane health (see §12), never a local credential. The forced
+first-login reset (§1.2) is the only in-portal password-reset path; the
+temporary password is the installer handoff value and is unrecoverable after
+reset (rotate via the Supabase path in §1.4). A stale
+`/var/lib/sift/passwords/` directory may remain from older installs; it is no
+longer consulted for login (sensitive-action re-auth challenges under file
+authority still use the local HMAC bridge — retirement is tracked in
+Session-Notes).
+
+### 1.6 Creating additional cases
+
+Operators (examiner role) create new cases from the portal Header
+case-selector -> "New case". Case activation re-auth depends on authority
+mode: under DB/Supabase authority the activation is gated by the Supabase
+session (no separate password challenge); under file authority a password
+HMAC challenge is required.
 
 ---
 
@@ -184,6 +198,14 @@ A healthy response (verified live) is `{"status":"ok", ...}` with:
 If `status` is not `ok`, check the failing backend's `detail`, then service logs
 (§9). `app.mcp_backends.health_status` is recomputed by the gateway probe — it is
 not authoritative state, so a restart re-derives it.
+
+Since BATCH-PT1, the same data is visible in the portal: the **System Health
+panel** on the Backends tab (`/portal/api/health`, auto-refreshing) shows
+Gateway, Supabase, evidence root, and every backend; idle mounted stdio
+backends display as `ok`. The Backends tab also has per-backend
+Enable/Disable controls (re-auth gated; a `restart_required` notice means the
+change applies to the served `/mcp` catalog after restart). The portal root is
+ergonomic: `https://<VM_IP>:4508/` redirects to `/portal/`.
 
 ### 3.2 OpenSearch health and indices
 
