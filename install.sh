@@ -149,6 +149,7 @@ stage_repo_to_install_root() {
       --exclude='*.pyc' \
       --exclude='.mcp.json' \
       --exclude='node_modules' \
+      --exclude='.DS_Store' \
       "$src/" "$dst/"
   else
     (
@@ -160,6 +161,7 @@ stage_repo_to_install_root() {
         --exclude='*.pyc' \
         --exclude='./.mcp.json' \
         --exclude='*/node_modules' \
+        --exclude='.DS_Store' \
         -cf - .
     ) | (
       cd "$dst"
