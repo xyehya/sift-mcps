@@ -13,6 +13,58 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-12 - Audit wave landed: HR2, AD1, CL1
+
+Status: DONE (three parallel worktree batches merged to local main; not pushed)
+
+Changed:
+
+- BATCH-HR2 `docs/hardening/component-audit.md` (804 lines) - executable
+  per-component audit guide with sanitized live evidence from 2026-06-12.
+- BATCH-AD1 `docs/add-ons/spec.md` + `docs/add-ons/author-guide.md` (955
+  lines) - normative manifest/contract spec plus author tutorial with a
+  hypothetical windows-triage-style query-only worked example per B-MVP-003;
+  verified OpenCTI is absent from the core install path (install.sh
+  seed_addon_backends seeds only opensearch-mcp and forensic-rag-mcp).
+- BATCH-CL1 three commits - AppArmor template repointed from the stale
+  `/home/*/sift-mcps-test/**` checkout to `/opt/sift-mcps/**`; dead
+  `docs/product/` doc path fixed; `.DS_Store` excluded from both installer
+  staging branches (B-MVP-009; the vol3/yara reference scan came back clean,
+  catalogs already map names to real binaries).
+
+Live verification results recorded by HR2 (read-only):
+
+- B-MVP-012 CONFIRMED: anon and service-role JWTs carry `iss=supabase-demo`
+  and the control-plane DSN uses the default `postgres` password - all three
+  demo secrets are in live use; rotation goes to HR3.
+- B-MVP-013 verdict: all 31 `app.*` tables have RLS ENABLED, none FORCEd;
+  gateway connects as service-role which bypasses RLS. Report-only as decided.
+- `systemd-analyze security` exposure 9.2/UNSAFE for both services; auditd is
+  NOT installed at runtime (HR1 assumed it was); AppArmor live profile path is
+  already correct but complain-mode; OpenSearch container runs non-root;
+  gateway cert carries IP SAN 192.168.122.81 (valid to 2028, informs TLS1);
+  live RAG embedding model is `BAAI/bge-base-en-v1.5`, cached under the
+  operator home rather than the service home.
+
+B-MVP-011 deliberately NOT actioned by CL1: live evidence shows the
+`examiner.json` PBKDF2 fallback and file-mode HMAC verification ledger are
+unexercised on the VM, but both are reachable, test-covered, supported
+non-Supabase/non-DB deployment modes - retiring them removes a deployment
+mode and needs an explicit operator decision (row updated below).
+
+New rows below: B-MVP-014 (auditd absent), B-MVP-015 (RAG model allowlist
+mismatch), B-MVP-016 (dead `scope_enforcement` manifest field).
+
+Validation: `python3 scripts/validate_docs.py` OK;
+`python3 scripts/validate_migration_docs.py` OK; `git diff --check` clean;
+`bash -n install.sh scripts/setup-ingest-mount-sudoers.sh` OK; targeted
+`uv run --extra dev --extra full pytest packages/sift-core/tests/test_verification.py`
+13 passed; secret scans clean on all three branch diffs.
+
+Next: BATCH-HR3 (hardening implementation) and BATCH-AD2 (conformance tests)
+are unblocked; CL2 is unblocked after AD1+CL1. Operator decisions pending on
+B-MVP-011/014/015/016 before the relevant HR3/AD2 sub-tasks.
+
 ### 2026-06-12 - Operator decisions recorded for open needs-input rows
 
 Status: DONE (decisions captured; implementation stays with owner batches)
@@ -202,12 +254,15 @@ after portal reset/credential issuance.
 | B-MVP-005 | Backlog | OPEN | DECIDED 2026-06-12: accept security-plugin-disabled on loopback for the single-node lab (Gateway is the sole policy boundary); HR3 hardens the container instead (cap_drop, no-new-privileges, digest pin, non-root) and documents snapshot policy and replica limits. Revisit only if OpenSearch leaves loopback. | BATCH-HR3 |
 | B-MVP-006 | Backlog | OPEN | Portal RAG document management must decide whether operator-added docs are global knowledge only or can create case-derived chunks with strict provenance. | BATCH-PT2 |
 | B-MVP-010 | Needs input | OPEN | DECIDED 2026-06-12: env-indirect `portal.session_secret` in `gateway.yaml` like the DSN/pepper. Implementation in BATCH-HR3. | BATCH-HR3 |
-| B-MVP-011 | Needs input | OPEN | DECIDED 2026-06-12: CL1 verifies on the live VM (read-only) that the `examiner.json` PBKDF2 fallback and file-mode HMAC verification ledger are dead, then retires them. If live evidence shows either is still exercised, stop and report instead. | BATCH-CL1 |
-| B-MVP-012 | Needs input | OPEN | DECIDED 2026-06-12: HR2 verifies (without printing values) whether the VM runs Supabase CLI demo JWT keys/default DB password; if so HR3 adds a rotation step.  | BATCH-HR2 / BATCH-HR3 |
-| B-MVP-013 | Needs input | OPEN | DECIDED 2026-06-12: HR2 verifies RLS enable/FORCE posture on `app.*` read-only and reports findings; no schema change without a separate operator go-ahead. | BATCH-HR2 |
+| B-MVP-011 | Needs input | OPEN | CL1 verdict 2026-06-12: both fallbacks UNEXERCISED live (examiner.json never re-touched, verification/ dir empty, zero legacy-auth log lines) but reachable, test-covered, supported non-Supabase/non-DB deployment modes. NEW DECISION NEEDED: drop the legacy file-mode deployment support entirely (delete code+tests) or keep it as a documented fallback. | Operator / BATCH-HR3 |
+| B-MVP-012 | Needs input | OPEN | HR2 verdict 2026-06-12: CONFIRMED - anon + service-role JWTs are `iss=supabase-demo` and DB password is default `postgres`. DECIDED: HR3 implements rotation (installer-generated project secrets + rotation procedure in operator docs). | BATCH-HR3 |
+| B-MVP-013 | Needs input | OPEN | HR2 verdict 2026-06-12: RLS ENABLED on 31/31 `app.*` tables, none FORCEd; several tables default-deny with 0 policies; gateway service-role bypasses RLS. DECISION PENDING: adopt FORCE ROW LEVEL SECURITY (schema change) or accept current posture with documented rationale. | Operator / BATCH-HR3 |
 | B-MVP-007 | Backlog | OPEN | ~4.4 GB of OpenCTI add-on images sit on the core VM unused. Document add-on image lifecycle/cleanup so core installs do not silently carry add-on payloads. | BATCH-AD2 |
 | B-MVP-008 | Backlog | OPEN | Volatility symbol cache is empty (on-demand fetch). Document symbol provisioning for air-gapped operation. | BATCH-OR3 / BATCH-HR3 |
-| B-MVP-009 | Backlog | OPEN | Installer staging hygiene: exclude `.DS_Store` from `/opt/sift-mcps`; verify no code references the literal `vol3` or a `yara` CLI (neither exists on the VM). | BATCH-CL1 |
+| B-MVP-009 | Backlog | DONE | DONE 2026-06-12 (CL1): `.DS_Store` excluded from both installer staging branches; vol3/yara scan clean - catalogs already map `vol3`->`vol` and yara CLI exists via python3-yara. | BATCH-CL1 |
+| B-MVP-014 | Needs input | OPEN | HR2 found auditd is NOT installed/active on the live VM although hardening docs assume audit coverage. Decide: HR3 installs+configures auditd with a minimal forensic ruleset, or document its absence as accepted lab posture. | Operator / BATCH-HR3 |
+| B-MVP-015 | Needs input | OPEN | Live RAG embedding model is `BAAI/bge-base-en-v1.5`, cached under the operator home (not the service home), and HR1's assumed allowlist disagrees. Decide canonical model + cache path (`HF_HOME` for sift-service) as part of the B-MVP-004 pin/offline work. | BATCH-HR3 |
+| B-MVP-016 | Needs input | OPEN | Manifest schema field `scope_enforcement` exists but no shipped manifest uses it and AddonAuthorityMiddleware never reads it (dead schema). Decide in AD2: implement enforcement or remove the field from the schema. | BATCH-AD2 |
 
 ## Active References
 
