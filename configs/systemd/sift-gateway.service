@@ -76,10 +76,13 @@ RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-# The gateway needs no ambient capabilities of its own (sudo re-acquires what the
-# child tools need through a fresh credential, outside this bounding set's reach
-# for the parent). Empty bounding set drops all caps from the gateway process.
-CapabilityBoundingSet=
+# Drop all capabilities EXCEPT CAP_LINUX_IMMUTABLE. The venv interpreter carries
+# cap_linux_immutable+ep (set by install.sh configure_immutable_capability so the
+# gateway can set/clear the +i flag on sealed evidence). A file-capability binary
+# cannot exec if its caps are not in the unit's bounding set, so an EMPTY set here
+# yields status=203/EXEC "Operation not permitted". Keeping exactly this one cap is
+# the minimal bounding set that still lets the service start and seal evidence.
+CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
 # MemoryDenyWriteExecute is NOT set: CPython/torch JITs and some native extensions
 # allocate W+X pages; enabling it crashes the embedder. Documented exclusion.
 # === end BATCH-HR3 hardening =================================================

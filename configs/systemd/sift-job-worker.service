@@ -62,7 +62,10 @@ RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-CapabilityBoundingSet=
+# Keep exactly CAP_LINUX_IMMUTABLE: the shared venv interpreter carries
+# cap_linux_immutable+ep, and a file-capability binary cannot exec if that cap is
+# absent from the bounding set (status=203/EXEC). All other caps are dropped.
+CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
 # === end BATCH-HR3 hardening =================================================
 
 [Install]
