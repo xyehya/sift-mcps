@@ -170,7 +170,12 @@ api_keys:
     last_used_ip: null
 
 portal:
-  session_secret: "${SIFT_PORTAL_SESSION_SECRET}"
+  # B-MVP-010: env-indirection. The session secret VALUE is not stored here; only
+  # the name of the env var that carries it. The installer writes the value into
+  # the 0600 control-plane.env file the systemd unit loads, and the gateway config
+  # loader (config.py resolve_portal_session_secret) reads the named env var at
+  # startup. This matches control_plane.postgres_dsn_env / token_registry.pepper_env.
+  session_secret_env: SIFT_PORTAL_SESSION_SECRET
   session_max_age: 28800
   default_examiner: "${SIFT_EXAMINER}"
   require_password_reset: true

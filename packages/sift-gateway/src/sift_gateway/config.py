@@ -169,6 +169,7 @@ def load_config(path: str) -> dict:
     apply_case_env(config)
     apply_execute_security_env(config)
     apply_trust_env(config)
+    resolve_portal_session_secret(config)
 
     # Warn early if portal session secret is absent — portal auth will fail at runtime.
     portal_secret = config.get("portal", {}).get("session_secret", "")
@@ -178,3 +179,33 @@ def load_config(path: str) -> dict:
         )
 
     return config
+
+
+def resolve_portal_session_secret(config: dict) -> None:
+    """Resolve the portal session secret from env-indirection (B-MVP-010).
+
+    The installer no longer writes the literal session secret into
+    ``gateway.yaml``; it writes a ``portal.session_secret_env`` name reference
+    (like ``control_plane.postgres_dsn_env`` and ``token_registry.pepper_env``)
+    and stores the value in the ``0600`` env file the unit loads. Here we read
+    the named env var and populate ``portal.session_secret`` in-memory so the
+    rest of the gateway (``server.py``) reads it unchanged.
+
+    Back-compat: if ``session_secret_env`` is absent but a literal
+    ``session_secret`` is present (older configs), that literal is kept as-is.
+    """
+    portal_config = config.get("portal")
+    if not isinstance(portal_config, dict):
+        return
+    secret_env = portal_config.get("session_secret_env")
+    if not secret_env:
+        return
+    resolved = os.environ.get(secret_env, "").strip()
+    if resolved:
+        portal_config["session_secret"] = resolved
+    elif not portal_config.get("session_secret"):
+        logger.warning(
+            "portal.session_secret_env=%s is set but the environment variable is "
+            "empty — portal login will not function",
+            secret_env,
+        )
