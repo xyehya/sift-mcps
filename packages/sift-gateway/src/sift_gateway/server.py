@@ -16,8 +16,8 @@ from sift_core.agent_tools import (
 )
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import PlainTextResponse
-from starlette.routing import Mount
+from starlette.responses import PlainTextResponse, RedirectResponse
+from starlette.routing import Mount, Route
 
 from sift_gateway.auth import AuthMiddleware
 
@@ -1291,6 +1291,15 @@ class Gateway:
                 on_override_cancel=cancel_override,
             )
             dashboard_app.state.gateway = self
+
+            # PT1/WI3: ergonomic root + bare-/portal redirects. Mount("/portal")
+            # only serves "/portal/..."; a request for "/" or "/portal" (no
+            # trailing slash) would otherwise 404. Redirect both to "/portal/".
+            async def _redirect_to_portal(_request) -> RedirectResponse:
+                return RedirectResponse(url="/portal/", status_code=307)
+
+            routes.append(Route("/", _redirect_to_portal, methods=["GET"]))
+            routes.append(Route("/portal", _redirect_to_portal, methods=["GET"]))
             routes.append(Mount("/portal", app=dashboard_app))
             routes.append(Mount("/dashboard", app=create_dashboard_app()))
         except ImportError:
