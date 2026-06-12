@@ -1,9 +1,16 @@
 services:
   opensearch:
-    image: opensearchproject/opensearch:3.5.0
+    # BATCH-HR3 (B-MVP-005): pin by digest so a re-pointed 3.5.0 tag upstream is
+    # detectable. Tag kept in the comment for readability; refresh both together
+    # when bumping (docker image inspect <img> --format '{{index .RepoDigests 0}}').
+    # opensearchproject/opensearch:3.5.0
+    image: opensearchproject/opensearch@sha256:dbb01641baadae5104e18acd888bf05e8fdd9af3567fd30624a76ba3e5a31dec
     container_name: sift-opensearch
     environment:
       - discovery.type=single-node
+      # B-MVP-005 DECIDED: security plugin stays disabled on the loopback-bound
+      # single-node lab (Gateway is the sole policy boundary). Container hardening
+      # below bounds a container-escape blast radius instead.
       - DISABLE_SECURITY_PLUGIN=true
       - OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g
       - path.repo=/usr/share/opensearch/snapshots
@@ -15,6 +22,15 @@ services:
       - "127.0.0.1:9200:9200"
     networks:
       - sift-net
+    # BATCH-HR3 (B-MVP-005) container hardening. The image already runs as the
+    # non-root opensearch user (UID 1000). Drop ALL Linux capabilities (OpenSearch
+    # needs none; memory locking comes from the memlock ulimit below, not
+    # CAP_IPC_LOCK) and forbid in-container privilege escalation. Security plugin
+    # stays disabled per the locked loopback-lab decision.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     ulimits:
       memlock:
         soft: -1

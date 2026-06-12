@@ -40,6 +40,49 @@ EnvironmentFile=-${SIFT_HOME}/opensearch.env
 # data dir so build_response/run_command enrichment fires under the service user.
 # Non-secret path; written by install.sh (write_fk_env).
 EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env
+# B-MVP-015 / B-MVP-004 (D3): the BGE embedding model cache lives under the
+# service home (not the operator home), and the model name/revision are pinned so
+# kb_search_knowledge loads reproducible weights. Non-secret identifiers/path.
+Environment=HF_HOME=${SIFT_HF_HOME}
+Environment=RAG_MODEL_NAME=${SIFT_RAG_MODEL_NAME}
+Environment=RAG_MODEL_REVISION=${SIFT_RAG_MODEL_REVISION}
+
+# === BATCH-HR3 systemd hardening ============================================
+# Minimal, tested containment for a service that (a) spawns forensic tooling via
+# `sudo -n -u agent_runtime` for run_command, and (b) mounts forensic images via
+# FUSE/sudo for ingest. Those two facts forbid the strongest directives:
+#   - NoNewPrivileges=yes would break `sudo` (run_command isolation) -> OMITTED.
+#   - PrivateDevices/RestrictNamespaces/SystemCallFilter=@system-service can break
+#     FUSE mounts and the sudo transition -> OMITTED (documented residual risk).
+# What is safe and applied (verified: /health=ok, ingest mount, run_command smoke):
+UMask=0077
+ProtectSystem=strict
+# Writable paths the service genuinely needs (everything else is read-only):
+#   /var/lib/sift  — secrets/config, enrichment, hayabusa output, state
+#   /cases         — evidence + agent/extraction/tmp working dirs
+#   /var/cache/sift— shared volatility symbol cache
+ReadWritePaths=/var/lib/sift /cases /var/cache/sift
+# ProtectHome=read-only (not true): sift-service's home IS /var/lib/sift, which
+# must stay writable; /home and /root are not needed and stay hidden via tmpfs.
+ProtectHome=tmpfs
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# The gateway needs no ambient capabilities of its own (sudo re-acquires what the
+# child tools need through a fresh credential, outside this bounding set's reach
+# for the parent). Empty bounding set drops all caps from the gateway process.
+CapabilityBoundingSet=
+# MemoryDenyWriteExecute is NOT set: CPython/torch JITs and some native extensions
+# allocate W+X pages; enabling it crashes the embedder. Documented exclusion.
+# === end BATCH-HR3 hardening =================================================
 
 [Install]
 WantedBy=multi-user.target

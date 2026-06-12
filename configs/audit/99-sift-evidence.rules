@@ -1,15 +1,43 @@
-## SIFT evidence chain — auditd rules (Phase 17b)
+## SIFT forensic-workstation auditd rules (BATCH-HR3, B-MVP-014).
 ##
-## Watches all write and attribute-change operations in the cases root and the
-## SIFT state directory. Attribute changes (perm=a) include chmod and chattr
-## calls — so deliberate clearing of the +i immutable flag is recorded in the
-## kernel audit log with UID, PID, binary path, and timestamp.
+## Minimal, tamper-evident kernel-audit coverage for the evidence chain, the
+## secret/config tree, the installed binaries, and host identity changes. The
+## DB app.audit_events table records application-level events; THIS layer adds a
+## kernel trail a host/root actor cannot edit through the application.
 ##
-## Query writes:   ausearch -k sift_evidence_write --format text
-## Query core:     ausearch -k sift_core_write --format text
+## Placeholders substituted by install.sh configure_auditd at deploy time:
+##   CASES_ROOT  -> $SIFT_CASE_ROOT (default /cases)
+##   SIFT_HOME   -> $SIFT_HOME       (default /var/lib/sift/.sift)
+##   INSTALL_ROOT-> $SIFT_MCPS_INSTALL_ROOT (default /opt/sift-mcps)
 ##
-## CASES_ROOT is substituted by install.sh at deploy time.
-## Default: /cases
+## Query examples:
+##   ausearch -k sift_evidence_write --format text
+##   ausearch -k sift_secret_access  --format text
+##   ausearch -k sift_identity       --format text
 
+## --- Evidence chain: all writes + attribute changes (chmod/chattr clears +i) ---
 -a always,exit -F dir=CASES_ROOT -F perm=wa -F key=sift_evidence_write
+
+## --- Core state tree (jobs, enrichment, verification, snapshots) ---------------
 -a always,exit -F dir=/var/lib/sift -F perm=wa -F key=sift_core_write
+
+## --- Secret/config tree: read OR write of the secret/config home --------------
+## perm=rwa flags any access (incl. read) of supabase.env / control-plane.env /
+## gateway.yaml / TLS keys so secret-file exfiltration attempts are recorded.
+-a always,exit -F dir=SIFT_HOME -F perm=rwa -F key=sift_secret_access
+
+## --- Installed binaries: writes to the staged install root -------------------
+## Detects tampering with the gateway/worker entrypoints and bundled tooling.
+-a always,exit -F dir=INSTALL_ROOT -F perm=wa -F key=sift_binary_write
+
+## --- Host identity / privilege files ------------------------------------------
+-w /etc/passwd       -p wa -k sift_identity
+-w /etc/shadow       -p wa -k sift_identity
+-w /etc/group        -p wa -k sift_identity
+-w /etc/gshadow      -p wa -k sift_identity
+-w /etc/sudoers      -p wa -k sift_identity
+-w /etc/sudoers.d/   -p wa -k sift_identity
+
+## --- SIFT systemd units -------------------------------------------------------
+-w /etc/systemd/system/sift-gateway.service    -p wa -k sift_unit_change
+-w /etc/systemd/system/sift-job-worker.service -p wa -k sift_unit_change
