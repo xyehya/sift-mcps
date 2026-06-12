@@ -60,12 +60,12 @@ OpenSearch/RAG tool smoke.
 - [x] BATCH-HR2 - Component hardening audit guides
 - [x] BATCH-HR3 - Installer and runtime hardening implementation wave
 - [x] BATCH-AD1 - Add-on specification and author guide
-- [ ] BATCH-AD2 - Add-on conformance tests and OpenCTI/Windows-triage proof
+- [x] BATCH-AD2 - Add-on conformance tests and OpenCTI/Windows-triage proof
 - [x] BATCH-CL1 - Legacy, pre-migration, and dead-reference cleanup
 - [ ] BATCH-CL2 - ProtocolSiftGateway rename and add_ons repository layout
 - [x] BATCH-PT1 - Portal operator workflow and health features
 - [ ] BATCH-PT2 - Portal RAG document management flow
-- [ ] BATCH-TLS1 - Installer certificate and trust strategy
+- [x] BATCH-TLS1 - Installer certificate and trust strategy
 - [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets
 - [ ] BATCH-CL3 - Retire legacy file-HMAC re-auth plane
 - [ ] BATCH-RG1 - Regenerate documentation modernization pass

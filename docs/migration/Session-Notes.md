@@ -13,6 +13,59 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-12 - Trust and add-on wave landed: TLS1 + AD2
+
+Status: DONE (six commits merged to local main; not pushed; live VM re-proven)
+
+Changed (TLS1, three commits): installer local-CA profile hardened - CA gets
+critical basicConstraints + keyCertSign/cRLSign, leaf gets serverAuth EKU
+(previously missing), SANs stay derived from the real host; reruns provably
+preserve the CA (fingerprint unchanged across installer reruns); new
+`scripts/rotate-tls.sh` with `--renew-leaf` (live-proven: gateway served the
+renewed leaf) and DANGER-gated `--rotate-ca`; handoff and maintenance-guide
+section 11 now carry exact client trust steps (browser import,
+REQUESTS_CA_BUNDLE/SSL_CERT_FILE, curl --cacert) and the deferred ACME
+profile. New tests/test_tls1_cert_profile.py (5 tests) guards the profile.
+
+Changed (AD2, three commits): conformance suite +31 tests closing the AD1 gap
+list (scope/prohibited-op denial, duplicate tools, clean-disable, hot-reload,
+env_refs negatives, requirement gating, manifest negatives, core-stays-clean
+regression). THREE real bugs found and fixed: setup-addon.sh emitted raw
+secret env maps the registry rejects (now env_refs-only payloads);
+empty namespace bypassed prefix enforcement (now fail-closed); register dir
+pointed at the service-owned .sift dir so the script could not run on a
+hardened install (now operator-writable ~/.sift/addon-register).
+
+B-MVP-016 RESOLVED as KEEP: the "dead field" premise was wrong -
+opensearch-mcp ships `scope_enforcement` on opensearch_enrich_intel, so
+schema removal would reject a live manifest. Regression tests added.
+
+Live OpenCTI add-on proof (contract-mechanics level, stub endpoint, no
+platform stack provisioned): validate ok (namespace=cti, 8 query-only
+tools); registry register -> audit `mcp_backend.registered`; hot-appeared in
+/health ~15 s after row seed WITHOUT gateway restart (tools_count 17->25,
+MainPID unchanged); OpenSearch indices byte-identical before/after (no
+contamination); disable -> `enabled_changed` audit + restart-applied catalog
+removal per D34; unregister -> row deleted, full audit lifecycle; final state
+back to exactly 2 core backends, /health ok, no OpenCTI containers ever ran,
+no temp/token files left. Operator-session REST and agent-credential /mcp
+listing remain the known LV1 gap (operator principal still `invited`).
+
+New backlog: B-MVP-019 (setup-addon payload paths vs ProtectHome),
+B-MVP-020 (pre-TLS1 CA on existing installs; fresh installs get the new
+profile).
+
+Validation: gateway+opencti suites 503 passed on merged main, +42 on the VM
+tree (Python 3.12); TLS profile tests 5/5; bash -n clean; both doc
+validators OK; git diff --check clean; secret scans clean; post-merge VM
+rerun exit 0 with /health status=ok and both services active.
+
+Next: Remaining program is BATCH-SB1 (self-managed Supabase compose),
+BATCH-CL2 (ProtocolSiftGateway rename + add_ons layout), BATCH-CL3
+(file-HMAC plane retirement), BATCH-PT2 (portal RAG management), BATCH-RG1
+(regenerate-docs modernization), and BATCH-LV1 (end-to-end live validation +
+Rocba proof, including the agent-credential MCP smoke).
+
 ### 2026-06-12 - Implementation wave landed: HR3 hardening + PT1 portal
 
 Status: DONE (ten commits merged to local main; not pushed; live VM re-proven)
@@ -296,7 +349,7 @@ after portal reset/credential issuance.
 
 | ID | Type | Status | Decision / Input Needed | Owner Batch |
 | --- | --- | --- | --- | --- |
-| B-MVP-001 | Needs input | OPEN | DECIDED 2026-06-12: internal/local CA profile for the IP-only lab VM; handoff documents client trust-bundle import, SAN verification, and rotation. ACME/domain profile deferred. Implementation in BATCH-TLS1. | BATCH-TLS1 |
+| B-MVP-001 | Backlog | DONE | DONE 2026-06-12 (TLS1, live-proven): internal-CA profile hardened (CA basicConstraints critical, leaf serverAuth EKU, derived SANs), reruns preserve the CA (fingerprint-proven), scripts/rotate-tls.sh gives leaf renewal + DANGER-gated CA rotation, handoff/docs carry client trust-bundle steps; ACME/domain documented as deferred profile. | BATCH-TLS1 |
 | B-MVP-002 | Needs input | OPEN | DECIDED 2026-06-12: rename GitHub repo/docs to `ProtocolSiftGateway`; keep `/opt/sift-mcps` runtime path and Python package import names unchanged. Implementation in BATCH-CL2. | BATCH-CL2 |
 | B-MVP-003 | Backlog | RESOLVED | DECIDED 2026-06-12: Windows triage stays an author-guide example only; no rebuild now. AD2 proves the add-on contract with OpenCTI alone. | BATCH-AD1 / BATCH-AD2 |
 | B-MVP-004 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): uv/Hayabusa/BGE/RAG-bundle pinned with SHA-256 hard gates, Supabase CLI SHA warn->die, GeoIP off by default behind --enable-geoip, SIFT_OFFLINE=1/--offline skips all fetches with staged-artifact messages. | BATCH-HR3 |
@@ -311,9 +364,11 @@ after portal reset/credential issuance.
 | B-MVP-009 | Backlog | DONE | DONE 2026-06-12 (CL1): `.DS_Store` excluded from both installer staging branches; vol3/yara scan clean - catalogs already map `vol3`->`vol` and yara CLI exists via python3-yara. | BATCH-CL1 |
 | B-MVP-014 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): installer installs+enables auditd; 12 SIFT rules loaded live (secrets/config, install-root binaries, identity files, units). | BATCH-HR3 |
 | B-MVP-015 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): BAAI/bge-base-en-v1.5 canonical with revision pin; explicit HF_HOME under the service home wired into both units; offline-aware loader. | BATCH-HR3 |
-| B-MVP-016 | Needs input | OPEN | Manifest schema field `scope_enforcement` exists but no shipped manifest uses it and AddonAuthorityMiddleware never reads it (dead schema). Decide in AD2: implement enforcement or remove the field from the schema. | BATCH-AD2 |
+| B-MVP-016 | Backlog | RESOLVED | RESOLVED 2026-06-12 (AD2): KEEP scope_enforcement - the premise was wrong; packages/opensearch-mcp/sift-backend.json ships it on opensearch_enrich_intel, so schema removal would reject a live manifest. It is advisory metadata in the OS5 family; regression tests added (shipped manifest validates, unknown fields still rejected). | BATCH-AD2 |
 | B-MVP-017 | Needs input | OPEN | DECIDED 2026-06-12: retire the legacy file-HMAC re-auth bridge, orphaned sift_session middleware, and sift-core verification.py writer funcs in a scoped cleanup batch. Registered as new BATCH-CL3. | BATCH-CL3 |
 | B-MVP-018 | Backlog | OPEN | AppArmor enforce-mode transition: profile is correct-path but complain-only; needs aa-logprof profiling against ingest/run_command plus a dedicated live rerun before flipping to enforce. | Future hardening batch |
+| B-MVP-019 | Backlog | OPEN | setup-addon.sh emits operator-tree paths (`~/sift-mcps`, `~/.local/bin/uv`) in register payloads, but the hardened gateway runs ProtectHome=tmpfs and only sees `/opt/sift-mcps`; derive command/manifest paths from the staged tree. AD2 fixed the register-dir permission half; the path-derivation half remains. | BATCH-SB1 / BATCH-LV1 |
+| B-MVP-020 | Backlog | OPEN | Existing installs keep the pre-TLS1 CA (CN=sift-mcps-CA, no CA extensions; leaf gains serverAuth only after rotate-tls.sh --renew-leaf). Fresh installs get the new profile. Note for the LV1 fresh-install pass; operators can adopt via DANGER-gated --rotate-ca. | BATCH-LV1 |
 
 ## Active References
 
