@@ -38,6 +38,37 @@ require_cmd() { command -v "$1" >/dev/null 2>&1 || die "Missing required command
 
 random_hex() { openssl rand -hex "$1"; }
 
+# --- offline / download-integrity helpers (B-MVP-004) ------------------------
+# True when offline mode is engaged. In offline mode every network download
+# step calls offline_die with a message pointing at the operator-staged path it
+# would otherwise fetch, so a hardened/air-gapped install fails loudly and
+# actionably instead of silently reaching the internet.
+is_offline() { [[ "${SIFT_OFFLINE:-0}" == "1" ]]; }
+
+# In offline mode, abort the current download step with an actionable message.
+# $1 = human label, $2 = the path/operation the operator must stage instead.
+offline_die() {
+  die "SIFT_OFFLINE=1: refusing to fetch $1. Stage it offline first: $2"
+}
+
+# Verify $1 (a file) matches the expected SHA-256 $2. Returns non-zero (and
+# warns) on mismatch or when sha256sum is unavailable; callers decide whether a
+# mismatch is fatal. Never prints the file contents.
+verify_sha256() {
+  local file="$1" expected="$2"
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    warn "sha256sum not available — cannot verify $(basename "$file") checksum."
+    return 2
+  fi
+  local actual
+  actual="$(sha256sum "$file" | awk '{print $1}')"
+  if [[ "$actual" == "$expected" ]]; then
+    return 0
+  fi
+  warn "SHA-256 mismatch for $(basename "$file"): expected $expected, got $actual."
+  return 1
+}
+
 # --- service-user ownership helpers ------------------------------------------
 # The installer runs as the operator (who keeps NOPASSWD root via sudo_if_needed),
 # but the gateway/worker run as the dedicated non-admin user sift-service. The
@@ -114,6 +145,40 @@ MATERIALS_FILE="${MATERIALS_FILE:-$SIFT_TOKENS_DIR/installer-handoff.txt}"
 SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
 GATEWAY_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-gateway.service"
 JOB_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-job-worker.service"
+
+# --- Download pins (B-MVP-004) -----------------------------------------------
+# Every external network download is version-pinned and (where the upstream
+# does not publish a checksum file) SHA-256-pinned in this script, mirroring the
+# Supabase CLI pin pattern in scripts/setup-supabase.sh. Refresh these together:
+# bump the version, recompute the SHA-256 with `sha256sum`, and re-verify on the
+# live VM. Verdicts and provenance live in docs/operator/reference-data-provenance.md
+# (the D1-D8 ledger).
+#
+# uv (D1): the versioned install script itself pins APP_VERSION internally; we
+# pin the script URL by version and SHA-256-verify the downloaded x86_64 tarball
+# out of band so the pipe-to-shell is no longer "latest + unauthenticated".
+SIFT_UV_VERSION="${SIFT_UV_VERSION:-0.11.21}"
+SIFT_UV_TARBALL_SHA256="${SIFT_UV_TARBALL_SHA256:-8c88519b0ef0af9801fcdee419bbb12116bd9e6b18e162ae093c932d8b264050}"
+# Hayabusa (D2): pinned release tag + SHA-256 of the lin-x64-gnu zip (upstream
+# ships no checksum file, so the hash is pinned here like the Supabase CLI).
+SIFT_HAYABUSA_TAG="${SIFT_HAYABUSA_TAG:-v3.9.0}"
+SIFT_HAYABUSA_SHA256="${SIFT_HAYABUSA_SHA256:-ffb31e02bd47d840d999d964d4663287cdb194a22ea856904348786acba414d7}"
+# BGE embedding model (D3): canonical revision (git commit) on Hugging Face Hub
+# for BAAI/bge-base-en-v1.5. The seed/query loaders pass this revision so the
+# weights are reproducible, and verify it after load (B-MVP-015).
+SIFT_RAG_MODEL_NAME="${SIFT_RAG_MODEL_NAME:-BAAI/bge-base-en-v1.5}"
+SIFT_RAG_MODEL_REVISION="${SIFT_RAG_MODEL_REVISION:-a5beb1e3e68b9ab74eb54cfd186867f64f240e1a}"
+# RAG Chroma bundle (D4, legacy chroma path only): pin the release tag so the
+# (already checksum-verified) bundle comes from a fixed release, not "latest".
+SIFT_RAG_INDEX_TAG="${SIFT_RAG_INDEX_TAG:-rag-index-v1}"
+# GeoIP (D6): the OpenSearch ip2geo datasource hits a live unauthenticated
+# endpoint. Off by default; set SIFT_GEOIP_ENABLED=1 to opt in.
+SIFT_GEOIP_ENABLED="${SIFT_GEOIP_ENABLED:-0}"
+# Offline mode (B-MVP-004): when set, NO network fetch is attempted. Each
+# download step short-circuits with an actionable message pointing at the
+# operator-staged artifact path it expects instead.
+SIFT_OFFLINE="${SIFT_OFFLINE:-0}"
+SIFT_HF_HOME="${SIFT_HF_HOME:-$SIFT_STATE_DIR/.cache/huggingface}"
 
 VENV_DIR="$REPO_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
@@ -236,10 +301,48 @@ install_uv_if_needed() {
     UV_BIN="$uv_bin"
     return
   fi
+  if is_offline; then
+    offline_die "uv ${SIFT_UV_VERSION}" \
+      "pre-install uv via your OS package manager or place the uv binary on PATH (e.g. ~/.local/bin/uv) before re-running ./install.sh"
+  fi
   require_cmd curl
-  log "Installing uv."
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  # B-MVP-004 (D1): pin uv to a specific version and SHA-256-verify the tarball.
+  # The versioned install script (astral.sh/uv/<ver>/install.sh) pins APP_VERSION
+  # internally, so we no longer pipe an unpinned "latest" script to the shell.
+  # We additionally download the x86_64 tarball ourselves and SHA-256-verify it
+  # against the pinned hash; on match we install from the verified tarball, and
+  # only fall back to the (still version-pinned) script if the arch is not x86_64.
+  log "Installing uv ${SIFT_UV_VERSION} (pinned)."
+  local tmpd tarball arch
+  tmpd="$(mktemp -d)"
+  arch="$(uname -m 2>/dev/null || echo unknown)"
+  if [[ "$arch" == "x86_64" || "$arch" == "amd64" ]]; then
+    tarball="$tmpd/uv-x86_64-unknown-linux-gnu.tar.gz"
+    if curl -fsSL -o "$tarball" \
+        "https://github.com/astral-sh/uv/releases/download/${SIFT_UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"; then
+      if verify_sha256 "$tarball" "$SIFT_UV_TARBALL_SHA256"; then
+        log "  uv tarball SHA-256 verified."
+        mkdir -p "$HOME/.local/bin"
+        tar -xzf "$tarball" -C "$tmpd"
+        local uv_extracted
+        uv_extracted="$(find "$tmpd" -type f -name uv | head -1)"
+        if [[ -n "$uv_extracted" ]]; then
+          install -m 755 "$uv_extracted" "$HOME/.local/bin/uv"
+        fi
+      else
+        rm -rf "$tmpd"
+        die "uv ${SIFT_UV_VERSION} tarball failed SHA-256 verification — refusing to install (supply-chain guard). Set SIFT_UV_TARBALL_SHA256 if you intentionally bumped the pin."
+      fi
+    fi
+  fi
+  rm -rf "$tmpd"
   uv_bin="$(resolve_uv)"
+  if [[ -z "$uv_bin" ]]; then
+    # Arch fallback: the version-pinned install script (NOT the unpinned latest).
+    log "  Falling back to the version-pinned uv install script for arch '$arch'."
+    curl -LsSf "https://astral.sh/uv/${SIFT_UV_VERSION}/install.sh" | sh
+    uv_bin="$(resolve_uv)"
+  fi
   [[ -n "$uv_bin" ]] || die "uv install completed but uv binary not found."
   UV_BIN="$uv_bin"
 }
@@ -488,6 +591,14 @@ install_state_dirs() {
   sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_ENRICHMENT_DIR"
   sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_CASE_ROOT"
 
+  # B-MVP-015 / B-MVP-004 (D3): explicit Hugging Face cache under the service
+  # home so the BGE embedding weights live with the service that uses them
+  # (gateway/worker run as sift-service and read HF_HOME from their unit env),
+  # not in the operator's home. 0755 so the seed (run by the operator via uv)
+  # and the running service can both reach it; weights are public, not secret.
+  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$(dirname "$SIFT_HF_HOME")"
+  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_HF_HOME"
+
   # SIFT_HOME (secrets + gateway.yaml + TLS + backups): 0700 owned sift-service.
   # NOT group `sift` — secrets must NOT be readable by agent_runtime.
   sudo_if_needed install -d -m 700 -o "$svc" -g "$svc" "$SIFT_HOME"
@@ -651,14 +762,21 @@ download_rag_index() {
     return
   fi
 
-  log "Downloading pre-built RAG knowledge index (22K+ records, ~1-3 GB)..."
+  if is_offline; then
+    warn "SIFT_OFFLINE=1: skipping RAG Chroma bundle download (legacy chroma path)."
+    warn "  Stage the bundle at $chroma_dir, or use the default SIFT_RAG_IMPORT_SOURCE=direct path (bundled JSONL, no download)."
+    return
+  fi
+  # B-MVP-004 (D4): pin the release tag (the bundle's internal SHA-256 file is
+  # still verified by download_index.py) instead of resolving "latest".
+  log "Downloading pre-built RAG knowledge index ${SIFT_RAG_INDEX_TAG} (22K+ records, ~1-3 GB)..."
   if "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads \
-    python -m rag_mcp.scripts.download_index --dest "$rag_data_dir"; then
+    python -m rag_mcp.scripts.download_index --dest "$rag_data_dir" --tag "$SIFT_RAG_INDEX_TAG"; then
     log "RAG knowledge index downloaded and verified."
   else
     warn "RAG knowledge index download FAILED."
     warn "  forensic-rag-mcp will start in degraded mode."
-    warn "  Retry: python -m rag_mcp.scripts.download_index"
+    warn "  Retry: python -m rag_mcp.scripts.download_index --tag $SIFT_RAG_INDEX_TAG"
   fi
 }
 
@@ -709,11 +827,26 @@ seed_rag_pgvector_direct() {
   fi
 
   log "Seeding bundled RAG knowledge directly into Supabase pgvector."
-  if SIFT_CONTROL_PLANE_DSN="$dsn" "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads \
+  # B-MVP-015 / B-MVP-004 (D3): pin the model name + revision and use an explicit
+  # HF_HOME under the service-home cache. In offline mode set HF_HUB_OFFLINE so
+  # sentence-transformers loads only from the pre-staged cache and never reaches
+  # Hugging Face Hub. SIFT_HF_HOME is created/owned sift-service in install_state_dirs.
+  local hf_offline=0
+  is_offline && hf_offline=1
+  if SIFT_CONTROL_PLANE_DSN="$dsn" \
+     RAG_MODEL_NAME="$SIFT_RAG_MODEL_NAME" \
+     RAG_MODEL_REVISION="$SIFT_RAG_MODEL_REVISION" \
+     HF_HOME="$SIFT_HF_HOME" \
+     HF_HUB_OFFLINE="$hf_offline" \
+     TRANSFORMERS_OFFLINE="$hf_offline" \
+     "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads \
     rag-mcp-seed-pgvector --knowledge-dir "$knowledge_dir" --embedding-mode model; then
     log "Direct Supabase pgvector RAG seed completed."
   else
     warn "Direct Supabase pgvector RAG seed FAILED."
+    if is_offline; then
+      warn "  Offline mode: pre-stage the model cache at $SIFT_HF_HOME (revision $SIFT_RAG_MODEL_REVISION) from an internet-connected host."
+    fi
     warn "  Retry: SIFT_CONTROL_PLANE_DSN='<dsn>' rag-mcp-seed-pgvector --knowledge-dir '$knowledge_dir' --embedding-mode model"
   fi
 }
@@ -753,18 +886,21 @@ install_hayabusa() {
 
   require_cmd unzip
 
-  local tag
-  tag=$(curl -fsS "https://api.github.com/repos/Yamato-Security/hayabusa/releases/latest" 2>/dev/null \
-    | "$SYSTEM_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null || echo "")
+  # B-MVP-004 (D2): pin the Hayabusa release tag + SHA-256 of the lin-x64-gnu zip
+  # instead of resolving "latest". Upstream publishes no checksum file, so the
+  # hash is pinned in this script (SIFT_HAYABUSA_SHA256) like the Supabase CLI.
+  local tag="$SIFT_HAYABUSA_TAG"
+  local asset="hayabusa-${tag#v}-lin-x64-gnu.zip"
+  local url="https://github.com/Yamato-Security/hayabusa/releases/download/${tag}/${asset}"
 
-  if [[ -z "$tag" ]]; then
-    warn "Could not resolve latest hayabusa release.  Detection will be unavailable."
+  if is_offline; then
+    warn "SIFT_OFFLINE=1: skipping hayabusa download. Detection will be unavailable until staged."
+    warn "  Stage offline: place the hayabusa binary at $binary_dir/hayabusa (and rules at $rules_dir),"
+    warn "  or pre-download $asset and extract it there, then re-run ./install.sh."
     return
   fi
 
-  local asset="hayabusa-${tag#v}-lin-x64-gnu.zip"
-  local url="https://github.com/Yamato-Security/hayabusa/releases/download/${tag}/${asset}"
-  log "Downloading hayabusa ${tag}..."
+  log "Downloading hayabusa ${tag} (pinned)..."
   local tmpd
   tmpd="$(mktemp -d)"
 
@@ -773,6 +909,17 @@ install_hayabusa() {
     rm -rf "$tmpd"
     return
   fi
+
+  # SHA-256 pin is a hard gate: a mismatch means the pinned artifact changed
+  # upstream (or was tampered with). Refuse to install rather than run an
+  # unverified detection binary.
+  if ! verify_sha256 "$tmpd/$asset" "$SIFT_HAYABUSA_SHA256"; then
+    warn "hayabusa ${tag} failed SHA-256 verification — refusing to install (supply-chain guard)."
+    warn "  If you intentionally bumped the pin, set SIFT_HAYABUSA_TAG and SIFT_HAYABUSA_SHA256."
+    rm -rf "$tmpd"
+    return
+  fi
+  log "  hayabusa SHA-256 verified."
 
   if ! file "$tmpd/$asset" | grep -q 'Zip archive'; then
     warn "hayabusa download was not a valid ZIP.  Detection will be unavailable."
@@ -1363,6 +1510,8 @@ _render_file() {
   export SIFT_EXECUTE_AS_USER SIFT_VOL_SYMBOLS SIFT_GATEWAY_SERVICE_USER
   export SIFT_EXAMINER SIFT_MCPS_ROOT UV_BIN PYTHON_BIN OPENCTI_URL OPENCTI_TOKEN
   export SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED SIFT_OPENSEARCH_ENABLED
+  # B-MVP-015 / B-MVP-004: model cache + pins rendered into the systemd units.
+  export SIFT_HF_HOME SIFT_RAG_MODEL_NAME SIFT_RAG_MODEL_REVISION
 
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
@@ -1520,29 +1669,61 @@ _resolved_token_pepper() {
   printf '%s' "$pepper"
 }
 
+# B-MVP-010: resolve the portal session secret for env-indirection. Preserve an
+# existing value so re-runs do not invalidate live operator sessions; otherwise
+# mint a fresh one. The VALUE lives only in the 0600 control-plane.env file
+# (gateway.yaml carries only the env-var NAME).
+_resolved_session_secret() {
+  local secret="${SIFT_PORTAL_SESSION_SECRET:-}"
+  if [[ -z "$secret" ]]; then
+    secret="$(_env_file_value "$SIFT_HOME/control-plane.env" "SIFT_PORTAL_SESSION_SECRET")"
+  fi
+  # Upgrade path: if a prior install wrote the literal into gateway.yaml, reuse
+  # that exact value so existing operator portal sessions are not invalidated when
+  # we move it to env-indirection (B-MVP-010). The literal is stripped from the
+  # config by _migrate_gateway_config below.
+  if [[ -z "$secret" ]] && svc_test_f "$SIFT_CONFIG"; then
+    secret="$(svc_read "$SIFT_CONFIG" | awk -F'"' '/^[[:space:]]*session_secret:[[:space:]]*"/{print $2; exit}')"
+  fi
+  if [[ -z "$secret" ]]; then
+    secret="$(random_hex 32)"
+  fi
+  printf '%s' "$secret"
+}
+
 write_control_plane_env() {
   local control_env_file="$SIFT_HOME/control-plane.env"
-  local cp_dsn token_pepper existing_dsn existing_pepper
+  local cp_dsn token_pepper session_secret
+  local existing_dsn existing_pepper existing_secret
   cp_dsn="$(_resolved_control_plane_dsn)"
   token_pepper="$(_resolved_token_pepper)"
+  # B-MVP-010: the portal session secret value lives here (env-indirection); the
+  # gateway config carries only its name. Always resolve it so the portal has a
+  # session secret even on core-only installs with no DSN.
+  session_secret="$(_resolved_session_secret)"
   existing_dsn="$(_env_file_value "$control_env_file" "SIFT_CONTROL_PLANE_DSN")"
   existing_pepper="$(_env_file_value "$control_env_file" "SIFT_TOKEN_PEPPER")"
+  existing_secret="$(_env_file_value "$control_env_file" "SIFT_PORTAL_SESSION_SECRET")"
 
-  if [[ -z "$cp_dsn" && -z "$token_pepper" ]]; then
+  # Only skip entirely when there is nothing at all to write (no DSN, no pepper,
+  # and no session secret) — otherwise the session secret alone is worth a file.
+  if [[ -z "$cp_dsn" && -z "$token_pepper" && -z "$session_secret" ]]; then
     log "No control-plane env vars set — skipping control-plane.env."
     log "  To enable DB authority, set SIFT_CONTROL_PLANE_DSN and re-run ./install.sh."
     return
   fi
 
-  if [[ -n "$existing_dsn" && -n "$existing_pepper" ]]; then
+  if [[ -n "$existing_dsn" && -n "$existing_pepper" && -n "$existing_secret" ]]; then
     log "Control-plane env file already complete — preserving $control_env_file."
     export SIFT_CONTROL_PLANE_DSN="$existing_dsn"
     export SIFT_TOKEN_PEPPER="$existing_pepper"
+    export SIFT_PORTAL_SESSION_SECRET="$existing_secret"
     return
   fi
 
   [[ -n "$existing_dsn" ]] && cp_dsn="$existing_dsn"
   [[ -n "$existing_pepper" ]] && token_pepper="$existing_pepper"
+  [[ -n "$existing_secret" ]] && session_secret="$existing_secret"
 
   log "Writing control-plane env file: $control_env_file"
   # Operator-owned temp -> sift-service-owned 0600 (see write_supabase_env).
@@ -1553,11 +1734,13 @@ write_control_plane_env() {
     printf '# Secrets are stored here, not in gateway.yaml.\n'
     [[ -n "$cp_dsn" ]] && printf 'SIFT_CONTROL_PLANE_DSN=%s\n' "$cp_dsn"
     [[ -n "$token_pepper" ]] && printf 'SIFT_TOKEN_PEPPER=%s\n' "$token_pepper"
+    [[ -n "$session_secret" ]] && printf 'SIFT_PORTAL_SESSION_SECRET=%s\n' "$session_secret"
   } > "$tmp"
   svc_install_file "$tmp" "$control_env_file" 600
   rm -f "$tmp"
   [[ -n "$cp_dsn" ]] && export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
   [[ -n "$token_pepper" ]] && export SIFT_TOKEN_PEPPER="$token_pepper"
+  [[ -n "$session_secret" ]] && export SIFT_PORTAL_SESSION_SECRET="$session_secret"
 }
 
 # =============================================================================
@@ -1680,7 +1863,11 @@ write_gateway_config() {
   fi
   SIFT_GATEWAY_TOKEN="sift_gw_$(random_hex 24)"
   SIFT_SERVICE_TOKEN="sift_svc_$(random_hex 24)"
-  SIFT_PORTAL_SESSION_SECRET="$(random_hex 32)"
+  # B-MVP-010: the portal session secret is no longer rendered into gateway.yaml
+  # (the template carries only session_secret_env, the env-var NAME). The VALUE is
+  # owned by write_control_plane_env (control-plane.env, 0600). Keep the var empty
+  # here so a stale literal can never leak into the rendered config.
+  SIFT_PORTAL_SESSION_SECRET=""
   SIFT_TOKEN_CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   CONFIG_CREATED=1
   export SIFT_GATEWAY_TOKEN SIFT_SERVICE_TOKEN SIFT_PORTAL_SESSION_SECRET SIFT_TOKEN_CREATED_AT
@@ -1731,6 +1918,19 @@ if isinstance(tls, dict):
     if "keyfile" not in tls and "key" in tls:
         tls["keyfile"] = tls.pop("key")
         changed = True
+
+# B-MVP-010: migrate an inline portal session secret to env-indirection. The
+# literal value was already copied into control-plane.env by write_control_plane_env
+# (via _resolved_session_secret reading this same file), so here we just strip the
+# literal and replace it with the env-var NAME. Idempotent.
+portal_cfg = cfg.setdefault("portal", {})
+if isinstance(portal_cfg, dict) and "session_secret" in portal_cfg:
+    portal_cfg.pop("session_secret", None)
+    portal_cfg["session_secret_env"] = "SIFT_PORTAL_SESSION_SECRET"
+    changed = True
+elif isinstance(portal_cfg, dict) and not portal_cfg.get("session_secret_env"):
+    portal_cfg["session_secret_env"] = "SIFT_PORTAL_SESSION_SECRET"
+    changed = True
 
 # RAG / triage / opencti enabled flags
 enrichment = cfg.setdefault("enrichment", {})
@@ -1960,8 +2160,19 @@ configure_opensearch_cluster() {
 }
 
 configure_geoip_pipeline() {
+  # B-MVP-004 (D6): the ip2geo datasource fetches from a live, unauthenticated
+  # endpoint (geoip.maps.opensearch.org). OFF by default; opt in with
+  # SIFT_GEOIP_ENABLED=1. Always skipped in offline mode.
+  if [[ "${SIFT_GEOIP_ENABLED:-0}" != "1" ]]; then
+    log "GeoIP enrichment disabled by default (set SIFT_GEOIP_ENABLED=1 to enable). Skipping ip2geo datasource."
+    return 0
+  fi
+  if is_offline; then
+    warn "SIFT_OFFLINE=1: skipping GeoIP datasource (it fetches from a live endpoint). Stage a local GeoLite2 datasource if needed."
+    return 0
+  fi
   curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null 2>&1 || return 0
-  log "Configuring GeoIP enrichment."
+  log "Configuring GeoIP enrichment (SIFT_GEOIP_ENABLED=1)."
 
   curl -fsS -X PUT "http://127.0.0.1:9200/_plugins/geospatial/ip2geo/datasource/maxmind-city" \
     -H "Content-Type: application/json" \
@@ -2454,25 +2665,58 @@ configure_immutable_capability() {
 }
 
 configure_auditd() {
-  if ! command -v augenrules &>/dev/null && ! command -v auditctl &>/dev/null; then
-    warn "auditd not found — skipping audit rules."
-    return 0
-  fi
+  # B-MVP-014: HR2 found auditd ABSENT at runtime on the live VM (package not
+  # installed, /etc/audit/rules.d missing), so the shipped rules were never
+  # loaded. Install + enable the daemon, then load a persistent forensic ruleset.
   local rules_src="${REPO_DIR}/configs/audit/99-sift-evidence.rules"
   [[ -f "$rules_src" ]] || return 0
+
+  if ! command -v auditctl &>/dev/null; then
+    if is_offline; then
+      warn "SIFT_OFFLINE=1: auditd not installed and cannot be fetched. Pre-install the 'auditd' package, then re-run."
+      return 0
+    fi
+    log "auditd not installed — installing the auditd package."
+    if ! apt_install_packages auditd audispd-plugins; then
+      warn "Could not install auditd — kernel-level evidence/secret auditing will be unavailable."
+      return 0
+    fi
+  fi
+
+  # rules.d is the persistent, boot-loaded location. Create it if the fresh
+  # package layout has not yet (auditd creates it, but be defensive).
+  sudo_if_needed install -d -m 750 /etc/audit/rules.d 2>/dev/null || true
+
   local rules_dst="/etc/audit/rules.d/99-sift-evidence.rules"
   local tmp
   tmp="$(mktemp)"
-  sed "s|CASES_ROOT|${SIFT_CASE_ROOT}|g" "$rules_src" > "$tmp"
+  sed -e "s|CASES_ROOT|${SIFT_CASE_ROOT}|g" \
+      -e "s|SIFT_HOME|${SIFT_HOME}|g" \
+      -e "s|INSTALL_ROOT|${SIFT_MCPS_INSTALL_ROOT}|g" \
+      "$rules_src" > "$tmp"
   sudo_if_needed cp "$tmp" "$rules_dst"
   rm -f "$tmp"
   sudo_if_needed chmod 640 "$rules_dst"
-  if command -v augenrules &>/dev/null; then
-    sudo_if_needed augenrules --load
-  else
-    sudo_if_needed auditctl -R "$rules_dst"
+
+  # Enable + start the daemon so rules survive reboot (persistent via rules.d).
+  if command -v systemctl &>/dev/null; then
+    sudo_if_needed systemctl enable auditd.service 2>/dev/null || true
+    sudo_if_needed systemctl restart auditd.service 2>/dev/null \
+      || sudo_if_needed systemctl start auditd.service 2>/dev/null || true
   fi
-  log "auditd rules installed."
+
+  # Load the rules now (augenrules compiles rules.d into the running kernel set).
+  if command -v augenrules &>/dev/null; then
+    sudo_if_needed augenrules --load 2>/dev/null || warn "augenrules --load reported an issue; rules will load on next boot."
+  elif command -v auditctl &>/dev/null; then
+    sudo_if_needed auditctl -R "$rules_dst" 2>/dev/null || true
+  fi
+
+  if command -v auditctl &>/dev/null && sudo_if_needed auditctl -l 2>/dev/null | grep -q 'sift_evidence_write'; then
+    log "auditd active with SIFT forensic rules loaded."
+  else
+    warn "auditd rules installed to $rules_dst but not confirmed live; verify with: sudo auditctl -l | grep sift_"
+  fi
 }
 
 configure_apparmor() {
@@ -2758,6 +3002,8 @@ main() {
       --no-opencti)           flag_no_opencti=1; shift ;;
       --no-rag)               flag_no_rag=1; shift ;;
       --external-supabase)    SIFT_EXTERNAL_SUPABASE=1; shift ;;
+      --offline)              SIFT_OFFLINE=1; shift ;;
+      --enable-geoip)         SIFT_GEOIP_ENABLED=1; shift ;;
       -h|--help)
         printf 'Usage: ./install.sh [OPTIONS]\n\n'
         printf 'Provisions (or removes) a sift-mcps stack on SIFT Workstation.\n'
@@ -2772,6 +3018,12 @@ main() {
         printf '  --external-supabase  Skip Supabase auto-provisioning.  Requires that\n'
         printf '                       SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,\n'
         printf '                       and SIFT_CONTROL_PLANE_DSN are already exported in env.\n'
+        printf '  --offline            Hardened/air-gapped install: attempt NO network downloads.\n'
+        printf '                       Each download step fails loudly pointing at the operator-\n'
+        printf '                       staged artifact path it expects (uv, hayabusa, HF model cache,\n'
+        printf '                       Supabase CLI). Equivalent to SIFT_OFFLINE=1.\n'
+        printf '  --enable-geoip       Enable the OpenSearch ip2geo datasource (off by default; it\n'
+        printf '                       fetches from a live endpoint). Equivalent to SIFT_GEOIP_ENABLED=1.\n'
         printf '  --uninstall          Reverse the install: stop/remove the systemd service, venv,\n'
         printf '                       ~/.sift (config/TLS/secrets), auditd + AppArmor configs, the\n'
         printf '                       hayabusa symlink, and docker containers. Preserves data\n'
@@ -2788,6 +3040,14 @@ main() {
     esac
   done
   export SIFT_EXTERNAL_SUPABASE
+  # B-MVP-004: propagate offline/geoip/model-cache controls to all sub-steps
+  # (including scripts/setup-supabase.sh invoked by preflight_supabase).
+  export SIFT_OFFLINE SIFT_GEOIP_ENABLED SIFT_HF_HOME
+  export SIFT_UV_VERSION SIFT_UV_TARBALL_SHA256 SIFT_HAYABUSA_TAG SIFT_HAYABUSA_SHA256
+  export SIFT_RAG_MODEL_NAME SIFT_RAG_MODEL_REVISION SIFT_RAG_INDEX_TAG
+  if is_offline; then
+    log "OFFLINE MODE (SIFT_OFFLINE=1): no network downloads will be attempted; staged artifacts required."
+  fi
 
   if [[ "$uninstall_mode" == "1" ]]; then
     do_uninstall

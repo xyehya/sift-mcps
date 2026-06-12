@@ -145,22 +145,29 @@ install_supabase_cli() {
   # shellcheck disable=SC2064
   trap "rm -rf '$tmpdir'" EXIT
 
+  if [[ "${SIFT_OFFLINE:-0}" == "1" ]]; then
+    die "SIFT_OFFLINE=1: refusing to download the Supabase CLI. Stage the v${SUPABASE_CLI_VERSION} binary at $SIFT_BIN_DIR/supabase (+ supabase-go) before re-running."
+  fi
+
   log "  Downloading: $SUPABASE_CLI_URL"
   curl -fsSL -o "$tmpdir/supabase.tar.gz" "$SUPABASE_CLI_URL" \
     || die "Download failed. Check network connectivity or try again."
 
-  # Verify SHA256 if sha256sum is available (advisory check — not blocking on mismatch
-  # since the pinned hash may differ across architectures; treat mismatch as warning).
+  # B-MVP-004 (D5): SHA-256 verification is now a HARD gate. The pin is for the
+  # linux amd64 tarball this URL serves; a mismatch means the artifact changed
+  # upstream or in transit, so we refuse to install rather than warn-and-continue.
+  # If you intentionally bumped the version, update SUPABASE_CLI_VERSION and
+  # SUPABASE_CLI_SHA256 together.
   if command -v sha256sum >/dev/null 2>&1; then
     local actual
     actual="$(sha256sum "$tmpdir/supabase.tar.gz" | awk '{print $1}')"
     if [[ "$actual" == "$SUPABASE_CLI_SHA256" ]]; then
       log "  SHA256 verified."
     else
-      warn "  SHA256 mismatch (expected $SUPABASE_CLI_SHA256, got $actual)."
-      warn "  This is expected if the pinned hash in this script is stale or the architecture"
-      warn "  differs.  Continuing — verify manually if this is a production install."
+      die "Supabase CLI SHA256 mismatch (expected $SUPABASE_CLI_SHA256, got $actual). Refusing to install (supply-chain guard). Update SUPABASE_CLI_VERSION + SUPABASE_CLI_SHA256 if you bumped the pin."
     fi
+  else
+    die "sha256sum not available — cannot verify the pinned Supabase CLI tarball. Install coreutils or stage a verified binary at $SIFT_BIN_DIR/supabase."
   fi
 
   tar -xzf "$tmpdir/supabase.tar.gz" -C "$tmpdir"
