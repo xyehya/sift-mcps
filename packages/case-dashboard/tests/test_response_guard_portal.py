@@ -91,7 +91,6 @@ def _clear_state(monkeypatch):
     _stub_state.clear()
     routes_mod._evidence_challenges.clear()
     routes_mod._challenges.clear()
-    routes_mod._login_challenges.clear()
 
 
 @pytest.fixture()

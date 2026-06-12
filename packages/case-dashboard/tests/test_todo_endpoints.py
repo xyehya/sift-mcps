@@ -45,7 +45,6 @@ def passwords_dir(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def app(passwords_dir, tmp_path, monkeypatch):
-    routes_mod._login_challenges.clear()
     routes_mod._challenges.clear()
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     return create_dashboard_v2_app(session_secret=_SECRET, session_max_age=28800)

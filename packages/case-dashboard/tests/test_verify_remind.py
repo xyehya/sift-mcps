@@ -116,7 +116,6 @@ def passwords_dir(tmp_path, monkeypatch):
 def _build_client(passwords_dir, tmp_path, monkeypatch, evidence_db):
     routes_mod._evidence_challenges.clear()
     routes_mod._challenges.clear()
-    routes_mod._login_challenges.clear()
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     app = create_dashboard_v2_app(
         session_secret=_SECRET,

@@ -28,7 +28,6 @@ from sift_core.approval_auth import (
     _save_password_entry as _save_pw_entry,
 )
 from sift_core.approval_auth import (
-    derive_auth_key,
     derive_ledger_key,
 )
 from sift_core.case_io import (
@@ -158,14 +157,6 @@ def _reauth_event_id(request: Request) -> str | None:
     return str(eid) if eid else None
 
 
-def _legacy_password_auth_disabled() -> bool:
-    """True when local PBKDF2 setup/challenge/reset endpoints must not run."""
-    return _SUPABASE_AUTH is not None or not _LEGACY_PORTAL_SESSION_ENABLED
-
-
-def _legacy_password_auth_disabled_response() -> JSONResponse:
-    return JSONResponse({"error": "Legacy portal password auth disabled"}, status_code=403)
-
 # Max delta file size (1 MB)
 _MAX_DELTA_SIZE = 1_048_576
 
@@ -209,12 +200,8 @@ _CHALLENGE_TTL = 30  # seconds
 _MAX_COMMIT_ATTEMPTS = 3
 _COMMIT_LOCKOUT_SECONDS = 900
 
-# Login challenge store — separate from commit challenges (R2 namespace separation)
-_login_challenges: dict[str, dict] = {}
-_LOGIN_CHALLENGE_TTL = 30  # seconds
-_MAX_LOGIN_ATTEMPTS = 5  # Phase 15c specifies 5 for login
-_MAX_LOGIN_CHALLENGES = 200  # R6 total pool cap
-_MAX_LOGIN_CHALLENGES_PER_EXAMINER = 5  # R6 per-examiner in-flight limit
+# B-MVP-011: the login-challenge store (and its R6 caps) was removed with the
+# local PBKDF2 login fallback. Supabase Auth is the only portal login path.
 
 _case_create_lock = threading.Lock()
 _CASE_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
@@ -596,39 +583,11 @@ def _commit_failure_count(examiner: str) -> int:
     return sum(1 for t in data.get(examiner, []) if now - t < _COMMIT_LOCKOUT_SECONDS)
 
 
-# Login lockout helpers — use "login:{examiner}" as the key (R2: separate namespace)
-
-def _check_login_lockout(examiner: str) -> str | None:
-    """Returns error message if login is locked out; None if OK. R2: login: namespace."""
-    lockout_file = Path.home() / ".sift" / ".password_lockout"
-    try:
-        data = json.loads(lockout_file.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    key = f"login:{examiner}"
-    failures = data.get(key, [])
-    now = time.time()
-    recent = sum(1 for t in failures if now - t < _COMMIT_LOCKOUT_SECONDS)
-    if recent >= _MAX_LOGIN_ATTEMPTS:
-        oldest = min(t for t in failures if now - t < _COMMIT_LOCKOUT_SECONDS)
-        remaining = int(_COMMIT_LOCKOUT_SECONDS - (now - oldest))
-        return f"Too many failed attempts. Try again in {max(remaining, 1)}s."
-    return None
-
-
-def _record_login_failure(examiner: str) -> None:
-    """Record a failed login attempt under login:{examiner} key. R2."""
-    _record_commit_failure(f"login:{examiner}")
-
-
-def _clear_login_failures(examiner: str) -> None:
-    """Clear login failure count on success. R2."""
-    _clear_commit_failures(f"login:{examiner}")
-
-
-def _login_failure_count(examiner: str) -> int:
-    """Count recent login failures under login:{examiner} key. R2."""
-    return _commit_failure_count(f"login:{examiner}")
+# B-MVP-011: the local examiner.json PBKDF2 *login* fallback (challenge/login/
+# setup/reset) was removed; Supabase Auth is the only portal login path. The
+# login-lockout helpers and the in-memory login-challenge store that served it
+# are gone with it. Sensitive-action re-auth (commit / evidence / case-activate /
+# report) keeps its own HMAC challenge stores and lockout helpers below.
 
 
 def _must_reset_check(examiner: str) -> JSONResponse | None:
@@ -3425,132 +3384,18 @@ async def post_commit(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
-# ---- Phase 12d: Auth endpoints ----
+# ---- Auth endpoints (Supabase-only login; B-MVP-011) ----
+#
+# The local examiner.json PBKDF2 login fallback (setup-required / setup /
+# challenge / login / reset-password) was removed. Supabase Auth is the only
+# portal login path. ``get_auth_setup_required`` is kept as a no-op the SPA can
+# still call on boot; it always reports that no local setup is required so the
+# frontend goes straight to the Supabase email/password sign-in form.
 
 
 async def get_auth_setup_required(request: Request) -> JSONResponse:
-    """No auth required. Returns whether first-time password setup is needed."""
-    if _legacy_password_auth_disabled():
-        return JSONResponse({"required": False, "setup_required": False})
-
-    try:
-        has_any = _PASSWORDS_DIR.is_dir() and any(_PASSWORDS_DIR.glob("*.json"))
-    except OSError:
-        has_any = False
-    required = not has_any
-    return JSONResponse({"required": required, "setup_required": required})
-
-
-async def post_auth_setup(request: Request) -> JSONResponse:
-    """Create the first examiner account. Only available when no passwords exist."""
-    if _legacy_password_auth_disabled():
-        return _legacy_password_auth_disabled_response()
-
-    try:
-        already_set_up = _PASSWORDS_DIR.is_dir() and any(_PASSWORDS_DIR.glob("*.json"))
-    except OSError:
-        already_set_up = False
-    if already_set_up:
-        return JSONResponse({"error": "Already set up"}, status_code=409)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
-    examiner = str(body.get("examiner", "")).strip()
-    password = str(body.get("password", ""))
-
-    if not _EXAMINER_RE.match(examiner):
-        return JSONResponse({"error": "Invalid examiner name"}, status_code=400)
-    if len(password) < 8:
-        return JSONResponse(
-            {"error": "Password too short (minimum 8 characters)"}, status_code=400
-        )
-
-    salt = secrets.token_bytes(32)
-    pw_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000).hex()
-    entry = {"hash": pw_hash, "salt": salt.hex(), "must_reset_password": False}
-    try:
-        _save_pw_entry(_PASSWORDS_DIR, examiner, entry)
-    except PermissionError as e:
-        logger.error("Cannot create passwords dir: %s", e)
-        return JSONResponse(
-            {"error": "Server configuration error — check gateway logs"},
-            status_code=500,
-        )
-    except OSError:
-        logger.exception("Failed to save password entry for %s", examiner)
-        return JSONResponse(
-            {"error": "Failed to save password — check gateway logs"},
-            status_code=500,
-        )
-    return JSONResponse({"ok": True, "examiner": examiner})
-
-
-async def get_auth_challenge(request: Request) -> JSONResponse:
-    """Issue a login challenge nonce. Always returns 200 (R3: no user enumeration)."""
-    if _legacy_password_auth_disabled():
-        return _legacy_password_auth_disabled_response()
-
-    examiner = str(request.query_params.get("examiner", "")).strip()
-    if not examiner or not _EXAMINER_RE.match(examiner):
-        return JSONResponse({"error": "Invalid examiner name"}, status_code=400)
-
-    lockout_msg = _check_login_lockout(examiner)
-    if lockout_msg:
-        return JSONResponse({"error": lockout_msg}, status_code=429)
-
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    now = time.time()
-
-    # Purge expired login challenges
-    expired = [
-        k for k, v in _login_challenges.items()
-        if now - v["created_at"] > _LOGIN_CHALLENGE_TTL
-    ]
-    for k in expired:
-        del _login_challenges[k]
-
-    # R6: Per-examiner limit — evict oldest for this examiner if at cap
-    per_examiner_keys = [
-        k for k, v in _login_challenges.items() if v["examiner"] == examiner
-    ]
-    while len(per_examiner_keys) >= _MAX_LOGIN_CHALLENGES_PER_EXAMINER:
-        oldest = min(per_examiner_keys, key=lambda k: _login_challenges[k]["created_at"])
-        del _login_challenges[oldest]
-        per_examiner_keys.remove(oldest)
-
-    # R6: Total pool cap — evict oldest overall
-    while len(_login_challenges) >= _MAX_LOGIN_CHALLENGES:
-        oldest = min(
-            _login_challenges.keys(), key=lambda k: _login_challenges[k]["created_at"]
-        )
-        del _login_challenges[oldest]
-
-    # R3: Always issue a challenge — fake for unknown examiners
-    is_fake = entry is None
-    salt_hex = secrets.token_hex(32) if is_fake else entry["salt"]
-
-    challenge_id = secrets.token_hex(16)
-    nonce = secrets.token_hex(32)
-    _login_challenges[challenge_id] = {
-        "nonce": nonce,
-        "examiner": examiner,
-        "created_at": now,
-        "bound_ip": request.client.host,
-        "_fake": is_fake,
-    }
-
-    return JSONResponse(
-        {
-            "challenge_id": challenge_id,
-            "nonce": nonce,
-            "salt": salt_hex,
-            "iterations": 600000,
-            "hash_algorithm": "SHA-256",
-        }
-    )
+    """No auth required. Local first-time setup is gone (Supabase is authority)."""
+    return JSONResponse({"required": False, "setup_required": False})
 
 
 def _http_status_from_callback_error(exc: Exception, default: int = 500) -> int:
@@ -3794,185 +3639,26 @@ async def post_supabase_forced_reset(request: Request) -> JSONResponse:
 
 
 async def post_auth_login(request: Request) -> JSONResponse:
-    """Authenticate. PR03A: email/password Supabase when configured, else legacy.
+    """Authenticate via Supabase email/password (B-MVP-011: the only login path).
 
-    When the Gateway has injected ``supabase_auth`` the portal uses the Supabase
-    email/password path. Otherwise it falls back to the legacy PBKDF2
-    challenge-response (still used by tests and non-Supabase deployments).
+    The local examiner.json PBKDF2 challenge-response fallback was removed. When
+    the control plane is unavailable (no Supabase callback injected), login fails
+    with a clear, actionable error instead of silently falling back to a local
+    password file.
     """
-    if _SUPABASE_AUTH is not None:
-        return await post_supabase_login(request)
-
-    if not _LEGACY_PORTAL_SESSION_ENABLED:
-        return JSONResponse({"error": "Legacy portal login disabled"}, status_code=403)
-
-    if not _SESSION_SECRET:
-        logger.error("Portal session secret not configured")
+    if _SUPABASE_AUTH is None:
+        # Fail closed and loud: do not invent a local login path.
         return JSONResponse(
-            {"error": "Portal session not configured — check gateway logs"},
-            status_code=500,
+            {
+                "error": (
+                    "Control plane unavailable — Supabase Auth is the only portal "
+                    "login path. Check the gateway's Supabase configuration and that "
+                    "the control plane is reachable, then retry."
+                )
+            },
+            status_code=503,
         )
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
-    challenge_id = str(body.get("challenge_id", ""))
-    examiner = str(body.get("examiner", "")).strip()
-    response_hex = str(body.get("response", ""))
-
-    if not challenge_id or not examiner or not response_hex:
-        return JSONResponse({"error": "Missing required fields"}, status_code=400)
-
-    if not _EXAMINER_RE.match(examiner):
-        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
-
-    # R2: Check login lockout (login: namespace, separate from commit lockout)
-    lockout_msg = _check_login_lockout(examiner)
-    if lockout_msg:
-        return JSONResponse({"error": lockout_msg}, status_code=429)
-
-    # Pop challenge — single-use
-    challenge = _login_challenges.pop(challenge_id, None)
-    if not challenge:
-        return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
-
-    now = time.time()
-    if now - challenge["created_at"] > _LOGIN_CHALLENGE_TTL:
-        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
-
-    if challenge.get("bound_ip") != request.client.host or challenge["examiner"] != examiner:
-        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
-
-    # R3: Fake challenges always fail — same error path as real mismatch
-    if challenge.get("_fake"):
-        _record_login_failure(examiner)
-        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
-
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
-
-    # R8: Domain-separated auth key — never use raw stored hash directly
-    try:
-        auth_key = derive_auth_key(entry["hash"])
-    except (ValueError, KeyError):
-        logger.error("Corrupt password entry for examiner %s", examiner)
-        return JSONResponse(
-            {"error": "Server configuration error — check gateway logs"},
-            status_code=500,
-        )
-
-    expected = hmac_mod.new(auth_key, challenge["nonce"].encode(), "sha256").hexdigest()
-    if not hmac_mod.compare_digest(expected, response_hex):
-        _record_login_failure(examiner)
-        remaining = _MAX_LOGIN_ATTEMPTS - _login_failure_count(examiner)
-        msg = (
-            f"Too many failed attempts. Locked for {_COMMIT_LOCKOUT_SECONDS}s."
-            if remaining <= 0
-            else "Invalid credentials"
-        )
-        return JSONResponse({"error": msg}, status_code=401)
-
-    _clear_login_failures(examiner)
-
-    must_reset = bool(entry.get("must_reset_password", False))
-    role = entry.get("role", "examiner")
-
-    token = generate_jwt(examiner, role, _SESSION_SECRET, _SESSION_MAX_AGE)
-    exp_ts = int(time.time()) + _SESSION_MAX_AGE
-    expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc).isoformat()
-
-    resp = JSONResponse(
-        {
-            "examiner": examiner,
-            "role": role,
-            "expires_at": expires_at,
-            "must_reset": must_reset,
-        }
-    )
-    resp.set_cookie(
-        COOKIE_NAME,
-        token,
-        max_age=_SESSION_MAX_AGE,
-        path=COOKIE_PATH,
-        httponly=True,
-        secure=True,
-        samesite=COOKIE_SAME_SITE,
-    )
-    return resp
-
-
-async def post_auth_reset_password(request: Request) -> JSONResponse:
-    """Reset password via login challenge + new password. Clears must_reset_password."""
-    if _legacy_password_auth_disabled():
-        return _legacy_password_auth_disabled_response()
-
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
-    challenge_id = str(body.get("challenge_id", ""))
-    response_hex = str(body.get("response", ""))
-    new_password = str(body.get("new_password", ""))
-
-    if not challenge_id or not response_hex or not new_password:
-        return JSONResponse({"error": "Missing required fields"}, status_code=400)
-
-    if len(new_password) < 8:
-        return JSONResponse(
-            {"error": "Password too short (minimum 8 characters)"}, status_code=400
-        )
-
-    challenge = _login_challenges.pop(challenge_id, None)
-    if not challenge:
-        return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
-
-    now = time.time()
-    if now - challenge["created_at"] > _LOGIN_CHALLENGE_TTL:
-        return JSONResponse({"error": "Challenge expired"}, status_code=401)
-
-    if challenge.get("_fake") or challenge["examiner"] != examiner:
-        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
-
-    if challenge.get("bound_ip") != request.client.host:
-        return JSONResponse({"error": "Challenge IP mismatch"}, status_code=401)
-
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return JSONResponse({"error": "No password configured"}, status_code=403)
-
-    try:
-        auth_key = derive_auth_key(entry["hash"])
-    except (ValueError, KeyError):
-        logger.error("Corrupt password entry for examiner %s", examiner)
-        return JSONResponse(
-            {"error": "Server configuration error — check gateway logs"},
-            status_code=500,
-        )
-
-    expected = hmac_mod.new(auth_key, challenge["nonce"].encode(), "sha256").hexdigest()
-    if not hmac_mod.compare_digest(expected, response_hex):
-        return JSONResponse({"error": "Invalid credentials"}, status_code=401)
-
-    new_salt = secrets.token_bytes(32)
-    new_hash = hashlib.pbkdf2_hmac("sha256", new_password.encode(), new_salt, 600_000).hex()
-    new_entry = {**entry, "hash": new_hash, "salt": new_salt.hex(), "must_reset_password": False}
-    try:
-        _save_pw_entry(_PASSWORDS_DIR, examiner, new_entry)
-    except OSError:
-        logger.exception("Failed to update password for %s", examiner)
-        return JSONResponse(
-            {"error": "Failed to update password — check gateway logs"},
-            status_code=500,
-        )
-    return JSONResponse({"ok": True})
+    return await post_supabase_login(request)
 
 
 async def post_auth_logout(request: Request) -> JSONResponse:
@@ -6092,12 +5778,10 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/response-guard/status", get_response_guard_status, methods=["GET"]),
         Route("/api/response-guard/override", post_response_guard_override, methods=["POST"]),
         Route("/api/response-guard/override/cancel", post_response_guard_override_cancel, methods=["POST"]),
-        # Phase 12d: auth endpoints
+        # Auth endpoints (Supabase-only login; B-MVP-011 removed the local
+        # PBKDF2 setup/challenge/reset-password fallback).
         Route("/api/auth/setup-required", get_auth_setup_required, methods=["GET"]),
-        Route("/api/auth/setup", post_auth_setup, methods=["POST"]),
-        Route("/api/auth/challenge", get_auth_challenge, methods=["GET"]),
         Route("/api/auth/login", post_auth_login, methods=["POST"]),
-        Route("/api/auth/reset-password", post_auth_reset_password, methods=["POST"]),
         # A1-BOOTSTRAP: installer forced-reset endpoint (Supabase path only)
         Route("/api/auth/forced-reset", post_supabase_forced_reset, methods=["POST"]),
         Route("/api/auth/logout", post_auth_logout, methods=["POST"]),
@@ -6527,11 +6211,12 @@ def create_dashboard_v2_app(
         job_service: D2 Gateway job/status adapter (JobService). Backs
             GET /api/jobs/{job_id} with the sanitized, case-scoped status. When
             None, the job-status route returns 503.
-        legacy_portal_session_enabled: When false, disables the legacy PBKDF2
-            challenge/login, the sift_session HMAC cookie, and the examiner Bearer
-            fallback. Defaults to True so existing suites and non-Supabase
-            deployments keep working; the Gateway passes
-            auth.legacy.portal_session_enabled.
+        legacy_portal_session_enabled: When false, the PortalSessionMiddleware
+            disables the legacy sift_session HMAC cookie and the examiner Bearer
+            fallback paths. (The local PBKDF2 *login* fallback was removed under
+            B-MVP-011; Supabase Auth is the only login path regardless of this
+            flag.) Defaults to True so existing suites keep working; the Gateway
+            passes auth.legacy.portal_session_enabled.
     """
     from case_dashboard.auth import PortalSessionMiddleware
 

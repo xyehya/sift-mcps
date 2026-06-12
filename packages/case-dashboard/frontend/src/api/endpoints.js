@@ -6,18 +6,11 @@ const REAUTH_OPTS = { suppressUnauthorized: true }
 // images can take minutes, well past the default 15s client timeout.
 const REAUTH_HASH_OPTS = { suppressUnauthorized: true, timeoutMs: LONG_TIMEOUT_MS }
 
-// --- Auth ---
-export const getSetupRequired = () => apiFetch('/api/auth/setup-required')
-export const postSetup = (body) => apiPost('/api/auth/setup', body)
-export const getChallenge = (examiner) => apiFetch('/api/auth/challenge?examiner=' + encodeURIComponent(examiner))
-export const postLogin = (body) => apiPost('/api/auth/login', body)
-export const postLogout = () => apiPost('/api/auth/logout', {})
-export const postResetPassword = (body) => apiPost('/api/auth/reset-password', body)
-export const getMe = () => apiFetch('/api/auth/me')
-
-// --- PR03A: Supabase email/password login + agent/service principals ---
+// --- Auth (Supabase-only; B-MVP-011 removed the local PBKDF2 login fallback) ---
 // Supabase login posts { email, password }; the server sets the signed session
 // envelope cookie. No token material is ever returned, displayed, or stored.
+export const postLogout = () => apiPost('/api/auth/logout', {})
+export const getMe = () => apiFetch('/api/auth/me')
 export const postSupabaseLogin = (body) => apiPost('/api/auth/login', body)
 export const postAuthRefresh = () => apiPost('/api/auth/refresh', {})
 export const postForcedReset = (body) => apiPost('/api/auth/forced-reset', body)

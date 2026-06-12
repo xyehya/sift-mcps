@@ -254,20 +254,19 @@ class TestLogin:
 
 
 # ---------------------------------------------------------------------------
-# legacy password auth suppression
+# B-MVP-011: the local examiner.json PBKDF2 login fallback is removed entirely
+# (not merely suppressed). The setup/challenge/reset endpoints no longer exist,
+# and setup-required is a no-op that always reports no local setup.
 # ---------------------------------------------------------------------------
 
 
-class TestLegacyPasswordAuthSuppression:
-    def test_supabase_mode_skips_legacy_first_run_setup_even_bridge_enabled(
-        self, fake_auth, tmp_path, monkeypatch
-    ):
+class TestLocalLoginFallbackRemoved:
+    def test_setup_required_is_noop_with_supabase(self, fake_auth, tmp_path, monkeypatch):
         monkeypatch.setattr(routes_mod, "_PASSWORDS_DIR", tmp_path / "passwords")
         app = create_dashboard_v2_app(
             session_secret=_SECRET,
             session_max_age=28800,
             supabase_auth=fake_auth,
-            legacy_portal_session_enabled=True,
         )
         client = TestClient(app, raise_server_exceptions=True)
 
@@ -275,40 +274,39 @@ class TestLegacyPasswordAuthSuppression:
         assert resp.status_code == 200
         assert resp.json() == {"required": False, "setup_required": False}
 
-        setup = client.post(
+        # The legacy local-account endpoints are gone (404, not 403).
+        assert client.post(
             "/api/auth/setup", json={"examiner": "alice", "password": "securepass1"}
-        )
-        assert setup.status_code == 403
-        assert client.get("/api/auth/challenge?examiner=alice").status_code == 403
+        ).status_code == 404
+        assert client.get("/api/auth/challenge?examiner=alice").status_code == 404
         assert client.post(
             "/api/auth/reset-password",
             json={"challenge_id": "x", "response": "y", "new_password": "securepass2"},
-        ).status_code == 403
+        ).status_code == 404
 
-    def test_legacy_password_endpoints_fail_closed_when_legacy_disabled(
-        self, tmp_path, monkeypatch
-    ):
+    def test_login_fails_closed_without_control_plane(self, tmp_path, monkeypatch):
+        """No Supabase callback -> login returns 503, never a silent local fallback."""
         monkeypatch.setattr(routes_mod, "_PASSWORDS_DIR", tmp_path / "passwords")
         app = create_dashboard_v2_app(
             session_secret=_SECRET,
             session_max_age=28800,
             supabase_auth=None,
-            legacy_portal_session_enabled=False,
         )
         client = TestClient(app, raise_server_exceptions=True)
 
-        setup_required = client.get("/api/auth/setup-required")
-        assert setup_required.status_code == 200
-        assert setup_required.json() == {"required": False, "setup_required": False}
+        resp = client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "pw"},
+        )
+        assert resp.status_code == 503
+        assert "Control plane unavailable" in resp.json()["error"]
 
-        assert client.post(
-            "/api/auth/setup", json={"examiner": "alice", "password": "securepass1"}
-        ).status_code == 403
-        assert client.get("/api/auth/challenge?examiner=alice").status_code == 403
-        assert client.post(
-            "/api/auth/reset-password",
-            json={"challenge_id": "x", "response": "y", "new_password": "securepass2"},
-        ).status_code == 403
+        # Legacy local endpoints are gone regardless of Supabase availability.
+        assert client.get("/api/auth/setup-required").json() == {
+            "required": False,
+            "setup_required": False,
+        }
+        assert client.get("/api/auth/challenge?examiner=alice").status_code == 404
 
 
 # ---------------------------------------------------------------------------

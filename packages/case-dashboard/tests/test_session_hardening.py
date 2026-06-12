@@ -9,7 +9,6 @@ Covers:
 from __future__ import annotations
 
 import hashlib
-import hmac as hmac_mod
 import json
 import secrets
 import time
@@ -45,7 +44,6 @@ def passwords_dir(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def app(passwords_dir, tmp_path, monkeypatch):
-    routes_mod._login_challenges.clear()
     routes_mod._challenges.clear()
     # Redirect Path.home() so lockout files land in tmp, not ~/.sift
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
@@ -135,38 +133,6 @@ class TestSlidingSessionRefresh:
         assert COOKIE_NAME not in resp.cookies
 
 
-# ---------------------------------------------------------------------------
-# 15c: Login Lockout Rates (429)
-# ---------------------------------------------------------------------------
-
-class TestLoginLockoutRateLimiting:
-    def test_five_login_failures_causes_lockout(self, client, passwords_dir, tmp_path):
-        _setup_examiner(passwords_dir, "bob", "correct_pass")
-
-        # 5 unsuccessful logins
-        for i in range(5):
-            # Get challenge
-            resp = client.get("/api/auth/challenge?examiner=bob")
-            assert resp.status_code == 200
-            data = resp.json()
-            # Send invalid response
-            payload = {
-                "challenge_id": data["challenge_id"],
-                "examiner": "bob",
-                "response": "bad_response_hex_" + str(i)
-            }
-            resp_login = client.post("/api/auth/login", json=payload)
-            assert resp_login.status_code == 401
-
-        # 6th attempt to get challenge or login must return 429
-        resp_challenge = client.get("/api/auth/challenge?examiner=bob")
-        assert resp_challenge.status_code == 429
-        assert "Too many failed attempts" in resp_challenge.json()["error"]
-
-        resp_login_block = client.post("/api/auth/login", json={
-            "challenge_id": "any_id",
-            "examiner": "bob",
-            "response": "any_response"
-        })
-        assert resp_login_block.status_code == 429
-        assert "Too many failed attempts" in resp_login_block.json()["error"]
+# B-MVP-011: the login-lockout (429) tests were removed with the local PBKDF2
+# login challenge endpoints. Login is Supabase-only; rate limiting for the
+# Supabase path lives upstream in the control plane.
