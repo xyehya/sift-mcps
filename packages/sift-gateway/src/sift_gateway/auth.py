@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 # /mcp is handled by its own ASGI-level auth (MCPAuthASGIApp) because
 # BaseHTTPMiddleware buffers responses and breaks SSE streaming.
 _PUBLIC_PATHS = {
+    # Root only redirects to /portal/ (see server.py root_redirect)
+    "/",
     "/health",
     "/health/",
     "/api/v1/health",

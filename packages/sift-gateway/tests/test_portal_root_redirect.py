@@ -65,3 +65,10 @@ def test_portal_slash_still_served(client):
     resp = client.get("/portal/", follow_redirects=False)
     assert resp.status_code == 200
     assert "Examiner Portal" in resp.text
+
+
+def test_root_path_is_public_for_auth_middleware():
+    """The auth middleware must not intercept '/' before the redirect route."""
+    from sift_gateway.auth import _PUBLIC_PATHS
+
+    assert "/" in _PUBLIC_PATHS
