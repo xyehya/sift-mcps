@@ -20,7 +20,7 @@
 # account (which already has broad NOPASSWD sudo), this allowlist is documentary
 # until that broad grant is removed. To actually enforce least privilege, run the
 # gateway/worker as a DEDICATED service user whose ONLY root capability is this
-# drop-in. See docs/product/security-architecture.md.
+# drop-in. See docs/regenerate/security-architecture.md.
 set -euo pipefail
 
 DEFAULT_SERVICE_USER="${SUDO_USER:-$(id -un 2>/dev/null || printf 'sift_gateway')}"

@@ -13,9 +13,11 @@
   #include <abstractions/ssl_certs>
   #include <abstractions/nameservice>
 
-  # Gateway source tree — read-only (code + configs)
-  /home/*/sift-mcps-test/                    r,
-  /home/*/sift-mcps-test/**                  r,
+  # Gateway source tree — read-only (code + configs). The installer stages the
+  # checkout into /opt/sift-mcps and the gateway runs as sift-service, so the
+  # runtime tree is /opt/sift-mcps, not an operator-home test checkout.
+  /opt/sift-mcps/                            r,
+  /opt/sift-mcps/**                          r,
 
   # uv Python installations and shared libs
   /home/*/.local/share/uv/python/*/          r,
@@ -83,7 +85,7 @@
   deny network raw,
 
   # Backend subprocesses — only uv-managed Python and console scripts
-  /home/*/sift-mcps-test/.venv/bin/**        rix,
+  /opt/sift-mcps/.venv/bin/**                rix,
   /home/*/.local/share/uv/python/**/bin/**   rix,
   /home/*/.local/bin/uv                      rix,
   /usr/bin/python3*                          rix,
