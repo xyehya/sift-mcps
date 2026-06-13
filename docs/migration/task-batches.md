@@ -68,7 +68,7 @@ OpenSearch/RAG tool smoke.
 - [x] BATCH-TLS1 - Installer certificate and trust strategy
 - [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets (DEFERRED to after LV1 per operator 2026-06-13)
 - [x] BATCH-CL3a - Supabase fail-closed operator-password re-verification (B-MVP-017; before LV1)
-- [ ] BATCH-CL3b - Delete dead file-HMAC re-auth plane after CL3a (B-MVP-017)
+- [ ] BATCH-CL3b - Complete re-auth migration: delete dead plane + must-reset re-home + cover B-MVP-021/022 (after CL3a, before LV1)
 - [x] BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables (B-MVP-013)
 - [x] BATCH-UN1 - Component uninstaller, remove all or selected components (B-MVP-007)
 - [x] BATCH-RG1 - Regenerate documentation modernization pass
@@ -762,17 +762,21 @@ Acceptance:
 - Live smoke: a sensitive action (e.g. evidence seal) re-auths via Supabase end
   to end on the VM, and is denied with the control plane stopped.
 
-## BATCH-CL3b - Delete the now-dead file-HMAC re-auth plane
+## BATCH-CL3b - Complete the Supabase re-auth migration (delete dead plane + cover gaps)
 
-Status: follows CL3a (operator 2026-06-13), before LV1. Pure deletion once CL3a
-proves nothing calls the file-HMAC plane.
+Status: follows CL3a (operator 2026-06-13), before LV1. Folds in B-MVP-021/022
+(operator 2026-06-13): besides deleting the dead file-HMAC plane and re-homing
+must-reset, also close the two pre-existing re-auth gaps the CL3a review found,
+since they live in the same case-dashboard re-auth code. Auth-touching ->
+/security-review required.
 
 Dependencies: BATCH-CL3a.
 
 Scope:
 
 - `packages/case-dashboard/**` (`sift_session` middleware,
-  `_sync_local_reauth_password`, file-HMAC challenge endpoints),
+  `_sync_local_reauth_password`, file-HMAC challenge endpoints, the
+  `post_case_activate` DB-active branch and `create_principal` re-auth gaps),
   `packages/sift-core/**` (`verification.py` re-auth writers, `backup_ops.py`
   ledger copy), their tests.
 
@@ -791,13 +795,21 @@ Exact work:
   re-home the must-reset write-gate to the Supabase `status='invited'` signal so
   forced-reset enforcement survives. Do NOT delete `_PASSWORDS_DIR` until this
   consumer is moved.
+- B-MVP-021: add `await _supabase_reverify(request, body)` to the
+  `post_case_activate` DB-active branch (`_ACTIVE_CASES is not None`) BEFORE
+  `set_active_case`, so live case activation re-auths. Test: DB-active branch
+  denies on wrong password / control-plane down, allows on correct password.
+- B-MVP-022: add the Supabase re-verify to agent/service credential issuance
+  (`create_principal`, POST /api/auth/principals) in addition to the existing
+  owner/admin gate. Test: denial on wrong password / fail-closed, success path.
 
 Acceptance:
 
 - No file-HMAC re-auth write/verify path remains; the must-reset gate works off
-  the Supabase signal (no `_PASSWORDS_DIR` reads remain); targeted suites green;
-  portal sensitive actions still re-auth correctly under Supabase authority (live
-  smoke). `/code-review` + `/security-review`.
+  the Supabase signal (no `_PASSWORDS_DIR` reads remain); case-activate (DB
+  branch) and credential issuance now re-auth via Supabase (fail-closed);
+  targeted suites green; portal sensitive actions still re-auth correctly under
+  Supabase authority (live smoke). `/code-review` + `/security-review`.
 
 ## BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables
 
