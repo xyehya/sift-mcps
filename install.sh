@@ -1809,6 +1809,13 @@ write_control_plane_env() {
     printf '# SIFT control-plane environment — managed by sift-mcps install.sh\n'
     printf '# Secrets are stored here, not in gateway.yaml.\n'
     [[ -n "$cp_dsn" ]] && printf 'SIFT_CONTROL_PLANE_DSN=%s\n' "$cp_dsn"
+    # When a control-plane DSN is configured, Postgres is the active-case + audit
+    # authority. SIFT_DB_ACTIVE signals that process-wide so the gateway AND the
+    # async job worker (which has no per-request AuthorityContext) suppress the
+    # legacy file-audit "Audit write failed" warning and treat the DB envelope as
+    # authority. Non-secret flag; read by sift_core.active_case_context and
+    # sift_common.audit. (Both units read this file via EnvironmentFile.)
+    [[ -n "$cp_dsn" ]] && printf 'SIFT_DB_ACTIVE=1\n'
     [[ -n "$token_pepper" ]] && printf 'SIFT_TOKEN_PEPPER=%s\n' "$token_pepper"
     [[ -n "$session_secret" ]] && printf 'SIFT_PORTAL_SESSION_SECRET=%s\n' "$session_secret"
   } > "$tmp"
