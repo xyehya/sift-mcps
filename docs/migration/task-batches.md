@@ -67,7 +67,7 @@ OpenSearch/RAG tool smoke.
 - [ ] BATCH-PT2 - Portal RAG document management flow
 - [x] BATCH-TLS1 - Installer certificate and trust strategy
 - [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets (DEFERRED to after LV1 per operator 2026-06-13)
-- [ ] BATCH-CL3a - Supabase fail-closed operator-password re-verification (B-MVP-017; before LV1)
+- [x] BATCH-CL3a - Supabase fail-closed operator-password re-verification (B-MVP-017; before LV1)
 - [ ] BATCH-CL3b - Delete dead file-HMAC re-auth plane after CL3a (B-MVP-017)
 - [x] BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables (B-MVP-013)
 - [x] BATCH-UN1 - Component uninstaller, remove all or selected components (B-MVP-007)
@@ -700,7 +700,20 @@ Acceptance:
 
 ## BATCH-CL3a - Supabase fail-closed operator-password re-verification
 
-Status: DECIDED 2026-06-13 (operator, option A) - build BEFORE LV1 so the
+Status: LANDED 2026-06-13 (636f425 + bundle rebuild 4b89ac0). Supabase GoTrue
+password-grant re-verify (session-bound via expected_auth_user_id, tokens
+discarded), all file-HMAC verify call sites switched, portal_session_enabled
+flipped false in the template (code default kept True). Adversarial security
+review: APPROVE-WITH-NITS, no exploitable bypass; the one MED finding (an
+identity-binding-dropping TypeError fallback) was removed; endpoint-level
+cross-operator binding test added. Suites: case-dashboard 353, sift-gateway 492,
+frontend vitest 82, vite build clean; served static/v2 bundle rebuilt to ship
+the {password} payload (install.sh serves the committed bundle, does not build).
+Live re-auth smoke folded into the LV1 fresh-install sequence. Pre-existing
+re-auth GAPS surfaced by the review (NOT introduced here): B-MVP-021
+(case-activate DB-active branch), B-MVP-022 (agent-credential issuance).
+
+Status (orig): DECIDED 2026-06-13 (operator, option A) - build BEFORE LV1 so the
 end-to-end proof validates the FINAL re-auth design. Re-scoped from the former
 BATCH-CL3 after the opus build agent proved (conductor-confirmed) that the
 file-HMAC plane is the ONLY operator-password re-auth verifier
@@ -773,11 +786,17 @@ Exact work:
   block. Drop their now-dead tests.
 - Leave `verification.write_ledger_entry`/`_apply_delta` (file-authority COMMIT
   ledger) ALONE - separate concern, separate follow-up.
+- MUST-RESET RE-HOMING (CL3a Fork 3): `_must_reset_check` currently reads
+  `_PASSWORDS_DIR` (the file-HMAC store this batch deletes). Before deleting it,
+  re-home the must-reset write-gate to the Supabase `status='invited'` signal so
+  forced-reset enforcement survives. Do NOT delete `_PASSWORDS_DIR` until this
+  consumer is moved.
 
 Acceptance:
 
-- No file-HMAC re-auth write/verify path remains; targeted suites green; portal
-  sensitive actions still re-auth correctly under Supabase authority (live
+- No file-HMAC re-auth write/verify path remains; the must-reset gate works off
+  the Supabase signal (no `_PASSWORDS_DIR` reads remain); targeted suites green;
+  portal sensitive actions still re-auth correctly under Supabase authority (live
   smoke). `/code-review` + `/security-review`.
 
 ## BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables
