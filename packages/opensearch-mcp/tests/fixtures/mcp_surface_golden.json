@@ -238,74 +238,34 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "Advisory": {
-                "properties": {
-                  "kind": {
-                    "description": "Machine-readable advisory category.",
-                    "enum": [
-                      "field_mapping",
-                      "execution_evidence",
-                      "pagination",
-                      "empty_result"
-                    ],
-                    "title": "Kind",
-                    "type": "string"
-                  },
-                  "text": {
-                    "description": "Human-readable advisory text.",
-                    "title": "Text",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "text"
-                ],
-                "title": "Advisory",
-                "type": "object"
-              },
-              "SearchHit": {
-                "properties": {
-                  "fields": {
-                    "additionalProperties": true,
-                    "description": "Projected _source fields after compact-mode shaping.",
-                    "title": "Fields",
-                    "type": "object"
-                  },
-                  "id": {
-                    "description": "Document _id.",
-                    "title": "Id",
-                    "type": "string"
-                  },
-                  "index": {
-                    "description": "Concrete index the hit came from.",
-                    "title": "Index",
-                    "type": "string"
-                  },
-                  "truncated": {
-                    "description": "Field names whose values were truncated to the size ceiling.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Truncated",
-                    "type": "array"
-                  }
-                },
-                "required": [
-                  "id",
-                  "index",
-                  "fields"
-                ],
-                "title": "SearchHit",
-                "type": "object"
-              }
-            },
             "properties": {
               "advisories": {
                 "description": "Optional field-mapping/empty-result/pagination hints.",
                 "items": {
-                  "$ref": "#/$defs/Advisory"
+                  "properties": {
+                    "kind": {
+                      "description": "Machine-readable advisory category.",
+                      "enum": [
+                        "field_mapping",
+                        "execution_evidence",
+                        "pagination",
+                        "empty_result"
+                      ],
+                      "title": "Kind",
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "Human-readable advisory text.",
+                      "title": "Text",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "text"
+                  ],
+                  "title": "Advisory",
+                  "type": "object"
                 },
                 "title": "Advisories",
                 "type": "array"
@@ -324,7 +284,39 @@
               "results": {
                 "description": "Matching documents, projected.",
                 "items": {
-                  "$ref": "#/$defs/SearchHit"
+                  "properties": {
+                    "fields": {
+                      "additionalProperties": true,
+                      "description": "Projected _source fields after compact-mode shaping.",
+                      "title": "Fields",
+                      "type": "object"
+                    },
+                    "id": {
+                      "description": "Document _id.",
+                      "title": "Id",
+                      "type": "string"
+                    },
+                    "index": {
+                      "description": "Concrete index the hit came from.",
+                      "title": "Index",
+                      "type": "string"
+                    },
+                    "truncated": {
+                      "description": "Field names whose values were truncated to the size ceiling.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Truncated",
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "index",
+                    "fields"
+                  ],
+                  "title": "SearchHit",
+                  "type": "object"
                 },
                 "title": "Results",
                 "type": "array"
@@ -356,8 +348,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -371,18 +370,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -487,8 +474,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -502,18 +496,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -620,104 +602,96 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "Detection": {
-                "properties": {
-                  "id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Finding id.",
-                    "title": "Id"
-                  },
-                  "index": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Source index.",
-                    "title": "Index"
-                  },
-                  "matched_docs": {
-                    "description": "Related document count.",
-                    "title": "Matched Docs",
-                    "type": "integer"
-                  },
-                  "rules": {
-                    "description": "Matched rules.",
-                    "items": {
-                      "$ref": "#/$defs/DetectionRuleRef"
-                    },
-                    "title": "Rules",
-                    "type": "array"
-                  },
-                  "timestamp": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Finding timestamp.",
-                    "title": "Timestamp"
-                  }
-                },
-                "required": [
-                  "matched_docs"
-                ],
-                "title": "Detection",
-                "type": "object"
-              },
-              "DetectionRuleRef": {
-                "properties": {
-                  "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Detection rule name.",
-                    "title": "Name"
-                  },
-                  "tags": {
-                    "description": "Rule tags.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Tags",
-                    "type": "array"
-                  }
-                },
-                "title": "DetectionRuleRef",
-                "type": "object"
-              }
-            },
             "properties": {
               "findings": {
                 "description": "Detection findings.",
                 "items": {
-                  "$ref": "#/$defs/Detection"
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Finding id.",
+                      "title": "Id"
+                    },
+                    "index": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Source index.",
+                      "title": "Index"
+                    },
+                    "matched_docs": {
+                      "description": "Related document count.",
+                      "title": "Matched Docs",
+                      "type": "integer"
+                    },
+                    "rules": {
+                      "description": "Matched rules.",
+                      "items": {
+                        "properties": {
+                          "name": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "default": null,
+                            "description": "Detection rule name.",
+                            "title": "Name"
+                          },
+                          "tags": {
+                            "description": "Rule tags.",
+                            "items": {
+                              "type": "string"
+                            },
+                            "title": "Tags",
+                            "type": "array"
+                          }
+                        },
+                        "title": "DetectionRuleRef",
+                        "type": "object"
+                      },
+                      "title": "Rules",
+                      "type": "array"
+                    },
+                    "timestamp": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Finding timestamp.",
+                      "title": "Timestamp"
+                    }
+                  },
+                  "required": [
+                    "matched_docs"
+                  ],
+                  "title": "Detection",
+                  "type": "object"
                 },
                 "title": "Findings",
                 "type": "array"
@@ -761,8 +735,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -776,18 +757,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -977,8 +946,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -992,18 +968,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -1178,8 +1142,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -1193,18 +1164,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -1426,8 +1385,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -1441,18 +1407,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -1531,204 +1485,196 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "ChecklistItem": {
-                "properties": {
-                  "artifact": {
-                    "description": "Artifact name.",
-                    "title": "Artifact",
-                    "type": "string"
-                  },
-                  "detail": {
-                    "description": "Human-readable artifact progress detail.",
-                    "title": "Detail",
-                    "type": "string"
-                  },
-                  "host": {
-                    "description": "Host name.",
-                    "title": "Host",
-                    "type": "string"
-                  },
-                  "status": {
-                    "description": "Per-artifact status.",
-                    "enum": [
-                      "done",
-                      "running",
-                      "failed",
-                      "pending"
-                    ],
-                    "title": "Status",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "host",
-                  "artifact",
-                  "status",
-                  "detail"
-                ],
-                "title": "ChecklistItem",
-                "type": "object"
-              },
-              "IngestRun": {
-                "properties": {
-                  "artifacts_complete": {
-                    "description": "Completed artifact count.",
-                    "title": "Artifacts Complete",
-                    "type": "integer"
-                  },
-                  "artifacts_total": {
-                    "description": "Total artifact count.",
-                    "title": "Artifacts Total",
-                    "type": "integer"
-                  },
-                  "bulk_failed": {
-                    "description": "Bulk write failures.",
-                    "title": "Bulk Failed",
-                    "type": "integer"
-                  },
-                  "case_id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Case id.",
-                    "title": "Case Id"
-                  },
-                  "checklist": {
-                    "description": "Progress checklist.",
-                    "items": {
-                      "$ref": "#/$defs/ChecklistItem"
-                    },
-                    "title": "Checklist",
-                    "type": "array"
-                  },
-                  "details": {
-                    "additionalProperties": true,
-                    "description": "Additional behavior-compatible fields.",
-                    "title": "Details",
-                    "type": "object"
-                  },
-                  "elapsed": {
-                    "description": "Elapsed time display.",
-                    "title": "Elapsed",
-                    "type": "string"
-                  },
-                  "errors": {
-                    "description": "Per-artifact errors.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Errors",
-                    "type": "array"
-                  },
-                  "halt_reason": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Structured halt reason when failed.",
-                    "title": "Halt Reason"
-                  },
-                  "hosts_complete": {
-                    "description": "Completed host count.",
-                    "title": "Hosts Complete",
-                    "type": "integer"
-                  },
-                  "hosts_total": {
-                    "description": "Total host count.",
-                    "title": "Hosts Total",
-                    "type": "integer"
-                  },
-                  "log_file": {
-                    "default": "",
-                    "description": "Run log file.",
-                    "title": "Log File",
-                    "type": "string"
-                  },
-                  "message": {
-                    "default": "",
-                    "description": "Operator-facing status message.",
-                    "title": "Message",
-                    "type": "string"
-                  },
-                  "next_steps": {
-                    "description": "Suggested next steps.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Next Steps",
-                    "type": "array"
-                  },
-                  "pid": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Worker process id.",
-                    "title": "Pid"
-                  },
-                  "status": {
-                    "description": "Run status.",
-                    "enum": [
-                      "starting",
-                      "running",
-                      "complete",
-                      "failed",
-                      "killed",
-                      "unknown"
-                    ],
-                    "title": "Status",
-                    "type": "string"
-                  },
-                  "total_indexed": {
-                    "description": "Total submitted documents.",
-                    "title": "Total Indexed",
-                    "type": "integer"
-                  },
-                  "warnings": {
-                    "description": "Non-fatal warnings.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Warnings",
-                    "type": "array"
-                  }
-                },
-                "required": [
-                  "status",
-                  "elapsed",
-                  "total_indexed",
-                  "bulk_failed",
-                  "hosts_complete",
-                  "hosts_total",
-                  "artifacts_complete",
-                  "artifacts_total"
-                ],
-                "title": "IngestRun",
-                "type": "object"
-              }
-            },
             "properties": {
               "ingests": {
                 "description": "Running or recent ingest/enrich runs.",
                 "items": {
-                  "$ref": "#/$defs/IngestRun"
+                  "properties": {
+                    "artifacts_complete": {
+                      "description": "Completed artifact count.",
+                      "title": "Artifacts Complete",
+                      "type": "integer"
+                    },
+                    "artifacts_total": {
+                      "description": "Total artifact count.",
+                      "title": "Artifacts Total",
+                      "type": "integer"
+                    },
+                    "bulk_failed": {
+                      "description": "Bulk write failures.",
+                      "title": "Bulk Failed",
+                      "type": "integer"
+                    },
+                    "case_id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Case id.",
+                      "title": "Case Id"
+                    },
+                    "checklist": {
+                      "description": "Progress checklist.",
+                      "items": {
+                        "properties": {
+                          "artifact": {
+                            "description": "Artifact name.",
+                            "title": "Artifact",
+                            "type": "string"
+                          },
+                          "detail": {
+                            "description": "Human-readable artifact progress detail.",
+                            "title": "Detail",
+                            "type": "string"
+                          },
+                          "host": {
+                            "description": "Host name.",
+                            "title": "Host",
+                            "type": "string"
+                          },
+                          "status": {
+                            "description": "Per-artifact status.",
+                            "enum": [
+                              "done",
+                              "running",
+                              "failed",
+                              "pending"
+                            ],
+                            "title": "Status",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "host",
+                          "artifact",
+                          "status",
+                          "detail"
+                        ],
+                        "title": "ChecklistItem",
+                        "type": "object"
+                      },
+                      "title": "Checklist",
+                      "type": "array"
+                    },
+                    "details": {
+                      "additionalProperties": true,
+                      "description": "Additional behavior-compatible fields.",
+                      "title": "Details",
+                      "type": "object"
+                    },
+                    "elapsed": {
+                      "description": "Elapsed time display.",
+                      "title": "Elapsed",
+                      "type": "string"
+                    },
+                    "errors": {
+                      "description": "Per-artifact errors.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Errors",
+                      "type": "array"
+                    },
+                    "halt_reason": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Structured halt reason when failed.",
+                      "title": "Halt Reason"
+                    },
+                    "hosts_complete": {
+                      "description": "Completed host count.",
+                      "title": "Hosts Complete",
+                      "type": "integer"
+                    },
+                    "hosts_total": {
+                      "description": "Total host count.",
+                      "title": "Hosts Total",
+                      "type": "integer"
+                    },
+                    "log_file": {
+                      "default": "",
+                      "description": "Run log file.",
+                      "title": "Log File",
+                      "type": "string"
+                    },
+                    "message": {
+                      "default": "",
+                      "description": "Operator-facing status message.",
+                      "title": "Message",
+                      "type": "string"
+                    },
+                    "next_steps": {
+                      "description": "Suggested next steps.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Next Steps",
+                      "type": "array"
+                    },
+                    "pid": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Worker process id.",
+                      "title": "Pid"
+                    },
+                    "status": {
+                      "description": "Run status.",
+                      "enum": [
+                        "starting",
+                        "running",
+                        "complete",
+                        "failed",
+                        "killed",
+                        "unknown"
+                      ],
+                      "title": "Status",
+                      "type": "string"
+                    },
+                    "total_indexed": {
+                      "description": "Total submitted documents.",
+                      "title": "Total Indexed",
+                      "type": "integer"
+                    },
+                    "warnings": {
+                      "description": "Non-fatal warnings.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Warnings",
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "elapsed",
+                    "total_indexed",
+                    "bulk_failed",
+                    "hosts_complete",
+                    "hosts_total",
+                    "artifacts_complete",
+                    "artifacts_total"
+                  ],
+                  "title": "IngestRun",
+                  "type": "object"
                 },
                 "title": "Ingests",
                 "type": "array"
@@ -1754,8 +1700,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -1769,18 +1722,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -2187,8 +2128,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -2202,18 +2150,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -2325,27 +2261,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "FieldValue": {
-                "properties": {
-                  "count": {
-                    "description": "Document count for this value.",
-                    "title": "Count",
-                    "type": "integer"
-                  },
-                  "value": {
-                    "description": "Distinct field value.",
-                    "title": "Value"
-                  }
-                },
-                "required": [
-                  "value",
-                  "count"
-                ],
-                "title": "FieldValue",
-                "type": "object"
-              }
-            },
             "properties": {
               "field": {
                 "description": "Field enumerated.",
@@ -2360,7 +2275,23 @@
               "values": {
                 "description": "Distinct values with counts.",
                 "items": {
-                  "$ref": "#/$defs/FieldValue"
+                  "properties": {
+                    "count": {
+                      "description": "Document count for this value.",
+                      "title": "Count",
+                      "type": "integer"
+                    },
+                    "value": {
+                      "description": "Distinct field value.",
+                      "title": "Value"
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "count"
+                  ],
+                  "title": "FieldValue",
+                  "type": "object"
                 },
                 "title": "Values",
                 "type": "array"
@@ -2375,8 +2306,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -2390,18 +2328,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -2522,59 +2448,34 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "Advisory": {
-                "properties": {
-                  "kind": {
-                    "description": "Machine-readable advisory category.",
-                    "enum": [
-                      "field_mapping",
-                      "execution_evidence",
-                      "pagination",
-                      "empty_result"
-                    ],
-                    "title": "Kind",
-                    "type": "string"
-                  },
-                  "text": {
-                    "description": "Human-readable advisory text.",
-                    "title": "Text",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "text"
-                ],
-                "title": "Advisory",
-                "type": "object"
-              },
-              "TimeBucket": {
-                "properties": {
-                  "count": {
-                    "description": "Document count in this time bucket.",
-                    "title": "Count",
-                    "type": "integer"
-                  },
-                  "time": {
-                    "description": "Bucket start (ISO-8601).",
-                    "title": "Time",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "time",
-                  "count"
-                ],
-                "title": "TimeBucket",
-                "type": "object"
-              }
-            },
             "properties": {
               "advisories": {
                 "description": "Optional narrowing advisory for very large histograms.",
                 "items": {
-                  "$ref": "#/$defs/Advisory"
+                  "properties": {
+                    "kind": {
+                      "description": "Machine-readable advisory category.",
+                      "enum": [
+                        "field_mapping",
+                        "execution_evidence",
+                        "pagination",
+                        "empty_result"
+                      ],
+                      "title": "Kind",
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "Human-readable advisory text.",
+                      "title": "Text",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "text"
+                  ],
+                  "title": "Advisory",
+                  "type": "object"
                 },
                 "title": "Advisories",
                 "type": "array"
@@ -2582,7 +2483,24 @@
               "buckets": {
                 "description": "Sparse date histogram buckets.",
                 "items": {
-                  "$ref": "#/$defs/TimeBucket"
+                  "properties": {
+                    "count": {
+                      "description": "Document count in this time bucket.",
+                      "title": "Count",
+                      "type": "integer"
+                    },
+                    "time": {
+                      "description": "Bucket start (ISO-8601).",
+                      "title": "Time",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "time",
+                    "count"
+                  ],
+                  "title": "TimeBucket",
+                  "type": "object"
                 },
                 "title": "Buckets",
                 "type": "array"
@@ -2607,8 +2525,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -2622,18 +2547,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -2759,8 +2672,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -2774,18 +2694,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -2897,32 +2805,27 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "Bucket": {
-                "properties": {
-                  "count": {
-                    "description": "Doc count for the value.",
-                    "title": "Count",
-                    "type": "integer"
-                  },
-                  "key": {
-                    "description": "Bucket value.",
-                    "title": "Key"
-                  }
-                },
-                "required": [
-                  "key",
-                  "count"
-                ],
-                "title": "Bucket",
-                "type": "object"
-              }
-            },
             "properties": {
               "buckets": {
                 "description": "Top-N buckets for the requested field.",
                 "items": {
-                  "$ref": "#/$defs/Bucket"
+                  "properties": {
+                    "count": {
+                      "description": "Doc count for the value.",
+                      "title": "Count",
+                      "type": "integer"
+                    },
+                    "key": {
+                      "description": "Bucket value.",
+                      "title": "Key"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "count"
+                  ],
+                  "title": "Bucket",
+                  "type": "object"
                 },
                 "title": "Buckets",
                 "type": "array"
@@ -2953,8 +2856,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -2968,18 +2878,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -3048,40 +2946,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "IndexInfo": {
-                "properties": {
-                  "docs": {
-                    "description": "Document count for the index.",
-                    "title": "Docs",
-                    "type": "integer"
-                  },
-                  "index": {
-                    "description": "Case index name.",
-                    "title": "Index",
-                    "type": "string"
-                  },
-                  "size": {
-                    "description": "Human store size, e.g. '1.2gb'.",
-                    "title": "Size",
-                    "type": "string"
-                  },
-                  "status": {
-                    "description": "Index status reported by cat indices.",
-                    "title": "Status",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "index",
-                  "docs",
-                  "size",
-                  "status"
-                ],
-                "title": "IndexInfo",
-                "type": "object"
-              }
-            },
             "properties": {
               "cluster_status": {
                 "description": "Cluster health status; single-node yellow may be annotated normal.",
@@ -3091,7 +2955,36 @@
               "indices": {
                 "description": "All case-* indices, sorted by name.",
                 "items": {
-                  "$ref": "#/$defs/IndexInfo"
+                  "properties": {
+                    "docs": {
+                      "description": "Document count for the index.",
+                      "title": "Docs",
+                      "type": "integer"
+                    },
+                    "index": {
+                      "description": "Case index name.",
+                      "title": "Index",
+                      "type": "string"
+                    },
+                    "size": {
+                      "description": "Human store size, e.g. '1.2gb'.",
+                      "title": "Size",
+                      "type": "string"
+                    },
+                    "status": {
+                      "description": "Index status reported by cat indices.",
+                      "title": "Status",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "index",
+                    "docs",
+                    "size",
+                    "status"
+                  ],
+                  "title": "IndexInfo",
+                  "type": "object"
                 },
                 "title": "Indices",
                 "type": "array"
@@ -3111,8 +3004,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -3126,18 +3026,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -3322,8 +3210,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -3337,18 +3232,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -3440,96 +3323,49 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "ArtifactCoverage": {
-                "properties": {
-                  "docs": {
-                    "description": "Document count for the artifact family.",
-                    "title": "Docs",
-                    "type": "integer"
-                  },
-                  "hosts": {
-                    "description": "Hosts with this artifact.",
-                    "items": {
-                      "type": "string"
+            "properties": {
+              "artifacts": {
+                "additionalProperties": {
+                  "properties": {
+                    "docs": {
+                      "description": "Document count for the artifact family.",
+                      "title": "Docs",
+                      "type": "integer"
                     },
-                    "title": "Hosts",
-                    "type": "array"
-                  },
-                  "indices": {
-                    "description": "Concrete indices merged.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Indices",
-                    "type": "array"
-                  }
-                },
-                "required": [
-                  "docs"
-                ],
-                "title": "ArtifactCoverage",
-                "type": "object"
-              },
-              "CoverageGap": {
-                "properties": {
-                  "command": {
-                    "description": "Exact ingest/enrich call to fill the gap.",
-                    "title": "Command",
-                    "type": "string"
-                  },
-                  "coverage_gap": {
-                    "description": "Missing coverage or enrichment.",
-                    "title": "Coverage Gap",
-                    "type": "string"
-                  },
-                  "next_mcp_step": {
-                    "description": "Next MCP step after filling the gap.",
-                    "title": "Next Mcp Step",
-                    "type": "string"
-                  },
-                  "output_path": {
-                    "anyOf": [
-                      {
+                    "hosts": {
+                      "description": "Hosts with this artifact.",
+                      "items": {
                         "type": "string"
                       },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Expected output path if applicable.",
-                    "title": "Output Path"
-                  },
-                  "warning": {
-                    "anyOf": [
-                      {
+                      "title": "Hosts",
+                      "type": "array"
+                    },
+                    "indices": {
+                      "description": "Concrete indices merged.",
+                      "items": {
                         "type": "string"
                       },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Non-fatal warning about the gap.",
-                    "title": "Warning"
+                      "title": "Indices",
+                      "type": "array"
+                    }
                   },
-                  "when_to_run": {
-                    "description": "When this gap should be filled.",
-                    "title": "When To Run",
-                    "type": "string"
-                  }
+                  "required": [
+                    "docs"
+                  ],
+                  "title": "ArtifactCoverage",
+                  "type": "object"
                 },
-                "required": [
-                  "coverage_gap",
-                  "when_to_run",
-                  "command",
-                  "next_mcp_step"
-                ],
-                "title": "CoverageGap",
+                "description": "Artifact coverage keyed by artifact family.",
+                "title": "Artifacts",
                 "type": "object"
               },
-              "CoverageState": {
+              "case_id": {
+                "description": "Resolved case id.",
+                "title": "Case Id",
+                "type": "string"
+              },
+              "coverage_state": {
+                "description": "Coverage and gap state.",
                 "properties": {
                   "disk_artifacts": {
                     "additionalProperties": {
@@ -3572,7 +3408,62 @@
                   "gaps": {
                     "description": "Actionable gaps.",
                     "items": {
-                      "$ref": "#/$defs/CoverageGap"
+                      "properties": {
+                        "command": {
+                          "description": "Exact ingest/enrich call to fill the gap.",
+                          "title": "Command",
+                          "type": "string"
+                        },
+                        "coverage_gap": {
+                          "description": "Missing coverage or enrichment.",
+                          "title": "Coverage Gap",
+                          "type": "string"
+                        },
+                        "next_mcp_step": {
+                          "description": "Next MCP step after filling the gap.",
+                          "title": "Next Mcp Step",
+                          "type": "string"
+                        },
+                        "output_path": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "description": "Expected output path if applicable.",
+                          "title": "Output Path"
+                        },
+                        "warning": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "description": "Non-fatal warning about the gap.",
+                          "title": "Warning"
+                        },
+                        "when_to_run": {
+                          "description": "When this gap should be filled.",
+                          "title": "When To Run",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "coverage_gap",
+                        "when_to_run",
+                        "command",
+                        "next_mcp_step"
+                      ],
+                      "title": "CoverageGap",
+                      "type": "object"
                     },
                     "title": "Gaps",
                     "type": "array"
@@ -3586,25 +3477,6 @@
                 },
                 "title": "CoverageState",
                 "type": "object"
-              }
-            },
-            "properties": {
-              "artifacts": {
-                "additionalProperties": {
-                  "$ref": "#/$defs/ArtifactCoverage"
-                },
-                "description": "Artifact coverage keyed by artifact family.",
-                "title": "Artifacts",
-                "type": "object"
-              },
-              "case_id": {
-                "description": "Resolved case id.",
-                "title": "Case Id",
-                "type": "string"
-              },
-              "coverage_state": {
-                "$ref": "#/$defs/CoverageState",
-                "description": "Coverage and gap state."
               },
               "enrichment": {
                 "additionalProperties": true,
@@ -3679,8 +3551,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -3694,18 +3573,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -3774,53 +3641,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "TopIndexShards": {
-                "properties": {
-                  "doc_count": {
-                    "description": "Document count.",
-                    "title": "Doc Count",
-                    "type": "integer"
-                  },
-                  "index": {
-                    "description": "Index name.",
-                    "title": "Index",
-                    "type": "string"
-                  },
-                  "primary_shards": {
-                    "description": "Primary shard count.",
-                    "title": "Primary Shards",
-                    "type": "integer"
-                  },
-                  "replica_shards": {
-                    "description": "Replica shard count.",
-                    "title": "Replica Shards",
-                    "type": "integer"
-                  },
-                  "size": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Human store size if reported.",
-                    "title": "Size"
-                  }
-                },
-                "required": [
-                  "index",
-                  "primary_shards",
-                  "replica_shards",
-                  "doc_count"
-                ],
-                "title": "TopIndexShards",
-                "type": "object"
-              }
-            },
             "properties": {
               "current_shards": {
                 "description": "Current shard count.",
@@ -3860,7 +3680,49 @@
               "top_indices_by_shard_count": {
                 "description": "Top visible indices by shard count.",
                 "items": {
-                  "$ref": "#/$defs/TopIndexShards"
+                  "properties": {
+                    "doc_count": {
+                      "description": "Document count.",
+                      "title": "Doc Count",
+                      "type": "integer"
+                    },
+                    "index": {
+                      "description": "Index name.",
+                      "title": "Index",
+                      "type": "string"
+                    },
+                    "primary_shards": {
+                      "description": "Primary shard count.",
+                      "title": "Primary Shards",
+                      "type": "integer"
+                    },
+                    "replica_shards": {
+                      "description": "Replica shard count.",
+                      "title": "Replica Shards",
+                      "type": "integer"
+                    },
+                    "size": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Human store size if reported.",
+                      "title": "Size"
+                    }
+                  },
+                  "required": [
+                    "index",
+                    "primary_shards",
+                    "replica_shards",
+                    "doc_count"
+                  ],
+                  "title": "TopIndexShards",
+                  "type": "object"
                 },
                 "title": "Top Indices By Shard Count",
                 "type": "array"
@@ -3879,8 +3741,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -3894,18 +3763,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
