@@ -13,6 +13,74 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-13 - Operator decision round + B-MVP-020 live CA rotation
+
+Status: DONE (decisions recorded; one live VM action proven; docs-only commit)
+
+Operator cleared the remaining open backlog and resequenced the program:
+
+- B-MVP-012 / BATCH-SB1 DEFERRED to after LV1. The end-to-end proof (LV1) now
+  runs first on the current Supabase CLI loopback stack with demo secrets
+  accepted as documented lab posture; SB1 (self-managed compose with generated
+  secrets) follows LV1 and must precede any non-lab deployment. LV1's
+  dependency on SB1 is dropped; SB1 no longer gates LV1.
+- B-MVP-013 DECIDED: adopt FORCE ROW LEVEL SECURITY on the 31 RLS-ENABLED
+  `app.*` tables. New BATCH-DB1 (schema migration). Gateway `service_role` has
+  BYPASSRLS so the gateway path is unaffected; FORCE is defense-in-depth that
+  makes RLS apply to the table OWNER and enforces default-deny on the 0-policy
+  tables.
+- B-MVP-006 DECIDED: all portal-managed RAG documents are GLOBAL KNOWLEDGE
+  ONLY; no case-derived chunks. PT2 scope is now add/list/refresh/retire for the
+  shared knowledge plane only.
+- B-MVP-007 DECIDED: keep the OpenCTI add-on images for now; new BATCH-UN1
+  builds a component uninstaller that removes ALL or operator-SELECTED
+  components, dry-run by default, with evidence under `/cases` never removed
+  without its own explicit flag.
+- B-MVP-008 PARKED (kept open): air-gapped Volatility symbol provisioning later.
+- B-MVP-018 DECIDED: keep AppArmor COMPLAIN-only through LV1; revisit
+  enforce-mode only after the end-to-end test passes.
+
+B-MVP-020 (live-proven, operator-requested): ran
+`rotate-tls.sh --rotate-ca --i-understand-clients-lose-trust` on the existing
+VM to migrate it to the full hardened CA profile and test the adoption path.
+Before: CA `CN=sift-mcps-CA` already carried critical basicConstraints CA:TRUE
+(the row's "no CA extensions" premise was partly stale) but lacked an explicit
+critical keyUsage; leaf already had serverAuth EKU. After: new CA
+`CN=Protocol SIFT Gateway local CA` with critical basicConstraints CA:TRUE +
+critical keyUsage(keyCertSign,cRLSign); fingerprint rotated
+`D4:93:87…` -> `E5:34:F9…`; leaf re-issued with serverAuth EKU and
+IP:192.168.122.81/IP:127.0.0.1/DNS SANs; keys 0600, certs 0644, all
+sift-service-owned; gateway restarted, `/health` status=ok, both services
+active; `curl --cacert ca-cert.pem` verifies WITHOUT `-k` on the IP SAN.
+Operator note: every client that imported the OLD ca-cert.pem must re-import
+`/var/lib/sift/.sift/tls/ca-cert.pem`.
+
+B-MVP-019 (operator asked for detail): `setup-addon.sh` builds the gateway
+register payload from the OPERATOR's checkout — `command` resolves to the
+operator's `uv` (`~/.local/bin/uv`), `--project` to `~/sift-mcps`, and
+`manifest_path` under `~/sift-mcps/packages/...`. The hardened gateway runs
+`ProtectHome=tmpfs`, so it sees an empty `/home/*` and can only reach
+`/opt/sift-mcps` + system paths. An add-on registered with those operator-home
+paths would pass validate/register but FAIL TO LAUNCH when the gateway tries to
+exec the stdio child (the AD2 OpenCTI proof was a stub and never launched a
+real child end to end, so this did not surface). AD2 already fixed the related
+register-DIR permission half (payload now written to operator-writable
+`~/.sift/addon-register`). The remaining path-derivation half: derive
+`command`/`--project`/`manifest_path` from the staged `/opt/sift-mcps` tree and
+a gateway-visible `uv`. Re-pointed to BATCH-LV1 (best fixed when LV1 first
+launches a real add-on under the hardened gateway, using live-confirmed staged
+paths). Operator to confirm: fix now as a standalone patch, or fold into LV1.
+
+New batches: BATCH-DB1 (FORCE RLS), BATCH-UN1 (component uninstaller).
+Validation: both doc validators pass; `git diff --check` clean. No secret
+values committed; the live rotation printed no key material.
+
+Next: remaining program is BATCH-CL2 (rename), BATCH-CL3 (file-HMAC retire),
+BATCH-DB1 (FORCE RLS), BATCH-PT2 (portal RAG, global-knowledge-only),
+BATCH-UN1 (uninstaller), BATCH-RG1 (regenerate docs), then BATCH-LV1
+(end-to-end live + Rocba, on the current CLI Supabase stack); BATCH-SB1
+deferred to after LV1.
+
 ### 2026-06-12 - Trust and add-on wave landed: TLS1 + AD2
 
 Status: DONE (six commits merged to local main; not pushed; live VM re-proven)
@@ -354,21 +422,21 @@ after portal reset/credential issuance.
 | B-MVP-003 | Backlog | RESOLVED | DECIDED 2026-06-12: Windows triage stays an author-guide example only; no rebuild now. AD2 proves the add-on contract with OpenCTI alone. | BATCH-AD1 / BATCH-AD2 |
 | B-MVP-004 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): uv/Hayabusa/BGE/RAG-bundle pinned with SHA-256 hard gates, Supabase CLI SHA warn->die, GeoIP off by default behind --enable-geoip, SIFT_OFFLINE=1/--offline skips all fetches with staged-artifact messages. | BATCH-HR3 |
 | B-MVP-005 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): OpenSearch container runs CapDrop=ALL, no-new-privileges, digest-pinned image; security plugin stays disabled per decided loopback lab posture. | BATCH-HR3 |
-| B-MVP-006 | Backlog | OPEN | Portal RAG document management must decide whether operator-added docs are global knowledge only or can create case-derived chunks with strict provenance. | BATCH-PT2 |
+| B-MVP-006 | Backlog | OPEN | DECIDED 2026-06-13: all portal-managed RAG documents are GLOBAL KNOWLEDGE ONLY; no case-derived chunks. PT2 implements add/list/refresh/retire for the shared knowledge plane only; case-derived RAG stays out of scope and would require a separate future design with evidence provenance. | BATCH-PT2 |
 | B-MVP-010 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): gateway.yaml carries session_secret_env only; value lives in 0600 control-plane.env; loader resolves the reference; migration strips inline literals. | BATCH-HR3 |
 | B-MVP-011 | Backlog | DONE | DONE 2026-06-12 (HR3+PT1, live-proven): portal login is Supabase-only (examiner.json fallback + local setup/challenge/reset endpoints removed; fails closed 503 when control plane is down); sift-core reporting is DB-content-hash-only. Remaining file-HMAC re-auth bridge tracked as B-MVP-017. | BATCH-HR3 / BATCH-PT1 |
-| B-MVP-012 | Needs input | OPEN | DECIDED 2026-06-12: replace the Supabase CLI local stack with a repo-owned self-managed compose that generates GOTRUE_JWT_SECRET, anon/service-role keys, and a non-default DB password at install. Registered as new BATCH-SB1; must land before BATCH-LV1. | BATCH-SB1 |
-| B-MVP-013 | Needs input | OPEN | HR2 verdict 2026-06-12: RLS ENABLED on 31/31 `app.*` tables, none FORCEd; several tables default-deny with 0 policies; gateway service-role bypasses RLS. DECISION PENDING: adopt FORCE ROW LEVEL SECURITY (schema change) or accept current posture with documented rationale. | Operator / BATCH-HR3 |
-| B-MVP-007 | Backlog | OPEN | ~4.4 GB of OpenCTI add-on images sit on the core VM unused. Document add-on image lifecycle/cleanup so core installs do not silently carry add-on payloads. | BATCH-AD2 |
-| B-MVP-008 | Backlog | OPEN | Volatility symbol cache is empty (on-demand fetch). Document symbol provisioning for air-gapped operation. | BATCH-OR3 / BATCH-HR3 |
+| B-MVP-012 | Needs input | OPEN | DECIDED 2026-06-12 (BATCH-SB1): repo-owned self-managed compose generating GOTRUE_JWT_SECRET, anon/service-role keys, non-default DB password. DEFERRED 2026-06-13 (operator): SB1 runs AFTER BATCH-LV1; LV1 proceeds on the current CLI loopback stack with demo secrets accepted as documented lab posture. SB1 no longer gates LV1; it must precede any non-lab deployment. | BATCH-SB1 |
+| B-MVP-013 | Needs input | OPEN | DECIDED 2026-06-13: ADOPT FORCE ROW LEVEL SECURITY on the 31 RLS-ENABLED `app.*` tables. Schema migration in BATCH-DB1. Defense-in-depth: gateway `service_role` has BYPASSRLS so the gateway path is unaffected; FORCE makes RLS apply to the table OWNER too, enforcing default-deny on the 0-policy tables. | BATCH-DB1 |
+| B-MVP-007 | Backlog | OPEN | DECIDED 2026-06-13: keep the OpenCTI add-on images for now; build a component uninstaller (BATCH-UN1) that removes ALL or operator-SELECTED components (add-on stacks/images, Supabase, core, units, state, TLS), dry-run by default, evidence never removed without its own flag. | BATCH-UN1 |
+| B-MVP-008 | Backlog | OPEN | PARKED 2026-06-13 (operator): keep open. Volatility symbol cache is empty (on-demand fetch); document symbol provisioning for air-gapped operation later. | BATCH-OR3 / BATCH-HR3 |
 | B-MVP-009 | Backlog | DONE | DONE 2026-06-12 (CL1): `.DS_Store` excluded from both installer staging branches; vol3/yara scan clean - catalogs already map `vol3`->`vol` and yara CLI exists via python3-yara. | BATCH-CL1 |
 | B-MVP-014 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): installer installs+enables auditd; 12 SIFT rules loaded live (secrets/config, install-root binaries, identity files, units). | BATCH-HR3 |
 | B-MVP-015 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): BAAI/bge-base-en-v1.5 canonical with revision pin; explicit HF_HOME under the service home wired into both units; offline-aware loader. | BATCH-HR3 |
 | B-MVP-016 | Backlog | RESOLVED | RESOLVED 2026-06-12 (AD2): KEEP scope_enforcement - the premise was wrong; packages/opensearch-mcp/sift-backend.json ships it on opensearch_enrich_intel, so schema removal would reject a live manifest. It is advisory metadata in the OS5 family; regression tests added (shipped manifest validates, unknown fields still rejected). | BATCH-AD2 |
 | B-MVP-017 | Needs input | OPEN | DECIDED 2026-06-12: retire the legacy file-HMAC re-auth bridge, orphaned sift_session middleware, and sift-core verification.py writer funcs in a scoped cleanup batch. Registered as new BATCH-CL3. | BATCH-CL3 |
-| B-MVP-018 | Backlog | OPEN | AppArmor enforce-mode transition: profile is correct-path but complain-only; needs aa-logprof profiling against ingest/run_command plus a dedicated live rerun before flipping to enforce. | Future hardening batch |
-| B-MVP-019 | Backlog | OPEN | setup-addon.sh emits operator-tree paths (`~/sift-mcps`, `~/.local/bin/uv`) in register payloads, but the hardened gateway runs ProtectHome=tmpfs and only sees `/opt/sift-mcps`; derive command/manifest paths from the staged tree. AD2 fixed the register-dir permission half; the path-derivation half remains. | BATCH-SB1 / BATCH-LV1 |
-| B-MVP-020 | Backlog | OPEN | Existing installs keep the pre-TLS1 CA (CN=sift-mcps-CA, no CA extensions; leaf gains serverAuth only after rotate-tls.sh --renew-leaf). Fresh installs get the new profile. Note for the LV1 fresh-install pass; operators can adopt via DANGER-gated --rotate-ca. | BATCH-LV1 |
+| B-MVP-018 | Backlog | OPEN | DECIDED 2026-06-13: keep AppArmor COMPLAIN-only through BATCH-LV1; revisit enforce-mode only after the end-to-end test passes (then aa-logprof profiling against ingest/run_command + a dedicated live rerun before flipping to enforce). | Future hardening batch (post-LV1) |
+| B-MVP-019 | Backlog | OPEN | Operator briefed 2026-06-13 (detail in change log). setup-addon.sh embeds operator-home paths (command=`~/.local/bin/uv`, `--project ~/sift-mcps`, manifest under `~/sift-mcps`) in register payloads, but the hardened gateway runs ProtectHome=tmpfs and can only see `/opt/sift-mcps` + system paths, so a so-registered add-on would fail to launch under the live gateway. Fix = derive command/project/manifest from the staged `/opt/sift-mcps` tree. Operator confirmed 2026-06-13: FOLD INTO BATCH-LV1 — fix when LV1 first launches a real add-on under the hardened gateway, using live-confirmed staged paths. | BATCH-LV1 |
+| B-MVP-020 | Backlog | DONE | DONE 2026-06-13 (operator-requested, live-proven): ran rotate-tls.sh --rotate-ca on the existing VM. New CA CN="Protocol SIFT Gateway local CA" with critical basicConstraints CA:TRUE + critical keyUsage(keyCertSign,cRLSign); leaf re-issued with serverAuth EKU + IP/DNS SANs; keys 0600 / certs 0644 sift-service; gateway restarted, /health ok, both services active; curl --cacert verifies WITHOUT -k on the IP SAN. Clients must re-import /var/lib/sift/.sift/tls/ca-cert.pem. | BATCH-TLS1 / live |
 
 ## Active References
 

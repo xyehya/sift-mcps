@@ -1,7 +1,7 @@
 # Task Batches
 
 Status: operator-readiness, hardening, add-on, and documentation regeneration tracker.
-Last updated: 2026-06-12.
+Last updated: 2026-06-13.
 
 This file is the executable batch list. `docs/migration/Session-Notes.md` is the
 decision log. Older completed migration batches remain in git history; do not
@@ -66,8 +66,10 @@ OpenSearch/RAG tool smoke.
 - [x] BATCH-PT1 - Portal operator workflow and health features
 - [ ] BATCH-PT2 - Portal RAG document management flow
 - [x] BATCH-TLS1 - Installer certificate and trust strategy
-- [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets
+- [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets (DEFERRED to after LV1 per operator 2026-06-13)
 - [ ] BATCH-CL3 - Retire legacy file-HMAC re-auth plane
+- [ ] BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables (B-MVP-013)
+- [ ] BATCH-UN1 - Component uninstaller, remove all or selected components (B-MVP-007)
 - [ ] BATCH-RG1 - Regenerate documentation modernization pass
 - [ ] BATCH-LV1 - End-to-end live VM validation and Rocba proof
 
@@ -666,7 +668,12 @@ Acceptance:
 
 ## BATCH-SB1 - Self-managed Supabase compose with generated secrets
 
-Dependencies: BATCH-HR3. Decided in B-MVP-012 (2026-06-12).
+Status: DEFERRED to after BATCH-LV1 (operator 2026-06-13). LV1 runs the
+end-to-end proof first on the current Supabase CLI loopback stack with the
+demo secrets accepted as documented lab posture; SB1 then replaces the CLI
+stack before any non-lab deployment. SB1 no longer gates LV1.
+
+Dependencies: BATCH-HR3. Decided in B-MVP-012 (2026-06-12); deferred 2026-06-13.
 
 Scope:
 
@@ -715,6 +722,86 @@ Acceptance:
 - No file-HMAC write path remains; targeted suites green; portal sensitive
   actions still re-auth correctly under DB authority (live smoke).
 
+## BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables
+
+Dependencies: none (schema-only). Decided in B-MVP-013 (2026-06-13).
+
+Scope:
+
+- `supabase/migrations/**` (new migration adding `FORCE ROW LEVEL SECURITY`).
+- Targeted DB/policy tests; operator docs RLS note in
+  `docs/operator/maintenance-guide.md` and `docs/hardening/component-audit.md`.
+
+Exact work:
+
+- Add a migration that runs `ALTER TABLE app.<t> FORCE ROW LEVEL SECURITY` for
+  the 31 `app.*` tables that already have RLS ENABLED (HR2 verdict 2026-06-12).
+- Confirm the migration is idempotent/re-runnable and ordered after the table
+  and policy definitions.
+- Verify the gateway path is unaffected: Supabase `service_role` carries
+  `BYPASSRLS`, so FORCE changes nothing for the gateway's own queries. FORCE is
+  defense-in-depth: it makes RLS apply to the table OWNER role too, so the
+  several default-deny (0-policy) tables also deny owner-role direct access.
+
+Hints and references:
+
+- HR2 verdict source: B-MVP-013; `docs/hardening/component-audit.md` RLS section.
+- Find tables: `rg -n 'enable row level security|create table app\.' supabase/migrations`.
+- Do NOT add BYPASSRLS to any application role; the point is to keep the owner
+  honest, not to widen access.
+
+Acceptance:
+
+- Every `app.*` table that has RLS ENABLED also has FORCE set (verify with a
+  `pg_class.relforcerowsecurity` query, redacted output).
+- Portal + MCP auth and a sensitive re-auth action still work end to end (live
+  smoke under BATCH-LV1 or a scoped DB1 live check).
+- Targeted suites green; both doc validators and `git diff --check` pass.
+
+## BATCH-UN1 - Component uninstaller, remove all or selected components
+
+Dependencies: BATCH-AD2; BATCH-OR1; BATCH-OR2. Decided in B-MVP-007 (2026-06-13).
+
+Scope:
+
+- New script: `scripts/uninstall.sh` (or `scripts/teardown.sh`).
+- Operator docs section in `docs/operator/maintenance-guide.md`.
+
+Exact work:
+
+- Give the operator one script that can remove ALL or a SELECTED subset of
+  installed/provisioned components: add-on Docker stacks/images/volumes (OpenCTI
+  ~4.4 GB, OpenSearch), the Supabase CLI stack, the staged runtime tree
+  `/opt/sift-mcps`, systemd units, the service user, state under
+  `/var/lib/sift`, caches under `/var/cache/sift`, auditd ruleset, AppArmor
+  profile, and TLS/CA material — each behind an explicit, named flag.
+- Default to an interactive menu plus non-interactive flags (e.g.
+  `--components opencti,opensearch` / `--all`). Dry-run by default; require an
+  explicit `--yes`/`--i-understand` to actually delete.
+- NEVER delete evidence under `/cases` unless an explicit, separately-named and
+  double-confirmed flag is given; treat evidence as the highest blast radius.
+- Keep core and add-on teardown separable: removing OpenCTI must not disturb the
+  SPG core; `--all` is the only path that tears core down.
+
+Hints and references:
+
+- Provisioning sources to mirror in reverse: `install.sh` (staging, units,
+  service user, auditd, AppArmor, TLS), `scripts/setup-supabase.sh`,
+  `scripts/setup-addon.sh`, OpenCTI/OpenSearch compose under `configs/**`.
+- Add-on image lifecycle is the B-MVP-007 driver: ~4.4 GB of OpenCTI images sit
+  unused on the core VM; this is the supported way to reclaim them.
+- Mark every destructive branch clearly; print exactly what will be removed in
+  the dry-run before any deletion.
+
+Acceptance:
+
+- `--components` removes only the named add-on resources; core stays `/health`
+  ok and both services active afterward.
+- `--all` cleanly removes the install; a fresh `./install.sh` then succeeds.
+- Dry-run lists targets without deleting; deletion requires explicit
+  confirmation; evidence under `/cases` is never removed without its own flag.
+- `bash -n` clean; live teardown/reinstall proof recorded in Session-Notes.
+
 ## BATCH-RG1 - Regenerate documentation modernization pass
 
 Dependencies: BATCH-OR2; BATCH-OR3; BATCH-OR4; BATCH-AD1; BATCH-HR2.
@@ -754,7 +841,10 @@ Acceptance:
 
 ## BATCH-LV1 - End-to-end live VM validation and Rocba proof
 
-Dependencies: BATCH-OR3; BATCH-HR3; BATCH-AD2; BATCH-PT1; BATCH-TLS1; BATCH-SB1; BATCH-CL3.
+Dependencies: BATCH-OR3; BATCH-HR3; BATCH-AD2; BATCH-PT1; BATCH-TLS1; BATCH-CL3;
+BATCH-DB1. (BATCH-SB1 deferred to after LV1 per operator 2026-06-13: the
+end-to-end proof runs on the current Supabase CLI loopback stack with demo
+secrets accepted as documented lab posture.)
 
 Scope:
 
@@ -773,6 +863,11 @@ Exact work:
   intended agent investigation path through MCP only.
 - Search/reference: prove OpenSearch health, Hayabusa index/query path, RAG
   `kb_*` query path, and report/export custody controls.
+- B-MVP-019 (folded in, operator 2026-06-13): when the first real add-on
+  launches under the hardened gateway, derive setup-addon.sh
+  `command`/`--project`/`manifest_path` from the staged `/opt/sift-mcps` tree
+  (operator-home paths are invisible under ProtectHome=tmpfs). Scoped patch +
+  targeted test before rerun.
 
 Hints and references:
 
