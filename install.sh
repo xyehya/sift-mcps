@@ -833,14 +833,30 @@ seed_rag_pgvector_direct() {
   # Hugging Face Hub. SIFT_HF_HOME is created/owned sift-service in install_state_dirs.
   local hf_offline=0
   is_offline && hf_offline=1
-  if SIFT_CONTROL_PLANE_DSN="$dsn" \
-     RAG_MODEL_NAME="$SIFT_RAG_MODEL_NAME" \
-     RAG_MODEL_REVISION="$SIFT_RAG_MODEL_REVISION" \
-     HF_HOME="$SIFT_HF_HOME" \
-     HF_HUB_OFFLINE="$hf_offline" \
-     TRANSFORMERS_OFFLINE="$hf_offline" \
-     "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads \
-    rag-mcp-seed-pgvector --knowledge-dir "$knowledge_dir" --embedding-mode model; then
+  # Run the seed AS the gateway service user (not the installer), from a
+  # service-traversable CWD, using the venv console script directly. Two
+  # fresh-install failure modes this avoids (both observed during BATCH-LV1):
+  #   1. the installer cannot write the sift-service-owned HF_HOME cache
+  #      ([Errno 13] .../.cache/huggingface/hub);
+  #   2. sentence-transformers probes the model id relative to CWD, and the
+  #      installer's $HOME is not traversable by the service user
+  #      ([Errno 13] 'BAAI/bge-base-en-v1.5/modules.json').
+  # The service user owns HF_HOME and is the same identity that reads the model
+  # cache at query time. Any operator-set proxy env is forwarded explicitly.
+  local seed_bin="$REPO_DIR/.venv/bin/rag-mcp-seed-pgvector"
+  local svc="${SIFT_GATEWAY_SERVICE_USER:-sift-service}"
+  local as_svc=(); [[ "$(id -un)" != "$svc" ]] && as_svc=(sudo -u "$svc")
+  if ( cd "$SIFT_STATE_DIR" && "${as_svc[@]}" env \
+        SIFT_CONTROL_PLANE_DSN="$dsn" \
+        RAG_MODEL_NAME="$SIFT_RAG_MODEL_NAME" \
+        RAG_MODEL_REVISION="$SIFT_RAG_MODEL_REVISION" \
+        HF_HOME="$SIFT_HF_HOME" \
+        HF_HUB_OFFLINE="$hf_offline" \
+        TRANSFORMERS_OFFLINE="$hf_offline" \
+        http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" \
+        HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" \
+        no_proxy="${no_proxy:-}" NO_PROXY="${NO_PROXY:-}" \
+        "$seed_bin" --knowledge-dir "$knowledge_dir" --embedding-mode model ); then
     log "Direct Supabase pgvector RAG seed completed."
   else
     warn "Direct Supabase pgvector RAG seed FAILED."
