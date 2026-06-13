@@ -618,3 +618,127 @@ and includes:
 `/var/lib/sift/.sift/opensearch.yaml`,
 `/var/lib/sift/.sift/forensic-knowledge.env`,
 `/var/lib/sift/tokens/installer-handoff.txt`, and the TLS material.
+
+---
+
+## 14. Uninstall / teardown (B-MVP-007, BATCH-UN1)
+
+`scripts/uninstall.sh` removes all or a selected subset of installed components.
+It is **dry-run by default** — run it without `--yes` to see exactly what would
+be deleted before committing.
+
+### Evidence is NEVER removed by default
+
+`/cases` (the forensic evidence root) has the highest blast radius. It is **never
+touched** by `--all` or any component flag. Removing evidence requires three
+explicit gates on the command line:
+
+```bash
+# This is the ONLY path that can remove /cases — all three flags are required.
+./scripts/uninstall.sh --remove-evidence --i-understand-evidence-loss --yes
+```
+
+An interactive "DELETE EVIDENCE" prompt is shown even then.
+
+### 14.1 Dry-run (safe — prints what would be removed)
+
+```bash
+# Interactive menu (no flags) — select components and see what would change.
+./scripts/uninstall.sh
+
+# Non-interactive dry-run of specific add-on(s):
+./scripts/uninstall.sh --components opencti
+./scripts/uninstall.sh --components opencti,opensearch
+
+# Non-interactive dry-run of a full teardown:
+./scripts/uninstall.sh --all
+```
+
+### 14.2 Available components
+
+| Token | What it removes | Core/Add-on |
+| --- | --- | --- |
+| `opencti` | OpenCTI Docker stack, named volumes, images (~4.4 GB), OpenCTI secret files under `/var/lib/sift/.sift/` | add-on |
+| `opensearch` | OpenSearch Docker stack (`docker-compose.yml`), named volume `opensearch-data`, OpenSearch config files | add-on |
+| `supabase` | Supabase CLI local stack (`supabase stop`), CLI binaries, `~/.sift/supabase-project/sift-supabase.env` | core |
+| `systemd` | `sift-gateway.service` + `sift-job-worker.service` units, service user `sift-service`, groups, `agent_runtime` user, sudoers drop-ins, hayabusa symlink | core |
+| `runtime` | `/opt/sift-mcps` staged tree, `.venv`, `/var/lib/sift/.sift/` (config, TLS, secrets, hayabusa, logs), enrichment symlinks | core |
+| `state` | `/var/lib/sift/{verification,tokens,snapshots,enrichment,.cache}` | core |
+| `cache` | `/var/cache/sift/` (Volatility3 symbols), Hugging Face model cache | core |
+| `auditd` | `/etc/audit/rules.d/99-sift-evidence.rules`; reload auditd | core |
+| `apparmor` | `/etc/apparmor.d/sift-gateway`; unload profile | core |
+| `tls` | `/var/lib/sift/.sift/tls/` (CA key, gateway key, certs); remove `user_allow_other` from `/etc/fuse.conf` | core |
+
+`--all` selects every token above (but never `/cases`).
+
+### 14.3 Remove add-ons only (core stays running)
+
+Removing `opencti` and/or `opensearch` does **not** disturb the SPG core. The
+gateway and portal stay up; only those Docker stacks and their config files are
+removed.
+
+```bash
+# DANGER: removes OpenCTI images + volumes (irreversible data loss for OpenCTI data).
+./scripts/uninstall.sh --components opencti --yes
+
+# DANGER: removes OpenSearch stack + indexed forensic evidence in opensearch-data.
+./scripts/uninstall.sh --components opensearch --yes
+
+# Both at once:
+./scripts/uninstall.sh --components opencti,opensearch --yes
+```
+
+Neither confirmation gate (`--i-understand`) is required for add-on-only removal
+because core SPG is unaffected. The `--yes` flag still required to actually delete.
+
+### 14.4 Full teardown (all components — core + add-ons)
+
+`--all` is the only path that tears down the SPG core. Both `--yes` and
+`--i-understand` are required; otherwise the script exits with an error.
+
+```bash
+# Dry-run first (no --yes):
+./scripts/uninstall.sh --all
+
+# DANGER: removes everything except /cases.
+# Services stop, units removed, user deleted, secrets wiped.
+./scripts/uninstall.sh --all --yes --i-understand
+```
+
+After a full teardown, reinstall with:
+
+```bash
+./install.sh
+```
+
+### 14.5 Confirmation gates summary
+
+| Scenario | Required flags |
+| --- | --- |
+| Dry-run (any selection) | none (default) |
+| Add-on only (`opencti`, `opensearch`) | `--yes` |
+| Core component(s) | `--yes` + `--i-understand` |
+| Full teardown (`--all`) | `--yes` + `--i-understand` |
+| Evidence (`/cases`) removal | `--remove-evidence` + `--i-understand-evidence-loss` + `--yes` + type "DELETE EVIDENCE" at prompt |
+
+### 14.6 What is NOT removed
+
+Even with `--all --yes --i-understand`:
+
+- `/cases` — evidence root (forensic data; requires separate flags, see above).
+- The source repo clone itself (the checkout you ran the script from).
+- Supabase Docker volumes (volumes contain the Postgres data; `supabase stop`
+  leaves them intact so re-running `supabase start` recovers the DB).
+
+### 14.7 Override paths
+
+If the install used non-default paths, override with:
+
+```bash
+./scripts/uninstall.sh --install-root /custom/path \
+                       --state-dir /custom/var/lib/sift \
+                       --cases-root /custom/cases \
+                       --service-user my-service-user \
+                       --execute-as my-runtime-user \
+                       --all --yes --i-understand
+```
