@@ -13,6 +13,46 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-13 - LV1 follow-up: add-on outputSchema made MCP-spec compliant (full tool aggregation unblocked)
+
+Status: DONE (committed local main 5e61c55, not pushed; deployed + live-proven on VM).
+
+Symptom: after the proxy keep-alive + pre-warm fix (4766a10) the aggregate finally
+enumerated all ~30 tools, but a strict MCP client (Claude Code loader) rejected the
+whole list with `Invalid input: expected "object"` at `tools[14..29].outputSchema.type`
+(the 16 opensearch add-on tools) and dropped every tool.
+
+Root cause: opensearch-mcp `_output_schema` advertised a bare `anyOf` outputSchema with
+NO root `type`. The MCP spec requires `outputSchema` to be an object-typed JSON Schema;
+the strict validator rejected the missing-root-type and discarded the entire aggregated
+surface. forensic-rag-mcp tools carry no outputSchema, so only opensearch was affected.
+
+Fix (two layers):
+- Source: opensearch `_output_schema` now emits root `"type": "object"` alongside the
+  `anyOf` (both branches are pydantic objects -> root type always satisfied).
+  Regenerated the opensearch mcp_surface golden (diff = only root `type:object`
+  insertions). registry.py.
+- Gateway aggregator (defense-in-depth): `_normalize_output_schema` in the
+  `GatewayToolCatalogMiddleware.on_list_tools` path repairs any forwarded
+  non-object outputSchema (`anyOf`/`oneOf`/`allOf` of objects -> inject `type:object`)
+  or, last resort, strips it -- one misbehaving backend can no longer poison the whole
+  `tools/list`. mcp_server.py.
+
+Proof:
+- Host: gateway suite 488 passed; opensearch suite green except the pre-existing
+  `test_tool_count` (15-vs-16, fails on clean tree too); normalizer unit-checked
+  (anyOf->object, object untouched, array->dropped, None->None).
+- Live VM (editable installs at /opt/sift-mcps, files synced sift-service:644, gateway
+  restarted): `is-active`, `/health` ok, both add-on proxies mounted, tool map = 18
+  add-on + 8 core. In-process wire-format check (`to_mcp_tool()`) over the live
+  opensearch backend: 16/16 tools now expose `outputSchema.type == "object"` with
+  `anyOf` preserved; ZERO non-object roots (was 16 before). e.g. `opensearch_search`
+  flipped from anyOf-without-type to `type: object`.
+
+Final live confirmation pending: operator reconnect of the siftmcp client (only holder
+of a valid agent JWT) should now load the full aggregated surface without the
+outputSchema error.
+
 ### 2026-06-13 - CL3b landed: file-HMAC re-auth plane retired (security-reviewed)
 
 Status: DONE (merged to local main, not pushed; live re-auth smoke folded into LV1).
