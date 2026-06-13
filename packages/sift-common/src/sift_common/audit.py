@@ -22,6 +22,23 @@ _EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
 _DEFAULT_STATE_DIR = "/var/lib/sift"
 
 
+def _db_authority_env_active() -> bool:
+    """True when the process-wide DB-authority flag is set.
+
+    Mirrors ``sift_core.active_case_context._env_db_active`` without importing
+    sift-core (sift-common must stay dependency-light). The Gateway/worker
+    bootstrap sets ``SIFT_DB_ACTIVE`` when a control-plane DSN is configured;
+    in that mode ``app.audit_events`` is the authoritative trail and a missing
+    local JSONL ledger is expected rather than a write failure.
+    """
+    return os.environ.get("SIFT_DB_ACTIVE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _state_root_for_case(case_dir: Path) -> Path:
     configured = os.environ.get("SIFT_STATE_DIR", "").strip()
     if configured:
@@ -259,8 +276,20 @@ class AuditWriter:
         extra: dict[str, Any] | None = None,
         examiner_override: str | None = None,
     ) -> str | None:
-        """Write an audit entry. Returns the audit_id, or None when no case is active."""
+        """Write an audit entry. Returns the audit_id, or None when no case is active.
+
+        DB-authority mode: when there is no local audit directory but the process
+        is running under Postgres audit authority (``SIFT_DB_ACTIVE`` set by the
+        Gateway/worker bootstrap), the authoritative audit trail is
+        ``app.audit_events`` written by the Gateway MCP envelope, not this JSONL
+        mirror. A missing local ledger is then expected, not a failure, so we
+        return the (caller-supplied or freshly minted) audit_id as a clean
+        no-op-success receipt rather than ``None``. File-authority mode is
+        unchanged: no audit dir still returns ``None``.
+        """
         if not self._get_audit_dir():
+            if _db_authority_env_active():
+                return audit_id or self._next_audit_id(examiner=examiner_override)
             return None
         if audit_id is None:
             audit_id = self._next_audit_id(examiner=examiner_override)

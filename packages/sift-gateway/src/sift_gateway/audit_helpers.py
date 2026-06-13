@@ -175,6 +175,167 @@ def _extract_audit_id(result: list) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Audit-detail redaction + bounding (gateway-centric detail capture).
+#
+# The MCP transport envelope now records the tool's REDACTED arguments
+# (pre-dispatch) and a BOUNDED result detail (post-dispatch) in the
+# ``app.audit_events`` ``details`` JSONB. Operators need the command/query that
+# was run and the rich provenance, but the audit row must never carry raw
+# secrets, JWTs, DSNs, service keys, passwords, or full case/evidence absolute
+# paths, and must not bloat. We therefore reuse the gateway's own response-guard
+# redactors (secret + sensitive-path) and then bound every value.
+#
+# Redaction policy mirrors the agent-facing choke point so the same prefixes /
+# secret patterns are enforced for the audit detail.
+# ---------------------------------------------------------------------------
+
+# Per-string / total-bytes ceilings for an audit detail block. Large argument or
+# result values are truncated with an explicit marker so rows stay small.
+_AUDIT_MAX_STR = 4_096          # max chars per individual string value
+_AUDIT_MAX_TOTAL = 16_384       # soft ceiling on the serialized detail block
+_AUDIT_MAX_ITEMS = 200          # max items kept from any one list
+_AUDIT_TRUNC_MARK = "...[truncated]"
+
+
+def _bound_value(value: Any, *, _budget: list[int]) -> Any:
+    """Recursively bound a JSON-like value for compact audit storage.
+
+    ``_budget`` is a single-element list tracking the remaining total character
+    budget across the whole structure; once exhausted, further content is
+    dropped with a marker. Strings longer than ``_AUDIT_MAX_STR`` are truncated.
+    Lists are capped at ``_AUDIT_MAX_ITEMS``. This runs AFTER redaction, so a
+    secret can never straddle a truncation boundary and leak a partial value.
+    """
+    if _budget[0] <= 0:
+        return _AUDIT_TRUNC_MARK
+    if isinstance(value, str):
+        s = value
+        if len(s) > _AUDIT_MAX_STR:
+            s = s[:_AUDIT_MAX_STR] + _AUDIT_TRUNC_MARK
+        if len(s) > _budget[0]:
+            s = s[: max(_budget[0], 0)] + _AUDIT_TRUNC_MARK
+        _budget[0] -= len(s)
+        return s
+    if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+        _budget[0] -= 8
+        return value
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        for k, v in value.items():
+            if _budget[0] <= 0:
+                out["_truncated"] = True
+                break
+            key = str(k)
+            _budget[0] -= len(key)
+            out[key] = _bound_value(v, _budget=_budget)
+        return out
+    if isinstance(value, (list, tuple)):
+        out_items: list[Any] = []
+        for index, item in enumerate(value):
+            if index >= _AUDIT_MAX_ITEMS or _budget[0] <= 0:
+                out_items.append(_AUDIT_TRUNC_MARK)
+                break
+            out_items.append(_bound_value(item, _budget=_budget))
+        return out_items
+    # Unknown type -> bounded string form.
+    return _bound_value(str(value), _budget=_budget)
+
+
+def redact_for_audit(value: Any, *, case_dir: str | None = None) -> Any:
+    """Redact then bound a JSON-like value for the audit ``details`` JSONB.
+
+    Order: secret redaction (critical+high -> ``[REDACTED:...]``) -> sensitive
+    absolute-path redaction (case/evidence/mount/state prefixes ->
+    ``[REDACTED:absolute_path]``; in-case absolutes collapse to relative display
+    paths) -> bounding/truncation. Redaction always runs (no override) so the
+    operator audit row never carries a raw secret or full host path. Failures in
+    the redactor degrade to a bounded, secret-stripped string rather than
+    leaking the original.
+    """
+    try:
+        from sift_gateway.response_guard import (
+            redact_paths_structured,
+            redact_structured,
+        )
+
+        case_dir_resolved: str | None = None
+        if case_dir:
+            try:
+                import os.path
+
+                case_dir_resolved = os.path.realpath(case_dir)
+            except (OSError, ValueError):
+                case_dir_resolved = case_dir
+
+        redacted, _ = redact_structured(value, override_active=False)
+        redacted, _ = redact_paths_structured(
+            redacted, case_dir_resolved=case_dir_resolved
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("audit detail redaction failed; storing marker: %s", exc)
+        return {"_redaction_error": type(exc).__name__}
+    return _bound_value(redacted, _budget=[_AUDIT_MAX_TOTAL])
+
+
+# Top-level run_command response keys that carry rich, operator-useful
+# provenance/detail. Each is independently redacted+bounded before storage.
+_RUN_COMMAND_DETAIL_KEYS = (
+    "provenance",
+    "stages",
+    "failed_stages",
+    "privilege_escalation",
+    "exit_code",
+    "full_output_sha256",
+    "full_output_bytes",
+    "agent_action",
+    "warnings",
+)
+
+
+def _extract_run_command_detail(result: list, *, case_dir: str | None = None) -> dict | None:
+    """Extract the rich run_command provenance/detail block from the response.
+
+    Returns a redacted+bounded dict (command, exit_code, input/output hashes,
+    pipeline stages, privilege events) or ``None`` if the response is not a
+    parseable run_command payload. The command string itself is redacted like
+    any other argument so a secret embedded in the command never lands raw.
+    """
+    for item in result:
+        text = getattr(item, "text", None)
+        if not text:
+            continue
+        try:
+            data = json.loads(text)
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        is_run_command = (
+            data.get("tool") == "run_command"
+            or data.get("tool_name") == "run_command"
+            or "provenance" in data
+        )
+        if not is_run_command:
+            continue
+        detail: dict[str, Any] = {}
+        for key in _RUN_COMMAND_DETAIL_KEYS:
+            if key in data:
+                detail[key] = data[key]
+        # exit_code is carried inside the parsed ``data`` payload, not at the top
+        # level; surface it for the detail block when present. (The command
+        # string itself is captured pre-dispatch as the redacted call arguments,
+        # not echoed in the agent-facing result.)
+        if "exit_code" not in detail:
+            inner = data.get("data")
+            if isinstance(inner, dict) and "exit_code" in inner:
+                detail["exit_code"] = inner["exit_code"]
+        if not detail:
+            return None
+        return redact_for_audit(detail, case_dir=case_dir)
+    return None
+
+
 def _truncate_params(params: dict, max_len: int = 1000) -> dict:
     """Truncate large param values for audit storage."""
     truncated = {}

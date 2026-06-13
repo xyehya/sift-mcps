@@ -17,6 +17,9 @@ from typing import Any
 
 from sift_common.audit import AuditWriter, resolve_examiner
 
+from sift_core.active_case_context import (
+    db_authority_active as _db_authority_active,
+)
 from sift_core.case_io import get_case_dir, resolve_case_path
 from sift_core.case_manager import (
     CaseManager,
@@ -914,24 +917,32 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         if raw_stages:
             extra_audit["stages"] = raw_stages
 
-        if audit.log(
-            tool="run_command",
-            params={"command": command, "purpose": purpose},
-            result_summary={
-                "exit_code": exec_result["exit_code"],
-                "output_file": output_file or "",
-                "output_sha256": output_sha256 or "",
-                "stdout_bytes": stdout_total_bytes or 0,
-                "stdout_head": (exec_result.get("stdout") or "")[:500],
-            },
-            audit_id=audit_id,
-            elapsed_ms=elapsed * 1000,
-            input_files=list(input_hashes.keys()) if input_hashes else None,
-            input_sha256s=list(input_hashes.values()) if input_hashes else None,
-            input_detection_method=detection_method,
-            extra=extra_audit if extra_audit else None,
-            examiner_override=examiner,
-        ) is None:
+        if (
+            audit.log(
+                tool="run_command",
+                params={"command": command, "purpose": purpose},
+                result_summary={
+                    "exit_code": exec_result["exit_code"],
+                    "output_file": output_file or "",
+                    "output_sha256": output_sha256 or "",
+                    "stdout_bytes": stdout_total_bytes or 0,
+                    "stdout_head": (exec_result.get("stdout") or "")[:500],
+                },
+                audit_id=audit_id,
+                elapsed_ms=elapsed * 1000,
+                input_files=list(input_hashes.keys()) if input_hashes else None,
+                input_sha256s=list(input_hashes.values()) if input_hashes else None,
+                input_detection_method=detection_method,
+                extra=extra_audit if extra_audit else None,
+                examiner_override=examiner,
+            )
+            is None
+            and not _db_authority_active()
+        ):
+            # File-authority mode only: a None return is a genuine JSONL write
+            # failure. In DB-authority mode the gateway MCP envelope is the
+            # authoritative audit trail (it captures command + provenance), so a
+            # missing local file ledger is expected and not an error.
             response["warning"] = "Audit write failed — action not recorded"
         if detection_method == "none" and first_binary not in _NO_INPUT_CMDS:
             response["input_files_warning"] = (
@@ -958,14 +969,18 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             error=str(exc),
             examiner=examiner,
         )
-        if audit.log(
-            tool="run_command",
-            params={"command": command, "purpose": purpose},
-            result_summary={"error": str(exc)},
-            audit_id=audit_id,
-            elapsed_ms=elapsed * 1000,
-            examiner_override=examiner,
-        ) is None:
+        if (
+            audit.log(
+                tool="run_command",
+                params={"command": command, "purpose": purpose},
+                result_summary={"error": str(exc)},
+                audit_id=audit_id,
+                elapsed_ms=elapsed * 1000,
+                examiner_override=examiner,
+            )
+            is None
+            and not _db_authority_active()
+        ):
             response["warning"] = "Audit write failed — action not recorded"
         return response
     except (ValueError, OSError, RuntimeError) as exc:

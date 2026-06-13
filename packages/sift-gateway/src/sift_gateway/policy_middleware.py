@@ -23,7 +23,12 @@ from sift_core.active_case_context import (
 from sift_core.agent_tools import core_tool_names
 
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
-from sift_gateway.audit_helpers import _extract_audit_id
+from sift_gateway.audit_helpers import (
+    _extract_audit_id,
+    _extract_run_command_detail,
+    _summarize_result as _summarize_audit_result,
+    redact_for_audit,
+)
 from sift_gateway.evidence_gate import (
     build_block_response,
     check_evidence_gate,
@@ -815,9 +820,17 @@ class AuditEnvelopeMiddleware(Middleware):
         case = _current_gateway_active_case()
         backend_name = self._backend_name(name)
         db_audit = getattr(self.gateway, "db_audit", None)
+        case_dir = case.artifact_path if case is not None else None
 
         request_id = self._request_id()
         envelope_event_id: str | None = None
+
+        # Capture the tool's REDACTED arguments for the operator audit trail.
+        # This applies uniformly to core and proxied add-on tools, so e.g.
+        # opensearch query_strings and run_command commands are recorded.
+        # Secrets and sensitive absolute paths are stripped and large values
+        # bounded before storage (see redact_for_audit).
+        redacted_args = redact_for_audit(_tool_args(context), case_dir=case_dir)
 
         # --- DB-first pre-dispatch envelope (required for mutating tools) ------
         if db_audit is not None:
@@ -841,6 +854,7 @@ class AuditEnvelopeMiddleware(Middleware):
                         "token_id": req_ctx["token_id"],
                         "source_ip": req_ctx["source_ip"],
                         "case_key": case.case_key if case is not None else None,
+                        "arguments": redacted_args,
                     },
                 )
                 self._attach_audit_event(envelope_event_id, request_id)
@@ -880,6 +894,29 @@ class AuditEnvelopeMiddleware(Middleware):
             raise
         finally:
             elapsed_ms = round((time.monotonic() - start) * 1000, 1)
+            # Build a BOUNDED result detail for the receipt: a lightweight
+            # summary for every tool, plus the rich run_command provenance block
+            # (command/hashes/stages/privilege events) when present. Both are
+            # redacted + bounded so no secret or host path lands in the row.
+            result_content = list(result.content or []) if result is not None else []
+            result_detail: dict[str, Any] = {}
+            try:
+                summary = _summarize_audit_result(result_content)
+                if summary:
+                    result_detail["result_summary"] = redact_for_audit(
+                        summary, case_dir=case_dir
+                    )
+                rc_detail = _extract_run_command_detail(
+                    result_content, case_dir=case_dir
+                )
+                if rc_detail:
+                    result_detail["detail"] = rc_detail
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "mcp_envelope: result detail extraction failed for %s: %s",
+                    name,
+                    exc,
+                )
             # DB-first result/failure receipt (best-effort: the tool already ran).
             if db_audit is not None:
                 try:
@@ -901,6 +938,7 @@ class AuditEnvelopeMiddleware(Middleware):
                             "backend_audit_id": backend_audit_id,
                             "envelope_event_id": envelope_event_id,
                             "principal": effective_principal,
+                            **result_detail,
                         },
                     )
                 except Exception as exc:
