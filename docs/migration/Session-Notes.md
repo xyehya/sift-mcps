@@ -13,6 +13,60 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-13 - Wave landed: DB1 + UN1 + RG1; CL3 refused (re-scope fork)
+
+Status: DONE for 3 of 4 (merged to local main, not pushed); CL3 BLOCKED.
+
+Four fenced worktree agents ran off main e69c491 (CL3 opus; DB1/UN1/RG1
+sonnet). Conductor reconciled: independent secret-scan of each branch diff
+(clean), file-fence verified (zero cross-branch overlap), cherry-picked the
+three mergeable branches linearly onto main, combined gates green.
+
+- DB1 (916f0e6): new `supabase/migrations/202606131000_force_rls_app_tables.sql`
+  FORCEs ROW LEVEL SECURITY on all 31 RLS-ENABLED `app.*` tables (explicit
+  per-table ALTERs grouped by source migration; idempotent). Conductor caught a
+  false-alarm grep (case-sensitive) and confirmed all 31 tables are covered and
+  match the HR2 list. component-audit §8 updated. Applies at next install/LV1.
+- UN1 (c98ec90): new `scripts/uninstall.sh` (all-or-selected component teardown)
+  + maintenance-guide §14. Dry-run by default; add-on removal needs `--yes`,
+  core/`--all` needs `--yes --i-understand`, evidence `/cases` needs a separate
+  `--remove-evidence --i-understand-evidence-loss` plus a typed confirmation.
+  Each teardown branch cites the install.sh function it reverses. bash -n clean.
+  Live teardown/reinstall proof folded into the LV1 fresh-install sequence.
+  Minor backlog noted by the agent (not yet ticketed): optional
+  `--supabase-purge-data` sub-flag (current behavior preserves Postgres volume).
+- RG1 (245322a): 15 `docs/regenerate/**` files modernized against current code +
+  the new operator/hardening/add-on docs (rag_search_case -> kb_*, OpenCTI
+  external, windows-triage removed, sift-service + /var/lib/sift/.sift paths,
+  no systemctl --user); new `docs/regenerate/README.md` fact-ownership index;
+  promotion recommendations captured there for a later pass. No forks.
+
+CL3 (file-HMAC re-auth retirement) REFUSED - no commit. The opus build agent
+proved (and the conductor independently confirmed two load-bearing facts) that
+the B-MVP-017 premise is false: there is NO DB/Supabase operator-password
+re-verification in the code. `portal_services.record_reauth_event` only inserts
+an unconditional `status='success'` audit row; the ONLY operator-password
+re-auth verifier is the file-HMAC challenge (`_load_pw_entry` + HMAC compare)
+gating evidence seal/ignore/retire, commit, report inclusion, and case-activate;
+`_sync_local_reauth_password` bridges that file verifier to the live Supabase
+password on login/forced-reset; and the plane ships ENABLED
+(`configs/gateway.yaml.template:134 portal_session_enabled: true`). Deleting it
+removes the only password re-verify with no replacement = a security regression.
+Per CL1 discipline the agent refused rather than force a half-gutted module.
+CL3 is a build-replacement-then-delete batch; re-scope is an OPEN operator
+decision (see B-MVP-017). The current file-HMAC plane WORKS, so LV1 can proceed
+on it; whether LV1 waits for the CL3 re-scope is part of that decision.
+
+Worktrees wt5-{cl3,db1,rg1,un1} and branches wave5/* removed after reconcile.
+Validation: both doc validators PASS, git diff --check clean, bash -n
+uninstall.sh clean, secret scans clean. No package code changed (DB1=SQL,
+UN1=shell, RG1=docs) so no pytest needed; CL3 made no changes.
+
+Next: operator decision on B-MVP-017 (CL3 re-scope). Remaining program:
+BATCH-CL2 (rename), BATCH-DB1/UN1 live-prove at LV1, BATCH-PT2 (portal RAG,
+global-knowledge-only), then BATCH-LV1 (end-to-end live + Rocba on the current
+CLI Supabase stack); BATCH-SB1 deferred to after LV1.
+
 ### 2026-06-13 - Operator decision round + B-MVP-020 live CA rotation
 
 Status: DONE (decisions recorded; one live VM action proven; docs-only commit)
@@ -426,14 +480,14 @@ after portal reset/credential issuance.
 | B-MVP-010 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): gateway.yaml carries session_secret_env only; value lives in 0600 control-plane.env; loader resolves the reference; migration strips inline literals. | BATCH-HR3 |
 | B-MVP-011 | Backlog | DONE | DONE 2026-06-12 (HR3+PT1, live-proven): portal login is Supabase-only (examiner.json fallback + local setup/challenge/reset endpoints removed; fails closed 503 when control plane is down); sift-core reporting is DB-content-hash-only. Remaining file-HMAC re-auth bridge tracked as B-MVP-017. | BATCH-HR3 / BATCH-PT1 |
 | B-MVP-012 | Needs input | OPEN | DECIDED 2026-06-12 (BATCH-SB1): repo-owned self-managed compose generating GOTRUE_JWT_SECRET, anon/service-role keys, non-default DB password. DEFERRED 2026-06-13 (operator): SB1 runs AFTER BATCH-LV1; LV1 proceeds on the current CLI loopback stack with demo secrets accepted as documented lab posture. SB1 no longer gates LV1; it must precede any non-lab deployment. | BATCH-SB1 |
-| B-MVP-013 | Needs input | OPEN | DECIDED 2026-06-13: ADOPT FORCE ROW LEVEL SECURITY on the 31 RLS-ENABLED `app.*` tables. Schema migration in BATCH-DB1. Defense-in-depth: gateway `service_role` has BYPASSRLS so the gateway path is unaffected; FORCE makes RLS apply to the table OWNER too, enforcing default-deny on the 0-policy tables. | BATCH-DB1 |
-| B-MVP-007 | Backlog | OPEN | DECIDED 2026-06-13: keep the OpenCTI add-on images for now; build a component uninstaller (BATCH-UN1) that removes ALL or operator-SELECTED components (add-on stacks/images, Supabase, core, units, state, TLS), dry-run by default, evidence never removed without its own flag. | BATCH-UN1 |
+| B-MVP-013 | Needs input | OPEN | DECIDED 2026-06-13: ADOPT FORCE ROW LEVEL SECURITY on the 31 RLS-ENABLED `app.*` tables (BATCH-DB1). Defense-in-depth: gateway `service_role` has BYPASSRLS so the gateway path is unaffected; FORCE makes RLS apply to the table OWNER too, enforcing default-deny on the 0-policy tables. DB1 LANDED 2026-06-13 (916f0e6): migration FORCEs all 31; applies at next install/LV1 (not yet live-applied). | BATCH-DB1 |
+| B-MVP-007 | Backlog | OPEN | DECIDED 2026-06-13: keep the OpenCTI add-on images for now; build a component uninstaller (BATCH-UN1) that removes ALL or operator-SELECTED components, dry-run by default, evidence never removed without its own flag. UN1 LANDED 2026-06-13 (c98ec90): scripts/uninstall.sh + maintenance-guide §14, bash -n clean, evidence triple-gated; live teardown/reinstall proof folded into LV1. | BATCH-UN1 |
 | B-MVP-008 | Backlog | OPEN | PARKED 2026-06-13 (operator): keep open. Volatility symbol cache is empty (on-demand fetch); document symbol provisioning for air-gapped operation later. | BATCH-OR3 / BATCH-HR3 |
 | B-MVP-009 | Backlog | DONE | DONE 2026-06-12 (CL1): `.DS_Store` excluded from both installer staging branches; vol3/yara scan clean - catalogs already map `vol3`->`vol` and yara CLI exists via python3-yara. | BATCH-CL1 |
 | B-MVP-014 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): installer installs+enables auditd; 12 SIFT rules loaded live (secrets/config, install-root binaries, identity files, units). | BATCH-HR3 |
 | B-MVP-015 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): BAAI/bge-base-en-v1.5 canonical with revision pin; explicit HF_HOME under the service home wired into both units; offline-aware loader. | BATCH-HR3 |
 | B-MVP-016 | Backlog | RESOLVED | RESOLVED 2026-06-12 (AD2): KEEP scope_enforcement - the premise was wrong; packages/opensearch-mcp/sift-backend.json ships it on opensearch_enrich_intel, so schema removal would reject a live manifest. It is advisory metadata in the OS5 family; regression tests added (shipped manifest validates, unknown fields still rejected). | BATCH-AD2 |
-| B-MVP-017 | Needs input | OPEN | DECIDED 2026-06-12: retire the legacy file-HMAC re-auth bridge, orphaned sift_session middleware, and sift-core verification.py writer funcs in a scoped cleanup batch. Registered as new BATCH-CL3. | BATCH-CL3 |
+| B-MVP-017 | Needs input | OPEN | DECIDED 2026-06-12: retire the file-HMAC re-auth plane (BATCH-CL3). REOPENED 2026-06-13: CL3 build agent (opus) REFUSED all deletions with code-cited proof (conductor-confirmed): there is NO DB/Supabase operator-password re-verification — `record_reauth_event` is audit-only (unconditional `status='success'`); the file-HMAC plane (`portal_session_enabled: true`, shipping) is the ONLY operator-password re-auth verifier; `_sync_local_reauth_password` bridges it to the live Supabase password. Retirement is build-replacement-then-delete, not cleanup. NEEDS OPERATOR DECISION: (A) re-scope to CL3a (build fail-closed Supabase re-verify + flip flag + migrate tests) then CL3b (delete dead plane); (B) accept the file-HMAC plane as the re-auth mechanism, drop CL3, document the model; (C) other. | Operator / BATCH-CL3 |
 | B-MVP-018 | Backlog | OPEN | DECIDED 2026-06-13: keep AppArmor COMPLAIN-only through BATCH-LV1; revisit enforce-mode only after the end-to-end test passes (then aa-logprof profiling against ingest/run_command + a dedicated live rerun before flipping to enforce). | Future hardening batch (post-LV1) |
 | B-MVP-019 | Backlog | OPEN | Operator briefed 2026-06-13 (detail in change log). setup-addon.sh embeds operator-home paths (command=`~/.local/bin/uv`, `--project ~/sift-mcps`, manifest under `~/sift-mcps`) in register payloads, but the hardened gateway runs ProtectHome=tmpfs and can only see `/opt/sift-mcps` + system paths, so a so-registered add-on would fail to launch under the live gateway. Fix = derive command/project/manifest from the staged `/opt/sift-mcps` tree. Operator confirmed 2026-06-13: FOLD INTO BATCH-LV1 — fix when LV1 first launches a real add-on under the hardened gateway, using live-confirmed staged paths. | BATCH-LV1 |
 | B-MVP-020 | Backlog | DONE | DONE 2026-06-13 (operator-requested, live-proven): ran rotate-tls.sh --rotate-ca on the existing VM. New CA CN="Protocol SIFT Gateway local CA" with critical basicConstraints CA:TRUE + critical keyUsage(keyCertSign,cRLSign); leaf re-issued with serverAuth EKU + IP/DNS SANs; keys 0600 / certs 0644 sift-service; gateway restarted, /health ok, both services active; curl --cacert verifies WITHOUT -k on the IP SAN. Clients must re-import /var/lib/sift/.sift/tls/ca-cert.pem. | BATCH-TLS1 / live |

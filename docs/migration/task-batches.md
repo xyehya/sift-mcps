@@ -67,10 +67,10 @@ OpenSearch/RAG tool smoke.
 - [ ] BATCH-PT2 - Portal RAG document management flow
 - [x] BATCH-TLS1 - Installer certificate and trust strategy
 - [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets (DEFERRED to after LV1 per operator 2026-06-13)
-- [ ] BATCH-CL3 - Retire legacy file-HMAC re-auth plane
-- [ ] BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables (B-MVP-013)
-- [ ] BATCH-UN1 - Component uninstaller, remove all or selected components (B-MVP-007)
-- [ ] BATCH-RG1 - Regenerate documentation modernization pass
+- [ ] BATCH-CL3 - Retire legacy file-HMAC re-auth plane (BLOCKED 2026-06-13: premise false, needs operator re-scope - see B-MVP-017 + CL3 section)
+- [x] BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables (B-MVP-013)
+- [x] BATCH-UN1 - Component uninstaller, remove all or selected components (B-MVP-007)
+- [x] BATCH-RG1 - Regenerate documentation modernization pass
 - [ ] BATCH-LV1 - End-to-end live VM validation and Rocba proof
 
 ## BATCH-OR0 - Rebase docs operating model around operator-hardening track
@@ -699,7 +699,33 @@ Acceptance:
 
 ## BATCH-CL3 - Retire legacy file-HMAC re-auth plane
 
-Dependencies: BATCH-PT1; BATCH-HR3. Decided in B-MVP-017 (2026-06-12).
+Status: BLOCKED 2026-06-13 - premise false, needs operator re-scope (B-MVP-017).
+The CL3 build agent (opus) refused all three deletions with code-cited proof
+(conductor independently confirmed two load-bearing facts):
+- `app.audit_events` re-auth via `portal_services.record_reauth_event` is
+  AUDIT-ONLY: it inserts an unconditional `status='success'` row with no
+  password parameter and no verification.
+- The ONLY operator-password re-auth verifier is the file-HMAC challenge
+  (`_load_pw_entry`/HMAC compare) gating evidence seal/ignore/retire, commit,
+  report inclusion, and case-activate; `_sync_local_reauth_password` bridges it
+  to the live Supabase password on login/forced-reset.
+- The legacy plane ships ENABLED: `configs/gateway.yaml.template:134`
+  `portal_session_enabled: true` (defaults True in `supabase_auth.py`).
+Deleting the plane removes the only password re-verify with NO replacement -> a
+security regression. CL3 is therefore a build-replacement-then-delete batch, not
+a delete-only cleanup. Recommended re-scope (operator decision in B-MVP-017):
+  - CL3a: build a fail-closed Supabase/DB operator-password re-verification for
+    the sensitive actions; flip `portal_session_enabled` to false; migrate the
+    legacy-plane tests to the Supabase-envelope harness.
+  - CL3b: then delete the now-dead `sift_session` middleware,
+    `_sync_local_reauth_password`, the file-HMAC challenges, and the
+    `verification.py`/`backup_ops.py` writers together.
+Provably-dead-in-isolation (0 src callers, could land under CL3b only):
+`verification.py` `rehmac_entries`/`copy_ledger_to_case`/`derive_hmac_key`,
+`backup_ops.py` ledger-copy block.
+
+Dependencies: BATCH-PT1; BATCH-HR3. Decided in B-MVP-017 (2026-06-12);
+BLOCKED/re-scope pending 2026-06-13.
 
 Scope:
 
@@ -723,6 +749,9 @@ Acceptance:
   actions still re-auth correctly under DB authority (live smoke).
 
 ## BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables
+
+Status: LANDED 2026-06-13 (916f0e6): migration authored, 31/31 RLS-enabled
+app.* tables FORCEd; applies at next install/LV1 (not yet live-applied).
 
 Dependencies: none (schema-only). Decided in B-MVP-013 (2026-06-13).
 
@@ -759,6 +788,10 @@ Acceptance:
 - Targeted suites green; both doc validators and `git diff --check` pass.
 
 ## BATCH-UN1 - Component uninstaller, remove all or selected components
+
+Status: LANDED 2026-06-13 (c98ec90): scripts/uninstall.sh + maintenance-guide
+section authored; bash -n clean, dry-run default, evidence triple-gated. Live
+teardown/reinstall proof folded into the LV1 fresh-install sequence.
 
 Dependencies: BATCH-AD2; BATCH-OR1; BATCH-OR2. Decided in B-MVP-007 (2026-06-13).
 
@@ -804,6 +837,12 @@ Acceptance:
 
 ## BATCH-RG1 - Regenerate documentation modernization pass
 
+Status: LANDED 2026-06-13 (245322a): 15 docs/regenerate files modernized vs
+current code + the new operator/hardening/add-on docs; new
+docs/regenerate/README.md fact-ownership index. Promotion recommendations
+(interaction-model, api-contracts, mcp-contracts kb_* surface, matrix-comparison)
+captured in that index for a later operator/docs pass.
+
 Dependencies: BATCH-OR2; BATCH-OR3; BATCH-OR4; BATCH-AD1; BATCH-HR2.
 
 Scope:
@@ -841,10 +880,12 @@ Acceptance:
 
 ## BATCH-LV1 - End-to-end live VM validation and Rocba proof
 
-Dependencies: BATCH-OR3; BATCH-HR3; BATCH-AD2; BATCH-PT1; BATCH-TLS1; BATCH-CL3;
-BATCH-DB1. (BATCH-SB1 deferred to after LV1 per operator 2026-06-13: the
-end-to-end proof runs on the current Supabase CLI loopback stack with demo
-secrets accepted as documented lab posture.)
+Dependencies: BATCH-OR3; BATCH-HR3; BATCH-AD2; BATCH-PT1; BATCH-TLS1; BATCH-DB1.
+(BATCH-SB1 deferred to after LV1 per operator 2026-06-13: the end-to-end proof
+runs on the current Supabase CLI loopback stack with demo secrets accepted as
+documented lab posture. BATCH-CL3 is BLOCKED/re-scope pending 2026-06-13: the
+file-HMAC re-auth plane currently WORKS, so LV1 can proceed on it; whether LV1
+waits for the CL3 re-scope is an open operator decision in B-MVP-017.)
 
 Scope:
 
