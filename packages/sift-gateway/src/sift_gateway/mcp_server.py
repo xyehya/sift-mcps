@@ -50,7 +50,6 @@ _CORE_TOOL_CATEGORIES: dict[str, str] = {
     "list_existing_findings": "findings",
     "manage_todo": "findings",
     "job_status": "ingest",
-    "ingest_job": "ingest",
     "run_command_job": "detection",
 }
 
@@ -65,7 +64,6 @@ _CORE_TOOL_PHASES: dict[str, str] = {
     "list_existing_findings": "FINDINGS",
     "manage_todo": "FINDINGS",
     "job_status": "INGEST",
-    "ingest_job": "INGEST",
     "run_command_job": "TRIAGE",
 }
 

@@ -1202,6 +1202,19 @@ class Gateway:
             """Start gateway metadata/background tasks around the FastAPI app."""
             import os as _os
             await gateway.start()
+            # wave8/ingest-tools (Blocker B): close the startup mount race. Add-on
+            # backend proxies are mounted at app-build time from the backends that
+            # __init__ loaded from app.mcp_backends. A backend row seeded into the
+            # registry AFTER __init__ but BEFORE serving (the install-seed /
+            # operator-register window) would otherwise only be picked up by the
+            # 30s _late_start_checker — so a client connecting right after restart
+            # would see only the core in-process tools. Re-read the registry and
+            # mount any newly-appeared backend HERE, before the first /mcp request
+            # is served, so the aggregate tools/list is complete from the start.
+            try:
+                await gateway.reload_backend_registry()
+            except Exception as exc:  # pragma: no cover - defensive startup
+                logger.warning("pre-serve backend registry reload failed: %s", exc)
             expected_tools = expected_mounted_tool_names(gateway)
             actual_tools = set((await gateway.list_tools()).keys())
             missing_tools = expected_tools - actual_tools

@@ -113,8 +113,10 @@ def test_enqueue_returns_only_job_id_and_uses_d1_rpc():
         return None
 
     svc, conn = _job_service_with(responder)
+    # wave8/ingest-tools: "ingest" was retired as a job_type; this test exercises
+    # the generic enqueue plumbing, so it uses the still-valid "run_command" type.
     result = svc.enqueue_job(
-        job_type="ingest",
+        job_type="run_command",
         case_id="case-1",
         evidence_id="ev-1",
         spec_public={"label": "parse"},

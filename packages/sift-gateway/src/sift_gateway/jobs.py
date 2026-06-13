@@ -28,7 +28,10 @@ from sift_gateway.identity import Identity
 
 logger = logging.getLogger(__name__)
 
-_VALID_JOB_TYPES = frozenset({"ingest", "enrich", "report", "run_command"})
+# NOTE: "ingest" was retired (wave8/ingest-tools): the opensearch-mcp add-on owns
+# the real ingest surface and runs directly through the gateway proxy, not via a
+# core job. "enrich"/"report" remain as a forward-looking allowlist.
+_VALID_JOB_TYPES = frozenset({"enrich", "report", "run_command"})
 
 # Fields exposed by app.job_status_public that are safe to return to
 # portal/agent callers. The view itself already excludes spec_internal,

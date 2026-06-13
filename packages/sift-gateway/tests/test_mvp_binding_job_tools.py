@@ -14,11 +14,9 @@ from sift_core.evidence_chain import ChainStatus
 
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.job_tools import (
-    OPENSEARCH_INGEST_TOOL,
+    GATEWAY_JOB_TOOLS,
     gateway_job_tool_specs,
-    handle_ingest_job,
     handle_job_status,
-    handle_opensearch_ingest_redirect,
     handle_run_command_job,
 )
 from sift_gateway.mcp_server import create_gateway_mcp_server
@@ -111,7 +109,7 @@ class _Gateway:
         self.job_service = _JobService()
         self.evidence_service = _EvidenceService(case_dir)
         self._audit = None
-        self._gateway_local_tools = {"ingest_job", "run_command_job", "job_status"}
+        self._gateway_local_tools = {"run_command_job", "job_status"}
         self._tool_manifest_meta = {}
         self.backends = {}
 
@@ -126,34 +124,23 @@ def _payload(contents):
     return json.loads(contents[0].text)
 
 
-def test_ingest_job_writes_path_only_to_spec_internal(tmp_path):
-    case_dir = tmp_path / "case"
-    (case_dir / "evidence").mkdir(parents=True)
-    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
-    gateway = _Gateway(case_dir)
-
-    result = asyncio.run(
-        handle_ingest_job(
-            gateway,
-            {"evidence_ref": "ev-1", "hostname": "host-a", "include": ["winevt"]},
-            "agent-1",
-        )
+def test_ingest_job_tool_is_fully_retired():
+    """wave8/ingest-tools (Blocker A): the core ``ingest_job`` tool and its
+    handler are retired. The opensearch-mcp add-on owns ingest directly; the
+    gateway no longer advertises or intercepts an ingest envelope."""
+    names = {spec["name"] for spec in gateway_job_tool_specs()}
+    assert "ingest_job" not in names
+    assert "opensearch_ingest" not in names, (
+        "the gateway must not shadow/intercept the add-on opensearch_ingest tool"
     )
+    assert GATEWAY_JOB_TOOLS == frozenset({"run_command_job", "job_status"})
+    # The retired handlers and policy enforcer no longer exist on the module.
+    import sift_gateway.job_tools as jt
 
-    body = _payload(result)
-    assert body == {"job_id": "job-1", "status": "queued", "job_type": "ingest"}
-    call = gateway.job_service.enqueued[0]
-    assert call["job_type"] == "ingest"
-    assert call["case_id"] == "11111111-1111-1111-1111-111111111111"
-    assert call["evidence_id"] == "ev-1"
-    assert call["spec_public"] == {
-        "evidence_ref": "evidence/disk.E01",
-        "hostname": "host-a",
-        "include": ["winevt"],
-        "full": False,
-    }
-    assert call["spec_internal"]["evidence_path"].endswith("evidence/disk.E01")
-    assert "/case/" not in json.dumps(body)
+    assert not hasattr(jt, "handle_ingest_job")
+    assert not hasattr(jt, "handle_opensearch_ingest_redirect")
+    assert not hasattr(jt, "INGEST_JOB_TOOL")
+    assert not hasattr(jt, "OPENSEARCH_INGEST_TOOL")
 
 
 def test_run_command_job_enqueues_public_args_and_internal_case_dir(tmp_path):
@@ -255,7 +242,12 @@ async def test_gateway_mcp_registers_local_binding_tools(tmp_path):
         mcp = create_gateway_mcp_server(gateway, api_keys={})
         tools = {tool.name for tool in await mcp.list_tools()}
 
-    assert {"ingest_job", "run_command_job", "job_status"} <= tools
+    assert {"run_command_job", "job_status"} <= tools
+    # wave8/ingest-tools: the retired ingest_job tool must NOT reappear.
+    assert "ingest_job" not in tools
+    # The gateway must not register/shadow opensearch_ingest as a local tool —
+    # the add-on proxy provides it directly.
+    assert "opensearch_ingest" not in tools
     # The removed gateway RAG shim must not reappear as a local tool.
     assert "rag_search_case" not in tools
 
@@ -591,136 +583,16 @@ def test_overlay_findings_counters_keep_file_values_on_db_error(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# BATCH-OS4: opensearch_ingest gateway policy enforcer
+# wave8/ingest-tools (Blocker A): opensearch_ingest runs DIRECT through the
+# add-on proxy. The gateway no longer intercepts it; dry_run=False is accepted
+# (no deny/redirect) and it is subject only to the same evidence gate every tool
+# gets — there is no special ingest gatekeeper.
 # ---------------------------------------------------------------------------
 
 
-def test_opensearch_ingest_dry_run_false_is_denied_in_db_active_mode(tmp_path):
-    """In DB-active mode (job_service wired), dry_run=False must be denied
-    with a typed redirect to ingest_job.  No subprocess-based ingest path
-    should be reachable by the agent."""
-    case_dir = tmp_path / "case"
-    (case_dir / "evidence").mkdir(parents=True)
-    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
-    gateway = _Gateway(case_dir)
-
-    result = asyncio.run(
-        handle_opensearch_ingest_redirect(
-            gateway,
-            {"path": "evidence/disk.E01", "dry_run": False},
-            "agent-1",
-        )
-    )
-    body = _payload(result)
-    assert body["error"] == "opensearch_ingest_direct_write_denied"
-    assert body["tool"] == OPENSEARCH_INGEST_TOOL
-    assert body["redirect"]["tool"] == "ingest_job"
-    # No absolute paths in the denial response
-    assert str(case_dir) not in json.dumps(body)
-    assert "/evidence/" not in json.dumps(body)
-
-
-def test_opensearch_ingest_dry_run_false_string_is_also_denied(tmp_path):
-    """Passing dry_run as the string 'false' must also be denied (not only
-    the boolean False) to prevent trivial type-coercion bypasses."""
-    case_dir = tmp_path / "case"
-    (case_dir / "evidence").mkdir(parents=True)
-    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
-    gateway = _Gateway(case_dir)
-
-    result = asyncio.run(
-        handle_opensearch_ingest_redirect(
-            gateway,
-            {"path": "evidence/disk.E01", "dry_run": "false"},
-            "agent-1",
-        )
-    )
-    body = _payload(result)
-    assert body["error"] == "opensearch_ingest_direct_write_denied"
-
-
-def test_opensearch_ingest_dry_run_true_allows_survey_with_sealed_evidence(tmp_path):
-    """In DB-active mode, dry_run=True (survey) is allowed after sealed-evidence
-    validation.  The response must be path-free: only the relative display path,
-    opaque evidence_id, and a redirect hint are returned."""
-    case_dir = tmp_path / "case"
-    (case_dir / "evidence").mkdir(parents=True)
-    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
-    gateway = _Gateway(case_dir)
-
-    result = asyncio.run(
-        handle_opensearch_ingest_redirect(
-            gateway,
-            {"path": "ev-1", "dry_run": True, "hostname": "host-a"},
-            "agent-1",
-        )
-    )
-    body = _payload(result)
-    assert body["status"] == "survey"
-    # Relative display path only — no absolute path
-    assert body["evidence_ref"] == "evidence/disk.E01"
-    assert body["evidence_id"] == "ev-1"
-    assert body["case_id"] == "11111111-1111-1111-1111-111111111111"
-    assert body["next_step"]["tool"] == "ingest_job"
-    # No absolute path leak
-    assert str(case_dir) not in json.dumps(body)
-    assert "/home/" not in json.dumps(body)
-    assert "/cases/" not in json.dumps(body)
-
-
-def test_opensearch_ingest_survey_default_dry_run_is_true(tmp_path):
-    """Omitting dry_run defaults to True (survey); the tool is read-only."""
-    case_dir = tmp_path / "case"
-    (case_dir / "evidence").mkdir(parents=True)
-    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
-    gateway = _Gateway(case_dir)
-
-    result = asyncio.run(
-        handle_opensearch_ingest_redirect(
-            gateway,
-            {"path": "ev-1"},  # no dry_run key
-            "agent-1",
-        )
-    )
-    body = _payload(result)
-    assert body["status"] == "survey"
-
-
-def test_opensearch_ingest_missing_path_returns_typed_error(tmp_path):
-    """Omitting the path argument returns a typed evidence_ref_required error,
-    not a raw exception or a path leak."""
-    gateway = _Gateway(tmp_path / "case")
-
-    result = asyncio.run(
-        handle_opensearch_ingest_redirect(
-            gateway,
-            {},  # no path
-            "agent-1",
-        )
-    )
-    body = _payload(result)
-    assert body["error"] == "evidence_ref_required"
-    assert body["tool"] == OPENSEARCH_INGEST_TOOL
-    assert str(tmp_path) not in json.dumps(body)
-
-
-def test_opensearch_ingest_gateway_spec_is_read_only_and_registered_when_job_service_wired():
-    """The opensearch_ingest spec in gateway_job_tool_specs() must be read_only=True
-    (survey only) and the handler must be set to handle_opensearch_ingest_redirect."""
-    spec = next(
-        (s for s in gateway_job_tool_specs() if s["name"] == OPENSEARCH_INGEST_TOOL),
-        None,
-    )
-    assert spec is not None, "opensearch_ingest must appear in gateway_job_tool_specs"
-    assert spec["read_only"] is True, "opensearch_ingest gateway spec must be read_only"
-    assert spec["handler"] is handle_opensearch_ingest_redirect
-    assert "ingest_job" in spec["description"]
-    assert "dry_run" in spec["description"]
-
-
-async def test_gateway_mcp_opensearch_ingest_tool_is_registered_when_job_service_wired(tmp_path):
-    """When job_service is wired, the opensearch_ingest Gateway local tool must be
-    present in the MCP catalog — this ensures it shadows the add-on proxy."""
+async def test_opensearch_ingest_is_not_a_gateway_local_tool(tmp_path):
+    """The gateway must NOT register opensearch_ingest as a local tool, so the
+    add-on proxy's real implementation (dry_run=False capable) is what runs."""
     case_dir = tmp_path / "case"
     case_dir.mkdir()
     gateway = _Gateway(case_dir)
@@ -730,46 +602,95 @@ async def test_gateway_mcp_opensearch_ingest_tool_is_registered_when_job_service
     ):
         mcp = create_gateway_mcp_server(gateway, api_keys={})
         tools = {tool.name for tool in await mcp.list_tools()}
+    # No gateway-local opensearch_ingest. (No add-on backend is registered in
+    # this unit harness, so the proxy tool simply isn't present — the assertion
+    # that matters is the gateway does not SHADOW it with a local deny handler.)
+    assert "opensearch_ingest" not in tools
+    assert "opensearch_ingest" not in gateway._gateway_local_tools
 
-    assert OPENSEARCH_INGEST_TOOL in tools, (
-        "opensearch_ingest must be in the MCP catalog when job_service is wired"
-    )
 
+async def test_opensearch_ingest_dry_run_false_is_not_intercepted_by_gateway(tmp_path):
+    """A direct opensearch_ingest(dry_run=False) call must reach the dispatch
+    (call_next) rather than being denied/redirected by a gateway gatekeeper.
+    Only the shared evidence gate may stop it — proven separately below."""
+    from mcp.types import TextContent
+    from types import SimpleNamespace
 
-def test_opensearch_ingest_response_contains_no_absolute_paths_or_credentials(tmp_path):
-    """Comprehensive leak check: neither dry_run=False denial nor dry_run=True
-    survey responses may carry absolute paths, credentials, or DB internals."""
+    from sift_gateway.policy_middleware import EvidenceGateMiddleware
+
     case_dir = tmp_path / "case"
     (case_dir / "evidence").mkdir(parents=True)
-    (case_dir / "evidence" / "mem.raw").write_bytes(b"mem")
     gateway = _Gateway(case_dir)
 
-    # Denial response leak check
-    denial = asyncio.run(
-        handle_opensearch_ingest_redirect(
-            gateway,
-            {"path": "evidence/mem.raw", "dry_run": False},
-            "agent-1",
-        )
-    )
-    denial_text = json.dumps(_payload(denial))
-    assert str(case_dir) not in denial_text
-    assert "postgresql" not in denial_text.lower()
-    assert "password" not in denial_text.lower()
-    assert "/home/" not in denial_text
-    assert "/cases/" not in denial_text
+    dispatched = {"called": False}
 
-    # Survey response leak check
-    survey = asyncio.run(
-        handle_opensearch_ingest_redirect(
-            gateway,
-            {"path": "ev-1", "dry_run": True},
-            "agent-1",
+    async def call_next(_context):
+        dispatched["called"] = True
+        return ToolResult(content=[TextContent(type="text", text='{"status": "started"}')])
+
+    middleware = EvidenceGateMiddleware(gateway)
+    context = SimpleNamespace(
+        message=SimpleNamespace(
+            name="opensearch_ingest", arguments={"path": "evidence/disk.E01", "dry_run": False}
         )
     )
-    survey_text = json.dumps(_payload(survey))
-    assert str(case_dir) not in survey_text
-    assert "postgresql" not in survey_text.lower()
-    assert "password" not in survey_text.lower()
-    assert "/home/" not in survey_text
-    assert "/cases/" not in survey_text
+    # Gate OK -> the call is dispatched, not denied/redirected.
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(case_dir),
+    ), patch(
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
+        return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 2},
+    ):
+        gateway.control_plane_dsn = "postgresql://x"
+        result = await middleware.on_call_tool(context, call_next)
+
+    assert dispatched["called"] is True
+    body = json.loads(result.content[0].text)
+    assert body == {"status": "started"}
+    # The retired deny payload must never appear.
+    assert "opensearch_ingest_direct_write_denied" not in json.dumps(body)
+
+
+async def test_evidence_gate_still_blocks_opensearch_ingest_when_unsealed(tmp_path):
+    """The shared evidence gate must still block opensearch_ingest(dry_run=False)
+    when evidence is unsealed — retiring the gatekeeper must NOT weaken the
+    sealed-before-analysis invariant."""
+    from types import SimpleNamespace
+
+    from sift_gateway.policy_middleware import EvidenceGateMiddleware
+
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    gateway = _Gateway(case_dir)
+    gateway.control_plane_dsn = "postgresql://x"
+
+    async def call_next(_context):
+        raise AssertionError("evidence gate must block before dispatch")
+
+    middleware = EvidenceGateMiddleware(gateway)
+    context = SimpleNamespace(
+        message=SimpleNamespace(
+            name="opensearch_ingest", arguments={"path": "evidence/disk.E01", "dry_run": False}
+        )
+    )
+    blocked_gate = {
+        "blocked": True,
+        "status": "unsealed",
+        "issues": ["No sealed evidence manifest"],
+        "manifest_version": 0,
+    }
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(case_dir),
+    ), patch(
+        "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=blocked_gate
+    ):
+        result = await middleware.on_call_tool(context, call_next)
+
+    assert result.is_error is True
+    body = result.structured_content
+    assert body is not None
+    # A block payload (not a dispatch) was returned for the unsealed chain.
+    text = json.dumps(body)
+    assert "unsealed" in text or "evidence" in text.lower()

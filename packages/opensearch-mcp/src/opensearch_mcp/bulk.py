@@ -15,18 +15,18 @@ from opensearchpy.exceptions import ConnectionTimeout, TransportError
 # ---------------------------------------------------------------------------
 # Provenance stamping (BATCH-F1)
 # ---------------------------------------------------------------------------
-# When an ingest runs as a durable DB job (sift_core JobWorker -> job_ingest),
-# every indexed document must carry the case/evidence/job provenance IDs so the
-# OpenSearch plane stays derived-but-traceable back to authoritative Postgres
-# state. Rather than thread a provenance dict through all 14 parser modules,
-# the job adapter sets this context var and every action funnelled through
-# flush_bulk is stamped centrally. The fields use the existing `vhir.*`
-# provenance namespace already present on indexed docs (source_file,
-# ingest_audit_id, ...). Stamping is opaque-ID-only: no OS/mount/case paths.
+# Every indexed document must carry the case/provenance IDs so the OpenSearch
+# plane stays derived-but-traceable back to authoritative Postgres state. Rather
+# than thread a provenance dict through all 14 parser modules, the ingest caller
+# sets this context var (wave8/ingest-tools: the add-on `ingest_cli scan` direct
+# path) and every action funnelled through flush_bulk is stamped centrally. The
+# fields use the existing `vhir.*` provenance namespace already present on
+# indexed docs (source_file, ingest_audit_id, ...). Stamping is opaque-ID-only:
+# no OS/mount/case paths.
 #
 # A ContextVar (not thread-local) is used so the stamp follows the logical
 # ingest scope and never leaks across concurrent in-process ingests. Empty by
-# default, so the CLI/non-job ingest path is unchanged.
+# default, so any ingest path that does not set it is unchanged.
 _provenance_ctx: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
     "opensearch_ingest_provenance", default=None
 )

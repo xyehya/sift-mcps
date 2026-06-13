@@ -10,39 +10,27 @@ from sift_core.execute.run_command_job import run_command_job_handler
 
 
 def build_handlers(dsn: str):
+    # wave8/ingest-tools: the core "ingest" job type was retired. The
+    # opensearch-mcp add-on owns the real ingest surface (opensearch_ingest) and
+    # runs directly through the gateway proxy, writing its own Postgres
+    # provenance receipt — there is no core ingest gatekeeper. The worker now
+    # only services the run_command durable-job path.
     handlers = {"run_command": run_command_job_handler}
+
+    # BATCH-K4: still wire the host-mapping correction recorder so
+    # opensearch_fix_host_mapping leaves an authoritative Postgres receipt when
+    # the worker (which owns the service DSN) runs in-process. Import-guarded so a
+    # missing add-on module never disables the run_command worker.
     try:
-        from opensearch_mcp.job_ingest import (
-            make_ingest_job_handler,
-            psycopg_provenance_recorder,
-        )
+        from opensearch_mcp.host_identity_db import psycopg_host_identity_recorder
 
-        # BATCH-K4: also inject the host-identity decision recorder so host
-        # identity is DB-recorded during ingest. Import-guarded separately so a
-        # missing host_identity_db module never disables ingest provenance.
-        host_identity_recorder = None
+        host_identity_recorder = psycopg_host_identity_recorder(dsn)
         try:
-            from opensearch_mcp.host_identity_db import psycopg_host_identity_recorder
+            from opensearch_mcp import server as _os_server
 
-            host_identity_recorder = psycopg_host_identity_recorder(dsn)
-        except ImportError:
+            _os_server.set_host_identity_recorder(host_identity_recorder)
+        except Exception:
             pass
-
-        handlers["ingest"] = make_ingest_job_handler(
-            provenance_recorder=psycopg_provenance_recorder(dsn),
-            host_identity_recorder=host_identity_recorder,
-        )
-
-        # BATCH-K4: wire the host-mapping correction recorder so
-        # opensearch_fix_host_mapping leaves an authoritative Postgres receipt
-        # when the worker (which owns the service DSN) runs in-process.
-        if host_identity_recorder is not None:
-            try:
-                from opensearch_mcp import server as _os_server
-
-                _os_server.set_host_identity_recorder(host_identity_recorder)
-            except Exception:
-                pass
     except ImportError:
         pass
     return handlers

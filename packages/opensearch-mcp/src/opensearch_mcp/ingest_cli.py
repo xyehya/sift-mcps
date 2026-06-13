@@ -1030,9 +1030,21 @@ def cmd_scan(args: argparse.Namespace) -> None:
             elif event == "artifact_failed":
                 print(f"FAILED: {kw['error']}")
 
-        from opensearch_mcp.bulk import ShardCapacityExhausted
+        from opensearch_mcp.bulk import (
+            ShardCapacityExhausted,
+            reset_ingest_provenance,
+            set_ingest_provenance,
+        )
         from opensearch_mcp.ingest_status import HALT_CIRCUIT_BREAKER
 
+        # wave8/ingest-tools: the add-on owns ingest provenance. Generate one
+        # opaque provenance_id per run, stamp it onto every indexed doc via the
+        # bulk provenance context, and (after the run) write the authoritative
+        # Postgres receipt. job_id is NULL — this is a direct, non-job ingest.
+        provenance_id = str(uuid.uuid4())
+        _prov_token = set_ingest_provenance(
+            {"vhir.case_id": case_id, "vhir.provenance_id": provenance_id}
+        )
         try:
             result = ingest(
                 hosts=hosts,
@@ -1068,6 +1080,18 @@ def cmd_scan(args: argparse.Namespace) -> None:
             )
             print(f"ABORT: {HALT_CIRCUIT_BREAKER}: {_sce}", file=sys.stderr)
             raise
+        finally:
+            reset_ingest_provenance(_prov_token)
+
+        # wave8/ingest-tools: write the authoritative Postgres provenance receipt
+        # for this direct ingest run. Best-effort — never blocks/fails an ingest
+        # that already wrote documents; skips silently when no service DSN is in
+        # the environment (e.g. CLI-direct / test invocation).
+        from opensearch_mcp.ingest_provenance import record_direct_ingest_provenance
+
+        record_direct_ingest_provenance(
+            case_id=case_id, provenance_id=provenance_id, result=result
+        )
 
         # Summary
         errors = []

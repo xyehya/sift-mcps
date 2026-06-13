@@ -18,21 +18,17 @@ from mcp.types import TextContent
 
 logger = logging.getLogger(__name__)
 
-INGEST_JOB_TOOL = "ingest_job"
 RUN_COMMAND_JOB_TOOL = "run_command_job"
 JOB_STATUS_TOOL = "job_status"
-# Gateway-owned shadow of the opensearch-mcp add-on tool.  When job_service is
-# wired (DB-active mode) this Gateway local tool is registered BEFORE the add-on
-# proxy is mounted, so it takes precedence and enforces the job/provenance
-# envelope: dry_run=False is denied/redirected to ingest_job; dry_run=True
-# (survey) is allowed only after sealed-evidence validation.  When job_service is
-# NOT wired (legacy / file mode) this tool is never registered, and the add-on
-# proxy continues to work as before.
-OPENSEARCH_INGEST_TOOL = "opensearch_ingest"
 
-GATEWAY_JOB_TOOLS = frozenset(
-    {INGEST_JOB_TOOL, RUN_COMMAND_JOB_TOOL, JOB_STATUS_TOOL, OPENSEARCH_INGEST_TOOL}
-)
+# NOTE: the gateway no longer owns or intercepts evidence ingest. The
+# opensearch-mcp add-on owns the real ingest+query surface (``opensearch_ingest``)
+# and runs DIRECTLY through the gateway proxy, subject to the same evidence-gate
+# and policy middleware every tool receives — there is no special ingest
+# gatekeeper. The retired ``ingest_job`` tool and the ``opensearch_ingest``
+# deny/redirect policy (which forced writes through the core ``image_strings``
+# job path) were removed; see wave8/ingest-tools.
+GATEWAY_JOB_TOOLS = frozenset({RUN_COMMAND_JOB_TOOL, JOB_STATUS_TOOL})
 
 
 class GatewayJobToolError(Exception):
@@ -44,39 +40,6 @@ class GatewayJobToolError(Exception):
 
 def gateway_job_tool_specs() -> list[dict[str, Any]]:
     return [
-        {
-            "name": INGEST_JOB_TOOL,
-            "description": (
-                "Enqueue sealed evidence ingest into the derived search plane through the "
-                "Postgres job state machine. Returns a job_id only."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "evidence_ref": {
-                        "type": "string",
-                        "description": "Sealed evidence id or relative display path.",
-                    },
-                    "hostname": {"type": "string"},
-                    "include": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "exclude": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "full": {"type": "boolean", "default": False},
-                    "priority": {"type": "integer", "default": 100},
-                    "max_attempts": {"type": "integer", "default": 3},
-                },
-                "required": ["evidence_ref"],
-            },
-            "read_only": False,
-            "category": "ingest",
-            "phase": "INGEST",
-            "handler": handle_ingest_job,
-        },
         {
             "name": RUN_COMMAND_JOB_TOOL,
             "description": (
@@ -123,85 +86,7 @@ def gateway_job_tool_specs() -> list[dict[str, Any]]:
             "phase": "INGEST",
             "handler": handle_job_status,
         },
-        {
-            "name": OPENSEARCH_INGEST_TOOL,
-            "description": (
-                "Evidence ingest survey (dry_run=True only in DB-active mode). "
-                "Validates sealed evidence ref and returns discovery metadata. "
-                "To index evidence into OpenSearch use ingest_job — it runs "
-                "through the Postgres job state machine with full provenance. "
-                "dry_run=False is not accepted here in DB-active mode."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Sealed evidence id or relative display path.",
-                    },
-                    "dry_run": {
-                        "type": "boolean",
-                        "default": True,
-                        "description": "Must be true (survey only). Use ingest_job for writes.",
-                    },
-                    "hostname": {"type": "string"},
-                    "format": {"type": "string"},
-                    "include": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "exclude": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": ["path"],
-            },
-            "read_only": True,
-            "category": "ingest",
-            "phase": "INGEST",
-            "handler": handle_opensearch_ingest_redirect,
-        },
     ]
-
-
-async def handle_ingest_job(
-    gateway: Any, arguments: dict[str, Any], examiner: str | None
-) -> list[TextContent]:
-    try:
-        case, identity = _active_case(gateway)
-        evidence = _resolve_evidence(gateway, case, str(arguments.get("evidence_ref") or ""))
-        job_service = _job_service(gateway)
-        spec_public = _drop_none(
-            {
-                "evidence_ref": evidence["display_path"],
-                "hostname": _optional_str(arguments.get("hostname")),
-                "include": _string_list(arguments.get("include")),
-                "exclude": _string_list(arguments.get("exclude")),
-                "full": bool(arguments.get("full", False)),
-            }
-        )
-        spec_internal = {
-            "evidence_path": str(evidence["path"]),
-            "case_dir": str(case.artifact_path or ""),
-            "case_key": case.case_key,
-            "examiner": examiner or getattr(identity, "principal", None) or "agent",
-        }
-        result = job_service.enqueue_job(
-            job_type="ingest",
-            case_id=case.case_id,
-            evidence_id=evidence.get("evidence_id"),
-            spec_public=spec_public,
-            spec_internal=spec_internal,
-            priority=int(arguments.get("priority") or 100),
-            max_attempts=int(arguments.get("max_attempts") or 3),
-            actor=identity,
-        ).public_dict()
-        result["status"] = "queued"
-        result["job_type"] = "ingest"
-    except Exception as exc:
-        result = _error_payload(exc, INGEST_JOB_TOOL)
-    return _json_text(result)
 
 
 async def handle_run_command_job(
@@ -281,89 +166,6 @@ async def handle_job_status(
         result = _job_service(gateway).job_status_public(job_id, identity)
     except Exception as exc:
         result = _error_payload(exc, JOB_STATUS_TOOL)
-    return _json_text(result)
-
-
-async def handle_opensearch_ingest_redirect(
-    gateway: Any, arguments: dict[str, Any], examiner: str | None
-) -> list[TextContent]:
-    """Gateway policy enforcer for ``opensearch_ingest`` in DB-active mode.
-
-    When ``job_service`` is wired (DB-active mode) this handler shadows the
-    add-on proxy ``opensearch_ingest`` tool registered by the opensearch-mcp
-    backend.  It enforces two rules:
-
-    1. ``dry_run=False`` is **denied**.  The agent is redirected to use
-       ``ingest_job``, which runs through the Postgres job/provenance envelope.
-       Direct subprocess-based ingest bypasses the evidence/job/provenance
-       envelope and must not be reachable from the agent in DB-active mode.
-
-    2. ``dry_run=True`` (survey) is **allowed** after sealed-evidence validation.
-       The evidence ref is resolved through the Gateway evidence service — the
-       same sealed-evidence check ``ingest_job`` uses — and a path-free survey
-       summary is returned.  No absolute paths, credentials, or DB internals
-       are included in the response.
-
-    Security guarantees:
-    - Agent responses carry no absolute evidence paths, mount paths, OS
-      credentials, DB DSNs, or worker file paths.
-    - The evidence ref is validated through the Gateway evidence service
-      (sealed-evidence check) before any survey information is returned.
-    - The handler never calls the subprocess-based ingest path.
-    """
-    try:
-        # Reject dry_run=False unconditionally — agent must use ingest_job.
-        dry_run = arguments.get("dry_run", True)
-        if dry_run is False or str(dry_run).lower() == "false":
-            result = {
-                "error": "opensearch_ingest_direct_write_denied",
-                "tool": OPENSEARCH_INGEST_TOOL,
-                "detail": (
-                    "Direct opensearch_ingest(dry_run=False) is not accepted in "
-                    "DB-active mode. Use ingest_job to index evidence through the "
-                    "Postgres job state machine with full provenance recording."
-                ),
-                "redirect": {
-                    "tool": INGEST_JOB_TOOL,
-                    "action": (
-                        "Call ingest_job(evidence_ref=<sealed-evidence-ref>) to "
-                        "enqueue a provenance-backed ingest job. Poll job_status "
-                        "with the returned job_id for terminal status."
-                    ),
-                },
-            }
-            return _json_text(result)
-
-        # dry_run=True — survey path: validate evidence ref through the
-        # sealed-evidence check, return path-free discovery metadata.
-        ref = str(arguments.get("path") or "")
-        if not ref:
-            raise GatewayJobToolError("evidence_ref_required")
-        case, identity = _active_case(gateway)
-        evidence = _resolve_evidence(gateway, case, ref)
-
-        # Build a path-free survey response.  The display_path is a relative
-        # reference (e.g. "evidence/disk.E01") and is safe to surface.
-        result = {
-            "status": "survey",
-            "evidence_ref": evidence["display_path"],
-            "evidence_id": str(evidence.get("evidence_id") or ""),
-            "case_id": str(case.case_id),
-            "hostname": _optional_str(arguments.get("hostname")),
-            "message": (
-                "Evidence ref resolved and sealed. "
-                "Call ingest_job(evidence_ref=...) to index this evidence "
-                "through the Postgres job state machine."
-            ),
-            "next_step": {
-                "tool": INGEST_JOB_TOOL,
-                "evidence_ref": evidence["display_path"],
-            },
-        }
-        # Strip None values before surfacing to agent.
-        result = {k: v for k, v in result.items() if v is not None and v != ""}
-    except Exception as exc:
-        result = _error_payload(exc, OPENSEARCH_INGEST_TOOL)
     return _json_text(result)
 
 

@@ -140,6 +140,38 @@ def test_reload_picks_up_late_seeded_backend_without_restart():
     assert "opensearch_search" in expected_mounted_tool_names(gateway)
 
 
+def test_pre_serve_reload_closes_startup_mount_race():
+    """wave8/ingest-tools (Blocker B): a backend seeded into app.mcp_backends
+    AFTER __init__ but BEFORE the server starts serving /mcp must be mounted by
+    the pre-serve registry reload, so a client connecting right after restart
+    sees the add-on tools (not only the core in-process tools).
+
+    This replicates the lifespan ordering: __init__ found zero backends, then a
+    row was seeded, then app_lifespan runs reload_backend_registry() BEFORE the
+    expected/actual tool reconciliation that gates serving.
+    """
+    gateway = _make_gateway()
+    gateway._fastmcp_server = FastMCP("sift-gateway-test")
+    registry = _FakeRegistry()
+    gateway.mcp_backend_registry = registry
+
+    # __init__-time: registry empty -> no add-on proxies mounted at build time.
+    asyncio.run(gateway._build_tool_map())
+    assert "opensearch-mcp" not in gateway._mounted_proxy_backends
+
+    # Row seeded after __init__ but before serving.
+    registry.seed("opensearch-mcp", _FakeBackend(_MANIFEST, started=True))
+
+    # Pre-serve reload (what app_lifespan now calls before the gate check).
+    asyncio.run(gateway.reload_backend_registry())
+
+    # The add-on tool is now in the expected-mounted catalog used to gate serve,
+    # so the aggregate /mcp surface is complete before the first request.
+    assert "opensearch-mcp" in gateway._mounted_proxy_backends
+    assert "opensearch_search" in expected_mounted_tool_names(gateway)
+    assert gateway._tool_map.get("opensearch_search") == "opensearch-mcp"
+
+
 def test_reload_is_idempotent_and_quiet_when_unchanged():
     gateway = _make_gateway()
     gateway._fastmcp_server = FastMCP("sift-gateway-test")

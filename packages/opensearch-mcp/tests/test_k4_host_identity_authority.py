@@ -214,63 +214,11 @@ def test_ingest_status_from_db_degrades_on_error(monkeypatch):
     assert rows == []
 
 
-# ---------------------------------------------------------------------------
-# job ingest discovery-decision recording
-# ---------------------------------------------------------------------------
-
-
-def test_ingest_handler_records_discovery_decisions(tmp_path):
-    from opensearch_mcp import job_ingest
-    from opensearch_mcp.results import ArtifactResult, HostResult, IngestResult
-
-    from sift_core.execute.job_worker import ClaimedJob, JobContext
-
-    job = ClaimedJob(
-        job_id="job-k4",
-        job_type="ingest",
-        case_id="11111111-1111-1111-1111-111111111111",
-        evidence_id=None,
-        spec_public={"hostname": "HOST01"},
-        spec_internal={"evidence_path": str(tmp_path)},
-        attempts=1,
-        max_attempts=3,
-        worker_id="w1",
-    )
-    worker = MagicMock()
-    worker._record_step = MagicMock(return_value="s")
-    worker._append_log = MagicMock(return_value="l")
-    worker._heartbeat = MagicMock(return_value=True)
-    ctx = JobContext(worker, job)
-
-    res = IngestResult(pipeline_version="opensearch-mcp-9.9.9")
-    host = HostResult(hostname="HOST01", volume_root="/should/not/leak")
-    host.artifacts.append(
-        ArtifactResult(artifact="evtx", index="case-c1-evtx-host01", indexed=3, bulk_failed=0)
-    )
-    res.hosts.append(host)
-
-    decisions: list[dict] = []
-
-    def _host_recorder(case_id, raw, canonical, decision, **kwargs):
-        decisions.append({"raw": raw, "canonical": canonical, "decision": decision, **kwargs})
-        return "d-1"
-
-    handler = job_ingest.make_ingest_job_handler(host_identity_recorder=_host_recorder)
-
-    with patch.object(job_ingest, "_resolve_evidence_path", return_value=tmp_path), patch(
-        "opensearch_mcp.ingest.discover", return_value=[object()]
-    ), patch("opensearch_mcp.ingest.ingest", return_value=res), patch(
-        "opensearch_mcp.client.get_client", return_value=MagicMock()
-    ):
-        handler(job, ctx)
-
-    assert len(decisions) == 1
-    d = decisions[0]
-    assert d["raw"] == "HOST01"
-    assert d["decision"] == "discovery_auto_new_canonical"
-    assert d["index_names"] == ["case-c1-evtx-host01"]
-    # No leaked path in the recorded decision.
-    assert "/should/not/leak" not in repr(d)
+# NOTE: the job-ingest discovery-decision recording test was removed with the
+# core "ingest" job type (wave8/ingest-tools). The opensearch-mcp add-on now owns
+# ingest directly and records its own provenance receipt; see
+# packages/opensearch-mcp/tests/test_ingest_provenance.py. The host-mapping
+# correction recorder exercised below is unchanged.
 
 
 # ---------------------------------------------------------------------------
