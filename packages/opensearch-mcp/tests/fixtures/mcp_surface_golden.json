@@ -409,7 +409,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Search Evidence"
     },
@@ -539,7 +540,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Count Documents"
     },
@@ -812,7 +814,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Security Analytics Detections"
     },
@@ -1027,7 +1030,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Fix Host ID Mapping"
     },
@@ -1227,7 +1231,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Fix Host ID Mapping"
     },
@@ -1474,7 +1479,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Enrich: Threat Intel (OpenCTI)"
     },
@@ -1801,7 +1807,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Ingest/Enrichment Progress"
     },
@@ -2233,7 +2240,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Ingest Evidence into OpenSearch"
     },
@@ -2420,7 +2428,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Field Value Discovery"
     },
@@ -2651,7 +2660,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Event Timeline (Histogram)"
     },
@@ -2802,7 +2812,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Get Full Document"
     },
@@ -2995,7 +3006,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Aggregate Field (Top-N)"
     },
@@ -3152,7 +3164,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Cluster & Index Status"
     },
@@ -3362,7 +3375,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Inspect Forensic Container"
     },
@@ -3718,7 +3732,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Case Coverage Summary"
     },
@@ -3917,7 +3932,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Shard Capacity"
     }

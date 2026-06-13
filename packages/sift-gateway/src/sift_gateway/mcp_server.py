@@ -308,6 +308,45 @@ class GatewayLocalTool(Tool):
         return ToolResult(content=[TextContent(type="text", text=str(value))])
 
 
+def _normalize_output_schema(tool: Any) -> None:
+    """Force a forwarded tool's ``outputSchema`` to be MCP-spec compliant.
+
+    The MCP spec requires an ``outputSchema`` to be an object-typed JSON Schema;
+    strict clients (the Claude Code MCP loader) reject any other root with
+    ``Invalid input: expected "object"`` and then drop the *entire* aggregated
+    tool list. A misbehaving backend must not be able to poison the whole
+    surface, so the aggregator repairs (or, as a last resort, strips) any
+    non-object ``outputSchema`` before advertising it.
+
+    - Root already ``type: "object"`` -> left untouched.
+    - Root missing a type but carrying ``anyOf``/``oneOf``/``allOf`` whose every
+      branch is an object -> inject ``"type": "object"`` (semantics preserved).
+    - Anything else (a non-object root we cannot safely coerce) -> drop the
+      ``outputSchema`` entirely; structured output simply goes unvalidated, which
+      is strictly better than losing the tool.
+    """
+    schema = getattr(tool, "outputSchema", None)
+    if not isinstance(schema, dict):
+        return
+    if schema.get("type") == "object":
+        return
+
+    def _all_object_branches(key: str) -> bool:
+        branches = schema.get(key)
+        return isinstance(branches, list) and bool(branches) and all(
+            isinstance(b, dict) and b.get("type") == "object" for b in branches
+        )
+
+    if "type" not in schema and any(
+        _all_object_branches(k) for k in ("anyOf", "oneOf", "allOf")
+    ):
+        # Mutate a copy so the proxy's cached Tool object is not altered in place.
+        tool.outputSchema = {"type": "object", **schema}
+        return
+
+    tool.outputSchema = None
+
+
 class GatewayToolCatalogMiddleware(Middleware):
     """Apply SIFT manifest/core list metadata to FastMCP tool listings."""
 
@@ -327,6 +366,7 @@ class GatewayToolCatalogMiddleware(Middleware):
             and tool.name not in hidden_addon_tools
         ]
         for tool in filtered:
+            _normalize_output_schema(tool)
             addon_meta = manifest_meta.get(tool.name, {})
             category = _CORE_TOOL_CATEGORIES.get(tool.name) or addon_meta.get("category", "")
             phase = _CORE_TOOL_PHASES.get(tool.name) or addon_meta.get(

@@ -2328,12 +2328,19 @@ def _output_schema(out_model: type[BaseModel]) -> dict[str, Any]:
     path, so the declared schema must admit both shapes; a schema-validating
     client (and the D27b gateway response-guard) otherwise rejects error
     results as schema-violating.
+
+    The root carries ``"type": "object"`` because the MCP spec requires an
+    ``outputSchema`` to be an object-typed JSON Schema, and strict clients (e.g.
+    the Claude Code MCP loader) reject a bare ``anyOf`` whose root ``type`` is
+    absent with ``Invalid input: expected "object"``. Both ``anyOf`` branches are
+    pydantic models (objects), so the added root type is always satisfied.
     """
     return {
+        "type": "object",
         "anyOf": [
             out_model.model_json_schema(),
             ToolError.model_json_schema(),
-        ]
+        ],
     }
 
 
