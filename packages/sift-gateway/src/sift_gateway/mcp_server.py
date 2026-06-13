@@ -551,7 +551,16 @@ def _stdio_transport(config: dict) -> StdioTransport:
         args=args,
         env=env,
         cwd=config.get("cwd"),
-        keep_alive=False,
+        # keep_alive=True so the add-on subprocess stays warm between requests.
+        # With keep_alive=False every aggregate tools/list re-spawned a fresh,
+        # heavy stdio backend (rag-mcp loads the embedder; opensearch-mcp loads
+        # its deps) and the client's list raced the spawn -> FastMCP
+        # "Client is not connected" -> the add-on tools dropped and tools/list
+        # timed out (LV1: client saw only the core tools). A warm subprocess
+        # makes the aggregate catalog (core + all backend tools) reliable and
+        # fast; the subprocess still starts lazily on first use, just isn't torn
+        # down between calls.
+        keep_alive=True,
     )
 
 

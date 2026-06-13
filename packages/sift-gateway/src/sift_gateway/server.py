@@ -1223,6 +1223,22 @@ class Gateway:
                     "Mounted proxy tools missing from gateway catalog: "
                     f"{sorted(missing_tools)}"
                 )
+            # LV1: pre-warm the mounted add-on proxies BEFORE serving /mcp. The
+            # mounted FastMCP proxies are lazy stdio subprocesses — without this,
+            # the client's FIRST aggregate tools/list spawns the heavy backends
+            # (rag-mcp loads the embedder; opensearch-mcp loads its deps) inline
+            # and races the client's list timeout -> "Client is not connected" ->
+            # the add-on tools drop and tools/list times out (LV1). Warming the
+            # aggregate here (with keep_alive=True keeping the subprocess hot)
+            # makes the full core+add-on catalog complete and instant from the
+            # first reconnect. Best-effort: never fail startup on a slow/absent
+            # backend — the 30s late-start checker + per-call lazy start remain.
+            try:
+                await asyncio.wait_for(
+                    gateway_mcp.list_tools(run_middleware=False), timeout=90.0
+                )
+            except Exception as exc:  # pragma: no cover - best-effort warm
+                logger.warning("pre-serve add-on proxy warm-up incomplete: %s", exc)
             reaper_task = None
             if gateway.idle_timeout > 0:
                 reaper_task = asyncio.create_task(gateway._idle_reaper())
