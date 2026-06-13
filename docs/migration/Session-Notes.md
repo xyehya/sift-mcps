@@ -49,9 +49,53 @@ Proof:
   `anyOf` preserved; ZERO non-object roots (was 16 before). e.g. `opensearch_search`
   flipped from anyOf-without-type to `type: object`.
 
-Final live confirmation pending: operator reconnect of the siftmcp client (only holder
-of a valid agent JWT) should now load the full aggregated surface without the
-outputSchema error.
+Operator reconnect CONFIRMED: the full 28-tool surface (11 core + 3 kb_* + 14
+opensearch_*) loaded in the siftmcp client with no outputSchema error.
+
+Exercising the now-reachable add-on tools surfaced two latent bugs (masked while the
+tools were unreachable) — both fixed and live-proven:
+
+- cc02ee5 (opensearch $defs hoist): adding the root type made the tools loadable,
+  which exposed that _output_schema merged two model_json_schema() outputs into one
+  anyOf with each branch's $defs left NESTED. A nested $ref (#/$defs/IndexInfo)
+  resolves against the document root, which had no $defs -> the structured-output
+  validator raised PointerToNowhere the moment opensearch_status actually returned.
+  Fix hoists both branches' $defs to the document root; FastMCP then inlines them.
+  Live: opensearch_status returns clean StatusOut (6 indices, 1M imgstrings docs).
+- 15a8c8b (kb default_case_scoped=false): the reachable kb_* tools were denied with
+  active_case_proxy_denied because is_case_scoped_tool()'s heuristic treats any
+  category-bearing non-"reference" tool as case-scoped; kb_* carry category
+  "enrichment". forensic-rag-mcp is a global reference plane, so its manifest now
+  declares default_case_scoped=false (live DB row patched in lockstep — gateway
+  reads manifest from app.mcp_backends, not the file). Live: kb_get_knowledge_stats
+  returns corpus stats (4318 chunks, BGE-base).
+
+Programmatic-tool-calling / output-filtering verification (operator-requested):
+- True Anthropic PTC (code_execution) is a raw-API feature NOT exposed to the Claude
+  Code MCP client; the gateway-native equivalents were exercised instead.
+- Server-side filtering: 1,000,000 indexed imgstrings; query 'dropbox' -> count 19,
+  search returns the matches with byte offsets + evidence provenance. A 40GB image
+  collapses to 19 hits in context. This is the context-economics win.
+- run_command pipelines WORK (prior QA's "literal argv / pipes unreachable" finding is
+  RESOLVED): `ls -la evidence | wc -l` parsed into 2 staged argv (shell=False);
+  `fls ... 2>... | grep | head` parsed into 3 stages with the 2> redirect captured and
+  per-stage exit codes + failed_stages diagnostics returned.
+
+OPEN FINDING (B-MVP, needs operator decision before Hermes): run_command returns
+`"Audit write failed — action not recorded"` on every call. Investigation: the gateway
+MCP envelope (source=gateway_mcp_envelope) DOES record mcp.tool.call + mcp.tool.result
+per call in app.audit_events with identity/access/outcome + a backend_audit_id pointer
+(chain-of-custody for "who/what/when" is intact). BUT the sift-core run_command DETAIL
+audit (exact command, input/output SHA256s, exit code, pipeline stages, privilege
+events) still targets the retired FILE JSONL ledger (sift_common.audit.AuditLogger);
+in DB-only mode there is no audit dir, so audit.log() returns None, the rich forensic
+detail is persisted NOWHERE, and the envelope's backend_audit_id dangles. This is the
+same shape as the deferred "move HMAC ledger to DB-only" task: the file ledger is
+retired but run_command's DB detail-recorder is not wired. Fix options: (a) give the
+run_command audit path a DB recorder writing detail into app.audit_events.details
+(authoritative), or (b) at minimum stop emitting the misleading agent-facing warning
+when the gateway envelope is the authority. Recommend folding into the deferred
+DB-audit / case-folder-doc unit before the Hermes run.
 
 ### 2026-06-13 - CL3b landed: file-HMAC re-auth plane retired (security-reviewed)
 
