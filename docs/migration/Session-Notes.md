@@ -13,6 +13,59 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-13 - CL3b landed: file-HMAC re-auth plane retired (security-reviewed)
+
+Status: DONE (merged to local main, not pushed; live re-auth smoke folded into LV1).
+
+BATCH-CL3b built by an opus agent, adversarially security-reviewed by a second
+opus agent, test-fidelity fix applied, conductor-reconciled. With CL3a this
+COMPLETES the Supabase re-auth migration (B-MVP-017 DONE).
+
+What landed (718684e):
+- MUST-RESET re-homed: `_must_reset_check` now keys on the Supabase
+  `status='invited'` signal (was the file-HMAC `_PASSWORDS_DIR`). The security
+  review found the PRIMARY forced-reset enforcement is actually the portal
+  resolver returning None for any non-active principal (supabase_auth.py:1186 ->
+  invited operators denied 401/403 upstream); `_must_reset_check` is kept as
+  defense-in-depth, and a new `TestForcedResetEnforcedByResolver` proves the real
+  prod path (the defense-in-depth tests are now explicitly labeled).
+- DELETED (each rg-proven dead): `_verify_evidence_hmac`,
+  `_verify_password_challenge_helper`, `_sync_local_reauth_password`, dead
+  in-memory challenge stores + the commit/report/evidence-chain challenge-GET
+  endpoints (zero frontend callers after CL3a); sift-core verification.py re-auth
+  cluster (`derive_hmac_key`/`verify_items`/`read_ledger`/`rehmac_entries`/
+  `copy_ledger_to_case`) and backup_ops password-hash snapshot block.
+- KEPT (live, by design): `_load_pw_entry`/`_PASSWORDS_DIR` (out-of-scope
+  file-authority COMMIT ledger key + a must_reset UI hint); the file-authority
+  COMMIT ledger (`write_ledger_entry`/`_apply_delta`) untouched.
+- B-MVP-021/022 closed: case-activate DB-active branch and `create_principal`
+  now require the fail-closed Supabase re-verify (DONE rows).
+
+Security review (adversarial, opus): VERDICT APPROVE-WITH-NITS, no auth bypass,
+no weakened forced-reset, no fail-open. Confirmed no surviving sensitive route
+lost its guard (24->22 must-reset sites = exactly the 2 deleted challenge GETs);
+the two new re-auth additions await `_supabase_reverify` before the privileged
+action; deletions broke no live caller; tests re-pointed not weakened; the kept
+`sift_session` branch is unminted in prod. The one LOW finding (must-reset test
+fidelity) was fixed before merge.
+
+REFUSED-AS-FORK -> B-MVP-023: the `sift_session` cookie-verify branch is
+session-establishment (not the re-auth plane), provably unminted in prod but
+load-bearing for ~11 test suites' fixtures; deleting it needs a fixture
+migration first. Left intact with its examiner Bearer fallback + JTI logout.
+
+Validation on merged main: case-dashboard 356, sift-gateway 492, sift-core 473,
+both doc validators PASS, git diff --check clean, secret scans clean, fence held
+(case-dashboard/sift-gateway/sift-core only; no configs, no frontend source ->
+no bundle rebuild). Worktree wt7-cl3b + branch removed.
+
+Next: BATCH-CL2 (repo rename) + BATCH-PT2 (portal RAG, global-knowledge-only) are
+the last two before LV1; both collide with case-dashboard so they run after this.
+Then LV1 (end-to-end live + Rocba on the current CLI Supabase stack), where
+DB1/UN1/CL3a/CL3b get their live proof. SB1 deferred past LV1. Open: B-MVP-023
+(sift_session retirement), B-MVP-008 (parked), B-MVP-018 (AppArmor enforce
+post-LV1).
+
 ### 2026-06-13 - CL3a landed: Supabase fail-closed re-auth (security-reviewed)
 
 Status: DONE (merged to local main, not pushed; live re-auth smoke folded into LV1).
@@ -553,12 +606,13 @@ after portal reset/credential issuance.
 | B-MVP-014 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): installer installs+enables auditd; 12 SIFT rules loaded live (secrets/config, install-root binaries, identity files, units). | BATCH-HR3 |
 | B-MVP-015 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): BAAI/bge-base-en-v1.5 canonical with revision pin; explicit HF_HOME under the service home wired into both units; offline-aware loader. | BATCH-HR3 |
 | B-MVP-016 | Backlog | RESOLVED | RESOLVED 2026-06-12 (AD2): KEEP scope_enforcement - the premise was wrong; packages/opensearch-mcp/sift-backend.json ships it on opensearch_enrich_intel, so schema removal would reject a live manifest. It is advisory metadata in the OS5 family; regression tests added (shipped manifest validates, unknown fields still rejected). | BATCH-AD2 |
-| B-MVP-017 | Needs input | OPEN | RE-DECIDED 2026-06-13 (operator, option A): the file-HMAC plane is the only operator-password re-auth verifier (`record_reauth_event` is audit-only) and ships enabled. Build a fail-closed Supabase password re-verify for sensitive actions (BATCH-CL3a) BEFORE LV1 so the end-to-end proof validates the final design; then delete the dead plane (BATCH-CL3b). CL3a LANDED 2026-06-13 (636f425 + bundle 4b89ac0): security review APPROVE-WITH-NITS, F1 binding-fallback removed, suites green; live re-auth smoke folded into LV1. CL3b (delete dead plane + must-reset re-home) next. | BATCH-CL3a / BATCH-CL3b |
+| B-MVP-017 | Needs input | DONE | DONE 2026-06-13: file-HMAC re-auth plane RETIRED. CL3a (636f425) built the fail-closed Supabase password re-verify; CL3b (718684e) deleted the dead verifiers, re-homed must-reset to the Supabase `invited` signal, and closed B-MVP-021/022. Both security-reviewed (APPROVE-WITH-NITS, no bypass); suites green; live smoke folded into LV1. RESIDUAL (test-coupled session-establishment, NOT the re-auth plane): `sift_session` cookie-verify -> B-MVP-023. | BATCH-CL3a / BATCH-CL3b |
 | B-MVP-018 | Backlog | OPEN | DECIDED 2026-06-13: keep AppArmor COMPLAIN-only through BATCH-LV1; revisit enforce-mode only after the end-to-end test passes (then aa-logprof profiling against ingest/run_command + a dedicated live rerun before flipping to enforce). | Future hardening batch (post-LV1) |
 | B-MVP-019 | Backlog | OPEN | Operator briefed 2026-06-13 (detail in change log). setup-addon.sh embeds operator-home paths (command=`~/.local/bin/uv`, `--project ~/sift-mcps`, manifest under `~/sift-mcps`) in register payloads, but the hardened gateway runs ProtectHome=tmpfs and can only see `/opt/sift-mcps` + system paths, so a so-registered add-on would fail to launch under the live gateway. Fix = derive command/project/manifest from the staged `/opt/sift-mcps` tree. Operator confirmed 2026-06-13: FOLD INTO BATCH-LV1 — fix when LV1 first launches a real add-on under the hardened gateway, using live-confirmed staged paths. | BATCH-LV1 |
 | B-MVP-020 | Backlog | DONE | DONE 2026-06-13 (operator-requested, live-proven): ran rotate-tls.sh --rotate-ca on the existing VM. New CA CN="Protocol SIFT Gateway local CA" with critical basicConstraints CA:TRUE + critical keyUsage(keyCertSign,cRLSign); leaf re-issued with serverAuth EKU + IP/DNS SANs; keys 0600 / certs 0644 sift-service; gateway restarted, /health ok, both services active; curl --cacert verifies WITHOUT -k on the IP SAN. Clients must re-import /var/lib/sift/.sift/tls/ca-cert.pem. | BATCH-TLS1 / live |
-| B-MVP-021 | Backlog | OPEN | Pre-existing gap (surfaced by CL3a security review, NOT a CL3a regression): `post_case_activate` DB-active branch (`_ACTIVE_CASES is not None`, the live VM path) returns before any re-auth, so case activation — a CLAUDE.md sensitive action — is NOT re-authed under DB authority. Fix: `await _supabase_reverify` before `set_active_case` in that branch. FOLDED INTO BATCH-CL3b 2026-06-13 (operator) — fixed before LV1. | BATCH-CL3b |
-| B-MVP-022 | Backlog | OPEN | Pre-existing gap (surfaced by CL3a security review): agent/service credential issuance (`create_principal`, POST /api/auth/principals) gates only on owner/admin role — no operator-password re-verify, though agent-credential issuance is a CLAUDE.md sensitive action. Fix: add Supabase re-verify. FOLDED INTO BATCH-CL3b 2026-06-13 (operator) — fixed before LV1. | BATCH-CL3b |
+| B-MVP-021 | Backlog | OPEN | Pre-existing gap (surfaced by CL3a security review, NOT a CL3a regression): `post_case_activate` DB-active branch (`_ACTIVE_CASES is not None`, the live VM path) returns before any re-auth, so case activation — a CLAUDE.md sensitive action — is NOT re-authed under DB authority. DONE 2026-06-13 (CL3b, 718684e): the DB-active branch now `await _supabase_reverify` before `set_active_case`; fail-closed tested (wrong-pw 401, control-plane-down 503, success). | BATCH-CL3b |
+| B-MVP-022 | Backlog | OPEN | Pre-existing gap (surfaced by CL3a security review): agent/service credential issuance (`create_principal`, POST /api/auth/principals) gates only on owner/admin role — no operator-password re-verify, though agent-credential issuance is a CLAUDE.md sensitive action. DONE 2026-06-13 (CL3b, 718684e): `create_principal` now requires Supabase re-verify in addition to the owner/admin gate; fail-closed tested (wrong-pw 401, missing-pw 400, success). | BATCH-CL3b |
+| B-MVP-023 | Backlog | OPEN | CL3b refused-as-fork (2026-06-13): the `sift_session` cookie-verify branch in case-dashboard auth.py is session-ESTABLISHMENT (not the file-HMAC re-auth plane), provably unminted in production but load-bearing for ~11 test suites' auth fixtures (generate_jwt + COOKIE_NAME). Migrate those fixtures to the Supabase-envelope harness, then delete the branch (and its examiner Bearer fallback / JTI logout if also dead). Not security-blocking (reaching it needs an already-secret-signed JWT). | Future legacy-session retirement batch |
 
 ## Active References
 

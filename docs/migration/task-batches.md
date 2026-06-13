@@ -68,7 +68,7 @@ OpenSearch/RAG tool smoke.
 - [x] BATCH-TLS1 - Installer certificate and trust strategy
 - [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets (DEFERRED to after LV1 per operator 2026-06-13)
 - [x] BATCH-CL3a - Supabase fail-closed operator-password re-verification (B-MVP-017; before LV1)
-- [ ] BATCH-CL3b - Complete re-auth migration: delete dead plane + must-reset re-home + cover B-MVP-021/022 (after CL3a, before LV1)
+- [x] BATCH-CL3b - Complete re-auth migration: delete dead plane + must-reset re-home + cover B-MVP-021/022 (after CL3a, before LV1)
 - [x] BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables (B-MVP-013)
 - [x] BATCH-UN1 - Component uninstaller, remove all or selected components (B-MVP-007)
 - [x] BATCH-RG1 - Regenerate documentation modernization pass
@@ -764,7 +764,22 @@ Acceptance:
 
 ## BATCH-CL3b - Complete the Supabase re-auth migration (delete dead plane + cover gaps)
 
-Status: follows CL3a (operator 2026-06-13), before LV1. Folds in B-MVP-021/022
+Status: LANDED 2026-06-13 (718684e). Deleted the dead file-HMAC re-auth
+verifiers / `_sync_local_reauth_password` / dead challenge stores+endpoints (each
+rg-proven dead) and the sift-core verification.py re-auth cluster + backup_ops
+password-hash snapshot; re-homed `_must_reset_check` to the Supabase
+`status='invited'` signal (with a real prod-path test proving the resolver is the
+primary forced-reset gate, `_must_reset_check` kept as defense-in-depth); added
+fail-closed Supabase re-verify to case-activate DB-active branch (B-MVP-021) and
+`create_principal` (B-MVP-022). Adversarial security review: APPROVE-WITH-NITS,
+no bypass. Suites: case-dashboard 356, sift-gateway 492, sift-core 473.
+`_load_pw_entry`/`_PASSWORDS_DIR` KEPT (still used by the out-of-scope
+file-authority commit ledger key + a must_reset UI hint). Live re-auth smoke
+folded into LV1. RESIDUAL -> B-MVP-023: the `sift_session` cookie-verify branch
+(session-establishment, NOT re-auth) was refused-as-fork because ~11 test suites
+authenticate through it; migrate those fixtures, then delete it.
+
+Status (orig): follows CL3a (operator 2026-06-13), before LV1. Folds in B-MVP-021/022
 (operator 2026-06-13): besides deleting the dead file-HMAC plane and re-homing
 must-reset, also close the two pre-existing re-auth gaps the CL3a review found,
 since they live in the same case-dashboard re-auth code. Auth-touching ->
