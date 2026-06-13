@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import secrets
-import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock
 
 import pytest
@@ -16,7 +12,13 @@ from starlette.testclient import TestClient
 
 import case_dashboard.routes as routes_mod
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+
+from _supabase_reauth_harness import (
+    GOOD_PASSWORD,
+    ReauthFakeSupabaseAuth,
+    operator_principal,
+    set_operator_session,
+)
 
 _SECRET = secrets.token_hex(32)
 
@@ -126,43 +128,37 @@ def mock_gateway():
 
 
 @pytest.fixture()
-def client(passwords_dir, mock_gateway, tmp_path, monkeypatch):
+def fake_auth():
+    return ReauthFakeSupabaseAuth()
+
+
+@pytest.fixture()
+def client(passwords_dir, mock_gateway, tmp_path, monkeypatch, fake_auth):
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
-    app = create_dashboard_v2_app(session_secret=_SECRET)
+    app = create_dashboard_v2_app(session_secret=_SECRET, supabase_auth=fake_auth)
     app.state.gateway = mock_gateway
-    return TestClient(app)
+    c = TestClient(app)
+    c._fake_auth = fake_auth  # so _setup_cookie can swap the resolved role
+    return c
 
 
 def _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=None):
-    if passwords_dir:
-        passwords_dir.mkdir(parents=True, exist_ok=True)
-        # Setup PBKDF2 hash for password123
-        pbkdf2_bin = hashlib.pbkdf2_hmac("sha256", b"password123", b"salt123", 600000)
-        entry = {
-            "hash": pbkdf2_bin.hex(),
-            "salt": "salt123",
-            "must_reset_password": False
-        }
-        (passwords_dir / f"{examiner}.json").write_text(json.dumps(entry))
+    """Attach a Supabase operator/readonly session (CL3a re-auth harness).
 
-    token = generate_jwt(examiner, role, _SECRET, max_age=3600)
-    client.cookies[COOKIE_NAME] = token
-    return token
+    ``role='readonly'`` swaps the fake auth's resolved principal to a readonly
+    operator so the operator route role checks see the same role as before.
+    """
+    system_role = "readonly" if role == "readonly" else "owner"
+    client._fake_auth._principal = operator_principal(
+        display_name=examiner, system_role=system_role,
+        principal_id=f"op-{examiner}",
+    )
+    set_operator_session(client, _SECRET)
 
 
-def _get_challenge_response(client, passwords_dir, examiner="alice"):
-    resp = client.get("/api/commit/challenge")
-    assert resp.status_code == 200
-    chal = resp.json()
-    challenge_id = chal["challenge_id"]
-    nonce = chal["nonce"]
-
-    # Compute HMAC response
-    pbkdf2_bin = hashlib.pbkdf2_hmac("sha256", b"password123", b"salt123", 600000)
-    response_hmac = hmac.new(
-        pbkdf2_bin, nonce.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-    return challenge_id, response_hmac
+# CL3a: a sensitive backend/service action now submits {"password": ...} which is
+# re-verified against Supabase, replacing the old HMAC challenge/response.
+_REAUTH_BODY = {"password": GOOD_PASSWORD}
 
 
 class TestBackendsPortal:
@@ -219,16 +215,15 @@ class TestBackendsPortal:
         _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
         headers = {"origin": "http://testserver"}
 
-        # Missing challenge
+        # Missing password
         resp = client.post("/api/backends/reload", json={}, headers=headers)
         assert resp.status_code == 400
-        assert "challenge_id" in resp.json()["error"]
+        assert "password" in resp.json()["error"].lower()
 
-        # Valid challenge
-        challenge_id, response = _get_challenge_response(client, passwords_dir)
+        # Valid re-auth
         resp = client.post(
             "/api/backends/reload",
-            json={"challenge_id": challenge_id, "response": response},
+            json=dict(_REAUTH_BODY),
             headers=headers
         )
         assert resp.status_code == 200
@@ -247,13 +242,12 @@ class TestBackendsPortal:
             headers=headers,
         )
         assert resp.status_code == 400
-        assert "challenge_id" in resp.json()["error"]
+        assert "password" in resp.json()["error"].lower()
 
-        challenge_id, response = _get_challenge_response(client, passwords_dir)
         resp = client.request(
             "DELETE",
             "/api/backends/test-backend",
-            json={"challenge_id": challenge_id, "response": response},
+            json=dict(_REAUTH_BODY),
             headers=headers,
         )
 
@@ -311,8 +305,7 @@ class TestBackendsPortal:
         manifest_path = tmp_path / "sift-backend.json"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-        # Valid challenge + config payload
-        challenge_id, response = _get_challenge_response(client, passwords_dir)
+        # Valid re-auth + config payload
         payload = {
             "name": "test-backend",
             "config": {
@@ -320,8 +313,7 @@ class TestBackendsPortal:
                 "command": "true",
                 "manifest_path": str(manifest_path)
             },
-            "challenge_id": challenge_id,
-            "response": response
+            "password": GOOD_PASSWORD,
         }
 
         resp = client.post("/api/backends", json=payload, headers=headers)
@@ -340,12 +332,10 @@ class TestBackendsPortal:
         _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
         headers = {"origin": "http://testserver"}
 
-        challenge_id, response = _get_challenge_response(client, passwords_dir)
         payload = {
             "name": "../test_backend",  # Path traversal / invalid characters
             "config": {"type": "stdio", "command": "true"},
-            "challenge_id": challenge_id,
-            "response": response
+            "password": GOOD_PASSWORD,
         }
         resp = client.post("/api/backends", json=payload, headers=headers)
         assert resp.status_code == 422
@@ -423,20 +413,18 @@ class TestBackendsPortal:
         )
 
         # Try to start -> should be rejected because requirements are unmet
-        challenge_id, response = _get_challenge_response(client, passwords_dir)
         start_resp = client.post(
             "/api/services/test-gated/start",
-            json={"challenge_id": challenge_id, "response": response},
+            json=dict(_REAUTH_BODY),
             headers=headers
         )
         assert start_resp.status_code == 400
         assert "unmet requirements" in start_resp.json()["error"]
 
         # Try to stop -> should be allowed even if requirements are unmet
-        challenge_id, response = _get_challenge_response(client, passwords_dir)
         stop_resp = client.post(
             "/api/services/test-gated/stop",
-            json={"challenge_id": challenge_id, "response": response},
+            json=dict(_REAUTH_BODY),
             headers=headers
         )
         assert stop_resp.status_code == 200
@@ -467,10 +455,9 @@ class TestBackendEnableDisable:
             [_RegistryRecord("opencti-mcp", enabled=True)]
         )
         headers = {"origin": "http://testserver"}
-        challenge_id, response = _get_challenge_response(client, passwords_dir)
         resp = client.post(
             "/api/backends/opencti-mcp/enabled",
-            json={"enabled": False, "challenge_id": challenge_id, "response": response},
+            json={"enabled": False, "password": GOOD_PASSWORD},
             headers=headers,
         )
         assert resp.status_code == 200
@@ -483,10 +470,9 @@ class TestBackendEnableDisable:
         _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
         mock_gateway.mcp_backend_registry = _Registry([])
         headers = {"origin": "http://testserver"}
-        challenge_id, response = _get_challenge_response(client, passwords_dir)
         resp = client.post(
             "/api/backends/ghost/enabled",
-            json={"enabled": True, "challenge_id": challenge_id, "response": response},
+            json={"enabled": True, "password": GOOD_PASSWORD},
             headers=headers,
         )
         assert resp.status_code == 404
@@ -497,10 +483,9 @@ class TestBackendEnableDisable:
             [_RegistryRecord("opencti-mcp", enabled=True)]
         )
         headers = {"origin": "http://testserver"}
-        challenge_id, response = _get_challenge_response(client, passwords_dir)
         resp = client.post(
             "/api/backends/opencti-mcp/enabled",
-            json={"enabled": "yes", "challenge_id": challenge_id, "response": response},
+            json={"enabled": "yes", "password": GOOD_PASSWORD},
             headers=headers,
         )
         assert resp.status_code == 400

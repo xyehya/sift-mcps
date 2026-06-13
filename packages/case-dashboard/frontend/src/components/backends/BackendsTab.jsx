@@ -8,10 +8,8 @@ import {
   postStartService,
   postStopService,
   postRestartService,
-  postSetBackendEnabled,
-  getCommitChallenge
+  postSetBackendEnabled
 } from '../../api/endpoints'
-import { computeSimpleChallengeResponse } from '../../api/crypto'
 import { useStore } from '../../store/useStore'
 import { HealthPanel } from './HealthPanel'
 
@@ -152,9 +150,8 @@ export function BackendsTab() {
 
     setChallengeModal(prev => ({ ...prev, loading: true, error: '' }))
     try {
-      const challenge = await getCommitChallenge()
-      const response = await computeSimpleChallengeResponse(password, challenge)
-      await onConfirm({ challenge_id: challenge.challenge_id, response })
+      // CL3a (B-MVP-017): password re-verified against Supabase server-side.
+      await onConfirm({ password })
       setChallengeModal({
         isOpen: false,
         title: '',

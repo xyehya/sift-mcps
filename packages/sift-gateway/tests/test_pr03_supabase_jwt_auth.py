@@ -783,6 +783,100 @@ async def test_d31_invalidate_principal_drops_only_matching_entries():
 
 
 # ---------------------------------------------------------------------------
+# CL3a (B-MVP-017) — SupabaseAuthCallbacks.reverify_password (fail closed)
+# ---------------------------------------------------------------------------
+
+
+class _ReverifyClient:
+    """Fake GoTrue client whose password_grant succeeds/fails per construction."""
+
+    def __init__(self, *, sub="auth-operator", outcome="ok"):
+        self._sub = sub
+        self._outcome = outcome
+        self.grant_calls: list[tuple[str, str]] = []
+
+    async def password_grant(self, email, password):
+        from sift_gateway.supabase_auth import (
+            InvalidTokenError, SupabaseSession, SupabaseUnavailableError,
+        )
+        self.grant_calls.append((email, password))
+        if self._outcome == "bad_password":
+            raise InvalidTokenError("invalid credentials")
+        if self._outcome == "unavailable":
+            raise SupabaseUnavailableError("Supabase Auth unreachable")
+        return SupabaseSession(
+            access_token="discard-at", refresh_token="discard-rt",
+            expires_at=9999999999, sub=self._sub,
+        )
+
+
+def _reverify_callbacks(*, sub="auth-operator", outcome="ok"):
+    from sift_gateway.supabase_auth import SupabaseAuthConfig, SupabaseAuthCallbacks
+
+    cfg = SupabaseAuthConfig(enabled=True, url="http://supabase.local", anon_key="anon")
+    cb = SupabaseAuthCallbacks.__new__(SupabaseAuthCallbacks)
+    cb._config = cfg
+    cb._audit = None
+    cb._client = _ReverifyClient(sub=sub, outcome=outcome)
+    cb._repository = _FakeRepo()
+    return cb
+
+
+async def test_reverify_password_accepts_active_operator():
+    cb = _reverify_callbacks(sub="auth-operator", outcome="ok")
+    out = await cb.reverify_password(
+        "alice@example.com", "correct-pw", "1.2.3.4",
+        expected_auth_user_id="auth-operator",
+    )
+    assert out["ok"] is True
+    assert out["auth_user_id"] == "auth-operator"
+    # The grant ran with the supplied email/password; tokens are discarded.
+    assert cb._client.grant_calls == [("alice@example.com", "correct-pw")]
+    assert "access_token" not in out and "refresh_token" not in out
+
+
+async def test_reverify_password_wrong_password_raises_401():
+    from sift_gateway.supabase_auth import InvalidTokenError
+
+    cb = _reverify_callbacks(outcome="bad_password")
+    with pytest.raises(InvalidTokenError) as ei:
+        await cb.reverify_password("alice@example.com", "wrong", "1.2.3.4")
+    assert ei.value.http_status == 401
+
+
+async def test_reverify_password_control_plane_down_raises_503():
+    from sift_gateway.supabase_auth import SupabaseUnavailableError
+
+    cb = _reverify_callbacks(outcome="unavailable")
+    with pytest.raises(SupabaseUnavailableError) as ei:
+        await cb.reverify_password("alice@example.com", "correct-pw", "1.2.3.4")
+    assert ei.value.http_status == 503
+
+
+async def test_reverify_password_identity_mismatch_raises_403():
+    from sift_gateway.supabase_auth import PrincipalForbiddenError
+
+    # The grant resolves to a DIFFERENT auth user than the active session.
+    cb = _reverify_callbacks(sub="auth-operator", outcome="ok")
+    with pytest.raises(PrincipalForbiddenError) as ei:
+        await cb.reverify_password(
+            "alice@example.com", "correct-pw", "1.2.3.4",
+            expected_auth_user_id="auth-someone-else",
+        )
+    assert ei.value.http_status == 403
+
+
+async def test_reverify_password_non_operator_principal_raises_403():
+    from sift_gateway.supabase_auth import PrincipalForbiddenError
+
+    # The grant's subject maps to an AGENT principal, not an operator.
+    cb = _reverify_callbacks(sub="auth-agent", outcome="ok")
+    with pytest.raises(PrincipalForbiddenError) as ei:
+        await cb.reverify_password("agent@example.com", "correct-pw", "1.2.3.4")
+    assert ei.value.http_status == 403
+
+
+# ---------------------------------------------------------------------------
 # C3 completion: list_principals (operator roster, no token material)
 # ---------------------------------------------------------------------------
 

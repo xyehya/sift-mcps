@@ -367,11 +367,12 @@ describe('B-06: MITRE tag cloud field source', () => {
 // ── Case activation flow ────────────────────────────────────────────
 describe('Case activation flow', () => {
   it('activation request uses case_id field (not id)', () => {
+    // CL3a (B-MVP-017): the file-backed activation branch submits {case_id,
+    // password}; the password is re-verified against Supabase server-side.
     const activatingCase = { id: 'test-case', name: 'Test Case' }
     const payload = {
       case_id: activatingCase.id,
-      challenge_id: 'challenge-hex',
-      response: 'response-hex',
+      password: 'secret123',
     }
     expect(payload.case_id).toBe('test-case')
     expect(payload.id).toBeUndefined()
@@ -494,16 +495,16 @@ describe('Security: XSS prevention', () => {
   })
 
   it('password is never stored in plaintext for long', () => {
-    // Password should be cleared from React state immediately after use
+    // CL3a: the password is cleared from React state immediately after it is
+    // submitted to the server for the Supabase re-verify.
     let password = 'temp-password'
-    // After challenge computation
     password = ''
     expect(password).toBe('')
   })
 
   it('activation error messages do not leak internal details', () => {
     const rawErrors = [
-      'Missing case_id, challenge_id, or response',
+      'Missing case_id',
       'Invalid case_id format',
       'Case directory not found',
       'Incorrect password',
@@ -522,32 +523,28 @@ describe('Security: XSS prevention', () => {
 
 // ── Security: Bypass logic ────────────────────────────────────────────
 describe('Security: Bypass prevention', () => {
-  it('activation requires non-empty challenge_id', () => {
+  it('activation requires a non-empty password (CL3a re-verify)', () => {
+    // CL3a: the file-backed activation branch submits {case_id, password};
+    // an empty/missing password must not produce a submittable payload.
     const payloads = [
-      { case_id: 'test', challenge_id: '', response: 'sig' },
-      { case_id: 'test', challenge_id: null, response: 'sig' },
-      { case_id: 'test', challenge_id: undefined, response: 'sig' },
+      { case_id: 'test', password: '' },
+      { case_id: 'test', password: null },
+      { case_id: 'test', password: undefined },
     ]
     for (const p of payloads) {
-      const valid = !!(p.case_id && p.challenge_id && p.response)
+      const valid = !!(p.case_id && p.password)
       expect(valid).toBe(false)
     }
   })
 
-  it('activation requires non-empty response', () => {
-    const valid = !!(('test-case' && 'challenge-hex' && ''))
-    expect(valid).toBe(false)
-  })
-
-  it('HMAC response must be computed client-side (cannot be guessed)', () => {
-    // The response must be HMAC-SHA256(stored_pbkdf2_hash, nonce)
-    // Without the stored hash, an attacker cannot compute a valid response
-    const fakeResponse = '0000000000000000000000000000000000000000000000000000000000000000'
-    // 64 hex chars = 32 bytes = SHA-256 length
-    expect(fakeResponse).toHaveLength(64)
-    // But without the correct key, it won't match
-    // The backend verifies: hmac.compare_digest(expected, response)
-    expect(typeof fakeResponse).toBe('string')
+  it('password is verified server-side against Supabase (not client-side)', () => {
+    // CL3a (B-MVP-017): the client no longer computes an HMAC; the plaintext
+    // password is sent over TLS and re-verified by the Gateway against Supabase
+    // GoTrue. The client cannot itself authorize the action.
+    const payload = { case_id: 'test', password: 'secret123' }
+    expect(payload.password).toBeTruthy()
+    expect(payload).not.toHaveProperty('challenge_id')
+    expect(payload).not.toHaveProperty('response')
   })
 
   it('clicking outside activation modal does not submit', () => {

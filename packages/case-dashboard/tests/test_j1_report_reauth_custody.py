@@ -20,7 +20,12 @@ from starlette.testclient import TestClient
 
 import case_dashboard.routes as routes_mod
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+
+from _supabase_reauth_harness import (
+    GOOD_PASSWORD,
+    ReauthFakeSupabaseAuth,
+    set_operator_session,
+)
 
 _SECRET = secrets.token_hex(32)
 
@@ -78,18 +83,19 @@ class FakeReportDB:
         self.recorded.append(metadata)
 
 
-def _make_client(**services):
+def _make_client(*, fake_auth=None, **services):
     app = create_dashboard_v2_app(
         session_secret=_SECRET,
         active_case_service=services.get("active_case_service", FakeActiveCases()),
         evidence_service=services.get("evidence_service"),
         report_service=services.get("report_service"),
+        supabase_auth=fake_auth or ReauthFakeSupabaseAuth(),
     )
     return TestClient(app)
 
 
 def _examiner(client):
-    client.cookies.set(COOKIE_NAME, generate_jwt("alice", "examiner", _SECRET, max_age=3600))
+    set_operator_session(client, _SECRET)
     return client
 
 
@@ -123,16 +129,13 @@ class TestReportReauth:
         assert "Re-auth" in resp.json()["error"]
         assert rep.recorded == []
 
-    def test_generate_with_reauth_records_event_and_metadata(self, case_dir, monkeypatch):
+    def test_generate_with_reauth_records_event_and_metadata(self, case_dir):
         ev = FakeEvidenceDB()
         rep = FakeReportDB()
         c = _examiner(_make_client(evidence_service=ev, report_service=rep))
-        monkeypatch.setattr(
-            routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key")
-        )
         resp = c.post(
             "/api/reports/generate",
-            json={"profile": "full", "challenge_id": "x", "response": "y"},
+            json={"profile": "full", "password": GOOD_PASSWORD},
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -146,46 +149,50 @@ class TestReportReauth:
         assert rep.recorded[0]["reauth_audit_event_id"] == "audit-evt-J1"
         assert rep.recorded[0]["seal_status"] == "sealed"
 
-    def test_generate_rejects_bad_password(self, case_dir, monkeypatch):
+    def test_generate_rejects_bad_password(self, case_dir):
         ev = FakeEvidenceDB()
         rep = FakeReportDB()
         c = _examiner(_make_client(evidence_service=ev, report_service=rep))
-        monkeypatch.setattr(
-            routes_mod, "_verify_evidence_hmac",
-            lambda *a, **k: ("Incorrect password", None),
-        )
         resp = c.post(
             "/api/reports/generate",
-            json={"profile": "full", "challenge_id": "x", "response": "y"},
+            json={"profile": "full", "password": "wrong-password"},
         )
         assert resp.status_code == 401
         assert rep.recorded == []
 
-
-class TestApprovedOnlyAndSanitization:
-    def test_draft_text_absent_from_response(self, case_dir, monkeypatch):
+    def test_generate_control_plane_down_fails_closed(self, case_dir):
         ev = FakeEvidenceDB()
-        c = _examiner(_make_client(evidence_service=ev, report_service=FakeReportDB()))
-        monkeypatch.setattr(
-            routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key")
-        )
+        rep = FakeReportDB()
+        c = _examiner(_make_client(
+            evidence_service=ev, report_service=rep,
+            fake_auth=ReauthFakeSupabaseAuth(control_plane_down=True),
+        ))
         resp = c.post(
             "/api/reports/generate",
-            json={"profile": "full", "challenge_id": "x", "response": "y"},
+            json={"profile": "full", "password": GOOD_PASSWORD},
+        )
+        assert resp.status_code == 503
+        assert rep.recorded == []
+
+
+class TestApprovedOnlyAndSanitization:
+    def test_draft_text_absent_from_response(self, case_dir):
+        ev = FakeEvidenceDB()
+        c = _examiner(_make_client(evidence_service=ev, report_service=FakeReportDB()))
+        resp = c.post(
+            "/api/reports/generate",
+            json={"profile": "full", "password": GOOD_PASSWORD},
         )
         assert resp.status_code == 200
         assert "DRAFTSECRET" not in resp.text
         assert "F-2" not in resp.text
 
-    def test_response_has_no_absolute_paths(self, case_dir, monkeypatch):
+    def test_response_has_no_absolute_paths(self, case_dir):
         ev = FakeEvidenceDB()
         c = _examiner(_make_client(evidence_service=ev, report_service=FakeReportDB()))
-        monkeypatch.setattr(
-            routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key")
-        )
         resp = c.post(
             "/api/reports/generate",
-            json={"profile": "full", "challenge_id": "x", "response": "y"},
+            json={"profile": "full", "password": GOOD_PASSWORD},
         )
         assert str(case_dir) not in resp.text
         assert "/tmp/" not in resp.text

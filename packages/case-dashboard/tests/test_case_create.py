@@ -504,59 +504,78 @@ def test_supabase_db_case_routes_use_active_case_service(passwords_dir, case_env
     assert not (Path.home() / ".sift" / "active_case").exists()
 
 
-def test_post_case_activate_success(client, case_env, passwords_dir, monkeypatch):
-    import hashlib
-    import hmac
+def test_post_case_activate_success(case_env, passwords_dir, tmp_path, monkeypatch):
+    """CL3a: the file-backed activation branch re-verifies the operator password
+    against Supabase (fail closed), not the local HMAC challenge."""
+    from _supabase_reauth_harness import (
+        GOOD_PASSWORD,
+        ReauthFakeSupabaseAuth,
+        set_operator_session,
+    )
 
-    # 1. Setup examiner password and cookie
-    examiner = "alice"
-    passwords_dir.mkdir(parents=True, exist_ok=True)
-    pbkdf2_bin = hashlib.pbkdf2_hmac("sha256", b"password123", b"salt123", 600000)
-    entry = {
-        "hash": pbkdf2_bin.hex(),
-        "salt": "salt123",
-        "must_reset_password": False
-    }
-    (passwords_dir / f"{examiner}.json").write_text(json.dumps(entry))
-
-    token = generate_jwt(examiner, "examiner", _SECRET, max_age=3600)
-    client.cookies[COOKIE_NAME] = token
-
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     case_root, cfg_path = case_env
+    # File-backed activation: no active-case service wired, Supabase re-auth on.
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        gateway_config_path=str(cfg_path),
+        supabase_auth=ReauthFakeSupabaseAuth(),
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+    set_operator_session(client, _SECRET)
+
     # Create the case to activate
     case_id = "case-to-activate-20260525-1414"
     case_dir = case_root / case_id
     case_dir.mkdir(parents=True)
     (case_dir / "CASE.yaml").write_text(f"case_id: {case_id}\nname: To Activate\n")
 
-    # 2. Get challenge
-    resp = client.get("/api/case/activate/challenge")
-    assert resp.status_code == 200
-    chal = resp.json()
-    assert "challenge_id" in chal
-    assert "nonce" in chal
-
-    # Verify salt/iterations match entry
-    assert chal["salt"] == "salt123"
-    assert chal["iterations"] == 600000
-
-    # 3. Compute response: HMAC-SHA256(stored_pbkdf2_hash, nonce)
-    expected_response = hmac.new(
-        pbkdf2_bin, chal["nonce"].encode("utf-8"), hashlib.sha256
-    ).hexdigest()
-
-    # 4. Activate
+    # Activate with the operator password (re-verified against Supabase).
     resp = client.post("/api/case/activate", json={
         "case_id": case_id,
-        "challenge_id": chal["challenge_id"],
-        "response": expected_response
+        "password": GOOD_PASSWORD,
     })
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is True
     assert resp.json()["case_id"] == case_id
 
     # Verify gateway config was updated
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
+    assert cfg["case"]["dir"] == ""
+
+
+def test_post_case_activate_wrong_password_denied(case_env, passwords_dir, tmp_path, monkeypatch):
+    """CL3a: a wrong password is denied (401) and never activates the case."""
+    from _supabase_reauth_harness import (
+        GOOD_PASSWORD,
+        ReauthFakeSupabaseAuth,
+        set_operator_session,
+    )
+
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    case_root, cfg_path = case_env
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        gateway_config_path=str(cfg_path),
+        supabase_auth=ReauthFakeSupabaseAuth(),
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+    set_operator_session(client, _SECRET)
+
+    case_id = "case-to-activate-20260525-1500"
+    (case_root / case_id).mkdir(parents=True)
+    (case_root / case_id / "CASE.yaml").write_text(f"case_id: {case_id}\n")
+
+    resp = client.post("/api/case/activate", json={
+        "case_id": case_id,
+        "password": "wrong-password",
+    })
+    assert resp.status_code == 401
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+    # Activation must not have changed the case dir.
     assert cfg["case"]["dir"] == ""

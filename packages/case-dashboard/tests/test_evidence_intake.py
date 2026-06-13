@@ -10,15 +10,16 @@ surfaced via the injected evidence service). These tests wire a fake DB evidence
 service the same way the Gateway injects the real one in production, plus the
 graceful-empty behavior for a fresh install with no DB service / no active case.
 
-Security invariants: HMAC verification, IP binding, single-use challenge,
-                     must_reset_password block, examiner role required,
-                     re-auth audit event id required for every mutation.
+Security invariants (CL3a / B-MVP-017): operator password re-verified against
+                     Supabase (fail closed), must_reset_password block, examiner
+                     role required, re-auth audit event id required for every
+                     mutation. The legacy file-HMAC challenge/single-use/IP-bind
+                     mechanics are gone (verifier moved to the control plane).
 """
 
 from __future__ import annotations
 
 import hashlib
-import hmac as hmac_mod
 import json
 import secrets
 from pathlib import Path
@@ -26,8 +27,13 @@ from pathlib import Path
 import case_dashboard.routes as routes_mod
 import pytest
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
 from starlette.testclient import TestClient
+
+from _supabase_reauth_harness import (
+    GOOD_PASSWORD,
+    ReauthFakeSupabaseAuth,
+    set_operator_session,
+)
 
 _SECRET = secrets.token_hex(32)
 _PBKDF2_ITERS = 600_000
@@ -124,11 +130,6 @@ class FakeEvidenceDB:
 # ---------------------------------------------------------------------------
 
 
-def _make_evidence_response(stored_hash_hex: str, nonce: str) -> str:
-    """Compute evidence HMAC response: HMAC-SHA256(stored_pbkdf2_hash, nonce)."""
-    return hmac_mod.new(bytes.fromhex(stored_hash_hex), nonce.encode(), "sha256").hexdigest()
-
-
 def _setup_examiner(
     passwords_dir: Path,
     examiner: str,
@@ -136,28 +137,18 @@ def _setup_examiner(
     *,
     must_reset: bool = False,
 ) -> dict:
+    """Write the local must_reset flag file the R1 gate still reads.
+
+    CL3a no longer verifies the password via this file (Supabase does), but the
+    ``must_reset_password`` gate is still read from ``_PASSWORDS_DIR``, so a few
+    tests still seed an entry to exercise that block. The hash is filler.
+    """
     passwords_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     salt = secrets.token_bytes(32)
     pw_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITERS).hex()
     entry = {"hash": pw_hash, "salt": salt.hex(), "must_reset_password": must_reset}
     (passwords_dir / f"{examiner}.json").write_text(json.dumps(entry))
     return entry
-
-
-def _session_cookie(examiner: str = "alice", role: str = "examiner") -> str:
-    return generate_jwt(examiner, role, _SECRET, max_age=3600)
-
-
-def _full_evidence_challenge(
-    client: TestClient, passwords_dir: Path, examiner: str = "alice"
-) -> tuple[str, str]:
-    """Returns (challenge_id, response_hmac)."""
-    entry = json.loads((passwords_dir / f"{examiner}.json").read_text())
-    resp = client.get("/api/evidence/chain/challenge")
-    assert resp.status_code == 200, resp.text
-    data = resp.json()
-    response = _make_evidence_response(entry["hash"], data["nonce"])
-    return data["challenge_id"], response
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +169,12 @@ def evidence_db():
 
 
 @pytest.fixture()
-def app(passwords_dir, tmp_path, monkeypatch, evidence_db):
+def fake_auth():
+    return ReauthFakeSupabaseAuth()
+
+
+@pytest.fixture()
+def app(passwords_dir, tmp_path, monkeypatch, evidence_db, fake_auth):
     routes_mod._evidence_challenges.clear()
     routes_mod._challenges.clear()
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
@@ -187,6 +183,7 @@ def app(passwords_dir, tmp_path, monkeypatch, evidence_db):
         session_max_age=28800,
         active_case_service=FakeActiveCases(),
         evidence_service=evidence_db,
+        supabase_auth=fake_auth,
     )
 
 
@@ -196,9 +193,8 @@ def client(app):
 
 
 @pytest.fixture()
-def authed_client(client, passwords_dir):
-    _setup_examiner(passwords_dir, "alice", "password123")
-    client.cookies[COOKIE_NAME] = _session_cookie()
+def authed_client(client):
+    set_operator_session(client, _SECRET)
     return client
 
 
@@ -206,10 +202,12 @@ def _fresh_install_client(passwords_dir, tmp_path, monkeypatch):
     """Client with NO DB evidence service and no active case (fresh install)."""
     routes_mod._evidence_challenges.clear()
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
-    app = create_dashboard_v2_app(session_secret=_SECRET, session_max_age=28800)
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET, session_max_age=28800,
+        supabase_auth=ReauthFakeSupabaseAuth(),
+    )
     c = TestClient(app, raise_server_exceptions=True)
-    _setup_examiner(passwords_dir, "alice", "password123")
-    c.cookies[COOKIE_NAME] = _session_cookie()
+    set_operator_session(c, _SECRET)
     return c
 
 
@@ -223,11 +221,25 @@ class TestEvidenceChainStatus:
         resp = client.get("/api/evidence/chain/status")
         assert resp.status_code == 403
 
-    def test_agent_role_returns_403(self, client, passwords_dir):
-        _setup_examiner(passwords_dir, "alice", "password123")
-        client.cookies[COOKIE_NAME] = _session_cookie(role="agent")
-        resp = client.get("/api/evidence/chain/status")
-        assert resp.status_code == 403
+    def test_agent_principal_returns_403(self, passwords_dir, tmp_path, monkeypatch):
+        """An agent principal carries no examiner identity -> operator route denies."""
+        from _supabase_reauth_harness import operator_principal, set_operator_session
+        agent_principal = dict(
+            operator_principal(), principal_type="agent",
+            auth_user_id="auth-user-agent-1",
+        )
+        fake = ReauthFakeSupabaseAuth(principal=agent_principal)
+        routes_mod._evidence_challenges.clear()
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET, session_max_age=28800,
+            active_case_service=FakeActiveCases(), evidence_service=FakeEvidenceDB(),
+            supabase_auth=fake,
+        )
+        c = TestClient(app, raise_server_exceptions=True)
+        set_operator_session(c, _SECRET)
+        resp = c.get("/api/evidence/chain/status")
+        assert resp.status_code in (401, 403)
 
     def test_unsealed_case_returns_unsealed(self, authed_client):
         resp = authed_client.get("/api/evidence/chain/status")
@@ -254,10 +266,10 @@ class TestEvidenceChainStatus:
         app = create_dashboard_v2_app(
             session_secret=_SECRET, session_max_age=28800,
             active_case_service=FakeActiveCases(), evidence_service=ev,
+            supabase_auth=ReauthFakeSupabaseAuth(),
         )
         c = TestClient(app, raise_server_exceptions=True)
-        _setup_examiner(passwords_dir, "alice", "password123")
-        c.cookies[COOKIE_NAME] = _session_cookie()
+        set_operator_session(c, _SECRET)
 
         resp = c.get("/api/evidence/chain/status")
         assert resp.status_code == 200
@@ -306,7 +318,6 @@ class TestEvidenceChainRescan:
         called_with: list[str] = []
         routes_mod._evidence_challenges.clear()
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
-        _setup_examiner(passwords_dir, "alice", "password123")
 
         app = create_dashboard_v2_app(
             session_secret=_SECRET,
@@ -314,9 +325,10 @@ class TestEvidenceChainRescan:
             active_case_service=FakeActiveCases(),
             evidence_service=FakeEvidenceDB(),
             on_chain_mutation=lambda s: called_with.append(s),
+            supabase_auth=ReauthFakeSupabaseAuth(),
         )
         c = TestClient(app, raise_server_exceptions=True)
-        c.cookies[COOKIE_NAME] = _session_cookie()
+        set_operator_session(c, _SECRET)
         c.post("/api/evidence/chain/rescan")
         # The mutation hook fires with the resolved case dir str (empty here since
         # FakeActiveCases has no artifact_path, but the hook is still invoked).
@@ -333,33 +345,20 @@ class TestEvidenceChainChallenge:
         resp = client.get("/api/evidence/chain/challenge")
         assert resp.status_code == 403
 
-    def test_returns_challenge_fields(self, authed_client):
+    def test_reauth_method_tag_is_supabase(self, authed_client, passwords_dir):
+        # CL3a: the challenge GET still answers (file-backed path), but the
+        # re-auth method tag now advertises the Supabase password re-verify.
+        _setup_examiner(passwords_dir, "alice", GOOD_PASSWORD)
         resp = authed_client.get("/api/evidence/chain/challenge")
         assert resp.status_code == 200
-        data = resp.json()
-        assert "challenge_id" in data
-        assert "nonce" in data
-        assert "salt" in data
-        assert data["iterations"] == 600000
-        assert data["reauth_method"] == "local_hmac_mvp_bridge"
-
-    def test_challenge_stored_in_evidence_challenges(self, authed_client):
-        resp = authed_client.get("/api/evidence/chain/challenge")
-        cid = resp.json()["challenge_id"]
-        assert cid in routes_mod._evidence_challenges
+        assert resp.json()["reauth_method"] == "supabase_password_reverify"
 
     def test_must_reset_password_blocked(self, client, passwords_dir):
-        _setup_examiner(passwords_dir, "alice", "password123", must_reset=True)
-        client.cookies[COOKIE_NAME] = _session_cookie()
+        _setup_examiner(passwords_dir, "alice", GOOD_PASSWORD, must_reset=True)
+        set_operator_session(client, _SECRET)
         resp = client.get("/api/evidence/chain/challenge")
         assert resp.status_code == 403
         assert "reset" in resp.json()["error"].lower()
-
-    def test_no_password_configured_returns_403(self, client, passwords_dir):
-        passwords_dir.mkdir(parents=True, exist_ok=True)
-        client.cookies[COOKIE_NAME] = _session_cookie()
-        resp = client.get("/api/evidence/chain/challenge")
-        assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -372,23 +371,15 @@ class TestEvidenceChainSeal:
         resp = client.post("/api/evidence/chain/seal", json={})
         assert resp.status_code == 403
 
-    def test_missing_challenge_fields_returns_400(self, authed_client):
+    def test_missing_password_returns_400(self, authed_client):
         resp = authed_client.post("/api/evidence/chain/seal", json={"file_specs": []})
         assert resp.status_code == 400
 
-    def test_invalid_challenge_id_returns_401(self, authed_client):
-        resp = authed_client.post(
-            "/api/evidence/chain/seal",
-            json={"challenge_id": "bad", "response": "bad", "file_specs": []},
-        )
-        assert resp.status_code == 401
-
-    def test_seal_empty_manifest(self, authed_client, passwords_dir, evidence_db):
+    def test_seal_empty_manifest(self, authed_client, evidence_db):
         """Sealing an empty file_specs reaches the DB seal RPC and returns version 1."""
-        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
         resp = authed_client.post(
             "/api/evidence/chain/seal",
-            json={"challenge_id": challenge_id, "response": response, "file_specs": []},
+            json={"password": GOOD_PASSWORD, "file_specs": []},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -398,13 +389,11 @@ class TestEvidenceChainSeal:
         assert data["files_added"] == []
         assert evidence_db.seal_calls and evidence_db.seal_calls[0][2] == "audit-evt-001"
 
-    def test_seal_registers_evidence_file(self, authed_client, passwords_dir, evidence_db):
-        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+    def test_seal_registers_evidence_file(self, authed_client, evidence_db):
         resp = authed_client.post(
             "/api/evidence/chain/seal",
             json={
-                "challenge_id": challenge_id,
-                "response": response,
+                "password": GOOD_PASSWORD,
                 "file_specs": [
                     {"path": "evidence/disk.raw", "source": "USB-001", "description": "Host disk image"}
                 ],
@@ -416,41 +405,29 @@ class TestEvidenceChainSeal:
         assert "evidence/disk.raw" in data["files_added"]
 
     def test_seal_wrong_password_returns_401(self, authed_client, evidence_db):
-        resp = authed_client.get("/api/evidence/chain/challenge")
-        data = resp.json()
-        resp2 = authed_client.post(
+        resp = authed_client.post(
             "/api/evidence/chain/seal",
-            json={
-                "challenge_id": data["challenge_id"],
-                "response": "deadbeef" * 8,
-                "file_specs": [],
-            },
+            json={"password": "wrong-password", "file_specs": []},
         )
-        assert resp2.status_code == 401
+        assert resp.status_code == 401
         assert not evidence_db.seal_calls
 
-    def test_challenge_is_single_use(self, authed_client, passwords_dir):
-        """Re-submitting the same challenge_id after success must fail."""
-        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
-        resp1 = authed_client.post(
+    def test_seal_control_plane_down_fails_closed(self, authed_client, evidence_db, fake_auth):
+        """CL3a: control plane unreachable -> 503, no file-HMAC fallback, no seal."""
+        fake_auth.control_plane_down = True
+        resp = authed_client.post(
             "/api/evidence/chain/seal",
-            json={"challenge_id": challenge_id, "response": response, "file_specs": []},
+            json={"password": GOOD_PASSWORD, "file_specs": []},
         )
-        assert resp1.status_code == 200
-        resp2 = authed_client.post(
-            "/api/evidence/chain/seal",
-            json={"challenge_id": challenge_id, "response": response, "file_specs": []},
-        )
-        assert resp2.status_code == 401
+        assert resp.status_code == 503
+        assert not evidence_db.seal_calls
 
     def test_seal_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
         """No DB service: seal degrades to the no-case response, never a file write."""
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        # Bypass HMAC so we exercise the no-DB branch, not the password check.
-        monkeypatch.setattr(routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key"))
         resp = c.post(
             "/api/evidence/chain/seal",
-            json={"challenge_id": "x", "response": "y", "file_specs": []},
+            json={"password": GOOD_PASSWORD, "file_specs": []},
         )
         assert resp.status_code == 404
         assert "active case" in resp.json()["error"].lower()
@@ -459,7 +436,6 @@ class TestEvidenceChainSeal:
         called_with: list[str] = []
         routes_mod._evidence_challenges.clear()
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
-        entry = _setup_examiner(passwords_dir, "alice", "password123")
 
         app = create_dashboard_v2_app(
             session_secret=_SECRET,
@@ -467,16 +443,14 @@ class TestEvidenceChainSeal:
             active_case_service=FakeActiveCases(),
             evidence_service=FakeEvidenceDB(),
             on_chain_mutation=lambda s: called_with.append(s),
+            supabase_auth=ReauthFakeSupabaseAuth(),
         )
         c = TestClient(app, raise_server_exceptions=True)
-        c.cookies[COOKIE_NAME] = _session_cookie()
+        set_operator_session(c, _SECRET)
 
-        resp = c.get("/api/evidence/chain/challenge")
-        data = resp.json()
-        response = _make_evidence_response(entry["hash"], data["nonce"])
         r = c.post(
             "/api/evidence/chain/seal",
-            json={"challenge_id": data["challenge_id"], "response": response, "file_specs": []},
+            json={"password": GOOD_PASSWORD, "file_specs": []},
         )
         assert r.status_code == 200
         # FakeActiveCases exposes no artifact_path, so the resolved case dir str is
@@ -484,11 +458,11 @@ class TestEvidenceChainSeal:
         assert called_with == []
 
     def test_must_reset_password_blocked(self, client, passwords_dir):
-        _setup_examiner(passwords_dir, "alice", "password123", must_reset=True)
-        client.cookies[COOKIE_NAME] = _session_cookie()
+        _setup_examiner(passwords_dir, "alice", GOOD_PASSWORD, must_reset=True)
+        set_operator_session(client, _SECRET)
         resp = client.post(
             "/api/evidence/chain/seal",
-            json={"challenge_id": "x", "response": "y", "file_specs": []},
+            json={"password": GOOD_PASSWORD, "file_specs": []},
         )
         assert resp.status_code == 403
 
@@ -504,18 +478,17 @@ class TestEvidenceChainDelete:
         assert resp.status_code == 403
 
     def test_missing_fields_returns_400(self, authed_client):
-        resp = authed_client.post("/api/evidence/chain/delete", json={"challenge_id": "x"})
+        # No path/reason and no password -> 400 (path/reason validated first).
+        resp = authed_client.post("/api/evidence/chain/delete", json={})
         assert resp.status_code == 400
 
-    def test_delete_stray_file(self, authed_client, passwords_dir, evidence_db):
+    def test_delete_stray_file(self, authed_client, evidence_db):
         """Deleting a stray file reaches the DB delete with a re-auth id and reports
         the bytes were removed."""
-        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
         resp = authed_client.post(
             "/api/evidence/chain/delete",
             json={
-                "challenge_id": challenge_id,
-                "response": response,
+                "password": GOOD_PASSWORD,
                 "path": "evidence/.planted-hidden",
                 "reason": "Unauthorized hidden file, not part of acquisition",
             },
@@ -530,28 +503,23 @@ class TestEvidenceChainDelete:
         assert evidence_db.delete_calls[0][2] == "audit-evt-001"
 
     def test_delete_wrong_password_returns_401(self, authed_client, evidence_db):
-        resp = authed_client.get("/api/evidence/chain/challenge")
-        data = resp.json()
-        resp2 = authed_client.post(
+        resp = authed_client.post(
             "/api/evidence/chain/delete",
             json={
-                "challenge_id": data["challenge_id"],
-                "response": "00" * 32,
+                "password": "wrong-password",
                 "path": "evidence/.planted-hidden",
                 "reason": "x",
             },
         )
-        assert resp2.status_code == 401
+        assert resp.status_code == 401
         assert not evidence_db.delete_calls
 
     def test_delete_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
         """No DB service: delete degrades to the no-case response, never a 500."""
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        # Bypass HMAC so we exercise the no-DB branch, not the password check.
-        monkeypatch.setattr(routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key"))
         resp = c.post(
             "/api/evidence/chain/delete",
-            json={"challenge_id": "x", "response": "y", "path": "evidence/f", "reason": "r"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/f", "reason": "r"},
         )
         assert resp.status_code == 404
         assert "active case" in resp.json()["error"].lower()
@@ -563,17 +531,15 @@ class TestEvidenceChainIgnore:
         assert resp.status_code == 403
 
     def test_missing_fields_returns_400(self, authed_client):
-        resp = authed_client.post("/api/evidence/chain/ignore", json={"challenge_id": "x"})
+        resp = authed_client.post("/api/evidence/chain/ignore", json={})
         assert resp.status_code == 400
 
-    def test_ignore_unregistered_file(self, authed_client, passwords_dir, evidence_db):
+    def test_ignore_unregistered_file(self, authed_client, evidence_db):
         """Ignoring an unregistered file reaches the DB ignore RPC with a re-auth id."""
-        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
         resp = authed_client.post(
             "/api/evidence/chain/ignore",
             json={
-                "challenge_id": challenge_id,
-                "response": response,
+                "password": GOOD_PASSWORD,
                 "path": "evidence/stray.txt",
                 "reason": "Accidentally copied, not evidence",
             },
@@ -588,52 +554,45 @@ class TestEvidenceChainIgnore:
         )
 
     def test_ignore_wrong_password_returns_401(self, authed_client, evidence_db):
-        resp = authed_client.get("/api/evidence/chain/challenge")
-        data = resp.json()
-        resp2 = authed_client.post(
+        resp = authed_client.post(
             "/api/evidence/chain/ignore",
             json={
-                "challenge_id": data["challenge_id"],
-                "response": "00" * 32,
+                "password": "wrong-password",
                 "path": "evidence/stray.txt",
                 "reason": "not needed",
             },
         )
-        assert resp2.status_code == 401
+        assert resp.status_code == 401
         assert not evidence_db.ignore_calls
 
     def test_ignore_missing_path_returns_400(self, authed_client):
         resp = authed_client.post(
             "/api/evidence/chain/ignore",
-            json={"challenge_id": "x", "response": "y", "reason": "because"},
+            json={"password": GOOD_PASSWORD, "reason": "because"},
         )
         assert resp.status_code == 400
 
     def test_ignore_missing_reason_returns_400(self, authed_client):
         resp = authed_client.post(
             "/api/evidence/chain/ignore",
-            json={"challenge_id": "x", "response": "y", "path": "evidence/x.txt"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.txt"},
         )
         assert resp.status_code == 400
 
-    def test_ignore_invalid_challenge_returns_401(self, authed_client):
+    def test_ignore_control_plane_down_fails_closed(self, authed_client, evidence_db, fake_auth):
+        fake_auth.control_plane_down = True
         resp = authed_client.post(
             "/api/evidence/chain/ignore",
-            json={
-                "challenge_id": "notreal",
-                "response": "deadbeef" * 8,
-                "path": "evidence/x.txt",
-                "reason": "test",
-            },
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.txt", "reason": "test"},
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 503
+        assert not evidence_db.ignore_calls
 
     def test_ignore_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        monkeypatch.setattr(routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key"))
         resp = c.post(
             "/api/evidence/chain/ignore",
-            json={"challenge_id": "x", "response": "y", "path": "evidence/x.txt", "reason": "r"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.txt", "reason": "r"},
         )
         assert resp.status_code == 404
 
@@ -648,13 +607,12 @@ class TestEvidenceChainRetire:
         resp = client.post("/api/evidence/chain/retire", json={})
         assert resp.status_code == 403
 
-    def test_agent_role_returns_403(self, client, passwords_dir):
-        _setup_examiner(passwords_dir, "alice", "password123")
-        client.cookies[COOKIE_NAME] = _session_cookie(role="agent")
+    def test_no_session_returns_401_or_403(self, client):
+        # No session at all -> examiner/role unset -> denied (role check first).
         resp = client.post("/api/evidence/chain/retire", json={})
-        assert resp.status_code == 403
+        assert resp.status_code in (401, 403)
 
-    def test_missing_challenge_fields_returns_400(self, authed_client):
+    def test_missing_password_returns_400(self, authed_client):
         resp = authed_client.post(
             "/api/evidence/chain/retire", json={"path": "evidence/x", "reason": "r"}
         )
@@ -663,30 +621,30 @@ class TestEvidenceChainRetire:
     def test_missing_path_returns_400(self, authed_client):
         resp = authed_client.post(
             "/api/evidence/chain/retire",
-            json={"challenge_id": "x", "response": "y", "reason": "r"},
+            json={"password": GOOD_PASSWORD, "reason": "r"},
         )
         assert resp.status_code == 400
 
     def test_missing_reason_returns_400(self, authed_client):
         resp = authed_client.post(
             "/api/evidence/chain/retire",
-            json={"challenge_id": "x", "response": "y", "path": "evidence/x"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x"},
         )
         assert resp.status_code == 400
 
-    def test_invalid_challenge_returns_401(self, authed_client):
+    def test_control_plane_down_fails_closed(self, authed_client, evidence_db, fake_auth):
+        fake_auth.control_plane_down = True
         resp = authed_client.post(
             "/api/evidence/chain/retire",
-            json={"challenge_id": "notreal", "response": "deadbeef" * 8,
-                  "path": "evidence/x.bin", "reason": "test"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "test"},
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 503
+        assert not evidence_db.retire_calls
 
-    def test_retire_active_file_succeeds(self, authed_client, passwords_dir, evidence_db):
-        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+    def test_retire_active_file_succeeds(self, authed_client, evidence_db):
         resp = authed_client.post(
             "/api/evidence/chain/retire",
-            json={"challenge_id": challenge_id, "response": response,
+            json={"password": GOOD_PASSWORD,
                   "path": "evidence/sample.E01", "reason": "corrupt acquisition"},
         )
         assert resp.status_code == 200
@@ -700,22 +658,19 @@ class TestEvidenceChainRetire:
         )
 
     def test_retire_wrong_password_returns_401(self, authed_client, evidence_db):
-        resp = authed_client.get("/api/evidence/chain/challenge")
-        data = resp.json()
-        resp2 = authed_client.post(
+        resp = authed_client.post(
             "/api/evidence/chain/retire",
-            json={"challenge_id": data["challenge_id"], "response": "00" * 32,
+            json={"password": "wrong-password",
                   "path": "evidence/x.bin", "reason": "test"},
         )
-        assert resp2.status_code == 401
+        assert resp.status_code == 401
         assert not evidence_db.retire_calls
 
     def test_retire_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        monkeypatch.setattr(routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key"))
         resp = c.post(
             "/api/evidence/chain/retire",
-            json={"challenge_id": "x", "response": "y", "path": "evidence/x.bin", "reason": "r"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "r"},
         )
         assert resp.status_code == 404
 
@@ -730,13 +685,7 @@ class TestEvidenceChainReacquire:
         resp = client.post("/api/evidence/chain/reacquire", json={})
         assert resp.status_code == 403
 
-    def test_agent_role_returns_403(self, client, passwords_dir):
-        _setup_examiner(passwords_dir, "alice", "password123")
-        client.cookies[COOKIE_NAME] = _session_cookie(role="agent")
-        resp = client.post("/api/evidence/chain/reacquire", json={})
-        assert resp.status_code == 403
-
-    def test_missing_challenge_fields_returns_400(self, authed_client):
+    def test_missing_password_returns_400(self, authed_client):
         resp = authed_client.post(
             "/api/evidence/chain/reacquire", json={"path": "evidence/x", "reason": "r"}
         )
@@ -745,30 +694,31 @@ class TestEvidenceChainReacquire:
     def test_missing_path_returns_400(self, authed_client):
         resp = authed_client.post(
             "/api/evidence/chain/reacquire",
-            json={"challenge_id": "x", "response": "y", "reason": "r"},
+            json={"password": GOOD_PASSWORD, "reason": "r"},
         )
         assert resp.status_code == 400
 
     def test_missing_reason_returns_400(self, authed_client):
         resp = authed_client.post(
             "/api/evidence/chain/reacquire",
-            json={"challenge_id": "x", "response": "y", "path": "evidence/x"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x"},
         )
         assert resp.status_code == 400
 
-    def test_invalid_challenge_returns_401(self, authed_client):
+    def test_control_plane_down_fails_closed(self, authed_client, evidence_db, fake_auth):
+        fake_auth.control_plane_down = True
         resp = authed_client.post(
             "/api/evidence/chain/reacquire",
-            json={"challenge_id": "notreal", "response": "deadbeef" * 8,
+            json={"password": GOOD_PASSWORD,
                   "path": "evidence/x.bin", "reason": "re-image"},
         )
-        assert resp.status_code == 401
+        assert resp.status_code == 503
+        assert not evidence_db.reacquire_calls
 
-    def test_reacquire_succeeds(self, authed_client, passwords_dir, evidence_db):
-        challenge_id, response = _full_evidence_challenge(authed_client, passwords_dir)
+    def test_reacquire_succeeds(self, authed_client, evidence_db):
         resp = authed_client.post(
             "/api/evidence/chain/reacquire",
-            json={"challenge_id": challenge_id, "response": response,
+            json={"password": GOOD_PASSWORD,
                   "path": "evidence/Rocba-Memory.raw",
                   "reason": "corrupt acquisition re-imaged"},
         )
@@ -784,21 +734,18 @@ class TestEvidenceChainReacquire:
         )
 
     def test_reacquire_wrong_password_returns_401(self, authed_client, evidence_db):
-        resp = authed_client.get("/api/evidence/chain/challenge")
-        data = resp.json()
-        resp2 = authed_client.post(
+        resp = authed_client.post(
             "/api/evidence/chain/reacquire",
-            json={"challenge_id": data["challenge_id"], "response": "00" * 32,
+            json={"password": "wrong-password",
                   "path": "evidence/x.bin", "reason": "re-image"},
         )
-        assert resp2.status_code == 401
+        assert resp.status_code == 401
         assert not evidence_db.reacquire_calls
 
     def test_reacquire_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        monkeypatch.setattr(routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key"))
         resp = c.post(
             "/api/evidence/chain/reacquire",
-            json={"challenge_id": "x", "response": "y", "path": "evidence/x.bin", "reason": "r"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "r"},
         )
         assert resp.status_code == 404

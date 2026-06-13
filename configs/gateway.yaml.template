@@ -131,7 +131,12 @@ auth:
     min_agent_token_ttl_seconds: 172800
   legacy:
     token_fallback_enabled: true
-    portal_session_enabled: true
+    # CL3a (B-MVP-017): sensitive-action re-auth is verified against Supabase
+    # GoTrue (password grant), not the legacy file-HMAC/legacy-session plane, so
+    # fresh installs that adopt this template ship with the legacy portal-session
+    # plane OFF. The code default in supabase_auth.py stays True so EXISTING
+    # installs are unaffected until they re-render this template.
+    portal_session_enabled: false
     anonymous_examiner_enabled: false
 
 control_plane:

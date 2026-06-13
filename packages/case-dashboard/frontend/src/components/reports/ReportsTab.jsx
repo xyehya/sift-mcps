@@ -2,12 +2,10 @@ import { useState, useEffect } from 'react'
 import { useStore } from '../../store/useStore'
 import {
   getReports,
-  getReportChallenge,
   postReportGenerate,
   postReportSave,
   getReport
 } from '../../api/endpoints'
-import { computeSimpleChallengeResponse } from '../../api/crypto'
 
 const PROFILES = {
   full: {
@@ -113,21 +111,14 @@ export function ReportsTab() {
       end_date: endDate || ''
     }
 
-    // Compute the HMAC challenge response so the server can record a re-auth
-    // audit event for this inclusion. Best-effort: if the challenge endpoint is
-    // unavailable, generation still proceeds (the server only enforces re-auth
-    // when DB authority is wired and will reject without it).
-    try {
-      const challenge = await getReportChallenge()
-      if (challenge && challenge.challenge_id) {
-        payload.challenge_id = challenge.challenge_id
-        payload.response = await computeSimpleChallengeResponse(reauthPassword, challenge)
-      }
-    } catch (err) {
-      // No challenge available (file-backed) — proceed without re-auth material.
-    } finally {
-      setReauthPassword('')
+    // CL3a (B-MVP-017): the operator password is re-verified against Supabase
+    // server-side so the server records a re-auth audit event for this inclusion.
+    // The server only enforces re-auth when DB authority is wired and rejects
+    // (fail closed) without a valid password.
+    if (reauthPassword) {
+      payload.password = reauthPassword
     }
+    setReauthPassword('')
 
     try {
       const result = await postReportGenerate(payload)

@@ -22,8 +22,14 @@ import secrets
 
 import case_dashboard.routes as routes_mod
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
 from starlette.testclient import TestClient
+
+from _supabase_reauth_harness import (
+    GOOD_PASSWORD,
+    ReauthFakeSupabaseAuth,
+    operator_principal,
+    set_operator_session,
+)
 
 _SECRET = secrets.token_hex(32)
 
@@ -173,7 +179,7 @@ class FakeJobService:
         return {"job_id": job_id, "status": "succeeded", "job_type": "ingest"}
 
 
-def _make_client(**services):
+def _make_client(*, principal=None, **services):
     app = create_dashboard_v2_app(
         session_secret=_SECRET,
         active_case_service=services.get("active_case_service", FakeActiveCases()),
@@ -181,18 +187,26 @@ def _make_client(**services):
         investigation_service=services.get("investigation_service"),
         report_service=services.get("report_service"),
         job_service=services.get("job_service"),
+        supabase_auth=ReauthFakeSupabaseAuth(principal=principal)
+        if principal is not None
+        else ReauthFakeSupabaseAuth(),
     )
     return TestClient(app)
 
 
 def _examiner(client):
-    client.cookies.set(COOKIE_NAME, generate_jwt("alice", "examiner", _SECRET, max_age=3600))
+    # operator with system_role 'examiner' -> examiner portal role.
+    set_operator_session(client, _SECRET)
     return client
 
 
-def _readonly(client):
-    client.cookies.set(COOKIE_NAME, generate_jwt("bob", "readonly", _SECRET, max_age=3600))
-    return client
+def _readonly_client(**services):
+    principal = operator_principal(
+        display_name="bob", system_role="readonly", principal_id="op-bob"
+    )
+    c = _make_client(principal=principal, **services)
+    set_operator_session(c, _SECRET)
+    return c
 
 
 # --------------------------------------------------------------------------- #
@@ -231,83 +245,87 @@ class TestEvidenceDBAuthority:
         assert body["authority"] == "db"
         assert body["path"] == "evidence/disk.E01"
         assert body["status"] == "verified"
-        assert ev.verify_calls == [
-            ("11111111-1111-1111-1111-111111111111", None)
-        ]
+        # CL3a: the Supabase-envelope session now populates request.state.principal,
+        # so the verify call carries the operator actor (was None under the legacy
+        # sift_session cookie which set principal=None).
+        assert len(ev.verify_calls) == 1
+        case_id, actor = ev.verify_calls[0]
+        assert case_id == "11111111-1111-1111-1111-111111111111"
+        assert isinstance(actor, dict) and actor["principal_type"] == "operator"
 
-    def test_seal_passes_reauth_event_id(self, monkeypatch):
+    def test_seal_passes_reauth_event_id(self):
         ev = FakeEvidenceDB()
         c = _examiner(_make_client(evidence_service=ev))
-        # Bypass the HMAC password check; the DB seal path is what we exercise.
-        monkeypatch.setattr(
-            routes_mod, "_verify_evidence_hmac",
-            lambda *a, **k: (None, b"key"),
-        )
+        # CL3a: the operator password is re-verified against Supabase.
         resp = c.post("/api/evidence/chain/seal", json={
-            "challenge_id": "x", "response": "y",
+            "password": GOOD_PASSWORD,
             "file_specs": [{"path": "evidence/disk.E01"}],
         })
         assert resp.status_code == 200
         body = resp.json()
         assert body["sealed"] is True and body["authority"] == "db"
-        assert body["reauth_method"] == "local_hmac_mvp_bridge"
+        assert body["reauth_method"] == "supabase_password_reverify"
         assert body["registration_mode"] == "atomic_register_and_seal"
         assert ev.seal_calls and ev.seal_calls[0][2] == "audit-evt-001"
         assert ev.reauth_calls and ev.reauth_calls[0][2] == "evidence_seal"
 
-    def test_seal_refused_without_reauth_event(self, monkeypatch):
+    def test_seal_refused_without_reauth_event(self):
         ev = FakeEvidenceDBNoReauth()
         c = _examiner(_make_client(evidence_service=ev))
-        monkeypatch.setattr(
-            routes_mod, "_verify_evidence_hmac",
-            lambda *a, **k: (None, b"key"),
-        )
         resp = c.post("/api/evidence/chain/seal", json={
-            "challenge_id": "x", "response": "y",
+            "password": GOOD_PASSWORD,
             "file_specs": [{"path": "evidence/disk.E01"}],
         })
         assert resp.status_code == 403
         assert "Re-auth" in resp.json()["error"]
         assert not ev.seal_calls
 
-    def test_seal_rejects_bad_hmac(self, monkeypatch):
+    def test_seal_rejects_bad_password(self):
         ev = FakeEvidenceDB()
         c = _examiner(_make_client(evidence_service=ev))
-        monkeypatch.setattr(
-            routes_mod, "_verify_evidence_hmac",
-            lambda *a, **k: ("Incorrect password", None),
-        )
         resp = c.post("/api/evidence/chain/seal", json={
-            "challenge_id": "x", "response": "y", "file_specs": [{"path": "evidence/d"}],
+            "password": "wrong-password", "file_specs": [{"path": "evidence/d"}],
         })
         assert resp.status_code == 401
         assert not ev.seal_calls
 
-    def test_ignore_and_retire_pass_reauth(self, monkeypatch):
+    def test_seal_control_plane_down_fails_closed(self):
+        ev = FakeEvidenceDB()
+        fake = ReauthFakeSupabaseAuth(control_plane_down=True)
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET, active_case_service=FakeActiveCases(),
+            evidence_service=ev, supabase_auth=fake,
+        )
+        c = TestClient(app)
+        set_operator_session(c, _SECRET)
+        resp = c.post("/api/evidence/chain/seal", json={
+            "password": GOOD_PASSWORD, "file_specs": [{"path": "evidence/d"}],
+        })
+        assert resp.status_code == 503
+        assert not ev.seal_calls
+
+    def test_ignore_and_retire_pass_reauth(self):
         ev = FakeEvidenceDB()
         c = _examiner(_make_client(evidence_service=ev))
-        monkeypatch.setattr(
-            routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key")
-        )
         r1 = c.post("/api/evidence/chain/ignore", json={
-            "challenge_id": "x", "response": "y", "path": "evidence/junk", "reason": "noise",
+            "password": GOOD_PASSWORD, "path": "evidence/junk", "reason": "noise",
         })
         assert r1.status_code == 200 and r1.json()["authority"] == "db"
-        assert r1.json()["reauth_method"] == "local_hmac_mvp_bridge"
+        assert r1.json()["reauth_method"] == "supabase_password_reverify"
         assert ev.ignore_calls[0][2] == "audit-evt-001"
 
         r2 = c.post("/api/evidence/chain/retire", json={
-            "challenge_id": "x", "response": "y", "path": "evidence/old", "reason": "dupe",
+            "password": GOOD_PASSWORD, "path": "evidence/old", "reason": "dupe",
         })
         assert r2.status_code == 200 and r2.json()["authority"] == "db"
-        assert r2.json()["reauth_method"] == "local_hmac_mvp_bridge"
+        assert r2.json()["reauth_method"] == "supabase_password_reverify"
         assert ev.retire_calls[0][2] == "audit-evt-001"
 
     def test_readonly_cannot_seal(self):
         ev = FakeEvidenceDB()
-        c = _readonly(_make_client(evidence_service=ev))
+        c = _readonly_client(evidence_service=ev)
         resp = c.post("/api/evidence/chain/seal", json={
-            "challenge_id": "x", "response": "y", "file_specs": [{"path": "evidence/d"}],
+            "password": GOOD_PASSWORD, "file_specs": [{"path": "evidence/d"}],
         })
         assert resp.status_code == 403
         assert not ev.seal_calls
@@ -362,7 +380,7 @@ class TestInvestigationDBAuthority:
 
     def test_readonly_cannot_create_todo(self):
         inv = FakeInvestigationDB()
-        c = _readonly(_make_client(investigation_service=inv))
+        c = _readonly_client(investigation_service=inv)
         assert c.post("/api/todos", json={"description": "x"}).status_code == 403
         assert inv.todos == []
 
@@ -412,7 +430,7 @@ class TestReportEligibility:
 
     def test_readonly_blocked_from_portal_state_mutation_paths(self):
         # /api/portal/state is read-only and allows readonly role.
-        c = _readonly(_make_client(report_service=FakeReportDB(), evidence_service=FakeEvidenceDB()))
+        c = _readonly_client(report_service=FakeReportDB(), evidence_service=FakeEvidenceDB())
         assert c.get("/api/portal/state").status_code == 200
 
 

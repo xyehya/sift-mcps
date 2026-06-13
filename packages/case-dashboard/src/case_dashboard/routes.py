@@ -216,7 +216,13 @@ _EVIDENCE_CHALLENGE_TTL = 30  # seconds
 _activation_challenges: dict[str, dict] = {}
 _ACTIVATION_CHALLENGE_TTL = 30  # seconds
 
-_MVP_REAUTH_METHOD = "local_hmac_mvp_bridge"
+# CL3a (B-MVP-017): sensitive-action re-auth is now verified against Supabase
+# GoTrue (password grant), not the local file-HMAC challenge. The challenge GET
+# endpoints still answer for UX continuity but their nonce is no longer the
+# verifier — the operator re-submits their password and it is re-checked against
+# the control plane. The method tag is surfaced so the frontend/audit can tell
+# the two planes apart during the legacy-plane sunset (file-HMAC deleted in CL3b).
+_MVP_REAUTH_METHOD = "supabase_password_reverify"
 _MVP_REGISTRATION_MODE = "atomic_register_and_seal"
 
 # Callback invoked after every successful evidence chain mutation (seal/ignore).
@@ -722,6 +728,120 @@ def _record_reauth_event(request: Request, examiner: str, action: str) -> str | 
     return str(eid) if eid else None
 
 
+def _session_operator_email(request: Request) -> str | None:
+    """Return the operator email carried by the authenticated portal session.
+
+    CL3a re-auth verifies the operator's submitted password against Supabase by
+    the SESSION's own email, never an email taken from the request body — the
+    password is the only operator-supplied secret. Returns None when the session
+    principal is missing or carries no email (which fails the re-auth closed).
+    """
+    principal = _request_principal(request)
+    if not isinstance(principal, dict):
+        return None
+    email = principal.get("email")
+    if isinstance(email, str) and email.strip():
+        return email.strip()
+    return None
+
+
+async def _supabase_reverify(request: Request, body: dict) -> JSONResponse | None:
+    """Fail-closed Supabase re-verification of an operator-submitted password.
+
+    The single sensitive-action re-auth verifier (B-MVP-017 / CL3a). Replaces the
+    local file-HMAC challenge for evidence seal/ignore/retire/reacquire/verify,
+    commit, report inclusion/export, case-activate, and backend/service control.
+
+    Contract:
+      - Email comes from the AUTHENTICATED SESSION (``_session_operator_email``),
+        never the request body. Password comes from ``body['password']``.
+      - SUCCESS only when Supabase GoTrue accepts the password for THIS operator
+        (the grant's subject must match the session's auth user) and the
+        principal is an active operator. The grant's tokens are discarded by the
+        Gateway callback; the portal session is never rotated.
+      - Returns ``None`` on success, or a denial ``JSONResponse``. NEVER returns
+        a success on any error path — no fallback to the file-HMAC plane.
+
+    Fail-closed denials:
+      - no control-plane callback wired                  -> 503
+      - callback lacks ``reverify_password``             -> 503
+      - session carries no operator email                -> 401
+      - missing password in body                         -> 400
+      - wrong password / unknown user / ANY non-200 from
+        GoTrue (incl. 4xx and 5xx)                       -> 401
+      - control plane unreachable / connection / timeout -> 503
+      - identity mismatch / non-operator                 -> 403
+
+    NB: ``password_grant`` maps every non-200 GoTrue response (including 5xx) to
+    a 401; only a connection-level error/timeout surfaces as 503. So an upstream
+    5xx denies with 401 here, not 503 — still fail closed either way.
+    """
+    if _SUPABASE_AUTH is None:
+        return JSONResponse(
+            {"error": "Control plane unavailable — re-auth requires Supabase."},
+            status_code=503,
+        )
+    reverify = getattr(_SUPABASE_AUTH, "reverify_password", None)
+    if not callable(reverify):
+        # Fail closed: an auth backend without re-verify must not silently allow.
+        return JSONResponse(
+            {"error": "Re-auth not supported by the configured control plane."},
+            status_code=503,
+        )
+
+    email = _session_operator_email(request)
+    if not email:
+        return JSONResponse(
+            {"error": "Re-auth unavailable: session carries no operator email."},
+            status_code=401,
+        )
+
+    password = body.get("password")
+    if not isinstance(password, str) or not password:
+        return JSONResponse(
+            {"error": "Re-auth required: confirm your password."},
+            status_code=400,
+        )
+
+    principal = _request_principal(request) or {}
+    expected_auth_user_id = principal.get("auth_user_id") or None
+    source_ip = request.client.host if request.client else "unknown"
+
+    try:
+        await reverify(
+            email,
+            password,
+            source_ip,
+            expected_auth_user_id=expected_auth_user_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - never leak token/password material
+        # FAIL CLOSED on ANY error, including a TypeError from a callback that
+        # cannot bind expected_auth_user_id: never retry without the identity
+        # binding and never fall through to "allowed".
+        return _reverify_denied_response(exc)
+    return None
+
+
+def _reverify_denied_response(exc: Exception) -> JSONResponse:
+    """Map a re-verify exception to a fail-closed denial (default 401).
+
+    Honors a typed ``.http_status``/``.reason`` when the callback raises a
+    Supabase auth error; otherwise denies with 401. Never returns < 400 and
+    never echoes token or password material.
+    """
+    status = getattr(exc, "http_status", None)
+    if not isinstance(status, int) or status < 400 or status > 599:
+        status = 401
+    reason = getattr(exc, "reason", None)
+    if reason == "supabase_unavailable" or status == 503:
+        msg = "Control plane unavailable — re-auth could not be verified."
+    elif status == 403:
+        msg = "Re-auth denied for this operator."
+    else:
+        msg = "Incorrect password."
+    return JSONResponse({"error": msg}, status_code=status)
+
+
 # ---------------------------------------------------------------------------
 # Evidence chain endpoint handlers (Phase 16a)
 # ---------------------------------------------------------------------------
@@ -1057,20 +1177,15 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    challenge_id = str(body.get("challenge_id", ""))
-    response_hmac = str(body.get("response", ""))
     file_specs = body.get("file_specs", [])
 
-    if not challenge_id or not response_hmac:
-        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
     if not isinstance(file_specs, list):
         return JSONResponse({"error": "file_specs must be a list"}, status_code=400)
 
-    err_msg, _derived_key = _verify_evidence_hmac(
-        examiner, challenge_id, response_hmac, request.client.host
-    )
-    if err_msg:
-        return JSONResponse({"error": err_msg}, status_code=401)
+    # CL3a: re-verify the operator's password against Supabase (fail closed).
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     # Validate file_specs entries
     for spec in file_specs:
@@ -1153,23 +1268,18 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    challenge_id = str(body.get("challenge_id", ""))
-    response_hmac = str(body.get("response", ""))
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
 
-    if not challenge_id or not response_hmac:
-        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
     if not reason:
         return JSONResponse({"error": "Missing reason"}, status_code=400)
 
-    err_msg, _derived_key = _verify_evidence_hmac(
-        examiner, challenge_id, response_hmac, request.client.host
-    )
-    if err_msg:
-        return JSONResponse({"error": err_msg}, status_code=401)
+    # CL3a: re-verify the operator's password against Supabase (fail closed).
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     # DB custody authority only (C1). No file-backed fallback; degrade gracefully.
     ignorer = getattr(_EVIDENCE_DB, "ignore", None) if _EVIDENCE_DB is not None else None
@@ -1238,23 +1348,18 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    challenge_id = str(body.get("challenge_id", ""))
-    response_hmac = str(body.get("response", ""))
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
 
-    if not challenge_id or not response_hmac:
-        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
     if not reason:
         return JSONResponse({"error": "Missing reason"}, status_code=400)
 
-    err_msg, _derived_key = _verify_evidence_hmac(
-        examiner, challenge_id, response_hmac, request.client.host
-    )
-    if err_msg:
-        return JSONResponse({"error": err_msg}, status_code=401)
+    # CL3a: re-verify the operator's password against Supabase (fail closed).
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     # DB custody authority only. No file-backed fallback; degrade gracefully.
     deleter = getattr(_EVIDENCE_DB, "delete_object", None) if _EVIDENCE_DB is not None else None
@@ -1326,23 +1431,18 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    challenge_id = str(body.get("challenge_id", ""))
-    response_hmac = str(body.get("response", ""))
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
 
-    if not challenge_id or not response_hmac:
-        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
     if not reason:
         return JSONResponse({"error": "Missing reason"}, status_code=400)
 
-    err_msg, _derived_key = _verify_evidence_hmac(
-        examiner, challenge_id, response_hmac, request.client.host
-    )
-    if err_msg:
-        return JSONResponse({"error": err_msg}, status_code=401)
+    # CL3a: re-verify the operator's password against Supabase (fail closed).
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     # DB custody authority only (C1). No file-backed fallback; degrade gracefully.
     retirer = getattr(_EVIDENCE_DB, "retire", None) if _EVIDENCE_DB is not None else None
@@ -1412,23 +1512,18 @@ async def post_evidence_chain_reacquire(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    challenge_id = str(body.get("challenge_id", ""))
-    response_hmac = str(body.get("response", ""))
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
 
-    if not challenge_id or not response_hmac:
-        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
     if not reason:
         return JSONResponse({"error": "Missing reason"}, status_code=400)
 
-    err_msg, _derived_key = _verify_evidence_hmac(
-        examiner, challenge_id, response_hmac, request.client.host
-    )
-    if err_msg:
-        return JSONResponse({"error": err_msg}, status_code=401)
+    # CL3a: re-verify the operator's password against Supabase (fail closed).
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     # DB custody authority only (C1). No file-backed fallback; degrade gracefully.
     reacquirer = (
@@ -1509,17 +1604,10 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    challenge_id = str(body.get("challenge_id", ""))
-    response_hmac = str(body.get("response", ""))
-
-    if not challenge_id or not response_hmac:
-        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
-
-    err_msg, _derived_key = _verify_evidence_hmac(
-        examiner, challenge_id, response_hmac, request.client.host
-    )
-    if err_msg:
-        return JSONResponse({"error": err_msg}, status_code=401)
+    # CL3a: re-verify the operator's password against Supabase (fail closed).
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     verifier = getattr(_EVIDENCE_DB, "verify", None) if _EVIDENCE_DB is not None else None
     if not callable(verifier):
@@ -1666,18 +1754,19 @@ async def post_response_guard_override(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    challenge_id = str(body.get("challenge_id", ""))
-    response_hmac = str(body.get("response", ""))
-    ttl = int(body.get("ttl_seconds", _DEFAULT_OVERRIDE_TTL))
+    try:
+        ttl = int(body.get("ttl_seconds", _DEFAULT_OVERRIDE_TTL))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "ttl_seconds must be an integer"}, status_code=400)
 
-    if not challenge_id or not response_hmac:
-        return JSONResponse({"error": "Missing challenge_id or response"}, status_code=400)
     if ttl < 1 or ttl > 3600:
         return JSONResponse({"error": "ttl_seconds must be 1–3600"}, status_code=400)
 
-    err_msg, _ = _verify_evidence_hmac(examiner, challenge_id, response_hmac, request.client.host)
-    if err_msg:
-        return JSONResponse({"error": err_msg}, status_code=401)
+    # CL3a (B-MVP-017): re-verify the operator password against Supabase
+    # (fail closed) instead of the local file-HMAC challenge.
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     if _OVERRIDE_ENABLE is None:
         return JSONResponse({"error": "Response guard not wired"}, status_code=503)
@@ -3308,60 +3397,21 @@ async def post_commit(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    challenge_id = body.get("challenge_id")
-    response_hmac = body.get("response")
-
-    if not challenge_id or not response_hmac:
-        return JSONResponse(
-            {"error": "Missing challenge_id or response"}, status_code=400
-        )
-
-    # Validate challenge
-    challenge = _challenges.pop(challenge_id, None)
-    if not challenge:
-        return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
-
-    if challenge.get("bound_ip") != request.client.host:
-        return JSONResponse({"error": "Challenge IP mismatch"}, status_code=403)
-
-    now = time.time()
-    if now - challenge["created_at"] > _CHALLENGE_TTL:
-        return JSONResponse({"error": "Challenge expired"}, status_code=401)
-
-    if challenge["examiner"] != examiner:
-        return JSONResponse({"error": "Challenge/examiner mismatch"}, status_code=401)
-
-    # Verify response: HMAC-SHA256(stored_pbkdf2_hash, nonce)
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return JSONResponse({"error": "No password configured"}, status_code=403)
-
-    try:
-        stored_hash = bytes.fromhex(entry["hash"])
-    except (ValueError, KeyError):
-        logger.error("Corrupt password entry for examiner %s", examiner)
-        return JSONResponse({"error": "Password data corrupted"}, status_code=500)
-    expected = hmac_mod.new(
-        stored_hash, challenge["nonce"].encode(), "sha256"
-    ).hexdigest()
-
-    if not hmac_mod.compare_digest(expected, response_hmac):
-        _record_commit_failure(examiner)
-        remaining = _MAX_COMMIT_ATTEMPTS - _commit_failure_count(examiner)
-        if remaining <= 0:
-            msg = f"Too many failed attempts. Locked for {_COMMIT_LOCKOUT_SECONDS}s."
-        else:
-            msg = f"Incorrect password. {remaining} attempt(s) remaining."
-        return JSONResponse({"error": msg}, status_code=401)
-
-    _clear_commit_failures(examiner)
+    # CL3a (B-MVP-017): the commit re-auth is now verified against Supabase
+    # GoTrue (password grant), not the local file-HMAC challenge. The operator
+    # re-submits their password; it is re-checked against the control plane and
+    # the action FAILS CLOSED when the control plane is unreachable or the
+    # password is wrong. No file-HMAC fallback is reached.
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     # BATCH-K2: in DB-active mode the approve/reject/edit transition is applied to
     # Postgres authority (content-hash/version guarded, atomic) and the case JSON
-    # is no longer the authority for report eligibility. The successful
-    # password/HMAC challenge above is the operator re-auth; record it as an audit
-    # event and pass its id into the DB review so the human decision is provenance
-    # linked. Falls through to the file path only when DB authority is not wired.
+    # is no longer the authority for report eligibility. The successful Supabase
+    # re-verify above is the operator re-auth; record it as an audit event and
+    # pass its id into the DB review so the human decision is provenance linked.
+    # Falls through to the file path only when DB authority is not wired.
     if _db_investigation_active():
         reviewer = getattr(_INVESTIGATION_DB, "apply_review", None)
         if callable(reviewer):
@@ -3374,9 +3424,27 @@ async def post_commit(request: Request) -> JSONResponse:
                 )
             return JSONResponse(result)
 
+    # File-backed authority (no DB investigation wired). The file-authority COMMIT
+    # ledger (verification.write_ledger_entry via _apply_delta) is OUT of CL3a
+    # scope and unchanged; it still keys on the local PBKDF2 hash. CL3a only moves
+    # the RE-AUTH DECISION to Supabase above — it does not alter the ledger key.
+    # The ledger key is loaded here purely to feed _apply_delta, never as the
+    # password verifier; absent a local entry the file path degrades.
+    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
+    if not entry:
+        return JSONResponse(
+            {"error": "Commit ledger key unavailable for file-backed authority"},
+            status_code=403,
+        )
+    try:
+        ledger_key = bytes.fromhex(entry["hash"])
+    except (ValueError, KeyError):
+        logger.error("Corrupt password entry for examiner %s", examiner)
+        return JSONResponse({"error": "Password data corrupted"}, status_code=500)
+
     # Apply delta (mirrors _review_mode)
     try:
-        result = _apply_delta(case_dir, examiner, stored_hash)
+        result = _apply_delta(case_dir, examiner, ledger_key)
     except Exception:
         logger.exception("Commit failed")
         return JSONResponse({"error": "Commit failed — check gateway logs"}, status_code=500)
@@ -4690,11 +4758,8 @@ async def post_case_activate(request: Request) -> JSONResponse:
     if err:
         return err
 
-    challenge_id = body.get("challenge_id", "").strip()
-    response_hmac = body.get("response", "").strip()
-
-    if not case_id or not challenge_id or not response_hmac:
-        return JSONResponse({"error": "Missing case_id, challenge_id, or response"}, status_code=400)
+    if not case_id:
+        return JSONResponse({"error": "Missing case_id"}, status_code=400)
 
     if not _valid_case_id(case_id):
         return JSONResponse({"error": "Invalid case_id format"}, status_code=400)
@@ -4704,40 +4769,13 @@ async def post_case_activate(request: Request) -> JSONResponse:
     if not real_requested.is_relative_to(real_root) or not real_requested.is_dir():
         return JSONResponse({"error": "Case directory not found or invalid"}, status_code=404)
 
-    # Validate challenge
-    challenge = _activation_challenges.pop(challenge_id, None)
-    if not challenge:
-        return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
-
-    if challenge.get("bound_ip") != request.client.host:
-        return JSONResponse({"error": "Challenge IP mismatch"}, status_code=403)
-
-    now = time.time()
-    if now - challenge["created_at"] > _ACTIVATION_CHALLENGE_TTL:
-        return JSONResponse({"error": "Challenge expired"}, status_code=401)
-
-    if challenge["examiner"] != examiner:
-        return JSONResponse({"error": "Challenge/examiner mismatch"}, status_code=401)
-
-    # Verify response: HMAC-SHA256(stored_pbkdf2_hash, nonce)
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return JSONResponse({"error": "No password configured"}, status_code=403)
-
-    try:
-        stored_hash = bytes.fromhex(entry["hash"])
-    except (ValueError, KeyError):
-        logger.error("Corrupt password entry for examiner %s", examiner)
-        return JSONResponse({"error": "Password data corrupted"}, status_code=500)
-
-    expected = hmac_mod.new(
-        stored_hash, challenge["nonce"].encode(), "sha256"
-    ).hexdigest()
-    if not hmac_mod.compare_digest(expected, response_hmac):
-        _record_commit_failure(f"activate:{examiner}")
-        return JSONResponse({"error": "Incorrect password"}, status_code=401)
-
-    _clear_commit_failures(f"activate:{examiner}")
+    # CL3a (B-MVP-017): re-verify the operator's password against Supabase
+    # (fail closed) instead of the local file-HMAC activation challenge. This is
+    # the file-backed activation branch (the DB-active branch above is handled by
+    # the PR03b active-case service and returns before reaching here).
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     # Concurrency serialization using threading.Lock with non-blocking acquire
     acquired = _case_create_lock.acquire(blocking=False)
@@ -5231,24 +5269,22 @@ def _db_custody_summary() -> dict | None:
     return summary
 
 
-def _report_reauth(request: Request, examiner: str, action: str, body: dict) -> tuple[JSONResponse | None, str | None]:
+async def _report_reauth(request: Request, examiner: str, action: str, body: dict) -> tuple[JSONResponse | None, str | None]:
     """Verify operator re-auth for a report inclusion/export action (F-MVP-4).
 
-    Re-uses the evidence HMAC challenge/response so report inclusion and export
-    are gated by the same password/HMAC re-auth as the other sensitive human
-    actions (AGENTS.md security invariant), and records a re-auth audit event
-    (consistent with C1/E1). Enforced only when DB evidence authority is wired —
-    the same condition under which seal/ignore/retire require re-auth — so
-    file-backed deployments and E1's report-only fakes are unaffected.
+    CL3a (B-MVP-017): report inclusion and export are now gated by the same
+    fail-closed Supabase password re-verify as the other sensitive human actions
+    (AGENTS.md security invariant), and record a re-auth audit event (consistent
+    with C1/E1). Enforced only when DB evidence authority is wired — the same
+    condition under which seal/ignore/retire require re-auth — so file-backed
+    deployments and E1's report-only fakes are unaffected.
 
     Returns (error_response | None, reauth_audit_event_id | None).
     """
     if _EVIDENCE_DB is None:
         return None, None
 
-    challenge_id = str(body.get("challenge_id", ""))
-    response_hmac = str(body.get("response", ""))
-    if not challenge_id or not response_hmac:
+    if not isinstance(body.get("password"), str) or not body.get("password"):
         return (
             JSONResponse(
                 {"error": "Re-auth required: report inclusion/export needs password confirmation."},
@@ -5256,11 +5292,9 @@ def _report_reauth(request: Request, examiner: str, action: str, body: dict) -> 
             ),
             None,
         )
-    err_msg, _ = _verify_evidence_hmac(
-        examiner, challenge_id, response_hmac, request.client.host
-    )
-    if err_msg:
-        return JSONResponse({"error": err_msg}, status_code=401), None
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err is not None:
+        return reauth_err, None
 
     reauth_id = _record_reauth_event(request, examiner, action)
     if not reauth_id:
@@ -5429,7 +5463,7 @@ async def generate_report_route(request: Request) -> JSONResponse:
         # Operator re-auth for report inclusion (F-MVP-4). Enforced only when DB
         # evidence authority is wired; yields a re-auth audit event id stamped
         # into the report's custody appendix.
-        reauth_err, reauth_id = _report_reauth(
+        reauth_err, reauth_id = await _report_reauth(
             request, examiner, "report_generate", body
         )
         if reauth_err is not None:
@@ -5963,8 +5997,9 @@ async def register_backend_route(request: Request) -> JSONResponse:
     examiner_name = _resolve_examiner(request)
     if not examiner_name:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    client_host = request.client.host if request.client else "unknown"
-    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    # CL3a (B-MVP-017): re-verify the operator password against Supabase
+    # (fail closed) instead of the local file-HMAC challenge.
+    challenge_err = await _supabase_reverify(request, body)
     if challenge_err:
         return challenge_err
 
@@ -5996,8 +6031,9 @@ async def unregister_backend_route(request: Request) -> JSONResponse:
     examiner_name = _resolve_examiner(request)
     if not examiner_name:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    client_host = request.client.host if request.client else "unknown"
-    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    # CL3a (B-MVP-017): re-verify the operator password against Supabase
+    # (fail closed) instead of the local file-HMAC challenge.
+    challenge_err = await _supabase_reverify(request, body)
     if challenge_err:
         return challenge_err
 
@@ -6029,8 +6065,9 @@ async def reload_backends_route(request: Request) -> JSONResponse:
     examiner_name = _resolve_examiner(request)
     if not examiner_name:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    client_host = request.client.host if request.client else "unknown"
-    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    # CL3a (B-MVP-017): re-verify the operator password against Supabase
+    # (fail closed) instead of the local file-HMAC challenge.
+    challenge_err = await _supabase_reverify(request, body)
     if challenge_err:
         return challenge_err
 
@@ -6067,8 +6104,9 @@ async def set_backend_enabled_route(request: Request) -> JSONResponse:
     examiner_name = _resolve_examiner(request)
     if not examiner_name:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    client_host = request.client.host if request.client else "unknown"
-    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    # CL3a (B-MVP-017): re-verify the operator password against Supabase
+    # (fail closed) instead of the local file-HMAC challenge.
+    challenge_err = await _supabase_reverify(request, body)
     if challenge_err:
         return challenge_err
 
@@ -6099,8 +6137,9 @@ async def start_service_route(request: Request) -> JSONResponse:
     examiner_name = _resolve_examiner(request)
     if not examiner_name:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    client_host = request.client.host if request.client else "unknown"
-    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    # CL3a (B-MVP-017): re-verify the operator password against Supabase
+    # (fail closed) instead of the local file-HMAC challenge.
+    challenge_err = await _supabase_reverify(request, body)
     if challenge_err:
         return challenge_err
 
@@ -6131,8 +6170,9 @@ async def stop_service_route(request: Request) -> JSONResponse:
     examiner_name = _resolve_examiner(request)
     if not examiner_name:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    client_host = request.client.host if request.client else "unknown"
-    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    # CL3a (B-MVP-017): re-verify the operator password against Supabase
+    # (fail closed) instead of the local file-HMAC challenge.
+    challenge_err = await _supabase_reverify(request, body)
     if challenge_err:
         return challenge_err
 
@@ -6163,8 +6203,9 @@ async def restart_service_route(request: Request) -> JSONResponse:
     examiner_name = _resolve_examiner(request)
     if not examiner_name:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    client_host = request.client.host if request.client else "unknown"
-    challenge_err = _verify_password_challenge_helper(body, client_host, examiner_name)
+    # CL3a (B-MVP-017): re-verify the operator password against Supabase
+    # (fail closed) instead of the local file-HMAC challenge.
+    challenge_err = await _supabase_reverify(request, body)
     if challenge_err:
         return challenge_err
 

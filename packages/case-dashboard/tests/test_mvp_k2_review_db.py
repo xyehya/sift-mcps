@@ -20,7 +20,12 @@ from starlette.testclient import TestClient
 
 import case_dashboard.routes as routes_mod
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+
+from _supabase_reauth_harness import (
+    GOOD_PASSWORD,
+    ReauthFakeSupabaseAuth,
+    set_operator_session,
+)
 
 _SECRET = secrets.token_hex(32)
 _CASE_ID = "11111111-1111-1111-1111-111111111111"
@@ -103,12 +108,13 @@ def _make_client(**services):
         evidence_service=services.get("evidence_service"),
         investigation_service=services.get("investigation_service"),
         report_service=services.get("report_service"),
+        supabase_auth=ReauthFakeSupabaseAuth(),
     )
     return TestClient(app)
 
 
 def _examiner(client):
-    client.cookies.set(COOKIE_NAME, generate_jwt("alice", "examiner", _SECRET, max_age=3600))
+    set_operator_session(client, _SECRET)
     return client
 
 
@@ -227,10 +233,9 @@ class TestReportDbInputs:
                 evidence_service=FakeEvidenceDB(),
             )
         )
-        monkeypatch.setattr(routes_mod, "_verify_evidence_hmac", lambda *a, **k: (None, b"key"))
         resp = c.post(
             "/api/reports/generate",
-            json={"profile": "full", "challenge_id": "x", "response": "y"},
+            json={"profile": "full", "password": GOOD_PASSWORD},
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()

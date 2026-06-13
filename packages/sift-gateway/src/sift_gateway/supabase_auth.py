@@ -200,6 +200,10 @@ class SupabaseAuthConfig:
     min_agent_token_ttl_seconds: int = _DEFAULT_MIN_AGENT_TOKEN_TTL
     # legacy flags
     legacy_token_fallback_enabled: bool = True
+    # CL3a (B-MVP-017): the template default is now False (sensitive-action
+    # re-auth verifies against Supabase), but the CODE default stays True so
+    # EXISTING installs that have not re-rendered gateway.yaml are unaffected
+    # until they adopt the new template. Deletion of the plane follows in CL3b.
     legacy_portal_session_enabled: bool = True
     legacy_anonymous_examiner_enabled: bool = False
 
@@ -1087,6 +1091,83 @@ class SupabaseAuthCallbacks:
             "fingerprint": session.fingerprint,
             "principal": _principal_dict(record),
         }
+
+    # -- sensitive-action re-verify (B-MVP-017 / CL3a) --------------------
+
+    async def reverify_password(
+        self,
+        email: str,
+        password: str,
+        source_ip: str | None,
+        *,
+        expected_auth_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Re-verify an operator's password for a sensitive action (CL3a).
+
+        The single Supabase-backed re-auth verifier that replaces the legacy
+        file-HMAC challenge. It performs a GoTrue password grant
+        (``POST /token?grant_type=password``) and immediately DISCARDS the
+        returned session — no portal cookie is set or rotated, no token material
+        is returned to the caller. The grant is used solely to prove the operator
+        re-supplied their current Supabase password.
+
+        Fails CLOSED in every uncertain case (the caller maps the raised error to
+        a denial and never falls back to a local verifier):
+
+        - wrong password / unknown user / ANY non-200 from GoTrue (incl. 4xx and
+          5xx) -> ``InvalidTokenError`` (HTTP 401) raised by ``password_grant``
+        - control plane unreachable / connection error / timeout ->
+          ``SupabaseUnavailableError`` (HTTP 503) raised by the underlying client
+        - the re-verified identity is not an ACTIVE operator, or (when
+          ``expected_auth_user_id`` is given) does not match the session's own
+          auth user -> ``PrincipalForbiddenError`` (HTTP 403)
+
+        Token material is never logged; only the non-secret fingerprint is
+        audited. The grant's access/refresh tokens go out of scope when this
+        method returns.
+        """
+        session = await self._client.password_grant(email, password)
+        # B-MVP-017: bind the re-verify to the already-authenticated session.
+        # The email is operator-supplied; without this check a logged-in operator
+        # could re-auth a sensitive action by typing ANY valid operator's
+        # email+password. Require the grant's subject to match the session.
+        if expected_auth_user_id and session.sub != expected_auth_user_id:
+            self._audit_log(
+                tool="portal_reverify",
+                summary="rejected: reverify_identity_mismatch",
+                extra={"source_ip": source_ip,
+                       "fingerprint": session.fingerprint,
+                       "reason": "forbidden"},
+            )
+            raise PrincipalForbiddenError(
+                "re-verify identity does not match the active session"
+            )
+        record = await asyncio.to_thread(
+            self._repository.lookup_by_auth_user_id, session.sub
+        )
+        if record is None or record.status != "active" or record.principal_type != "operator":
+            reason = "principal_not_mapped" if record is None else (
+                "principal_disabled" if record.status != "active" else "forbidden"
+            )
+            self._audit_log(
+                tool="portal_reverify",
+                summary=f"rejected: {reason}",
+                extra={"source_ip": source_ip, "auth_user_id": session.sub,
+                       "fingerprint": session.fingerprint, "reason": reason},
+            )
+            raise PrincipalForbiddenError("re-verify principal is not an active operator")
+
+        self._audit_log(
+            tool="portal_reverify",
+            summary="accepted",
+            extra={"source_ip": source_ip, "auth_user_id": session.sub,
+                   "principal_id": record.principal_id, "principal_type": "operator",
+                   "fingerprint": session.fingerprint},
+        )
+        # Session tokens are intentionally discarded here (go out of scope); the
+        # operator's existing portal cookie is unchanged.
+        return {"ok": True, "auth_user_id": record.auth_user_id,
+                "principal_id": record.principal_id}
 
     # -- resolve ----------------------------------------------------------
 

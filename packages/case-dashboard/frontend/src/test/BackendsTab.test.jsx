@@ -13,7 +13,6 @@ vi.mock('../api/endpoints', () => ({
   postRestartService: vi.fn(),
   postSetBackendEnabled: vi.fn(),
   getHealth: vi.fn(),
-  getCommitChallenge: vi.fn(),
 }))
 
 describe('Backends tab payload and logic validation', () => {

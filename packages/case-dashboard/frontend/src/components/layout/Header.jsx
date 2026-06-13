@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useStore } from '../../store/useStore'
 import { postLogout, postCaseActivate, getCaseActivateChallenge, postCaseCreate } from '../../api/endpoints'
-import { computeSimpleChallengeResponse } from '../../api/crypto'
 import { Icon } from '../common/Icon'
 
 export function Header({ onLogout }) {
@@ -57,14 +56,13 @@ export function Header({ onLogout }) {
     try {
       const challenge = await getCaseActivateChallenge()
       // DB/Supabase authority mode returns {required:false, authority:'postgres'}
-      // — case activation is gated by the Supabase session, not the local HMAC
-      // re-auth bridge, so there is no challenge nonce to answer.
+      // — case activation is gated by the Supabase session itself, so there is no
+      // per-action re-auth. The file-backed branch (CL3a, B-MVP-017) re-verifies
+      // the operator password against Supabase server-side.
       const dbAuthority = challenge?.required === false
       const payload = { case_id: activatingCase.id }
       if (!dbAuthority) {
-        const response = await computeSimpleChallengeResponse(activatePassword, challenge)
-        payload.challenge_id = challenge.challenge_id
-        payload.response = response
+        payload.password = activatePassword
       }
       setActivatePassword('')
       await postCaseActivate(payload)

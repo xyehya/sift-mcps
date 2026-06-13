@@ -4,7 +4,6 @@ import {
   getEvidence,
   getChainStatus,
   postChainRescan,
-  getChainChallenge,
   postChainSeal,
   postChainAnchor,
   postChainProofExport,
@@ -15,7 +14,6 @@ import {
   postChainRetire,
   postChainReacquire
 } from '../../api/endpoints'
-import { computeSimpleChallengeResponse } from '../../api/crypto'
 import { SkeletonBlock } from '../common/Skeleton'
 
 function formatTime(timestamp) {
@@ -104,9 +102,8 @@ export function EvidenceTab() {
     setModalError('')
     setModalResult(null)
     try {
-      const challenge = await getChainChallenge()
-      const response = await computeSimpleChallengeResponse(modalPassword, challenge)
-      const res = await postChainVerifyHmac({ challenge_id: challenge.challenge_id, response })
+      // CL3a (B-MVP-017): password re-verified against Supabase server-side.
+      const res = await postChainVerifyHmac({ password: modalPassword })
       setModalResult(res)
 
       // Refresh chain status
@@ -129,18 +126,15 @@ export function EvidenceTab() {
     setModalError('')
     setModalResult(null)
     try {
-      const challenge = await getChainChallenge()
-      const response = await computeSimpleChallengeResponse(modalPassword, challenge)
-
       const fileSpecs = (chainStatus?.unregistered || []).map((path) => ({
         path,
         source: unregisteredMetadata[path]?.source || '',
         description: unregisteredMetadata[path]?.description || ''
       }))
 
+      // CL3a (B-MVP-017): password re-verified against Supabase server-side.
       const res = await postChainSeal({
-        challenge_id: challenge.challenge_id,
-        response,
+        password: modalPassword,
         file_specs: fileSpecs
       })
 
@@ -177,12 +171,9 @@ export function EvidenceTab() {
     setModalError('')
     setModalResult(null)
     try {
-      const challenge = await getChainChallenge()
-      const response = await computeSimpleChallengeResponse(modalPassword, challenge)
-
+      // CL3a (B-MVP-017): password re-verified against Supabase server-side.
       const res = await postChainDelete({
-        challenge_id: challenge.challenge_id,
-        response,
+        password: modalPassword,
         path: pendingPath,
         reason: modalReason
       })
@@ -221,12 +212,9 @@ export function EvidenceTab() {
     setModalError('')
     setModalResult(null)
     try {
-      const challenge = await getChainChallenge()
-      const response = await computeSimpleChallengeResponse(modalPassword, challenge)
-
+      // CL3a (B-MVP-017): password re-verified against Supabase server-side.
       const res = await postChainIgnore({
-        challenge_id: challenge.challenge_id,
-        response,
+        password: modalPassword,
         path: pendingPath,
         reason: modalReason
       })
@@ -265,12 +253,9 @@ export function EvidenceTab() {
     setModalError('')
     setModalResult(null)
     try {
-      const challenge = await getChainChallenge()
-      const response = await computeSimpleChallengeResponse(modalPassword, challenge)
-
+      // CL3a (B-MVP-017): password re-verified against Supabase server-side.
       const res = await postChainRetire({
-        challenge_id: challenge.challenge_id,
-        response,
+        password: modalPassword,
         path: pendingPath,
         reason: modalReason
       })
@@ -309,12 +294,9 @@ export function EvidenceTab() {
     setModalError('')
     setModalResult(null)
     try {
-      const challenge = await getChainChallenge()
-      const response = await computeSimpleChallengeResponse(modalPassword, challenge)
-
+      // CL3a (B-MVP-017): password re-verified against Supabase server-side.
       const res = await postChainReacquire({
-        challenge_id: challenge.challenge_id,
-        response,
+        password: modalPassword,
         path: pendingPath,
         reason: modalReason
       })

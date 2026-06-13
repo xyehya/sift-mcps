@@ -6,8 +6,6 @@ Covers: GET /api/response-guard/status, POST /api/response-guard/override,
 
 from __future__ import annotations
 
-import hashlib
-import hmac as hmac_mod
 import json
 import secrets
 import time
@@ -18,10 +16,15 @@ from starlette.testclient import TestClient
 
 import case_dashboard.routes as routes_mod
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+
+from _supabase_reauth_harness import (
+    GOOD_PASSWORD,
+    ReauthFakeSupabaseAuth,
+    operator_principal,
+    set_operator_session,
+)
 
 _SECRET = secrets.token_hex(32)
-_PBKDF2_ITERS = 600_000
 _CASE_DIR = "/tmp/case-rg-portal-test"
 
 
@@ -30,25 +33,12 @@ _CASE_DIR = "/tmp/case-rg-portal-test"
 # ---------------------------------------------------------------------------
 
 
-def _hash_password(password: str, salt_hex: str) -> str:
-    return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt_hex), _PBKDF2_ITERS).hex()
-
-
-def _make_evidence_response(stored_hash_hex: str, nonce: str) -> str:
-    return hmac_mod.new(bytes.fromhex(stored_hash_hex), nonce.encode(), "sha256").hexdigest()
-
-
-def _setup_examiner(passwords_dir: Path, examiner: str = "alice", password: str = "password123") -> dict:
+def _setup_examiner(passwords_dir: Path, examiner: str = "alice", *, must_reset: bool = False) -> dict:
+    """Seed the local must_reset flag file the R1 gate still reads (CL3a)."""
     passwords_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    salt = secrets.token_bytes(32)
-    pw_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITERS).hex()
-    entry = {"hash": pw_hash, "salt": salt.hex(), "must_reset_password": False}
+    entry = {"hash": "aa" * 32, "salt": "bb" * 32, "must_reset_password": must_reset}
     (passwords_dir / f"{examiner}.json").write_text(json.dumps(entry))
     return entry
-
-
-def _session_cookie(examiner: str = "alice", role: str = "examiner") -> str:
-    return generate_jwt(examiner, role, _SECRET, max_age=3600)
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +91,12 @@ def passwords_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def app(passwords_dir, tmp_path, monkeypatch):
+def fake_auth():
+    return ReauthFakeSupabaseAuth()
+
+
+@pytest.fixture()
+def app(passwords_dir, tmp_path, monkeypatch, fake_auth):
     monkeypatch.setenv("SIFT_CASE_DIR", _CASE_DIR)
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     return create_dashboard_v2_app(
@@ -110,6 +105,7 @@ def app(passwords_dir, tmp_path, monkeypatch):
         on_override_get_status=_stub_get_status,
         on_override_enable=_stub_enable,
         on_override_cancel=_stub_cancel,
+        supabase_auth=fake_auth,
     )
 
 
@@ -119,19 +115,9 @@ def client(app):
 
 
 @pytest.fixture()
-def authed_client(client, passwords_dir):
-    _setup_examiner(passwords_dir)
-    client.cookies[COOKIE_NAME] = _session_cookie()
+def authed_client(client):
+    set_operator_session(client, _SECRET)
     return client
-
-
-def _full_evidence_challenge(client: TestClient, passwords_dir: Path) -> tuple[str, str]:
-    entry = json.loads((passwords_dir / "alice.json").read_text())
-    resp = client.get("/api/evidence/chain/challenge")
-    assert resp.status_code == 200, resp.text
-    data = resp.json()
-    response = _make_evidence_response(entry["hash"], data["nonce"])
-    return data["challenge_id"], response
 
 
 # ---------------------------------------------------------------------------
@@ -144,11 +130,21 @@ class TestResponseGuardStatus:
         resp = client.get("/api/response-guard/status")
         assert resp.status_code == 403
 
-    def test_agent_role_returns_403(self, client, passwords_dir):
-        _setup_examiner(passwords_dir)
-        client.cookies[COOKIE_NAME] = _session_cookie(role="agent")
-        resp = client.get("/api/response-guard/status")
-        assert resp.status_code == 403
+    def test_agent_principal_returns_403(self, passwords_dir, tmp_path, monkeypatch):
+        agent = dict(operator_principal(), principal_type="agent",
+                     auth_user_id="auth-user-agent-1")
+        monkeypatch.setenv("SIFT_CASE_DIR", _CASE_DIR)
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET, session_max_age=28800,
+            on_override_get_status=_stub_get_status,
+            on_override_enable=_stub_enable, on_override_cancel=_stub_cancel,
+            supabase_auth=ReauthFakeSupabaseAuth(principal=agent),
+        )
+        c = TestClient(app, raise_server_exceptions=True)
+        set_operator_session(c, _SECRET)
+        resp = c.get("/api/response-guard/status")
+        assert resp.status_code in (401, 403)
 
     def test_inactive_returns_correct_structure(self, authed_client):
         resp = authed_client.get("/api/response-guard/status")
@@ -170,10 +166,11 @@ class TestResponseGuardStatus:
     def test_no_callbacks_returns_warning(self, passwords_dir, tmp_path, monkeypatch):
         monkeypatch.setenv("SIFT_CASE_DIR", _CASE_DIR)
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
-        _setup_examiner(passwords_dir)
-        app = create_dashboard_v2_app(session_secret=_SECRET)  # no override callbacks
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET, supabase_auth=ReauthFakeSupabaseAuth(),
+        )  # no override callbacks
         c = TestClient(app)
-        c.cookies[COOKIE_NAME] = _session_cookie()
+        set_operator_session(c, _SECRET)
         resp = c.get("/api/response-guard/status")
         assert resp.status_code == 200
         data = resp.json()
@@ -190,22 +187,14 @@ class TestResponseGuardOverride:
         resp = client.post("/api/response-guard/override", json={})
         assert resp.status_code == 403
 
-    def test_missing_challenge_returns_400(self, authed_client):
+    def test_missing_password_returns_400(self, authed_client):
         resp = authed_client.post("/api/response-guard/override", json={"ttl_seconds": 60})
         assert resp.status_code == 400
 
-    def test_invalid_challenge_returns_401(self, authed_client):
+    def test_successful_override_enable(self, authed_client):
         resp = authed_client.post(
             "/api/response-guard/override",
-            json={"challenge_id": "bad", "response": "bad", "ttl_seconds": 60},
-        )
-        assert resp.status_code == 401
-
-    def test_successful_override_enable(self, authed_client, passwords_dir):
-        cid, response = _full_evidence_challenge(authed_client, passwords_dir)
-        resp = authed_client.post(
-            "/api/response-guard/override",
-            json={"challenge_id": cid, "response": response, "ttl_seconds": 120},
+            json={"password": GOOD_PASSWORD, "ttl_seconds": 120},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -214,48 +203,38 @@ class TestResponseGuardOverride:
         assert data["enabled_by"] == "alice"
         assert _stub_state.get(_CASE_DIR) is not None
 
-    def test_ttl_out_of_range_returns_400(self, authed_client, passwords_dir):
-        cid, response = _full_evidence_challenge(authed_client, passwords_dir)
+    def test_ttl_out_of_range_returns_400(self, authed_client):
         resp = authed_client.post(
             "/api/response-guard/override",
-            json={"challenge_id": cid, "response": response, "ttl_seconds": 9999},
+            json={"password": GOOD_PASSWORD, "ttl_seconds": 9999},
         )
         assert resp.status_code == 400
 
     def test_wrong_password_returns_401(self, authed_client):
-        resp = authed_client.get("/api/evidence/chain/challenge")
-        data = resp.json()
         resp2 = authed_client.post(
             "/api/response-guard/override",
-            json={"challenge_id": data["challenge_id"], "response": "00" * 32, "ttl_seconds": 60},
+            json={"password": "wrong-password", "ttl_seconds": 60},
         )
         assert resp2.status_code == 401
+
+    def test_control_plane_down_fails_closed(self, authed_client, fake_auth):
+        fake_auth.control_plane_down = True
+        resp = authed_client.post(
+            "/api/response-guard/override",
+            json={"password": GOOD_PASSWORD, "ttl_seconds": 60},
+        )
+        assert resp.status_code == 503
+        assert _stub_state.get(_CASE_DIR) is None
 
     def test_must_reset_password_blocked(self, client, passwords_dir, monkeypatch):
         monkeypatch.setenv("SIFT_CASE_DIR", _CASE_DIR)
-        _setup_examiner(passwords_dir)
-        (passwords_dir / "alice.json").write_text(
-            json.dumps({"hash": "aa" * 32, "salt": "bb" * 32, "must_reset_password": True})
-        )
-        client.cookies[COOKIE_NAME] = _session_cookie()
+        _setup_examiner(passwords_dir, must_reset=True)
+        set_operator_session(client, _SECRET)
         resp = client.post(
             "/api/response-guard/override",
-            json={"challenge_id": "x", "response": "y"},
+            json={"password": GOOD_PASSWORD},
         )
         assert resp.status_code == 403
-
-    def test_challenge_single_use(self, authed_client, passwords_dir):
-        cid, response = _full_evidence_challenge(authed_client, passwords_dir)
-        resp1 = authed_client.post(
-            "/api/response-guard/override",
-            json={"challenge_id": cid, "response": response},
-        )
-        assert resp1.status_code == 200
-        resp2 = authed_client.post(
-            "/api/response-guard/override",
-            json={"challenge_id": cid, "response": response},
-        )
-        assert resp2.status_code == 401
 
 
 # ---------------------------------------------------------------------------

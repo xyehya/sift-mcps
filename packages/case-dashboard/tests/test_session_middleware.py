@@ -1,13 +1,18 @@
-"""Tests for case_dashboard.auth.PortalSessionMiddleware — Phase 12c.
+"""Tests for case_dashboard.auth.PortalSessionMiddleware (Supabase-envelope plane).
 
-Drivers: SIFT-MCPS-PLAN.md §Phase 12 / TASKS.md §12c.
+CL3a (B-MVP-017): migrated off the legacy ``sift_session`` JWT cookie + Bearer
+API-key plane (sunset; deleted in CL3b) to the Supabase session-envelope plane
+that the live portal uses. The middleware resolves the envelope's access token to
+an app principal via the injected Supabase callback and stamps
+``request.state.principal/examiner/role``; only operator principals get an
+examiner identity, and an unresolved/agent envelope leaves state cleared so route
+handlers enforce 401/403.
 """
 
 from __future__ import annotations
 
 import secrets
 
-import pytest
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
@@ -16,27 +21,37 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from case_dashboard.auth import PortalSessionMiddleware
-from case_dashboard.session_jwt import generate_jwt
+from case_dashboard.session_jwt import (
+    SESSION_ENVELOPE_COOKIE_NAME,
+    generate_session_envelope,
+)
+
+from _supabase_reauth_harness import operator_principal
 
 _SECRET = secrets.token_hex(32)
-
-_EXAMINER_KEY = "sift_gw_" + secrets.token_hex(24)
-_AGENT_KEY = "sift_svc_" + secrets.token_hex(24)
-
-_API_KEYS = {
-    _EXAMINER_KEY: {"examiner": "alice", "role": "examiner"},
-    _AGENT_KEY: {"examiner": "hermes", "role": "agent"},
-}
+_ACCESS_TOKEN = "mw-access-" + secrets.token_hex(8)
 
 
-def _make_app(session_secret=_SECRET, api_keys=None) -> Starlette:
-    """Minimal Starlette app wrapped with PortalSessionMiddleware for testing."""
+class _FakeSupabaseAuth:
+    """Minimal C3 resolver: maps the known access token to ``principal``."""
 
+    def __init__(self, principal):
+        self._principal = principal
+
+    async def resolve(self, access_token, source_ip):
+        return self._principal if access_token == _ACCESS_TOKEN else None
+
+    async def refresh(self, refresh_token, source_ip):
+        return None
+
+
+def _make_app(principal) -> Starlette:
     async def endpoint(request: Request):
         return JSONResponse(
             {
                 "examiner": getattr(request.state, "examiner", "MISSING"),
                 "role": getattr(request.state, "role", "MISSING"),
+                "has_principal": getattr(request.state, "principal", None) is not None,
             }
         )
 
@@ -45,129 +60,100 @@ def _make_app(session_secret=_SECRET, api_keys=None) -> Starlette:
         middleware=[
             Middleware(
                 PortalSessionMiddleware,
-                session_secret=session_secret,
-                api_keys=api_keys if api_keys is not None else _API_KEYS,
+                session_secret=_SECRET,
+                api_keys={},
+                supabase_auth=_FakeSupabaseAuth(principal),
+                legacy_portal_session_enabled=False,
             )
         ],
     )
 
 
-class TestCookieAuth:
-    def test_valid_cookie_sets_examiner_and_role(self):
-        token = generate_jwt("alice", "examiner", _SECRET)
-        client = TestClient(_make_app(), cookies={"sift_session": token})
-        resp = client.get("/api/test")
-        assert resp.status_code == 200
-        data = resp.json()
+def _envelope(sub: str = "auth-user-op-alice") -> str:
+    return generate_session_envelope(
+        access_token=_ACCESS_TOKEN,
+        refresh_token="mw-refresh",
+        expires_at=9999999999,
+        sub=sub,
+        fingerprint="fp",
+        secret=_SECRET,
+    )
+
+
+class TestSupabaseEnvelopeAuth:
+    def test_operator_envelope_sets_examiner_and_role(self):
+        client = TestClient(_make_app(operator_principal()))
+        client.cookies.set(SESSION_ENVELOPE_COOKIE_NAME, _envelope())
+        data = client.get("/api/test").json()
         assert data["examiner"] == "alice"
         assert data["role"] == "examiner"
+        assert data["has_principal"] is True
 
-    def test_valid_cookie_readonly_role(self):
-        token = generate_jwt("bob", "readonly", _SECRET)
-        client = TestClient(_make_app(), cookies={"sift_session": token})
-        resp = client.get("/api/test")
-        data = resp.json()
+    def test_readonly_operator_gets_readonly_role(self):
+        principal = operator_principal(display_name="bob", system_role="readonly")
+        client = TestClient(_make_app(principal))
+        client.cookies.set(SESSION_ENVELOPE_COOKIE_NAME, _envelope())
+        data = client.get("/api/test").json()
         assert data["examiner"] == "bob"
         assert data["role"] == "readonly"
 
-    def test_tampered_cookie_falls_through_to_none(self):
-        token = generate_jwt("alice", "examiner", _SECRET)
-        parts = token.split(".")
-        bad = f"{parts[0]}.{parts[1]}." + ("A" * len(parts[2]))
-        client = TestClient(_make_app(), cookies={"sift_session": bad})
-        resp = client.get("/api/test")
-        data = resp.json()
-        assert data["examiner"] is None
-
-    def test_expired_cookie_falls_through_to_none(self):
-        token = generate_jwt("alice", "examiner", _SECRET, max_age=0)
-        client = TestClient(_make_app(), cookies={"sift_session": token})
-        resp = client.get("/api/test")
-        data = resp.json()
-        assert data["examiner"] is None
-
-    def test_cookie_with_wrong_secret_falls_through_to_none(self):
-        wrong_secret = secrets.token_hex(32)
-        token = generate_jwt("alice", "examiner", wrong_secret)
-        client = TestClient(_make_app(), cookies={"sift_session": token})
-        resp = client.get("/api/test")
-        data = resp.json()
-        assert data["examiner"] is None
-
-
-class TestBearerFallback:
-    def test_examiner_bearer_token_sets_state(self):
-        client = TestClient(_make_app())
-        resp = client.get("/api/test", headers={"Authorization": f"Bearer {_EXAMINER_KEY}"})
-        data = resp.json()
-        assert data["examiner"] == "alice"
-        assert data["role"] == "examiner"
-
-    def test_agent_bearer_token_does_not_authenticate(self):
-        """Agent tokens must never be accepted by the portal middleware — examiner only."""
-        client = TestClient(_make_app())
-        resp = client.get("/api/test", headers={"Authorization": f"Bearer {_AGENT_KEY}"})
-        data = resp.json()
+    def test_agent_principal_gets_no_examiner_identity(self):
+        agent = dict(operator_principal(), principal_type="agent")
+        client = TestClient(_make_app(agent))
+        client.cookies.set(SESSION_ENVELOPE_COOKIE_NAME, _envelope())
+        data = client.get("/api/test").json()
+        # Agent principals are intentionally left without (examiner, role).
         assert data["examiner"] is None
         assert data["role"] is None
 
-    def test_invalid_bearer_token_sets_none(self):
-        client = TestClient(_make_app())
-        resp = client.get("/api/test", headers={"Authorization": "Bearer invalid_token_xyz"})
-        data = resp.json()
+    def test_tampered_envelope_falls_through_to_none(self):
+        client = TestClient(_make_app(operator_principal()))
+        env = _envelope()
+        client.cookies.set(SESSION_ENVELOPE_COOKIE_NAME, env[:-4] + "AAAA")
+        data = client.get("/api/test").json()
         assert data["examiner"] is None
+        assert data["role"] is None
+        assert data["has_principal"] is False
 
-    def test_bearer_fallback_not_used_when_valid_cookie_present(self):
-        """Cookie takes priority over Bearer token."""
-        token = generate_jwt("cookie-user", "examiner", _SECRET)
-        client = TestClient(
-            _make_app(),
-            cookies={"sift_session": token},
+    def test_unresolvable_token_clears_state(self):
+        # The fake only resolves _ACCESS_TOKEN; a different one resolves to None.
+        client = TestClient(_make_app(operator_principal()))
+        env = generate_session_envelope(
+            access_token="some-other-token", refresh_token="r",
+            expires_at=9999999999, sub="x", fingerprint="fp", secret=_SECRET,
         )
-        resp = client.get(
-            "/api/test", headers={"Authorization": f"Bearer {_EXAMINER_KEY}"}
-        )
-        data = resp.json()
-        assert data["examiner"] == "cookie-user"
+        client.cookies.set(SESSION_ENVELOPE_COOKIE_NAME, env)
+        data = client.get("/api/test").json()
+        assert data["examiner"] is None
+        assert data["has_principal"] is False
 
 
 class TestNoAuth:
-    def test_no_cookie_no_bearer_sets_none(self):
-        client = TestClient(_make_app())
-        resp = client.get("/api/test")
-        data = resp.json()
+    def test_no_cookie_sets_none(self):
+        client = TestClient(_make_app(operator_principal()))
+        data = client.get("/api/test").json()
         assert data["examiner"] is None
         assert data["role"] is None
+        assert data["has_principal"] is False
 
     def test_middleware_never_returns_401_itself(self):
-        """Middleware sets state to None; it does NOT return 401 — route handlers do that."""
-        client = TestClient(_make_app())
+        client = TestClient(_make_app(operator_principal()))
         resp = client.get("/api/test")
         assert resp.status_code == 200  # endpoint returns 200 even with examiner=None
 
-    def test_no_api_keys_configured_bearer_falls_through(self):
-        """With empty api_keys, Bearer tokens produce examiner=None."""
-        client = TestClient(_make_app(api_keys={}))
-        resp = client.get("/api/test", headers={"Authorization": f"Bearer {_EXAMINER_KEY}"})
+    def test_legacy_disabled_ignores_bearer(self):
+        client = TestClient(_make_app(operator_principal()))
+        resp = client.get(
+            "/api/test", headers={"Authorization": "Bearer anything"}
+        )
         data = resp.json()
-        assert data["examiner"] is None
-
-    def test_empty_session_secret_cookie_auth_skipped(self):
-        """Empty session_secret means cookie auth is bypassed entirely."""
-        token = generate_jwt("alice", "examiner", _SECRET)
-        client = TestClient(_make_app(session_secret=""), cookies={"sift_session": token})
-        resp = client.get("/api/test")
-        data = resp.json()
-        # Cookie auth skipped (no secret), Bearer also absent → None
         assert data["examiner"] is None
 
 
 class TestR9StateAccess:
     def test_examiner_accessible_via_getattr(self):
-        """Route handlers must use getattr(request.state, 'examiner', None) — R9."""
-        token = generate_jwt("alice", "examiner", _SECRET)
-        client = TestClient(_make_app(), cookies={"sift_session": token})
+        client = TestClient(_make_app(operator_principal()))
+        client.cookies.set(SESSION_ENVELOPE_COOKIE_NAME, _envelope())
         resp = client.get("/api/test")
-        # The test endpoint uses getattr — must not raise AttributeError
         assert resp.status_code == 200
         assert resp.json()["examiner"] == "alice"

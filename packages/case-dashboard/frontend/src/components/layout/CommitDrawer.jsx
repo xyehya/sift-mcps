@@ -1,7 +1,6 @@
 import { useState, useRef } from 'react'
 import { useStore } from '../../store/useStore'
-import { getCommitChallenge, postCommit, deleteDelta } from '../../api/endpoints'
-import { computeSimpleChallengeResponse } from '../../api/crypto'
+import { postCommit, deleteDelta } from '../../api/endpoints'
 
 export function CommitDrawer() {
   const { commitDrawerOpen, setCommitDrawerOpen, delta, setDelta, findings, addToast } = useStore()
@@ -53,10 +52,11 @@ export function CommitDrawer() {
   async function doCommit() {
     setErr('')
     try {
-      const challenge = await getCommitChallenge()
-      const response = await computeSimpleChallengeResponse(password, challenge)
+      // CL3a (B-MVP-017): the operator password is re-verified against Supabase
+      // server-side (over TLS, same as login); no local HMAC challenge round-trip.
+      const submittedPassword = password
       setPassword('')
-      await postCommit({ challenge_id: challenge.challenge_id, response })
+      await postCommit({ password: submittedPassword })
       setDelta([])
       setSuccess(true)
       addToast('Changes committed successfully', 'success')

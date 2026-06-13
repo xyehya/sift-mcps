@@ -24,7 +24,12 @@ from starlette.testclient import TestClient
 
 import case_dashboard.routes as routes_mod
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+from case_dashboard.session_jwt import SESSION_ENVELOPE_COOKIE_NAME
+
+from _supabase_reauth_harness import (
+    ReauthFakeSupabaseAuth,
+    set_operator_session,
+)
 
 _SECRET = secrets.token_hex(32)
 _PBKDF2_ITERS = 600_000
@@ -63,12 +68,27 @@ def app(passwords_dir, tmp_path, monkeypatch):
     routes_mod._challenges.clear()
     # Redirect Path.home() so lockout files land in tmp, not ~/.sift
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    # No Supabase callback wired here: the login-fail-closed test relies on it.
     return create_dashboard_v2_app(session_secret=_SECRET, session_max_age=28800)
 
 
 @pytest.fixture()
 def client(app):
     return TestClient(app, raise_server_exceptions=True)
+
+
+@pytest.fixture()
+def authed_client(passwords_dir, tmp_path, monkeypatch):
+    """A client whose Supabase-envelope session resolves to operator 'alice'."""
+    routes_mod._challenges.clear()
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET, session_max_age=28800,
+        supabase_auth=ReauthFakeSupabaseAuth(),
+    )
+    c = TestClient(app, raise_server_exceptions=True)
+    set_operator_session(c, _SECRET)
+    return c
 
 
 # ---------------------------------------------------------------------------
@@ -185,42 +205,28 @@ def active_case_dir(tmp_path, monkeypatch):
 
 class TestR1MustResetBlocks:
     def test_must_reset_examiner_cannot_post_delta(
-        self, client, passwords_dir, active_case_dir
+        self, authed_client, passwords_dir, active_case_dir
     ):
         """R1: must_reset_password=true prevents delta writes."""
         _setup_examiner(passwords_dir, "alice", "password123", must_reset=True)
-        token = generate_jwt("alice", "examiner", _SECRET)
-        resp = client.post(
-            "/api/delta",
-            json={"items": []},
-            cookies={COOKIE_NAME: token},
-        )
+        resp = authed_client.post("/api/delta", json={"items": []})
         assert resp.status_code == 403
 
     def test_must_reset_examiner_cannot_delete_delta(
-        self, client, passwords_dir, active_case_dir
+        self, authed_client, passwords_dir, active_case_dir
     ):
         """R1: must_reset_password=true prevents delta item deletion."""
         _setup_examiner(passwords_dir, "alice", "password123", must_reset=True)
-        token = generate_jwt("alice", "examiner", _SECRET)
-        resp = client.delete(
-            "/api/delta/someid",
-            cookies={COOKIE_NAME: token},
-        )
+        resp = authed_client.delete("/api/delta/someid")
         assert resp.status_code == 403
 
     def test_non_reset_examiner_can_access_write_routes(
-        self, client, passwords_dir, active_case_dir
+        self, authed_client, passwords_dir, active_case_dir
     ):
         """R1: Normal examiner (no must_reset) is allowed through auth check."""
         _setup_examiner(passwords_dir, "alice", "password123", must_reset=False)
-        token = generate_jwt("alice", "examiner", _SECRET)
-        # Case dir exists but no delta file → 404, but that means auth passed (not 401 or 403)
-        resp = client.post(
-            "/api/delta",
-            json={"items": []},
-            cookies={COOKIE_NAME: token},
-        )
+        # Case dir exists but no delta file → 404, but that means auth passed.
+        resp = authed_client.post("/api/delta", json={"items": []})
         assert resp.status_code not in (401, 403)
 
 
@@ -234,11 +240,10 @@ class TestLogout:
         resp = client.post("/api/auth/logout")
         assert resp.status_code == 200
 
-    def test_logout_clears_cookie(self, client):
-        resp = client.post("/api/auth/logout")
-        # Starlette sets Max-Age=0 to clear cookie
+    def test_logout_clears_envelope_cookie(self, authed_client):
+        resp = authed_client.post("/api/auth/logout")
         cookie_header = resp.headers.get("set-cookie", "")
-        assert COOKIE_NAME in cookie_header
+        assert SESSION_ENVELOPE_COOKIE_NAME in cookie_header
         assert "max-age=0" in cookie_header.lower()
 
 
@@ -252,23 +257,15 @@ class TestMe:
         resp = client.get("/api/auth/me")
         assert resp.status_code == 401
 
-    def test_me_returns_examiner_info_with_valid_cookie(self, client, passwords_dir):
-        _setup_examiner(passwords_dir, "alice", "password123")
-        token = generate_jwt("alice", "examiner", _SECRET)
-        resp = client.get("/api/auth/me", cookies={COOKIE_NAME: token})
+    def test_me_returns_operator_profile_with_supabase_session(self, authed_client):
+        resp = authed_client.get("/api/auth/me")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["examiner"] == "alice"
-        assert data["role"] == "examiner"
-        assert data["expires_at"] is not None
-
-    def test_r1_me_reads_must_reset_from_disk(self, client, passwords_dir):
-        """R1: /api/auth/me re-reads must_reset_password from disk, not just JWT."""
-        _setup_examiner(passwords_dir, "alice", "password123", must_reset=True)
-        token = generate_jwt("alice", "examiner", _SECRET)
-        resp = client.get("/api/auth/me", cookies={COOKIE_NAME: token})
-        assert resp.status_code == 200
-        assert resp.json()["must_reset"] is True
+        # Supabase plane returns the token-free operator profile.
+        assert data["principal_type"] == "operator"
+        assert data["display_name"] == "alice"
+        # No token material in the profile.
+        assert "access_token" not in data and "refresh_token" not in data
 
     def test_me_no_session_no_bearer(self, client):
         resp = client.get("/api/auth/me")
