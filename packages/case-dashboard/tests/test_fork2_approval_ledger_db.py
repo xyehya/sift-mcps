@@ -115,3 +115,64 @@ def test_apply_delta_db_appends_db_ledger_for_approved(patched, tmp_path):
     assert not (tmp_path / "pending-reviews.json").exists()
     # No file ledger module is reachable from the commit path anymore.
     assert not hasattr(routes_mod, "write_ledger_entry")
+
+
+def test_authority_skipped_item_gets_no_ledger_event(patched, tmp_path):
+    """SEC-F1: apply_review may SKIP an approve-requested item (stale/not found);
+    the ledger must NOT attest APPROVED for it. Drive off the authoritative result,
+    not the request."""
+    inv, appended = patched
+
+    def _apply(*, case_id, actions, examiner, reauth_audit_event_id, actor=None):
+        # F-1 was requested approve but the content authority skipped it.
+        return {"approved": 1, "rejected": 0, "edited": 0,
+                "skipped": [{"id": "F-1", "reason": "stale content hash"}]}
+
+    delta = {"items": [
+        {"id": "F-1", "action": "approve"},
+        {"id": "T-9", "action": "approve"},
+    ]}
+    (tmp_path / "pending-reviews.json").write_text(json.dumps(delta))
+
+    routes_mod._apply_delta_db(_Req(), tmp_path, "alice", _apply)
+    assert sorted(a["item_id"] for a in appended) == ["T-9"]
+    assert "F-1" not in {a["item_id"] for a in appended}
+
+
+def test_skipped_as_reviewresult_tuples_filtered(patched, tmp_path):
+    """Production apply_review returns a ReviewResult object whose .skipped is a
+    tuple of (id, reason); SEC-F1 filtering must handle that shape too."""
+    inv, appended = patched
+
+    class _RR:
+        approved, rejected, edited = 1, 0, 0
+        skipped = (("F-1", "not found"),)
+
+    def _apply(*, case_id, actions, examiner, reauth_audit_event_id, actor=None):
+        return _RR()
+
+    delta = {"items": [
+        {"id": "F-1", "action": "approve"},
+        {"id": "T-9", "action": "approve"},
+    ]}
+    (tmp_path / "pending-reviews.json").write_text(json.dumps(delta))
+
+    routes_mod._apply_delta_db(_Req(), tmp_path, "alice", _apply)
+    assert sorted(a["item_id"] for a in appended) == ["T-9"]
+
+
+def test_missing_content_hash_writes_no_null_bound_event(patched, tmp_path):
+    """SEC-F1: an APPROVED ledger event must bind to a real DB content_hash; a
+    missing hash is surfaced as a ledger failure, never a null-bound event."""
+    inv, appended = patched
+    inv.rows["F-1"]["content_hash"] = None  # DB read-back yields no hash
+
+    def _apply(*, case_id, actions, examiner, reauth_audit_event_id, actor=None):
+        return {"approved": 1, "rejected": 0, "edited": 0, "skipped": []}
+
+    delta = {"items": [{"id": "F-1", "action": "approve"}]}
+    (tmp_path / "pending-reviews.json").write_text(json.dumps(delta))
+
+    result = routes_mod._apply_delta_db(_Req(), tmp_path, "alice", _apply)
+    assert appended == []
+    assert result.get("ledger_failures") == ["F-1"]

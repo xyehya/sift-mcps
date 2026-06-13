@@ -75,7 +75,9 @@ create table if not exists app.approval_commit_events (
   prev_hash text not null default '',
   event_hash text not null,
   -- Re-auth linkage: the audit event that authorized this review batch.
-  reauth_audit_event_id uuid null references app.audit_events(id) on delete set null,
+  -- SEC-F5: on delete RESTRICT so a re-auth proof cannot be silently detached
+  -- from a historical commit event by deleting the referenced audit row.
+  reauth_audit_event_id uuid null references app.audit_events(id) on delete restrict,
   audit_event_id uuid null references app.audit_events(id) on delete set null,
   approved_by text null,
   actor_user_id uuid null references app.operator_profiles(id) on delete set null,
@@ -93,7 +95,17 @@ create table if not exists app.approval_commit_events (
   constraint approval_commit_events_event_hash_check
     check (length(btrim(event_hash)) > 0),
   constraint approval_commit_events_content_hash_shape_check
-    check (content_hash is null or content_hash ~ '^sha256:[0-9a-f]{64}$')
+    check (content_hash is null or content_hash ~ '^sha256:[0-9a-f]{64}$'),
+  -- SEC-F2: the event_hash canonical payload joins fields with '|'. item_id is
+  -- the only request-supplied free-form field reachable on the supported path;
+  -- forbidding '|' in it keeps the canonical string unambiguous (no delimiter
+  -- injection). (content_hash/action/item_type/seq/case_id are shape/enum/uuid
+  -- constrained; details is service-written.)
+  constraint approval_commit_events_item_id_no_delim_check
+    check (item_id !~ '[|]'),
+  -- SEC-F5: an APPROVED commit event must carry its authorizing re-auth proof.
+  constraint approval_commit_events_approved_reauth_check
+    check (action <> 'APPROVED' or reauth_audit_event_id is not null)
 );
 
 -- ---------------------------------------------------------------------------
@@ -144,6 +156,21 @@ drop trigger if exists approval_commit_events_no_update on app.approval_commit_e
 create trigger approval_commit_events_no_update
   before update or delete on app.approval_commit_events
   for each row execute function app.approval_block_mutation();
+
+-- SEC-F3: TRUNCATE is a statement-level op that bypasses BEFORE UPDATE/DELETE row
+-- triggers, so without this a TRUNCATE-privileged role could wipe the ledger (and
+-- reset the head) without tripping the append-only guard. Block it at the
+-- statement level on both tables. (The locked evidence_custody pattern has the
+-- same row-only gap; backfilling it there is tracked as backlog.)
+drop trigger if exists approval_commit_events_no_truncate on app.approval_commit_events;
+create trigger approval_commit_events_no_truncate
+  before truncate on app.approval_commit_events
+  for each statement execute function app.approval_block_mutation();
+
+drop trigger if exists approval_commit_heads_no_truncate on app.approval_commit_heads;
+create trigger approval_commit_heads_no_truncate
+  before truncate on app.approval_commit_heads
+  for each statement execute function app.approval_block_mutation();
 
 -- ---------------------------------------------------------------------------
 -- RPC: append one approval-commit event, advancing the per-case hash chain.
@@ -305,7 +332,16 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- Service-only execute grants on the append + read RPCs.
+-- SEC-F4: new functions get EXECUTE to PUBLIC by default. Today that is not
+-- exploitable because USAGE on schema app is granted to service_role only, so
+-- anon/authenticated cannot resolve app.* — but a future migration that widens
+-- app schema USAGE would instantly expose this SECURITY DEFINER append RPC to
+-- forged ledger calls. Revoke PUBLIC explicitly (defence-in-depth), then grant
+-- service_role.
 -- ---------------------------------------------------------------------------
+revoke execute on function app.approval_append_commit_event(
+  uuid, text, text, text, text, uuid, text, uuid, uuid, jsonb) from public;
+revoke execute on function app.approval_commit_tip(uuid) from public;
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then

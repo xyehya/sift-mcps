@@ -1848,6 +1848,21 @@ def _apply_delta_db(request: Request, case_dir: Path, examiner: str, reviewer) -
     # The current content_hash is read back from DB authority so the ledger event
     # binds to the exact approved content (never the staged/file value).
     ledger_failures: list[str] = []
+    # SEC-F1: the tamper-evident ledger must attest ONLY what the content
+    # authority actually approved. apply_review() silently SKIPS items it cannot
+    # transition (not found / stale version / stale content hash / field changed)
+    # and commits only the accepted subset; iterating the request actions would
+    # forge an APPROVED event for an approval that never happened. Drive the loop
+    # from the authoritative result: request-approved MINUS authority-skipped.
+    _skipped_raw = getattr(result, "skipped", None)
+    if _skipped_raw is None and isinstance(result, dict):
+        _skipped_raw = result.get("skipped") or ()
+    skipped_ids: set[str] = set()
+    for _s in _skipped_raw or ():
+        if isinstance(_s, (tuple, list)) and _s:
+            skipped_ids.add(str(_s[0]))
+        elif isinstance(_s, dict) and _s.get("id"):
+            skipped_ids.add(str(_s["id"]))
     db_findings: dict[str, dict] = {}
     db_timeline: dict[str, dict] = {}
     try:
@@ -1858,7 +1873,6 @@ def _apply_delta_db(request: Request, case_dir: Path, examiner: str, reviewer) -
             if isinstance(_row, dict) and _row.get("id"):
                 db_timeline[str(_row["id"])] = _row
     except Exception:
-        # Read-back is a binding nicety, not a gate; fall back to no content hash.
         logger.warning("approval-commit ledger content read-back failed")
     for act in actions:
         if (act.get("action") or "").lower() != "approve":
@@ -1866,9 +1880,23 @@ def _apply_delta_db(request: Request, case_dir: Path, examiner: str, reviewer) -
         item_id = str(act.get("id") or "")
         if not item_id:
             continue
+        if item_id in skipped_ids:
+            # Content authority did NOT transition this item to APPROVED — never
+            # attest it in the ledger.
+            continue
         item_type = "timeline" if item_id.startswith("T-") else "finding"
         src = db_timeline.get(item_id) if item_type == "timeline" else db_findings.get(item_id)
         content_hash = (src or {}).get("content_hash")
+        if not content_hash:
+            # SEC-F1: an APPROVED ledger event MUST bind to the exact approved
+            # content_hash from DB authority. Never write a null-content-bound
+            # event; surface it as a ledger failure instead.
+            logger.warning(
+                "approval-commit ledger: no DB content_hash for approved %s; skipping event",
+                item_id,
+            )
+            ledger_failures.append(item_id)
+            continue
         try:
             append_approval_commit_event_db(
                 case_id,
