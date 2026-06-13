@@ -116,6 +116,24 @@ class TestReportDbVerificationAuthority:
         assert {"id": "F-1", "status": "VERIFIED"} in result["verification_alerts"]
         assert "integrity_warning" not in result
 
+    def test_db_active_surfaces_approval_commit_ledger_tip(self, case_dir):
+        # FORK-2: the report's commit-ledger authority is the DB hash-chain tip
+        # (app.approval_commit_events), read via read_approval_commit_tip_db — the
+        # retired file HMAC ledger is never consulted.
+        approved = _finding("F-1", "db authoritative observation")
+        inputs = {"findings": [approved], "timeline": [], "iocs": []}
+        tip = {"head_seq": 3, "head_hash": "sha256:" + "c" * 64, "event_count": 3}
+        with patch(
+            "sift_core.reporting.read_approval_commit_tip_db", return_value=tip
+        ):
+            result = _gen(case_dir, investigation_inputs=inputs)
+        assert result["verification_authority"] == "db-content-hash"
+        ledger = result["approval_commit_ledger"]
+        assert ledger["authority"] == "db-hash-chain"
+        assert ledger["head_seq"] == 3
+        assert ledger["head_hash"] == "sha256:" + "c" * 64
+        assert ledger["event_count"] == 3
+
     def test_db_active_flags_db_row_mutation(self, case_dir):
         approved = _finding("F-1", "original")
         approved["observation"] = "mutated without rehash"

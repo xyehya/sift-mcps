@@ -31,11 +31,12 @@ from sift_core.evidence_chain import (
     init_evidence_chain,
 )
 
-# BATCH-NW1: compute_content_hash and HASH_EXCLUDE_KEYS are now imported from
-# investigation_store (single shared authority).  case_io re-exports them for
-# backward compatibility but routes imports directly from the source of truth.
-from sift_core.investigation_store import HASH_EXCLUDE_KEYS, compute_content_hash
-from sift_core.verification import compute_hmac, write_ledger_entry
+# BATCH-NW1: compute_content_hash is imported from investigation_store (single
+# shared authority).  case_io re-exports it for backward compatibility but routes
+# imports directly from the source of truth. (FORK-2: HASH_EXCLUDE_KEYS is no
+# longer imported here — it only fed the retired file HMAC ledger description.)
+from sift_core.investigation_store import compute_content_hash
+from sift_core.verification import append_approval_commit_event_db
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -1837,26 +1838,75 @@ def _apply_delta_db(request: Request, case_dir: Path, examiner: str, reviewer) -
     except OSError:
         pass
 
+    # FORK-2: append an approval-commit event to the DB hash-chain ledger
+    # (app.approval_commit_events) for each APPROVED item. This replaces the
+    # retired file HMAC ledger: tamper-evidence now comes from the append-only
+    # per-case prev_hash/event_hash chain + the DB mutation-blocking trigger, with
+    # no secret key. The DB review transition above is the content authority; this
+    # records the commit event with its re-auth linkage. Best-effort and ordered
+    # AFTER the authoritative transition, mirroring the old Step-3 ledger write.
+    # The current content_hash is read back from DB authority so the ledger event
+    # binds to the exact approved content (never the staged/file value).
+    ledger_failures: list[str] = []
+    db_findings: dict[str, dict] = {}
+    db_timeline: dict[str, dict] = {}
+    try:
+        for _row in _INVESTIGATION_DB.list_findings(case_id) or []:
+            if isinstance(_row, dict) and _row.get("id"):
+                db_findings[str(_row["id"])] = _row
+        for _row in _INVESTIGATION_DB.list_timeline(case_id) or []:
+            if isinstance(_row, dict) and _row.get("id"):
+                db_timeline[str(_row["id"])] = _row
+    except Exception:
+        # Read-back is a binding nicety, not a gate; fall back to no content hash.
+        logger.warning("approval-commit ledger content read-back failed")
+    for act in actions:
+        if (act.get("action") or "").lower() != "approve":
+            continue
+        item_id = str(act.get("id") or "")
+        if not item_id:
+            continue
+        item_type = "timeline" if item_id.startswith("T-") else "finding"
+        src = db_timeline.get(item_id) if item_type == "timeline" else db_findings.get(item_id)
+        content_hash = (src or {}).get("content_hash")
+        try:
+            append_approval_commit_event_db(
+                case_id,
+                item_id=item_id,
+                item_type=item_type,
+                content_hash=content_hash,
+                action="APPROVED",
+                reauth_audit_event_id=reauth_id,
+                approved_by=examiner,
+                details={"mode": "dashboard_db_authority"},
+            )
+        except Exception:
+            logger.warning("approval-commit ledger append failed for %s", item_id)
+            ledger_failures.append(item_id)
+
     summary = dict(result) if isinstance(result, dict) else {}
     summary.setdefault("authority", "db")
+    if ledger_failures:
+        summary["ledger_failures"] = ledger_failures
     return summary
 
 
-def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
+def _apply_delta(case_dir: Path, examiner: str) -> dict:
     """Apply pending delta. Returns summary dict.
 
-    derived_key is the stored PBKDF2 hash bytes loaded from the local commit
-    ledger key entry (the file-authority COMMIT ledger; out of CL3b scope). This
-    is NOT the sensitive-action password re-auth — that is verified against
-    Supabase before this runs.
+    File-backed authority path (no DB investigation service wired). The
+    sensitive-action password re-auth is verified against Supabase before this
+    runs.
 
     This is a faithful port of _review_mode (approve.py:806-1159).
     Every field name, key, and schema detail matches the CLI.
 
-    Write ordering matches CLI exactly (approve.py:1066-1113):
+    Write ordering (FORK-2):
     Step 1 (critical): Save findings.json + timeline.json
     Step 2 (best-effort): Write approval log entries
-    Step 3 (best-effort): Write HMAC ledger entries
+    Step 3 (best-effort): Append approval-commit events to the DB hash-chain
+        ledger (no-op when no control-plane DSN). The retired file HMAC ledger
+        writer is no longer called.
     """
     delta_path = case_dir / "pending-reviews.json"
     processing_path = case_dir / "pending-reviews.processing"
@@ -2195,36 +2245,32 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
                 case_dir, item_id, action, identity, now, **kwargs
             )
 
-        # Step 3: Write HMAC ledger entries (best-effort)
-        hmac_failures: list[str] = []
+        # Step 3 (FORK-2): the file HMAC ledger writer is RETIRED. The
+        # approval-commit ledger is now DB-only (app.approval_commit_events, an
+        # append-only per-case hash chain). This file-backed _apply_delta path
+        # runs only when NO DB control plane is wired; in that mode there is no
+        # approval-commit ledger authority (the file ledger that used to serve
+        # that role is gone). The DB-active path (_apply_delta_db) writes the DB
+        # ledger. We still best-effort append to the DB ledger here in case a
+        # control-plane DSN is configured even on the file-backed authority path;
+        # it is a no-op (returns None) when SIFT_CONTROL_PLANE_DSN is unset.
+        ledger_failures: list[str] = []
         for item in approved_items:
             _item_id = item.get("id", "")
             _item_type = "timeline" if _item_id.startswith("T-") else "finding"
-            # BATCH-NW1: use the authority HASH_EXCLUDE_KEYS (19 keys, imported
-            # from investigation_store) so HMAC coverage matches content_hash.
-            _description = json.dumps(
-                {k: v for k, v in item.items()
-                 if k not in HASH_EXCLUDE_KEYS and not k.startswith("_")},
-                sort_keys=True,
-                default=str,
-            )
-            _mac = compute_hmac(derived_key, _description)
-            _entry = {
-                "finding_id": _item_id,
-                "type": _item_type,
-                "hmac": _mac,
-                "hmac_version": 2,
-                "content_snapshot": _description,
-                "approved_by": examiner,
-                "approved_at": now,
-                "case_id": case_id,
-                "mode": "dashboard",
-            }
             try:
-                write_ledger_entry(case_id, _entry)
-            except OSError:
-                logger.warning("HMAC write failed for %s", _item_id)
-                hmac_failures.append(_item_id)
+                append_approval_commit_event_db(
+                    case_id,
+                    item_id=_item_id,
+                    item_type=_item_type,
+                    content_hash=item.get("content_hash"),
+                    action="APPROVED",
+                    approved_by=examiner,
+                    details={"mode": "dashboard_file_authority"},
+                )
+            except Exception:
+                logger.warning("approval-commit ledger append failed for %s", _item_id)
+                ledger_failures.append(_item_id)
 
         # Delete processing file
         processing_path.unlink(missing_ok=True)
@@ -2235,7 +2281,7 @@ def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
             "edited": edited_count,
             "skipped": [{"id": s[0], "reason": s[1]} for s in skipped],
             "errors": errors,
-            "hmac_failures": hmac_failures,
+            "ledger_failures": ledger_failures,
         }
     except BaseException:
         # Restore delta file on failure
@@ -3261,27 +3307,14 @@ async def post_commit(request: Request) -> JSONResponse:
                 )
             return JSONResponse(result)
 
-    # File-backed authority (no DB investigation wired). The file-authority COMMIT
-    # ledger (verification.write_ledger_entry via _apply_delta) is OUT of CL3a
-    # scope and unchanged; it still keys on the local PBKDF2 hash. CL3a only moves
-    # the RE-AUTH DECISION to Supabase above — it does not alter the ledger key.
-    # The ledger key is loaded here purely to feed _apply_delta, never as the
-    # password verifier; absent a local entry the file path degrades.
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return JSONResponse(
-            {"error": "Commit ledger key unavailable for file-backed authority"},
-            status_code=403,
-        )
+    # File-backed authority (no DB investigation wired). FORK-2: the file HMAC
+    # ledger writer is retired, so this path no longer loads a local PBKDF2
+    # "ledger key" — that key existed only to MAC the file ledger entries. The
+    # Supabase re-verify above is the sensitive-action re-auth. _apply_delta
+    # best-effort appends approval-commit events to the DB hash-chain ledger when
+    # a control-plane DSN is configured, and is a no-op otherwise.
     try:
-        ledger_key = bytes.fromhex(entry["hash"])
-    except (ValueError, KeyError):
-        logger.error("Corrupt password entry for examiner %s", examiner)
-        return JSONResponse({"error": "Password data corrupted"}, status_code=500)
-
-    # Apply delta (mirrors _review_mode)
-    try:
-        result = _apply_delta(case_dir, examiner, ledger_key)
+        result = _apply_delta(case_dir, examiner)
     except Exception:
         logger.exception("Commit failed")
         return JSONResponse({"error": "Commit failed — check gateway logs"}, status_code=500)
