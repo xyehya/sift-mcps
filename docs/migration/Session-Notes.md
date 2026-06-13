@@ -13,6 +13,20 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-13 - CL3 re-scoped (operator option A): CL3a -> CL3b before LV1
+
+Status: DECISION recorded; CL3a build launched.
+
+Operator resolved the B-MVP-017 fork with option A: build a fail-closed Supabase
+operator-password re-verification (GoTrue password grant) for the sensitive
+actions and flip `portal_session_enabled` false (BATCH-CL3a), then delete the
+now-dead file-HMAC re-auth plane (BATCH-CL3b). CL3a lands BEFORE LV1 so the
+end-to-end proof validates the final re-auth design. CL3a is auth-touching ->
+`/security-review` is part of its Definition of Done. Scope fence: re-auth only;
+the file-authority COMMIT ledger (`verification.write_ledger_entry` via
+`_apply_delta`) is explicitly OUT of scope (separate follow-up). LV1 now depends
+on CL3a + CL3b.
+
 ### 2026-06-13 - Wave landed: DB1 + UN1 + RG1; CL3 refused (re-scope fork)
 
 Status: DONE for 3 of 4 (merged to local main, not pushed); CL3 BLOCKED.
@@ -487,7 +501,7 @@ after portal reset/credential issuance.
 | B-MVP-014 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): installer installs+enables auditd; 12 SIFT rules loaded live (secrets/config, install-root binaries, identity files, units). | BATCH-HR3 |
 | B-MVP-015 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): BAAI/bge-base-en-v1.5 canonical with revision pin; explicit HF_HOME under the service home wired into both units; offline-aware loader. | BATCH-HR3 |
 | B-MVP-016 | Backlog | RESOLVED | RESOLVED 2026-06-12 (AD2): KEEP scope_enforcement - the premise was wrong; packages/opensearch-mcp/sift-backend.json ships it on opensearch_enrich_intel, so schema removal would reject a live manifest. It is advisory metadata in the OS5 family; regression tests added (shipped manifest validates, unknown fields still rejected). | BATCH-AD2 |
-| B-MVP-017 | Needs input | OPEN | DECIDED 2026-06-12: retire the file-HMAC re-auth plane (BATCH-CL3). REOPENED 2026-06-13: CL3 build agent (opus) REFUSED all deletions with code-cited proof (conductor-confirmed): there is NO DB/Supabase operator-password re-verification — `record_reauth_event` is audit-only (unconditional `status='success'`); the file-HMAC plane (`portal_session_enabled: true`, shipping) is the ONLY operator-password re-auth verifier; `_sync_local_reauth_password` bridges it to the live Supabase password. Retirement is build-replacement-then-delete, not cleanup. NEEDS OPERATOR DECISION: (A) re-scope to CL3a (build fail-closed Supabase re-verify + flip flag + migrate tests) then CL3b (delete dead plane); (B) accept the file-HMAC plane as the re-auth mechanism, drop CL3, document the model; (C) other. | Operator / BATCH-CL3 |
+| B-MVP-017 | Needs input | OPEN | RE-DECIDED 2026-06-13 (operator, option A): the file-HMAC plane is the only operator-password re-auth verifier (`record_reauth_event` is audit-only) and ships enabled. Build a fail-closed Supabase password re-verify for sensitive actions (BATCH-CL3a) BEFORE LV1 so the end-to-end proof validates the final design; then delete the dead plane (BATCH-CL3b). Re-auth aligns with Supabase authority; /security-review required. | BATCH-CL3a / BATCH-CL3b |
 | B-MVP-018 | Backlog | OPEN | DECIDED 2026-06-13: keep AppArmor COMPLAIN-only through BATCH-LV1; revisit enforce-mode only after the end-to-end test passes (then aa-logprof profiling against ingest/run_command + a dedicated live rerun before flipping to enforce). | Future hardening batch (post-LV1) |
 | B-MVP-019 | Backlog | OPEN | Operator briefed 2026-06-13 (detail in change log). setup-addon.sh embeds operator-home paths (command=`~/.local/bin/uv`, `--project ~/sift-mcps`, manifest under `~/sift-mcps`) in register payloads, but the hardened gateway runs ProtectHome=tmpfs and can only see `/opt/sift-mcps` + system paths, so a so-registered add-on would fail to launch under the live gateway. Fix = derive command/project/manifest from the staged `/opt/sift-mcps` tree. Operator confirmed 2026-06-13: FOLD INTO BATCH-LV1 — fix when LV1 first launches a real add-on under the hardened gateway, using live-confirmed staged paths. | BATCH-LV1 |
 | B-MVP-020 | Backlog | DONE | DONE 2026-06-13 (operator-requested, live-proven): ran rotate-tls.sh --rotate-ca on the existing VM. New CA CN="Protocol SIFT Gateway local CA" with critical basicConstraints CA:TRUE + critical keyUsage(keyCertSign,cRLSign); leaf re-issued with serverAuth EKU + IP/DNS SANs; keys 0600 / certs 0644 sift-service; gateway restarted, /health ok, both services active; curl --cacert verifies WITHOUT -k on the IP SAN. Clients must re-import /var/lib/sift/.sift/tls/ca-cert.pem. | BATCH-TLS1 / live |

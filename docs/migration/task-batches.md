@@ -67,7 +67,8 @@ OpenSearch/RAG tool smoke.
 - [ ] BATCH-PT2 - Portal RAG document management flow
 - [x] BATCH-TLS1 - Installer certificate and trust strategy
 - [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets (DEFERRED to after LV1 per operator 2026-06-13)
-- [ ] BATCH-CL3 - Retire legacy file-HMAC re-auth plane (BLOCKED 2026-06-13: premise false, needs operator re-scope - see B-MVP-017 + CL3 section)
+- [ ] BATCH-CL3a - Supabase fail-closed operator-password re-verification (B-MVP-017; before LV1)
+- [ ] BATCH-CL3b - Delete dead file-HMAC re-auth plane after CL3a (B-MVP-017)
 - [x] BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables (B-MVP-013)
 - [x] BATCH-UN1 - Component uninstaller, remove all or selected components (B-MVP-007)
 - [x] BATCH-RG1 - Regenerate documentation modernization pass
@@ -697,56 +698,87 @@ Acceptance:
 - Rerun is idempotent; rotation procedure proven once live.
 - No secret values in repo, logs, or handoff beyond the designed handoff.
 
-## BATCH-CL3 - Retire legacy file-HMAC re-auth plane
+## BATCH-CL3a - Supabase fail-closed operator-password re-verification
 
-Status: BLOCKED 2026-06-13 - premise false, needs operator re-scope (B-MVP-017).
-The CL3 build agent (opus) refused all three deletions with code-cited proof
-(conductor independently confirmed two load-bearing facts):
-- `app.audit_events` re-auth via `portal_services.record_reauth_event` is
-  AUDIT-ONLY: it inserts an unconditional `status='success'` row with no
-  password parameter and no verification.
-- The ONLY operator-password re-auth verifier is the file-HMAC challenge
-  (`_load_pw_entry`/HMAC compare) gating evidence seal/ignore/retire, commit,
-  report inclusion, and case-activate; `_sync_local_reauth_password` bridges it
-  to the live Supabase password on login/forced-reset.
-- The legacy plane ships ENABLED: `configs/gateway.yaml.template:134`
-  `portal_session_enabled: true` (defaults True in `supabase_auth.py`).
-Deleting the plane removes the only password re-verify with NO replacement -> a
-security regression. CL3 is therefore a build-replacement-then-delete batch, not
-a delete-only cleanup. Recommended re-scope (operator decision in B-MVP-017):
-  - CL3a: build a fail-closed Supabase/DB operator-password re-verification for
-    the sensitive actions; flip `portal_session_enabled` to false; migrate the
-    legacy-plane tests to the Supabase-envelope harness.
-  - CL3b: then delete the now-dead `sift_session` middleware,
-    `_sync_local_reauth_password`, the file-HMAC challenges, and the
-    `verification.py`/`backup_ops.py` writers together.
-Provably-dead-in-isolation (0 src callers, could land under CL3b only):
-`verification.py` `rehmac_entries`/`copy_ledger_to_case`/`derive_hmac_key`,
-`backup_ops.py` ledger-copy block.
+Status: DECIDED 2026-06-13 (operator, option A) - build BEFORE LV1 so the
+end-to-end proof validates the FINAL re-auth design. Re-scoped from the former
+BATCH-CL3 after the opus build agent proved (conductor-confirmed) that the
+file-HMAC plane is the ONLY operator-password re-auth verifier
+(`portal_services.record_reauth_event` is audit-only - unconditional
+`status='success'`, no password) and ships ENABLED
+(`configs/gateway.yaml.template:134 portal_session_enabled: true`). See B-MVP-017.
 
-Dependencies: BATCH-PT1; BATCH-HR3. Decided in B-MVP-017 (2026-06-12);
-BLOCKED/re-scope pending 2026-06-13.
+Dependencies: BATCH-PT1; BATCH-HR3.
 
 Scope:
 
-- `packages/case-dashboard/**` (local re-auth bridge, sift_session middleware),
-  `packages/sift-core/**` (`verification.py` writer funcs, `backup_ops.py`
-  ledger copy), tests.
+- `packages/case-dashboard/**` (sensitive-action re-auth challenge/verify call
+  sites), `packages/sift-gateway/**` (shared Supabase re-verify entry point if
+  it fits there), `configs/gateway.yaml.template`, and the re-auth/session tests
+  of those packages.
 
 Exact work:
 
-- Remove `_sync_local_reauth_password` and file-authority HMAC challenges for
-  commit/evidence/report/case-activate; DB/Supabase authority becomes the only
-  re-auth path with fail-closed errors.
-- Remove the orphaned `sift_session` cookie verification middleware (nothing
-  mints it) after confirming the test/agent harness has a replacement.
-- Delete `verification.py` writer functions and the ledger copy in
-  `backup_ops.py` once the last consumer is gone; drop their tests.
+- Add a fail-closed Supabase operator-password re-verification used at
+  sensitive-action time (evidence seal/ignore/retire, commit, report
+  inclusion/export, case-activate, agent-credential issuance): re-check the
+  operator-supplied password against Supabase GoTrue (password grant) and DENY
+  if the control plane is unreachable or the password is wrong. Keep the
+  `record_reauth_event` audit stamp - now backed by a real verification.
+- Replace the file-HMAC verify call sites (`_verify_evidence_hmac`, the inline
+  `post_commit` HMAC check, `_verify_password_challenge_helper`) with the new
+  Supabase re-verify. Do NOT yet delete the now-unused file-HMAC functions
+  (that is CL3b) - just stop calling them.
+- Flip `configs/gateway.yaml.template` to `portal_session_enabled: false`.
+  Recommend keeping the `supabase_auth.py` default True so existing installs are
+  unaffected until they adopt the new template; document the choice.
+- Migrate the legacy-plane tests (`test_session_middleware.py`,
+  `test_auth_endpoints.py`, `test_session_hardening.py`) to the
+  Supabase-envelope harness used by `test_pr03_supabase_portal_auth.py`.
+
+SCOPE FENCE (do NOT expand): this batch is RE-AUTH only. Do NOT touch the
+file-authority COMMIT ledger (`verification.write_ledger_entry` called from
+`_apply_delta`) - that is a separate file-authority concern, tracked as a
+follow-up, not part of the re-auth retirement.
 
 Acceptance:
 
-- No file-HMAC write path remains; targeted suites green; portal sensitive
-  actions still re-auth correctly under DB authority (live smoke).
+- Sensitive actions re-auth against Supabase and FAIL CLOSED when the control
+  plane is down (no file-HMAC fallback reached). Targeted suites green.
+- `/code-review` always; `/security-review` REQUIRED (auth path).
+- Live smoke: a sensitive action (e.g. evidence seal) re-auths via Supabase end
+  to end on the VM, and is denied with the control plane stopped.
+
+## BATCH-CL3b - Delete the now-dead file-HMAC re-auth plane
+
+Status: follows CL3a (operator 2026-06-13), before LV1. Pure deletion once CL3a
+proves nothing calls the file-HMAC plane.
+
+Dependencies: BATCH-CL3a.
+
+Scope:
+
+- `packages/case-dashboard/**` (`sift_session` middleware,
+  `_sync_local_reauth_password`, file-HMAC challenge endpoints),
+  `packages/sift-core/**` (`verification.py` re-auth writers, `backup_ops.py`
+  ledger copy), their tests.
+
+Exact work:
+
+- After CL3a, prove (grep + import graph) the file-HMAC re-auth plane has zero
+  live callers, then delete: the `sift_session` cookie-verify middleware,
+  `_sync_local_reauth_password`, the file-HMAC challenge endpoints, and the
+  provably-dead `verification.py` re-auth helpers (`rehmac_entries`,
+  `copy_ledger_to_case`, `derive_hmac_key`) + the `backup_ops.py` ledger-copy
+  block. Drop their now-dead tests.
+- Leave `verification.write_ledger_entry`/`_apply_delta` (file-authority COMMIT
+  ledger) ALONE - separate concern, separate follow-up.
+
+Acceptance:
+
+- No file-HMAC re-auth write/verify path remains; targeted suites green; portal
+  sensitive actions still re-auth correctly under Supabase authority (live
+  smoke). `/code-review` + `/security-review`.
 
 ## BATCH-DB1 - Adopt FORCE ROW LEVEL SECURITY on app.* tables
 
@@ -880,12 +912,12 @@ Acceptance:
 
 ## BATCH-LV1 - End-to-end live VM validation and Rocba proof
 
-Dependencies: BATCH-OR3; BATCH-HR3; BATCH-AD2; BATCH-PT1; BATCH-TLS1; BATCH-DB1.
-(BATCH-SB1 deferred to after LV1 per operator 2026-06-13: the end-to-end proof
-runs on the current Supabase CLI loopback stack with demo secrets accepted as
-documented lab posture. BATCH-CL3 is BLOCKED/re-scope pending 2026-06-13: the
-file-HMAC re-auth plane currently WORKS, so LV1 can proceed on it; whether LV1
-waits for the CL3 re-scope is an open operator decision in B-MVP-017.)
+Dependencies: BATCH-OR3; BATCH-HR3; BATCH-AD2; BATCH-PT1; BATCH-TLS1; BATCH-DB1;
+BATCH-CL3a; BATCH-CL3b. (BATCH-SB1 deferred to after LV1 per operator
+2026-06-13: the end-to-end proof runs on the current Supabase CLI loopback stack
+with demo secrets accepted as documented lab posture. BATCH-CL3a (Supabase
+re-verify) lands BEFORE LV1 per operator 2026-06-13 so LV1 proves the final
+re-auth design; BATCH-CL3b deletion follows CL3a, also before LV1.)
 
 Scope:
 
