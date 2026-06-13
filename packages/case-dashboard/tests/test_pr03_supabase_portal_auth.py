@@ -20,17 +20,16 @@ from __future__ import annotations
 
 import secrets
 
-import pytest
-from starlette.testclient import TestClient
-
 import case_dashboard.routes as routes_mod
+import pytest
 from case_dashboard.routes import create_dashboard_v2_app
 from case_dashboard.session_jwt import (
-    SESSION_ENVELOPE_COOKIE_NAME,
     COOKIE_NAME,
+    SESSION_ENVELOPE_COOKIE_NAME,
     generate_jwt,
     generate_session_envelope,
 )
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 
@@ -128,6 +127,22 @@ class FakeSupabaseAuth:
         }
         self.tokens_issued.append(result)
         return result
+
+    async def reverify_password(
+        self, email, password, source_ip, *, expected_auth_user_id=None
+    ):
+        """CL3b (B-MVP-022): fail-closed re-verify used by sensitive actions.
+
+        Accepts the operator's good password ("pw", same as login) and binds the
+        grant subject to the active session (expected_auth_user_id). Wrong
+        password -> 401; identity mismatch -> 403; mirroring the real callback.
+        """
+        self.calls.append(("reverify_password", email, source_ip))
+        if password == "wrong" or password != "pw":
+            raise PortalAuthError(401, "Invalid credentials")
+        if expected_auth_user_id and expected_auth_user_id != _OPERATOR["auth_user_id"]:
+            raise PortalAuthError(403, "Re-auth identity mismatch")
+        return {"ok": True, "auth_user_id": _OPERATOR["auth_user_id"]}
 
     async def revoke_principal(self, creator, principal_type, principal_id, source_ip):
         self.calls.append(("revoke_principal", principal_type, principal_id, source_ip))
@@ -490,7 +505,12 @@ class TestPrincipalLifecycle:
         cookie = self._operator_cookie(client)
         resp = client.post(
             "/api/auth/principals",
-            json={"kind": "agent", "display_name": "Scanner agent", "tool_scopes": ["mcp:*"]},
+            json={
+                "kind": "agent",
+                "display_name": "Scanner agent",
+                "tool_scopes": ["mcp:*"],
+                "password": "pw",  # B-MVP-022: credential issuance re-auths
+            },
             cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
         )
         assert resp.status_code == 201
@@ -515,7 +535,12 @@ class TestPrincipalLifecycle:
         cookie = self._operator_cookie(client)
         resp = client.post(
             "/api/auth/principals",
-            json={"kind": "agent", "display_name": "Scanner agent", "tool_scopes": ["mcp:*"]},
+            json={
+                "kind": "agent",
+                "display_name": "Scanner agent",
+                "tool_scopes": ["mcp:*"],
+                "password": "pw",  # B-MVP-022: credential issuance re-auths
+            },
             cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
         )
         assert resp.status_code == 201
@@ -549,10 +574,33 @@ class TestPrincipalLifecycle:
         cookie = self._operator_cookie(client)
         resp = client.post(
             "/api/auth/principals",
-            json={"kind": "robot", "display_name": "x"},
+            json={"kind": "robot", "display_name": "x", "password": "pw"},
             cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
         )
         assert resp.status_code == 400
+
+    def test_create_denied_on_wrong_password(self, client, fake_auth):
+        """B-MVP-022: a wrong re-auth password denies issuance — no credential."""
+        cookie = self._operator_cookie(client)
+        resp = client.post(
+            "/api/auth/principals",
+            json={"kind": "agent", "display_name": "x", "password": "wrong"},
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
+        )
+        assert resp.status_code == 401
+        # No credential issued: issue_principal was never called.
+        assert not any(c[0] == "issue_principal" for c in fake_auth.calls)
+
+    def test_create_denied_when_password_missing(self, client, fake_auth):
+        """B-MVP-022: a missing re-auth password fails closed — no credential."""
+        cookie = self._operator_cookie(client)
+        resp = client.post(
+            "/api/auth/principals",
+            json={"kind": "agent", "display_name": "x"},
+            cookies={SESSION_ENVELOPE_COOKIE_NAME: cookie},
+        )
+        assert resp.status_code == 400
+        assert not any(c[0] == "issue_principal" for c in fake_auth.calls)
 
     def test_revoke_calls_callback_and_disables_principal(self, client, fake_auth):
         cookie = self._operator_cookie(client)
@@ -725,11 +773,12 @@ class TestC10RefreshHardening:
         assert "max-age=0" in resp.headers.get("set-cookie", "").lower()
 
     def test_envelope_older_than_absolute_cap_is_rejected(self, app, fake_auth):
+        import time as _time
+
         from case_dashboard.session_jwt import (
             ABSOLUTE_ENVELOPE_LIFETIME_SECONDS,
             verify_session_envelope,
         )
-        import time as _time
 
         client = TestClient(app, raise_server_exceptions=True)
         at = "old-but-resolvable"
@@ -751,8 +800,9 @@ class TestC10RefreshHardening:
 
     def test_rotation_preserves_original_issued_at(self, app, fake_auth):
         """A refresh must NOT reset eiat — the absolute cap survives rotation."""
-        from case_dashboard.session_jwt import verify_session_envelope
         import time as _time
+
+        from case_dashboard.session_jwt import verify_session_envelope
 
         client = TestClient(app, raise_server_exceptions=True)
         rt = "rotate-preserve-rt"

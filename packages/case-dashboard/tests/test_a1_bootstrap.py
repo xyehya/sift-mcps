@@ -10,17 +10,15 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timezone
-from pathlib import Path
-
-import pytest
-from starlette.testclient import TestClient
 
 import case_dashboard.routes as routes_mod
-from case_dashboard.routes import create_dashboard_v2_app, _make_case_name
+import pytest
+from case_dashboard.routes import _make_case_name, create_dashboard_v2_app
 from case_dashboard.session_jwt import (
     SESSION_ENVELOPE_COOKIE_NAME,
     generate_session_envelope,
 )
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 
@@ -173,7 +171,10 @@ def test_supabase_login_returns_must_reset_false_when_active(tmp_path, monkeypat
     data = resp.json()
     assert data["ok"] is True
     assert data["must_reset"] is False
-    assert (tmp_path / "alice.json").is_file()
+    # CL3b: login no longer mirrors the password into a local file-HMAC store
+    # (_sync_local_reauth_password was deleted with the dead re-auth plane); the
+    # forced-reset signal is the Supabase 'invited' status, not a local file.
+    assert not (tmp_path / "alice.json").exists()
 
 
 # ---------------------------------------------------------------------------

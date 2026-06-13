@@ -14,7 +14,6 @@ from sift_core.case_io import load_case_meta
 from sift_core.verification import VERIFICATION_DIR
 
 _SKIP_NAMES = {"__pycache__", ".DS_Store", "examiners.bak"}
-_PASSWORDS_DIR = Path(os.environ.get("SIFT_PASSWORDS_DIR", "/var/lib/sift/passwords"))
 
 
 def sha256_file(path: Path) -> str:
@@ -127,24 +126,10 @@ def create_backup_data(
     else:
         ledger_note = "Note: no verification ledger found for this case"
 
-    password_examiners: list[str] = []
-    try:
-        findings_file = case_dir / "findings.json"
-        if findings_file.exists():
-            findings = json.loads(findings_file.read_text())
-            if isinstance(findings, list):
-                examiners_in_case = {
-                    f.get("created_by", "") for f in findings if f.get("created_by")
-                }
-                pw_dir = backup_dir / "passwords"
-                for ex in sorted(examiners_in_case):
-                    pw_file = _PASSWORDS_DIR / f"{ex}.json"
-                    if pw_file.is_file():
-                        pw_dir.mkdir(exist_ok=True)
-                        shutil.copy2(str(pw_file), str(pw_dir / f"{ex}.json"))
-                        password_examiners.append(ex)
-    except (json.JSONDecodeError, OSError):
-        pass
+    # CL3b (B-MVP-017): the file-HMAC password store (_PASSWORDS_DIR/{ex}.json)
+    # was part of the dead re-auth plane; operator passwords are authoritative in
+    # Supabase GoTrue, never in case backups. The block that snapshotted those
+    # password-hash files into the backup was removed with the plane.
 
     total_files = len(files_to_copy)
     for i, (rel_path, abs_path, _size) in enumerate(files_to_copy, 1):
@@ -196,8 +181,6 @@ def create_backup_data(
         "includes_evidence": include_evidence,
         "includes_extractions": include_extractions,
         "includes_verification_ledger": ledger_included,
-        "includes_password_hashes": bool(password_examiners),
-        "password_examiners": password_examiners,
         "includes_opensearch": False,
         "authority": "db-postgres" if _db_active else "file",
         "snapshot_only": _db_active,
@@ -229,7 +212,6 @@ def create_backup_data(
         "includes_verification_ledger": ledger_included,
         "includes_opensearch": False,
         "opensearch_snapshot": {},
-        "password_examiners": password_examiners,
         "ledger_note": ledger_note,
         "symlinks": scan["symlinks"],
     }

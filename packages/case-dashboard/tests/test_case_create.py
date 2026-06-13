@@ -91,8 +91,24 @@ def test_readonly_role_returns_403(client, passwords_dir):
     assert resp.status_code == 403
 
 
-def test_must_reset_password_returns_403(client, passwords_dir):
-    _setup_cookie(client, examiner="alice", role="examiner", must_reset=True, passwords_dir=passwords_dir)
+def test_must_reset_password_returns_403(passwords_dir, tmp_path, monkeypatch):
+    # CL3b: forced-reset now derives from the Supabase 'invited' status on the
+    # session principal, not a file flag.
+    from _supabase_reauth_harness import (
+        ReauthFakeSupabaseAuth,
+        operator_principal,
+        set_operator_session,
+    )
+
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET, session_max_age=28800,
+        supabase_auth=ReauthFakeSupabaseAuth(
+            principal=operator_principal(status="invited"),
+        ),
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+    set_operator_session(client, _SECRET)
     resp = client.post("/api/case/create", json={
         "casename": "case1",
         "title": "Case 1",
@@ -425,13 +441,18 @@ def test_get_cases_returns_cases_list(client, case_env, passwords_dir):
     assert "case-two-20260525-1414" in case_ids
 
 
-def test_get_case_activate_challenge_requires_password_setup(client, passwords_dir):
-    # Setup examiner cookie but do NOT write password entry (no entry exists)
+def test_get_case_activate_challenge_file_backed_requires_supabase_reauth(client, passwords_dir):
+    # CL3b: the file-backed activation challenge no longer mints a file-HMAC
+    # nonce/salt. Without an active-case service wired it reports that re-auth is
+    # required and routed through Supabase; the activation POST then re-verifies
+    # the operator password against Supabase GoTrue (fail closed).
     token = generate_jwt("alice", "examiner", _SECRET, max_age=3600)
     client.cookies[COOKIE_NAME] = token
     resp = client.get("/api/case/activate/challenge")
-    assert resp.status_code == 403
-    assert "No password configured" in resp.json()["error"]
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["required"] is True
+    assert body["authority"] == "supabase"
 
 
 def test_supabase_db_case_routes_use_active_case_service(passwords_dir, case_env, tmp_path, monkeypatch):
@@ -477,31 +498,130 @@ def test_supabase_db_case_routes_use_active_case_service(passwords_dir, case_env
             self.calls.append(("create", payload, principal))
             return FakeCase()
 
+    # B-MVP-021 (CL3b): the DB-active activation branch now re-verifies the
+    # operator password against Supabase before set_active_case. Drive the test
+    # with a real operator session (Supabase envelope) + a reauth-capable fake.
+    from _supabase_reauth_harness import (
+        GOOD_PASSWORD,
+        ReauthFakeSupabaseAuth,
+        operator_principal,
+        set_operator_session,
+    )
+
+    operator = operator_principal()
     active = FakeActiveCases()
     app = create_dashboard_v2_app(
         session_secret=_SECRET,
         session_max_age=28800,
         gateway_config_path=str(cfg_path),
-        supabase_auth=object(),
+        supabase_auth=ReauthFakeSupabaseAuth(principal=operator),
         active_case_service=active,
     )
     client = TestClient(app, raise_server_exceptions=True)
-    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+    set_operator_session(client, _SECRET)
 
     assert client.get("/api/case/activate/challenge").json()["required"] is False
     assert client.get("/api/cases").json()["cases"][0]["case_key"] == "db-case"
     assert client.get("/api/case").json()["case_key"] == "db-case"
-    assert client.post("/api/case/activate", json={"case_id": "db-case"}).json()["ok"] is True
+    assert client.post(
+        "/api/case/activate", json={"case_id": "db-case", "password": GOOD_PASSWORD}
+    ).json()["ok"] is True
     assert client.post("/api/case/metadata", json={"field": "severity", "value": "low"}).status_code == 200
     assert client.post("/api/case/create", json={"casename": "db-case", "title": "DB Case"}).status_code == 200
 
-    assert ("set", "db-case", None) in active.calls
+    assert ("set", "db-case", operator) in active.calls
     assert any(call[0] == "metadata" for call in active.calls)
     assert any(call[0] == "create" for call in active.calls)
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
     assert cfg["case"]["dir"] == ""
     assert not (Path.home() / ".sift" / "active_case").exists()
+
+
+def test_db_active_case_activate_denied_on_wrong_password(case_env, passwords_dir, tmp_path, monkeypatch):
+    """B-MVP-021 (CL3b): the DB-active activation branch re-verifies against
+    Supabase before set_active_case. A wrong password denies with NO activation."""
+    from _supabase_reauth_harness import (
+        ReauthFakeSupabaseAuth,
+        operator_principal,
+        set_operator_session,
+    )
+
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    case_root, cfg_path = case_env
+
+    class _Case:
+        case_id = "db-uuid-1"
+        case_key = "db-case"
+
+        def as_dict(self):
+            return {"case_id": self.case_id, "case_key": self.case_key}
+
+    class _ActiveCases:
+        def __init__(self):
+            self.calls = []
+
+        def set_active_case(self, case_id, principal):
+            self.calls.append(("set", case_id, principal))
+            return _Case()
+
+    active = _ActiveCases()
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        gateway_config_path=str(cfg_path),
+        supabase_auth=ReauthFakeSupabaseAuth(principal=operator_principal()),
+        active_case_service=active,
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+    set_operator_session(client, _SECRET)
+
+    resp = client.post(
+        "/api/case/activate", json={"case_id": "db-case", "password": "wrong-password"}
+    )
+    assert resp.status_code == 401
+    # Fail closed: the active-case service was never asked to switch the case.
+    assert not any(c[0] == "set" for c in active.calls)
+
+
+def test_db_active_case_activate_denied_when_control_plane_down(case_env, passwords_dir, tmp_path, monkeypatch):
+    """B-MVP-021 (CL3b): control plane unreachable -> 503, no activation."""
+    from _supabase_reauth_harness import (
+        GOOD_PASSWORD,
+        ReauthFakeSupabaseAuth,
+        operator_principal,
+        set_operator_session,
+    )
+
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    case_root, cfg_path = case_env
+
+    class _ActiveCases:
+        def __init__(self):
+            self.calls = []
+
+        def set_active_case(self, case_id, principal):
+            self.calls.append(("set", case_id, principal))
+            raise AssertionError("set_active_case must not run when re-auth fails")
+
+    active = _ActiveCases()
+    fake = ReauthFakeSupabaseAuth(principal=operator_principal())
+    fake.control_plane_down = True
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        gateway_config_path=str(cfg_path),
+        supabase_auth=fake,
+        active_case_service=active,
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+    set_operator_session(client, _SECRET)
+
+    resp = client.post(
+        "/api/case/activate", json={"case_id": "db-case", "password": GOOD_PASSWORD}
+    )
+    assert resp.status_code == 503
+    assert not active.calls
 
 
 def test_post_case_activate_success(case_env, passwords_dir, tmp_path, monkeypatch):
@@ -550,7 +670,6 @@ def test_post_case_activate_success(case_env, passwords_dir, tmp_path, monkeypat
 def test_post_case_activate_wrong_password_denied(case_env, passwords_dir, tmp_path, monkeypatch):
     """CL3a: a wrong password is denied (401) and never activates the case."""
     from _supabase_reauth_harness import (
-        GOOD_PASSWORD,
         ReauthFakeSupabaseAuth,
         set_operator_session,
     )

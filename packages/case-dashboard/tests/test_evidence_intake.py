@@ -26,14 +26,13 @@ from pathlib import Path
 
 import case_dashboard.routes as routes_mod
 import pytest
-from case_dashboard.routes import create_dashboard_v2_app
-from starlette.testclient import TestClient
-
 from _supabase_reauth_harness import (
     GOOD_PASSWORD,
     ReauthFakeSupabaseAuth,
     set_operator_session,
 )
+from case_dashboard.routes import create_dashboard_v2_app
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 _PBKDF2_ITERS = 600_000
@@ -175,8 +174,6 @@ def fake_auth():
 
 @pytest.fixture()
 def app(passwords_dir, tmp_path, monkeypatch, evidence_db, fake_auth):
-    routes_mod._evidence_challenges.clear()
-    routes_mod._challenges.clear()
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     return create_dashboard_v2_app(
         session_secret=_SECRET,
@@ -200,7 +197,6 @@ def authed_client(client):
 
 def _fresh_install_client(passwords_dir, tmp_path, monkeypatch):
     """Client with NO DB evidence service and no active case (fresh install)."""
-    routes_mod._evidence_challenges.clear()
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     app = create_dashboard_v2_app(
         session_secret=_SECRET, session_max_age=28800,
@@ -229,7 +225,6 @@ class TestEvidenceChainStatus:
             auth_user_id="auth-user-agent-1",
         )
         fake = ReauthFakeSupabaseAuth(principal=agent_principal)
-        routes_mod._evidence_challenges.clear()
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         app = create_dashboard_v2_app(
             session_secret=_SECRET, session_max_age=28800,
@@ -261,7 +256,6 @@ class TestEvidenceChainStatus:
             objects=[{"display_path": "evidence/stray.txt", "status": "detected",
                       "seal_status": "unsealed"}],
         )
-        routes_mod._evidence_challenges.clear()
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         app = create_dashboard_v2_app(
             session_secret=_SECRET, session_max_age=28800,
@@ -316,7 +310,6 @@ class TestEvidenceChainRescan:
     def test_rescan_invokes_on_chain_mutation(self, passwords_dir, tmp_path, monkeypatch):
         """on_chain_mutation callback is called with case_dir_str."""
         called_with: list[str] = []
-        routes_mod._evidence_challenges.clear()
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
 
         app = create_dashboard_v2_app(
@@ -340,25 +333,11 @@ class TestEvidenceChainRescan:
 # ---------------------------------------------------------------------------
 
 
-class TestEvidenceChainChallenge:
-    def test_no_auth_returns_403(self, client):
-        resp = client.get("/api/evidence/chain/challenge")
-        assert resp.status_code == 403
-
-    def test_reauth_method_tag_is_supabase(self, authed_client, passwords_dir):
-        # CL3a: the challenge GET still answers (file-backed path), but the
-        # re-auth method tag now advertises the Supabase password re-verify.
-        _setup_examiner(passwords_dir, "alice", GOOD_PASSWORD)
-        resp = authed_client.get("/api/evidence/chain/challenge")
-        assert resp.status_code == 200
-        assert resp.json()["reauth_method"] == "supabase_password_reverify"
-
-    def test_must_reset_password_blocked(self, client, passwords_dir):
-        _setup_examiner(passwords_dir, "alice", GOOD_PASSWORD, must_reset=True)
-        set_operator_session(client, _SECRET)
-        resp = client.get("/api/evidence/chain/challenge")
-        assert resp.status_code == 403
-        assert "reset" in resp.json()["error"].lower()
+# CL3b (B-MVP-017): the file-HMAC evidence-chain challenge GET
+# (/api/evidence/chain/challenge) was deleted with the dead re-auth plane. The
+# seal/ignore/retire/etc. endpoints now POST {password} and re-verify against
+# Supabase directly (see TestEvidenceChainSeal), so there is no challenge GET to
+# test. The forced-reset block is covered at the seal endpoint below.
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +413,6 @@ class TestEvidenceChainSeal:
 
     def test_seal_invokes_on_chain_mutation(self, passwords_dir, tmp_path, monkeypatch):
         called_with: list[str] = []
-        routes_mod._evidence_challenges.clear()
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
 
         app = create_dashboard_v2_app(
@@ -457,10 +435,22 @@ class TestEvidenceChainSeal:
         # empty and the hook is skipped — assert it never raised and stayed empty.
         assert called_with == []
 
-    def test_must_reset_password_blocked(self, client, passwords_dir):
-        _setup_examiner(passwords_dir, "alice", GOOD_PASSWORD, must_reset=True)
-        set_operator_session(client, _SECRET)
-        resp = client.post(
+    def test_must_reset_password_blocked(self, passwords_dir, tmp_path, monkeypatch):
+        # CL3b: the forced-reset gate now derives from the Supabase 'invited'
+        # status carried by the session principal, not a file flag. An invited
+        # operator is blocked from sealing until they reset.
+        from _supabase_reauth_harness import operator_principal
+
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET, session_max_age=28800,
+            supabase_auth=ReauthFakeSupabaseAuth(
+                principal=operator_principal(status="invited"),
+            ),
+        )
+        c = TestClient(app, raise_server_exceptions=True)
+        set_operator_session(c, _SECRET)
+        resp = c.post(
             "/api/evidence/chain/seal",
             json={"password": GOOD_PASSWORD, "file_specs": []},
         )

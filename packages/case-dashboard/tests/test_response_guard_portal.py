@@ -11,18 +11,16 @@ import secrets
 import time
 from pathlib import Path
 
-import pytest
-from starlette.testclient import TestClient
-
 import case_dashboard.routes as routes_mod
-from case_dashboard.routes import create_dashboard_v2_app
-
+import pytest
 from _supabase_reauth_harness import (
     GOOD_PASSWORD,
     ReauthFakeSupabaseAuth,
     operator_principal,
     set_operator_session,
 )
+from case_dashboard.routes import create_dashboard_v2_app
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 _CASE_DIR = "/tmp/case-rg-portal-test"
@@ -79,8 +77,6 @@ def _stub_cancel(case_dir_str: str) -> None:
 @pytest.fixture(autouse=True)
 def _clear_state(monkeypatch):
     _stub_state.clear()
-    routes_mod._evidence_challenges.clear()
-    routes_mod._challenges.clear()
 
 
 @pytest.fixture()
@@ -226,11 +222,19 @@ class TestResponseGuardOverride:
         assert resp.status_code == 503
         assert _stub_state.get(_CASE_DIR) is None
 
-    def test_must_reset_password_blocked(self, client, passwords_dir, monkeypatch):
+    def test_must_reset_password_blocked(self, passwords_dir, tmp_path, monkeypatch):
+        # CL3b: forced-reset now derives from the Supabase 'invited' status on
+        # the session principal, not a file flag.
         monkeypatch.setenv("SIFT_CASE_DIR", _CASE_DIR)
-        _setup_examiner(passwords_dir, must_reset=True)
-        set_operator_session(client, _SECRET)
-        resp = client.post(
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET, session_max_age=28800,
+            supabase_auth=ReauthFakeSupabaseAuth(
+                principal=operator_principal(status="invited"),
+            ),
+        )
+        c = TestClient(app, raise_server_exceptions=True)
+        set_operator_session(c, _SECRET)
+        resp = c.post(
             "/api/response-guard/override",
             json={"password": GOOD_PASSWORD},
         )

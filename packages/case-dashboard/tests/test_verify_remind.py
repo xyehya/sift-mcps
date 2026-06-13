@@ -89,8 +89,6 @@ def passwords_dir(tmp_path, monkeypatch):
 
 
 def _build_client(passwords_dir, tmp_path, monkeypatch, evidence_db, *, fake_auth=None):
-    routes_mod._evidence_challenges.clear()
-    routes_mod._challenges.clear()
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     app = create_dashboard_v2_app(
         session_secret=_SECRET,
@@ -136,7 +134,6 @@ class TestChainStatusIncludesVerifyFields:
 
 class TestVerifyHmacEndpoint:
     def test_no_auth_returns_403(self, passwords_dir, tmp_path, monkeypatch):
-        routes_mod._evidence_challenges.clear()
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         app = create_dashboard_v2_app(
             session_secret=_SECRET, session_max_age=28800,
@@ -219,7 +216,6 @@ class TestVerifyHmacEndpoint:
 
     def test_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
         """No DB service: verify-hmac degrades to no-case, never reads a file ledger."""
-        routes_mod._evidence_challenges.clear()
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         app = create_dashboard_v2_app(
             session_secret=_SECRET, session_max_age=28800,

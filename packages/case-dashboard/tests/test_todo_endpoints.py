@@ -16,12 +16,11 @@ import json
 import secrets
 from pathlib import Path
 
-import pytest
-from starlette.testclient import TestClient
-
 import case_dashboard.routes as routes_mod
+import pytest
 from case_dashboard.routes import create_dashboard_v2_app
 from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 _PBKDF2_ITERS = 600_000
@@ -45,7 +44,6 @@ def passwords_dir(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def app(passwords_dir, tmp_path, monkeypatch):
-    routes_mod._challenges.clear()
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
     return create_dashboard_v2_app(session_secret=_SECRET, session_max_age=28800)
 
@@ -151,12 +149,26 @@ class TestCreateTodo:
         )
         assert resp.status_code == 403
 
-    def test_must_reset_forbidden(self, client, active_case_dir, passwords_dir):
-        _setup_examiner(passwords_dir, "carol", "password123", must_reset=True)
-        token = generate_jwt("carol", "examiner", _SECRET)
-        resp = client.post(
-            "/api/todos", json={"description": "x"}, cookies={COOKIE_NAME: token}
+    def test_must_reset_forbidden(self, active_case_dir, passwords_dir, tmp_path, monkeypatch):
+        # CL3b: the forced-reset write block now derives from the Supabase
+        # 'invited' status on the session principal (not a file flag), so it is
+        # exercised through a Supabase-envelope session for an invited operator.
+        from _supabase_reauth_harness import (
+            ReauthFakeSupabaseAuth,
+            operator_principal,
+            set_operator_session,
         )
+
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET, session_max_age=28800,
+            supabase_auth=ReauthFakeSupabaseAuth(
+                principal=operator_principal(status="invited"),
+            ),
+        )
+        c = TestClient(app, raise_server_exceptions=True)
+        set_operator_session(c, _SECRET)
+        resp = c.post("/api/todos", json={"description": "x"})
         assert resp.status_code == 403
 
 

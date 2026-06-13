@@ -1,14 +1,11 @@
 """Case dashboard routes — Starlette sub-app for finding review."""
 
 import getpass
-import hashlib
-import hmac as hmac_mod
 import json
 import logging
 import os
 import pwd
 import re
-import secrets
 import shutil
 import subprocess
 import tempfile
@@ -24,12 +21,6 @@ import yaml
 from sift_core.approval_auth import (
     _load_password_entry as _load_pw_entry,
 )
-from sift_core.approval_auth import (
-    _save_password_entry as _save_pw_entry,
-)
-from sift_core.approval_auth import (
-    derive_ledger_key,
-)
 from sift_core.case_io import (
     _protected_write,
     case_approvals_path,
@@ -39,6 +30,7 @@ from sift_core.case_io import (
 from sift_core.evidence_chain import (
     init_evidence_chain,
 )
+
 # BATCH-NW1: compute_content_hash and HASH_EXCLUDE_KEYS are now imported from
 # investigation_store (single shared authority).  case_io re-exports them for
 # backward compatibility but routes imports directly from the source of truth.
@@ -58,7 +50,6 @@ from case_dashboard.session_jwt import (
     SESSION_ENVELOPE_COOKIE_NAME,
     SESSION_ENVELOPE_COOKIE_PATH,
     SESSION_ENVELOPE_COOKIE_SAME_SITE,
-    generate_jwt,
     generate_session_envelope,
     revoke_jti,
     verify_jwt,
@@ -194,27 +185,22 @@ _DELTA_EDITABLE_FIELDS = {
     "tags",
 }
 
-# In-memory challenge store (gateway is single-process uvicorn)
-_challenges: dict[str, dict] = {}  # challenge_id → {nonce, examiner, created_at}
-_CHALLENGE_TTL = 30  # seconds
+# Sensitive-action lockout window (shared by the commit / case-activate
+# re-auth lockout read). _MAX_COMMIT_ATTEMPTS / _COMMIT_LOCKOUT_SECONDS feed
+# _check_commit_lockout, which is still consulted before a Supabase re-verify.
 _MAX_COMMIT_ATTEMPTS = 3
 _COMMIT_LOCKOUT_SECONDS = 900
 
 # B-MVP-011: the login-challenge store (and its R6 caps) was removed with the
 # local PBKDF2 login fallback. Supabase Auth is the only portal login path.
+# CL3b (B-MVP-017): the per-action file-HMAC challenge stores (commit / evidence
+# / case-activate nonce+salt) were removed with the dead file-HMAC re-auth plane;
+# sensitive-action re-auth is verified against Supabase GoTrue, not a local nonce.
 
 _case_create_lock = threading.Lock()
 _CASE_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
 _CASE_SLUG_INVALID_RE = re.compile(r"[^a-z0-9_-]+")
 _CASE_SLUG_HYPHENS_RE = re.compile(r"-+")
-
-# Evidence chain challenge store — domain-separated from commit challenges (R2)
-_evidence_challenges: dict[str, dict] = {}
-_EVIDENCE_CHALLENGE_TTL = 30  # seconds
-
-# Case activation challenge store — domain-separated
-_activation_challenges: dict[str, dict] = {}
-_ACTIVATION_CHALLENGE_TTL = 30  # seconds
 
 # CL3a (B-MVP-017): sensitive-action re-auth is now verified against Supabase
 # GoTrue (password grant), not the local file-HMAC challenge. The challenge GET
@@ -596,10 +582,30 @@ def _commit_failure_count(examiner: str) -> int:
 # report) keeps its own HMAC challenge stores and lockout helpers below.
 
 
-def _must_reset_check(examiner: str) -> JSONResponse | None:
-    """R1: Returns 403 if examiner must reset password; None if OK. Re-reads from disk."""
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if entry and entry.get("must_reset_password"):
+def _must_reset_check(request: Request) -> JSONResponse | None:
+    """Return 403 when the operator must reset their password; None otherwise.
+
+    CL3b (B-MVP-017 Fork 3): the forced-reset gate now derives from the Supabase
+    control-plane signal carried by the authenticated session principal —
+    ``status == 'invited'`` — the SAME signal ``post_supabase_login`` uses to set
+    ``must_reset`` at login. It no longer reads the file-HMAC ``_PASSWORDS_DIR``
+    store (deleted with the dead re-auth plane). ``active`` operators pass.
+
+    DEFENSE-IN-DEPTH, NOT the primary enforcement. In production the PRIMARY
+    forced-reset enforcement is the Supabase resolver itself: ``resolve`` returns
+    ``None`` for any principal whose ``status != "active"`` (sift-gateway
+    ``supabase_auth.py:1186``). So an ``invited`` operator never reaches a route
+    with a principal at all — the portal middleware leaves ``request.state``
+    unauthenticated and the upstream auth/role gate denies 401 BEFORE this check
+    runs. This branch is a fail-closed backstop for any future/alternate path
+    that might ever surface a non-active principal to a handler; under the current
+    resolver its ``invited`` branch is not reached in prod. (See
+    ``TestForcedResetEnforcedByResolver`` for the live path, and
+    ``TestForcedResetGateDefenseInDepth`` for this gate driven by an injected
+    non-active principal.)
+    """
+    principal = _request_principal(request)
+    if isinstance(principal, dict) and principal.get("status") == "invited":
         return JSONResponse(
             {"error": "Password reset required before performing this action"},
             status_code=403,
@@ -662,41 +668,6 @@ def _detect_write_block(evidence_dir: Path) -> dict:
         pass
 
     return {"write_protected": False, "warning": _WRITE_BLOCK_WARNING}
-
-
-def _verify_evidence_hmac(
-    examiner: str,
-    challenge_id: str,
-    response_hmac: str,
-    client_ip: str,
-) -> tuple[str | None, bytes | None]:
-    """Verify an evidence chain HMAC challenge. Returns (error_msg | None, derived_key | None)."""
-    now = time.time()
-    challenge = _evidence_challenges.pop(challenge_id, None)
-    if not challenge:
-        return "Invalid or expired challenge", None
-    if now - challenge["created_at"] > _EVIDENCE_CHALLENGE_TTL:
-        return "Challenge expired", None
-    if challenge.get("bound_ip") != client_ip:
-        return "Challenge IP mismatch", None
-    if challenge["examiner"] != examiner:
-        return "Challenge/examiner mismatch", None
-
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return "No password configured", None
-    try:
-        stored_hash = bytes.fromhex(entry["hash"])
-    except (ValueError, KeyError):
-        return "Password data corrupted", None
-
-    expected = hmac_mod.new(stored_hash, challenge["nonce"].encode(), "sha256").hexdigest()
-    if not hmac_mod.compare_digest(expected, response_hmac):
-        _record_commit_failure(f"evidence:{examiner}")
-        return "Incorrect password", None
-
-    _clear_commit_failures(f"evidence:{examiner}")
-    return None, derive_ledger_key(entry["hash"])
 
 
 def _record_reauth_event(request: Request, examiner: str, action: str) -> str | None:
@@ -1107,53 +1078,6 @@ async def post_evidence_chain_rescan(request: Request) -> JSONResponse:
     return JSONResponse(_evidence_chain_status())
 
 
-async def get_evidence_chain_challenge(request: Request) -> JSONResponse:
-    """Issue a challenge nonce for evidence seal/ignore operations."""
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-
-    err = _must_reset_check(examiner)
-    if err:
-        return err
-
-    lockout_msg = _check_commit_lockout(f"evidence:{examiner}")
-    if lockout_msg:
-        return JSONResponse({"error": lockout_msg}, status_code=429)
-
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return JSONResponse({"error": "No password configured"}, status_code=403)
-
-    # Purge expired evidence challenges
-    now = time.time()
-    expired = [k for k, v in _evidence_challenges.items() if now - v["created_at"] > _EVIDENCE_CHALLENGE_TTL]
-    for k in expired:
-        del _evidence_challenges[k]
-
-    challenge_id = secrets.token_hex(16)
-    nonce = secrets.token_hex(32)
-    _evidence_challenges[challenge_id] = {
-        "nonce": nonce,
-        "examiner": examiner,
-        "created_at": now,
-        "bound_ip": request.client.host,
-    }
-
-    return JSONResponse({
-        "challenge_id": challenge_id,
-        "nonce": nonce,
-        "salt": entry["salt"],
-        "iterations": 600000,
-        "hash_algorithm": "SHA-256",
-        "reauth_method": _MVP_REAUTH_METHOD,
-    })
-
-
 async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     """Seal a new evidence manifest version with HMAC confirmation.
 
@@ -1168,7 +1092,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -1259,7 +1183,7 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -1339,7 +1263,7 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -1422,7 +1346,7 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -1503,7 +1427,7 @@ async def post_evidence_chain_reacquire(request: Request) -> JSONResponse:
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -1595,7 +1519,7 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -1745,7 +1669,7 @@ async def post_response_guard_override(request: Request) -> JSONResponse:
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -1921,8 +1845,10 @@ def _apply_delta_db(request: Request, case_dir: Path, examiner: str, reviewer) -
 def _apply_delta(case_dir: Path, examiner: str, derived_key: bytes) -> dict:
     """Apply pending delta. Returns summary dict.
 
-    derived_key is the stored PBKDF2 hash bytes — same as derive_hmac_key()
-    would produce from the raw password + salt.
+    derived_key is the stored PBKDF2 hash bytes loaded from the local commit
+    ledger key entry (the file-authority COMMIT ledger; out of CL3b scope). This
+    is NOT the sensitive-action password re-auth — that is verified against
+    Supabase before this runs.
 
     This is a faithful port of _review_mode (approve.py:806-1159).
     Every field name, key, and schema detail matches the CLI.
@@ -2591,7 +2517,7 @@ async def post_case_metadata(request: Request) -> JSONResponse:
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -2691,42 +2617,6 @@ def _write_todos(case_dir: Path, todos: list) -> JSONResponse | None:
     return None
 
 
-def _sync_local_reauth_password(examiner: str | None, password: str) -> None:
-    """Keep the MVP local HMAC reauth bridge aligned with Supabase login.
-
-    Supabase is the login authority, but evidence seal/verify, review commit,
-    report inclusion, and response-guard override still use the local PBKDF2
-    challenge bridge in this MVP. Store only the salted verifier, never the raw
-    password, so the same operator password works for both login and reauth.
-    """
-    if not examiner or not password:
-        return
-    salt = secrets.token_bytes(32)
-    pw_hash = hashlib.pbkdf2_hmac(
-        "sha256", password.encode(), salt, 600_000
-    ).hex()
-    existing = _load_pw_entry(_PASSWORDS_DIR, examiner) or {}
-    entry = {
-        **existing,
-        "hash": pw_hash,
-        "salt": salt.hex(),
-        "must_reset_password": False,
-        "role": existing.get("role", "examiner"),
-    }
-    _save_pw_entry(_PASSWORDS_DIR, examiner, entry)
-
-
-def _principal_examiner_name(principal: dict) -> str | None:
-    """Return the local examiner name used by legacy HMAC reauth files."""
-    if not isinstance(principal, dict) or principal.get("principal_type") != "operator":
-        return None
-    return (
-        principal.get("display_name")
-        or principal.get("email")
-        or principal.get("principal_id")
-    )
-
-
 async def _read_todo_body(request: Request) -> tuple[dict | None, JSONResponse | None]:
     """Size-check, read and JSON-parse a todo request body into a dict."""
     content_length = request.headers.get("content-length")
@@ -2774,7 +2664,7 @@ async def post_todo(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -2869,7 +2759,7 @@ async def patch_todo(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -2988,7 +2878,7 @@ async def delete_todo(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -3110,7 +3000,7 @@ async def post_delta(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -3209,7 +3099,7 @@ async def delete_delta_item(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -3267,7 +3157,7 @@ async def verify_evidence(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -3317,59 +3207,6 @@ async def verify_evidence(request: Request) -> JSONResponse:
     return _no_case_response()
 
 
-async def get_commit_challenge(request: Request) -> JSONResponse:
-    """Issue a challenge nonce + salt for password verification."""
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-
-    lockout_msg = _check_commit_lockout(examiner)
-    if lockout_msg:
-        return JSONResponse({"error": lockout_msg}, status_code=429)
-
-    err = _must_reset_check(examiner)
-    if err:
-        return err
-
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return JSONResponse(
-            {"error": "No password configured. Run: sift config --setup-password"},
-            status_code=403,
-        )
-
-    # Purge expired challenges
-    now = time.time()
-    expired = [
-        k for k, v in _challenges.items() if now - v["created_at"] > _CHALLENGE_TTL
-    ]
-    for k in expired:
-        del _challenges[k]
-
-    challenge_id = secrets.token_hex(16)
-    nonce = secrets.token_hex(32)
-    _challenges[challenge_id] = {
-        "nonce": nonce,
-        "examiner": examiner,
-        "created_at": now,
-        "bound_ip": request.client.host,
-    }
-
-    return JSONResponse(
-        {
-            "challenge_id": challenge_id,
-            "nonce": nonce,
-            "salt": entry["salt"],
-            "iterations": 600000,
-            "hash_algorithm": "SHA-256",
-        }
-    )
-
-
 async def post_commit(request: Request) -> JSONResponse:
     """Apply delta with challenge-response authentication."""
     role_err = _require_examiner_role(request)
@@ -3388,7 +3225,7 @@ async def post_commit(request: Request) -> JSONResponse:
     if lockout_msg:
         return JSONResponse({"error": lockout_msg}, status_code=429)
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -3568,13 +3405,12 @@ async def post_supabase_login(request: Request) -> JSONResponse:
     # A1-BOOTSTRAP: signal forced reset when the operator was provisioned by the
     # installer with status='invited'. The portal must present a password-reset
     # screen before allowing any other action. Token material is not in the body.
+    # CL3b (B-MVP-017): the login no longer mirrors the password into the local
+    # file-HMAC re-auth store — that plane is deleted. Sensitive-action re-auth is
+    # re-verified directly against Supabase GoTrue, and the forced-reset gate
+    # reads the same Supabase 'invited' status carried by the session principal.
     principal_status = principal.get("status", "active")
     must_reset = principal_status == "invited"
-    if not must_reset:
-        try:
-            _sync_local_reauth_password(_principal_examiner_name(principal), password)
-        except OSError as exc:
-            logger.warning("local reauth password sync failed: %s", type(exc).__name__)
 
     resp = JSONResponse({
         "ok": True,
@@ -3695,14 +3531,11 @@ async def post_supabase_forced_reset(request: Request) -> JSONResponse:
         msg = reason if isinstance(reason, str) and reason else "Forced reset failed"
         return JSONResponse({"error": msg}, status_code=status)
 
-    principal = getattr(request.state, "principal", None)
-    try:
-        _sync_local_reauth_password(
-            _principal_examiner_name(principal or {}), new_password
-        )
-    except OSError as exc:
-        logger.warning("local reauth password sync failed after forced reset: %s", type(exc).__name__)
-
+    # CL3b (B-MVP-017): the forced reset is applied in the Supabase control plane,
+    # which flips the operator's status from 'invited' to 'active'. The next
+    # request resolves a fresh session principal carrying the new status, so the
+    # forced-reset gate (_must_reset_check, now Supabase 'invited'-driven) clears
+    # on its own. No local file-HMAC re-auth store is mirrored — that plane is gone.
     return JSONResponse({"ok": True, "must_reset": False})
 
 
@@ -4018,7 +3851,7 @@ async def create_token(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    must_err = _must_reset_check(examiner)
+    must_err = _must_reset_check(request)
     if must_err:
         return must_err
 
@@ -4129,7 +3962,7 @@ async def revoke_token(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    must_err = _must_reset_check(examiner)
+    must_err = _must_reset_check(request)
     if must_err:
         return must_err
 
@@ -4169,7 +4002,7 @@ async def rotate_token(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    must_err = _must_reset_check(examiner)
+    must_err = _must_reset_check(request)
     if must_err:
         return must_err
 
@@ -4234,7 +4067,7 @@ async def reactivate_token(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
-    must_err = _must_reset_check(examiner)
+    must_err = _must_reset_check(request)
     if must_err:
         return must_err
 
@@ -4382,6 +4215,15 @@ async def create_principal(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    # B-MVP-022 (CL3b): agent/service credential issuance is a CLAUDE.md sensitive
+    # action. In ADDITION to the owner/admin role gate above, re-verify the
+    # operator's password against Supabase (fail closed) before minting any
+    # credential. A wrong password / unreachable control plane denies issuance
+    # with no credential minted.
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err:
+        return reauth_err
 
     kind = str(body.get("kind", "")).strip()
     display_name = str(body.get("display_name", "")).strip()
@@ -4664,62 +4506,32 @@ async def get_cases(request: Request) -> JSONResponse:
 
 
 async def get_case_activate_challenge(request: Request) -> JSONResponse:
-    """GET /portal/api/case/activate/challenge — Issue challenge nonce for case activation."""
-    if _ACTIVE_CASES is not None and _SUPABASE_AUTH is not None:
-        role_err = _require_examiner_role(request)
-        if role_err:
-            return role_err
-        return JSONResponse({"required": False, "authority": "postgres"})
+    """GET /portal/api/case/activate/challenge — re-auth mode probe for activation.
 
+    CL3b (B-MVP-017): this endpoint no longer mints a file-HMAC nonce/salt — that
+    plane is deleted. It is now a thin probe the SPA (Header.jsx) calls before
+    activating a case to learn whether DB (Postgres) authority is wired:
+
+      * DB + Supabase authority -> ``{"required": false, "authority": "postgres"}``;
+        the SPA activates directly and ``post_case_activate`` re-verifies the
+        operator's password against Supabase before ``set_active_case`` (B-MVP-021).
+      * file-backed fallback (no active-case service) -> ``{"required": true,
+        "authority": "supabase"}``; activation still re-auths, but the operator
+        confirms their password which ``post_case_activate`` checks against
+        Supabase GoTrue (fail closed). No local nonce/salt is issued.
+    """
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
 
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    if _ACTIVE_CASES is not None and _SUPABASE_AUTH is not None:
+        return JSONResponse({"required": False, "authority": "postgres"})
 
-    lockout_msg = _check_commit_lockout(f"activate:{examiner}")
-    if lockout_msg:
-        return JSONResponse({"error": lockout_msg}, status_code=429)
-
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return JSONResponse(
-            {"error": "No password configured. Run: sift config --setup-password"},
-            status_code=403,
-        )
-
-    # Purge expired challenges
-    now = time.time()
-    expired = [
-        k for k, v in _activation_challenges.items() if now - v["created_at"] > _ACTIVATION_CHALLENGE_TTL
-    ]
-    for k in expired:
-        del _activation_challenges[k]
-
-    challenge_id = secrets.token_hex(16)
-    nonce = secrets.token_hex(32)
-    _activation_challenges[challenge_id] = {
-        "nonce": nonce,
-        "examiner": examiner,
-        "created_at": now,
-        "bound_ip": request.client.host,
-    }
-
-    return JSONResponse(
-        {
-            "challenge_id": challenge_id,
-            "nonce": nonce,
-            "salt": entry["salt"],
-            "iterations": 600000,
-            "hash_algorithm": "SHA-256",
-        }
-    )
+    return JSONResponse({"required": True, "authority": "supabase"})
 
 
 async def post_case_activate(request: Request) -> JSONResponse:
@@ -4744,6 +4556,14 @@ async def post_case_activate(request: Request) -> JSONResponse:
         case_id = str(body.get("case_id") or body.get("case_key") or "").strip()
         if not case_id:
             return JSONResponse({"error": "Missing case_id"}, status_code=400)
+        # B-MVP-021 (CL3b): case activation is a CLAUDE.md sensitive action. The
+        # DB-active branch (the live VM path) previously activated without any
+        # re-auth. Re-verify the operator's password against Supabase (fail
+        # closed) BEFORE set_active_case so a wrong password / unreachable
+        # control plane denies the activation with no state change and no audit.
+        reauth_err = await _supabase_reverify(request, body)
+        if reauth_err:
+            return reauth_err
         try:
             case = _ACTIVE_CASES.set_active_case(case_id, _request_principal(request))
             return JSONResponse({"ok": True, **case.as_dict()})
@@ -4754,7 +4574,7 @@ async def post_case_activate(request: Request) -> JSONResponse:
     if lockout_msg:
         return JSONResponse({"error": lockout_msg}, status_code=429)
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -4808,7 +4628,7 @@ async def post_case_create(request: Request) -> JSONResponse:
     if role_err:
         return role_err
 
-    err = _must_reset_check(examiner)
+    err = _must_reset_check(request)
     if err:
         return err
 
@@ -5355,15 +5175,6 @@ def _record_report_metadata(
         logger.warning("DB record_report failed: %s", exc)
 
 
-async def get_report_challenge(request: Request) -> JSONResponse:
-    """Issue a re-auth challenge for report generation/export (F-MVP-4).
-
-    Thin alias over the evidence-chain challenge so the portal can confirm the
-    operator's password before generating or exporting a report.
-    """
-    return await get_evidence_chain_challenge(request)
-
-
 async def get_reports(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -5772,7 +5583,6 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/portal/state", get_portal_state, methods=["GET"]),
         Route("/api/jobs/{job_id}", get_job_status, methods=["GET"]),
         Route("/api/reports", get_reports, methods=["GET"]),
-        Route("/api/reports/challenge", get_report_challenge, methods=["GET"]),
         Route("/api/reports/generate", generate_report_route, methods=["POST"]),
         Route("/api/reports/{id}/save", save_report_route, methods=["POST"]),
         Route("/api/reports/{id}", get_report_by_id, methods=["GET"]),
@@ -5794,12 +5604,10 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/iocs", get_iocs, methods=["GET"]),
         Route("/api/summary", get_summary, methods=["GET"]),
         Route("/api/evidence/{path:path}/verify", verify_evidence, methods=["POST"]),
-        Route("/api/commit/challenge", get_commit_challenge, methods=["GET"]),
         Route("/api/commit", post_commit, methods=["POST"]),
         # Phase 16a: evidence chain intake
         Route("/api/evidence/chain/status", get_evidence_chain_status, methods=["GET"]),
         Route("/api/evidence/chain/rescan", post_evidence_chain_rescan, methods=["POST"]),
-        Route("/api/evidence/chain/challenge", get_evidence_chain_challenge, methods=["GET"]),
         Route("/api/evidence/chain/seal", post_evidence_chain_seal, methods=["POST"]),
         Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
         Route("/api/evidence/chain/delete", post_evidence_chain_delete, methods=["POST"]),
@@ -5865,50 +5673,6 @@ def _verify_origin(request: Request) -> JSONResponse | None:
     if not origin_host or origin_host != host:
         if origin_host.replace("localhost", "127.0.0.1") != host.replace("localhost", "127.0.0.1"):
             return JSONResponse({"error": f"Origin mismatch: {origin_host} vs {host}"}, status_code=400)
-    return None
-
-
-def _verify_password_challenge_helper(body: dict, client_host: str, examiner: str) -> JSONResponse | None:
-    challenge_id = body.pop("challenge_id", None)
-    response_hmac = body.pop("response", None)
-
-    if not challenge_id or not response_hmac:
-        return JSONResponse(
-            {"error": "Missing challenge_id or response"}, status_code=400
-        )
-
-    challenge = _challenges.pop(challenge_id, None)
-    if not challenge:
-        return JSONResponse({"error": "Invalid or expired challenge"}, status_code=401)
-
-    if challenge.get("bound_ip") != client_host:
-        return JSONResponse({"error": "Challenge IP mismatch"}, status_code=403)
-
-    now = time.time()
-    if now - challenge["created_at"] > _CHALLENGE_TTL:
-        return JSONResponse({"error": "Challenge expired"}, status_code=401)
-
-    if challenge["examiner"] != examiner:
-        return JSONResponse({"error": "Challenge/examiner mismatch"}, status_code=401)
-
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    if not entry:
-        return JSONResponse({"error": "No password configured"}, status_code=403)
-
-    try:
-        stored_hash = bytes.fromhex(entry["hash"])
-    except (ValueError, KeyError):
-        logger.error("Corrupt password entry for examiner %s", examiner)
-        return JSONResponse({"error": "Password data corrupted"}, status_code=500)
-
-    expected = hmac_mod.new(
-        stored_hash, challenge["nonce"].encode(), "sha256"
-    ).hexdigest()
-    if not hmac_mod.compare_digest(expected, response_hmac):
-        _record_commit_failure(examiner)
-        return JSONResponse({"error": "Incorrect password"}, status_code=401)
-
-    _clear_commit_failures(examiner)
     return None
 
 
