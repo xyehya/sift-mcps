@@ -5,6 +5,7 @@
   "tier": "addon",
   "transport": "stdio",
   "namespace": "kb",
+  "default_case_scoped": false,
   "instructions": "Use this backend to semantically search the shared IR/DFIR knowledge corpus (Sigma, MITRE ATT&CK, Atomic Red Team, Splunk, KAPE, Velociraptor, LOLBAS, GTFOBins, and more). It is a derived/reference plane that provides grounding context only; it is NOT case evidence and holds no authority over cases, evidence seal, findings, or reports. Correlate retrieved knowledge with case artifacts before acting on it.",
   "authority_contract": {
     "non_authoritative": true,
