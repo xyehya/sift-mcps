@@ -60,7 +60,7 @@ Do not paste the password into any committed artifact.
 | 9 | RAG/HF offline + model identity | HIGH (offline) / MED | HR3 (B-MVP-004) | cached model is **`BAAI/bge-base-en-v1.5`**, NOT the HR1 allowlist — contradicts HR1 §13 |
 | 6 | OpenSearch security plugin disabled | MED (lab, accepted) | HR3 (B-MVP-005) | security plugin off (HTTP 400), cluster yellow, 127.0.0.1 only — **accepted** per B-MVP-005 |
 | 5 | Docker container hardening | MED | HR3 (B-MVP-005) | OpenSearch runs **non-root (User=1000)** but **no cap_drop / no-new-privileges / writable rootfs** |
-| 8 | Postgres RLS not FORCEd | MED / HIGH (DSN leak) | report-only (B-MVP-013) | all 31 `app.*` tables **RLS-enabled, 0 FORCEd**; service-role bypasses (B-MVP-013) |
+| 8 | Postgres RLS not FORCEd | MED (reduced from HIGH) | DB1 **DONE**; HR3 (key rotation) | all 31 `app.*` tables **RLS-enabled**; FORCE adopted in DB1 (`202606131000`); service-role carries BYPASSRLS (unaffected); key rotation still open (HR3) |
 | 14 | Hayabusa unpinned/unverified download | MED | HR3 (B-MVP-004) | binary present, installed from "latest", no checksum recorded |
 | 3 | uv `curl\|sh` bootstrap unpinned | MED | HR3 (B-MVP-004) | install-time supply chain |
 | 1 | Host firewall default-deny | MED (lab) / HIGH (exposed) | HR3/operator | **ufw inactive**; only docker-managed nft tables present |
@@ -348,15 +348,36 @@ batch reports RLS posture read-only — **enabled but not FORCEd**).
     `worker_heartbeats`. (Tables with `|1` have one policy; the listed
     zero-policy ones rely on default-deny.)
 
-  > **Verdict:** RLS is **enabled but not FORCEd** on every `app.*` table. The
-  > Gateway connects with the **service-role** credential, which **bypasses RLS**
-  > (Postgres: table owners / `BYPASSRLS` / service-role bypass unless
-  > `FORCE ROW LEVEL SECURITY`). So RLS is real defence-in-depth for non-service
-  > roles but is **not** the live boundary — the Gateway is. This matches the locked
-  > architecture (Gateway is the only policy boundary).
-- **Threats.** If the service-role DSN leaks (and it is the **demo** value — §7), an
-  attacker reads all tenants directly because RLS is not FORCEd against the
-  service-role connection.
+  > **Verdict (pre-DB1):** RLS was **enabled but not FORCEd** on every `app.*`
+  > table. The Gateway connects with the **service-role** credential, which
+  > **bypasses RLS** (Postgres: table owners / `BYPASSRLS` / service-role bypass
+  > unless `FORCE ROW LEVEL SECURITY`). So RLS is real defence-in-depth for
+  > non-service roles but is **not** the live boundary — the Gateway is. This
+  > matches the locked architecture (Gateway is the only policy boundary).
+
+- **BATCH-DB1 remediation (2026-06-13) — FORCE adopted.**
+  Migration `202606131000_force_rls_app_tables.sql` adds
+  `ALTER TABLE app.<t> FORCE ROW LEVEL SECURITY` for all 31 RLS-ENABLED tables.
+  - `FORCE ROW LEVEL SECURITY` makes RLS apply to the table OWNER role too.
+  - Supabase `service_role` carries `BYPASSRLS` (Postgres privilege) and is
+    **NOT affected** by FORCE — the gateway's own queries are unchanged.
+  - The several zero-policy tables now also deny the owner role by default.
+  - The migration is idempotent (re-FORCEing a FORCEd table is a no-op).
+
+  Operator verification query (emit count only; expect 0):
+  ```sql
+  select count(*) from pg_class
+  where relkind='r'
+    and relnamespace='app'::regnamespace
+    and relrowsecurity=true
+    and relforcerowsecurity=false;
+  -- expected after DB1: 0
+  ```
+
+- **Threats.** If the service-role DSN leaks (and it is the **demo** value — §7),
+  an attacker using the service-role credential bypasses RLS regardless (BYPASSRLS).
+  FORCE does not change that; the primary mitigation remains key rotation (HR3/§7).
+  FORCE closes the owner-role bypass gap for all other credentials.
 - **Checks (read-only).**
   ```sql
   -- posture table (counts only):
@@ -364,25 +385,23 @@ batch reports RLS posture read-only — **enabled but not FORCEd**).
          count(*) filter (where relrowsecurity)      rls_enabled,
          count(*) filter (where relforcerowsecurity) rls_forced
   from pg_class join pg_namespace on relnamespace=pg_namespace.oid
-  where nspname='app' and relkind='r';      -- verified: 31 | 31 | 0
+  where nspname='app' and relkind='r';
+  -- pre-DB1 verified: 31 | 31 | 0
+  -- post-DB1 expected: 31 | 31 | 31
   select tablename, count(*) from pg_policies where schemaname='app' group by 1;
   ```
   RAG knowledge-only invariant (NW4 trigger) — confirm derived RAG is blocked:
   ```sql
   select tgname from pg_trigger where tgrelid='app.rag_chunks'::regclass;  -- _block_derived_rag_insert
   ```
-- **Remediation plan.** **B-MVP-013 DECIDED: report-only here; no schema change
-  without a separate operator go-ahead.** The high-leverage mitigation is rotating
-  the demo service-role/DSN (§7, HR3), which removes the cheap key. FORCEing RLS on
-  control-plane tables is a schema change out of HR3's safe-installer scope and needs
-  its own fork.
-- **Residual risk.** Demo service-role key + non-FORCEd RLS = single-credential read
-  of all control-plane data if the DSN leaks. Mitigated by localhost bind + §7
-  rotation.
-- **Risk rating.** MEDIUM (Gateway is the boundary) / HIGH (if DSN leaks, given demo
-  key).
-- **Owner batch.** HR3 (key rotation removes the cheap exploit); RLS-FORCE is a
-  **fork candidate** (operator decision, schema change).
+- **Remediation plan.** B-MVP-013 report-only phase complete (HR2). FORCE adopted in
+  BATCH-DB1 (2026-06-13). Remaining high-leverage mitigation: rotate the demo
+  service-role/DSN (§7, HR3), which removes the cheap credential.
+- **Residual risk.** FORCE closes the owner-bypass gap. The service-role BYPASSRLS is
+  inherent to Postgres; mitigated by key rotation (HR3) and localhost bind.
+- **Risk rating.** MEDIUM (Gateway is the boundary; demo key residual risk until HR3
+  rotation) — reduced from HIGH (if DSN leaks) now that FORCE is in place.
+- **Owner batch.** DB1 (FORCE — DONE); HR3 (key rotation, removes cheap exploit).
 
 ## 9. RAG / Hugging Face / sentence-transformers (B-MVP-004)
 
