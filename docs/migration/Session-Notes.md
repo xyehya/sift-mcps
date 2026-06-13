@@ -13,6 +13,62 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-14 - DB-audit unit landed: run_command/add-on audit detail + approval ledger DB hash chain (security-reviewed, live-proven)
+
+Status: DONE (local main, not pushed; deployed + live-verified on VM). Built by two
+parallel opus worktree agents (S1, S2), adversarially security-reviewed by a third,
+findings fixed, reconciled into main, deployed, and proven on the live Supabase/gateway.
+
+Commits: 8100ed1 (S1) + f8953f1 (S2) + 4db84b3 (merge) + d830511 (S3 doc) +
+831e71f (sec fixes F1-F5) + c24b60b (install SIFT_DB_ACTIVE wiring).
+
+S1 — audit DETAIL to DB (closes the LV1 "run_command detail dropped" gap):
+- The gateway MCP envelope (AuditEnvelopeMiddleware) now records REDACTED tool
+  arguments (pre-dispatch) and a bounded result_summary + run_command provenance
+  `detail` (post-dispatch) into app.audit_events.details — for core AND proxied
+  add-on tools. Redaction reuses response_guard (redact_structured +
+  redact_paths_structured, override_active=False) then bounds; no secret/abs path
+  reaches details. The misleading DB-mode "Audit write failed" warning is retired.
+- install.sh now writes SIFT_DB_ACTIVE=1 to control-plane.env when a DSN is set, so
+  the gateway AND the async job worker (no per-request AuthorityContext) agree on
+  DB-authority mode. Set live on the VM.
+- LIVE PROOF: run_command via MCP -> NO warning; call-row details.arguments captured;
+  result-row details.detail = {exit_code, provenance, stages}; redaction probe ->
+  `/cases/...` collapsed to relative, `/var/lib/sift/...` -> [REDACTED:absolute_path],
+  zero raw sensitive paths in the DB.
+
+S2 — HMAC ledger -> DB-only (FORK-2 closed):
+- Retired the file HMAC ledger (verification.py write_ledger_entry/compute_hmac
+  deleted). Approval-commit events now go to app.approval_commit_events, an
+  append-only per-case SHA-256 hash chain (prev_hash/event_hash) + heads tip,
+  appended atomically by SECURITY DEFINER RPC, immutable via append-only triggers.
+  Keyless (mirrors the locked evidence_custody pattern); keyed-MAC detached
+  verification flagged as a separate operator fork, not implemented.
+- LIVE PROOF (migration 202606141200 applied to Supabase): chain links correctly,
+  head advances, UPDATE/DELETE/TRUNCATE all blocked, F5 (APPROVED=>reauth) and F2
+  (item_id no-'|') checks reject, F4 public-execute revoked; test rows rolled back
+  (zero pollution).
+
+Security review (SHIP-WITH-FIXES) — S1 clean; S2 fixes applied + regression-tested:
+- F1 (HIGH): approval-commit loop attested APPROVED for items the content authority
+  SKIPPED (and could null-bind content). Now driven off the authoritative
+  ReviewResult (request-approved MINUS skipped); missing content_hash is a hard
+  skip surfaced as ledger_failure. +3 regression tests.
+- F2/F3/F4/F5 (LOW/MED): item_id no-delim CHECK; BEFORE TRUNCATE triggers; REVOKE
+  EXECUTE FROM public on both RPCs; APPROVED=>non-null reauth CHECK + reauth FK on
+  delete RESTRICT.
+
+S3 — docs/operator/case-directory-layout.md: every case dir/file role + DB-authority
+vs mirror, the app.audit_events details-by-source schema, and the new approval ledger.
+
+Gate: sift-gateway 496, sift-core 480, case-dashboard 361, doc validators OK.
+
+OPEN BACKLOG (B-MVP, hardening, non-blocking): the locked app.evidence_custody_events
+pattern shares F2/F3/F4 (|-delimited hash canonicalization, no TRUNCATE guard, no
+explicit revoke-from-public). Backfill the same three fixes there in a dedicated
+migration; not touched here to avoid editing the locked evidence-chain migration.
+Also: keyed-MAC detached approval-ledger verification (operator fork) remains open.
+
 ### 2026-06-13 - LV1 follow-up: add-on outputSchema made MCP-spec compliant (full tool aggregation unblocked)
 
 Status: DONE (committed local main 5e61c55, not pushed; deployed + live-proven on VM).
