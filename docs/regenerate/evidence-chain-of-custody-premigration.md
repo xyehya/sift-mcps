@@ -1,4 +1,17 @@
-# AgentIR — Evidence Chain of Custody
+# AgentIR — Evidence Chain of Custody (PRE-MIGRATION ARCHIVAL)
+
+> **ARCHIVAL / HISTORICAL — RG1 (2026-06-13).** This document describes the
+> pre-migration file-backed evidence chain from the original AgentIR product. It is
+> retained for historical reference. The current authoritative evidence lifecycle is
+> documented in `docs/operator/state-authority-map.md` (BATCH-OR2) and in the
+> `data-flows-and-lifecycles.md` lifecycle 4 above (updated by BATCH-V1 migration).
+>
+> The current system uses **Postgres DB authority** (`app.evidence_custody_events`,
+> `app.evidence_chain_heads`, `app.evidence_seal` RPC) rather than the file-backed
+> `evidence-manifest.json` / `evidence-ledger.jsonl` described here. The file forms
+> are now export/proof artifacts only, not the authority plane. The `~/.sift/gateway.yaml`
+> config path referenced below is now `/var/lib/sift/.sift/gateway.yaml` (BATCH-HR3).
+> Supabase/Postgres is the single authority for the live deployment.
 
 Chain of custody is the documented, unbroken record of who handled evidence, when, and what state it was in. In digital forensics, it is the difference between an admissible report and a dismissed case.
 

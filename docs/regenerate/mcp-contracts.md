@@ -1,7 +1,10 @@
 # MCP Contracts
 
-Status: filled by BATCH-PDOC2 (verified inventory). Validation owner: BATCH-PDOC2 and BATCH-AUT1.
-Last updated: 2026-06-09.
+Status: archival — superseded by `docs/add-ons/spec.md` (tool contracts),
+`docs/operator/maintenance-guide.md` (operator credential and scope ops), and
+`docs/add-ons/author-guide.md` (add-on manifest). Updated by BATCH-RG1 (2026-06-13)
+to mark stale `rag_search_case` content; historical detail is preserved below.
+Last updated: 2026-06-13 (RG1 corrections applied on top of original 2026-06-09 entry).
 
 ## Scope
 
@@ -27,8 +30,18 @@ Tools come from three places:
    `gateway.job_service` is wired); `rag_search_case` (`rag_bridge.py`, registered only
    when `gateway.rag_query_service` is wired).
 3. **Add-on proxy tools** — mounted from registered backends' manifests
-   (`_mount_addon_proxies`), namespaced and renamed per manifest. These are
-   demo-optional and out of scope for the demo-critical contracts below.
+   (`_mount_addon_proxies`), namespaced and renamed per manifest. These include
+   `opensearch-mcp` tools (e.g. `opensearch_search`) and `forensic-rag-mcp` knowledge
+   tools (`kb_search_knowledge`, `kb_list_knowledge_sources`, `kb_get_knowledge_stats`).
+
+> **RG1 correction (2026-06-13):** The gateway-local `rag_search_case` shim (formerly in
+> `rag_bridge.py`) was **removed** in BATCH-OSX-RAG / BATCH-NW2. The file
+> `packages/sift-gateway/src/sift_gateway/rag_bridge.py` no longer exists. RAG is now
+> served entirely through the `forensic-rag-mcp` add-on backend using the `kb_*`
+> tool names above (source: `packages/forensic-rag-mcp/src/rag_mcp/__init__.py`,
+> `server.py`). Any reference in this document to `rag_search_case` is **historical**;
+> see `docs/add-ons/spec.md` and `docs/operator/rag-and-search-maintenance.md` for
+> the current RAG surface.
 
 Each tool carries `meta.category` and `meta.recommended_for_phase`
 (`_CORE_TOOL_CATEGORIES` / `_CORE_TOOL_PHASES`, mcp_server.py:41-71) so the agent can
@@ -65,7 +78,7 @@ live-proven where a BATCH-V1 block names them.
 | `run_command_job` | detection / TRIAGE | **no** | `tool:run_command_job` | live-proven (BATCH-V1 `884c3641…`; **AUT1** `b58fb7a2…` → pollable UUID) |
 | `ingest_job` | ingest / INGEST | **no** | `tool:ingest_job` | live-proven (job `e6572af3…`, indexed 1) |
 | `job_status` | ingest / INGEST | yes | `tool:job_status` | **live-proven (AUT1)**: `b58fb7a2…` → `succeeded`; `job_not_found` for missing UUID; malformed id → typed `invalid_job_id` (AUT1 fix) |
-| `rag_search_case` | knowledge-rag / CORRELATE | yes | `tool:rag_search_case` | live-proven BATCH-V1 (`status=ok`), but **AUT1-B2: ABSENT from the live agent catalog** — only registered when `gateway.rag_query_service` is wired |
+| ~~`rag_search_case`~~ | **REMOVED (RG1)** | — | — | **RG1 (2026-06-13): tool removed** in BATCH-OSX-RAG. Replaced by `kb_search_knowledge` / `kb_list_knowledge_sources` / `kb_get_knowledge_stats` in the `forensic-rag-mcp` add-on (namespace `kb`). Historical note: was live-proven BATCH-V1 (`status=ok`), absent from live catalog (AUT1-B2). |
 | `record_finding` | findings / FINDINGS | **no** | `tool:record_finding` | live-proven (`F-hermes-v1-gate-001`; AUT1: incomplete finding REJECTED with provenance guidance) |
 | `record_timeline_event` | findings / FINDINGS | **no** | `tool:record_timeline_event` | live-proven |
 | `manage_todo` | findings / FINDINGS | **no** | `tool:manage_todo` | live-proven (AUT1: create→list→complete) |
@@ -317,7 +330,14 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
   repeated polling of a large-output job re-consumes context. Poll sparingly and
   stop at the first terminal state.
 
-### `rag_search_case` — CORRELATE, read-only (live-proven)
+### `rag_search_case` — HISTORICAL (removed in BATCH-OSX-RAG / BATCH-NW2)
+
+> **RG1 correction (2026-06-13):** `rag_search_case` no longer exists. The gateway
+> `rag_bridge.py` was removed. Use `kb_search_knowledge`, `kb_list_knowledge_sources`,
+> and `kb_get_knowledge_stats` through the `forensic-rag-mcp` add-on (namespace `kb`).
+> The add-on contract is in `docs/add-ons/spec.md`. The content below is historical only.
+
+### `rag_search_case` — CORRELATE, read-only (historical; removed)
 - Description: "Search the case-scoped pgvector RAG plane and shared forensic knowledge.
   Returns path-free, provenance-linked snippets."
 - Input (rag_bridge.py:97): plain object schema for client compatibility; runtime
@@ -376,7 +396,7 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
 
 | Class | Tools |
 | --- | --- |
-| Safe-read (read-parallel) | `case_info`, `evidence_info`, `capability_guide`, `get_tool_help`, `list_existing_findings`, `rag_search_case`, `job_status`, `manage_todo` (list) |
+| Safe-read (read-parallel) | `case_info`, `evidence_info`, `capability_guide`, `get_tool_help`, `list_existing_findings`, `kb_search_knowledge` (via add-on), `job_status`, `manage_todo` (list) | (`rag_search_case` removed — see RG1 note above) |
 | Job-parallel (durable) | `ingest_job`, `run_command_job` |
 | Serialized-mutation (case-serialized) | `run_command`, `record_finding`, `record_timeline_event`, `manage_todo` (create/update/complete) |
 | Operator-only / denied to agent | `evidence_register` (filtered), portal seal/ignore/retire/approve (REST, not MCP) |

@@ -1,7 +1,12 @@
 # Product Architecture
 
-Status: filled (BATCH-PDOC1). Validation owner: BATCH-PDOC1.
-Last updated: 2026-06-09.
+Status: archival — architecture planes, product thesis, and journeys remain accurate.
+Updated by BATCH-RG1 (2026-06-13):
+- `rag_search_case` removed; RAG is now `kb_*` via `forensic-rag-mcp` add-on.
+- `windows-triage-mcp` removed from repo and from the derived plane listing.
+- Component table corrected to reflect current service identity (`sift-service`).
+See `docs/add-ons/spec.md` for the authoritative core/add-on boundary.
+Last updated: 2026-06-13 (RG1 corrections applied on top of original 2026-06-09 entry).
 
 This document is the product-facing architecture reference. It is grounded in the
 current code on `revamp/spg-v1` and the live BATCH-V1 cutover evidence in
@@ -77,9 +82,8 @@ flowchart LR
   subgraph DERIVED["Derived / reference plane (non-authoritative)"]
     OS["OpenSearch<br/>search, timeline, IOC"]
     RAG[("pgvector RAG<br/>app.rag_chunks knowledge")]
-    CTI["OpenCTI add-on (query-only)"]
-    WTR["Win-triage add-on (query-only)"]
-    FK["Forensic knowledge pack"]
+    CTI["OpenCTI add-on (query-only) — external add-on"]
+    FK["Forensic knowledge pack (in-process)"]
     REP["Reports / exports<br/>approved-only"]
   end
 
@@ -102,10 +106,9 @@ flowchart LR
   WORKER --> RC
   RC --> PG
   MW -. "case-scoped query tools" .-> OS
-  MW -. "rag_search_case provenance-filtered" .-> RAG
-  MW -. "query-only" .-> CTI
-  MW -. "query-only" .-> WTR
-  MW -. "tool help" .-> FK
+  MW -. "kb_search_knowledge (forensic-rag-mcp add-on)" .-> RAG
+  MW -. "query-only (external add-on)" .-> CTI
+  MW -. "tool help / in-process" .-> FK
   PG -- "approved-only inputs" --> REP
   REP -. "view/download" .-> PORTAL
 ```
@@ -137,7 +140,7 @@ This is the load-bearing security invariant of the product.
   absolute paths and secrets before any agent-visible result is returned
   (`packages/sift-gateway/src/sift_gateway/response_guard.py`,
   `scan_tool_result` / `redact_tool_result` / `redact_structured`). Live proof:
-  the BATCH-V1 report-export and `rag_search_case` leak scans found no `/cases`,
+  the BATCH-V1 report-export and RAG leak scans (then using `rag_search_case`, now replaced by `kb_*` add-on tools) found no `/cases`,
   `/home`, loopback, DB DSN, service-role/password, or OpenSearch strings
   (`Session-Notes.md` 2026-06-08 entries).
 
@@ -192,7 +195,7 @@ sequenceDiagram
   MCP->>PG: policy + audit envelope
   AG->>MCP: ingest_job -> job_id
   AG->>MCP: job_status (poll)
-  AG->>MCP: search / rag_search_case
+  AG->>MCP: opensearch_search / kb_search_knowledge (via add-on)
   MCP->>OS: case-scoped query
   AG->>MCP: record_finding / record_timeline_event (proposals)
 ```
@@ -232,7 +235,7 @@ sequenceDiagram
 Live proof of all four journeys end-to-end is in the BATCH-V1 cutover entry of
 `Session-Notes.md` (2026-06-08): active case `case-v1gate-06081857`, sealed
 evidence with proof exports, pre-seal denial / post-seal allow, OpenSearch
-`ingest_job`, `rag_search_case`, approved-finding report, and DB custody proof
+`ingest_job`, RAG query (then `rag_search_case`, now `kb_*` via add-on), approved-finding report, and DB custody proof
 export.
 
 ## 7. Component Responsibilities
@@ -248,7 +251,7 @@ export.
 | Evidence broker + mount | Detect, register, hash, seal, verify, ignore, retire evidence. | High-integrity source + custody ledger. | `evidence_chain.py`, `evidence_gate.py`, `evidence_watcher.py` |
 | OpenSearch | Search, timeline, IOC over derived parser docs. | Derived/rebuildable, never authority. | `packages/opensearch-mcp/src/opensearch_mcp/**` |
 | pgvector RAG | Shared forensic knowledge + future case-derived context. | Reference/derived grounding. | `packages/forensic-rag-mcp/src/rag_mcp/**`, `202606081400_rag_pgvector.sql` |
-| OpenCTI / Win-triage / Forensic knowledge | Query-only enrichment and reference. | Non-authoritative add-ons. | `packages/opencti-mcp/**`, `packages/windows-triage-mcp/**`, `packages/forensic-knowledge/**` |
+| OpenCTI (external add-on) / Forensic knowledge (in-process) | Query-only enrichment and reference. | Non-authoritative. | `packages/opencti-mcp/**`, `packages/forensic-knowledge/**`. **RG1: windows-triage-mcp removed from repo; future external add-on candidate only.** |
 | Reports | Approved-only report export with custody/provenance appendix. | Export artifact backed by DB. | `reporting.py`, `report_profiles.py`, `202606081500_report_metadata.sql` |
 
 A deeper code map is in `code-structure.md`.

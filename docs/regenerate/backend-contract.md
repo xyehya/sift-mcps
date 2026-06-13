@@ -2,7 +2,13 @@
 
 > **Audience:** add-on authors and operators integrating external MCP backends into
 > the SIFT Protocol Gateway (SPG).
-> **Status:** current as of OSX2 (commit aaa244b — advanced-tool-use per-tool fields).
+> **Status:** archival — superseded by `docs/add-ons/spec.md` (normative contract)
+> and `docs/add-ons/author-guide.md` (worked example). Updated by BATCH-RG1
+> (2026-06-13): `setup-addon.sh` register payload path corrected; OpenCTI core-install
+> language corrected. The manifest schema and lifecycle description below remain
+> accurate; read `docs/add-ons/spec.md` for the current authoritative version.
+>
+> **Original status:** current as of OSX2 (commit aaa244b — advanced-tool-use per-tool fields).
 > **Schema source:** `packages/sift-gateway/src/sift_gateway/sift-backend.schema.json`
 > (JSON Schema draft-07, validates every manifest before registration).
 
@@ -166,10 +172,13 @@ The row stored in `app.mcp_backends` carries: `name`, `namespace`, `transport`,
 
 ### 2.2 Post-install operator path (`scripts/setup-addon.sh`)
 
-For backends NOT bundled with the installer, `scripts/setup-addon.sh` (lines 1–50)
-is a helper that provisions prerequisites, prompts for config, and writes a
-ready-to-submit register payload to `~/.sift/addon-register/<name>.json`. The
-operator then submits via Portal → Backends. This is the same `register` door a
+For backends NOT bundled with the installer, `scripts/setup-addon.sh` is a helper
+that provisions prerequisites, prompts for config, and writes a ready-to-submit
+register payload to `$HOME/.sift/addon-register/<name>.json` (default, controlled
+by `$SIFT_ADDON_REGISTER_DIR`). **RG1 (2026-06-13): AD2 live fix — the operator
+running `setup-addon.sh` writes to their own `~/.sift/addon-register/` (operator
+home), not the service-owned `/var/lib/sift/.sift/` (source:
+`scripts/setup-addon.sh:87-91`).** The operator then submits via Portal → Backends. This is the same `register` door a
 third-party backend uses — `setup-addon.sh` never edits `gateway.yaml` and never
 seeds the DB directly.
 
@@ -311,8 +320,8 @@ names. The raw `CTI_API_KEY` value is **never** stored in `app.mcp_backends` —
 the name `"CTI_API_KEY"` is. The gateway resolves the actual value at mount time.
 
 **Operator path** (external / post-install): run `scripts/setup-addon.sh`, which
-writes `~/.sift/addon-register/cti-lookup-mcp.json`, then submit via
-Portal → Backends → Register. The portal validates the manifest against
+writes `~/.sift/addon-register/cti-lookup-mcp.json` (operator home; see RG1 note
+in §2.2 above), then submit via Portal → Backends → Register. The portal validates the manifest against
 `sift-backend.schema.json` before calling `McpBackendRegistry.register()`.
 
 Either path performs an idempotent upsert into `app.mcp_backends` (ON CONFLICT on

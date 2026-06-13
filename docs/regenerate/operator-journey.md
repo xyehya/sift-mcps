@@ -1,7 +1,9 @@
 # Operator Journey
 
-Status: filled (BATCH-PDOC1). Validation owner: BATCH-PDOC1 and BATCH-AUT2.
-Last updated: 2026-06-09.
+Status: archival — operator journey and re-auth gates remain accurate.
+No stale facts requiring correction were found by BATCH-RG1 (2026-06-13).
+The current authoritative operator manual is `docs/operator/maintenance-guide.md`.
+Last updated: 2026-06-13 (RG1 review — no corrections needed).
 
 The operator is the human authority for evidence handling, case activation,
 credential issuance, review, approvals, and report export. The operator works

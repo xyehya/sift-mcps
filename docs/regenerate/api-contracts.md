@@ -1,7 +1,10 @@
 # API Contracts
 
-Status: filled by BATCH-PDOC2. Validation owner: BATCH-PDOC2.
-Last updated: 2026-06-09.
+Status: archival — REST contracts and auth model remain accurate.
+No stale facts requiring correction were found by BATCH-RG1 (2026-06-13).
+See `docs/operator/maintenance-guide.md` for the current operator login and
+credential flow.
+Last updated: 2026-06-13 (RG1 review — no corrections needed).
 
 ## Scope
 

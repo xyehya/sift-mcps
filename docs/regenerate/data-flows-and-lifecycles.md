@@ -1,7 +1,11 @@
 # Data Flows and Lifecycles
 
-Status: filled (BATCH-PDOC1). Validation owner: BATCH-PDOC1.
-Last updated: 2026-06-09.
+Status: archival — lifecycle diagrams and authority model remain accurate.
+Section 8 (RAG Import / Query Lifecycle) updated by BATCH-RG1 (2026-06-13) to
+remove stale `rag_search_case` references; current RAG surface is `kb_*` via
+`forensic-rag-mcp` add-on. See `docs/operator/rag-and-search-maintenance.md`
+for the current RAG maintenance guide.
+Last updated: 2026-06-13 (RG1 corrections applied on top of original 2026-06-09 entry).
 
 One subsection per lifecycle. Each states its **state transitions** and **where
 authority lives**. Claims are grounded in `supabase/migrations/**`, package
@@ -258,32 +262,47 @@ stateDiagram-v2
 
 ## 8. RAG Import / Query Lifecycle
 
-Import (operator/installer side):
+> **RG1 correction (2026-06-13):** The gateway-local `rag_search_case` shim and
+> `rag_bridge.py` were removed in BATCH-OSX-RAG / BATCH-NW2. The current agent-facing
+> RAG surface is three `kb_*` tools served through the `forensic-rag-mcp` add-on backend
+> (source: `packages/forensic-rag-mcp/src/rag_mcp/server.py`). The import path below
+> remains correct (Chroma bundle → pgvector); the query path has changed.
+
+Import (operator/installer side — unchanged):
 
 ```
 Chroma release bundle -> rag-mcp-import-chroma-pgvector ->
 app.rag_collections / app.rag_documents / app.rag_chunks (kind='knowledge', case_id NULL)
 ```
 
-Query (agent side):
+Current query path (agent side — BATCH-OSX-RAG / NW2 replacement):
 
 ```
-agent rag_search_case(query) -> Gateway PgVectorRagQueryService ->
-pgvector top-k filtered by case/provenance -> redacted results
+agent -> Gateway /mcp -> forensic-rag-mcp add-on (namespace: kb) ->
+  kb_search_knowledge(query, ...) -> PgVectorRagStore ->
+  pgvector top-k filtered (kind='knowledge') -> redacted results
+  kb_list_knowledge_sources() -> distinct source labels
+  kb_get_knowledge_stats()    -> corpus statistics / health probe
+```
+
+Historical (removed) query path — for context only:
+
+```
+agent rag_search_case(query) -> Gateway PgVectorRagQueryService (rag_bridge.py) [REMOVED]
 ```
 
 - `app.rag_collections.kind` (`202606081400_rag_pgvector.sql`,
   `rag_collections_kind_check`): `knowledge` (shared reference, `case_id NULL`)
-  or `derived` (case context, `case_id` set). For the MVP only `knowledge` is
-  populated; case-derived `derived` rows are `Status: TODO`.
-- Chroma is a source artifact only; agents never query Chroma or receive DB
-  credentials/paths (`pgvector_chroma_import.py`; `rag_bridge.py`).
-- Authority: Postgres pgvector. The plane is reference/derived and never
-  authorizes. Tests: `packages/forensic-rag-mcp/tests/test_pgvector_store.py`,
-  `test_pgvector_chroma_import.py`, `packages/sift-gateway/tests/test_g1_rag_bridge.py`.
-- Live proof: `rag_search_case` returned knowledge hits with
-  `has_abs_path=false`, `case_ids=[None]`, leak-clean (`Session-Notes.md`
-  2026-06-08, both RAG entries).
+  only. The `derived` kind (case-scoped) is blocked by trigger
+  `_block_derived_rag_insert` (`202606111200_rag_knowledge_only.sql:147`);
+  case-derived RAG requires an explicit new design.
+- Chroma is a legacy import source only; agents never query Chroma or receive DB
+  credentials/paths (`pgvector_chroma_import.py`).
+- Authority: Postgres pgvector. The plane is reference only and never authorizes.
+  Tests: `packages/forensic-rag-mcp/tests/test_pgvector_store.py`,
+  `test_pgvector_chroma_import.py`.
+- See `docs/operator/rag-and-search-maintenance.md` for current maintenance,
+  re-seeding, and `kb_*` tool reference.
 
 ---
 

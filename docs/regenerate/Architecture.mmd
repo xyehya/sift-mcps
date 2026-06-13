@@ -126,17 +126,21 @@ flowchart TB
     %% current: read from gateway.yaml until D22/F-11 lands; reached ONLY
     %% through the Gateway aggregate policy path)
     %% -------------------------
-    subgraph ADDONS["Add-on MCP Backends - query-only (current gateway.yaml, target mcp_backends)"]
+    %% RG1 (2026-06-13): Diagram is archival/pre-migration state. Current state:
+    %% - opensearch-mcp is a registered core add-on (seeded by install.sh).
+    %% - forensic-rag-mcp is a registered core add-on (seeded by install.sh); tools are kb_*.
+    %% - windows-triage-mcp REMOVED from repo; future external add-on candidate only.
+    %% - opencti-mcp is an EXTERNAL add-on (never seeded by install.sh).
+    %% - gateway.yaml static tokens are legacy fallback; mcp_backends (Postgres) is current.
+    subgraph ADDONS["Add-on MCP Backends - registered in app.mcp_backends (RG1: updated)"]
       direction LR
-      OpenSearchCompat("<b>opensearch-mcp</b><br/>current compatibility add-on until D19<br/>target: core/in-process SIFT tools")
-      OpenCTI("<b>opencti-mcp</b> &rarr; <b>OpenCTI platform</b><br/>platform + worker + redis + rabbitmq + minio<br/>query-only; case_scoped = false")
-      WinTriage("<b>windows-triage-mcp</b><br/>local baseline DBs<br/>query-only; case_scoped = false")
+      OpenSearchCompat("<b>opensearch-mcp</b><br/>core add-on seeded by install.sh<br/>namespace: opensearch")
+      OpenCTI("<b>opencti-mcp</b> &rarr; <b>OpenCTI platform</b><br/>EXTERNAL add-on — not in core install path<br/>query-only; setup via scripts/setup-addon.sh")
+      ForensicRAG("<b>forensic-rag-mcp</b><br/>core add-on seeded by install.sh<br/>namespace: kb — tools: kb_search_knowledge, kb_list_knowledge_sources, kb_get_knowledge_stats")
     end
 
-    %% Note: OpenSearch and RAG are TARGET CORE, not long-term add-ons (D19/D23).
-    %% OpenSearch may still appear through gateway.yaml/proxy compatibility until
-    %% the later OpenSearch-core phase retires its add-on registration.
-    %% RAG retrieval is a core control-plane tool over Supabase pgvector.
+    %% RG1: OpenSearch and forensic-rag-mcp are core add-ons registered in app.mcp_backends.
+    %% RAG retrieval goes through the kb_* tools in forensic-rag-mcp (not a gateway-local shim).
 
     %% -------------------------
     %% Flows
@@ -146,9 +150,9 @@ flowchart TB
 
     Gateway -. "AuthZ, audit,<br/>case + workflow state,<br/><b>ENQUEUE jobs / pipelines</b><br/><i>DB active-case authority per D32</i>" .-> Supabase
     Gateway -. "Mediated case-scoped<br/>search & retrieval<br/><i>target core OpenSearch tools</i>" .-> OpenSearch
-    Gateway -. "OpenSearch compatibility add-on<br/><i>until D19 core move</i>" .-> OpenSearchCompat
-    Gateway -. "Registered add-on tool calls<br/>query-only, audited under active case<br/><i>control-plane registry target per D22</i>" .-> OpenCTI
-    Gateway -. "Registered add-on tool calls<br/>query-only, audited under active case<br/><i>control-plane registry target per D22</i>" .-> WinTriage
+    Gateway -. "Core add-on tool calls (opensearch_*)<br/>seeded by install.sh" .-> OpenSearchCompat
+    Gateway -. "External add-on tool calls (cti_*)<br/>query-only; registered separately" .-> OpenCTI
+    Gateway -. "Core add-on tool calls (kb_*)<br/>seeded by install.sh" .-> ForensicRAG
     OpenCTI -. "opencti_* indices<br/>(scoped role)" .-> OpenSearch
 
     Supabase == "Workers CLAIM durable jobs<br/>(poll + lease)" ==> EXECUTION

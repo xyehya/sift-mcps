@@ -1,7 +1,10 @@
 # Known Limitations and Areas of Improvement
 
-Status: freeze candidate. Validation owner: BATCH-FRZ1.
-Last updated: 2026-06-10.
+Status: archival — partially superseded. Updated by BATCH-RG1 (2026-06-13):
+- Ingest mount privilege row updated: service now runs as `sift-service` (HR3/BATCH-HR3).
+- RAG scope introspection row updated: `rag_search_case` removed; RAG is `kb_*` via add-on.
+- See `docs/operator/maintenance-guide.md` for the current operational state.
+Last updated: 2026-06-13 (RG1 corrections applied on top of original 2026-06-10 entry).
 
 ## Current Known Limitations
 
@@ -9,12 +12,12 @@ Last updated: 2026-06-10.
 | --- | --- | --- | --- |
 | Re-auth | MVP uses a local HMAC/password bridge for sensitive portal actions. | Acceptable if explained clearly; not a custody bypass because Gateway still records the re-auth event and DB transition. | Move to Supabase password re-auth/session verification. |
 | Re-acquisition click proof | The `violated -> sealed` re-acquisition path is deployed and route/unit tested, and live service-RPC proof exists, but the portal click path has not been rerun in this FRZ1 pass. | Do not present a live re-acquire click on the prepared Rocba case unless rerun on a throwaway file first. The custody story can show the already-retired ghost and re-acquired replacement. | Run the click proof on a throwaway case/file: seal small file, modify bytes, rescan to violation, re-seal with reason/HMAC, confirm gate clears. |
-| Ingest mount privilege | Disk-image ingest needs root to mount (`containers.py`: xmount/ewfmount/mount/losetup/qemu-nbd/modprobe nbd/partprobe/umount/fusermount). A narrow audited allowlist exists, but the demo VM's gateway still runs as `sansforensics`, whose blanket `ALL=(ALL) NOPASSWD: ALL` grant masks the allowlist. | Ingest works on the demo VM, but the service identity has more root than it needs. | Run gateway/worker as a dedicated non-admin service user whose only root capability is the mount allowlist, then keep blanket sudo only for the human admin. |
+| Ingest mount privilege | Disk-image ingest needs root to mount (xmount/ewfmount/mount/losetup/qemu-nbd/modprobe nbd/partprobe/umount/fusermount). **RG1 (2026-06-13): RESOLVED in BATCH-HR3** — gateway/worker now run as the dedicated non-admin `sift-service` user with a narrow audited sudoers allowlist (`configs/systemd/sift-gateway.service`, `sift-job-worker.service`). The blanket `sansforensics` sudo is no longer used for service execution. Residual: per-exec kernel sandbox (bwrap/seccomp) still TODO (see IMP-FRZ1-10). | Residual per-exec sandbox only | Per-exec bwrap/LXC sandbox (IMP-FRZ1-10). |
 | Installer re-run | A full destructive `./install.sh` re-run has not been exercised on a throwaway VM. Source now installs `ripgrep`/`acl`, repairs `pyewf` after `uv sync`, renders both Gateway and worker unit files, and wires the runtime + ingest sudoers helpers. | None for the live demo if the prepared VM is used. Risk is reinstall/idempotency drift on a fresh VM. | Run a destructive idempotency pass on a throwaway VM before claiming installer freeze complete. |
 | Offline memory symbols | Volatility now works unprivileged and is live-proven on `Rocba-Memory2.raw`, but a cold offline VM may need Microsoft symbols already cached or staged. | Online/cached demo is OK. Fully offline demo should warm or bundle symbols first. | Bundle common Windows ISF symbols into the install image or pre-warm the case symbol cache before the demo. |
 | run_command progress stderr | Durable forensic tools can put carriage-return progress spam in stderr; output is capped but still noisy. | Cosmetic/context cost only. It does not expose secrets or block the demo. | Filter progress lines in the worker output path while preserving real errors. |
 | Pre-context denials | Some pre-context denials remain Gateway-local security telemetry, not `app.audit_events`. | Accepted MVP behavior; it does not affect authorized demo actions or report eligibility. | Add a DB projector for attributable pre-context denials. |
-| Agent scope introspection | `rag_search_case` is reachable only when the issued agent carries `mcp:*` or `tool:rag_search_case`; the agent cannot self-inspect its granted scopes. | Operator must issue the demo agent with the RAG scope and verify the catalog. | Surface issued scopes or add a catalog self-check tool. |
+| Agent scope introspection | **RG1 (2026-06-13): `rag_search_case` removed.** RAG is now served by the `forensic-rag-mcp` add-on backend (`kb_search_knowledge` etc., namespace `kb`). Scope grammar is unchanged: agent needs `mcp:*` or `namespace:kb` or `tool:kb_search_knowledge` etc. The agent still cannot self-inspect its granted scopes. | Operator must verify the issued scope set covers `kb_*` tools. | Surface issued scopes or add a catalog self-check tool. |
 | RAG authority | Shared forensic knowledge rows are case-neutral (`case_id NULL`). | Correct for reference grounding; not case evidence. The agent must not cite RAG as proof of what happened in the case. | Add case-derived chunks with evidence provenance after ingest. |
 | OpenSearch profile | Single-node OpenSearch can report yellow health. | Acceptable if indexing/search works. | Use a multi-node or replica-adjusted production profile. |
 | Agent-visible file mirrors | `evidence_info` listing and `record_finding` artifact audit checks are DB-backed now. Residual agent-visible context such as `case_info.file_structure`, `agent/findings_list.json`, grounding-score source checks, and some audit summaries can still reflect file mirrors or saved snapshots. | Low if the demo treats DB-backed `case_info` counters, `evidence_info`, findings list, and report authority as the source of truth. | Continue moving advisory/snapshot fields to DB-derived reads, or label them explicitly as snapshots. |
@@ -26,7 +29,7 @@ Last updated: 2026-06-10.
 | ID | Priority | Area | Improvement | Owner batch | Status |
 | --- | --- | --- | --- | --- | --- |
 | IMP-FRZ1-01 | P1 | Portal principal UI | Show token type, display name, active/expired/revoked status, TTL remaining, and a revoke button that disables/dims after successful revoke. | BATCH-FRZ1 | Done |
-| IMP-FRZ1-02 | P1 | Service identity | Move gateway/worker to a dedicated non-admin service user and enforce the narrow mount sudoers allowlist. | Post-freeze hardening | Open |
+| IMP-FRZ1-02 | P1 | Service identity | Move gateway/worker to a dedicated non-admin service user and enforce the narrow mount sudoers allowlist. **RG1 (2026-06-13): RESOLVED in BATCH-HR3** — services now run as `sift-service` (see `configs/systemd/sift-gateway.service`). | BATCH-HR3 | **Done** |
 | IMP-FRZ1-03 | P1 | Installer | Add post-sync `pyewf` relink, `rg` install, and destructive throwaway-VM idempotency coverage. | Post-freeze hardening | Partial: source fixed; throwaway VM proof open |
 | IMP-FRZ1-04 | P1 | Offline symbols | Bundle or pre-warm Windows ISF symbols for fully offline memory demos. | Post-freeze packaging | Open |
 | IMP-FRZ1-05 | P2 | Output polish | Filter carriage-return progress spam from durable job stderr previews. | Post-freeze polish | Open |
@@ -48,8 +51,10 @@ Last updated: 2026-06-10.
   name, active/expired/revoked state, TTL remaining, scopes, and disables/dims
   revoke after success; legacy PR02 token controls are no longer shown in the
   normal Settings page.
-- `rag_search_case` advertises a plain object schema with no top-level
-  composition keys and is live-callable through the 13-tool MCP catalog.
+- **RG1 (2026-06-13): `rag_search_case` removed** — replaced by `kb_search_knowledge`
+  and sibling `kb_*` tools in the `forensic-rag-mcp` add-on (BATCH-OSX-RAG / NW2).
+  The original 13-tool catalog count is now stale; add-on tool count depends on which
+  backends are registered.
 - Volatility cache/HOME/XDG issues are resolved for `Rocba-Memory2.raw`.
 - Logical E01 triage is demo-ready with direct `fls`.
 - Large command outputs can be saved under `agent/run_commands/...` and cited by

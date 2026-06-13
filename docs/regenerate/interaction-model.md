@@ -1,8 +1,9 @@
 # Interaction Model
 
-Status: filled (BATCH-PDOC1, sole owner). Validation owner: BATCH-PDOC1 and
-BATCH-AUT1.
-Last updated: 2026-06-09.
+Status: archival — interaction model and re-auth gates remain accurate.
+Updated by BATCH-RG1 (2026-06-13): `rag_search_case` references updated to reflect
+removal; current RAG tools are `kb_search_knowledge` etc. via `forensic-rag-mcp`.
+Last updated: 2026-06-13 (RG1 corrections applied on top of original 2026-06-09 entry).
 
 This document defines how the human operator and the AI agent interact across the
 Gateway policy boundary: the handoff, the re-auth gates, the tool loops, and
@@ -107,7 +108,7 @@ middleware chain (`policy_middleware.py`):
 | --- | --- | --- |
 | Orientation | `case_info`, `evidence_info`, `get_tool_help` | once oriented |
 | Ingest | `ingest_job` -> `job_status` | job `succeeded`/`failed` |
-| Search/ground | OpenSearch search, `rag_search_case` | enough context gathered |
+| Search/ground | OpenSearch search (`opensearch_search`), `kb_search_knowledge` (via forensic-rag-mcp add-on) | enough context gathered | (`rag_search_case` removed — RG1) |
 | Deeper analysis | `run_command_job`, `run_command` | output captured + hashed |
 | Record | `record_finding`, `record_timeline_event`, `manage_todo`, `list_existing_findings` | proposals staged as `DRAFT` |
 
@@ -124,8 +125,9 @@ Phase-ordered agent loop for the demo case:
 4. Poll: use `job_status` until a terminal state (`succeeded`, `failed`,
    `cancelled`, or `expired`) appears; do not enqueue duplicate jobs only
    because a job is pending.
-5. Ground: use OpenSearch and `rag_search_case` to collect evidence and forensic
-   knowledge context.
+5. Ground: use OpenSearch (`opensearch_search`) and `kb_search_knowledge` (via
+   forensic-rag-mcp add-on) to collect evidence and forensic knowledge context.
+   **RG1: `rag_search_case` removed; use `kb_*` tools through the add-on.**
 6. Deepen: use `run_command_job` only when the allowed command adds specific
    forensic value and can cite controlled output refs.
 7. Propose: record findings/timeline/TODOs with provenance.
@@ -170,7 +172,7 @@ Product-level classification (BATCH-AUT1 produces the per-tool verdict in
 
 | Class | Tools | Rationale |
 | --- | --- | --- |
-| Safe in parallel (read-only) | `case_info`, `evidence_info`, `list_existing_findings`, OpenSearch search, `rag_search_case`, `job_status` | No mutation; idempotent reads. |
+| Safe in parallel (read-only) | `case_info`, `evidence_info`, `list_existing_findings`, `opensearch_search`, `kb_search_knowledge` (via add-on), `job_status` | No mutation; idempotent reads. (`rag_search_case` removed — RG1) |
 | Parallel-safe launch, poll separately | `ingest_job`, `run_command_job` | Durable jobs are independent; the worker serializes via `claim_next_job` (`FOR UPDATE SKIP LOCKED`). |
 | Serialize by state | `record_finding`, `record_timeline_event`, `manage_todo` | Content-hash/version guards reject stale concurrent writes (`investigation_store.StaleVersionError`). |
 | Operator-only / not agent-facing | seal, approve, issue credential, report export | Behind re-auth gates G1–G5. |

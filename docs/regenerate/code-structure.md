@@ -1,7 +1,11 @@
 # Code Structure
 
-Status: filled (BATCH-PDOC1). Validation owner: BATCH-PDOC1.
-Last updated: 2026-06-09.
+Status: archival — package map and trust boundaries are accurate.
+Updated by BATCH-RG1 (2026-06-13) to remove stale `windows-triage-mcp` package
+reference (package removed from repo), remove stale `rag_bridge.py` / `rag_search_case`
+entry (module removed in BATCH-OSX-RAG), and clarify OpenCTI / forensic-rag-mcp
+as external add-ons. See `docs/add-ons/spec.md` for the authoritative add-on boundary.
+Last updated: 2026-06-13 (RG1 corrections applied).
 
 A future-developer onboarding map of the codebase: where each package sits in the
 architecture, the key modules within it, the trust boundaries between packages,
@@ -21,8 +25,8 @@ file presence under `packages/**/tests/`.
 | `packages/opensearch-mcp/src/opensearch_mcp/**` | Derived | Parser ingest, OpenSearch indexing/search, host identity derived metadata. |
 | `packages/forensic-rag-mcp/src/rag_mcp/**` | Reference | pgvector RAG store, seed/import CLIs, query helpers. |
 | `packages/forensic-knowledge/src/forensic_knowledge/**` | Reference | Local forensic reference data + guidance. |
-| `packages/opencti-mcp/src/opencti_mcp/**` | Reference | Query-only OpenCTI enrichment add-on. |
-| `packages/windows-triage-mcp/src/windows_triage_mcp/**` | Reference | Query-only Windows triage baseline add-on. |
+| `packages/opencti-mcp/src/opencti_mcp/**` | Reference | Query-only OpenCTI enrichment — **external add-on** (not in core install path). See `docs/add-ons/spec.md §1`. |
+| ~~`packages/windows-triage-mcp/`~~ | *(removed)* | **RG1 (2026-06-13): package removed from repo.** Windows-triage integrations are a future external add-on candidate; see `docs/add-ons/author-guide.md` for the illustrative example. |
 | `supabase/migrations/**` | Authority | Postgres/Supabase schema, RPCs, views, transitions (`app.*`). |
 | `configs/**` | Infra | Gateway, systemd, auditd, AppArmor, service templates. |
 | `scripts/**` | Infra | `validate_docs.py`, `validate_migration_docs.py`, agent runtime setup. |
@@ -45,7 +49,7 @@ file presence under `packages/**/tests/`.
 | `evidence_watcher.py` | inotify drift watcher (TTL fallback when inotify unavailable). |
 | `response_guard.py` | Path/secret redaction (`scan_tool_result`, `redact_tool_result`, `redact_structured`). |
 | `jobs.py`, `job_tools.py` | `JobService.enqueue_job` (path-free public spec); tool specs `ingest_job` / `run_command_job` / `job_status`. |
-| `rag_bridge.py` | `PgVectorRagQueryService` + `rag_search_case` handler. |
+| ~~`rag_bridge.py`~~ | **RG1 (2026-06-13): module removed** in BATCH-OSX-RAG. RAG is now served through the `forensic-rag-mcp` add-on backend (`kb_search_knowledge`, `kb_list_knowledge_sources`, `kb_get_knowledge_stats`). |
 | `rate_limit.py`, `audit_helpers.py`, `oplog.py` | Rate limiting, audit envelope helpers, operation log. |
 | `mcp_backends_registry.py`, `backends/` | Backend registry + add-on proxies. |
 
@@ -80,11 +84,16 @@ file presence under `packages/**/tests/`.
 identity — never case authority), `gateway.py` / `tools.py` (gateway-facing
 search/timeline tools).
 
-### forensic-rag-mcp (reference plane)
+### forensic-rag-mcp (reference plane — external add-on backend)
 
-`pgvector_store.py` (query/store), `pgvector_seed.py` (direct model-backed corpus seed) +
-`pgvector_chroma_import.py` (explicit Chroma compatibility import),
-`server.py` / `tool_metadata.py` (RAG MCP surface).
+**RG1 (2026-06-13):** Runs as a registered MCP add-on backend (namespace `kb`), not
+an in-process gateway module. Core modules: `pgvector_store.py` (query/store),
+`pgvector_seed.py` (direct model-backed corpus seed),
+`pgvector_chroma_import.py` (legacy Chroma-to-pgvector import for initial seed),
+`server.py` (MCP surface exposing `kb_search_knowledge`, `kb_list_knowledge_sources`,
+`kb_get_knowledge_stats`), `query_embedding.py` (BGE embedding), `tool_metadata.py`.
+The gateway-local `rag_bridge.py` (`rag_search_case`) is removed; all RAG queries
+go through this add-on.
 
 ### case-dashboard (human/policy)
 
@@ -123,7 +132,7 @@ flowchart LR
   CORE --> PG
   CORE --> OS["opensearch-mcp"]
   CORE --> RAG["forensic-rag-mcp"]
-  GW -. query-only .-> ADDONS["opencti-mcp / windows-triage-mcp / forensic-knowledge"]
+  GW -. query-only .-> ADDONS["opencti-mcp (external add-on) / forensic-knowledge (in-process)"]
 ```
 
 - The agent crosses into the system **only** at `sift-gateway`. There is no

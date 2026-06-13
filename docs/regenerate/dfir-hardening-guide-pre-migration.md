@@ -1,4 +1,21 @@
-# AgentIR — DFIR OS Hardening Guide
+# AgentIR — DFIR OS Hardening Guide (PRE-MIGRATION ARCHIVAL)
+
+> **ARCHIVAL / HISTORICAL — RG1 (2026-06-13).** This document describes
+> pre-migration OS hardening from Phase 17 of the original AgentIR product. It is
+> retained as seed material for the current hardening effort. The current authoritative
+> hardening reference is `docs/hardening/component-audit.md` (BATCH-HR2) and
+> `docs/hardening/research-matrix.md` (BATCH-HR1).
+>
+> Key differences from the current deployed state:
+> - "AgentIR" is the old product name; the current product is the Protocol SIFT Gateway.
+> - The old `chattr +i` capability was granted to the `~/.local/share/uv/...python3.11`
+>   binary; the current service runs as `sift-service` from `/opt/sift-mcps/.venv`.
+> - `agentir` in auditd rule keys is the old key name; current rules use `sift_evidence_write`
+>   and `sift_core_write` (source: `configs/audit/99-sift-evidence.rules`).
+> - Service paths, Python interpreter paths, and config dirs have all changed.
+>
+> This document is archival only. Verify every check command against the current
+> `docs/hardening/component-audit.md` before running on a live system.
 
 This guide documents the OS-level evidence hardening implemented in Phase 17. It covers what each mechanism does, what it protects against, how to verify it is active, and — critically — what it cannot protect against.
 

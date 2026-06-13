@@ -1,7 +1,12 @@
 # Security Architecture
 
-Status: validated baseline. Validation owner: BATCH-SEC1.
-Last updated: 2026-06-09.
+Status: archival — control claims and threat boundaries remain accurate.
+Updated by BATCH-RG1 (2026-06-13):
+- Trust boundary table Z5: Windows-triage-mcp removed from repo (external add-on candidate only).
+- Secret file paths: env files moved from `~/.sift/` to `/var/lib/sift/.sift/` (BATCH-HR3).
+- Service identity: services now run as `sift-service`, not `sansforensics` (BATCH-HR3).
+See `docs/hardening/component-audit.md` for the current hardening audit guide.
+Last updated: 2026-06-13 (RG1 corrections applied on top of original 2026-06-09 entry).
 
 This document is the control baseline for the SIFT MCP DFIR platform. It maps the
 `AGENTS.md` "Security invariants" to the code that enforces each one, defines the
@@ -18,10 +23,11 @@ capabilities. The agent gets MCP tools, not raw evidence paths, shell access,
 database credentials, OpenSearch credentials, service-role keys, or report
 approval authority. Two planes carry truth — the Gateway (the single policy
 boundary) and Postgres/Supabase (the authoritative control plane) — and every
-other surface (OpenSearch, RAG, OpenCTI, Windows triage, forensic knowledge,
-local case files, file manifests) is derived, reference, or export only and can
-never authorize a case, seal evidence, approve a finding, or admit data to a
-report.
+other surface (OpenSearch, RAG via forensic-rag-mcp add-on, OpenCTI external add-on,
+forensic knowledge in-process library, local case files, file manifests) is derived,
+reference, or export only and can never authorize a case, seal evidence, approve a
+finding, or admit data to a report. **RG1 (2026-06-13): Windows-triage-mcp removed
+from repo; it is a future external add-on candidate only.**
 
 ## Trust Boundaries
 
@@ -33,7 +39,7 @@ report.
 | Z3 | Postgres/Supabase control plane | Authority plane | service-mediated transition RPCs | authoritative IDs, statuses, read models | RLS + service-only RPCs + append-only hash-chained ledgers (`supabase/migrations/*.sql`) |
 | Z4 | Durable job worker | Path-resolving executor | path-free public job specs + worker-only `spec_internal` | DB job rows, path-scrubbed receipts | scrubbed env, authority-write refusal (`execute/worker.py`, `runtime_acl.py`) |
 | Z4 | Evidence mount | Operator-managed bytes | sealed evidence files | read bytes under ACL/audit | per-case host ACLs, broker/worker-only path resolution |
-| Z5 | Derived/reference planes (OpenSearch, RAG, OpenCTI, Windows triage, forensic knowledge) | Non-authoritative | provenance-stamped docs, query-only lookups | search/intel/context | add-on `authority_contract` enforced by `AddonAuthorityMiddleware` |
+| Z5 | Derived/reference planes (OpenSearch, RAG via forensic-rag-mcp, OpenCTI external add-on, forensic knowledge in-process) | Non-authoritative | provenance-stamped docs, query-only lookups | search/intel/context | add-on `authority_contract` enforced by `AddonAuthorityMiddleware`. **RG1: Windows-triage-mcp removed from repo; it is a future external add-on candidate only.** |
 
 The agent (Z1) and the Gateway (Z2) are the same host process boundary for the
 MVP; the agent reaches tools only through the FastMCP `/mcp` surface. The Gateway
@@ -69,7 +75,7 @@ Each row is an `AGENTS.md` "Security invariants" line and where it is enforced.
 | Sensitive human actions require password/HMAC re-auth | `routes._verify_evidence_hmac`, `_record_reauth_event`; evidence RPCs `evidence_seal/ignore/retire/reacquire` | Constant-time HMAC challenge (TTL + IP-bound + examiner-bound + one-time), producing a `reauth_audit_event_id` that the service-only seal/ignore/retire/reacquire RPCs require (`raise insufficient_privilege` if null). Re-acquisition (re-seal of a legitimately changed item) is held to the same re-auth bar and additionally requires a non-empty operator reason; it supersedes the prior sealed hash in an append-only custody event rather than overwriting history. |
 | Derived/reference planes do not authorize cases or evidence | `policy_middleware.AddonAuthorityMiddleware`; `*/sift-backend.json` `authority_contract` | `required_scopes` and `prohibited_operations` (seal/approve/bypass/...) are enforced fail-closed before backend dispatch; knowledge RAG is case-neutral (`case_id NULL`). |
 | Reports include approved findings and approved supporting data only | `reporting.generate_report_data` (line ~500) | Single gate filters items to exactly `status == "APPROVED"`; in DB-active mode report verification reconciles against the per-row DB `content_hash` (K6) so post-approval tampering is detected. |
-| No raw MCP/service tokens, Supabase secrets, OpenSearch passwords, or VM secrets in repo files | `runtime_acl.build_sandbox_env`; control-plane env handling (`~/.sift/*.env`, chmod 600, systemd `EnvironmentFile`) | Secrets live in VM-local env files, never repo files; the sandbox subprocess env is scrubbed to a tiny allowlist with a post-allowlist secret deny floor. |
+| No raw MCP/service tokens, Supabase secrets, OpenSearch passwords, or VM secrets in repo files | `runtime_acl.build_sandbox_env`; control-plane env handling (`/var/lib/sift/.sift/*.env`, chmod 600, owned by `sift-service`, systemd `EnvironmentFile`) | Secrets live in VM-local env files (under `/var/lib/sift/.sift/` after BATCH-HR3, formerly `~/.sift/`), never repo files; the sandbox subprocess env is scrubbed to a tiny allowlist with a post-allowlist secret deny floor. **RG1: path corrected to `/var/lib/sift/.sift/` (service home of `sift-service`); `~/.sift/` is the legacy operator-home path (now the runtime user's home through the systemd state dir).** |
 
 ## Middleware execution order (defense-in-depth chain)
 

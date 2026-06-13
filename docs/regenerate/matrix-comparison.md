@@ -1,26 +1,45 @@
 # SIFT Skill Coverage Matrix
 
+> **RG1 (2026-06-13):** This document is **archival**. The coverage matrix and skill
+> mapping remain useful context for understanding forensic tool coverage, but several
+> terms and tool references are stale:
+>
+> - `AGENTIR_CASE_DIR` — old environment variable name. Current code uses the case path
+>   resolved server-side via `AuthorityContext`; agents never see the absolute path.
+>   The agent output dir is `agent/` (relative). `run_command` saves outputs under
+>   `agent/run_commands/` (source: `packages/sift-core/src/sift_core/execute/worker.py`).
+> - `windows-triage baselines` — the `windows-triage-mcp` package has been removed from
+>   this repo. Windows-triage integrations are a future external add-on candidate only
+>   (see `docs/add-ons/author-guide.md`). References below are historical.
+> - `idx_*` tool names — these were pre-migration MCP tool names. Current tool names
+>   are in `docs/add-ons/spec.md` and `packages/opensearch-mcp/sift-backend.json`.
+>   `opensearch_search`, `opensearch_ingest_status`, etc. are the current names.
+> - `sift-mcp/run_command` — the tool name is now simply `run_command` through Gateway `/mcp`.
+>
+> See `docs/inventory/sift-tool-inventory.md` for the current live tool inventory.
+
 ## Scope
 
 This compares the SIFT skill workflows against the current `sift-mcps` runtime surface.
 The goal is to identify what the AI agent can use through MCP directly, what is only
 available as a controlled `run_command` fallback, and where the easiest automation wins are.
 
-Assumptions:
+Assumptions (original — see RG1 note above for current corrections):
 
 - "Automated" means available through an MCP workflow that resolves case paths, writes indexed
   structured output, and can be queried later without re-reading large command output.
-- "Fallback" means the host tool exists or can be run through `sift-mcp/run_command`, but the
+- "Fallback" means the host tool exists or can be run through `run_command`, but the
   output is not yet captured as first-class case context.
 - The desired direction is: enrich the pipeline once, index or summarize durable facts, and only
   instruct the agent to run manual commands for narrow gaps.
 - Examiner-controlled evidence intake remains authoritative. The human operator copies files
   into `evidence/`, seals them in the portal, and verifies the evidence ledger. Agent-run
   commands produce analysis outputs, not evidence registrations.
-- Agent-visible fallback outputs should live under `AGENTIR_CASE_DIR/agent/`, with
-  `agent/commands/` as the default command capture location. Do not add new top-level
-  case directories such as `analysis/` or `exports/` unless the portal and case I/O
-  explicitly adopt them.
+- Agent-visible fallback outputs should live under `agent/` (relative path within the case),
+  with `agent/run_commands/` as the default command capture location. **RG1: `AGENTIR_CASE_DIR`
+  is a stale pre-migration env var name; the case dir is never passed to the agent.** Do not add
+  new top-level case directories such as `analysis/` or `exports/` unless the portal and case
+  I/O explicitly adopt them.
 
 ## Grounding Notes
 
@@ -43,7 +62,7 @@ The matrix is a coverage map, not an implementation contract. The safest expansi
 | Memory Forensics / Volatility 3 | `idx_ingest(format="memory", tier=1/2/3)`, `vol-*` indices, triage enrichment for services, Hayabusa↔memory correlation, `coverage_state` in `idx_case_summary` | **Strong (Tier 1)** | No Memory Baseliner; no dump workflows; no YARA-in-memory; no VAD/manual strings workflow | Low to medium. psscan (2,212 docs) and netscan (430 docs) now default Tier 1. Agent can query `hayabusa_corroboration.flagged:true` to surface cross-referenced processes. `coverage_state` shows exactly what ran and what's missing. |
 | Timeline / Plaso | Plaso fallback parsers for selected artifacts; OpenSearch timeline/query tools | Partial | No first-class `.plaso` build/export, `pinfo`, `psort` slice/filter, or merged super-timeline workflow | Medium. Agent can query indexed timelines, but not generate examiner-friendly Plaso exports through MCP. |
 | File System / Carving / TSK | Container inspect, read-only mount/ingest, artifact discovery, safe traversal | Partial | `mmls/fsstat/fls/icat/ils/tsk_recover`, `bulk_extractor`, `photorec`, bodyfile/mactime are not indexed workflows | Medium. Deep filesystem recovery requires manual commands and can bloat context. |
-| Threat Hunting / IOC Sweeps | OpenCTI enrichment, Hayabusa detections, windows-triage baselines, OpenSearch IOC search | Low to partial | YARA/yarac not currently integrated; no generated IOC sweep artifacts; Velociraptor is out-of-band | Medium to high for malware-hunt workflows. Agent lacks a one-call sweep path. |
+| Threat Hunting / IOC Sweeps | OpenCTI enrichment (external add-on), Hayabusa detections, OpenSearch IOC search | Low to partial | YARA/yarac not currently integrated; no generated IOC sweep artifacts; Velociraptor is out-of-band. **RG1: `windows-triage baselines` removed** — package is no longer in repo (external add-on candidate only). | Medium to high for malware-hunt workflows. Agent lacks a one-call sweep path. |
 | Case/report chain of custody | Portal case lifecycle, evidence manifest, HMAC ledger, approvals, reports | Strong | Command-output artifacts from manual fallbacks need standard capture, hashes, and audit/provenance linking | Low for normal workflow; medium when manual commands produce sidecar outputs. |
 
 ## Detailed Skill Mapping
@@ -114,7 +133,7 @@ The matrix is a coverage map, not an implementation contract. The safest expansi
 |---|---|---|---|
 | OpenCTI IOC enrichment | Yes | Strong for indexed IOCs | Keep. |
 | Hayabusa | Yes | Strong for event detections | Keep. |
-| windows-triage baselines | Yes | Strong for paths/services/process context | Keep; expand summary rollups. |
+| windows-triage baselines | **RG1: removed** | `windows-triage-mcp` package no longer in repo. Future external add-on candidate (see `docs/add-ons/author-guide.md`). | Rebuild as an external add-on if needed. |
 | YARA file sweep | No | `yara` was not found in current VM PATH during check | Install/verify YARA, then add a case-aware sweep job. |
 | YARA memory scan | No | Needs rules + memory image path | Add only after file sweep framework exists. |
 | Velociraptor | No | External web console; not local SIFT binary | Treat as out-of-band collection, ingest exported results. |
@@ -142,8 +161,9 @@ Impact: high. Effort: medium.
 For manual fallbacks, the agent should not paste huge command output into chat. Instead:
 
 - MCP response gives a precise command.
-- Command writes to `agent/commands/` or another purpose-specific subdirectory under
-  `AGENTIR_CASE_DIR/agent/`.
+- Command writes to `agent/run_commands/` or another purpose-specific subdirectory under
+  `agent/` (the case-relative output dir; **RG1: `AGENTIR_CASE_DIR` is a stale pre-migration
+  env var** — the case dir is resolved server-side and is never exposed to the agent).
 - A follow-up MCP tool indexes or summarizes the output.
 - Tool response returns file paths and short summaries only.
 
@@ -274,7 +294,8 @@ Example for YARA:
 {
   "coverage_gap": "No YARA sweep has been run for this case.",
   "when_to_run": "Run only after specific IOC strings, hashes, or malware family rules are available.",
-  "command": "yara -r -s /path/to/rules.yar \"$AGENTIR_CASE_DIR/evidence\" > \"$AGENTIR_CASE_DIR/agent/yara/ioc_sweep.txt\"",
+  "command": "yara -r -s /path/to/rules.yar evidence > agent/yara/ioc_sweep.txt",
+  "_rg1_note": "RG1: $AGENTIR_CASE_DIR is a stale pre-migration env var. Pass evidence_refs to run_command; the gateway resolves paths internally.",
   "output_path": "agent/yara/ioc_sweep.txt",
   "next_mcp_step": "Index or summarize only matching rule names, paths, and offsets; do not paste full output into findings.",
   "warning": "Community rules can be noisy. Treat hits as leads, not findings."
@@ -287,7 +308,8 @@ Example for Volatility deep dive:
 {
   "coverage_gap": "Default memory ingest did not run malfind or VAD analysis.",
   "when_to_run": "Run only for suspicious PIDs from pslist/psscan/pstree/cmdline/netstat.",
-  "command": "vol -f \"$AGENTIR_CASE_DIR/evidence/Rocba-Memory.raw\" --renderer json windows.malfind --pid <PID> > \"$AGENTIR_CASE_DIR/agent/memory/malfind_<PID>.json\"",
+  "command": "vol --renderer json windows.malfind --pid <PID>",
+  "_rg1_note": "RG1: $AGENTIR_CASE_DIR is stale. Pass evidence_ref for the memory image via run_command evidence_refs; the gateway resolves the absolute path internally.",
   "output_path": "agent/memory/malfind_<PID>.json",
   "next_mcp_step": "Summarize PID, process name, VAD address, protection, and PE/header indicators.",
   "warning": "malfind has false positives; require corroboration before recording a finding."
