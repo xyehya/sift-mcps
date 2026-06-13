@@ -63,11 +63,21 @@ vs mirror, the app.audit_events details-by-source schema, and the new approval l
 
 Gate: sift-gateway 496, sift-core 480, case-dashboard 361, doc validators OK.
 
-OPEN BACKLOG (B-MVP, hardening, non-blocking): the locked app.evidence_custody_events
-pattern shares F2/F3/F4 (|-delimited hash canonicalization, no TRUNCATE guard, no
-explicit revoke-from-public). Backfill the same three fixes there in a dedicated
-migration; not touched here to avoid editing the locked evidence-chain migration.
-Also: keyed-MAC detached approval-ledger verification (operator fork) remains open.
+DONE 2026-06-14 — evidence-chain hardening backfilled (migration 202606141400, live-verified):
+F3 BEFORE TRUNCATE guards on evidence_custody_events/evidence_versions/evidence_chain_heads;
+F4 revoke-execute-from-public + grant service_role on ALL app SECURITY DEFINER functions
+(required: evidence_append_custody_event had no explicit grantee, ran via PUBLIC default).
+F2 N/A for evidence custody (event_type enum-constrained; no request-supplied free-form
+field; live hash NOT rewritten). Live proof: 3 guards present, public-execute=False/
+service_role=True, 6 custody events intact, TRUNCATE blocked, app USAGE = service_role-only.
+STILL OPEN: keyed-MAC detached approval-ledger verification (operator fork).
+
+CORRECTION to an earlier S-1 note: sealed evidence/ IS write/delete-protected — the seal
+flow applies chattr +i (immutable) / +a via CAP_LINUX_IMMUTABLE on the venv python
+(install.sh configure_immutable_capability; evidence_chain.py clears +i only transiently to
+hash, then re-applies). run_command runs as agent_runtime (no CAP_LINUX_IMMUTABLE) so cp/rm
+cannot overwrite/delete a sealed immutable file; uninstall must chattr -i/-a before rm. The
+prior "cp/rm can mutate evidence/" framing was stale.
 
 ### 2026-06-13 - LV1 follow-up: add-on outputSchema made MCP-spec compliant (full tool aggregation unblocked)
 
