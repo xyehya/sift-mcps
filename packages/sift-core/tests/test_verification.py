@@ -1,79 +1,223 @@
-"""Tests for sift_core.verification HMAC ledger module.
+"""Tests for sift_core.verification — DB-only approval-commit ledger (FORK-2).
 
-CL3b (B-MVP-017): the password-keyed file-HMAC re-auth helpers (``derive_hmac_key``
-/ ``verify_items`` / ``rehmac_entries`` / ``read_ledger`` / ``copy_ledger_to_case``)
-were part of the dead file-HMAC re-auth plane and were deleted with it. The tests
-that covered them were dropped. What remains here covers the file-authority COMMIT
-ledger *writer* (``write_ledger_entry`` + ``compute_hmac`` + case-id validation),
-which is still live (called from the case-dashboard ``_apply_delta`` path).
+The file HMAC ledger writer (``write_ledger_entry`` + ``compute_hmac``) was
+RETIRED: the approval-commit ledger is now an append-only, per-case hash-linked
+DB table (``app.approval_commit_events``) written via
+``app.approval_append_commit_event``. These tests cover the Python helpers that
+drive that RPC, using the repo's fake-psycopg idiom (an in-memory connection that
+simulates the chain RPC) so no live database is required. The trigger/RPC SQL
+itself is exercised against live Postgres (see the unit report).
 """
 
 from __future__ import annotations
 
-import json
+import hashlib
 
 import pytest
 from sift_core.verification import (
-    compute_hmac,
-    write_ledger_entry,
+    _validate_case_id,
+    append_approval_commit_event_db,
+    read_approval_commit_tip_db,
 )
 
-# A 32-byte ledger key (HMAC-SHA256 key length). The password-derived key
-# helper was removed with the dead re-auth plane; the commit ledger writer
-# takes an already-derived key.
-_LEDGER_KEY = bytes(range(32))
+_DSN = "postgresql://service@localhost/sift"
+_CASE = "11111111-1111-1111-1111-111111111111"
 
 
-@pytest.fixture(autouse=True)
-def _patch_verification_dir(tmp_path, monkeypatch):
-    """Redirect VERIFICATION_DIR to tmp_path for all tests."""
-    monkeypatch.setattr("sift_core.verification.VERIFICATION_DIR", tmp_path)
+# --------------------------------------------------------------------------- #
+# Fake psycopg connection that simulates app.approval_append_commit_event /
+# app.approval_commit_tip, including the prev_hash/event_hash chain math so a
+# test can assert the chain links exactly as the SQL does.
+# --------------------------------------------------------------------------- #
 
 
-def test_compute_hmac_deterministic_and_content_bound():
-    """A known key+description produces a stable HMAC; different content differs."""
-    h1 = compute_hmac(_LEDGER_KEY, "Malware found on host A")
-    h2 = compute_hmac(_LEDGER_KEY, "Malware found on host A")
-    assert h1 == h2
-    assert len(h1) == 64  # hex SHA-256
-
-    h3 = compute_hmac(_LEDGER_KEY, "Malware found on host B")
-    assert h3 != h1
-
-
-def test_write_ledger_entry_appends(tmp_path):
-    """write_ledger_entry appends a JSONL line readable from disk."""
-    entry = {
-        "finding_id": "F-001",
-        "type": "finding",
-        "hmac": compute_hmac(_LEDGER_KEY, "Test finding"),
-        "content_snapshot": "Test finding",
-        "approved_by": "alice",
-        "approved_at": "2026-01-01T00:00:00Z",
-        "case_id": "INC-2026-001",
-    }
-    write_ledger_entry("INC-2026-001", entry)
-
-    path = tmp_path / "INC-2026-001.jsonl"
-    assert path.exists()
-    lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    assert len(lines) == 1
-    assert lines[0]["finding_id"] == "F-001"
-    assert lines[0]["content_snapshot"] == "Test finding"
-
-    # Second write appends rather than overwrites.
-    write_ledger_entry("INC-2026-001", {**entry, "finding_id": "F-002"})
-    lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-    assert [line_["finding_id"] for line_ in lines] == ["F-001", "F-002"]
+def _sql_event_hash(prev_hash, case_id, seq, item_id, item_type, action,
+                    content_hash, reauth, details):
+    payload = "|".join([
+        prev_hash or "",
+        str(case_id),
+        str(seq),
+        item_id,
+        item_type,
+        action,
+        content_hash or "",
+        str(reauth or ""),
+        details or "{}",
+    ])
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def test_case_id_validation():
-    """Rejects path traversal and empty case IDs at the write boundary."""
-    with pytest.raises(ValueError, match="path traversal"):
-        write_ledger_entry("../evil", {"finding_id": "F-001"})
+class FakeLedgerDB:
+    """In-memory mirror of app.approval_commit_events + app.approval_commit_heads."""
 
-    with pytest.raises(ValueError, match="path traversal"):
-        write_ledger_entry("../../etc/passwd", {"finding_id": "F-001"})
+    def __init__(self):
+        # case_id -> list of event dicts (append-only)
+        self.events: dict[str, list[dict]] = {}
+        # case_id -> (head_seq, head_hash)
+        self.heads: dict[str, tuple[int, str]] = {}
+        self.committed = 0
 
-    with pytest.raises(ValueError, match="empty"):
-        write_ledger_entry("", {"finding_id": "F-001"})
+
+class FakeCursor:
+    def __init__(self, db: FakeLedgerDB):
+        self._db = db
+        self._result = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=()):
+        s = " ".join(sql.split())
+        if "approval_append_commit_event" in s:
+            (case_id, item_id, item_type, action, content_hash, reauth,
+             approved_by, actor_user, actor_service, details) = params
+            prev_seq, prev_hash = self._db.heads.get(case_id, (0, ""))
+            seq = prev_seq + 1
+            event_hash = _sql_event_hash(
+                prev_hash, case_id, seq, item_id, item_type, action,
+                content_hash, reauth, details,
+            )
+            row = {
+                "id": f"evt-{case_id}-{seq}",
+                "seq": seq,
+                "item_id": item_id,
+                "item_type": item_type,
+                "action": action,
+                "content_hash": content_hash,
+                "prev_hash": prev_hash,
+                "event_hash": event_hash,
+                "approved_by": approved_by,
+            }
+            self._db.events.setdefault(case_id, []).append(row)
+            self._db.heads[case_id] = (seq, event_hash)
+            self._result = (row["id"],)
+        elif "approval_commit_tip" in s:
+            (case_id,) = params
+            seq, head_hash = self._db.heads.get(case_id, (0, ""))
+            count = len(self._db.events.get(case_id, []))
+            self._result = (seq, head_hash, count)
+        else:  # pragma: no cover - defensive
+            self._result = None
+
+    def fetchone(self):
+        return self._result
+
+
+class FakeConnection:
+    def __init__(self, db: FakeLedgerDB):
+        self._db = db
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def cursor(self):
+        return FakeCursor(self._db)
+
+    def commit(self):
+        self._db.committed += 1
+
+
+def _make_connect(db: FakeLedgerDB):
+    def _connect(dsn):
+        assert dsn == _DSN
+        return FakeConnection(db)
+    return _connect
+
+
+# --------------------------------------------------------------------------- #
+# append_approval_commit_event_db — DB hash-chain authority
+# --------------------------------------------------------------------------- #
+
+
+class TestAppendApprovalCommitEvent:
+    def test_append_writes_chained_rows(self):
+        """Two appends form a prev_hash/event_hash chain: event2.prev == event1.event."""
+        db = FakeLedgerDB()
+        connect = _make_connect(db)
+
+        eid1 = append_approval_commit_event_db(
+            _CASE, item_id="F-001", item_type="finding",
+            content_hash="sha256:" + "a" * 64, action="APPROVED",
+            reauth_audit_event_id="audit-1", approved_by="alice",
+            dsn=_DSN, connect=connect,
+        )
+        eid2 = append_approval_commit_event_db(
+            _CASE, item_id="T-002", item_type="timeline",
+            content_hash="sha256:" + "b" * 64, action="APPROVED",
+            reauth_audit_event_id="audit-1", approved_by="alice",
+            dsn=_DSN, connect=connect,
+        )
+
+        assert eid1 and eid2 and eid1 != eid2
+        events = db.events[_CASE]
+        assert len(events) == 2
+        # Genesis event links from the empty prev_hash.
+        assert events[0]["prev_hash"] == ""
+        assert events[0]["seq"] == 1
+        # Second event's prev_hash is the first event's event_hash — chain link.
+        assert events[1]["prev_hash"] == events[0]["event_hash"]
+        assert events[1]["seq"] == 2
+        # event_hash is a sha256:<hex> over canonical fields.
+        for ev in events:
+            assert ev["event_hash"].startswith("sha256:")
+            assert len(ev["event_hash"].split(":", 1)[1]) == 64
+        # The write is committed.
+        assert db.committed == 2
+
+    def test_no_dsn_is_noop(self, monkeypatch):
+        """With no control-plane DSN, the helper is a no-op (returns None) and never
+        falls back to a file ledger."""
+        monkeypatch.delenv("SIFT_CONTROL_PLANE_DSN", raising=False)
+        result = append_approval_commit_event_db(
+            _CASE, item_id="F-001", item_type="finding", content_hash=None,
+        )
+        assert result is None
+
+
+# --------------------------------------------------------------------------- #
+# read_approval_commit_tip_db — reconciliation reads the DB ledger as authority
+# --------------------------------------------------------------------------- #
+
+
+class TestReadApprovalCommitTip:
+    def test_tip_reflects_chain_head(self):
+        db = FakeLedgerDB()
+        connect = _make_connect(db)
+        append_approval_commit_event_db(
+            _CASE, item_id="F-001", item_type="finding", content_hash=None,
+            dsn=_DSN, connect=connect,
+        )
+        append_approval_commit_event_db(
+            _CASE, item_id="F-002", item_type="finding", content_hash=None,
+            dsn=_DSN, connect=connect,
+        )
+        tip = read_approval_commit_tip_db(_CASE, dsn=_DSN, connect=connect)
+        assert tip["head_seq"] == 2
+        assert tip["event_count"] == 2
+        # Tip hash equals the last appended event's event_hash (authority tip).
+        assert tip["head_hash"] == db.events[_CASE][-1]["event_hash"]
+
+    def test_tip_no_dsn_is_none(self, monkeypatch):
+        monkeypatch.delenv("SIFT_CONTROL_PLANE_DSN", raising=False)
+        assert read_approval_commit_tip_db(_CASE) is None
+
+
+# --------------------------------------------------------------------------- #
+# Retained: case-id validation guard (kept for the legacy backup export path)
+# --------------------------------------------------------------------------- #
+
+
+class TestCaseIdValidation:
+    def test_rejects_traversal_and_empty(self):
+        with pytest.raises(ValueError, match="path traversal"):
+            _validate_case_id("../evil")
+        with pytest.raises(ValueError, match="path traversal"):
+            _validate_case_id("../../etc/passwd")
+        with pytest.raises(ValueError, match="empty"):
+            _validate_case_id("")

@@ -31,6 +31,7 @@ from sift_core.evidence_ops import list_evidence_data
 from sift_core.report_profiles import PROFILES, STRIPPED_FINDING_FIELDS
 from sift_core.active_case_context import db_authority_active
 from sift_core.investigation_store import HASH_EXCLUDE_KEYS, compute_content_hash
+from sift_core.verification import read_approval_commit_tip_db
 
 # BATCH-NW1: the old narrow _HASH_EXCLUDE_KEYS (15 keys) has been removed.
 # HASH_EXCLUDE_KEYS imported from investigation_store is the single authoritative
@@ -633,6 +634,27 @@ def generate_report_data(
     _db_mode = investigation_inputs is not None or db_authority_active()
     if _db_mode:
         result["verification_authority"] = "db-content-hash"
+        # FORK-2: surface the DB approval-commit ledger tip as the authoritative
+        # commit-ledger signal (replaces the retired file HMAC ledger). The
+        # per-row content_hash above is the per-item authority; the hash-chain tip
+        # here is the append-only, tamper-evident record that those approvals were
+        # committed. Best-effort: a missing control plane or ledger leaves the
+        # report's content-hash authority intact and never fails generation.
+        try:
+            case_id = (metadata or {}).get("case_id") or case_dir.name
+            tip = read_approval_commit_tip_db(str(case_id)) if case_id else None
+            if tip is not None:
+                result["approval_commit_ledger"] = {
+                    "authority": "db-hash-chain",
+                    "head_seq": tip.get("head_seq", 0),
+                    "head_hash": tip.get("head_hash", ""),
+                    "event_count": tip.get("event_count", 0),
+                }
+        except Exception as e:  # pragma: no cover - defensive
+            result["approval_commit_ledger"] = {
+                "authority": "db-hash-chain",
+                "error": str(e),
+            }
         try:
             alerts = reconcile_verification_db(approved_findings, approved_timeline)
         except Exception as e:
