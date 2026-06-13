@@ -3326,13 +3326,20 @@ def _principal_profile(principal: dict) -> dict:
         for m in memberships
         if isinstance(m, dict)
     ]
+    system_role = principal.get("system_role")
     return {
         "principal_type": principal.get("principal_type"),
         "principal_id": principal.get("principal_id"),
         "auth_user_id": principal.get("auth_user_id"),
         "display_name": principal.get("display_name"),
         "email": principal.get("email"),
-        "system_role": principal.get("system_role"),
+        "system_role": system_role,
+        # Portal capability role the SPA gates on (e.g. create-case). Mirrors
+        # auth.py _examiner_role_from_principal: readonly system_role -> readonly,
+        # every other operator system_role (operator/lead/owner/admin) ->
+        # examiner. Without this the SPA reads user.role == undefined and hides
+        # examiner-only controls for fully-privileged operators.
+        "role": "readonly" if system_role == "readonly" else "examiner",
         "status": principal.get("status"),
         "case_memberships": safe_memberships,
     }
@@ -4512,9 +4519,9 @@ async def get_case_activate_challenge(request: Request) -> JSONResponse:
     plane is deleted. It is now a thin probe the SPA (Header.jsx) calls before
     activating a case to learn whether DB (Postgres) authority is wired:
 
-      * DB + Supabase authority -> ``{"required": false, "authority": "postgres"}``;
-        the SPA activates directly and ``post_case_activate`` re-verifies the
-        operator's password against Supabase before ``set_active_case`` (B-MVP-021).
+      * DB + Supabase authority -> ``{"required": true, "authority": "postgres"}``;
+        ``post_case_activate`` re-verifies the operator's password against Supabase
+        before ``set_active_case`` (B-MVP-021), so the SPA MUST collect and send it.
       * file-backed fallback (no active-case service) -> ``{"required": true,
         "authority": "supabase"}``; activation still re-auths, but the operator
         confirms their password which ``post_case_activate`` checks against
@@ -4525,7 +4532,9 @@ async def get_case_activate_challenge(request: Request) -> JSONResponse:
         return role_err
 
     if _ACTIVE_CASES is not None and _SUPABASE_AUTH is not None:
-        return JSONResponse({"required": False, "authority": "postgres"})
+        # B-MVP-021: activation under DB authority re-verifies the operator
+        # password in post_case_activate, so the SPA must collect + send it.
+        return JSONResponse({"required": True, "authority": "postgres"})
 
     err = _must_reset_check(request)
     if err:

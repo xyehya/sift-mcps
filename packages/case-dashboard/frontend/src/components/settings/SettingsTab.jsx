@@ -61,6 +61,7 @@ export function SettingsTab() {
   const [pKind, setPKind] = useState('agent')
   const [pName, setPName] = useState('')
   const [pScopes, setPScopes] = useState('mcp:*')
+  const [pPassword, setPPassword] = useState('')
   // Issued JWT session material — shown ONCE, never written to localStorage.
   const [issued, setIssued] = useState(null)
   const [nowMs, setNowMs] = useState(() => Date.now())
@@ -89,9 +90,13 @@ export function SettingsTab() {
   async function handleCreatePrincipal(e) {
     e.preventDefault()
     if (!pName) { addToast('Display name is required', 'warn'); return }
+    if (!pPassword) { addToast('Confirm your operator password to issue a credential', 'warn'); return }
     try {
       const tool_scopes = pScopes.split(',').map((s) => s.trim()).filter(Boolean)
-      const result = await postPrincipal({ kind: pKind, display_name: pName, tool_scopes })
+      // Issuing an agent/service credential is a sensitive action: the gateway
+      // re-verifies the operator password against Supabase (B-MVP-022/CL3b).
+      const result = await postPrincipal({ kind: pKind, display_name: pName, tool_scopes, password: pPassword })
+      setPPassword('')
       // Token material returned exactly once. Hold in memory only for display.
       setIssued(result)
       setPName('')
@@ -180,6 +185,13 @@ export function SettingsTab() {
                 <input type="text" placeholder="mcp:* or tool:foo, namespace:bar" value={pScopes} onChange={(e) => setPScopes(e.target.value)}
                   className="w-full px-3 py-2 rounded text-xs font-mono focus:outline-none"
                   style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }} />
+              </div>
+              <div>
+                <label className="block text-[10px] font-mono text-text-muted mb-1">OPERATOR PASSWORD *</label>
+                <input type="password" placeholder="Re-auth: confirm your password" value={pPassword} onChange={(e) => setPPassword(e.target.value)} required autoComplete="current-password"
+                  className="w-full px-3 py-2 rounded text-xs focus:outline-none"
+                  style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }} />
+                <p className="text-[10px] mt-1" style={{ color: 'var(--text-ghost)' }}>Issuing a credential is a sensitive action — re-verified against Supabase.</p>
               </div>
               <button type="submit" className="w-full py-2 rounded text-xs font-sans font-semibold hover:opacity-85 border transition-opacity"
                 style={{ background: 'var(--cyan-dim)', color: 'var(--cyan)', borderColor: 'var(--cyan)' }}>

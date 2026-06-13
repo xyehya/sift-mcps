@@ -365,3 +365,17 @@ class TestMe:
         resp = client.get("/api/auth/me")
         assert resp.status_code == 401
         assert "error" in resp.json()
+
+
+def test_principal_profile_exposes_portal_role():
+    """_principal_profile maps system_role -> the portal capability role the SPA
+    gates examiner-only controls on (e.g. create-case). readonly stays readonly;
+    every other operator system_role is examiner. Regression (LV1): the profile
+    exposed only system_role, so the SPA read user.role == undefined and hid the
+    New-case button for fully-privileged operators."""
+    from case_dashboard.routes import _principal_profile
+
+    assert _principal_profile({"principal_type": "operator", "system_role": "owner"})["role"] == "examiner"
+    assert _principal_profile({"principal_type": "operator", "system_role": "admin"})["role"] == "examiner"
+    assert _principal_profile({"principal_type": "operator", "system_role": "operator"})["role"] == "examiner"
+    assert _principal_profile({"principal_type": "operator", "system_role": "readonly"})["role"] == "readonly"

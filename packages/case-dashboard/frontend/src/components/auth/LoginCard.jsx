@@ -23,7 +23,7 @@ function Input({ label, value, onChange, type = 'text', autoComplete }) {
 
 // WI6 — forced first-login reset. Explains where the temporary password came
 // from (installer handoff file) and that it is unrecoverable once replaced.
-function ResetPasswordForm({ onDone }) {
+function ResetPasswordForm({ onSession, onNeedLogin }) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [err, setErr] = useState('')
@@ -37,9 +37,14 @@ function ResetPasswordForm({ onDone }) {
     setErr('')
     try {
       await postForcedReset({ new_password: password })
-      const session = await getMe()
-      if (!session) { setErr('Password reset succeeded. Sign in again.'); return }
-      onDone(session)
+      // Changing the password invalidates the temporary Supabase session, so the
+      // current cookie is usually already dead. Try to reuse it; if it's gone,
+      // route the operator to the sign-in form with the new password rather than
+      // leaving them stuck on this reset form.
+      let session = null
+      try { session = await getMe() } catch { session = null }
+      if (session) { onSession(session); return }
+      onNeedLogin('Password set. Sign in with your new password.')
     } catch (ex) {
       console.error('Password reset failed:', ex)
       setErr('Password reset failed. The temporary session may have expired — sign in again with the installer password.')
@@ -88,6 +93,7 @@ export function LoginCard({ onLogin }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
+  const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
 
   // Supabase email/password login. The server validates the password against
@@ -119,7 +125,10 @@ export function LoginCard({ onLogin }) {
     <div className="min-h-screen flex items-center justify-center bg-bg-base">
       <div className="w-full max-w-sm p-8 rounded-lg border border-border-soft bg-bg-surface">
         {phase === 'reset' ? (
-          <ResetPasswordForm onDone={onLogin} />
+          <ResetPasswordForm
+            onSession={onLogin}
+            onNeedLogin={(msg) => { setPhase('login'); setNotice(msg); setPassword('') }}
+          />
         ) : (
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -127,6 +136,7 @@ export function LoginCard({ onLogin }) {
               <h1 className="font-display font-extrabold text-2xl text-text-bright">Examiner Portal</h1>
               <p className="text-text-muted text-xs mt-1">Sign in with your Supabase operator email and password.</p>
             </div>
+            {notice && <p className="text-xs" style={{ color: 'var(--jade)' }}>{notice}</p>}
             {err && <p className="text-crimson text-xs">{err}</p>}
             <Input label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" />
             <Input label="Password" type="password" value={password} onChange={setPassword} autoComplete="current-password" />

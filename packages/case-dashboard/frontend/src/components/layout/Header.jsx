@@ -264,13 +264,13 @@ export function Header({ onLogout }) {
             {activateErr && <p className="text-xs" style={{ color: 'var(--crimson)' }}>{activateErr}</p>}
             <label className="block">
               <span className="text-xs font-sans uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-                Password <span className="normal-case text-text-ghost">(re-auth; skipped under Supabase authority)</span>
+                Password <span className="normal-case text-text-ghost">(re-auth — verified against Supabase)</span>
               </span>
               <input type="password" value={activatePassword}
                 onChange={(e) => setActivatePassword(e.target.value)}
                 className="mt-1 w-full px-3 py-2 rounded text-sm font-sans"
                 style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }}
-                autoFocus />
+                autoFocus required />
             </label>
             <div className="flex gap-2">
               <button type="submit" disabled={activating}

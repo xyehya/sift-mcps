@@ -520,7 +520,9 @@ def test_supabase_db_case_routes_use_active_case_service(passwords_dir, case_env
     client = TestClient(app, raise_server_exceptions=True)
     set_operator_session(client, _SECRET)
 
-    assert client.get("/api/case/activate/challenge").json()["required"] is False
+    # B-MVP-021: DB-authority activation re-verifies the operator password, so
+    # the probe reports required:true and the SPA collects + sends it (below).
+    assert client.get("/api/case/activate/challenge").json()["required"] is True
     assert client.get("/api/cases").json()["cases"][0]["case_key"] == "db-case"
     assert client.get("/api/case").json()["case_key"] == "db-case"
     assert client.post(
