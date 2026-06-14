@@ -115,7 +115,9 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "REQUIRED fields in 'finding': title, type, host, observation, interpretation, confidence, "
         "confidence_justification.\n"
         "OPTIONAL fields in 'finding': audit_ids (from tool responses — critical for provenance), "
-        "mitre_ids, iocs, event_type, event_timestamp, artifact_ref, related_findings, affected_account.\n\n"
+        "mitre_ids, iocs, event_type, event_timestamp, artifact_ref, related_findings, "
+        "supersedes (finding id(s) this finding corrects/replaces, for self-correction chains), "
+        "affected_account.\n\n"
         "EXAMPLE: {\"finding\": {\"title\": \"Suspicious PowerShell Execution\", \"type\": \"finding\", "
         "\"host\": \"WEBSRV01\", \"observation\": \"Encoded PowerShell ran from outlook.exe — EventID 1, "
         "ParentImage: outlook.exe, Image: powershell.exe\", \"interpretation\": \"Likely initial access "
@@ -131,7 +133,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
             {
                 "finding": {
                     "type": "object",
-                    "description": "Required: title, type, host, observation, interpretation, confidence, confidence_justification. Optional: audit_ids, mitre_ids, iocs, event_type, event_timestamp, artifact_ref, related_findings, affected_account.",
+                    "description": "Required: title, type, host, observation, interpretation, confidence, confidence_justification. Optional: audit_ids, mitre_ids, iocs, event_type, event_timestamp, artifact_ref, related_findings, supersedes, affected_account.",
                     "properties": {
                         "title": {"type": "string", "description": "Concise finding title"},
                         "type": {"type": "string", "enum": ["finding", "attribution", "conclusion", "exclusion"]},
@@ -147,6 +149,11 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
                         "event_timestamp": {"type": "string", "description": "ISO 8601 timestamp of the incident event"},
                         "artifact_ref": {"type": "string"},
                         "related_findings": {"type": "array", "items": {"type": "string"}},
+                        "supersedes": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Finding id(s) this finding corrects or replaces (self-correction chain).",
+                        },
                         "affected_account": {"type": "string"},
                     },
                     "required": ["title", "type", "host", "observation", "interpretation", "confidence", "confidence_justification"],
