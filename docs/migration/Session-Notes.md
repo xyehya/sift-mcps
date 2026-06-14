@@ -13,9 +13,20 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
-### 2026-06-14 - RUN-1 (post-MVP orchestrator): 4 parallel agents reconciled on run1/integrate (host-side DONE; VM proof pending)
+### 2026-06-14 - RUN-1 (post-MVP orchestrator): 4 parallel agents reconciled + LIVE-PROVEN on run1/integrate
 
-Status: IN_PROGRESS (code + local gate DONE on `run1/integrate`; serial VM live-proof pending).
+Status: DONE (code + local gate + `/security-review` + serial VM live-proof all GREEN on `run1/integrate`).
+NOT yet merged to main / pushed (RUN-2 push decision pending operator).
+
+VM live-proof (rsync deploy to /opt/sift-mcps editable tree + restart; case case-rocba-case-06132304):
+- TOOL: `running_commands_status` live on MCP surface (old `job_status` disconnected); inventory
+  real-names (`vol` not vol3, `regripper`->rip.pl, plaso .py) via list_available_tools; `vol` AND
+  Zimmerman `EvtxECmd` (v1.5.2.0, dotnet 9.0.116) run via run_command (incl pipe `vol|head`).
+- OSW: `case_dir` injection live (no-arg ingest_status resolves active case); K4 DB-active
+  ingest_status redirect live (after the B-MVP-025 fix). B4 memory durable-lane deferred to RUN-3.
+- B-MVP-025: pre-existing gateway env-propagation bug FOUND+FIXED+proven live (see row below).
+- HARDEN: AppArmor flipped COMPLAIN->ENFORCE, 0 AVC denials, regression green (B-MVP-018).
+- /security-review on the combined diff: clean (no HIGH/MEDIUM); fixed a non-security srumecmd typo.
 
 Orchestrated 4 disjoint-fence agents off LOCAL main (origin 63 behind), reconciled to
 `run1/integrate` (zero file overlap). Plan + decisions: `docs/ORCHESTRATOR-HANDOFF-2026-06-14.md`.
@@ -904,7 +915,7 @@ after portal reset/credential issuance.
 | B-MVP-015 | Backlog | DONE | DONE 2026-06-12 (HR3, live-proven): BAAI/bge-base-en-v1.5 canonical with revision pin; explicit HF_HOME under the service home wired into both units; offline-aware loader. | BATCH-HR3 |
 | B-MVP-016 | Backlog | RESOLVED | RESOLVED 2026-06-12 (AD2): KEEP scope_enforcement - the premise was wrong; packages/opensearch-mcp/sift-backend.json ships it on opensearch_enrich_intel, so schema removal would reject a live manifest. It is advisory metadata in the OS5 family; regression tests added (shipped manifest validates, unknown fields still rejected). | BATCH-AD2 |
 | B-MVP-017 | Needs input | DONE | DONE 2026-06-13: file-HMAC re-auth plane RETIRED. CL3a (636f425) built the fail-closed Supabase password re-verify; CL3b (718684e) deleted the dead verifiers, re-homed must-reset to the Supabase `invited` signal, and closed B-MVP-021/022. Both security-reviewed (APPROVE-WITH-NITS, no bypass); suites green; live smoke folded into LV1. RESIDUAL (test-coupled session-establishment, NOT the re-auth plane): `sift_session` cookie-verify -> B-MVP-023. | BATCH-CL3a / BATCH-CL3b |
-| B-MVP-018 | Backlog | OPEN | DECIDED 2026-06-13: keep AppArmor COMPLAIN-only through BATCH-LV1; revisit enforce-mode only after the end-to-end test passes (then aa-logprof profiling against ingest/run_command + a dedicated live rerun before flipping to enforce). | Future hardening batch (post-LV1) |
+| B-MVP-018 | Backlog | DONE | DECIDED 2026-06-13: keep AppArmor COMPLAIN-only through BATCH-LV1; revisit enforce after e2e. SUPERSEDED + DONE 2026-06-14 (RUN-1 HARDEN, live): enforce-flip brought forward and proven. Profile (configs/apparmor/sift-gateway.template, +cases/*/agent rw, evidence-write-deny intact) regenerated to /etc/apparmor.d/sift-gateway, loaded complain, gateway traffic exercised (run_command vol/EvtxECmd incl pipes + ingest_status), audit-log harvest showed ZERO AVC violations, then flipped to ENFORCE via apparmor_parser -r (aa-enforce util absent on VM). Post-enforce regression GREEN: gateway active+healthy, run_command + ingest_status work, DENIED_count=0. NOTE: live runtime is ENFORCE; install.sh configure_apparmor still loads complain by default (safe install default) — operator may opt to make enforce the install default in a follow-up. | RUN-1 HARDEN / live |
 | B-MVP-019 | Backlog | OPEN | Operator briefed 2026-06-13 (detail in change log). setup-addon.sh embeds operator-home paths (command=`~/.local/bin/uv`, `--project ~/sift-mcps`, manifest under `~/sift-mcps`) in register payloads, but the hardened gateway runs ProtectHome=tmpfs and can only see `/opt/sift-mcps` + system paths, so a so-registered add-on would fail to launch under the live gateway. Fix = derive command/project/manifest from the staged `/opt/sift-mcps` tree. Operator confirmed 2026-06-13: FOLD INTO BATCH-LV1 — fix when LV1 first launches a real add-on under the hardened gateway, using live-confirmed staged paths. | BATCH-LV1 |
 | B-MVP-020 | Backlog | DONE | DONE 2026-06-13 (operator-requested, live-proven): ran rotate-tls.sh --rotate-ca on the existing VM. New CA CN="Protocol SIFT Gateway local CA" with critical basicConstraints CA:TRUE + critical keyUsage(keyCertSign,cRLSign); leaf re-issued with serverAuth EKU + IP/DNS SANs; keys 0600 / certs 0644 sift-service; gateway restarted, /health ok, both services active; curl --cacert verifies WITHOUT -k on the IP SAN. Clients must re-import /var/lib/sift/.sift/tls/ca-cert.pem. | BATCH-TLS1 / live |
 | B-MVP-021 | Backlog | OPEN | Pre-existing gap (surfaced by CL3a security review, NOT a CL3a regression): `post_case_activate` DB-active branch (`_ACTIVE_CASES is not None`, the live VM path) returns before any re-auth, so case activation — a CLAUDE.md sensitive action — is NOT re-authed under DB authority. DONE 2026-06-13 (CL3b, 718684e): the DB-active branch now `await _supabase_reverify` before `set_active_case`; fail-closed tested (wrong-pw 401, control-plane-down 503, success). | BATCH-CL3b |
