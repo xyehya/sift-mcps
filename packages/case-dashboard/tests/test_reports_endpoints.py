@@ -31,7 +31,6 @@ def client():
     app = create_dashboard_v2_app(
         session_secret=_SECRET,
         supabase_auth=ReauthFakeSupabaseAuth(),
-        legacy_portal_session_enabled=False,
     )
     return TestClient(app)
 
@@ -49,7 +48,6 @@ def auth_readonly_cookie():
         supabase_auth=ReauthFakeSupabaseAuth(
             principal=operator_principal(system_role="readonly")
         ),
-        legacy_portal_session_enabled=False,
     )
     c = TestClient(app)
     set_operator_session(c, _SECRET)

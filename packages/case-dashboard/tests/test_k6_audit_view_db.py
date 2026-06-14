@@ -60,7 +60,6 @@ def _client(inv):
         active_case_service=FakeActiveCases(),
         investigation_service=inv,
         supabase_auth=ReauthFakeSupabaseAuth(),
-        legacy_portal_session_enabled=False,
     )
     c = TestClient(app)
     set_operator_session(c, _SECRET)

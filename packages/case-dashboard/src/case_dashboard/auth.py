@@ -7,68 +7,26 @@ resolver and rotates the cookie. The resolved app principal (operator / agent /
 service) is placed on ``request.state.principal``; ``request.state.examiner`` and
 ``request.state.role`` are derived for backward-compatible route handlers.
 
-Legacy behavior — the HMAC ``sift_session`` cookie and the examiner Bearer-token
-fallback — is retained ONLY when ``legacy_portal_session_enabled`` is true. The
-Gateway passes the real flag; tests default it to true so existing suites stay
-green.
-
 Route handlers read request.state via getattr() (R9) and decide 401/403. This
 middleware never returns 401/403 itself.
 """
 
 from __future__ import annotations
 
-import hmac
 import logging
-from datetime import datetime, timezone
-
-import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 from case_dashboard.session_jwt import (
-    COOKIE_NAME,
-    COOKIE_PATH,
-    COOKIE_SAME_SITE,
     SESSION_ENVELOPE_COOKIE_NAME,
     SESSION_ENVELOPE_COOKIE_PATH,
     SESSION_ENVELOPE_COOKIE_SAME_SITE,
-    verify_jwt,
-    generate_jwt,
     generate_session_envelope,
     verify_session_envelope,
 )
 
 logger = logging.getLogger(__name__)
-
-_MAX_TOKEN_LENGTH = 1024
-
-
-def _verify_bearer(token: str, api_keys: dict) -> dict | None:
-    """Timing-safe bearer lookup with expiry check. Returns key_info or None."""
-    if not token or len(token) > _MAX_TOKEN_LENGTH:
-        return None
-    matched_key = None
-    for candidate in api_keys:
-        if hmac.compare_digest(token, candidate) and matched_key is None:
-            matched_key = candidate
-    if matched_key is None:
-        return None
-    key_info = api_keys.get(matched_key, {})
-    if not isinstance(key_info, dict):
-        return None
-    if key_info.get("revoked_at"):
-        return None
-    expires_at = key_info.get("expires_at")
-    if expires_at:
-        try:
-            exp = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-            if datetime.now(timezone.utc) > exp:
-                return None
-        except (ValueError, AttributeError):
-            pass
-    return key_info
 
 
 def _examiner_role_from_principal(principal: dict) -> tuple[str | None, str | None]:
@@ -101,9 +59,7 @@ class PortalSessionMiddleware(BaseHTTPMiddleware):
     Priority:
       1. Supabase session envelope cookie -> resolve via supabase_auth -> set
          request.state.principal/examiner/role (with refresh + cookie rotation).
-      2. (legacy only) sift_session cookie -> verify JWT -> set examiner/role.
-      3. (legacy only) Authorization: Bearer token in api_keys, examiner role.
-      4. Neither -> examiner=None, role=None, principal=None (handlers enforce 401).
+      2. Neither -> examiner=None, role=None, principal=None (handlers enforce 401).
     """
 
     def __init__(
@@ -114,14 +70,12 @@ class PortalSessionMiddleware(BaseHTTPMiddleware):
         api_keys: dict,
         session_max_age: int = 28800,
         supabase_auth=None,
-        legacy_portal_session_enabled: bool = True,
     ):
         super().__init__(app)
         self._session_secret = session_secret
         self._api_keys = api_keys
         self._session_max_age = session_max_age
         self._supabase_auth = supabase_auth
-        self._legacy_enabled = legacy_portal_session_enabled
 
     def _set_envelope_cookie(self, response, envelope: str) -> None:
         response.set_cookie(
@@ -228,59 +182,7 @@ class PortalSessionMiddleware(BaseHTTPMiddleware):
         if handled:
             return response
 
-        # Legacy paths only when explicitly enabled.
-        if self._legacy_enabled:
-            # 2. Cookie-based JWT auth (legacy sift_session)
-            cookie_val = request.cookies.get(COOKIE_NAME)
-            if cookie_val and self._session_secret:
-                payload = verify_jwt(cookie_val, self._session_secret)
-                if payload is not None:
-                    request.state.examiner = payload.get("sub")
-                    request.state.role = payload.get("role", "examiner")
-                    request.state.principal = None
-
-                    now = int(time.time())
-                    exp = payload.get("exp", 0)
-                    iat = payload.get("iat", 0)
-
-                    should_refresh = False
-                    if exp - now < self._session_max_age * 0.9 and now - iat > 300:
-                        should_refresh = True
-
-                    response = await call_next(request)
-
-                    if should_refresh:
-                        new_token = generate_jwt(
-                            sub=request.state.examiner,
-                            role=request.state.role,
-                            secret=self._session_secret,
-                            max_age=self._session_max_age,
-                        )
-                        response.set_cookie(
-                            COOKIE_NAME,
-                            new_token,
-                            max_age=self._session_max_age,
-                            path=COOKIE_PATH,
-                            httponly=True,
-                            secure=True,
-                            samesite=COOKIE_SAME_SITE,
-                        )
-                    return response
-
-            # 3. Bearer token fallback — examiner role only
-            auth_header = request.headers.get("authorization", "")
-            if auth_header.lower().startswith("bearer ") and self._api_keys:
-                token = auth_header[7:].strip()
-                key_info = _verify_bearer(token, self._api_keys)
-                if key_info is not None and key_info.get("role", "") == "examiner":
-                    request.state.examiner = key_info.get(
-                        "examiner", key_info.get("analyst", "unknown")
-                    )
-                    request.state.role = "examiner"
-                    request.state.principal = None
-                    return await call_next(request)
-
-        # 4. No valid auth — route handlers enforce 401
+        # 2. No valid auth — route handlers enforce 401
         request.state.examiner = None
         request.state.role = None
         request.state.principal = None

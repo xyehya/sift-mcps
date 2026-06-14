@@ -14,10 +14,6 @@ import json
 import secrets
 import time
 
-COOKIE_NAME = "sift_session"
-COOKIE_PATH = "/portal"
-COOKIE_SAME_SITE = "strict"
-
 # PR03A — Supabase-backed session envelope cookie. Distinct name from the legacy
 # sift_session cookie so the two paths never collide. The envelope carries the
 # Supabase access/refresh tokens (signed, never logged) so the portal can resolve
@@ -90,11 +86,6 @@ def generate_jwt(sub: str, role: str, secret: str, max_age: int = 28800) -> str:
 
 
 _revoked_jtis: set[str] = set()
-
-
-def revoke_jti(jti: str) -> None:
-    """Revoke a JWT by its JTI (in-memory)."""
-    _revoked_jtis.add(jti)
 
 
 def is_revoked(jti: str) -> bool:

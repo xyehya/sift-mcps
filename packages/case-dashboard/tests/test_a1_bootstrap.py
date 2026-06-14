@@ -145,7 +145,6 @@ def test_supabase_login_returns_must_reset_true_when_invited():
         session_secret=_SECRET,
         session_max_age=28800,
         supabase_auth=fake_auth,
-        legacy_portal_session_enabled=False,
     )
     client = TestClient(app, raise_server_exceptions=True)
     resp = client.post("/api/auth/login", json={"email": "alice@example.com", "password": "TempPass123!"})
@@ -163,7 +162,6 @@ def test_supabase_login_returns_must_reset_false_when_active(tmp_path, monkeypat
         session_secret=_SECRET,
         session_max_age=28800,
         supabase_auth=fake_auth,
-        legacy_portal_session_enabled=False,
     )
     client = TestClient(app, raise_server_exceptions=True)
     resp = client.post("/api/auth/login", json={"email": "alice@example.com", "password": "MyPass123!"})
@@ -186,7 +184,6 @@ def _make_forced_reset_app(fake_auth):
         session_secret=_SECRET,
         session_max_age=28800,
         supabase_auth=fake_auth,
-        legacy_portal_session_enabled=False,
     )
 
 
@@ -253,7 +250,6 @@ def test_forced_reset_returns_503_when_supabase_not_configured():
         session_secret=_SECRET,
         session_max_age=28800,
         supabase_auth=None,
-        legacy_portal_session_enabled=True,
     )
     client = TestClient(app, raise_server_exceptions=True)
     envelope = _make_envelope("access-test-token")

@@ -9,9 +9,8 @@ Security invariants: examiner role required for writes (readonly → 403),
 authenticated session required (401), must_reset blocks writes (403).
 
 B-MVP-023: migrated from the legacy sift_session JWT cookie to the
-Supabase-envelope harness. The legacy plane is disabled
-(legacy_portal_session_enabled=False) and a fake Supabase auth callback
-provides operator identity.
+Supabase-envelope harness. The legacy plane has been removed, so a fake
+Supabase auth callback is the only source of operator identity.
 """
 
 from __future__ import annotations
@@ -50,7 +49,6 @@ def app(passwords_dir, tmp_path, monkeypatch):
         session_secret=_SECRET,
         session_max_age=28800,
         supabase_auth=ReauthFakeSupabaseAuth(),
-        legacy_portal_session_enabled=False,
     )
 
 
@@ -155,7 +153,6 @@ class TestCreateTodo:
             supabase_auth=ReauthFakeSupabaseAuth(
                 principal=operator_principal(system_role="readonly")
             ),
-            legacy_portal_session_enabled=False,
         )
         c = TestClient(app, raise_server_exceptions=True)
         set_operator_session(c, _SECRET)
@@ -263,7 +260,6 @@ class TestUpdateTodo:
             supabase_auth=ReauthFakeSupabaseAuth(
                 principal=operator_principal(system_role="readonly")
             ),
-            legacy_portal_session_enabled=False,
         )
         ro_client = TestClient(ro_app, raise_server_exceptions=True)
         set_operator_session(ro_client, _SECRET)
@@ -314,7 +310,6 @@ class TestDeleteTodo:
             supabase_auth=ReauthFakeSupabaseAuth(
                 principal=operator_principal(system_role="readonly")
             ),
-            legacy_portal_session_enabled=False,
         )
         ro_client = TestClient(ro_app, raise_server_exceptions=True)
         set_operator_session(ro_client, _SECRET)

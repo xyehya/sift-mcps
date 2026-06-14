@@ -1,9 +1,9 @@
 """Case create/list/activate portal route tests.
 
 B-MVP-023: migrated from the legacy sift_session JWT cookie to the
-Supabase-envelope harness. The app fixture is wired with supabase_auth and
-legacy_portal_session_enabled=False. Tests that need a readonly operator create
-their own app instance with the appropriate principal.
+Supabase-envelope harness. The legacy plane has been removed; the app fixture
+is wired with supabase_auth. Tests that need a readonly operator create their
+own app instance with the appropriate principal.
 """
 
 import json
@@ -65,7 +65,6 @@ def app(passwords_dir, case_env, tmp_path, monkeypatch):
         session_max_age=28800,
         gateway_config_path=str(case_env[1]),
         supabase_auth=ReauthFakeSupabaseAuth(),
-        legacy_portal_session_enabled=False,
     )
 
 
@@ -122,7 +121,6 @@ def test_readonly_role_returns_403(passwords_dir, case_env, tmp_path, monkeypatc
         supabase_auth=ReauthFakeSupabaseAuth(
             principal=operator_principal(system_role="readonly")
         ),
-        legacy_portal_session_enabled=False,
     )
     ro_client = TestClient(ro_app, raise_server_exceptions=True)
     set_operator_session(ro_client, _SECRET)
@@ -434,7 +432,6 @@ def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_
         gateway_config_path=str(cfg_path),
         on_case_activated=lambda case_dir: activated.append(case_dir),
         supabase_auth=ReauthFakeSupabaseAuth(),
-        legacy_portal_session_enabled=False,
     )
     client = TestClient(app, raise_server_exceptions=True)
     set_operator_session(client, _SECRET)

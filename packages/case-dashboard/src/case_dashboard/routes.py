@@ -18,9 +18,6 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import yaml
-from sift_core.approval_auth import (
-    _load_password_entry as _load_pw_entry,
-)
 from sift_core.case_io import (
     _protected_write,
     case_approvals_path,
@@ -45,15 +42,10 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from case_dashboard.session_jwt import (
-    COOKIE_NAME,
-    COOKIE_PATH,
-    COOKIE_SAME_SITE,
     SESSION_ENVELOPE_COOKIE_NAME,
     SESSION_ENVELOPE_COOKIE_PATH,
     SESSION_ENVELOPE_COOKIE_SAME_SITE,
     generate_session_envelope,
-    revoke_jti,
-    verify_jwt,
     verify_session_envelope,
 )
 
@@ -106,10 +98,6 @@ _EVIDENCE_DB = None
 _INVESTIGATION_DB = None
 _REPORT_DB = None
 _JOB_SERVICE = None
-# When false, the legacy PBKDF2 challenge/login, sift_session HMAC cookie, and
-# examiner Bearer fallback are disabled. Defaults to True so existing suites and
-# non-Supabase deployments keep working; the Gateway passes the real flag.
-_LEGACY_PORTAL_SESSION_ENABLED: bool = True
 
 
 def _active_case_id() -> str | None:
@@ -3631,12 +3619,13 @@ async def post_auth_login(request: Request) -> JSONResponse:
 
 
 async def post_auth_logout(request: Request) -> JSONResponse:
-    """Clear the portal session cookie(s). PR03A: also tells Supabase to revoke.
+    """Clear the portal session cookie. PR03A: also tells Supabase to revoke.
 
-    Clears both the legacy sift_session cookie (revoking its JTI) and the
-    Supabase session-envelope cookie. When a Supabase callback is configured and
-    a valid envelope is present, the access token is passed to supabase_auth.logout
-    so the Gateway can revoke the upstream session. Token values are never logged.
+    Clears the Supabase session-envelope cookie. When a Supabase callback is
+    configured and a valid envelope is present, the access token is passed to
+    supabase_auth.logout so the Gateway can revoke the upstream session. Token
+    values are never logged. The stale legacy ``sift_session`` cookie is also
+    proactively cleared in the response so old browsers shed it on logout.
     """
     # PR03A — Supabase session envelope logout.
     if _SESSION_SECRET:
@@ -3650,22 +3639,17 @@ async def post_auth_logout(request: Request) -> JSONResponse:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("portal logout callback failed: %s", type(exc).__name__)
 
-    # Legacy sift_session JTI revocation.
-    cookie_token = request.cookies.get(COOKIE_NAME)
-    if cookie_token and _SESSION_SECRET:
-        payload = verify_jwt(cookie_token, _SESSION_SECRET)
-        if payload and "jti" in payload:
-            revoke_jti(payload["jti"])
-
     resp = JSONResponse({"ok": True})
+    # Proactively clear the stale legacy sift_session cookie (B-MVP-023 removed
+    # the legacy session plane; this only sheds cookies left in old browsers).
     resp.set_cookie(
-        COOKIE_NAME,
+        "sift_session",
         "",
         max_age=0,
-        path=COOKIE_PATH,
+        path="/portal",
         httponly=True,
         secure=True,
-        samesite=COOKIE_SAME_SITE,
+        samesite="strict",
     )
     resp.set_cookie(
         SESSION_ENVELOPE_COOKIE_NAME,
@@ -3682,9 +3666,9 @@ async def post_auth_logout(request: Request) -> JSONResponse:
 async def get_auth_me(request: Request) -> JSONResponse:
     """Return current session info, or 401 if not authenticated.
 
-    PR03A: when the middleware resolved a Supabase app principal, return the
-    operator profile + system_role + case memberships (no token material). Falls
-    back to the legacy examiner/role/must_reset shape otherwise.
+    PR03A: the middleware resolves the Supabase app principal; return the
+    operator profile + system_role + case memberships (no token material).
+    Agent/service principals and unauthenticated requests get 401.
     """
     principal = getattr(request.state, "principal", None)
     if isinstance(principal, dict) and principal:
@@ -3694,42 +3678,7 @@ async def get_auth_me(request: Request) -> JSONResponse:
             return JSONResponse({"error": "Not authenticated"}, status_code=401)
         return JSONResponse(profile)
 
-    examiner = getattr(request.state, "examiner", None)
-    role = getattr(request.state, "role", None)
-
-    if not examiner:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
-
-    # R1: Re-read must_reset from disk — JWT is a UI hint only
-    entry = _load_pw_entry(_PASSWORDS_DIR, examiner)
-    must_reset = bool(entry.get("must_reset_password", False)) if entry else False
-
-    cookie_val = request.cookies.get(COOKIE_NAME)
-    expires_at = None
-    if cookie_val and _SESSION_SECRET:
-        payload = verify_jwt(cookie_val, _SESSION_SECRET)
-        if payload:
-            exp_ts = payload.get("exp", 0)
-            expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc).isoformat()
-
-    return JSONResponse(
-        {
-            "examiner": examiner,
-            "role": role,
-            "expires_at": expires_at,
-            "must_reset": must_reset,
-        }
-    )
-
-
-async def serve_index(request: Request) -> Response:
-    index_path = _STATIC_DIR / "index.html"
-    if not index_path.exists():
-        return JSONResponse(
-            {"error": "Dashboard not built yet"},
-            status_code=404,
-        )
-    return FileResponse(index_path, media_type="text/html")
+    return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
 
 _V2_STATIC_DIR = _STATIC_DIR / "v2"
@@ -6049,13 +5998,6 @@ async def restart_service_route(request: Request) -> JSONResponse:
 
 
 
-def create_dashboard_app() -> Starlette:
-    """Create the v1 dashboard sub-app for mounting on the gateway."""
-    routes = _dashboard_api_routes()
-    routes.append(Route("/", serve_index, methods=["GET"]))
-    return Starlette(routes=routes, middleware=[Middleware(SecurityHeadersMiddleware)])
-
-
 async def serve_v2_static(request: Request) -> Response:
     """Serve static files from the v2 directory (images, icons, etc.)."""
     filename = request.path_params.get("filename", "")
@@ -6101,7 +6043,6 @@ def create_dashboard_v2_app(
     investigation_service=None,
     report_service=None,
     job_service=None,
-    legacy_portal_session_enabled: bool = True,
 ) -> Starlette:
     """Create the v2 dashboard sub-app for mounting on the gateway.
 
@@ -6151,12 +6092,6 @@ def create_dashboard_v2_app(
         job_service: D2 Gateway job/status adapter (JobService). Backs
             GET /api/jobs/{job_id} with the sanitized, case-scoped status. When
             None, the job-status route returns 503.
-        legacy_portal_session_enabled: When false, the PortalSessionMiddleware
-            disables the legacy sift_session HMAC cookie and the examiner Bearer
-            fallback paths. (The local PBKDF2 *login* fallback was removed under
-            B-MVP-011; Supabase Auth is the only login path regardless of this
-            flag.) Defaults to True so existing suites keep working; the Gateway
-            passes auth.legacy.portal_session_enabled.
     """
     from case_dashboard.auth import PortalSessionMiddleware
 
@@ -6164,7 +6099,7 @@ def create_dashboard_v2_app(
     global _TOKEN_REGISTRY
     global _ON_CHAIN_MUTATION, _OVERRIDE_GET_STATUS, _OVERRIDE_ENABLE, _OVERRIDE_CANCEL
     global _ON_CASE_ACTIVATED
-    global _SUPABASE_AUTH, _ACTIVE_CASES, _LEGACY_PORTAL_SESSION_ENABLED
+    global _SUPABASE_AUTH, _ACTIVE_CASES
     global _EVIDENCE_DB, _INVESTIGATION_DB, _REPORT_DB, _JOB_SERVICE
     _SESSION_SECRET = session_secret
     _SESSION_MAX_AGE = session_max_age
@@ -6182,7 +6117,6 @@ def create_dashboard_v2_app(
     _INVESTIGATION_DB = investigation_service
     _REPORT_DB = report_service
     _JOB_SERVICE = job_service
-    _LEGACY_PORTAL_SESSION_ENABLED = legacy_portal_session_enabled
     routes = _dashboard_api_routes()
     routes.append(Route("/assets/{filename:path}", serve_v2_assets, methods=["GET"]))
     routes.append(Route("/{filename}", serve_v2_static, methods=["GET"]))
@@ -6196,7 +6130,6 @@ def create_dashboard_v2_app(
                 api_keys=_API_KEYS,
                 session_max_age=session_max_age,
                 supabase_auth=supabase_auth,
-                legacy_portal_session_enabled=legacy_portal_session_enabled,
             ),
             Middleware(SecurityHeadersMiddleware),
         ],

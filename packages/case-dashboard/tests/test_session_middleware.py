@@ -63,7 +63,6 @@ def _make_app(principal) -> Starlette:
                 session_secret=_SECRET,
                 api_keys={},
                 supabase_auth=_FakeSupabaseAuth(principal),
-                legacy_portal_session_enabled=False,
             )
         ],
     )

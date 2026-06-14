@@ -1,9 +1,9 @@
 """Tests for Examiner Portal GET API endpoints authentication validation.
 
 B-MVP-023: migrated from the legacy sift_session JWT cookie to the
-Supabase-envelope harness. The app is instantiated with
-legacy_portal_session_enabled=False and a supabase_auth fake so the
-Supabase-envelope path is the only active auth plane.
+Supabase-envelope harness. The legacy plane has been removed; the app is
+instantiated with a supabase_auth fake so the Supabase-envelope path is the
+only active auth plane.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ def _make_app(*, system_role: str = "owner"):
         supabase_auth=ReauthFakeSupabaseAuth(
             principal=operator_principal(system_role=system_role)
         ),
-        legacy_portal_session_enabled=False,
     )
 
 

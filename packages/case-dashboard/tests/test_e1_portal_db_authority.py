@@ -246,8 +246,8 @@ class TestEvidenceDBAuthority:
         assert body["path"] == "evidence/disk.E01"
         assert body["status"] == "verified"
         # CL3a: the Supabase-envelope session now populates request.state.principal,
-        # so the verify call carries the operator actor (was None under the legacy
-        # sift_session cookie which set principal=None).
+        # so the verify call carries the operator actor (was None under the
+        # now-removed legacy session cookie, B-MVP-023, which set principal=None).
         assert len(ev.verify_calls) == 1
         case_id, actor = ev.verify_calls[0]
         assert case_id == "11111111-1111-1111-1111-111111111111"

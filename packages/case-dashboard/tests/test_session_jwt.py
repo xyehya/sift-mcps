@@ -11,27 +11,11 @@ import time
 import pytest
 
 from case_dashboard.session_jwt import (
-    COOKIE_NAME,
-    COOKIE_PATH,
-    COOKIE_SAME_SITE,
     generate_jwt,
     verify_jwt,
 )
 
 _SECRET = secrets.token_hex(32)  # 32 bytes = 64 hex chars
-
-
-class TestCookieConstants:
-    """Cookie attribute constants must match the plan spec exactly."""
-
-    def test_cookie_name(self):
-        assert COOKIE_NAME == "sift_session"
-
-    def test_cookie_path(self):
-        assert COOKIE_PATH == "/portal"
-
-    def test_cookie_same_site(self):
-        assert COOKIE_SAME_SITE == "strict"
 
 
 class TestGenerateJwt:

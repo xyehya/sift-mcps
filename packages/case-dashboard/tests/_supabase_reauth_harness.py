@@ -2,9 +2,8 @@
 
 CL3a moved every sensitive-action re-auth from the legacy file-HMAC challenge
 to a fail-closed Supabase GoTrue password re-verify. The legacy-plane tests
-authenticated with a ``sift_session`` JWT cookie (which sets only
-``request.state.examiner``) and answered an HMAC challenge. They are migrated to
-this harness, which:
+authenticated with the (now-removed, B-MVP-023) legacy session cookie and
+answered an HMAC challenge. They are migrated to this harness, which:
 
   * authenticates via the Supabase session-envelope cookie so the request
     carries an operator ``principal`` (with email) — the email the re-verify

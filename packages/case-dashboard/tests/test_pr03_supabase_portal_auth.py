@@ -24,9 +24,7 @@ import case_dashboard.routes as routes_mod
 import pytest
 from case_dashboard.routes import create_dashboard_v2_app
 from case_dashboard.session_jwt import (
-    COOKIE_NAME,
     SESSION_ENVELOPE_COOKIE_NAME,
-    generate_jwt,
     generate_session_envelope,
 )
 from starlette.testclient import TestClient
@@ -201,7 +199,6 @@ def app(fake_auth):
         session_secret=_SECRET,
         session_max_age=28800,
         supabase_auth=fake_auth,
-        legacy_portal_session_enabled=False,
     )
 
 
@@ -464,29 +461,16 @@ class TestAgentDenied:
 
 
 # ---------------------------------------------------------------------------
-# legacy session only when enabled
+# legacy session plane removed (B-MVP-023): only Supabase envelope or 401
 # ---------------------------------------------------------------------------
 
 
 class TestLegacyFlag:
-    def test_legacy_cookie_rejected_when_flag_disabled(self, client):
-        # app fixture has legacy_portal_session_enabled=False.
-        token = generate_jwt("alice", "examiner", _SECRET)
-        resp = client.get("/api/auth/me", cookies={COOKIE_NAME: token})
+    def test_unauthenticated_returns_401(self, client):
+        # With the legacy sift_session cookie / Bearer fallback removed, a
+        # request that carries no valid Supabase session envelope gets 401.
+        resp = client.get("/api/auth/me", cookies={"sift_session": "stale.token.value"})
         assert resp.status_code == 401
-
-    def test_legacy_cookie_accepted_when_flag_enabled(self, fake_auth):
-        app = create_dashboard_v2_app(
-            session_secret=_SECRET,
-            session_max_age=28800,
-            supabase_auth=fake_auth,
-            legacy_portal_session_enabled=True,
-        )
-        client = TestClient(app, raise_server_exceptions=True)
-        token = generate_jwt("alice", "examiner", _SECRET)
-        resp = client.get("/api/auth/me", cookies={COOKIE_NAME: token})
-        assert resp.status_code == 200
-        assert resp.json()["examiner"] == "alice"
 
 
 # ---------------------------------------------------------------------------
@@ -529,7 +513,6 @@ class TestPrincipalLifecycle:
             session_max_age=28800,
             supabase_auth=fake_auth,
             active_case_service=_ActiveCases(active_case_id),
-            legacy_portal_session_enabled=False,
         )
         client = TestClient(app, raise_server_exceptions=True)
         cookie = self._operator_cookie(client)
