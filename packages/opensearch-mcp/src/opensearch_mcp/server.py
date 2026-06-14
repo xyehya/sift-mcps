@@ -2503,13 +2503,21 @@ def opensearch_ingest(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def opensearch_ingest_status(case_id: str = "", case_dir: str = "") -> dict:
+def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str = "") -> dict:
     """Check status of running or recent ingest operations.
 
     Defaults to active case. Pass case_id="*" to see all cases.
+    In DB-active mode, also reads the durable worker progress mirror so
+    realtime per-step counts (indexed_docs, artifacts_complete, worker_label)
+    are visible while the job is in flight — no explicit job_id needed.
 
     Args:
         case_id: Filter to this case (default: active case). "*" for all.
+        case_dir: Gateway-injected authoritative case directory. Do not set;
+            the Gateway populates it from the DB active case.
+        job_id: Optional opaque job_id from opensearch_ingest dispatch response.
+            When supplied in DB-active mode, returned alongside the local
+            progress mirror to link the caller to the durable job record.
     """
     from opensearch_mcp.ingest_status import db_status_active, read_active_ingests
 
@@ -2523,31 +2531,41 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "") -> dict:
             "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
         }
 
-    # BATCH-K4 authority cutover: in DB-active mode the durable Postgres job +
-    # provenance state is the authority for ingest/enrich status, read through
-    # the Gateway (job_status / app.opensearch_ingest_status). The agent process
-    # has no DB credentials by design, so this tool does not read the DB itself;
-    # it stops treating the tamperable local status JSON as authority and points
-    # the caller at the durable job status. This makes host/ingest-status file
-    # tampering unable to change portal/Gateway authority.
-    if db_status_active():
-        return {
-            "ingests": [],
-            "authority": "postgres-durable-jobs",
-            "message": (
-                "DB-active mode: ingest/enrich status is served from durable "
-                "Postgres job state (not local status files). Poll the durable "
-                "job via the Gateway job status (the enqueue/start response "
-                "carries the job_id) or the Examiner Portal for live progress."
-            ),
-        }
-
+    # B3: in DB-active mode, the durable Postgres job state (app.job_status_public)
+    # is the canonical authority for ingest/enrich status. The agent process has no
+    # DB credentials by design. HOWEVER: the durable worker (sift-opensearch-worker@)
+    # mirrors its realtime progress into the local ingest-status JSON files via
+    # ingest_job._mirror_until_terminal → ingest_status.read_active_ingests. Those
+    # mirror files are NOT tamperable authority (the DB job row remains canonical)
+    # but they carry live per-step detail (indexed_docs, artifacts_complete,
+    # worker_label) that supplements the job_status tool during a long ingest.
+    # Serve the local mirror when it has content; always point at the durable job
+    # authority so callers know where to get the canonical terminal result.
     ingests = read_active_ingests()
 
     if filter_case and filter_case != "*":
         ingests = [i for i in ingests if i.get("case_id") == filter_case]
 
+    _db_active = db_status_active()
     if not ingests:
+        # B3: in DB-active mode with no local mirror data yet (e.g. the worker
+        # has not written its first progress record), guide the caller to the
+        # durable job authority while remaining polling-friendly.
+        if _db_active:
+            resp: dict = {
+                "ingests": [],
+                "authority": "postgres-durable-jobs",
+                "message": (
+                    "No local ingest-mirror data yet. The durable worker has not "
+                    "written its first progress record. "
+                    "Poll job_status(job_id=<job_id from ingest response>) for "
+                    "realtime worker_label and current_step."
+                ),
+            }
+            if job_id:
+                resp["job_id"] = job_id
+                resp["next_step"] = f"Call job_status(job_id='{job_id}') for durable status."
+            return resp
         return {"ingests": [], "message": "No active or recent ingests."}
 
     summaries = []
@@ -2719,7 +2737,24 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "") -> dict:
 
         summaries.append(s)
 
-    return {"ingests": summaries}
+    # B3: when the worker mirror has data, surface it alongside the authority
+    # note so the caller understands which plane to treat as canonical.
+    result: dict = {"ingests": summaries}
+    if _db_active:
+        result["authority"] = "postgres-durable-jobs"
+        result["authority_note"] = (
+            "Counts above come from the durable worker progress mirror "
+            "(written by sift-opensearch-worker@). The canonical job record "
+            "lives in app.job_status_public; poll job_status(job_id) for the "
+            "definitive status and terminal result_public."
+        )
+        if job_id:
+            result["job_id"] = job_id
+            result["next_step"] = (
+                f"Call job_status(job_id='{job_id}') for the authoritative "
+                "durable job record (worker_label, current_step, result_public)."
+            )
+    return result
 
 
 def idx_ingest_json(
@@ -3682,6 +3717,11 @@ def idx_ingest_memory(
     resp = {
         "status": "started",
         "pid": proc.pid,
+        # B4: expose run_id so the durable ingest_job handler can track this
+        # memory lane via _run_ids() → _mirror_until_terminal, giving it full
+        # parity with the disk lane (realtime worker_label, current_step,
+        # indexed_docs, artifacts_complete, parallel claim via FOR UPDATE SKIP LOCKED).
+        "run_id": run_id,
         "tier": tier,
         "plugins": plugin_list,
         "message": (
