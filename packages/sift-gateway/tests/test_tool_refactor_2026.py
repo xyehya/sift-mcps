@@ -507,7 +507,7 @@ class TestGetToolHelp:
 
     async def test_returns_help_for_valid_tool(self, tmp_path, monkeypatch):
         gateway, _ = _setup_case(tmp_path, monkeypatch, "HELP-001")
-        payload = await _call(gateway, "get_tool_help", {"tool_name": "vol3"})
+        payload = await _call(gateway, "get_tool_help", {"tool_name": "vol"})
         assert "error" not in payload
 
     async def test_returns_error_for_unknown_tool(self, tmp_path, monkeypatch):

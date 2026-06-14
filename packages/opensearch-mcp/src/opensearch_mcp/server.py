@@ -2503,13 +2503,22 @@ def opensearch_ingest(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def opensearch_ingest_status(case_id: str = "", case_dir: str = "") -> dict:
+def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str = "") -> dict:
     """Check status of running or recent ingest operations.
 
     Defaults to active case. Pass case_id="*" to see all cases.
+    In DB-active mode (BATCH-K4), local mirror files are not read. The tool
+    returns ingests=[] + authority="postgres-durable-jobs" and a pointer to
+    job_status(job_id) where the authoritative worker_label, current_step,
+    and terminal result_public live (app.job_status_public).
 
     Args:
         case_id: Filter to this case (default: active case). "*" for all.
+        case_dir: Gateway-injected authoritative case directory. Do not set;
+            the Gateway populates it from the DB active case.
+        job_id: Optional opaque job_id from opensearch_ingest dispatch response.
+            Included in the DB-active redirect so callers can call
+            job_status(job_id) directly for the durable job record.
     """
     from opensearch_mcp.ingest_status import db_status_active, read_active_ingests
 
@@ -2523,24 +2532,29 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "") -> dict:
             "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
         }
 
-    # BATCH-K4 authority cutover: in DB-active mode the durable Postgres job +
-    # provenance state is the authority for ingest/enrich status, read through
-    # the Gateway (job_status / app.opensearch_ingest_status). The agent process
-    # has no DB credentials by design, so this tool does not read the DB itself;
-    # it stops treating the tamperable local status JSON as authority and points
-    # the caller at the durable job status. This makes host/ingest-status file
-    # tampering unable to change portal/Gateway authority.
-    if db_status_active():
-        return {
+    # B3 (K4-preserving): in DB-active mode Postgres is the authoritative
+    # ingest-status authority (app.job_status_public). The agent backend has no
+    # DB credentials by design; local status JSON files can be tampered and MUST
+    # NOT be read (BATCH-K4 locked contract). Return ingests=[] and a pointer to
+    # the durable job authority. Callers poll job_status(job_id) for worker_label,
+    # current_step, and the terminal result_public.
+    # (Option A — gateway-injected DB row data — deferred; see backlog item.)
+    _db_active = db_status_active()
+    if _db_active:
+        resp: dict = {
             "ingests": [],
             "authority": "postgres-durable-jobs",
             "message": (
-                "DB-active mode: ingest/enrich status is served from durable "
-                "Postgres job state (not local status files). Poll the durable "
-                "job via the Gateway job status (the enqueue/start response "
-                "carries the job_id) or the Examiner Portal for live progress."
+                "Durable job authority is active. Local ingest-mirror files are "
+                "not read (BATCH-K4). Poll job_status(job_id=<job_id from ingest "
+                "response>) for realtime worker_label, current_step, and the "
+                "terminal result_public from app.job_status_public."
             ),
         }
+        if job_id:
+            resp["job_id"] = job_id
+            resp["next_step"] = f"Call job_status(job_id='{job_id}') for durable status."
+        return resp
 
     ingests = read_active_ingests()
 
@@ -3682,6 +3696,11 @@ def idx_ingest_memory(
     resp = {
         "status": "started",
         "pid": proc.pid,
+        # B4: expose run_id so the durable ingest_job handler can track this
+        # memory lane via _run_ids() → _mirror_until_terminal, giving it full
+        # parity with the disk lane (realtime worker_label, current_step,
+        # indexed_docs, artifacts_complete, parallel claim via FOR UPDATE SKIP LOCKED).
+        "run_id": run_id,
         "tier": tier,
         "plugins": plugin_list,
         "message": (

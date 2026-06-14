@@ -7,11 +7,15 @@ the agent and portal interoperate on todos.json.
 
 Security invariants: examiner role required for writes (readonly → 403),
 authenticated session required (401), must_reset blocks writes (403).
+
+B-MVP-023: migrated from the legacy sift_session JWT cookie to the
+Supabase-envelope harness. The legacy plane is disabled
+(legacy_portal_session_enabled=False) and a fake Supabase auth callback
+provides operator identity.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import secrets
 from pathlib import Path
@@ -19,20 +23,17 @@ from pathlib import Path
 import case_dashboard.routes as routes_mod
 import pytest
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+from case_dashboard.session_jwt import SESSION_ENVELOPE_COOKIE_NAME
 from starlette.testclient import TestClient
 
+from _supabase_reauth_harness import (
+    ReauthFakeSupabaseAuth,
+    operator_principal,
+    operator_envelope,
+    set_operator_session,
+)
+
 _SECRET = secrets.token_hex(32)
-_PBKDF2_ITERS = 600_000
-
-
-def _setup_examiner(passwords_dir: Path, examiner: str, password: str, *, must_reset: bool = False):
-    passwords_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    salt = secrets.token_bytes(32)
-    pw_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITERS).hex()
-    entry = {"hash": pw_hash, "salt": salt.hex(), "must_reset_password": must_reset}
-    (passwords_dir / f"{examiner}.json").write_text(json.dumps(entry))
-    return entry
 
 
 @pytest.fixture()
@@ -45,7 +46,12 @@ def passwords_dir(tmp_path, monkeypatch):
 @pytest.fixture()
 def app(passwords_dir, tmp_path, monkeypatch):
     monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
-    return create_dashboard_v2_app(session_secret=_SECRET, session_max_age=28800)
+    return create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        supabase_auth=ReauthFakeSupabaseAuth(),
+        legacy_portal_session_enabled=False,
+    )
 
 
 @pytest.fixture()
@@ -63,9 +69,9 @@ def active_case_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def examiner_cookie(passwords_dir):
-    _setup_examiner(passwords_dir, "alice", "password123")
-    return {COOKIE_NAME: generate_jwt("alice", "examiner", _SECRET)}
+def examiner_cookie():
+    """Session envelope cookie dict for the default operator (alice/examiner)."""
+    return {SESSION_ENVELOPE_COOKIE_NAME: operator_envelope(_SECRET)}
 
 
 def _todos_on_disk(case_dir: Path) -> list:
@@ -141,12 +147,19 @@ class TestCreateTodo:
         resp = client.post("/api/todos", json={"description": "x"})
         assert resp.status_code == 403
 
-    def test_readonly_role_forbidden(self, client, active_case_dir, passwords_dir):
-        _setup_examiner(passwords_dir, "bob", "password123")
-        token = generate_jwt("bob", "readonly", _SECRET)
-        resp = client.post(
-            "/api/todos", json={"description": "x"}, cookies={COOKIE_NAME: token}
+    def test_readonly_role_forbidden(self, active_case_dir, tmp_path, monkeypatch):
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        monkeypatch.setattr(routes_mod, "_PASSWORDS_DIR", tmp_path / "passwords")
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET, session_max_age=28800,
+            supabase_auth=ReauthFakeSupabaseAuth(
+                principal=operator_principal(system_role="readonly")
+            ),
+            legacy_portal_session_enabled=False,
         )
+        c = TestClient(app, raise_server_exceptions=True)
+        set_operator_session(c, _SECRET)
+        resp = c.post("/api/todos", json={"description": "x"})
         assert resp.status_code == 403
 
     def test_must_reset_forbidden(self, active_case_dir, passwords_dir, tmp_path, monkeypatch):
@@ -241,12 +254,20 @@ class TestUpdateTodo:
         )
         assert resp.status_code == 404
 
-    def test_readonly_forbidden(self, client, active_case_dir, passwords_dir, examiner_cookie):
+    def test_readonly_forbidden(self, client, active_case_dir, examiner_cookie, tmp_path, monkeypatch):
         tid = self._create(client, examiner_cookie)
-        token = generate_jwt("bob", "readonly", _SECRET)
-        resp = client.patch(
-            f"/api/todos/{tid}", json={"status": "completed"}, cookies={COOKIE_NAME: token}
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        monkeypatch.setattr(routes_mod, "_PASSWORDS_DIR", tmp_path / "passwords")
+        ro_app = create_dashboard_v2_app(
+            session_secret=_SECRET, session_max_age=28800,
+            supabase_auth=ReauthFakeSupabaseAuth(
+                principal=operator_principal(system_role="readonly")
+            ),
+            legacy_portal_session_enabled=False,
         )
+        ro_client = TestClient(ro_app, raise_server_exceptions=True)
+        set_operator_session(ro_client, _SECRET)
+        resp = ro_client.patch(f"/api/todos/{tid}", json={"status": "completed"})
         assert resp.status_code == 403
 
 
@@ -284,10 +305,20 @@ class TestDeleteTodo:
         resp = client.delete("/api/todos/TODO-alice-001")
         assert resp.status_code == 403
 
-    def test_readonly_forbidden(self, client, active_case_dir, passwords_dir, examiner_cookie):
+    def test_readonly_forbidden(self, client, active_case_dir, examiner_cookie, tmp_path, monkeypatch):
         tid = self._create(client, examiner_cookie)
-        token = generate_jwt("bob", "readonly", _SECRET)
-        resp = client.delete(f"/api/todos/{tid}", cookies={COOKIE_NAME: token})
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        monkeypatch.setattr(routes_mod, "_PASSWORDS_DIR", tmp_path / "passwords")
+        ro_app = create_dashboard_v2_app(
+            session_secret=_SECRET, session_max_age=28800,
+            supabase_auth=ReauthFakeSupabaseAuth(
+                principal=operator_principal(system_role="readonly")
+            ),
+            legacy_portal_session_enabled=False,
+        )
+        ro_client = TestClient(ro_app, raise_server_exceptions=True)
+        set_operator_session(ro_client, _SECRET)
+        resp = ro_client.delete(f"/api/todos/{tid}")
         assert resp.status_code == 403
 
 

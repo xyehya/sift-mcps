@@ -433,6 +433,9 @@ class TestDetectionsToolRegistration:
             for name, obj in inspect.getmembers(srv)
             if callable(obj) and name.startswith("opensearch_") and not name.startswith("_")
         ]
-        # 15 search/ingest/enrich tools + opensearch_host_fix (idx_install_pipelines
-        # removed in Phase 6 — ensure_winlog_pipeline runs at startup instead)
-        assert len(tool_names) == 16
+        # 15 opensearch_* callables: search/count/aggregate/get_event/timeline/
+        # field_values/status/shard_status/case_summary/inspect_container/
+        # ingest/ingest_status/enrich_intel/list_detections/host_fix.
+        # (idx_install_pipelines removed in Phase 6; ensure_winlog_pipeline
+        # runs at startup instead.)
+        assert len(tool_names) == 15

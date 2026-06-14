@@ -2,14 +2,14 @@ category: volatility
 common_binary_dir: /opt/volatility3
 
 tools:
-  - name: vol3
+  - name: vol
     binary: vol
     input_style: flag
     input_flag: "-f"
     output_format: json
     timeout_seconds: 1200
     interactive: false
-    description: "Volatility 3 memory forensics framework"
+    description: "Volatility 3 memory forensics framework (invocable as 'vol')"
     fk_tool_name: "Volatility 3"
     common_flags:
       - flag: "-r"
