@@ -146,7 +146,7 @@ def _case_text(case: ActiveCase, tool_name: str | None = None) -> TextContent:
     return TextContent(type="text", text=json.dumps(payload, indent=2))
 
 
-_READ_ONLY_NONCORE_TOOLS = frozenset({"capability_guide", "get_tool_help", "job_status"})
+_READ_ONLY_NONCORE_TOOLS = frozenset({"capability_guide", "get_tool_help", "running_commands_status"})
 _CASE_CONTEXT_RESPONSE_TOOLS = frozenset({"case_info", "evidence_info", "capability_guide"})
 
 
@@ -1045,7 +1045,7 @@ class OpenSearchJobDispatchMiddleware(Middleware):
     ``sift-opensearch-worker@`` units (the only place with a shared mount
     namespace) claim and run. Dispatch is NON-BLOCKING: it returns an opaque
     job_id immediately so the MCP surface never blocks on a long ingest; the agent
-    polls ``job_status`` for realtime ``worker_label`` / ``current_step``.
+    polls ``running_commands_status`` for realtime ``worker_label`` / ``current_step``.
 
     Placement: INNERMOST middleware. By the time on_call_tool runs here the call
     has already passed auth, addon-authority, active-case, the pre-dispatch audit
@@ -1112,7 +1112,7 @@ class OpenSearchJobDispatchMiddleware(Middleware):
             "dispatched_to": "opensearch-worker",
             "next_step": (
                 "Dispatched to a dedicated OpenSearch worker (non-blocking). Poll "
-                "job_status(job_id) for realtime progress (worker_label, "
+                "running_commands_status(job_id) for realtime progress (worker_label, "
                 "current_step) and the terminal result_public."
             ),
         }

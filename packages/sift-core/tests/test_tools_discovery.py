@@ -35,7 +35,10 @@ def test_tool_help_inventory_returns_availability_booleans():
     assert inv["total_available"] == sum(1 for t in inv["tools"] if t["available"])
 
     for entry in inv["tools"]:
-        assert set(entry) == {"name", "category", "available"}
+        # "invoke_as" is present only when the catalog name differs from the
+        # invocable binary (e.g. "regripper" → invoke_as "rip.pl").
+        assert set(entry) <= {"name", "category", "available", "invoke_as"}
+        assert {"name", "category", "available"} <= set(entry)
         assert isinstance(entry["available"], bool)
 
     assert "run_command" in inv["hint"]
@@ -96,3 +99,28 @@ def test_tool_help_unknown_tool_errors_helpfully():
 def test_run_command_help_mentions_inventory_discovery():
     help_card = get_tool_help("run_command")
     assert "get_tool_help('inventory')" in help_card["discovery"]
+
+
+def test_inventory_regripper_shows_invoke_as_rip_pl():
+    """Catalog name 'regripper' must surface invoke_as='rip.pl' so agents know
+    the real binary name without trial-and-error."""
+    inv = get_tool_help("inventory")
+    rr = next((t for t in inv["tools"] if t["name"] == "regripper"), None)
+    assert rr is not None, "regripper must be in catalog"
+    assert rr.get("invoke_as") == "rip.pl", (
+        "regripper catalog entry must surface invoke_as='rip.pl' (the real binary)"
+    )
+
+
+def test_inventory_vol_catalog_name_matches_binary():
+    """Catalog name for Volatility 3 must be 'vol' (the invocable binary),
+    not 'vol3'. No invoke_as needed when name == binary."""
+    inv = get_tool_help("inventory")
+    # 'vol3' must NOT appear — it was the old broken catalog name.
+    vol3_entry = next((t for t in inv["tools"] if t["name"] == "vol3"), None)
+    assert vol3_entry is None, "old 'vol3' catalog name must be gone"
+    # 'vol' must exist.
+    vol_entry = next((t for t in inv["tools"] if t["name"] == "vol"), None)
+    assert vol_entry is not None, "catalog must have a 'vol' entry"
+    # Binary matches name, so no invoke_as needed.
+    assert "invoke_as" not in vol_entry

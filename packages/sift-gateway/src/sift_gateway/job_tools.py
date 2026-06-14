@@ -19,7 +19,7 @@ from mcp.types import TextContent
 logger = logging.getLogger(__name__)
 
 RUN_COMMAND_JOB_TOOL = "run_command_job"
-JOB_STATUS_TOOL = "job_status"
+JOB_STATUS_TOOL = "running_commands_status"
 
 # NOTE: the gateway no longer owns or intercepts evidence ingest. The
 # opensearch-mcp add-on owns the real ingest+query surface (``opensearch_ingest``)
@@ -45,7 +45,7 @@ def gateway_job_tool_specs() -> list[dict[str, Any]]:
             "description": (
                 "Enqueue a sandboxed run_command request through the Postgres "
                 "job state machine for long-running or parallel work. Returns a "
-                "pollable UUID job_id only; use job_status to retrieve terminal "
+                "pollable UUID job_id only; use running_commands_status to retrieve terminal "
                 "status and sanitized output refs."
             ),
             "parameters": {
@@ -75,7 +75,7 @@ def gateway_job_tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": JOB_STATUS_TOOL,
-            "description": "Read sanitized status for a durable Postgres job.",
+            "description": "Read sanitized status for a durable Postgres job (run_command_job or opensearch ingest). Pass the UUID job_id returned by run_command_job or opensearch_ingest.",
             "parameters": {
                 "type": "object",
                 "properties": {"job_id": {"type": "string"}},
