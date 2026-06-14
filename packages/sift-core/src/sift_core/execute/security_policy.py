@@ -135,7 +135,7 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
         "RBCmd",
         "rbcmd",
         "SrumECmd",
-        "sruecmd",
+        "srumecmd",
         "SQLECmd",
         "sqlecmd",
         "bstrings",
