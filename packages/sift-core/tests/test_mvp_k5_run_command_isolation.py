@@ -34,7 +34,14 @@ from sift_core.execute.security_policy import SECURITY_POLICY_ENV
 
 # Reuse the durable-job fake Postgres from the D1 worker tests so the receipt
 # path under test is identical to production; only the SQL engine is simulated.
-from .test_job_worker import FakeJobDB, _Job, _worker
+from .test_job_worker import (
+    FakeJobDB,
+    _Conn as _JobConn,
+    _Cursor as _JobCursor,
+    _Job,
+    _unwrap_jsonb,
+    _worker,
+)
 
 _KEY = b"k5-run-command-isolation-derived-key32"
 
@@ -382,3 +389,129 @@ def test_run_command_cannot_read_secret_env_via_proc(db, sealed_case, monkeypatc
     blob = json.dumps(stored.result_public)
     assert "sr-secret-should-not-leak" not in blob
     assert "postgresql://u:p@h/db" not in blob
+
+
+# --- B-MVP-027 regression: durable lane reaches exec, no pre-exec KeyError -----
+#
+# The durable ``run_command`` lane historically failed with
+# ``unhandled worker error: KeyError`` BEFORE the command executed, while the
+# synchronous lane worked. Root cause: when the agent passed ``evidence_refs``,
+# the worker handler dropped two pieces of the synchronous-lane contract that
+# ``_run_command`` relies on — the per-job DB authority flag
+# (``ActiveCaseContext(db_active=True)``) and the Gateway-injected
+# ``_resolved_evidence_refs`` private arg. Without them, the evidence-ref
+# resolution branch in ``_run_command`` could not satisfy the trusted-internal
+# contract and the worker tore down before reaching ``execute()``.
+#
+# These tests lock the fix in by driving the FULL real ``JobWorker.run_once``
+# loop (not just the handler) for the canonical minimal agent calls — a plain
+# command and an evidence-ref command — and asserting the durable job reaches
+# exec (status ``succeeded``) with no worker-level error summary.
+
+
+class _RoundTripConn(_JobConn):
+    def cursor(self):
+        return _RoundTripCursor(self)
+
+
+class _RoundTripCursor(_JobCursor):
+    """Serialize jsonb params through json.dumps/loads like real Postgres.
+
+    The base fake stores the worker's ``_jsonb``-wrapped dicts as live Python
+    objects, so it never exercises serialization. Real Postgres serializes the
+    payload to jsonb on write and rebuilds a plain dict on read. Round-tripping
+    the ``complete_job`` / ``record_job_step`` payloads here keeps the
+    durable-lane regression honest: any value the worker persists in
+    ``result_public`` / step detail must survive ``json.dumps`` (the real wire).
+    """
+
+    def execute(self, sql, params=None):
+        s = " ".join(sql.lower().split())
+        if ("app.complete_job" in s or "app.record_job_step" in s) and params:
+            rt = []
+            for p in params or ():
+                obj = _unwrap_jsonb(p)
+                if isinstance(obj, dict):
+                    obj = json.loads(json.dumps(obj, default=str))
+                rt.append(obj)
+            params = tuple(rt)
+        return super().execute(sql, params)
+
+
+class _JsonRoundTripDB(FakeJobDB):
+    """FakeJobDB whose connections JSON-round-trip jsonb writes."""
+
+    def connect(self):
+        return _RoundTripConn(self)
+
+
+def _roundtrip_db():
+    """A JSON-round-tripping fake whose cursor serializes jsonb on write."""
+    _Job._seq = 0
+    db = _JsonRoundTripDB()
+    return db
+
+
+def test_b_mvp_027_plain_command_reaches_exec_via_worker_loop(sealed_case):
+    """A minimal no-evidence durable run_command must reach exec, not KeyError."""
+    db = _roundtrip_db()
+    job = _enqueue_run_command(
+        db, sealed_case,
+        command="echo durable-lane-ok",
+        purpose="prove durable lane reaches exec",
+    )
+    w = _worker(db, {"run_command": run_command_job_handler})
+    w.run_once(job_types=["run_command"])
+
+    stored = db.get(job.id)
+    # Reached exec and completed: not requeued/failed with a worker error.
+    assert stored.status == "succeeded", stored.error_summary
+    assert "unhandled worker error" not in (stored.error_summary or "")
+    assert stored.result_public.get("success") is True
+    assert stored.result_public["receipt"]["command_plan_sha256"]
+
+
+def test_b_mvp_027_evidence_ref_command_reaches_exec_via_worker_loop(db, sealed_case):
+    """The evidence-ref durable path (the original KeyError trigger) reaches exec.
+
+    Mirrors the Gateway contract: ``evidence_refs`` in spec_public plus the
+    resolved internal refs in spec_internal that ``run_command_job_handler``
+    re-injects as the trusted-internal ``_resolved_evidence_refs`` arg.
+    """
+    ev_path = str(sealed_case / "evidence" / "disk.txt")
+    job = db.enqueue(
+        _Job(
+            "run_command",
+            case_id="K5-001",
+            max_attempts=1,
+            spec_public={
+                "command": "cat evidence/disk.txt",
+                "purpose": "read sealed evidence via durable lane",
+                "evidence_refs": ["disk.txt"],
+            },
+            spec_internal={
+                "case_dir": str(sealed_case),
+                "case_key": "K5-001",
+                "examiner": "analyst",
+                "resolved_evidence_refs": [
+                    {
+                        "ref": "disk.txt",
+                        "evidence_id": "",
+                        "display_path": "evidence/disk.txt",
+                        "path": ev_path,
+                    }
+                ],
+            },
+        )
+    )
+    w = _worker(db, {"run_command": run_command_job_handler})
+    w.run_once(job_types=["run_command"])
+
+    stored = db.get(job.id)
+    assert stored.status == "succeeded", stored.error_summary
+    assert "unhandled worker error" not in (stored.error_summary or "")
+    receipt = stored.result_public["receipt"]
+    assert receipt["success"] is True
+    # Public refs come from the trusted-internal display_path contract.
+    assert receipt["evidence_refs"] == ["evidence/disk.txt"]
+    assert len(receipt["input_sha256s"]) == 1
