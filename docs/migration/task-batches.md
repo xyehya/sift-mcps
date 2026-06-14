@@ -28,13 +28,25 @@ Live baseline (from prior sessions): clone-entry `./install.sh` stages into `/op
 
 ## Wave Order
 
-1. RUN-3 hardening completion (top priority): R3-CEIL/R3-FLOOR/R3-AA/R3-GATE.
-2. Discovery & operators: OR1, OR2, OR4 → OR3.
-3. Hardening research/audit: HR1 → HR2 → HR3.
-4. Add-on: AD1 → AD2.
-5. Portal/TLS/product gaps: PT1 → PT2 and TLS1.
-6. Cleanup/ops: CL1/CL2/DB1/UN1/RG1.
-7. Live validation closeout: LV1.
+Completed waves (landed): RUN-3 (R3-CEIL/FLOOR/AA/GATE), Discovery/operators (OR1-OR4),
+Hardening (HR1-HR3), Add-on (AD1-AD2), PT1, TLS1, DB1, CL1, CL3a/b, UN1, RG1.
+
+Remaining sequence (operator decision 2026-06-14):
+
+1. **Optimizations first** — run_command / agent execution optimizations (define + sequence; see
+   B-MVP-028). This is the immediate next priority before any product-gap batch.
+2. **Portal RAG** — BATCH-PT2 (knowledge-plane document management).
+3. **Supabase default-key research** — BATCH-SB1, reframed: research a lighter remediation for the
+   default CLI demo keys (rotate/replace post-install) that does NOT require a full self-managed
+   compose. Full compose is the fallback, not the first move.
+4. **Repo rename at the end** — BATCH-CL2 (`ProtocolSiftGateway` + add_ons layout).
+5. **Legacy removal sweep** — resolve B-MVP-023: remove `legacy_portal_session_enabled` fallback and
+   delete any remaining legacy code paths/tests (fold under CL-cleanup discipline).
+6. **End-to-end LAST** — BATCH-LV1 is the final closeout run, after the above. Do not pull it forward.
+
+Baseline constraint (operator): the SIFT VM ships a fixed default kernel; kernel upgrades are NOT
+encouraged. Every Floor control must hold at that baseline (Landlock ABI v4). ioctl-scoping (ABI v5)
+is therefore NOT a planned dependency — ioctl is covered by the seccomp filter at the v4 baseline.
 
 ## Batch Index
 
@@ -459,24 +471,32 @@ Acceptance:
 
 - TLS posture is usable in lab and documented for operator trust bootstrap and renewals.
 
-## BATCH-SB1 - Self-managed Supabase compose with generated secrets
+## BATCH-SB1 - Supabase default-key remediation (research-first; compose is fallback)
 
-Status: DEFERRED to after BATCH-LV1 (operator 2026-06-13). Current proof proceeds on CLI loopback stack.
+Status: RESEARCH-FIRST (operator 2026-06-14). The concern is the well-known default demo JWT secret +
+anon/service_role keys that ship with every `supabase` CLI install. Before committing to a full
+self-managed compose, research a lighter path that removes the default-key risk without it.
 
 Dependencies: BATCH-HR3.
 
 Scope:
 
-- `scripts/setup-supabase.sh`, compose files, install bootstrap path
+- `scripts/setup-supabase.sh`, install bootstrap path; compose files only if research concludes they
+  are required.
 
 Exact work:
 
-- Replace CLI-demo loopback handling only after LV1 authorization.
-- Keep clone-entry flow and migration-safe credential generation/rotation.
+- RESEARCH (do first, write findings note): can the install rotate/replace the CLI's default
+  `JWT secret` + regenerate `anon`/`service_role` keys in-place on the existing CLI/loopback stack
+  (e.g. `supabase` config override + key re-mint + restart) so no installation runs with the public
+  demo keys — WITHOUT standing up a full self-managed compose?
+- Only if research shows in-place rotation is infeasible/insufficient: fall back to self-managed
+  compose with generated secrets, keeping clone-entry flow and migration-safe rotation.
 
 Acceptance:
 
-- Fresh install uses generated non-demo secrets and end-to-end auth works before non-lab deployment.
+- No installation runs with the public default demo keys. Documented remediation (rotation or compose)
+  with end-to-end auth proven before any non-lab deployment.
 
 ## BATCH-CL3a - Supabase fail-closed operator-password re-verification
 

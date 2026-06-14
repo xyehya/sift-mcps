@@ -268,5 +268,7 @@ Next steps, gated in order:
 ## 7. Backlog (out of RUN-3 scope; B# in Session-Notes)
 - `run_command_structured({stages})` second entrypoint (C1 migration) — no deprecation of string API.
 - LXD/microVM Tier-2 for malware-adjacent binaries (C4 dropped for hackathon).
-- Landlock ioctl-scoping (ABI v5) when VM kernel ≥ 6.10.
+- ~~Landlock ioctl-scoping (ABI v5) when VM kernel ≥ 6.10~~ — DROPPED as a dependency (operator
+  2026-06-14): SIFT VM ships a fixed default kernel, upgrades not encouraged. ioctl is covered by the
+  seccomp filter at the Landlock ABI v4 baseline; the Floor must hold at v4 with no kernel bump.
 - Make AppArmor enforce the install.sh default (carry-over from RUN-1 B-MVP-018 note).

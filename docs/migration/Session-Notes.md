@@ -13,6 +13,29 @@ Last updated: 2026-06-14.
 
 ## Current Change Log
 
+### 2026-06-14 - Post-RUN-3 pipeline decisions locked (sequence, Supabase, legacy, kernel baseline)
+
+Status: DONE
+
+Changed (operator decisions, persisted to task-batches.md Wave Order + the backlog table):
+- Remaining sequence: (1) run_command/agent OPTIMIZATIONS first (B-MVP-028), (2) Portal RAG (PT2),
+  (3) Supabase default-key research (SB1), (4) repo rename (CL2) near the end, (5) legacy removal
+  sweep (B-MVP-023), (6) end-to-end LV1 LAST. LV1 is not to be pulled forward.
+- Kernel baseline: SIFT VM ships a fixed default kernel; kernel upgrades NOT encouraged. Every Floor
+  control must hold at Landlock ABI v4. ioctl-scoping (ABI v5) is dropped as a dependency — ioctl is
+  covered by the seccomp filter at the v4 baseline.
+- Supabase (SB1): reframed research-first. Research rotating/re-minting the default `supabase` CLI demo
+  JWT secret + anon/service_role keys in place post-install (no install runs with public demo keys),
+  avoiding a full self-managed compose unless rotation proves insufficient.
+- Legacy (B-MVP-023): DECISION = REMOVE the `legacy_portal_session_enabled` fallback and sweep/delete
+  any remaining legacy code paths/tests. Re-owned to CL2 cleanup discipline.
+
+Validation:
+- `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`, `git diff --check`.
+
+Next:
+- Define the optimization scope (B-MVP-028) and start there before PT2.
+
 ### 2026-06-14 - RUN-3 live MCP gate complete; seccomp=kill + apparmor=enforce live; evidence sealed
 
 Status: DONE
@@ -115,11 +138,12 @@ Next:
 | --- | --- | --- | --- | --- |
 | B-MVP-002 | Backlog | OPEN | Rename repo to `ProtocolSiftGateway` is decided at architecture level; CL2 pending operator/infra timing. | BATCH-CL2 |
 | B-MVP-006 | Backlog | OPEN | Confirm portal knowledge-document policy for shared/reference-only behavior in PT2. | BATCH-PT2 |
-| B-MVP-012 | Backlog | DEFERRED | Self-managed Supabase compose remains deferred after LV1; confirm non-lab deployment timing. | BATCH-SB1 |
+| B-MVP-012 | Backlog | OPEN | DECISION (2026-06-14): research-first. Research a lighter remediation for the default `supabase` CLI demo JWT secret + anon/service_role keys (rotate/re-mint in place post-install) that avoids a full self-managed compose; compose is the fallback only if rotation is insufficient. No install may run with the public demo keys. | BATCH-SB1 |
 | B-MVP-019 | Backlog | OPEN | Ensure add-on register path fields are sourced from staged `/opt/sift-mcps` paths for first real add-on launch. | BATCH-LV1 |
-| B-MVP-023 | Backlog | OPEN | Decide whether to keep legacy `legacy_portal_session_enabled` fallback or fully delete legacy session branch/tests. | BATCH-HR3 |
-| B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green on live VM 2026-06-14. Push pending operator authorization. | BATCH-R3-* |
+| B-MVP-023 | Backlog | OPEN | DECISION (2026-06-14): REMOVE. Delete the `legacy_portal_session_enabled` fallback and sweep + delete any remaining legacy code paths/tests (operator: remove anything legacy still in code). | BATCH-CL2 |
+| B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green + committed 4ee3d1f pushed to origin/main 2026-06-14. | BATCH-R3-* |
 | B-MVP-027 | Backlog | OPEN | `run_command_job` durable lane (Postgres job state machine) fails with `unhandled worker error: KeyError` before exec; synchronous `run_command` lane unaffected. Pre-existing; fix the durable path. | BATCH-R3-* |
+| B-MVP-028 | Backlog | OPEN | Define + sequence the run_command / agent execution optimizations (operator: "optimizations first" before PT2). Scope to be specified next session. | BATCH-R3-* |
 
 ## Validation Commands
 
