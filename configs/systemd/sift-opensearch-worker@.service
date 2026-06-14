@@ -50,53 +50,51 @@ Environment=HF_HOME=${SIFT_HF_HOME}
 Environment=RAG_MODEL_NAME=${SIFT_RAG_MODEL_NAME}
 Environment=RAG_MODEL_REVISION=${SIFT_RAG_MODEL_REVISION}
 
-# === BATCH-HR3 systemd hardening (identical to sift-job-worker.service) ======
-# Same containment rationale as sift-gateway.service / sift-job-worker.service:
-# this worker performs FUSE image mounts via sudo during ingest, so
-# NoNewPrivileges / PrivateDevices / RestrictNamespaces / SystemCallFilter are
-# OMITTED (would break sudo + FUSE). The safe, tested subset is applied below.
+# === Worker hardening — FUSE-CONSTRAINED PROFILE ============================
+# This worker sudo-mounts forensic images via FUSE (ewfmount/xmount) during
+# ingest. FUSE channel creation (the fusermount mount() syscall) has TWO hard
+# kernel/systemd requirements that were EMPIRICALLY established on the live VM
+# (2026-06-14, transient systemd-run probes against the real E01):
+#
+#   1. CAP_SYS_ADMIN must be in the unit CapabilityBoundingSet. fusermount is
+#      setuid-root but the bounding set caps even a setuid child; without
+#      CAP_SYS_ADMIN the mount fails `fusermount: mount failed: Operation not
+#      permitted` / "Unable to create fuse channel". (Probe G6/H1: adding
+#      CAP_SYS_ADMIN flipped FAIL->MOUNT_OK.)
+#   2. The unit must run in the HOST mount namespace. EVERY systemd directive
+#      that forces a private mount namespace — ProtectSystem=*, ProtectHome,
+#      PrivateTmp, ReadOnly/ReadWritePaths, ProtectKernelTunables/Modules/Logs,
+#      ProtectControlGroups — makes fusermount fail with the same error EVEN WITH
+#      CAP_SYS_ADMIN and MountFlags=shared. (Probes F1-F4, P1-P2, Q1-Q5 all
+#      FAIL; the FUSE-safe subset below is MOUNT_OK.) MountFlags=shared does NOT
+#      rescue a private-namespace unit — the original decoupling design's premise
+#      that it would was wrong; see Session-Notes 2026-06-14.
+#
+# CONSEQUENCE / DECISION-PENDING: this worker therefore CANNOT carry
+# ProtectSystem=strict or the path/kernel-mount protections the gateway uses.
+# It keeps the namespace-free hardening (below) + the gateway's privilege-drop
+# caps + CAP_SYS_ADMIN. This is a real, narrow posture reduction vs the gateway,
+# justified because the worker has NO listener, NO auth surface, NO inbound
+# request path — it only claims durable jobs from Postgres and runs forensic
+# tooling on already-sealed evidence inside the case jail, with mounts gated by
+# the narrow /etc/sudoers.d/sift-ingest-mount allowlist. The gateway is
+# untouched (MountFlags= empty, full HR3). FLAGGED for /security-review before
+# merge; an alternative (mount in a dedicated non-systemd mount helper, or a
+# bwrap/nsjail FUSE shim) may tighten this later.
 UMask=0077
-ProtectSystem=strict
-ReadWritePaths=/var/lib/sift /cases /var/cache/sift
-ProtectHome=tmpfs
-PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
 ProtectClock=true
 ProtectHostname=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
-#
-# === THE ONLY RELAXATION vs sift-job-worker.service =========================
-# MountFlags=shared
-#   Root cause of the E01 FUSE failure: ProtectSystem/ProtectHome/PrivateTmp put
-#   the unit in a private mount namespace whose root defaults to SLAVE
-#   propagation; the kernel then refuses to create a FUSE mount in it
-#   (fusermount: Operation not permitted). MountFlags=shared makes this unit's
-#   mount namespace use SHARED propagation, so (a) the sudo ewfmount/xmount/loop
-#   FUSE mount succeeds and (b) it is visible to this worker's own EZ/TSK/Hayabusa
-#   reads of the mounted volume. This is the documented, narrowest fix.
-#
-#   Why this is acceptable HERE and rejected on the gateway:
-#     - The gateway is the policy boundary: it holds the portal/agent auth
-#       surface, the MCP listener, and every secret-bearing request path. The
-#       operator's standing rule is "do not relax the gateway", so the gateway
-#       keeps MountFlags= (empty) and every HR3 directive.
-#     - This worker has NO listener, NO auth surface, NO inbound request path. It
-#       only claims durable jobs from Postgres and runs forensic tooling on
-#       already-sealed evidence inside the case jail. Relaxing mount-namespace
-#       PROPAGATION on this isolated unit does not widen the gateway's attack
-#       surface; it does not add a capability, a device, a syscall, or a path.
-#     - Mounts are still gated by the existing narrow /etc/sudoers.d/sift-ingest-mount
-#       allowlist (xmount/ewfmount/mount/umount/ntfs-3g/losetup/qemu-nbd/
-#       partprobe/fusermount(3)/modprobe nbd). MountFlags=shared changes only
-#       propagation, not WHAT may be mounted or by whom.
-MountFlags=shared
+# Bounding set: the gateway's privilege-drop caps (CAP_SETUID/SETGID/SETPCAP for
+# `sudo -n` to root, CAP_AUDIT_WRITE for the sudoers audit plugin, omitting them
+# gives `sudo: unable to change to root gid: Operation not permitted`) + the
+# file-cap venv interpreter's CAP_LINUX_IMMUTABLE + CAP_SYS_ADMIN for the FUSE
+# channel. This is the gateway's set plus CAP_SYS_ADMIN (the gateway mounts in
+# its own privileged path; this isolated worker needs the explicit bound).
+CapabilityBoundingSet=CAP_LINUX_IMMUTABLE CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_AUDIT_WRITE CAP_SYS_ADMIN
 # === end hardening ==========================================================
 
 [Install]
