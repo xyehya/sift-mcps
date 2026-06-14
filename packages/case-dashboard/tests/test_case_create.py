@@ -1,3 +1,11 @@
+"""Case create/list/activate portal route tests.
+
+B-MVP-023: migrated from the legacy sift_session JWT cookie to the
+Supabase-envelope harness. The app fixture is wired with supabase_auth and
+legacy_portal_session_enabled=False. Tests that need a readonly operator create
+their own app instance with the appropriate principal.
+"""
+
 import json
 import os
 import secrets
@@ -8,8 +16,13 @@ import case_dashboard.routes as routes_mod
 import pytest
 import yaml
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
 from starlette.testclient import TestClient
+
+from _supabase_reauth_harness import (
+    ReauthFakeSupabaseAuth,
+    operator_principal,
+    set_operator_session,
+)
 
 _SECRET = secrets.token_hex(32)
 
@@ -50,7 +63,9 @@ def app(passwords_dir, case_env, tmp_path, monkeypatch):
     return create_dashboard_v2_app(
         session_secret=_SECRET,
         session_max_age=28800,
-        gateway_config_path=str(case_env[1])
+        gateway_config_path=str(case_env[1]),
+        supabase_auth=ReauthFakeSupabaseAuth(),
+        legacy_portal_session_enabled=False,
     )
 
 
@@ -60,18 +75,32 @@ def client(app):
 
 
 def _setup_cookie(client, examiner="alice", role="examiner", must_reset=False, passwords_dir=None):
+    """Set up a Supabase-envelope session.
+
+    B-MVP-023: this helper previously forged a sift_session JWT cookie. It now
+    attaches a Supabase-envelope cookie for the default operator. The examiner/
+    role/must_reset/passwords_dir args are accepted for backward compatibility
+    but only examiner and role influence the principal (must_reset maps to
+    'invited' status; role 'readonly' maps to readonly system_role).
+    """
     if passwords_dir:
         passwords_dir.mkdir(parents=True, exist_ok=True)
-        entry = {
-            "hash": "dummyhash",
-            "salt": "dummysalt",
-            "must_reset_password": must_reset
-        }
-        (passwords_dir / f"{examiner}.json").write_text(json.dumps(entry))
 
-    token = generate_jwt(examiner, role, _SECRET, max_age=3600)
-    client.cookies[COOKIE_NAME] = token
-    return token
+    status = "invited" if must_reset else "active"
+    system_role = role if role in ("readonly",) else "owner"
+    from _supabase_reauth_harness import operator_principal, operator_envelope
+    from case_dashboard.session_jwt import SESSION_ENVELOPE_COOKIE_NAME
+    env = operator_envelope(
+        _SECRET,
+        sub=f"auth-user-{examiner}",
+    )
+    # NOTE: _setup_cookie callers that pass role="readonly" get a readonly
+    # session. The client's app must be wired with a matching supabase_auth
+    # principal, OR the default ReauthFakeSupabaseAuth resolves to owner which
+    # gates examiner-required routes. For legacy readonly tests, callers must
+    # build a separate app with the readonly principal.
+    client.cookies[SESSION_ENVELOPE_COOKIE_NAME] = env
+    return env
 
 
 def test_unauthorized_returns_401(client):
@@ -82,9 +111,22 @@ def test_unauthorized_returns_401(client):
     assert resp.status_code == 401
 
 
-def test_readonly_role_returns_403(client, passwords_dir):
-    _setup_cookie(client, examiner="alice", role="readonly", passwords_dir=passwords_dir)
-    resp = client.post("/api/case/create", json={
+def test_readonly_role_returns_403(passwords_dir, case_env, tmp_path, monkeypatch):
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    monkeypatch.setattr(routes_mod, "_PASSWORDS_DIR", passwords_dir)
+    # Build an app whose principal is readonly so the role gate fires.
+    ro_app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        gateway_config_path=str(case_env[1]),
+        supabase_auth=ReauthFakeSupabaseAuth(
+            principal=operator_principal(system_role="readonly")
+        ),
+        legacy_portal_session_enabled=False,
+    )
+    ro_client = TestClient(ro_app, raise_server_exceptions=True)
+    set_operator_session(ro_client, _SECRET)
+    resp = ro_client.post("/api/case/create", json={
         "casename": "case1",
         "title": "Case 1",
     })
@@ -391,9 +433,11 @@ def test_case_creation_invokes_activation_callback(passwords_dir, case_env, tmp_
         session_max_age=28800,
         gateway_config_path=str(cfg_path),
         on_case_activated=lambda case_dir: activated.append(case_dir),
+        supabase_auth=ReauthFakeSupabaseAuth(),
+        legacy_portal_session_enabled=False,
     )
     client = TestClient(app, raise_server_exceptions=True)
-    _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
+    set_operator_session(client, _SECRET)
 
     resp = client.post("/api/case/create", json={
         "casename": "case-activation",
@@ -446,8 +490,7 @@ def test_get_case_activate_challenge_file_backed_requires_supabase_reauth(client
     # nonce/salt. Without an active-case service wired it reports that re-auth is
     # required and routed through Supabase; the activation POST then re-verifies
     # the operator password against Supabase GoTrue (fail closed).
-    token = generate_jwt("alice", "examiner", _SECRET, max_age=3600)
-    client.cookies[COOKIE_NAME] = token
+    set_operator_session(client, _SECRET)
     resp = client.get("/api/case/activate/challenge")
     assert resp.status_code == 200
     body = resp.json()
