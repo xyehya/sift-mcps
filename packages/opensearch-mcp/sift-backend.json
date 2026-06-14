@@ -8,13 +8,23 @@
   "instructions": "Use this backend for indexed evidence search, aggregation, timeline analysis, ingest, and enrichment. It is not an independent reference source; use reference-providing backends for grounding.",
   "default_case_scoped": true,
   "data_plane": {
-    "dependencies": ["opensearch", "postgres-opensearch-provenance", "postgres-host-identity"],
+    "dependencies": [
+      "opensearch",
+      "postgres-opensearch-provenance",
+      "postgres-host-identity"
+    ],
     "writes": true,
     "notes": "Derived, rebuildable search plane. Indexed documents are case-scoped (case-<case_id>-<type>-<host>) and carry vhir.case_id / vhir.evidence_id / vhir.provenance_id stamped by the ingest job adapter. Index and provenance metadata are registered in authoritative Postgres (app.opensearch_indices / app.opensearch_ingest_provenance). In DB-active mode, ingest/enrich status is served from durable Postgres job state (app.job_status_public / app.opensearch_ingest_status) and host-identity decisions/corrections are recorded in app.host_identity_decisions; the local ingest-status JSON and host-dictionary.yaml are parser-compatibility/debug artifacts only and cannot change DB authority. Hostname detection/index naming remains required derived parser metadata. Holds no authority over cases, evidence seal, findings, or reports."
   },
   "capabilities": {
-    "provides": ["search", "ingest", "enrichment"],
-    "requires": ["http://localhost:9200"],
+    "provides": [
+      "search",
+      "ingest",
+      "enrichment"
+    ],
+    "requires": [
+      "http://localhost:9200"
+    ],
     "enriches_responses": false
   },
   "tools": [
@@ -27,9 +37,31 @@
       "output_shape": "SearchOut: total, total_capped (true => total is a gte lower bound; call opensearch_count for exact), returned, offset, compact, results[] of {id, index, fields, truncated[]}, advisories[].",
       "response_shaping": "compact=True (default) drops bloat fields and truncates values to 500 chars; page with limit/offset rather than widening the query; expand a single hit with opensearch_get_event.",
       "usage_examples": [
-        {"description": "Minimal: find a process by name", "arguments": {"query": "process.name:*powershell*"}},
-        {"description": "Scoped + time-bounded", "arguments": {"query": "event.code:4688 AND process.name:*powershell*", "case_id": "rocba-drive-20260526-1417", "time_from": "2026-05-26T00:00:00Z", "time_to": "2026-05-26T23:59:59Z"}},
-        {"description": "Full document view, second page, oldest-first", "arguments": {"query": "source.ip:\"::1\"", "compact": false, "sort": "@timestamp:asc", "limit": 100, "offset": 100}}
+        {
+          "description": "Minimal: find a process by name",
+          "arguments": {
+            "query": "process.name:*powershell*"
+          }
+        },
+        {
+          "description": "Scoped + time-bounded",
+          "arguments": {
+            "query": "event.code:4688 AND process.name:*powershell*",
+            "case_id": "rocba-drive-20260526-1417",
+            "time_from": "2026-05-26T00:00:00Z",
+            "time_to": "2026-05-26T23:59:59Z"
+          }
+        },
+        {
+          "description": "Full document view, second page, oldest-first",
+          "arguments": {
+            "query": "source.ip:\"::1\"",
+            "compact": false,
+            "sort": "@timestamp:asc",
+            "limit": 100,
+            "offset": 100
+          }
+        }
       ],
       "defer_loading": false,
       "defer_loading_rationale": "Core analysis verb used in nearly every session; keep always-loaded.",
@@ -38,7 +70,10 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id", "case_dir"]
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_count",
@@ -47,10 +82,18 @@
       "avoid_when": "Avoid when you need per-value counts (use opensearch_aggregate) or the documents themselves (use opensearch_search).",
       "output_notes": "Returns counts only; follow with search or aggregate for evidence details.",
       "output_shape": "CountOut: count (exact document count for the query in scope).",
-      "response_shaping": "Cheapest possible probe — one integer, no docs.",
+      "response_shaping": "Cheapest possible probe \u2014 one integer, no docs.",
       "usage_examples": [
-        {"description": "Count all docs in scope", "arguments": {}},
-        {"description": "Count successful logons", "arguments": {"query": "event.code:4624"}}
+        {
+          "description": "Count all docs in scope",
+          "arguments": {}
+        },
+        {
+          "description": "Count successful logons",
+          "arguments": {
+            "query": "event.code:4624"
+          }
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "Low-frequency helper; opensearch_search already reports total. Tool-Search defer_loading candidate.",
@@ -59,7 +102,10 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id", "case_dir"]
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_aggregate",
@@ -70,8 +116,20 @@
       "output_shape": "AggregateOut: field, total_docs (matched before bucketing), buckets[] of {key, count}, truncated (true => more buckets than limit exist).",
       "response_shaping": "Returns only the requested buckets, never raw docs. CSV/registry text fields need '.keyword'; evtx fields like event.code are already keyword.",
       "usage_examples": [
-        {"description": "Top event codes in the active case", "arguments": {"field": "event.code"}},
-        {"description": "Top file paths (text field needs .keyword), filtered", "arguments": {"field": "Path.keyword", "query": "host.name:wksn01", "limit": 20}}
+        {
+          "description": "Top event codes in the active case",
+          "arguments": {
+            "field": "event.code"
+          }
+        },
+        {
+          "description": "Top file paths (text field needs .keyword), filtered",
+          "arguments": {
+            "field": "Path.keyword",
+            "query": "host.name:wksn01",
+            "limit": 20
+          }
+        }
       ],
       "defer_loading": false,
       "defer_loading_rationale": "Frequent pivot tool; keep always-loaded alongside search/timeline.",
@@ -80,7 +138,10 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id", "case_dir"]
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_get_event",
@@ -91,7 +152,13 @@
       "output_shape": "GetEventOut: id, index, fields (full, untruncated), truncated[] (empty), note.",
       "response_shaping": "The deliberate counterpart to compact search: pay the full-document cost for exactly one record, identified from a prior search hit.",
       "usage_examples": [
-        {"description": "Expand a specific search hit", "arguments": {"event_id": "abc123", "index": "case-rocba-drive-20260526-1417-evtx-srl-forge"}}
+        {
+          "description": "Expand a specific search hit",
+          "arguments": {
+            "event_id": "abc123",
+            "index": "case-rocba-drive-20260526-1417-evtx-srl-forge"
+          }
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "Used only to expand a known search hit; Tool-Search defer_loading candidate.",
@@ -108,11 +175,24 @@
       "when_to_use": "Use to find activity spikes and temporal windows, then scope opensearch_search with time_from/time_to.",
       "avoid_when": "Avoid for value distributions (use opensearch_aggregate) or for the events themselves (use opensearch_search).",
       "output_notes": "Timeline buckets are scoping aids; inspect underlying events before conclusions.",
-      "output_shape": "TimelineOut: total_docs, interval, buckets[] of {time (ISO-8601), count} (sparse — empty buckets omitted), advisories[].",
+      "output_shape": "TimelineOut: total_docs, interval, buckets[] of {time (ISO-8601), count} (sparse \u2014 empty buckets omitted), advisories[].",
       "response_shaping": "Returns bucket counts only. Buckets are warned at the configured ceiling and never silently truncated; narrow with time_from/time_to or widen the interval.",
       "usage_examples": [
-        {"description": "Hourly histogram of process creations", "arguments": {"query": "event.code:4688"}},
-        {"description": "15-minute resolution over a known window", "arguments": {"query": "host.name:wksn01", "interval": "15m", "time_from": "2026-05-26T08:00:00Z", "time_to": "2026-05-26T18:00:00Z"}}
+        {
+          "description": "Hourly histogram of process creations",
+          "arguments": {
+            "query": "event.code:4688"
+          }
+        },
+        {
+          "description": "15-minute resolution over a known window",
+          "arguments": {
+            "query": "host.name:wksn01",
+            "interval": "15m",
+            "time_from": "2026-05-26T08:00:00Z",
+            "time_to": "2026-05-26T18:00:00Z"
+          }
+        }
       ],
       "defer_loading": false,
       "defer_loading_rationale": "Frequent triage tool; keep always-loaded.",
@@ -121,7 +201,10 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id", "case_dir"]
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_field_values",
@@ -132,8 +215,20 @@
       "output_shape": "FieldValuesOut: field, values[] of {value, count}, truncated (true => more distinct values exist than returned).",
       "response_shaping": "Returns the value inventory only. CSV/text fields need '.keyword'; raise limit (hard cap 500) to widen.",
       "usage_examples": [
-        {"description": "Distinct event-log providers present", "arguments": {"field": "winlog.provider_name"}},
-        {"description": "Distinct users, filtered to a host", "arguments": {"field": "user.name.keyword", "query": "host.name:wksn01", "limit": 100}}
+        {
+          "description": "Distinct event-log providers present",
+          "arguments": {
+            "field": "winlog.provider_name"
+          }
+        },
+        {
+          "description": "Distinct users, filtered to a host",
+          "arguments": {
+            "field": "user.name.keyword",
+            "query": "host.name:wksn01",
+            "limit": 100
+          }
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "Overlaps opensearch_aggregate; lower-frequency discovery helper and a Tool-Search defer_loading candidate.",
@@ -142,18 +237,24 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id", "case_dir"]
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_status",
       "description": "Backend health/readiness check: OpenSearch cluster connectivity plus per-case index document counts. Deprecated tool form; prefer the opensearch://cluster/status resource.",
       "when_to_use": "Use as the backend health/readiness check and to confirm per-case index state.",
-      "avoid_when": "Deprecated tool form — prefer the resource opensearch://cluster/status. For one case's artifact/coverage breakdown use opensearch_case_summary.",
+      "avoid_when": "Deprecated tool form \u2014 prefer the resource opensearch://cluster/status. For one case's artifact/coverage breakdown use opensearch_case_summary.",
       "output_notes": "Health/status output only; it is not case evidence.",
       "output_shape": "StatusOut: cluster_status (single-node yellow may be annotated normal), indices[] of {index, docs, size, status}, total_indices.",
       "response_shaping": "Compact cluster + index roll-up; also exposed as a read-only resource to keep it out of the tool budget.",
       "usage_examples": [
-        {"description": "Cluster + per-case index health", "arguments": {}}
+        {
+          "description": "Cluster + per-case index health",
+          "arguments": {}
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "Deprecated tool form mirrored by a resource; Tool-Search defer_loading candidate pending removal at/after D27b.",
@@ -169,12 +270,15 @@
       "name": "opensearch_shard_status",
       "description": "Report shard usage and capacity headroom across the cluster. Deprecated tool form; prefer the opensearch://cluster/shards resource.",
       "when_to_use": "Use for operational readiness before large ingest or when indexing fails.",
-      "avoid_when": "Deprecated tool form — prefer the resource opensearch://cluster/shards. Administrative signal, not investigation evidence.",
+      "avoid_when": "Deprecated tool form \u2014 prefer the resource opensearch://cluster/shards. Administrative signal, not investigation evidence.",
       "output_notes": "Administrative capacity signal; not investigation evidence.",
       "output_shape": "ShardStatusOut: current_shards, max_shards_per_node, data_nodes, max_total, headroom_pct, status (ok>=10% | warning>=2% | critical<2%), top_indices_by_shard_count[].",
       "response_shaping": "Capacity roll-up with only the top shard-heavy indices; also exposed as a read-only resource.",
       "usage_examples": [
-        {"description": "Check shard headroom before a large image ingest", "arguments": {}}
+        {
+          "description": "Check shard headroom before a large image ingest",
+          "arguments": {}
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "Deprecated, operations-only; mirrored by a resource. Tool-Search defer_loading candidate pending removal at/after D27b.",
@@ -187,16 +291,30 @@
     },
     {
       "name": "opensearch_case_summary",
-      "description": "Complete coverage overview of indexed evidence for a case — the first call in any indexed investigation. Returns hosts, artifact families, per-family doc counts, time range, enrichment state, and coverage gaps with exact fill commands.",
+      "description": "Complete coverage overview of indexed evidence for a case \u2014 the first call in any indexed investigation. Returns hosts, artifact families, per-family doc counts, time range, enrichment state, and coverage gaps with exact fill commands.",
       "when_to_use": "Use after ingest or at session start to understand indexed coverage and gaps.",
       "avoid_when": "Skip only when you already hold a current summary this session; for a single artifact's frequency use opensearch_aggregate.",
       "output_notes": "Coverage gaps guide next actions; verify important claims with underlying records.",
       "output_shape": "CaseSummaryOut: case_id, hosts[], artifacts{family:{docs,hosts[],indices[]}}, total_docs, time_range{earliest,latest}, enrichment{...}, coverage_state{disk_artifacts,memory,enrichment,gaps[]}, investigation_hints[], warnings[].",
-      "response_shaping": "include_fields defaults False to keep the summary compact; the per-artifact field/type map is the bulk of the payload — request it only when picking aggregation fields.",
+      "response_shaping": "include_fields defaults False to keep the summary compact; the per-artifact field/type map is the bulk of the payload \u2014 request it only when picking aggregation fields.",
       "usage_examples": [
-        {"description": "Coverage map for the active case", "arguments": {}},
-        {"description": "Coverage map for a named case", "arguments": {"case_id": "rocba-drive-20260526-1417"}},
-        {"description": "Include field/type maps to plan aggregations", "arguments": {"case_id": "rocba-drive-20260526-1417", "include_fields": true}}
+        {
+          "description": "Coverage map for the active case",
+          "arguments": {}
+        },
+        {
+          "description": "Coverage map for a named case",
+          "arguments": {
+            "case_id": "rocba-drive-20260526-1417"
+          }
+        },
+        {
+          "description": "Include field/type maps to plan aggregations",
+          "arguments": {
+            "case_id": "rocba-drive-20260526-1417",
+            "include_fields": true
+          }
+        }
       ],
       "defer_loading": false,
       "defer_loading_rationale": "High-frequency entry point; keep always-loaded so the agent can orient at session start without a Tool-Search round trip.",
@@ -205,7 +323,10 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id", "case_dir"]
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_inspect_container",
@@ -214,9 +335,14 @@
       "avoid_when": "Avoid after ingest planning is done; follow with opensearch_ingest(dry_run=True) for the full plan.",
       "output_notes": "Preview output helps plan ingest and does not modify evidence.",
       "output_shape": "InspectContainerOut: path, resolved_path, container_type (e01|raw|file|unknown), tool_available, size_bytes, size_human, hashes{}, partitions[], acquiry_info{}, raw_info (truncated).",
-      "response_shaping": "raw_info is truncated fdisk/img_stat text — a preview, not the full tool dump. Read-only; never modifies evidence.",
+      "response_shaping": "raw_info is truncated fdisk/img_stat text \u2014 a preview, not the full tool dump. Read-only; never modifies evidence.",
       "usage_examples": [
-        {"description": "Preview an E01 before ingest", "arguments": {"path": "evidence/rocba-cdrive.e01"}}
+        {
+          "description": "Preview an E01 before ingest",
+          "arguments": {
+            "path": "evidence/rocba-cdrive.e01"
+          }
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "SURVEY-phase tool used once per evidence item; Tool-Search defer_loading candidate.",
@@ -225,20 +351,49 @@
       "evidence_class": "read_only",
       "category": "evidence-survey",
       "recommended_phase": "SURVEY",
-      "safe_case_argument_names": ["case_dir"]
+      "safe_case_argument_names": [
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_ingest",
-      "description": "Discover and ingest forensic artifacts into OpenSearch. dry_run=True by default — the agent must explicitly set dry_run=False to write. Supports container/artifact-dir auto-detect, format override, include/exclude artifact filters, memory tiers/plugins, and VSS.",
+      "description": "Discover and ingest forensic artifacts into OpenSearch. dry_run=True by default \u2014 the agent must explicitly set dry_run=False to write. Supports container/artifact-dir auto-detect, format override, include/exclude artifact filters, memory tiers/plugins, and VSS.",
       "when_to_use": "Use after examiner approval to index evidence for structured search.",
       "avoid_when": "Avoid setting dry_run=False until the target evidence and ingest plan are clear; use force=True only for an intentional re-ingest when the case already has docs.",
       "output_notes": "Mutating operation scoped to the OpenSearch index; dry runs should precede writes.",
       "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, next_step, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns status=queued + job_id (dispatched to sift-opensearch-worker@); poll job_status(job_id).",
-      "response_shaping": "Returns a plan/run reference (run_id, log_file) rather than streaming ingest output — poll opensearch_ingest_status for progress. The 'password' arg is a SECRET, redacted from audit/logs/results.",
+      "response_shaping": "Returns a plan/run reference (run_id, log_file) rather than streaming ingest output \u2014 poll opensearch_ingest_status for progress. The 'password' arg is a SECRET, redacted from audit/logs/results.",
       "usage_examples": [
-        {"description": "Preview an auto-detected container (default dry run)", "arguments": {"path": "evidence/rocba-cdrive.e01", "format": "auto"}},
-        {"description": "Ingest a specific delimited artifact set for one host", "arguments": {"path": "evidence/triage/wksn01", "format": "delimited", "hostname": "wksn01", "include": ["amcache", "shimcache"], "dry_run": false}},
-        {"description": "Deep memory analysis, write", "arguments": {"path": "evidence/memdump.raw", "format": "memory", "hostname": "wksn01", "tier": 3, "dry_run": false}}
+        {
+          "description": "Preview an auto-detected container (default dry run)",
+          "arguments": {
+            "path": "evidence/rocba-cdrive.e01",
+            "format": "auto"
+          }
+        },
+        {
+          "description": "Ingest a specific delimited artifact set for one host",
+          "arguments": {
+            "path": "evidence/triage/wksn01",
+            "format": "delimited",
+            "hostname": "wksn01",
+            "include": [
+              "amcache",
+              "shimcache"
+            ],
+            "dry_run": false
+          }
+        },
+        {
+          "description": "Deep memory analysis, write",
+          "arguments": {
+            "path": "evidence/memdump.raw",
+            "format": "memory",
+            "hostname": "wksn01",
+            "tier": 3,
+            "dry_run": false
+          }
+        }
       ],
       "defer_loading": false,
       "defer_loading_rationale": "Central INGEST-phase verb; keep always-loaded.",
@@ -247,20 +402,35 @@
       "evidence_class": "mutating",
       "category": "ingest",
       "recommended_phase": "INGEST",
-      "safe_case_argument_names": ["case_dir"]
+      "safe_case_argument_names": [
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_ingest_status",
-      "description": "Check running/recent ingest and enrichment operations for a case (\"*\" for all cases), with the per-host artifact checklist. In DB-active mode serves the durable worker progress mirror (indexed_docs, artifacts_complete, worker_label) plus authority note pointing at job_status(job_id) for the canonical terminal result. Pass job_id (from the opensearch_ingest dispatch response) to link the mirror to the durable job record. Also the status channel for async enrichment.",
-      "when_to_use": "Use to monitor ingest progress or troubleshoot recent ingest runs (~every 30s while active); poll async enrichment with artifact_name 'intel'/'triage'. In DB-active mode, also pass job_id from the ingest response for linked status.",
-      "avoid_when": "Operational status only — inspect indexed records (opensearch_search) for evidence, not this.",
-      "output_notes": "In DB-active mode, ingests[] comes from the worker progress mirror; authority and job_id fields link to the canonical durable job. Inspect indexed records for evidence.",
-      "output_shape": "IngestStatusOut: ingests[] of {case_id, status, pid, elapsed, total_indexed, bulk_failed, hosts_complete/total, artifacts_complete/total, log_file, checklist[], message, halt_reason, errors[], next_steps[], warnings[], details{}}, message, authority (DB-active mode), authority_note, job_id, next_step.",
-      "response_shaping": "Returns a structured progress summary plus a log_file reference, not the raw run log. In DB-active mode, authority_note explains the canonical source.",
+      "description": "Check running/recent ingest and enrichment operations for a case (\"*\" for all cases), with the per-host artifact checklist. In DB-active mode (BATCH-K4), local mirror files are NOT read; returns ingests=[] + authority=\"postgres-durable-jobs\" and a pointer to job_status(job_id) where authoritative worker_label, current_step, and terminal result_public live. Pass job_id (from the opensearch_ingest dispatch response) to get a direct link in the redirect. Also the status channel for async enrichment.",
+      "when_to_use": "Use to check whether a non-DB-active ingest is running (~every 30s while active). In DB-active mode, this returns the durable-job authority pointer; use job_status(job_id) for the actual realtime status.",
+      "avoid_when": "Operational status only \u2014 inspect indexed records (opensearch_search) for evidence, not this.",
+      "output_notes": "In DB-active mode, ingests=[] always (BATCH-K4); authority and job_id fields redirect to the canonical durable job. In legacy mode, ingests[] carries per-artifact progress from local status files.",
+      "output_shape": "IngestStatusOut: ingests[] of {case_id, status, pid, elapsed, total_indexed, bulk_failed, hosts_complete/total, artifacts_complete/total, log_file, checklist[], message, halt_reason, errors[], next_steps[], warnings[], details{}}, message, authority (DB-active mode only), job_id (when supplied), next_step.",
+      "response_shaping": "In DB-active mode returns a redirect only (no mirror content). In legacy mode returns a structured progress summary plus a log_file reference.",
       "usage_examples": [
-        {"description": "Poll the active case's runs", "arguments": {}},
-        {"description": "Show runs across all cases", "arguments": {"case_id": "*"}},
-        {"description": "Poll with job_id linkage (DB-active mode)", "arguments": {"job_id": "<job_id from opensearch_ingest response>"}}
+        {
+          "description": "Poll the active case's runs",
+          "arguments": {}
+        },
+        {
+          "description": "Show runs across all cases",
+          "arguments": {
+            "case_id": "*"
+          }
+        },
+        {
+          "description": "Poll with job_id linkage (DB-active mode)",
+          "arguments": {
+            "job_id": "<job_id from opensearch_ingest response>"
+          }
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "Used only while an ingest/enrich run is in flight; Tool-Search defer_loading candidate.",
@@ -269,19 +439,33 @@
       "evidence_class": "read_only",
       "category": "ingest",
       "recommended_phase": "INGEST",
-      "safe_case_argument_names": ["case_id", "case_dir"]
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_enrich_intel",
-      "description": "Enrich indexed evidence with OpenCTI threat intel. Async — returns immediately with a run_id. Requires enrichment:intel scope. Status is pollable via opensearch_ingest_status (artifact_name='intel').",
+      "description": "Enrich indexed evidence with OpenCTI threat intel. Async \u2014 returns immediately with a run_id. Requires enrichment:intel scope. Status is pollable via opensearch_ingest_status (artifact_name='intel').",
       "when_to_use": "Use after indexed indicators exist and CTI context would help prioritize pivots.",
       "avoid_when": "Avoid when OpenCTI is unavailable or when indicators are speculative. Use dry_run=True first to size the IOC corpus.",
       "output_notes": "Starts asynchronous enrichment; follow status/results before relying on output. No OpenCTI credentials or OpenSearch passwords are returned. Enrichment cannot approve findings, alter evidence, or decide reports.",
-      "output_shape": "EnrichIntelOut: status (preview|started), case_id, ips, hashes, domains, total_iocs (preview counts), pid, run_id, log_file, note. Async on write — poll opensearch_ingest_status (artifact_name=='intel').",
+      "output_shape": "EnrichIntelOut: status (preview|started), case_id, ips, hashes, domains, total_iocs (preview counts), pid, run_id, log_file, note. Async on write \u2014 poll opensearch_ingest_status (artifact_name=='intel').",
       "response_shaping": "Returns counts + a run reference, never IOC dumps or OpenCTI/OpenSearch credentials.",
       "usage_examples": [
-        {"description": "Size the IOC corpus without lookup", "arguments": {"dry_run": true}},
-        {"description": "Launch async enrichment for a case", "arguments": {"case_id": "rocba-drive-20260526-1417", "dry_run": false}}
+        {
+          "description": "Size the IOC corpus without lookup",
+          "arguments": {
+            "dry_run": true
+          }
+        },
+        {
+          "description": "Launch async enrichment for a case",
+          "arguments": {
+            "case_id": "rocba-drive-20260526-1417",
+            "dry_run": false
+          }
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "CORRELATE-phase, scope-gated, add-on-dependent (OpenCTI); Tool-Search defer_loading candidate.",
@@ -290,8 +474,13 @@
       "evidence_class": "mutating",
       "category": "enrichment",
       "recommended_phase": "CORRELATE",
-      "safe_case_argument_names": ["case_id", "case_dir"],
-      "required_scopes": ["enrichment:intel"],
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ],
+      "required_scopes": [
+        "enrichment:intel"
+      ],
       "scope_enforcement": "gateway_primary_env_fallback",
       "enrichment_policy": {
         "derived_state_only": true,
@@ -300,20 +489,32 @@
         "poll_via": "opensearch_ingest_status",
         "poll_discriminator": "artifact_name == 'intel'"
       },
-      "prohibited_operations": ["approve_findings", "alter_evidence", "decide_reports"],
+      "prohibited_operations": [
+        "approve_findings",
+        "alter_evidence",
+        "decide_reports"
+      ],
       "secret_leak_guarantee": "No OpenCTI credentials, OpenSearch passwords, DB DSNs, or service tokens are returned in any response."
     },
     {
       "name": "opensearch_list_detections",
       "description": "List Security Analytics (Sigma) detection findings for triage pivots, filtered by severity/detector_type; falls back to a Hayabusa query suggestion when the Sigma plugin is unavailable or empty.",
       "when_to_use": "Use to identify indexed Sigma/Security Analytics detections for triage pivots.",
-      "avoid_when": "Detection hits are leads, not conclusions — validate against source events and surrounding context before recording a finding.",
+      "avoid_when": "Detection hits are leads, not conclusions \u2014 validate against source events and surrounding context before recording a finding.",
       "output_notes": "Detection hits require validation against source events and surrounding context.",
       "output_shape": "ListDetectionsOut: findings[] of {id, timestamp, index, rules[] of {name, tags[]}, matched_docs}, total, returned, offset, suggestion (Hayabusa fallback when present).",
       "response_shaping": "Paginate with limit/offset; the per-finding payload references matched docs by count, not by embedding them.",
       "usage_examples": [
-        {"description": "All detections, first page", "arguments": {}},
-        {"description": "High-severity detections only", "arguments": {"severity": "high"}}
+        {
+          "description": "All detections, first page",
+          "arguments": {}
+        },
+        {
+          "description": "High-severity detections only",
+          "arguments": {
+            "severity": "high"
+          }
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "Depends on the optional Security Analytics plugin; lower-frequency. Tool-Search defer_loading candidate.",
@@ -333,7 +534,13 @@
       "output_shape": "FixHostMappingOut: status ('complete'), raw, new_canonical, docs_updated, host_identity_authority, host_identity_decision_id (DB receipt), audit_id, dict_path/dict_saved (legacy non-DB mode only), details{}.",
       "response_shaping": "Returns the correction receipt (decision/audit ids, docs_updated), not the reindexed documents.",
       "usage_examples": [
-        {"description": "Re-map a mis-attributed host across the case", "arguments": {"raw": "wksn01", "new_canonical": "WKSN01.corp.local"}}
+        {
+          "description": "Re-map a mis-attributed host across the case",
+          "arguments": {
+            "raw": "wksn01",
+            "new_canonical": "WKSN01.corp.local"
+          }
+        }
       ],
       "defer_loading": true,
       "defer_loading_rationale": "Rare, sensitive admin correction; Tool-Search defer_loading candidate.",
@@ -342,14 +549,28 @@
       "evidence_class": "mutating",
       "category": "admin",
       "recommended_phase": "INGEST",
-      "safe_case_argument_names": ["case_dir"],
+      "safe_case_argument_names": [
+        "case_dir"
+      ],
       "receipt_policy": {
         "db_active_mode": "write_receipt_or_deny",
-        "receipt_fields": ["source", "canonical", "actor_type", "tool", "index_names", "docs_updated", "audit_event_id"],
+        "receipt_fields": [
+          "source",
+          "canonical",
+          "actor_type",
+          "tool",
+          "index_names",
+          "docs_updated",
+          "audit_event_id"
+        ],
         "fail_closed": true,
         "no_path_leak": true
       },
-      "prohibited_operations": ["approve_findings", "alter_evidence", "decide_reports"]
+      "prohibited_operations": [
+        "approve_findings",
+        "alter_evidence",
+        "decide_reports"
+      ]
     }
   ],
   "health": "opensearch_status"
