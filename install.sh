@@ -145,6 +145,12 @@ MATERIALS_FILE="${MATERIALS_FILE:-$SIFT_TOKENS_DIR/installer-handoff.txt}"
 SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
 GATEWAY_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-gateway.service"
 JOB_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-job-worker.service"
+# feat/opensearch-workers: dedicated least-privilege OpenSearch ingest/enrich
+# worker template + how many instances to start (N parallel workers claim
+# ingest/enrich jobs via FOR UPDATE SKIP LOCKED). Default 2; override with
+# SIFT_OPENSEARCH_WORKERS. Installed only when OpenSearch is enabled.
+OPENSEARCH_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-opensearch-worker@.service"
+SIFT_OPENSEARCH_WORKERS="${SIFT_OPENSEARCH_WORKERS:-2}"
 
 # --- Download pins (B-MVP-004) -----------------------------------------------
 # Every external network download is version-pinned and (where the upstream
@@ -2559,6 +2565,26 @@ install_systemd_service() {
   fi
   _render_file "$REPO_DIR/configs/systemd/sift-job-worker.service" "$JOB_WORKER_SERVICE_FILE" 0644 root
 
+  # feat/opensearch-workers: dedicated OpenSearch ingest/enrich worker template.
+  # Only when OpenSearch is enabled — the FUSE-mount ingest pipeline runs here
+  # (the only unit with MountFlags=shared), NOT in the hardened gateway/job-worker.
+  local _os_worker_instances=()
+  if [[ "${SIFT_OPENSEARCH_ENABLED:-true}" == "true" ]]; then
+    if [[ -x "$VENV_DIR/bin/sift-opensearch-worker" ]]; then
+      _render_file "$REPO_DIR/configs/systemd/sift-opensearch-worker@.service" \
+        "$OPENSEARCH_WORKER_SERVICE_FILE" 0644 root
+      local _n="${SIFT_OPENSEARCH_WORKERS:-2}"
+      [[ "$_n" =~ ^[0-9]+$ && "$_n" -ge 1 ]] || _n=2
+      local _i
+      for _i in $(seq 1 "$_n"); do
+        _os_worker_instances+=("sift-opensearch-worker@${_i}.service")
+      done
+      log "OpenSearch ingest/enrich workers: ${_n} instance(s) (override with SIFT_OPENSEARCH_WORKERS)."
+    else
+      warn "Missing OpenSearch worker entrypoint: $VENV_DIR/bin/sift-opensearch-worker (ingest will not run decoupled)."
+    fi
+  fi
+
   if ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not found — service file written but not started."
     return
@@ -2566,6 +2592,10 @@ install_systemd_service() {
   sudo_if_needed systemctl daemon-reload
   sudo_if_needed systemctl enable sift-gateway.service sift-job-worker.service
   sudo_if_needed systemctl restart sift-gateway.service sift-job-worker.service
+  if [[ ${#_os_worker_instances[@]} -gt 0 ]]; then
+    sudo_if_needed systemctl enable "${_os_worker_instances[@]}"
+    sudo_if_needed systemctl restart "${_os_worker_instances[@]}"
+  fi
 }
 
 # =============================================================================

@@ -1,0 +1,103 @@
+[Unit]
+# feat/opensearch-workers: dedicated, least-privilege OpenSearch ingest/enrich
+# worker. The OpenSearch ingest pipeline (FUSE-mount an E01, EZ/TSK parse,
+# Hayabusa Sigma detection, index) cannot run inside the gateway's hardened unit:
+# ProtectSystem=strict + ProtectHome + PrivateTmp put the unit in a PRIVATE mount
+# namespace whose root mount uses SLAVE propagation, and the kernel refuses a new
+# FUSE mount there (fusermount: Operation not permitted). The opensearch backend
+# used to be a stdio child of the gateway and inherited that sandbox, so disk
+# ingest could never mount. This unit runs the pipeline OUT of the gateway: the
+# gateway stays the thin policy boundary and enqueues durable ingest/enrich jobs;
+# these workers claim and run them (FOR UPDATE SKIP LOCKED -> N parallel workers).
+#
+# Template: start N instances, e.g.
+#   systemctl enable --now sift-opensearch-worker@1 sift-opensearch-worker@2
+# %i is the instance number (used only for the worker_id label / journal tag).
+Description=sift-mcps OpenSearch ingest/enrich worker %i
+After=network.target sift-gateway.service
+PartOf=sift-gateway.service
+
+[Service]
+Type=simple
+# Runs as the SAME dedicated non-admin service user as the gateway/job-worker.
+# No new user, no extra group, no portal/agent auth surface.
+User=${SIFT_GATEWAY_SERVICE_USER}
+Group=${SIFT_GATEWAY_SERVICE_USER}
+# Restrict this worker to the opensearch lane only; it never services
+# run_command. The label makes N-way parallelism visible in job_status.worker_label.
+ExecStart=${SIFT_MCPS_ROOT}/.venv/bin/sift-opensearch-worker --job-types ingest,enrich
+Environment=SIFT_WORKER_ID=osw-%i
+WorkingDirectory=${SIFT_MCPS_ROOT}
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sift-opensearch-worker@%i
+# Shared Volatility3 symbol cache (mode 2775, group `sift`) — parse_memory.py /
+# worker.py read SIFT_VOL_SYMBOLS and write symbols there, shared with agent_runtime.
+Environment=SIFT_VOL_SYMBOLS=${SIFT_VOL_SYMBOLS}
+# Control-plane DSN + service-role secrets for DB job claims, identical to the
+# default job worker. Same in-code env-scrub boundary applies to any child the
+# worker spawns; this unit grants no broader secret exposure than sift-job-worker.
+# IMPORTANT: %h would resolve to /root for a system service (NOT influenced by
+# User=, see systemd.unit(5)); use the absolute SIFT_HOME install.sh substitutes.
+EnvironmentFile=-${SIFT_HOME}/supabase.env
+EnvironmentFile=-${SIFT_HOME}/control-plane.env
+EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env
+Environment=UV_NO_MANAGED_PYTHON=1
+Environment=UV_PYTHON_DOWNLOADS=never
+Environment=HF_HOME=${SIFT_HF_HOME}
+Environment=RAG_MODEL_NAME=${SIFT_RAG_MODEL_NAME}
+Environment=RAG_MODEL_REVISION=${SIFT_RAG_MODEL_REVISION}
+
+# === BATCH-HR3 systemd hardening (identical to sift-job-worker.service) ======
+# Same containment rationale as sift-gateway.service / sift-job-worker.service:
+# this worker performs FUSE image mounts via sudo during ingest, so
+# NoNewPrivileges / PrivateDevices / RestrictNamespaces / SystemCallFilter are
+# OMITTED (would break sudo + FUSE). The safe, tested subset is applied below.
+UMask=0077
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sift /cases /var/cache/sift
+ProtectHome=tmpfs
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
+#
+# === THE ONLY RELAXATION vs sift-job-worker.service =========================
+# MountFlags=shared
+#   Root cause of the E01 FUSE failure: ProtectSystem/ProtectHome/PrivateTmp put
+#   the unit in a private mount namespace whose root defaults to SLAVE
+#   propagation; the kernel then refuses to create a FUSE mount in it
+#   (fusermount: Operation not permitted). MountFlags=shared makes this unit's
+#   mount namespace use SHARED propagation, so (a) the sudo ewfmount/xmount/loop
+#   FUSE mount succeeds and (b) it is visible to this worker's own EZ/TSK/Hayabusa
+#   reads of the mounted volume. This is the documented, narrowest fix.
+#
+#   Why this is acceptable HERE and rejected on the gateway:
+#     - The gateway is the policy boundary: it holds the portal/agent auth
+#       surface, the MCP listener, and every secret-bearing request path. The
+#       operator's standing rule is "do not relax the gateway", so the gateway
+#       keeps MountFlags= (empty) and every HR3 directive.
+#     - This worker has NO listener, NO auth surface, NO inbound request path. It
+#       only claims durable jobs from Postgres and runs forensic tooling on
+#       already-sealed evidence inside the case jail. Relaxing mount-namespace
+#       PROPAGATION on this isolated unit does not widen the gateway's attack
+#       surface; it does not add a capability, a device, a syscall, or a path.
+#     - Mounts are still gated by the existing narrow /etc/sudoers.d/sift-ingest-mount
+#       allowlist (xmount/ewfmount/mount/umount/ntfs-3g/losetup/qemu-nbd/
+#       partprobe/fusermount(3)/modprobe nbd). MountFlags=shared changes only
+#       propagation, not WHAT may be mounted or by whom.
+MountFlags=shared
+# === end hardening ==========================================================
+
+[Install]
+WantedBy=multi-user.target
