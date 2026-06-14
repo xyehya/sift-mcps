@@ -6,11 +6,11 @@
 # To re-profile: sudo aa-logprof  (after running gateway traffic in complain mode)
 #
 # SCOPE NOTE (post opensearch-worker decoupling, 2026-06-14):
-# This profile covers ONLY the sift-gateway process. The two separate worker
-# units (sift-job-worker for run_command, sift-opensearch-worker@N for ingest/
-# enrich) are NOT profiled here:
-#   - sift-job-worker: a future profile can be added; its run_command workload
-#     is in the host mount namespace and needs similar forensic-tool exec rights.
+# This profile covers ONLY the sift-gateway process. Separate workers are not
+# confined by this profile:
+#   - sift-job-worker: RUN-3 adds a separate dfir-exec launcher profile for the
+#     per-command child path; the long-lived worker process itself remains a
+#     systemd-confined service.
 #   - sift-opensearch-worker@N: CANNOT be AppArmor-profiled without breaking
 #     FUSE mount support. FUSE requires the host mount namespace, and AppArmor
 #     combined with ProtectSystem/PrivateMounts would block fusermount even with
@@ -114,10 +114,9 @@
   # Forensic tooling (Zimmerman tools, mount helpers, FUSE tools).
   # NOTE: after the opensearch-worker decoupling (2026-06-14) the gateway no
   # longer invokes FUSE mounts inline — those moved to sift-opensearch-worker@N.
-  # These exec rights remain because run_command (via sift-job-worker) may invoke
-  # forensic binaries, and aa-logprof against live ingest+run_command traffic is
-  # required before pruning any entry. Defer pruning to the enforce-flip aa-logprof
-  # pass; do not remove entries speculatively.
+  # These exec rights remain until aa-logprof against live gateway traffic proves
+  # they can be pruned. RUN-3's run_command child path is covered by the separate
+  # dfir-exec profile, not by this gateway profile.
   /usr/local/bin/*                           rix,
   /usr/bin/xmount                            rix,
   /usr/bin/ewfmount                          rix,

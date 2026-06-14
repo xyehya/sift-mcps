@@ -2885,7 +2885,23 @@ configure_apparmor() {
   rm -f "$tmp"
   sudo_if_needed chmod 644 "$profile_dst"
   sudo_if_needed apparmor_parser -C -r "$profile_dst" 2>/dev/null || true
-  log "AppArmor profile installed (complain mode)."
+
+  profile_src="${REPO_DIR}/configs/apparmor/dfir-exec.template"
+  profile_dst="/etc/apparmor.d/dfir-exec"
+  if [[ -f "$profile_src" ]]; then
+    tmp="$(mktemp)"
+    sed -e "s|@@DFIR_EXEC_LAUNCHER@@|${VENV_DIR}/bin/dfir-exec-launcher|g" \
+        -e "s|@@PYTHON_BIN@@|${VENV_PYTHON}|g" \
+        -e "s|@@SIFT_MCPS_ROOT@@|${REPO_DIR}|g" \
+        -e "s|@@SIFT_CASES_ROOT@@|${SIFT_CASES_ROOT}|g" \
+        -e "s|@@SIFT_VOL_SYMBOLS@@|${SIFT_VOL_SYMBOLS}|g" \
+        "$profile_src" > "$tmp"
+    sudo_if_needed cp "$tmp" "$profile_dst"
+    rm -f "$tmp"
+    sudo_if_needed chmod 644 "$profile_dst"
+    sudo_if_needed apparmor_parser -C -r "$profile_dst" 2>/dev/null || true
+  fi
+  log "AppArmor profiles installed (complain mode)."
 }
 
 # =============================================================================
