@@ -345,6 +345,12 @@ def _install_landlock(policy: dict[str, Any]) -> int:
                 "/etc/localtime",
                 "/etc/ssl/certs",
                 "/etc/nsswitch.conf",
+                # volatility3's automagic initializes the stdlib mimetypes
+                # module, which reads /etc/mime.types. Without a grant the
+                # Landlock floor denies it (EACCES), the exception derails vol's
+                # automagic, and layer/symbol resolution fails. Read-only data
+                # file; no privilege or secret exposure.
+                "/etc/mime.types",
                 "/usr/share",
             ]
         )

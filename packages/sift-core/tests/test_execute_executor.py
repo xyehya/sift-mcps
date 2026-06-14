@@ -397,6 +397,7 @@ def test_native_runtime_user_requires_existing_local_account(monkeypatch):
 
 def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
     calls = []
+    spawn_envs = []
     launcher_path = "/opt/sift-mcps/.venv/bin/dfir-exec-launcher"
 
     class FakeProcess:
@@ -416,6 +417,7 @@ def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
 
     def fake_popen(cmd, **kwargs):
         calls.append(cmd)
+        spawn_envs.append(kwargs.get("env"))
         return FakeProcess()
 
     monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
@@ -446,6 +448,11 @@ def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
     assert policy["runtime_user"] == "agent_runtime"
     assert policy["seccomp_mode"] == "log"
     assert policy["require_landlock"] is False
+
+    # RUN-3 AppArmor enforce-readiness: the launcher interpreter must not write
+    # .pyc into the read-only /opt tree. Its spawn env carries the suppression
+    # flag; the launcher re-scrubs before exec'ing the tool so it never leaks.
+    assert spawn_envs[0].get("PYTHONDONTWRITEBYTECODE") == "1"
 
 
 def test_worker_skips_inner_sudo_when_runtime_user_already_applied(monkeypatch):

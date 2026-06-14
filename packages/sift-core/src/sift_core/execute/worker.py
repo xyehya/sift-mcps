@@ -275,6 +275,18 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if merge_stderr:
                 stage_stderr = subprocess.STDOUT
 
+            # RUN-3 AppArmor enforce-readiness: when the dfir-exec launcher wraps
+            # the stage, its interpreter imports launcher + runtime_acl from the
+            # read-only /opt install tree and would attempt __pycache__ writes
+            # there (Landlock blocks the write; the *attempt* shows up as an
+            # AppArmor denial under enforce). Disable bytecode for the launcher's
+            # own interpreter via its spawn env. The launcher re-scrubs the env
+            # with build_sandbox_env before exec'ing the real tool, so this never
+            # reaches the tool and the G9 PYTHON* env-deny stays intact.
+            stage_env = tool_env
+            if launch_argv is not original_argv:
+                stage_env = {**tool_env, "PYTHONDONTWRITEBYTECODE": "1"}
+
             proc = subprocess.Popen(
                 argv,
                 stdin=stage_stdin,
@@ -284,7 +296,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 shell=False,
                 start_new_session=(os.name == "posix"),
                 preexec_fn=preexec_fn,
-                env=tool_env,
+                env=stage_env,
             )
             processes.append((proc, opened_files, original_argv))
             

@@ -13,9 +13,49 @@ Last updated: 2026-06-14.
 
 ## Current Change Log
 
+### 2026-06-14 - RUN-3 live MCP gate complete; seccomp=kill + apparmor=enforce live; evidence sealed
+
+Status: DONE
+
+Changed:
+- Live MCP gate run on the active case via in-session SIFT MCP tools (no curl/Python/API shims).
+- Positive forensic matrix GREEN on real sealed evidence under the jail: TSK `img_stat`/`fsstat`/`fls`,
+  a multi-stage `fls | grep` pipe (shell=False), and volatility3 `windows.pslist` (python+mmap+symbol
+  cache). Output carried the untrusted-provenance label and saved-output sha256 receipts.
+- Negative red-team matrix GREEN: ~25 live rows all fail closed with zero `approval_required`
+  (sqlite `.shell/.load`, sed `s///e`, `python3`/`python3.12`/`bash`/`busybox`, find `-exec`, tar
+  `--checkpoint-action`, vol `--plugin-dirs`, exiftool `-config`, curl `-d`, wget `--post-file`,
+  `/var/lib/sift` read, evidence write, findings.json/CASE.yaml, `chattr`/`setfattr`/`mount`); Floor
+  live: curl egress → exit 7 (Landlock/cgroup deny); P7 stripped an OSC escape sequence.
+- Floor flexibility fix: volatility3 automagic reads `/etc/mime.types` via stdlib mimetypes; granted
+  it in BOTH the launcher Landlock set and the AppArmor profile (both layers must allow).
+- AppArmor enforce-readiness: added `/proc/[0-9]*/fd/` grant + `PYTHONDONTWRITEBYTECODE=1` on the
+  launcher spawn env (worker.py) and worker unit to stop `.pyc` writes into the read-only /opt tree.
+- seccomp burn-in clean (0 LOG violations), then flipped template + live worker unit `log → kill`;
+  vol+TSK stay green under kill (no SIGSYS).
+- `dfir-exec` AppArmor flipped `complain → enforce` with 0 AVC denials on the positive matrix.
+- Evidence immutability restored: `chattr +i` on both evidence files (`lsattr` shows `i`); post-matrix
+  sha256 of both files equals the sealed manifest hashes (matrix altered nothing).
+- spec §10 walked and all-true, incl. G5: 34 transient `sift-run-command-*.scope` units proven via
+  journal (`MemoryMax=4G TasksMax=64 CPUQuota OOMPolicy=kill IPAddressDeny=any` per exec).
+
+Validation:
+- Host: strict security slice + executor + k5 isolation = 144 passed / 2 xfailed (with the new
+  launcher/template/unit changes); earlier full strict slice 64 passed / 2 xfailed.
+- Live VM: `/health` ok; gateway + job-worker active; `agent_runtime` uid 995; Landlock ABI present;
+  seccomp=kill + apparmor=enforce live; 0 dfir-exec AVCs; evidence sha256 == sealed.
+
+Next:
+- Host code changes (worker.py, dfir_exec_launcher.py, dfir-exec.template, sift-job-worker.service,
+  2 test files) are deployed live but uncommitted — run `/security-review` on the combined diff, then
+  commit and `git push origin main` only on operator authorization.
+- Re-render/reinstall is NOT required for the live VM (changes applied in place), but a fresh install
+  now carries seccomp=kill + the mime.types/proc-fd profile grants by default.
+- Follow-up: fix the `run_command_job` durable-lane `KeyError` (B-MVP-027).
+
 ### 2026-06-14 - RUN-3 is locally merged on main; non-MCP live gate is green
 
-Status: IN_PROGRESS
+Status: DONE (superseded by the live MCP gate entry above)
 
 Changed:
 - `run3/integrate` changes are now in local `main`.
@@ -78,7 +118,8 @@ Next:
 | B-MVP-012 | Backlog | DEFERRED | Self-managed Supabase compose remains deferred after LV1; confirm non-lab deployment timing. | BATCH-SB1 |
 | B-MVP-019 | Backlog | OPEN | Ensure add-on register path fields are sourced from staged `/opt/sift-mcps` paths for first real add-on launch. | BATCH-LV1 |
 | B-MVP-023 | Backlog | OPEN | Decide whether to keep legacy `legacy_portal_session_enabled` fallback or fully delete legacy session branch/tests. | BATCH-HR3 |
-| B-MVP-026 | Backlog | OPEN | Complete RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof. | BATCH-R3-* |
+| B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green on live VM 2026-06-14. Push pending operator authorization. | BATCH-R3-* |
+| B-MVP-027 | Backlog | OPEN | `run_command_job` durable lane (Postgres job state machine) fails with `unhandled worker error: KeyError` before exec; synchronous `run_command` lane unaffected. Pre-existing; fix the durable path. | BATCH-R3-* |
 
 ## Validation Commands
 

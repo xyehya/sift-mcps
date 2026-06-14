@@ -48,7 +48,12 @@ Environment=SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1
 Environment=SIFT_EXECUTE_REQUIRE_LANDLOCK=1
 Environment=SIFT_EXECUTE_SYSTEMD_SCOPE=1
 Environment=SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER=/usr/local/sbin/sift-run-command-systemd-scope
-Environment=SIFT_EXECUTE_SECCOMP_MODE=log
+Environment=SIFT_EXECUTE_SECCOMP_MODE=kill
+# RUN-3 AppArmor enforce-readiness: keep the long-running worker process from
+# attempting .pyc writes into the read-only /opt install tree, which surface as
+# AppArmor denials under enforce. The dfir-exec launcher gets the same flag via
+# its own spawn env (worker.py); the tool env stays PYTHON*-free (G9).
+Environment=PYTHONDONTWRITEBYTECODE=1
 # B-MVP-015 / B-MVP-004 (D3): the worker re-embeds for ingest-time RAG paths and
 # memory-symbol work; point its HF cache at the service home and pin the model.
 Environment=HF_HOME=${SIFT_HF_HOME}

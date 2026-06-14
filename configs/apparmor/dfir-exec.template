@@ -41,6 +41,9 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   /etc/alternatives/**                     r,
   /etc/localtime                           r,
   /etc/nsswitch.conf                       r,
+  # volatility3 automagic initializes stdlib mimetypes, which reads
+  # /etc/mime.types. Landlock grants the same file; both layers must allow.
+  /etc/mime.types                          r,
   /etc/passwd                              r,
   /etc/group                               r,
   /etc/hosts                               r,
@@ -68,6 +71,11 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   /proc/[0-9]*/mounts                      r,
   /proc/[0-9]*/stat                        r,
   /proc/[0-9]*/status                      r,
+  # The launcher enumerates inherited FDs via os.listdir("/proc/self/fd"); the
+  # kernel resolves /proc/self -> /proc/<pid> before AppArmor mediates, so the
+  # /proc/self/** rule above does not match the resolved path. Grant the dir
+  # listing on the pid-form path for the FD-close pass.
+  /proc/[0-9]*/fd/                         r,
   deny @{PROC}/sys/kernel/**               w,
 
   # Case role model. Landlock supplies the per-case deny-by-absence floor; this

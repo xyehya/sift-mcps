@@ -6,7 +6,8 @@
 > sequences its §9 phases into disjoint-fence agent batches. If this plan and the spec ever
 > disagree, the spec wins; fix this plan.
 
-Status: **READY TO LAUNCH** (design frozen; not started). Created 2026-06-14.
+Status: **WAVE-2 COMPLETE** (live MCP gate green 2026-06-14; seccomp=kill + apparmor=enforce live;
+evidence immutable; awaiting push authorization). Created 2026-06-14.
 Branch base: LOCAL `main` (origin synced @ `2015b94`). Worktrees made MANUALLY off local main
 (`isolation:worktree` branches off stale origin — see `[[reference-agent-worktree-base-bug]]`).
 
@@ -170,14 +171,22 @@ Dependencies: B-GATE's live pass depends on B-CEIL+B-FLOOR deployed. B-AA enforc
 - [x] RECONCILE → `run3/integrate`; gate green
 - [x] `/security-review` combined diff — clean / fixed
 - [x] WAVE 2 deploy + non-MCP live gate green (health, helper, runtime user, direct floor probes)
-- [ ] WAVE 2 MCP positive forensic matrix green (flexibility)
-- [ ] WAVE 2 MCP negative harness all-blocked
-- [ ] seccomp LOG→KILL flipped in service units; positive still green
-- [ ] AppArmor dfir-exec complain→enforce; 0 denials
-- [ ] evidence integrity pre/post intact and immutable bit present
-- [ ] spec §10 checklist all-true
+- [x] WAVE 2 MCP positive forensic matrix green (flexibility) — img_stat/fsstat/fls/fls|grep + vol pslist on real sealed evidence
+- [x] WAVE 2 MCP negative harness all-blocked — ~25 live rows fail closed, zero `approval_required`
+- [x] seccomp LOG→KILL flipped in service units; positive still green (vol+TSK green under kill, no SIGSYS)
+- [x] AppArmor dfir-exec complain→enforce; 0 denials (positive matrix green, 0 AVCs)
+- [x] evidence integrity pre/post intact and immutable bit present (sha256 == sealed manifest; `chattr +i` restored)
+- [x] spec §10 checklist all-true (incl. G5 — 34 transient systemd scopes proven, IPAddressDeny/MemoryMax/TasksMax)
 - [x] merge `run3/integrate` → local `main` + log
 - [ ] push origin + memory update (only when explicitly requested)
+
+Wave-2 follow-up fixes landed during the live gate (uncommitted on host, deployed live):
+- Floor was too tight for volatility3: its automagic reads `/etc/mime.types` via stdlib mimetypes;
+  added that file to the launcher Landlock grants AND the AppArmor profile (both layers must allow).
+  Without it vol failed identically under Landlock-only then again under AppArmor-enforce.
+- AppArmor enforce-readiness: `/proc/[0-9]*/fd/` grant (launcher FD-close reads the pid-form path the
+  kernel resolves `/proc/self` to) + `PYTHONDONTWRITEBYTECODE=1` on the launcher spawn env (worker.py)
+  and worker unit, to stop `.pyc` write attempts into the read-only /opt tree.
 
 Latest non-MCP validation snapshot (2026-06-14):
 
@@ -196,17 +205,21 @@ Latest non-MCP validation snapshot (2026-06-14):
   matrix and negative red-team harness must be run through the configured in-session SIFT MCP tools,
   not curl/Python API shims.
 
-Known follow-up findings before final go/no-go:
+Known follow-up findings — RESOLVED in the 2026-06-14 live MCP gate:
 
-- `SIFT_EXECUTE_SECCOMP_MODE` is still `log` in rendered service units. Do not flip the unit default
-  to `kill` until the MCP positive matrix is green; a direct kill-mode network probe already proved
-  SIGSYS behavior.
-- `dfir-exec` remains AppArmor complain-mode. Audit burn-in showed allowed launcher reads of
-  `/proc/<pid>/fd/` and Python bytecode creation attempts under `/opt/sift-mcps/**/__pycache__/`;
-  fix/profile these before enforce.
-- Active evidence files are root-owned and floor-protected from `agent_runtime`, but the host
-  immutable `i` bit was absent in `lsattr`. Restore/prove immutable sealing before checking the
-  evidence-integrity item.
+- ~~`SIFT_EXECUTE_SECCOMP_MODE` still `log`~~ → RESOLVED. Template + live worker unit flipped to
+  `kill` after the positive matrix went green; vol+TSK stay green under kill (no SIGSYS); network
+  probe still fails closed.
+- ~~`dfir-exec` AppArmor complain-mode + `/proc/<pid>/fd` and `__pycache__` denials~~ → RESOLVED.
+  Profile flipped to enforce with 0 AVC denials; `/proc/[0-9]*/fd/` grant added; bytecode writes
+  suppressed via `PYTHONDONTWRITEBYTECODE=1`.
+- ~~Evidence immutable `i` bit absent~~ → RESOLVED. `chattr +i` restored on both evidence files
+  (`lsattr` shows `i`); post-matrix sha256 of both files equals the sealed manifest hashes.
+
+Open backlog (out of RUN-3 gate scope):
+- `run_command_job` durable lane (Postgres job state machine) fails with `unhandled worker error:
+  KeyError` before exec; the synchronous `run_command` lane is unaffected and was used for the gate.
+  Pre-existing on deployed code (not introduced by the Wave-2 patch). Track for a follow-up fix.
 
 ---
 

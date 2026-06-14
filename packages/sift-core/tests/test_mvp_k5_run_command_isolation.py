@@ -106,6 +106,11 @@ def test_sandbox_env_keeps_safe_runtime_allowlist(monkeypatch):
     assert env[SECURITY_POLICY_ENV] == '{"mode":"denylist"}'
     # Non-interactive hardening defaults applied.
     assert env["TERM"] == "dumb"
+    # G9: PYTHON* env names (code-injection vectors) never survive scrubbing,
+    # including the benign PYTHONDONTWRITEBYTECODE — the launcher hardening sets
+    # that on the launcher's *own* spawn env, not the scrubbed tool env.
+    assert "PYTHONDONTWRITEBYTECODE" not in env
+    assert env_leak_report(env) == []
 
 
 def test_sandbox_env_overrides_cannot_smuggle_secret():
