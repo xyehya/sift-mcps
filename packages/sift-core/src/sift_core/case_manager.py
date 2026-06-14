@@ -6,6 +6,7 @@ Local-first: each examiner owns a flat case directory. Case lifecycle
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
