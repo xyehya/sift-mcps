@@ -44,6 +44,65 @@ def mock_client():
         yield client
 
 
+class TestResolveIndexB1:
+    """B1: default index-pattern resolution must agree with index naming.
+
+    Indices are named ``case-<case_key>-<type>-<host>`` where ``case_key`` is
+    the case directory basename — which itself already starts with ``case-``
+    (e.g. ``case-rocba-case-06132304``), so real indices carry a doubled
+    ``case-case-`` prefix. The default query pattern MUST reproduce that exact
+    prefix, and must NOT be built from the opaque DB UUID the Gateway injects.
+    """
+
+    def test_case_key_starting_with_case_prefix_keeps_doubled_prefix(self, monkeypatch):
+        # Active case dir basename already starts with 'case-' (real-world key).
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "case-rocba-case-06132304")
+        # No explicit index, no explicit case_id -> derive from active case.
+        pattern = srv._resolve_index("", "")
+        # Must match the actually-created indices, e.g.
+        # case-case-rocba-case-06132304-evtx-srl-forge
+        assert pattern == "case-case-rocba-case-06132304-*"
+
+    def test_explicit_case_id_with_case_prefix_resolves_correctly(self):
+        pattern = srv._resolve_index("", "case-rocba-case-06132304")
+        assert pattern == "case-case-rocba-case-06132304-*"
+
+    def test_uuid_case_id_is_ignored_in_favour_of_active_case(self, monkeypatch):
+        # The Gateway injects the opaque DB UUID into case_id; building
+        # case-<uuid>-* would match nothing. The active-case dir must win.
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "case-rocba-case-06132304")
+        uuid = "674425ae-78ea-4c9c-9a14-3c9d0b6f900c"
+        pattern = srv._resolve_index("", uuid)
+        assert pattern == "case-case-rocba-case-06132304-*"
+        assert uuid not in pattern
+
+    def test_explicit_index_always_wins(self):
+        assert (
+            srv._resolve_index("case-case-x-evtx-*", "case-y")
+            == "case-case-x-evtx-*"
+        )
+
+    def test_no_case_falls_back_to_wildcard(self, monkeypatch):
+        monkeypatch.setattr(srv, "_get_active_case", lambda: None)
+        assert srv._resolve_index("", "") == "case-*"
+
+    def test_count_uses_injected_case_dir_basename_as_key(self, mock_client, tmp_path):
+        # Simulate the Gateway injecting the authoritative case_dir (whose
+        # basename is the case_key) while also injecting the opaque UUID into
+        # case_id. The query must target the doubled-prefix indices.
+        case_dir = tmp_path / "case-rocba-case-06132304"
+        case_dir.mkdir()
+        mock_client.count.return_value = {"count": 7}
+        opensearch_count(
+            query="*",
+            case_id="674425ae-78ea-4c9c-9a14-3c9d0b6f900c",
+            case_dir=str(case_dir),
+        )
+        # Inspect the index the client was actually asked to count.
+        _, kwargs = mock_client.count.call_args
+        assert kwargs["index"] == "case-case-rocba-case-06132304-*"
+
+
 class TestToolRegistry:
     def test_ingest_format_variants_are_consolidated_under_idx_ingest(self):
         tools = srv.server._tool_manager._tools

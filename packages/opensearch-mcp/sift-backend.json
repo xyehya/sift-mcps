@@ -38,7 +38,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_count",
@@ -59,7 +59,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_aggregate",
@@ -80,7 +80,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_get_event",
@@ -121,7 +121,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_field_values",
@@ -142,7 +142,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_status",
@@ -233,7 +233,7 @@
       "when_to_use": "Use after examiner approval to index evidence for structured search.",
       "avoid_when": "Avoid setting dry_run=False until the target evidence and ingest plan are clear; use force=True only for an intentional re-ingest when the case already has docs.",
       "output_notes": "Mutating operation scoped to the OpenSearch index; dry runs should precede writes.",
-      "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed), case_id, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}.",
+      "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, next_step, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns status=queued + job_id (dispatched to sift-opensearch-worker@); poll job_status(job_id).",
       "response_shaping": "Returns a plan/run reference (run_id, log_file) rather than streaming ingest output — poll opensearch_ingest_status for progress. The 'password' arg is a SECRET, redacted from audit/logs/results.",
       "usage_examples": [
         {"description": "Preview an auto-detected container (default dry run)", "arguments": {"path": "evidence/rocba-cdrive.e01", "format": "auto"}},

@@ -28,15 +28,28 @@ from sift_gateway.identity import Identity
 
 logger = logging.getLogger(__name__)
 
-# NOTE: "ingest" was retired (wave8/ingest-tools): the opensearch-mcp add-on owns
-# the real ingest surface and runs directly through the gateway proxy, not via a
-# core job. "enrich"/"report" remain as a forward-looking allowlist.
-_VALID_JOB_TYPES = frozenset({"enrich", "report", "run_command"})
+# feat/opensearch-workers: "ingest" is RE-ENABLED. The OpenSearch ingest pipeline
+# (FUSE-mount E01 + Hayabusa + vol3 -> index) is decoupled from the gateway stdio
+# proxy and dispatched as a durable job to the dedicated, least-privilege
+# ``sift-opensearch-worker@`` units (the only place with the shared mount
+# namespace FUSE needs). "enrich" rides the same path. The gateway remains the
+# sole enqueue boundary (OpenSearchJobDispatchMiddleware enqueues here after
+# auth/evidence-gate/audit). "report" stays a forward-looking allowlist entry.
+_VALID_JOB_TYPES = frozenset({"ingest", "enrich", "report", "run_command"})
 
 # Fields exposed by app.job_status_public that are safe to return to
-# portal/agent callers. The view itself already excludes spec_internal,
-# worker_id, and lease internals; this is the explicit allow-list the adapter
-# returns, so a future view change cannot silently widen the agent surface.
+# portal/agent callers. The view itself excludes spec_internal and lease
+# internals; this is the explicit allow-list the adapter returns, so a future
+# view change cannot silently widen the agent surface.
+#
+# feat/opensearch-workers adds two REALTIME fields for the decoupled workers:
+#   * worker_label  — non-sensitive liveness label of the worker holding the job
+#                     (e.g. ``osw-1-ab12cd``); null when not leased. Lets the
+#                     agent/operator see N-way parallel ingest and live progress.
+#   * current_step  — latest job step {step_index,name,status,detail,updated_at}
+#                     with path-free detail counts (handler contract). Surfaces
+#                     phase + indexed/host/hayabusa progress before the terminal
+#                     result_public lands.
 _PUBLIC_STATUS_FIELDS = (
     "job_id",
     "job_type",
@@ -56,6 +69,8 @@ _PUBLIC_STATUS_FIELDS = (
     "updated_at",
     "step_count",
     "steps_succeeded",
+    "worker_label",
+    "current_step",
 )
 
 
@@ -245,7 +260,8 @@ class JobService:
                            evidence_id::text, priority, attempts, max_attempts,
                            spec_public, result_public, error_summary,
                            provenance_id::text, created_at, started_at,
-                           finished_at, updated_at, step_count, steps_succeeded
+                           finished_at, updated_at, step_count, steps_succeeded,
+                           worker_label, current_step
                     from app.job_status_public
                     where job_id = %s
                     """,

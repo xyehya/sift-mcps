@@ -13,6 +13,83 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-14 - BUILT: OpenSearch decoupled scalable workers (branch feat/opensearch-workers; deployed to TEST)
+
+Status: IN_PROGRESS (build + unit tests DONE; deployed to VM; first live smoke pending joint test).
+
+Implements the 2026-06-14 DECISION below. Branch `feat/opensearch-workers` (do NOT
+merge/push yet — `/security-review` required before merge). 5 commits:
+- 5628af0 gateway dispatch boundary + realtime status (`OpenSearchJobDispatchMiddleware`,
+  innermost; redirects `opensearch_ingest`/`opensearch_enrich_intel` to a NON-BLOCKING
+  durable job, returns opaque job_id; query tools stay on the thin proxy).
+- fedd6d1 ingest/enrich job handlers + lane-scoped worker CLI
+  (`opensearch_mcp/ingest_job.py`; `job_worker_cli.build_handlers(job_types=...)` wires
+  only the requested lane).
+- 3817a98 `configs/systemd/sift-opensearch-worker@.service` template (only relaxation vs
+  sift-job-worker: `MountFlags=shared`) + install.sh render/enable N instances.
+- 402851b unit + concurrency + anti-spoof tests.
+- a2dfc51 agentic-security skill docs (environment-profile + repo-security-baseline:
+  control A dispatch + control H FUSE OPEN→RESOLVED-via-decoupled-worker).
+Migration `202606150900_opensearch_worker_status.sql` (per-step/worker realtime status).
+
+Architecture honored: gateway stays the SOLE policy boundary and is NOT loosened
+(`MountFlags=` empty kept); every ingest/query call still passes auth → active-case →
+audit → evidence-gate before dispatch; worker sees only the gateway-resolved
+DB-authoritative `case_dir` in `spec_internal` (client-supplied `case_dir`/`case_id`/
+`case_key` dropped — anti-spoof); N workers claim distinct jobs via `FOR UPDATE SKIP
+LOCKED`; non-blocking dispatch.
+
+Test proof (per-package, host .venv): sift-core job worker 18 passed; opensearch-mcp
+ingest-job handler 7 passed; sift-gateway dispatch middleware 6 passed + job/binding
+regression (test_mvp_d2 + test_mvp_binding) 35 passed. 4 build commits confirmed green
+after the API-interruption resume.
+
+Live proof (sanitized, VM siftworkstation, case-rocba, 2026-06-14): deployed editable
+to /opt/sift-mcps; migration 202606150900 applied (worker_label + current_step in
+app.job_status_public); created the `sift-opensearch-worker` console script;
+installed+enabled `sift-opensearch-worker@1`; restarted gateway + job-worker.
+- THE CROWN-JEWEL GATE PASSED: `opensearch_ingest(evidence/rocba-cdrive.e01,
+  dry_run=false, force=true)` → non-blocking dispatch → `osw-1` CLAIMED the durable
+  job → FUSE MOUNT SUCCEEDED (xmount → ntfs-3g ro,noexec; NO `Operation not
+  permitted`) → parsed the E01 disk artifacts → job `succeeded`. 14 disk-family
+  indices for host srl-forge landed (evtx 12,440, registry 7,278, srum 18,516,
+  amcache 1,112, prefetch 1,081, shimcache, shellbags, jumplists, lnk, recyclebin,
+  tasks, wer, httperr) — artifacts that were UNREACHABLE before (the entire reason
+  for the build).
+- Realtime status proven through the agent MCP surface: `job_status(job_id)` returns
+  `status=running`, `worker_label=osw-1`, `current_step` with live `indexed_docs` +
+  `artifacts_complete n/14`, path-free `spec_public`.
+- Hardened gateway untouched: `MountFlags=` empty, `ProtectSystem=strict`.
+
+THREE LIVE-DISCOVERED BUILD DEFECTS FIXED THIS SESSION (commits b5d6d91, 521230c):
+1. The decoupling's core premise was WRONG. `MountFlags=shared` does NOT let a
+   private-mount-namespace unit do FUSE. Empirically (live systemd-run probes vs the
+   real E01): fusermount needs (a) CAP_SYS_ADMIN in the bounding set AND (b) the HOST
+   mount namespace — i.e. NO ProtectSystem/ProtectHome/PrivateTmp/ReadWritePaths/
+   ProtectKernel*/ProtectControlGroups (each forces a private ns and fails the mount
+   even WITH CAP_SYS_ADMIN+MountFlags=shared). Worker now runs the namespace-free
+   hardening subset + gateway privilege-drop caps + CAP_SYS_ADMIN. NET POSTURE
+   REDUCTION vs design (worker loses ProtectSystem=strict) — DECISION-PENDING, FLAGGED
+   for /security-review before merge.
+2. Worker bounding set was cap_linux_immutable-only (copied from sift-job-worker) →
+   sudo→root mount failed `unable to change to root gid`. Now has SETUID/SETGID/
+   SETPCAP/AUDIT_WRITE.
+3. `sift-job-worker.service` wasn't lane-restricted → the cap-starved default worker
+   ALSO claimed ingest jobs and failed the mount. Pinned to `--job-types run_command`.
+4. (commit 521230c) Dispatch returned `status=queued` but IngestOut's Literal lacked
+   it → the gateway output-validator REJECTED the response, so the agent never got the
+   job_id (the job still ran). Added `queued` + job_id/job_type/dispatched_to/next_step
+   to IngestOut; regenerated the surface golden; redeployed + restarted gateway; now
+   the dispatch returns the job_id cleanly.
+
+STOPPED for joint testing (per operator). System left clean: services active+idle, no
+stuck jobs, disk indices persisted. STILL OPEN: full 40GB E01 completion; Hayabusa
+`*-hayabusa-*` index verify (Hayabusa RAN on the parsed EVTX live but the dedicated
+detection index wasn't confirmed this pass); N-worker (@2..@N) parallel proof;
+`/security-review` of the worker posture reduction BEFORE merge. Updated
+mcp_tool_assessment.md §0 (FUSE/Hayabusa/single-threaded → RESOLVED; WOF extractor +
+PTC bridge + sandbox still OPEN).
+
 ### 2026-06-14 - DECISION: decouple OpenSearch into scalable least-privilege workers (design-first; in progress)
 
 Status: APPROVED (operator), design-first; partial fixes landed, decoupling build pending.

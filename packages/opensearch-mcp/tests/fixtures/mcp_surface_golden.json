@@ -1964,7 +1964,7 @@
         "category": "ingest",
         "defer_loading": false,
         "defer_loading_rationale": "Central INGEST-phase verb; keep always-loaded.",
-        "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed), case_id, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Mutating; poll progress via opensearch_ingest_status.",
+        "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, next_step, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns status=queued + job_id (non-blocking, dispatched to a sift-opensearch-worker@); poll job_status(job_id) for realtime worker_label/current_step.",
         "recommended_for_phase": "INGEST",
         "response_shaping": "Returns a plan/run reference (run_id, log_file) rather than streaming ingest output \u2014 poll opensearch_ingest_status for progress. The 'password' arg is a SECRET, redacted from audit/logs/results.",
         "usage_examples": [
@@ -2053,6 +2053,45 @@
                 "title": "Details",
                 "type": "object"
               },
+              "dispatched_to": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Worker lane a queued ingest was dispatched to.",
+                "title": "Dispatched To"
+              },
+              "job_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Durable job id for a queued (worker-dispatched) ingest; poll job_status.",
+                "title": "Job Id"
+              },
+              "job_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Dispatched job type (ingest/enrich) when queued.",
+                "title": "Job Type"
+              },
               "log_file": {
                 "anyOf": [
                   {
@@ -2065,6 +2104,19 @@
                 "default": null,
                 "description": "Background run log file.",
                 "title": "Log File"
+              },
+              "next_step": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Operator guidance for a queued dispatch.",
+                "title": "Next Step"
               },
               "note": {
                 "anyOf": [
@@ -2119,7 +2171,8 @@
                   "containers_detected",
                   "multi_started",
                   "already_indexed",
-                  "failed"
+                  "failed",
+                  "queued"
                 ],
                 "title": "Status",
                 "type": "string"

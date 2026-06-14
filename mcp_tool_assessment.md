@@ -13,6 +13,66 @@ harder and slower than it needed to be.
 
 ---
 
+## 0. Resolution status (2026-06-14) — append-only update
+
+The friction report below is the historical record of the run; it is NOT rewritten.
+This section tracks which of its defects have since been fixed in code. Anchors point
+at the merged/landed fix.
+
+Resolved on `fix/mcp-assessment-p0` (merged to main; live-proven):
+- **RESOLVED — `no_active_case` ingest defect (the highest-impact defect, §1
+  opensearch_ingest / opensearch_inspect_container / opensearch_case_summary).** The
+  gateway now injects the DB-authoritative `case_dir` into each filesystem-touching
+  backend tool call; the opensearch backend resolves the active case from it. Memory
+  ingest live-proven: 23 indices / ~180,892 docs. Anchor: commit 1e660ea +
+  03f5753; `opensearch_mcp/server.py:active_case_dir()`.
+- **RESOLVED — UUID-vs-human-id trap (§1 opensearch_ingest_status, §2(b)).** case_dir
+  injection makes ingest resolve the same active case the tolerant siblings do.
+- **RESOLVED — `extractions/`/`agent/` write-jail + 0600 handoff (§2(b/c), §3 P0
+  extract→parse handoff).** run_command may now read/write anywhere under the active
+  case dir (evidence/ + integrity records + secrets stay hard-denied); worker umask
+  0027 makes extracted files group-readable. Anchor: 445bb1e, 349bb23.
+- **RESOLVED — `grep -e`/`-E` over-aggressive flag block (§2(c)).** Anchor: ef41e85.
+- **RESOLVED — record_finding IOC `hashlib` bug (§3 P2) + KB/audit_id grounding
+  credit + native `supersedes` field (§2(d), §3 P1 supersedes).** Anchor: 1863fe2,
+  aaa885d.
+- **RESOLVED — vol3/tqdm CR `Progress:` flood (§2(a)).** Collapsed at the executor.
+  Anchor: 6bcbb0f.
+
+Resolved by the OpenSearch-worker decoupling (this branch `feat/opensearch-workers`;
+deployed to TEST, first live smoke per Session-Notes):
+- **RESOLVED — FUSE E01 disk-image mount (`fusermount: Operation not permitted`),
+  the residual half of the §1 opensearch_ingest defect.** Root cause: the opensearch
+  backend ran as a stdio child of the hardened gateway and inherited its private/slave
+  mount namespace, so the kernel refused new FUSE mounts. Fixed by moving the
+  privileged ingest/enrich pipeline into a dedicated least-privilege
+  `sift-opensearch-worker@` systemd unit (`MountFlags=shared` its only relaxation vs
+  `sift-job-worker`); the gateway dispatches a durable job and stays hardened. Anchor:
+  `policy_middleware.py:OpenSearchJobDispatchMiddleware`, `opensearch_mcp/ingest_job.py`,
+  `configs/systemd/sift-opensearch-worker@.service`, migration
+  `202606150900_opensearch_worker_status.sql`.
+- **RESOLVED — Hayabusa/detections never reachable (§2(d), §3 P1 event-log
+  timeliner).** Hayabusa runs in the DISK ingest, which was blocked by the FUSE mount;
+  with the worker the disk pipeline mounts and Hayabusa indices land + become
+  queryable via `opensearch_list_detections`/`search`/`timeline`. (Live verify of the
+  Hayabusa indices is the remaining joint-test step — see Session-Notes.)
+- **RESOLVED — single-threaded / blocking ingest.** Dispatch is now NON-BLOCKING
+  (gateway returns an opaque job_id immediately) and N `sift-opensearch-worker@`
+  instances claim distinct jobs via `FOR UPDATE SKIP LOCKED`, so ingest scales and
+  never blocks further MCP calls. Realtime per-worker progress via
+  `app.job_status_public`.
+
+Still OPEN (not addressed by these fixes):
+- **OPEN — P0 WOF/NTFS-compressed file extractor (§3).** TSK can't read WOF-compressed
+  EVTX; independent of ingest decoupling. (Ingest's own Hayabusa/EVTX path may sidestep
+  this for the in-pipeline parse, but the standalone run_command extractor gap remains.)
+- **OPEN — P1 programmatic callMCPTool bridge / sandboxed code runner (§2(c), §3).**
+- **OPEN — catalog↔binary name mismatch (`regripper`/`vol3` vs `rip.pl`/`vol`) (§1
+  get_tool_help).**
+- **OPEN — OS-level run_command sandbox (cgroup/rlimit only, not bwrap/nsjail).**
+
+---
+
 ## 1. Frictions — per tool
 
 ### case_info

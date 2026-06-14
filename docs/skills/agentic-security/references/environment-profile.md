@@ -33,6 +33,21 @@ server-side at the Gateway, not client-side.
 - `case-dashboard` — operator portal backend (REST routes, review/approval path).
 - `opensearch-mcp` — add-on backend: ingest (disk/memory/logs via Hayabusa,
   Volatility, etc.) + search/aggregate/timeline. The ONLY ingest+query driver.
+  SPLIT execution (2026-06-14): the privileged ingest/enrich pipeline does NOT run
+  as a stdio child of the gateway — it would inherit the gateway's private mount
+  namespace and FUSE E01 mounts fail. The gateway enqueues a durable ingest/enrich
+  job; a dedicated `sift-opensearch-worker@` systemd unit claims and runs it
+  (`opensearch_mcp/ingest_job.py`, console script `sift-opensearch-worker`, N
+  instances via `FOR UPDATE SKIP LOCKED`). The worker's security profile is
+  FUSE-CONSTRAINED (live-established 2026-06-14): fusermount needs CAP_SYS_ADMIN in
+  the bounding set AND the HOST mount namespace, so the worker carries the gateway's
+  privilege-drop caps + CAP_SYS_ADMIN but CANNOT use ProtectSystem=strict / any
+  private-namespace directive (MountFlags=shared does NOT rescue a private-ns unit).
+  This is a real, narrow posture reduction vs the gateway (the worker has no
+  listener / no auth surface / no inbound path; mounts gated by
+  /etc/sudoers.d/sift-ingest-mount) — PENDING /security-review. Query tools
+  (search/aggregate/timeline/count/field_values/list_detections) need no FUSE and
+  stay on the thin in-gateway proxy.
 - `forensic-rag-mcp` (namespace `kb`) — add-on backend: global IR/DFIR knowledge
   corpus in Supabase pgvector. Non-authoritative reference plane; `query_only`.
 - `forensic-knowledge` — FK enrichment data loader (tool guidance bundled with

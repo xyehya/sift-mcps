@@ -7,7 +7,16 @@ Type=simple
 # Runs as the dedicated non-admin service user (sift-service), same as the gateway.
 User=${SIFT_GATEWAY_SERVICE_USER}
 Group=${SIFT_GATEWAY_SERVICE_USER}
-ExecStart=${SIFT_MCPS_ROOT}/.venv/bin/sift-job-worker
+# feat/opensearch-workers: PIN this worker to the run_command lane. The shared
+# job_worker_cli wires the opensearch ingest/enrich handlers whenever the add-on
+# is importable, so an unrestricted worker would ALSO claim ingest/enrich jobs and
+# run the FUSE mount — but this unit is calibrated for run_command (cap_linux_
+# immutable only, MountFlags= empty), so the mount would fail with `sudo: unable to
+# change to root gid: Operation not permitted`. The privileged ingest/enrich lane
+# belongs exclusively to sift-opensearch-worker@.service (adds CAP_SYS_ADMIN and
+# runs in the host mount namespace for FUSE; no MountFlags=shared). Lane isolation
+# is enforced here, not just by privilege.
+ExecStart=${SIFT_MCPS_ROOT}/.venv/bin/sift-job-worker --job-types run_command
 WorkingDirectory=${SIFT_MCPS_ROOT}
 Restart=on-failure
 RestartSec=5

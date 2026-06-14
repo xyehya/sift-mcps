@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re as _re
 from pathlib import Path
 
 from sift_core.case_io import cases_root, resolve_case_path
@@ -628,13 +629,32 @@ def _strip_hits(
     return results
 
 
+_UUID_RE = _re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    _re.IGNORECASE,
+)
+
+
 def _resolve_index(index: str, case_id: str) -> str:
-    """Resolve index pattern from explicit index, case_id, or active case."""
+    """Resolve index pattern from explicit index, case_id, or active case.
+
+    Index names are built from the case *key* (the case directory basename,
+    e.g. ``case-rocba-case-06132304``) via :func:`build_index_name`. The
+    DB-authoritative active case is the only reliable source of that key inside
+    a Gateway deployment, so it takes precedence here. A caller-supplied
+    ``case_id`` that is the opaque DB UUID (which the Gateway uses internally
+    and would otherwise build a ``case-<uuid>-*`` pattern that matches nothing)
+    is ignored in favour of the active-case directory basename. See B1.
+    """
     if index:
         return index
     from opensearch_mcp.paths import sanitize_index_component
 
-    cid = case_id or _get_active_case() or ""
+    cid = ""
+    if case_id and not _UUID_RE.match(case_id.strip()):
+        cid = case_id.strip()
+    if not cid:
+        cid = _get_active_case() or ""
     if cid:
         return f"case-{sanitize_index_component(cid)}-*"
     return "case-*"
@@ -792,6 +812,7 @@ def opensearch_search(
     time_from: str = "",
     time_to: str = "",
     compact: bool = True,
+    case_dir: str = "",
 ) -> dict:
     """Search indexed evidence using OpenSearch query_string syntax.
 
@@ -825,7 +846,10 @@ def opensearch_search(
         sort: Sort field:order (default @timestamp:desc).
         time_from: Start time (ISO 8601, e.g., '2023-01-25T14:00:00Z').
         time_to: End time (ISO 8601).
+        case_dir: Gateway-injected authoritative case directory. Do not set;
+            the Gateway populates it from the DB active case.
     """
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     index = _resolve_index(index, case_id)
     err = _validate_index(index)
     if err:
@@ -907,6 +931,7 @@ def opensearch_count(
     query: str = "*",
     index: str = "",
     case_id: str = "",
+    case_dir: str = "",
 ) -> dict:
     """Count matching documents — returns a scalar, no documents returned.
 
@@ -924,7 +949,10 @@ def opensearch_count(
         index: Index pattern. Overrides case_id if provided.
         case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
+        case_dir: Gateway-injected authoritative case directory. Do not set;
+            the Gateway populates it from the DB active case.
     """
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     index = _resolve_index(index, case_id)
     err = _validate_index(index)
     if err:
@@ -953,6 +981,7 @@ def opensearch_aggregate(
     index: str = "",
     case_id: str = "",
     limit: int = 50,
+    case_dir: str = "",
 ) -> dict:
     """Aggregate (group by) a field — frequency analysis, top-N counts.
 
@@ -981,7 +1010,10 @@ def opensearch_aggregate(
         case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
         limit: Max buckets (default 50, max 500).
+        case_dir: Gateway-injected authoritative case directory. Do not set;
+            the Gateway populates it from the DB active case.
     """
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     index = _resolve_index(index, case_id)
     err = _validate_index(index)
     if err:
@@ -1072,6 +1104,7 @@ def opensearch_timeline(
     time_field: str = "@timestamp",
     time_from: str = "",
     time_to: str = "",
+    case_dir: str = "",
 ) -> dict:
     """Show event count over time as a date histogram — temporal spike detection.
 
@@ -1099,6 +1132,8 @@ def opensearch_timeline(
         time_field: Timestamp field (default @timestamp).
         time_from: Start time (ISO 8601, e.g., '2023-01-25T14:00:00Z').
         time_to: End time (ISO 8601).
+        case_dir: Gateway-injected authoritative case directory. Do not set;
+            the Gateway populates it from the DB active case.
     """
     import re as _re_mod
 
@@ -1107,6 +1142,7 @@ def opensearch_timeline(
             "error": f"Invalid interval '{interval}'. Use Ns/Nm/Nh/Nd (e.g., 1h, 30m).",
             "next_step": "Retry opensearch_timeline with an interval like 1h or 30m.",
         }
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     index = _resolve_index(index, case_id)
     err = _validate_index(index)
     if err:
@@ -1169,6 +1205,7 @@ def opensearch_field_values(
     index: str = "",
     case_id: str = "",
     limit: int = 50,
+    case_dir: str = "",
 ) -> dict:
     """List unique values for a field with occurrence counts — field discovery.
 
@@ -1196,7 +1233,10 @@ def opensearch_field_values(
         case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
         limit: Max values (default 50, max 500).
+        case_dir: Gateway-injected authoritative case directory. Do not set;
+            the Gateway populates it from the DB active case.
     """
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     index = _resolve_index(index, case_id)
     err = _validate_index(index)
     if err:
@@ -1402,7 +1442,15 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False, cas
     from opensearch_mcp.paths import sanitize_index_component
 
     _INJECTED_CASE_DIR.set((case_dir or "").strip())
-    cid = case_id or _get_active_case()
+    # B1: index names use the case *key* (dir basename). A caller/Gateway
+    # supplied case_id that is the opaque DB UUID would build a
+    # ``case-<uuid>-*`` pattern that matches nothing, so the authoritative
+    # active-case directory takes precedence over a UUID-shaped case_id.
+    cid = ""
+    if case_id and not _UUID_RE.match(case_id.strip()):
+        cid = case_id.strip()
+    if not cid:
+        cid = _get_active_case()
     if not cid:
         return {
             "error": "No active case.",

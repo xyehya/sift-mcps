@@ -35,6 +35,19 @@ Last synced: 2026-06-14.
 - 🟡 Add-on authority contract (prohibited_operations / required_scopes) enforced
   by `AddonAuthorityMiddleware`, but only opencti/rag exercise it; windows-triage
   unbuilt. Anchor: `policy_middleware.py`, `app.mcp_backends.authority_contract`.
+- ✅ Privileged OpenSearch ingest/enrich are decoupled out of the gateway: the
+  gateway no longer runs them in its hardened mount namespace (which made FUSE
+  E01 mounts fail — see H). `OpenSearchJobDispatchMiddleware` (innermost, runs
+  only after auth/active-case/audit/evidence-gate) redirects
+  `opensearch_ingest`/`opensearch_enrich_intel` to a NON-BLOCKING durable job; a
+  dedicated least-privilege `sift-opensearch-worker@` unit claims and runs them.
+  Anti-spoof: the worker spec carries only the gateway-resolved DB-authoritative
+  `case_dir` (a client-supplied `case_dir`/`case_id` is dropped); `spec_public`
+  is path-free; the gateway gains no privilege. Query tools stay on the thin
+  proxy. Anchor: `policy_middleware.py:OpenSearchJobDispatchMiddleware`,
+  `opensearch_mcp/ingest_job.py`, tests
+  `test_opensearch_dispatch_middleware.py` (anti-spoof) +
+  `test_ingest_job_handler.py` (N-worker SKIP LOCKED claim safety). (2026-06-14)
 
 ## B. run_command host execution (ASI05 — highest risk)
 
@@ -131,6 +144,39 @@ Last synced: 2026-06-14.
   skips fetches. Anchor: `install.sh` (HR3 block).
 - ✅ auditd installed with SIFT rules; OpenSearch container CapDrop=ALL +
   no-new-privileges + digest-pinned. Anchor: `install.sh`, `docker-compose.yml`.
+- ✅ (was 🟥 OPEN) FUSE E01 disk-image mount under the hardened sandbox. Root
+  cause: `ProtectSystem=strict`+`ProtectHome`+`PrivateTmp` put the unit in a
+  PRIVATE mount namespace with SLAVE propagation, so the kernel refused new FUSE
+  mounts (`fusermount: Operation not permitted`); the opensearch backend, as a
+  stdio child of the gateway, inherited that sandbox and disk ingest could never
+  mount. RESOLVED by decoupling (see A): the ingest pipeline runs in a dedicated
+  `sift-opensearch-worker@` unit. The TRUE FUSE constraints were established by live
+  systemd-run probes against the real E01 (2026-06-14) and CORRECT the original
+  design (which wrongly assumed `MountFlags=shared` would let a hardened, private-
+  namespace unit mount): fusermount needs (1) CAP_SYS_ADMIN in the bounding set (the
+  setuid-root helper is still capped by the bounding set) AND (2) the HOST mount
+  namespace — EVERY private-mount-namespace directive (ProtectSystem=*, ProtectHome,
+  PrivateTmp, ReadWrite/ReadOnlyPaths, ProtectKernel*, ProtectControlGroups) makes
+  the mount fail `Operation not permitted` even WITH CAP_SYS_ADMIN + MountFlags=
+  shared. So the worker runs the NAMESPACE-FREE hardening subset (ProtectClock,
+  ProtectHostname, RestrictSUIDSGID/Realtime, LockPersonality, RestrictAddress-
+  Families) + the gateway's privilege-drop caps (CAP_SETUID/SETGID/SETPCAP/
+  AUDIT_WRITE — the immutable-only sift-job-worker set fails sudo→root with `unable
+  to change to root gid: Operation not permitted`) + CAP_SYS_ADMIN. It therefore
+  CANNOT carry ProtectSystem=strict — a REAL, NARROW posture reduction vs the
+  gateway. 🟡-grade: justified (the worker has no listener / no auth surface / no
+  inbound request path; it only claims durable jobs and runs forensic tooling on
+  sealed evidence in the case jail; mounts gated by the narrow
+  /etc/sudoers.d/sift-ingest-mount allowlist; the gateway is untouched —
+  MountFlags= empty, full HR3) but PENDING /security-review before merge; a bwrap/
+  nsjail FUSE shim or non-systemd mount helper could tighten it later. The default
+  sift-job-worker is pinned `--job-types run_command` so the cap-starved worker
+  never claims the privileged ingest/enrich lane. Anchor:
+  `configs/systemd/sift-opensearch-worker@.service` (documented profile + probe
+  evidence), `configs/systemd/sift-job-worker.service` (lane pin), `install.sh`
+  (renders + enables N instances), `opensearch_mcp/containers.py` (plain `sudo`
+  mounts). LIVE-PROVEN: E01 mounted (xmount→ntfs-3g) + 14 disk-family indices for
+  host srl-forge. (2026-06-14)
 - 🟥 BATCH-SB1 self-managed Supabase compose (generated secrets) — required before
   any non-lab deploy; deferred.
 - 🟥 AppArmor COMPLAIN-only until post-LV1 enforce pass.

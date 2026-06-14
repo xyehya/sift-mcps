@@ -1,0 +1,101 @@
+[Unit]
+# feat/opensearch-workers: dedicated, least-privilege OpenSearch ingest/enrich
+# worker. The OpenSearch ingest pipeline (FUSE-mount an E01, EZ/TSK parse,
+# Hayabusa Sigma detection, index) cannot run inside the gateway's hardened unit:
+# ProtectSystem=strict + ProtectHome + PrivateTmp put the unit in a PRIVATE mount
+# namespace whose root mount uses SLAVE propagation, and the kernel refuses a new
+# FUSE mount there (fusermount: Operation not permitted). The opensearch backend
+# used to be a stdio child of the gateway and inherited that sandbox, so disk
+# ingest could never mount. This unit runs the pipeline OUT of the gateway: the
+# gateway stays the thin policy boundary and enqueues durable ingest/enrich jobs;
+# these workers claim and run them (FOR UPDATE SKIP LOCKED -> N parallel workers).
+#
+# Template: start N instances, e.g.
+#   systemctl enable --now sift-opensearch-worker@1 sift-opensearch-worker@2
+# %i is the instance number (used only for the worker_id label / journal tag).
+Description=sift-mcps OpenSearch ingest/enrich worker %i
+After=network.target sift-gateway.service
+PartOf=sift-gateway.service
+
+[Service]
+Type=simple
+# Runs as the SAME dedicated non-admin service user as the gateway/job-worker.
+# No new user, no extra group, no portal/agent auth surface.
+User=${SIFT_GATEWAY_SERVICE_USER}
+Group=${SIFT_GATEWAY_SERVICE_USER}
+# Restrict this worker to the opensearch lane only; it never services
+# run_command. The label makes N-way parallelism visible in job_status.worker_label.
+ExecStart=${SIFT_MCPS_ROOT}/.venv/bin/sift-opensearch-worker --job-types ingest,enrich
+Environment=SIFT_WORKER_ID=osw-%i
+WorkingDirectory=${SIFT_MCPS_ROOT}
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sift-opensearch-worker@%i
+# Shared Volatility3 symbol cache (mode 2775, group `sift`) — parse_memory.py /
+# worker.py read SIFT_VOL_SYMBOLS and write symbols there, shared with agent_runtime.
+Environment=SIFT_VOL_SYMBOLS=${SIFT_VOL_SYMBOLS}
+# Control-plane DSN + service-role secrets for DB job claims, identical to the
+# default job worker. Same in-code env-scrub boundary applies to any child the
+# worker spawns; this unit grants no broader secret exposure than sift-job-worker.
+# IMPORTANT: %h would resolve to /root for a system service (NOT influenced by
+# User=, see systemd.unit(5)); use the absolute SIFT_HOME install.sh substitutes.
+EnvironmentFile=-${SIFT_HOME}/supabase.env
+EnvironmentFile=-${SIFT_HOME}/control-plane.env
+EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env
+Environment=UV_NO_MANAGED_PYTHON=1
+Environment=UV_PYTHON_DOWNLOADS=never
+Environment=HF_HOME=${SIFT_HF_HOME}
+Environment=RAG_MODEL_NAME=${SIFT_RAG_MODEL_NAME}
+Environment=RAG_MODEL_REVISION=${SIFT_RAG_MODEL_REVISION}
+
+# === Worker hardening — FUSE-CONSTRAINED PROFILE ============================
+# This worker sudo-mounts forensic images via FUSE (ewfmount/xmount) during
+# ingest. FUSE channel creation (the fusermount mount() syscall) has TWO hard
+# kernel/systemd requirements that were EMPIRICALLY established on the live VM
+# (2026-06-14, transient systemd-run probes against the real E01):
+#
+#   1. CAP_SYS_ADMIN must be in the unit CapabilityBoundingSet. fusermount is
+#      setuid-root but the bounding set caps even a setuid child; without
+#      CAP_SYS_ADMIN the mount fails `fusermount: mount failed: Operation not
+#      permitted` / "Unable to create fuse channel". (Probe G6/H1: adding
+#      CAP_SYS_ADMIN flipped FAIL->MOUNT_OK.)
+#   2. The unit must run in the HOST mount namespace. EVERY systemd directive
+#      that forces a private mount namespace — ProtectSystem=*, ProtectHome,
+#      PrivateTmp, ReadOnly/ReadWritePaths, ProtectKernelTunables/Modules/Logs,
+#      ProtectControlGroups — makes fusermount fail with the same error EVEN WITH
+#      CAP_SYS_ADMIN and MountFlags=shared. (Probes F1-F4, P1-P2, Q1-Q5 all
+#      FAIL; the FUSE-safe subset below is MOUNT_OK.) MountFlags=shared does NOT
+#      rescue a private-namespace unit — the original decoupling design's premise
+#      that it would was wrong; see Session-Notes 2026-06-14.
+#
+# CONSEQUENCE / DECISION-PENDING: this worker therefore CANNOT carry
+# ProtectSystem=strict or the path/kernel-mount protections the gateway uses.
+# It keeps the namespace-free hardening (below) + the gateway's privilege-drop
+# caps + CAP_SYS_ADMIN. This is a real, narrow posture reduction vs the gateway,
+# justified because the worker has NO listener, NO auth surface, NO inbound
+# request path — it only claims durable jobs from Postgres and runs forensic
+# tooling on already-sealed evidence inside the case jail, with mounts gated by
+# the narrow /etc/sudoers.d/sift-ingest-mount allowlist. The gateway is
+# untouched (MountFlags= empty, full HR3). FLAGGED for /security-review before
+# merge; an alternative (mount in a dedicated non-systemd mount helper, or a
+# bwrap/nsjail FUSE shim) may tighten this later.
+UMask=0077
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# Bounding set: the gateway's privilege-drop caps (CAP_SETUID/SETGID/SETPCAP for
+# `sudo -n` to root, CAP_AUDIT_WRITE for the sudoers audit plugin, omitting them
+# gives `sudo: unable to change to root gid: Operation not permitted`) + the
+# file-cap venv interpreter's CAP_LINUX_IMMUTABLE + CAP_SYS_ADMIN for the FUSE
+# channel. This is the gateway's set plus CAP_SYS_ADMIN (the gateway mounts in
+# its own privileged path; this isolated worker needs the explicit bound).
+CapabilityBoundingSet=CAP_LINUX_IMMUTABLE CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_AUDIT_WRITE CAP_SYS_ADMIN
+# === end hardening ==========================================================
+
+[Install]
+WantedBy=multi-user.target

@@ -332,6 +332,11 @@ async def test_case_dir_is_preserved_in_safe_case_argument_names():
             f"{tool} safe_case_argument_names dropped case_dir: {safe}"
         )
 
-    # Pure-query tools keep case_id only (no spurious case_dir).
+    # B1: pure-query tools must ALSO inject case_dir. Index names are built from
+    # the case *key* (case dir basename), but the Gateway fills an injected
+    # case_id with the opaque DB UUID — building case-<uuid>-* matches nothing.
+    # case_dir (DB-authoritative dir whose basename is the case key) lets the
+    # backend resolve the correct doubled-prefix pattern; case_id is retained so
+    # a mismatching client-supplied case_id is still denied (cross-case guard).
     search_safe = gateway.safe_case_argument_names("opensearch_search")
-    assert search_safe == {"case_id"}, search_safe
+    assert search_safe == {"case_id", "case_dir"}, search_safe
