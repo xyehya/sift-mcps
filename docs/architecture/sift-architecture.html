@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Protocol SIFT Gateway — Architecture Description</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* ---- canvas ---- */
+    --paper:#EEF0F3; --surface:#FFFFFF; --ink:#16222E; --ink-soft:#5A6772; --hair:#D2D7DD;
+    /* ---- semantic plane palette (color == meaning, defined once) ---- */
+    --gate:#B5791A;  --gate-tint:#FBF1DA;   /* GOLD  · single policy boundary (hero) */
+    --ctrl:#2C5F94;  --ctrl-tint:#E4ECF5;   /* BLUE  · authoritative control plane    */
+    --data:#3F7E80;  --data-tint:#E1EDED;   /* TEAL  · derived data plane             */
+    --exec:#43505F;  --exec-tint:#E6E9ED;   /* SLATE · execution / sandbox            */
+    --evid:#2F7D55;  --evid-tint:#E2F0E8;   /* GREEN · sealed / immutable evidence    */
+    --deny:#C0392B;  --deny-tint:#FBE7E4;   /* RED   · deny path / STRIDE threat      */
+    --client:#6B7785;--client-tint:#ECEEF1; /* GREY  · clients / human + agent        */
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:"IBM Plex Serif",Georgia,serif; font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:0 28px}
+  .mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+  .sans{font-family:"IBM Plex Sans",system-ui,sans-serif}
+
+  /* ---------- masthead ---------- */
+  header.masthead{border-bottom:2px solid var(--ink); padding-top:46px}
+  .doc-tag{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.22em;
+    text-transform:uppercase; color:var(--ink-soft); display:flex; gap:18px; flex-wrap:wrap}
+  h1{font-family:"IBM Plex Sans",sans-serif; font-weight:700; font-size:clamp(30px,5vw,52px);
+    line-height:1.04; letter-spacing:-.02em; margin:14px 0 6px}
+  .subtitle{font-family:"IBM Plex Sans",sans-serif; font-weight:500; font-size:clamp(15px,2.4vw,20px);
+    color:var(--ink-soft); margin:0 0 22px}
+  .control-strip{display:flex; flex-wrap:wrap; gap:0; border-top:1px solid var(--hair);
+    margin-bottom:0; font-family:"IBM Plex Mono",monospace; font-size:12px}
+  .control-strip div{padding:10px 22px 12px 0; margin-right:22px; border-right:1px solid var(--hair)}
+  .control-strip div:last-child{border-right:0}
+  .control-strip .k{display:block; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--ink-soft); margin-bottom:3px}
+  .control-strip .v{color:var(--ink); font-weight:500}
+
+  /* ---------- sticky nav ---------- */
+  nav.vpnav{position:sticky; top:0; z-index:30; background:rgba(238,240,243,.92);
+    backdrop-filter:blur(8px); border-bottom:1px solid var(--hair); margin-top:0}
+  nav.vpnav .wrap{display:flex; gap:4px; flex-wrap:wrap; padding-top:10px; padding-bottom:10px}
+  nav.vpnav a{font-family:"IBM Plex Mono",monospace; font-size:11.5px; letter-spacing:.04em;
+    text-decoration:none; color:var(--ink-soft); padding:6px 11px; border:1px solid transparent; border-radius:3px}
+  nav.vpnav a:hover{color:var(--ink); border-color:var(--hair); background:var(--surface)}
+  nav.vpnav a b{color:var(--gate); font-weight:600}
+
+  /* ---------- thesis ---------- */
+  .thesis{padding:40px 0 8px}
+  .thesis .eyebrow{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.2em;
+    text-transform:uppercase; color:var(--gate); font-weight:600; margin-bottom:14px}
+  .thesis p{font-size:clamp(17px,2.5vw,21px); line-height:1.65; max-width:60ch; margin:0}
+  .thesis p strong{font-weight:500; background:linear-gradient(transparent 62%, var(--gate-tint) 62%); padding:0 1px}
+
+  /* ---------- viewpoint section ---------- */
+  section.vp{padding:54px 0 10px; border-top:1px solid var(--hair); margin-top:46px}
+  .vp-head{display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; margin-bottom:6px}
+  .vp-id{font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:13px; color:var(--gate);
+    border:1px solid var(--gate); border-radius:3px; padding:3px 8px; letter-spacing:.06em}
+  .vp-std{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--ink-soft)}
+  .vp h2{font-family:"IBM Plex Sans",sans-serif; font-weight:600; font-size:clamp(22px,3.4vw,32px);
+    letter-spacing:-.015em; margin:8px 0 4px}
+  .concern{font-family:"IBM Plex Sans",sans-serif; font-size:14px; color:var(--ink-soft); max-width:74ch; margin:0 0 22px}
+  .concern b{color:var(--ink); font-weight:600}
+
+  /* diagram card */
+  .canvas{background:var(--surface); border:1px solid var(--hair); border-radius:8px;
+    padding:26px 22px 18px; box-shadow:0 1px 2px rgba(22,34,46,.04),0 10px 30px rgba(22,34,46,.05)}
+  .canvas svg{display:block; width:100%; height:auto}
+
+  /* caption under diagram */
+  .cap{font-size:14.5px; line-height:1.62; color:var(--ink); max-width:80ch; margin:20px 0 0}
+  .cap .lead{font-family:"IBM Plex Sans",sans-serif; font-weight:600}
+  .cap code{font-family:"IBM Plex Mono",monospace; font-size:12.5px; background:var(--exec-tint);
+    padding:1px 5px; border-radius:3px}
+
+  /* shared SVG text classes */
+  svg text{font-family:"IBM Plex Mono",monospace; fill:var(--ink)}
+  .t-title{font-family:"IBM Plex Sans",sans-serif; font-weight:600}
+  .t-zone{font-family:"IBM Plex Mono",monospace; font-weight:600; letter-spacing:.12em}
+
+  /* legend */
+  .legend{display:grid; grid-template-columns:repeat(auto-fit,minmax(225px,1fr)); gap:14px 30px;
+    background:var(--surface); border:1px solid var(--hair); border-radius:8px; padding:24px 26px}
+  .legend h3{grid-column:1/-1; font-family:"IBM Plex Sans",sans-serif; font-size:13px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-soft); margin:0 0 4px; font-weight:600}
+  .lg{display:flex; gap:11px; align-items:flex-start; font-size:13px; line-height:1.4}
+  .lg .sw{flex:0 0 26px; height:16px; border-radius:3px; margin-top:2px}
+  .lg .nm{font-family:"IBM Plex Mono",monospace; font-weight:500; font-size:12.5px}
+  .lg .ds{display:block; color:var(--ink-soft); font-size:12px; font-family:"IBM Plex Sans",sans-serif}
+
+  /* STRIDE matrix */
+  table.stride{width:100%; border-collapse:collapse; margin-top:22px; font-family:"IBM Plex Sans",sans-serif;
+    background:var(--surface); border:1px solid var(--hair); border-radius:8px; overflow:hidden}
+  table.stride th{font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
+    text-align:left; color:var(--ink-soft); padding:13px 16px; background:var(--paper); border-bottom:1px solid var(--hair)}
+  table.stride td{padding:13px 16px; font-size:13px; vertical-align:top; border-bottom:1px solid var(--hair); line-height:1.5}
+  table.stride tr:last-child td{border-bottom:0}
+  table.stride td:first-child{font-family:"IBM Plex Mono",monospace; font-weight:600; color:var(--deny); width:30px}
+  table.stride td:nth-child(2){font-weight:600; width:30%}
+  table.stride .sub{display:block; font-weight:400; font-size:11px; color:var(--ink-soft); margin-top:2px; font-family:"IBM Plex Mono",monospace}
+  table.stride code{font-family:"IBM Plex Mono",monospace; font-size:11.5px; background:var(--exec-tint); padding:1px 4px; border-radius:3px}
+  table.stride td:nth-child(4){font-size:12px}
+  .s{display:inline-block; width:20px; height:20px; line-height:20px; text-align:center; border-radius:4px;
+    font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:11px; color:#fff; margin-right:3px}
+  .s-s{background:#7B5EA7}.s-t{background:#C0392B}.s-r{background:#B5791A}.s-i{background:#2C5F94}.s-d{background:#43505F}.s-e{background:#2F7D55}
+
+  footer{border-top:2px solid var(--ink); margin-top:64px; padding:26px 0 70px;
+    font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--ink-soft)}
+  footer b{color:var(--ink)}
+
+  @media (max-width:640px){
+    .control-strip div{border-right:0; padding-right:0}
+    nav.vpnav a{font-size:10.5px; padding:5px 8px}
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <div class="doc-tag">
+      <span>Architecture Description</span>
+      <span>ISO/IEC/IEEE&nbsp;42010</span>
+      <span>Confidential · Engineering</span>
+    </div>
+    <h1>Protocol SIFT Gateway</h1>
+    <p class="subtitle">Portable MCP runtime for an autonomous DFIR agent on the SANS SIFT Workstation</p>
+    <div class="control-strip">
+      <div><span class="k">Source of truth</span><span class="v">commit 156e810</span></div>
+      <div><span class="k">As of</span><span class="v">2026-06-14</span></div>
+      <div><span class="k">Stack</span><span class="v">FastAPI · FastMCP 3.0 · Starlette · Uvicorn</span></div>
+      <div><span class="k">Planes</span><span class="v">8</span></div>
+      <div><span class="k">Policy boundaries</span><span class="v">1 (single)</span></div>
+    </div>
+  </div>
+</header>
+
+<nav class="vpnav">
+  <div class="wrap">
+    <a href="#vp1"><b>VP-1</b>&nbsp; System Context</a>
+    <a href="#vp2"><b>VP-2</b>&nbsp; Container / Planes</a>
+    <a href="#vp3"><b>VP-3</b>&nbsp; Policy-Chain Lifecycle</a>
+    <a href="#vp4"><b>VP-4</b>&nbsp; STRIDE Trust Model</a>
+    <a href="#vp5"><b>VP-5</b>&nbsp; Sandbox &amp; Deployment</a>
+    <a href="#legend"><b>KEY</b>&nbsp; Notation</a>
+  </div>
+</nav>
+
+<div class="thesis wrap">
+  <div class="eyebrow">System in one paragraph</div>
+  <p>The <strong>Gateway is the single policy boundary</strong>: every REST call, every MCP tool call, every privileged action passes through it. <strong>Postgres is the authoritative control plane</strong> (RLS-forced); <strong>OpenSearch is derived and never authoritative</strong>. AI agents reach tools only through the aggregate <span class="mono">/mcp</span>; humans use the React portal at <span class="mono">/portal</span>. Heavy work runs as durable Postgres jobs claimed by least-privilege workers, and deep execution is confined to an <strong>OS-sandboxed run_command plane</strong>.</p>
+</div>
+
+<section class="vp wrap" id="vp1">
+  <div class="vp-head">
+    <span class="vp-id">VP-1</span>
+    <span class="vp-std">C4 Model · Level 1 — System Context</span>
+  </div>
+  <h2>Who and what the gateway serves</h2>
+  <p class="concern">Addresses the concern of <b>scope &amp; external interfaces</b>: the system is a single trust-bearing unit with exactly two classes of consumer and one external dependency. There are no other ingress paths.</p>
+  <div class="canvas">
+    <svg viewBox="0 0 1120 520" role="img" aria-label="C4 system context diagram">
+      <defs>
+        <marker id="c1arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L8,3 L0,6 Z" fill="var(--ink)"/>
+        </marker>
+      </defs>
+
+      <!-- relationship lines (drawn first, under boxes) -->
+      <line x1="290" y1="150" x2="408" y2="205" stroke="var(--ink)" stroke-width="1.4" marker-end="url(#c1arrow)"/>
+      <line x1="290" y1="372" x2="408" y2="312" stroke="var(--ink)" stroke-width="1.4" marker-end="url(#c1arrow)"/>
+      <line x1="752" y1="262" x2="878" y2="262" stroke="var(--ink)" stroke-width="1.4" marker-end="url(#c1arrow)"/>
+
+      <!-- rel labels -->
+      <g>
+        <rect x="300" y="150" width="116" height="34" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+        <text x="358" y="164" text-anchor="middle" font-size="9.5">investigates · approves</text>
+        <text x="358" y="176" text-anchor="middle" font-size="9.5">findings · exports [HTTPS /portal]</text>
+      </g>
+      <g>
+        <rect x="300" y="318" width="116" height="34" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+        <text x="358" y="332" text-anchor="middle" font-size="9.5">runs DFIR tools via MCP</text>
+        <text x="358" y="344" text-anchor="middle" font-size="9.5">[Supabase JWT · /mcp only]</text>
+      </g>
+      <g>
+        <rect x="760" y="244" width="112" height="34" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+        <text x="816" y="258" text-anchor="middle" font-size="9.5">queries threat intel</text>
+        <text x="816" y="270" text-anchor="middle" font-size="9.5">[cti_* · query-only]</text>
+      </g>
+
+      <!-- Operator (person) -->
+      <g>
+        <rect x="80" y="92" width="210" height="98" rx="8" fill="var(--client-tint)" stroke="var(--client)" stroke-width="1.6"/>
+        <circle cx="108" cy="120" r="9" fill="var(--client)"/>
+        <path d="M96,150 q12,-18 24,0" fill="none" stroke="var(--client)" stroke-width="3" stroke-linecap="round"/>
+        <text x="132" y="118" class="t-title" font-size="15">DFIR Operator</text>
+        <text x="132" y="134" font-size="9.5" fill="var(--ink-soft)">[ PERSON ]</text>
+        <text x="98" y="172" font-size="11" fill="var(--ink-soft)" font-family="IBM Plex Sans">Human analyst — case lead,</text>
+        <text x="98" y="185" font-size="11" fill="var(--ink-soft)" font-family="IBM Plex Sans">approver, report reviewer.</text>
+      </g>
+
+      <!-- AI Agent -->
+      <g>
+        <rect x="80" y="312" width="210" height="116" rx="8" fill="var(--client-tint)" stroke="var(--client)" stroke-width="1.6"/>
+        <rect x="96" y="330" width="20" height="16" rx="2" fill="none" stroke="var(--client)" stroke-width="2.4"/>
+        <circle cx="106" cy="338" r="2.4" fill="var(--client)"/>
+        <text x="126" y="338" class="t-title" font-size="15">AI DFIR Agent</text>
+        <text x="126" y="354" font-size="9.5" fill="var(--ink-soft)">[ EXTERNAL SOFTWARE ]</text>
+        <text x="98" y="384" font-size="11" fill="var(--ink-soft)" font-family="IBM Plex Sans">Autonomous LLM clients —</text>
+        <text x="98" y="397" font-size="11" fill="var(--ink-soft)" font-family="IBM Plex Sans">Claude / Codex / local MCP.</text>
+        <text x="98" y="410" font-size="11" fill="var(--ink-soft)" font-family="IBM Plex Sans">No privilege beyond its scope.</text>
+      </g>
+
+      <!-- The system (HERO, gold) -->
+      <g>
+        <rect x="408" y="150" width="344" height="224" rx="10" fill="var(--gate-tint)" stroke="var(--gate)" stroke-width="2.4"/>
+        <text x="580" y="196" text-anchor="middle" class="t-title" font-size="21" fill="var(--ink)">Protocol SIFT Gateway</text>
+        <text x="580" y="216" text-anchor="middle" font-size="10" fill="var(--gate)" font-weight="600" letter-spacing="2">[ SOFTWARE SYSTEM ]</text>
+        <line x1="446" y1="232" x2="714" y2="232" stroke="var(--gate)" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>
+        <text x="580" y="256" text-anchor="middle" font-size="12.5" fill="var(--ink)" font-family="IBM Plex Sans" font-weight="600">SINGLE POLICY BOUNDARY</text>
+        <text x="580" y="284" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)" font-family="IBM Plex Sans">Authenticates, authorizes, scopes to a case,</text>
+        <text x="580" y="300" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)" font-family="IBM Plex Sans">gates evidence, audits, redacts, and aggregates</text>
+        <text x="580" y="316" text-anchor="middle" font-size="11.5" fill="var(--ink-soft)" font-family="IBM Plex Sans">all tool access onto the SANS SIFT Workstation.</text>
+        <text x="580" y="350" text-anchor="middle" font-size="10" fill="var(--gate)" font-family="IBM Plex Mono">runtime env: SIFT Workstation VM</text>
+      </g>
+
+      <!-- OpenCTI external -->
+      <g>
+        <rect x="880" y="200" width="180" height="124" rx="4" fill="var(--data-tint)" stroke="var(--data)" stroke-width="1.6" stroke-dasharray="6 4"/>
+        <text x="970" y="244" text-anchor="middle" class="t-title" font-size="15">OpenCTI</text>
+        <text x="970" y="260" text-anchor="middle" font-size="9.5" fill="var(--ink-soft)">[ EXTERNAL SYSTEM ]</text>
+        <text x="970" y="286" text-anchor="middle" font-size="11" fill="var(--ink-soft)" font-family="IBM Plex Sans">Threat-intelligence</text>
+        <text x="970" y="299" text-anchor="middle" font-size="11" fill="var(--ink-soft)" font-family="IBM Plex Sans">platform. Read-only.</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap"><span class="lead">Reading it:</span> only two consumer classes exist — a <b>human operator</b> over HTTPS to <code>/portal</code>, and an <b>AI agent</b> over MCP to <code>/mcp</code>. Both terminate at one system. The lone external dependency, OpenCTI, is reached <em>through</em> the gateway under a query-only contract — the agent never talks to it directly. This is the whole point of the design: there is no second door.</p>
+</section>
+<section class="vp wrap" id="vp2">
+  <div class="vp-head">
+    <span class="vp-id">VP-2</span>
+    <span class="vp-std">C4 Model · Level 2 — Containers / 8 Planes</span>
+  </div>
+  <h2>The eight planes and the one gate between them</h2>
+  <p class="concern">Addresses <b>decomposition &amp; authority</b>: how runnable units split into planes, which plane is the source of truth, and the fact that every path from a client to anything privileged is funneled through a single gold band. Color encodes plane authority (see key).</p>
+  <div class="canvas">
+    <svg viewBox="0 0 1160 936" role="img" aria-label="C4 container and plane diagram">
+      <defs>
+        <marker id="c2arrow" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L7.5,3 L0,6 Z" fill="var(--ink)"/>
+        </marker>
+        <marker id="c2claim" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L7.5,3 L0,6 Z" fill="var(--ctrl)"/>
+        </marker>
+      </defs>
+
+      <!-- ============ CLIENT BAND ============ -->
+      <text x="80" y="22" class="t-zone" font-size="12" fill="var(--client)">① CLIENT PLANE</text>
+      <rect x="250" y="30" width="288" height="74" rx="8" fill="var(--client-tint)" stroke="var(--client)" stroke-width="1.6"/>
+      <text x="394" y="58" text-anchor="middle" class="t-title" font-size="14">Operator Portal</text>
+      <text x="394" y="76" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">React + Vite · served at /portal/</text>
+      <text x="394" y="92" text-anchor="middle" font-size="10" fill="var(--client)">HUMAN-ONLY REST</text>
+
+      <rect x="618" y="30" width="292" height="74" rx="8" fill="var(--client-tint)" stroke="var(--client)" stroke-width="1.6"/>
+      <text x="764" y="58" text-anchor="middle" class="t-title" font-size="14">AI Agent Clients</text>
+      <text x="764" y="76" text-anchor="middle" font-size="10.5" fill="var(--ink-soft)">Claude / Codex / local MCP</text>
+      <text x="764" y="92" text-anchor="middle" font-size="10" fill="var(--client)">Supabase JWT · /mcp ONLY</text>
+
+      <!-- client -> gate -->
+      <line x1="394" y1="104" x2="394" y2="156" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c2arrow)"/>
+      <line x1="764" y1="104" x2="764" y2="156" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c2arrow)"/>
+      <rect x="338" y="118" width="112" height="22" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+      <text x="394" y="133" text-anchor="middle" font-size="9.5">REST · set active case</text>
+      <rect x="702" y="118" width="124" height="22" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+      <text x="764" y="133" text-anchor="middle" font-size="9.5">MCP tool calls (JWT)</text>
+
+      <!-- ============ GATEWAY BAND (HERO) ============ -->
+      <rect x="70" y="158" width="1020" height="150" rx="10" fill="var(--gate-tint)" stroke="var(--gate)" stroke-width="2.6"/>
+      <text x="92" y="184" class="t-zone" font-size="13" fill="var(--gate)">② GATEWAY — SINGLE POLICY BOUNDARY</text>
+      <text x="1068" y="184" text-anchor="end" font-size="10.5" fill="var(--gate)" font-family="IBM Plex Mono">pkg: sift-gateway</text>
+
+      <rect x="92" y="200" width="232" height="92" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.2"/>
+      <text x="208" y="224" text-anchor="middle" font-size="12" class="t-title">HTTP middleware stack</text>
+      <text x="208" y="244" text-anchor="middle" font-size="9.3" fill="var(--ink-soft)">SecureHeaders → HTTPSGuard →</text>
+      <text x="208" y="257" text-anchor="middle" font-size="9.3" fill="var(--ink-soft)">NormalizePath → CORS → Auth</text>
+      <text x="208" y="278" text-anchor="middle" font-size="9" fill="var(--gate)">Supabase JWT · skips /mcp (own auth)</text>
+
+      <rect x="338" y="200" width="288" height="92" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.6"/>
+      <text x="482" y="224" text-anchor="middle" font-size="12" class="t-title">9-stage MCP tool-call chain</text>
+      <text x="482" y="244" text-anchor="middle" font-size="9" fill="var(--ink-soft)">Catalog→ToolAuthz→AddonAuthority→</text>
+      <text x="482" y="257" text-anchor="middle" font-size="9" fill="var(--ink-soft)">CaseContext→Audit→ProxyCase→</text>
+      <text x="482" y="270" text-anchor="middle" font-size="9" fill="var(--ink-soft)">EvidenceGate→ResponseGuard→JobDispatch</text>
+      <text x="482" y="286" text-anchor="middle" font-size="8.6" fill="var(--gate)">detailed in VP-3 ↓</text>
+
+      <rect x="640" y="200" width="186" height="92" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.2"/>
+      <text x="733" y="232" text-anchor="middle" font-size="12" class="t-title">REST routes</text>
+      <text x="733" y="252" text-anchor="middle" font-size="9.5" fill="var(--ink-soft)">rest.py · portal-only</text>
+      <text x="733" y="266" text-anchor="middle" font-size="9.5" fill="var(--ink-soft)">operator API</text>
+
+      <rect x="840" y="200" width="228" height="92" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.2"/>
+      <text x="954" y="232" text-anchor="middle" font-size="12" class="t-title">Backend aggregator</text>
+      <text x="954" y="252" text-anchor="middle" font-size="9.5" fill="var(--ink-soft)">mcp_backends_registry ·</text>
+      <text x="954" y="266" text-anchor="middle" font-size="9.5" fill="var(--ink-soft)">http_backend · stdio_backend</text>
+
+      <!-- gateway downstream arrows -->
+      <line x1="240" y1="308" x2="240" y2="368" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c2arrow)"/>
+      <rect x="150" y="328" width="150" height="22" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+      <text x="225" y="343" text-anchor="middle" font-size="9.5">in-process dispatch</text>
+
+      <line x1="900" y1="308" x2="900" y2="368" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c2arrow)"/>
+      <rect x="812" y="328" width="152" height="22" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+      <text x="888" y="343" text-anchor="middle" font-size="9.5">proxied (http / stdio)</text>
+
+      <!-- ============ CORE TOOLS ============ -->
+      <rect x="70" y="370" width="500" height="124" rx="9" fill="none" stroke="var(--ink)" stroke-width="1.1" stroke-dasharray="2 3"/>
+      <text x="84" y="390" class="t-zone" font-size="11.5" fill="var(--ink)">③ CORE IN-PROCESS TOOLS · sift-core</text>
+      <rect x="86" y="400" width="148" height="80" rx="6" fill="var(--exec-tint)" stroke="var(--exec)" stroke-width="1.3"/>
+      <text x="160" y="428" text-anchor="middle" font-size="11.5" class="t-title">run_command</text>
+      <text x="160" y="446" text-anchor="middle" font-size="9" fill="var(--ink-soft)">OS-sandboxed exec</text>
+      <text x="160" y="460" text-anchor="middle" font-size="9" fill="var(--exec)">see VP-5</text>
+      <rect x="244" y="400" width="148" height="80" rx="6" fill="var(--surface)" stroke="var(--ink)" stroke-width="1.1"/>
+      <text x="318" y="424" text-anchor="middle" font-size="11" class="t-title">findings / timeline</text>
+      <text x="318" y="442" text-anchor="middle" font-size="9" fill="var(--ink-soft)">record_finding ·</text>
+      <text x="318" y="455" text-anchor="middle" font-size="9" fill="var(--ink-soft)">record_timeline · todo</text>
+      <rect x="402" y="400" width="152" height="80" rx="6" fill="var(--surface)" stroke="var(--ink)" stroke-width="1.1"/>
+      <text x="478" y="424" text-anchor="middle" font-size="11" class="t-title">case / evidence</text>
+      <text x="478" y="442" text-anchor="middle" font-size="9" fill="var(--ink-soft)">case_manager · evidence_</text>
+      <text x="478" y="455" text-anchor="middle" font-size="9" fill="var(--ink-soft)">chain · reporting · verify</text>
+
+      <!-- ============ ADD-ON BACKENDS ============ -->
+      <rect x="610" y="370" width="480" height="124" rx="9" fill="none" stroke="var(--ink)" stroke-width="1.1" stroke-dasharray="2 3"/>
+      <text x="624" y="390" class="t-zone" font-size="11.5" fill="var(--ink)">⑤ ADD-ON MCP BACKENDS · app.mcp_backends</text>
+      <rect x="626" y="400" width="146" height="80" rx="6" fill="var(--data-tint)" stroke="var(--data)" stroke-width="1.3"/>
+      <text x="699" y="424" text-anchor="middle" font-size="11.5" class="t-title">opensearch-mcp</text>
+      <text x="699" y="442" text-anchor="middle" font-size="9" fill="var(--ink-soft)">CORE · opensearch_* (16)</text>
+      <text x="699" y="455" text-anchor="middle" font-size="9" fill="var(--ink-soft)">ns: opensearch</text>
+      <rect x="782" y="400" width="146" height="80" rx="6" fill="var(--data-tint)" stroke="var(--data)" stroke-width="1.3"/>
+      <text x="855" y="424" text-anchor="middle" font-size="11.5" class="t-title">forensic-rag-mcp</text>
+      <text x="855" y="442" text-anchor="middle" font-size="9" fill="var(--ink-soft)">CORE · kb_* knowledge-only</text>
+      <text x="855" y="455" text-anchor="middle" font-size="9" fill="var(--ink-soft)">ns: kb · pgvector</text>
+      <rect x="938" y="400" width="138" height="80" rx="6" fill="var(--data-tint)" stroke="var(--data)" stroke-width="1.3" stroke-dasharray="6 4"/>
+      <text x="1007" y="424" text-anchor="middle" font-size="11.5" class="t-title">opencti-mcp</text>
+      <text x="1007" y="442" text-anchor="middle" font-size="9" fill="var(--ink-soft)">EXTERNAL · cti_*</text>
+      <text x="1007" y="455" text-anchor="middle" font-size="9" fill="var(--ink-soft)">query-only</text>
+
+      <!-- gateway -> control & data (long arrows down the sides) -->
+      <path d="M150,308 L150,360 L150,528" fill="none" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c2arrow)"/>
+      <rect x="74" y="500" width="160" height="22" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+      <text x="154" y="515" text-anchor="middle" font-size="9.3">authz · audit · ENQUEUE</text>
+
+      <path d="M1010,308 L1010,360 L1010,528" fill="none" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c2arrow)"/>
+      <rect x="936" y="500" width="150" height="22" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+      <text x="1011" y="515" text-anchor="middle" font-size="9.3">mediated case search</text>
+
+      <!-- addon -> data -->
+      <line x1="699" y1="480" x2="699" y2="528" stroke="var(--ink)" stroke-width="1.3" marker-end="url(#c2arrow)"/>
+      <rect x="616" y="498" width="166" height="22" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+      <text x="699" y="513" text-anchor="middle" font-size="9.3">scoped-role index writes</text>
+
+      <!-- ============ CONTROL PLANE (AUTHORITATIVE) ============ -->
+      <rect x="70" y="530" width="500" height="216" rx="9" fill="var(--ctrl-tint)" stroke="var(--ctrl)" stroke-width="2"/>
+      <text x="84" y="552" class="t-zone" font-size="12" fill="var(--ctrl)">④ CONTROL PLANE — AUTHORITATIVE</text>
+      <text x="556" y="552" text-anchor="end" font-size="10" fill="var(--ctrl)">Supabase / Postgres · FORCE RLS</text>
+      <!-- cylinder glyph -->
+      <ellipse cx="118" cy="578" rx="22" ry="7" fill="none" stroke="var(--ctrl)" stroke-width="1.4"/>
+      <path d="M96,578 L96,604 a22,7 0 0 0 44,0 L140,578" fill="none" stroke="var(--ctrl)" stroke-width="1.4"/>
+      <text x="160" y="590" font-size="10.5" fill="var(--ctrl)" font-weight="600" font-family="IBM Plex Sans">source of truth — no env / pointer state</text>
+      <!-- table chips -->
+      <g font-family="IBM Plex Mono" font-size="10" fill="var(--ink)">
+        <rect x="86" y="618" width="226" height="26" rx="4" fill="var(--surface)" stroke="var(--ctrl)" stroke-width="0.8"/><text x="96" y="635">Identity + JWT principals · membership</text>
+        <rect x="86" y="650" width="226" height="26" rx="4" fill="var(--surface)" stroke="var(--ctrl)" stroke-width="0.8"/><text x="96" y="667">Active-Case authority</text>
+        <rect x="86" y="682" width="226" height="26" rx="4" fill="var(--surface)" stroke="var(--ctrl)" stroke-width="0.8"/><text x="96" y="699">Evidence custody · append-only chains</text>
+        <rect x="86" y="714" width="226" height="26" rx="4" fill="var(--surface)" stroke="var(--ctrl)" stroke-width="0.8"/><text x="96" y="731">Durable jobs / steps / logs</text>
+        <rect x="324" y="618" width="232" height="26" rx="4" fill="var(--surface)" stroke="var(--ctrl)" stroke-width="0.8"/><text x="334" y="635">Audit events (append-only)</text>
+        <rect x="324" y="650" width="232" height="26" rx="4" fill="var(--surface)" stroke="var(--ctrl)" stroke-width="0.8"/><text x="334" y="667">Report metadata + approval ledger</text>
+        <rect x="324" y="682" width="232" height="26" rx="4" fill="var(--surface)" stroke="var(--ctrl)" stroke-width="0.8"/><text x="334" y="699">mcp_backends registry</text>
+        <rect x="324" y="714" width="232" height="26" rx="4" fill="var(--surface)" stroke="var(--ctrl)" stroke-width="0.8"/><text x="334" y="731">opensearch provenance · rag pgvector</text>
+      </g>
+
+      <!-- ============ DATA PLANE (DERIVED) ============ -->
+      <rect x="610" y="530" width="480" height="216" rx="9" fill="var(--data-tint)" stroke="var(--data)" stroke-width="2"/>
+      <text x="624" y="552" class="t-zone" font-size="12" fill="var(--data)">⑥ DATA PLANE — DERIVED</text>
+      <text x="1076" y="552" text-anchor="end" font-size="10" fill="var(--data)">never authoritative</text>
+      <ellipse cx="660" cy="582" rx="26" ry="8" fill="var(--surface)" stroke="var(--data)" stroke-width="1.4"/>
+      <path d="M634,582 L634,618 a26,8 0 0 0 52,0 L686,582" fill="var(--surface)" stroke="var(--data)" stroke-width="1.4"/>
+      <text x="708" y="588" font-size="13" class="t-title" fill="var(--ink)">OpenSearch 3.5.0</text>
+      <text x="708" y="606" font-size="10" fill="var(--ink-soft)" font-family="IBM Plex Sans">security ON · per-consumer scoped roles</text>
+      <g font-family="IBM Plex Mono" font-size="10" fill="var(--ink)">
+        <rect x="634" y="636" width="200" height="26" rx="4" fill="var(--surface)" stroke="var(--data)" stroke-width="0.8"/><text x="644" y="653">case-* indices (full-text / vector)</text>
+        <rect x="634" y="668" width="200" height="26" rx="4" fill="var(--surface)" stroke="var(--data)" stroke-width="0.8"/><text x="644" y="685">opencti_* indices · timeline</text>
+        <rect x="846" y="636" width="226" height="58" rx="6" fill="var(--surface)" stroke="var(--data)" stroke-width="1"/>
+        <text x="959" y="656" text-anchor="middle" font-size="10.5" class="t-title" fill="var(--ink)">N ingest workers</text>
+        <text x="959" y="672" text-anchor="middle" font-size="9" fill="var(--ink-soft)">sift-opensearch-worker@</text>
+        <text x="959" y="685" text-anchor="middle" font-size="9" fill="var(--ink-soft)">least-priv · parallel · non-blocking</text>
+      </g>
+      <text x="850" y="725" font-size="9.5" fill="var(--data)">bulk index ←  spawned by opensearch-mcp</text>
+
+      <!-- ============ EXECUTION PLANE ============ -->
+      <rect x="70" y="772" width="500" height="132" rx="9" fill="var(--exec-tint)" stroke="var(--exec)" stroke-width="2"/>
+      <text x="84" y="794" class="t-zone" font-size="12" fill="var(--exec)">⑦ EXECUTION PLANE · SIFT VM</text>
+      <rect x="86" y="804" width="226" height="88" rx="6" fill="var(--surface)" stroke="var(--exec)" stroke-width="1.3"/>
+      <text x="199" y="828" text-anchor="middle" font-size="12" class="t-title">sift-job-worker</text>
+      <text x="199" y="846" text-anchor="middle" font-size="9" fill="var(--ink-soft)">claim: FOR UPDATE SKIP LOCKED</text>
+      <text x="199" y="859" text-anchor="middle" font-size="9" fill="var(--ink-soft)">lease 300s · poll 1s</text>
+      <text x="199" y="878" text-anchor="middle" font-size="9" fill="var(--exec)">types: run_command · ingest · enrich</text>
+      <rect x="324" y="804" width="232" height="88" rx="6" fill="var(--exec)" stroke="var(--exec)"/>
+      <text x="440" y="832" text-anchor="middle" font-size="12" fill="#fff" font-family="IBM Plex Sans" font-weight="600">sandboxed run_command</text>
+      <text x="440" y="852" text-anchor="middle" font-size="9.5" fill="#D7DCE2">Landlock v4 + seccomp=kill</text>
+      <text x="440" y="866" text-anchor="middle" font-size="9.5" fill="#D7DCE2">+ cgroup + AppArmor=enforce</text>
+
+      <!-- ============ EVIDENCE & REPORTS ============ -->
+      <rect x="610" y="772" width="480" height="132" rx="9" fill="var(--evid-tint)" stroke="var(--evid)" stroke-width="2"/>
+      <text x="624" y="794" class="t-zone" font-size="12" fill="var(--evid)">⑧ EVIDENCE &amp; REPORTS</text>
+      <rect x="626" y="804" width="216" height="88" rx="6" fill="var(--surface)" stroke="var(--evid)" stroke-width="1.4"/>
+      <text x="734" y="828" text-anchor="middle" font-size="12" class="t-title">Evidence Vault</text>
+      <text x="734" y="846" text-anchor="middle" font-size="9" fill="var(--ink-soft)">immutable raw bytes + sha256</text>
+      <text x="734" y="859" text-anchor="middle" font-size="9" fill="var(--ink-soft)">chattr +i · manifest + ledger</text>
+      <text x="734" y="878" text-anchor="middle" font-size="9" fill="var(--evid)">operator-mounted only</text>
+      <rect x="854" y="804" width="222" height="88" rx="6" fill="var(--surface)" stroke="var(--evid)" stroke-width="1.4"/>
+      <text x="965" y="828" text-anchor="middle" font-size="12" class="t-title">Reports / Exports</text>
+      <text x="965" y="846" text-anchor="middle" font-size="9" fill="var(--ink-soft)">HTML / PDF / JSON bundles</text>
+      <text x="965" y="865" text-anchor="middle" font-size="9" fill="var(--evid)" font-weight="600">APPROVED findings &amp; data ONLY</text>
+
+      <!-- control ==CLAIM==> execution -->
+      <path d="M200,746 L200,800" fill="none" stroke="var(--ctrl)" stroke-width="3.2" marker-end="url(#c2claim)"/>
+      <path d="M214,746 L214,800" fill="none" stroke="var(--ctrl)" stroke-width="1" opacity="0.5"/>
+      <rect x="120" y="754" width="180" height="22" rx="4" fill="var(--surface)" stroke="var(--ctrl)"/>
+      <text x="210" y="769" text-anchor="middle" font-size="9.3" fill="var(--ctrl)">workers CLAIM durable jobs</text>
+
+      <!-- execution -> control (status/findings/audit) -->
+      <path d="M300,820 L420,820 L420,700 L312,700" fill="none" stroke="var(--ink)" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#c2arrow)" opacity="0.75"/>
+      <rect x="330" y="724" width="170" height="22" rx="4" fill="var(--surface)" stroke="var(--hair)"/>
+      <text x="415" y="739" text-anchor="middle" font-size="9.3">status · proposed findings · audit</text>
+
+      <!-- execution -> data (artifacts) -->
+      <path d="M556,840 L590,840 L590,690 L626,690" fill="none" stroke="var(--ink)" stroke-width="1.3" marker-end="url(#c2arrow)"/>
+      <rect x="500" y="788" width="190" height="22" rx="4" fill="var(--surface)" stroke="var(--hair)" transform="rotate(-90 595 880)"/>
+
+      <!-- execution -> evidence + reports -->
+      <line x1="556" y1="848" x2="624" y2="848" stroke="var(--ink)" stroke-width="1.3" marker-end="url(#c2arrow)"/>
+    </svg>
+  </div>
+  <p class="cap"><span class="lead">Reading it:</span> the gold band is the only thing both clients can reach, and everything below it is reachable <em>only</em> from inside that band. Authority flows one way: <b>Postgres (blue) is the source of truth</b>; OpenSearch (teal) is a derived projection that is rebuilt from artifacts and is never trusted as the system of record. Heavy work doesn't block the agent — the gateway enqueues a durable job, least-privilege workers <b>claim</b> it under a lease, and confined execution writes results back up to Postgres and out to the derived index. Evidence (green) is operator-mounted and immutable; reports only ever contain approved material.</p>
+</section>
+<section class="vp wrap" id="vp3">
+  <div class="vp-head">
+    <span class="vp-id">VP-3</span>
+    <span class="vp-std">UML 2.5 · Sequence — Tool-Call Policy Chain</span>
+  </div>
+  <h2>One ordered path, nine fail-closed gates</h2>
+  <p class="concern">Addresses <b>runtime security behavior</b>: the exact ordered chain every agent tool call traverses (verified in <code>mcp_server.py</code> + <code>policy_middleware.py</code>). A deny at any stage short-circuits to an audited MCP error — the tool body never executes. Projected as a gated pipeline for legibility; message order is preserved.</p>
+  <div class="canvas">
+    <svg viewBox="0 0 1120 752" role="img" aria-label="UML sequence of the policy chain">
+      <defs>
+        <marker id="c3down" markerWidth="9" markerHeight="9" refX="4" refY="7.5" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L6,0 L3,7.5 Z" fill="var(--ink)"/>
+        </marker>
+        <marker id="c3deny" markerWidth="8" markerHeight="8" refX="6.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L6.5,3 L0,6 Z" fill="var(--deny)"/>
+        </marker>
+        <marker id="c3ret" markerWidth="9" markerHeight="9" refX="4" refY="1" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,7.5 L6,7.5 L3,0 Z" fill="var(--evid)"/>
+        </marker>
+      </defs>
+
+      <!-- AGENT entry -->
+      <rect x="120" y="22" width="600" height="46" rx="7" fill="var(--client-tint)" stroke="var(--client)" stroke-width="1.6"/>
+      <text x="138" y="44" class="t-title" font-size="13">AI Agent</text>
+      <text x="138" y="60" font-size="10" fill="var(--ink-soft)">POST /mcp · Bearer JWT</text>
+      <text x="704" y="50" text-anchor="end" font-size="10.5" fill="var(--client)">request enters →</text>
+
+      <!-- DENY RAIL -->
+      <rect x="812" y="76" width="270" height="560" rx="9" fill="var(--deny-tint)" stroke="var(--deny)" stroke-width="1.6" stroke-dasharray="7 4"/>
+      <text x="947" y="106" text-anchor="middle" class="t-title" font-size="13" fill="var(--deny)">DENY — any stage</text>
+      <text x="947" y="128" text-anchor="middle" font-size="10.5" fill="var(--deny)" font-family="IBM Plex Sans">short-circuits to an</text>
+      <text x="947" y="143" text-anchor="middle" font-size="10.5" fill="var(--deny)" font-family="IBM Plex Sans">audited MCP error.</text>
+      <text x="947" y="170" text-anchor="middle" font-size="11.5" fill="var(--deny)" font-weight="600" font-family="IBM Plex Sans">The tool body</text>
+      <text x="947" y="186" text-anchor="middle" font-size="11.5" fill="var(--deny)" font-weight="600" font-family="IBM Plex Sans">NEVER runs.</text>
+      <line x1="852" y1="208" x2="1042" y2="208" stroke="var(--deny)" stroke-width="0.8" opacity="0.5"/>
+      <text x="947" y="232" text-anchor="middle" font-size="9.5" fill="var(--deny)">fail-closed defaults:</text>
+      <text x="947" y="250" text-anchor="middle" font-size="9.5" fill="var(--deny)">· no identity → reject</text>
+      <text x="947" y="266" text-anchor="middle" font-size="9.5" fill="var(--deny)">· tool out of scope → reject</text>
+      <text x="947" y="282" text-anchor="middle" font-size="9.5" fill="var(--deny)">· prohibited add-on op → reject</text>
+      <text x="947" y="298" text-anchor="middle" font-size="9.5" fill="var(--deny)">· evidence unsealed → block</text>
+      <text x="947" y="314" text-anchor="middle" font-size="9.5" fill="var(--deny)">· audit write fails → block</text>
+
+      <!-- helper: stages drawn via repeated groups -->
+      <!-- y anchors -->
+      <g font-family="IBM Plex Mono">
+        <!-- STAGE template: stripe + badge + name + rule, with down arrow + deny connector -->
+
+        <!-- 0 AUTH -->
+        <line x1="420" y1="68" x2="420" y2="92" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="94" width="600" height="48" rx="7" fill="var(--surface)" stroke="var(--ink)" stroke-width="1.1"/>
+        <rect x="120" y="94" width="6" height="48" rx="3" fill="var(--ink)"/>
+        <circle cx="150" cy="118" r="13" fill="var(--ink)"/><text x="150" y="122" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">A</text>
+        <text x="176" y="114" class="t-title" font-size="13">Identity — SiftTokenVerifier</text>
+        <text x="176" y="131" font-size="10" fill="var(--ink-soft)">verify Supabase JWT (PR02 hash / api_key fallback) → principal: type · scopes · case</text>
+
+        <!-- chain stages -->
+        <!-- 1 -->
+        <line x1="420" y1="142" x2="420" y2="160" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="162" width="600" height="44" rx="7" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.1"/>
+        <rect x="120" y="162" width="6" height="44" rx="3" fill="var(--gate)"/>
+        <circle cx="150" cy="184" r="13" fill="var(--gate)"/><text x="150" y="188" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">1</text>
+        <text x="176" y="180" class="t-title" font-size="12.5">GatewayToolCatalog</text>
+        <text x="176" y="196" font-size="9.7" fill="var(--ink-soft)">filter the tool catalog to what this principal may even see</text>
+        <line x1="720" y1="184" x2="810" y2="184" stroke="var(--deny)" stroke-width="0.9" stroke-dasharray="4 3" marker-end="url(#c3deny)" opacity="0.55"/>
+
+        <!-- 2 -->
+        <line x1="420" y1="206" x2="420" y2="220" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="222" width="600" height="44" rx="7" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.1"/>
+        <rect x="120" y="222" width="6" height="44" rx="3" fill="var(--gate)"/>
+        <circle cx="150" cy="244" r="13" fill="var(--gate)"/><text x="150" y="248" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">2</text>
+        <text x="176" y="240" class="t-title" font-size="12.5">ToolAuthorization <tspan font-family="IBM Plex Mono" font-size="9.5" fill="var(--ink-soft)">(B-10)</tspan></text>
+        <text x="176" y="256" font-size="9.7" fill="var(--ink-soft)">fail-closed if no identity · deny on tool_scope · rate limit</text>
+        <line x1="720" y1="244" x2="810" y2="244" stroke="var(--deny)" stroke-width="0.9" stroke-dasharray="4 3" marker-end="url(#c3deny)" opacity="0.55"/>
+
+        <!-- 3 -->
+        <line x1="420" y1="266" x2="420" y2="280" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="282" width="600" height="44" rx="7" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.1"/>
+        <rect x="120" y="282" width="6" height="44" rx="3" fill="var(--gate)"/>
+        <circle cx="150" cy="304" r="13" fill="var(--gate)"/><text x="150" y="308" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">3</text>
+        <text x="176" y="300" class="t-title" font-size="12.5">AddonAuthority <tspan font-family="IBM Plex Mono" font-size="9.5" fill="var(--ink-soft)">(H1)</tspan></text>
+        <text x="176" y="316" font-size="9.7" fill="var(--ink-soft)">enforce authority_contract + required_scopes · deny prohibited ops</text>
+        <line x1="720" y1="304" x2="810" y2="304" stroke="var(--deny)" stroke-width="0.9" stroke-dasharray="4 3" marker-end="url(#c3deny)" opacity="0.55"/>
+
+        <!-- 4 -->
+        <line x1="420" y1="326" x2="420" y2="340" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="342" width="600" height="44" rx="7" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.1"/>
+        <rect x="120" y="342" width="6" height="44" rx="3" fill="var(--gate)"/>
+        <circle cx="150" cy="364" r="13" fill="var(--gate)"/><text x="150" y="368" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">4</text>
+        <text x="176" y="360" class="t-title" font-size="12.5">CaseContext</text>
+        <text x="176" y="376" font-size="9.7" fill="var(--ink-soft)">inject the DB active-case context (no env / pointer trust)</text>
+
+        <!-- 5 -->
+        <line x1="420" y1="386" x2="420" y2="400" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="402" width="600" height="44" rx="7" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.1"/>
+        <rect x="120" y="402" width="6" height="44" rx="3" fill="var(--gate)"/>
+        <circle cx="150" cy="424" r="13" fill="var(--gate)"/><text x="150" y="428" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">5</text>
+        <text x="176" y="420" class="t-title" font-size="12.5">AuditEnvelope</text>
+        <text x="176" y="436" font-size="9.7" fill="var(--ink-soft)">pre-dispatch DB audit write · fail-closed for write tools · append-only</text>
+        <line x1="720" y1="424" x2="810" y2="424" stroke="var(--deny)" stroke-width="0.9" stroke-dasharray="4 3" marker-end="url(#c3deny)" opacity="0.55"/>
+
+        <!-- 6 -->
+        <line x1="420" y1="446" x2="420" y2="460" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="462" width="600" height="44" rx="7" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.1"/>
+        <rect x="120" y="462" width="6" height="44" rx="3" fill="var(--gate)"/>
+        <circle cx="150" cy="484" r="13" fill="var(--gate)"/><text x="150" y="488" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">6</text>
+        <text x="176" y="480" class="t-title" font-size="12.5">ProxyActiveCase</text>
+        <text x="176" y="496" font-size="9.7" fill="var(--ink-soft)">propagate the active case to the proxied add-on backend</text>
+
+        <!-- 7 -->
+        <line x1="420" y1="506" x2="420" y2="520" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="522" width="600" height="44" rx="7" fill="var(--surface)" stroke="var(--deny)" stroke-width="1.5"/>
+        <rect x="120" y="522" width="6" height="44" rx="3" fill="var(--deny)"/>
+        <circle cx="150" cy="544" r="13" fill="var(--deny)"/><text x="150" y="548" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">7</text>
+        <text x="176" y="540" class="t-title" font-size="12.5">EvidenceGate</text>
+        <text x="176" y="556" font-size="9.7" fill="var(--ink-soft)">REQUIRE evidence registered + sealed + chain_status OK — else block</text>
+        <line x1="720" y1="544" x2="810" y2="544" stroke="var(--deny)" stroke-width="1.4" marker-end="url(#c3deny)"/>
+
+        <!-- 8 -->
+        <line x1="420" y1="566" x2="420" y2="580" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="582" width="600" height="44" rx="7" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.1"/>
+        <rect x="120" y="582" width="6" height="44" rx="3" fill="var(--gate)"/>
+        <circle cx="150" cy="604" r="13" fill="var(--gate)"/><text x="150" y="608" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">8</text>
+        <text x="176" y="600" class="t-title" font-size="12.5">ResponseGuard</text>
+        <text x="176" y="616" font-size="9.7" fill="var(--ink-soft)">redact secrets → [REDACTED:*] · label untrusted output · no path leaks</text>
+
+        <!-- 9 -->
+        <line x1="420" y1="626" x2="420" y2="640" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="642" width="600" height="44" rx="7" fill="var(--surface)" stroke="var(--gate)" stroke-width="1.1"/>
+        <rect x="120" y="642" width="6" height="44" rx="3" fill="var(--gate)"/>
+        <circle cx="150" cy="664" r="13" fill="var(--gate)"/><text x="150" y="668" text-anchor="middle" font-size="11" fill="#fff" font-weight="600">9</text>
+        <text x="176" y="660" class="t-title" font-size="12.5">OpenSearchJobDispatch</text>
+        <text x="176" y="676" font-size="9.7" fill="var(--ink-soft)">ingest / enrich → durable worker job, non-blocking (returns job_id)</text>
+
+        <!-- TOOL -->
+        <line x1="420" y1="686" x2="420" y2="700" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c3down)"/>
+        <rect x="120" y="702" width="600" height="44" rx="7" fill="var(--evid-tint)" stroke="var(--evid)" stroke-width="1.5"/>
+        <text x="176" y="722" class="t-title" font-size="13" fill="var(--ink)">Tool body executes</text>
+        <text x="176" y="737" font-size="9.7" fill="var(--ink-soft)">core in-process tool OR proxied add-on — only now, only if all gates passed</text>
+      </g>
+
+      <!-- return path -->
+      <path d="M105,724 L80,724 L80,45 L114,45" fill="none" stroke="var(--evid)" stroke-width="1.6" marker-end="url(#c3ret)"/>
+      <text x="74" y="400" text-anchor="middle" font-size="10" fill="var(--evid)" transform="rotate(-90 74 400)">result → redacted · audited · job_id if dispatched</text>
+    </svg>
+  </div>
+  <p class="cap"><span class="lead">Reading it:</span> identity is resolved <em>before</em> the chain even begins, and stages 1–9 run in fixed order. Five of them can reject outright (dashed red), and stage&nbsp;7 — the <b>EvidenceGate</b> — is the hard interlock: no tool touches a case until its evidence is registered, sealed, and the custody chain verifies. Anything that escapes a gate lands on the single audited deny rail; only a call that clears all nine reaches the tool body, and even its output is redacted on the way back out.</p>
+</section>
+<section class="vp wrap" id="vp4">
+  <div class="vp-head">
+    <span class="vp-id">VP-4</span>
+    <span class="vp-std">STRIDE · Data-Flow Diagram + Threat Matrix</span>
+  </div>
+  <h2>Trust boundaries and what guards each crossing</h2>
+  <p class="concern">Addresses <b>threat exposure</b>: where trust changes hands, what an adversary could attempt there (Spoofing, Tampering, Repudiation, Information disclosure, Denial of service, Elevation of privilege), and the specific control that closes it. Seven boundaries; every flow crosses at least one.</p>
+  <div class="canvas">
+    <svg viewBox="0 0 1120 600" role="img" aria-label="STRIDE data flow diagram with trust boundaries">
+      <defs>
+        <marker id="c4arrow" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L7.5,3 L0,6 Z" fill="var(--ink)"/>
+        </marker>
+      </defs>
+
+      <!-- flows (under nodes) -->
+      <line x1="200" y1="150" x2="426" y2="172" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c4arrow)"/>
+      <line x1="426" y1="206" x2="206" y2="184" stroke="var(--ink)" stroke-width="1.3" marker-end="url(#c4arrow)" stroke-dasharray="5 3"/>
+      <line x1="200" y1="452" x2="430" y2="250" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c4arrow)"/>
+      <line x1="664" y1="160" x2="876" y2="116" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c4arrow)"/>
+      <line x1="664" y1="222" x2="876" y2="286" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c4arrow)"/>
+      <line x1="556" y1="276" x2="556" y2="416" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c4arrow)"/>
+      <line x1="652" y1="466" x2="816" y2="474" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#c4arrow)"/>
+
+      <!-- AI Agent (external, untrusted) -->
+      <rect x="50" y="118" width="152" height="74" fill="var(--client-tint)" stroke="var(--deny)" stroke-width="1.8"/>
+      <text x="126" y="146" text-anchor="middle" class="t-title" font-size="13">AI Agent</text>
+      <text x="126" y="164" text-anchor="middle" font-size="9.5" fill="var(--deny)">EXTERNAL · UNTRUSTED</text>
+      <text x="126" y="180" text-anchor="middle" font-size="9" fill="var(--ink-soft)">+ untrusted evidence text</text>
+
+      <!-- Operator (external, re-auth) -->
+      <rect x="50" y="418" width="152" height="74" fill="var(--client-tint)" stroke="var(--client)" stroke-width="1.8"/>
+      <text x="126" y="446" text-anchor="middle" class="t-title" font-size="13">Operator</text>
+      <text x="126" y="464" text-anchor="middle" font-size="9.5" fill="var(--ink-soft)">EXTERNAL · SEMI-TRUSTED</text>
+      <text x="126" y="480" text-anchor="middle" font-size="9" fill="var(--ink-soft)">step-up re-auth required</text>
+
+      <!-- Gateway (process, hero) -->
+      <rect x="426" y="120" width="240" height="156" rx="14" fill="var(--gate-tint)" stroke="var(--gate)" stroke-width="2.4"/>
+      <text x="546" y="174" text-anchor="middle" class="t-title" font-size="16">Gateway</text>
+      <text x="546" y="194" text-anchor="middle" font-size="9.5" fill="var(--gate)">POLICY DECISION POINT</text>
+      <text x="546" y="220" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-family="IBM Plex Sans">authn · authz · audit ·</text>
+      <text x="546" y="234" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-family="IBM Plex Sans">evidence gate · redaction</text>
+      <text x="546" y="256" text-anchor="middle" font-size="9" fill="var(--gate)">single trusted process</text>
+
+      <!-- Control plane store -->
+      <ellipse cx="966" cy="76" rx="90" ry="11" fill="var(--ctrl-tint)" stroke="var(--ctrl)" stroke-width="1.6"/>
+      <path d="M876,76 L876,140 a90,11 0 0 0 180,0 L1056,76" fill="var(--ctrl-tint)" stroke="var(--ctrl)" stroke-width="1.6"/>
+      <text x="966" y="106" text-anchor="middle" class="t-title" font-size="12" fill="var(--ink)">Control Plane</text>
+      <text x="966" y="122" text-anchor="middle" font-size="9" fill="var(--ctrl)">Postgres · FORCE RLS · authoritative</text>
+
+      <!-- Data plane store -->
+      <ellipse cx="966" cy="250" rx="90" ry="11" fill="var(--data-tint)" stroke="var(--data)" stroke-width="1.6"/>
+      <path d="M876,250 L876,314 a90,11 0 0 0 180,0 L1056,250" fill="var(--data-tint)" stroke="var(--data)" stroke-width="1.6"/>
+      <text x="966" y="280" text-anchor="middle" class="t-title" font-size="12" fill="var(--ink)">Data Plane</text>
+      <text x="966" y="296" text-anchor="middle" font-size="9" fill="var(--data)">OpenSearch · derived · scoped roles</text>
+
+      <!-- Execution process -->
+      <rect x="466" y="416" width="186" height="100" rx="14" fill="var(--exec-tint)" stroke="var(--exec)" stroke-width="2"/>
+      <text x="559" y="454" text-anchor="middle" class="t-title" font-size="13">Execution</text>
+      <text x="559" y="472" text-anchor="middle" font-size="9.5" fill="var(--exec)">CONFINED SANDBOX</text>
+      <text x="559" y="492" text-anchor="middle" font-size="9" fill="var(--ink-soft)">deny-default · least-priv</text>
+
+      <!-- Evidence store -->
+      <line x1="816" y1="424" x2="1024" y2="424" stroke="var(--evid)" stroke-width="1.8"/>
+      <line x1="816" y1="520" x2="1024" y2="520" stroke="var(--evid)" stroke-width="1.8"/>
+      <line x1="816" y1="424" x2="816" y2="520" stroke="var(--evid)" stroke-width="1.8" opacity="0.4"/>
+      <text x="920" y="462" text-anchor="middle" class="t-title" font-size="12" fill="var(--ink)">Evidence Vault</text>
+      <text x="920" y="480" text-anchor="middle" font-size="9" fill="var(--evid)">immutable · chattr +i</text>
+      <text x="920" y="494" text-anchor="middle" font-size="9" fill="var(--evid)">append-only custody chain</text>
+
+      <!-- boundary tags -->
+      <g font-family="IBM Plex Mono" font-weight="600">
+        <g><line x1="316" y1="120" x2="316" y2="216" stroke="var(--deny)" stroke-width="1.4" stroke-dasharray="6 4"/><circle cx="316" cy="138" r="13" fill="var(--deny)"/><text x="316" y="142" text-anchor="middle" font-size="10" fill="#fff">1</text></g>
+        <g><line x1="316" y1="230" x2="316" y2="470" stroke="var(--deny)" stroke-width="1.4" stroke-dasharray="6 4"/><circle cx="316" cy="368" r="13" fill="var(--deny)"/><text x="316" y="372" text-anchor="middle" font-size="10" fill="#fff">7</text></g>
+        <g><circle cx="318" cy="196" r="13" fill="var(--deny)"/><text x="318" y="200" text-anchor="middle" font-size="10" fill="#fff">6</text></g>
+        <g><line x1="740" y1="84" x2="788" y2="150" stroke="var(--deny)" stroke-width="1.4" stroke-dasharray="6 4"/><circle cx="772" cy="128" r="13" fill="var(--deny)"/><text x="772" y="132" text-anchor="middle" font-size="10" fill="#fff">4</text></g>
+        <g><line x1="740" y1="290" x2="790" y2="226" stroke="var(--deny)" stroke-width="1.4" stroke-dasharray="6 4"/><circle cx="772" cy="248" r="13" fill="var(--deny)"/><text x="772" y="252" text-anchor="middle" font-size="10" fill="#fff">5</text></g>
+        <g><line x1="500" y1="346" x2="612" y2="346" stroke="var(--deny)" stroke-width="1.4" stroke-dasharray="6 4"/><circle cx="556" cy="346" r="13" fill="var(--deny)"/><text x="556" y="350" text-anchor="middle" font-size="10" fill="#fff">3</text></g>
+        <g><line x1="734" y1="430" x2="734" y2="512" stroke="var(--deny)" stroke-width="1.4" stroke-dasharray="6 4"/><circle cx="734" cy="470" r="13" fill="var(--deny)"/><text x="734" y="474" text-anchor="middle" font-size="10" fill="#fff">2</text></g>
+      </g>
+      <text x="316" y="540" text-anchor="middle" font-size="9.5" fill="var(--deny)" font-family="IBM Plex Sans">red dashed = trust boundary</text>
+    </svg>
+  </div>
+
+  <table class="stride">
+    <thead>
+      <tr><th>#</th><th>Trust boundary</th><th>STRIDE in play</th><th>Enforcing control</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>Client → Gateway <span class="sub">single policy boundary; per-backend /mcp routes disabled</span></td><td><span class="s s-s">S</span><span class="s s-t">T</span><span class="s s-r">R</span><span class="s s-e">E</span></td><td><code>AuthMiddleware</code> + <code>SiftTokenVerifier</code> (Supabase JWT); <code>ToolAuthorization</code> fail-closed on no identity / out-of-scope</td></tr>
+      <tr><td>2</td><td>Execution / Core → Evidence Vault <span class="sub">immutability boundary</span></td><td><span class="s s-t">T</span><span class="s s-r">R</span><span class="s s-i">I</span></td><td><code>EvidenceGate</code> (sealed + chain OK before any tool runs); <code>chattr +i</code>; append-only custody chains</td></tr>
+      <tr><td>3</td><td>Worker → OS Sandbox <span class="sub">privilege confinement</span></td><td><span class="s s-e">E</span><span class="s s-d">D</span><span class="s s-t">T</span></td><td>Landlock v4 + seccomp=kill + AppArmor=enforce + no-new-privs; cgroup <code>MemoryMax/TasksMax</code>, <code>IPAddressDeny=any</code>; runtime-user fail-closed</td></tr>
+      <tr><td>4</td><td>Gateway → Control Plane <span class="sub">authority boundary</span></td><td><span class="s s-t">T</span><span class="s s-r">R</span><span class="s s-e">E</span></td><td>Postgres authoritative + <code>FORCE RLS</code>; <code>active_case_authority</code> (no env/pointer state); append-only audit</td></tr>
+      <tr><td>5</td><td>Gateway / Add-ons → Data Plane <span class="sub">derived-data boundary</span></td><td><span class="s s-t">T</span><span class="s s-i">I</span><span class="s s-e">E</span></td><td>OpenSearch never authoritative; per-consumer scoped roles; provenance tracking; case-scoped mediated search</td></tr>
+      <tr><td>6</td><td>Tool output → Agent <span class="sub">untrusted-output boundary</span></td><td><span class="s s-i">I</span><span class="s s-t">T</span></td><td><code>ResponseGuard</code>: secret patterns → <code>[REDACTED:*]</code>, untrusted-output labelling, no path/traceback leaks</td></tr>
+      <tr><td>7</td><td>Operator → privileged action <span class="sub">human step-up boundary</span></td><td><span class="s s-s">S</span><span class="s s-r">R</span><span class="s s-e">E</span></td><td>Supabase fail-closed re-verify (CL3a/b) on case activation, evidence seal/retire, finding approval, report export, credential issuance; <code>approval_ledger</code></td></tr>
+    </tbody>
+  </table>
+  <p class="cap" style="margin-top:14px"><span class="lead">Reading it:</span> the two boundaries a forensic system lives or dies on are <b>#2</b> (evidence can never be silently mutated — physical immutability plus a verifying chain) and <b>#6</b> (tool output is treated as hostile and scrubbed before it re-enters the agent's context — the prompt-injection-from-evidence defense). Boundary&nbsp;#4 encodes the authority rule from VP-2: even a fully-authorized write lands in Postgres under RLS, never in the derived index.</p>
+</section>
+<section class="vp wrap" id="vp5">
+  <div class="vp-head">
+    <span class="vp-id">VP-5</span>
+    <span class="vp-std">UML Deployment + Defense-in-Depth — run_command</span>
+  </div>
+  <h2>The jail every forensic command falls through</h2>
+  <p class="concern">Addresses <b>execution containment &amp; deployment</b>: where confined work runs (the SIFT VM node, as a dedicated runtime user) and the two stacked layers — a policy <em>ceiling</em> and a kernel <em>floor</em> — that a command must clear before a forensic binary ever executes. Both default to deny.</p>
+  <div class="canvas">
+    <svg viewBox="0 0 1120 770" role="img" aria-label="run_command sandbox ceiling and floor inside the SIFT VM">
+      <defs>
+        <marker id="c5down" markerWidth="10" markerHeight="10" refX="4" refY="8" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L7,0 L3.5,8 Z" fill="var(--ink)"/>
+        </marker>
+      </defs>
+
+      <!-- deployment node wrapper -->
+      <rect x="36" y="54" width="1048" height="694" rx="10" fill="none" stroke="var(--exec)" stroke-width="1.4" stroke-dasharray="3 4"/>
+      <rect x="36" y="34" width="430" height="30" rx="5" fill="var(--exec)"/>
+      <text x="52" y="54" font-size="11.5" fill="#fff" font-family="IBM Plex Mono" font-weight="600">«deployment node»  SANS SIFT Workstation VM · agent_runtime uid</text>
+
+      <!-- input -->
+      <rect x="350" y="80" width="420" height="56" rx="8" fill="var(--surface)" stroke="var(--ink)" stroke-width="1.3"/>
+      <text x="560" y="104" text-anchor="middle" class="t-title" font-size="13">run_command(command: str)</text>
+      <text x="560" y="122" text-anchor="middle" font-size="10" fill="var(--ink-soft)">shell=False · multi-stage argv · supports | &amp;&amp; || ; &gt; &gt;&gt; &lt; 2&gt;&amp;1</text>
+      <line x1="560" y1="136" x2="560" y2="158" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#c5down)"/>
+
+      <!-- CEILING -->
+      <rect x="96" y="162" width="928" height="208" rx="10" fill="var(--gate-tint)" stroke="var(--gate)" stroke-width="1.8"/>
+      <text x="116" y="186" class="t-zone" font-size="12" fill="var(--gate)">CEILING — POLICY</text>
+      <text x="1004" y="186" text-anchor="end" font-size="9.5" fill="var(--gate)">sift-core/execute/security.py</text>
+      <g font-family="IBM Plex Sans">
+        <rect x="116" y="198" width="430" height="50" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="0.9"/>
+        <text x="130" y="217" font-size="11.5" font-weight="600">Allowlist policy @mvp_forensic</text>
+        <text x="130" y="234" font-size="10" fill="var(--deny)" font-weight="600">unlisted_policy = contained (fail-closed)</text>
+        <rect x="574" y="198" width="430" height="50" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="0.9"/>
+        <text x="588" y="217" font-size="11.5" font-weight="600">Program-text scanners</text>
+        <text x="588" y="234" font-size="10" fill="var(--ink-soft)" font-family="IBM Plex Mono">sed · sqlite3 · tshark · vol · exiftool</text>
+
+        <rect x="116" y="256" width="430" height="50" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="0.9"/>
+        <text x="130" y="275" font-size="11.5" font-weight="600">Block shells &amp; interpreters</text>
+        <text x="130" y="292" font-size="10" fill="var(--ink-soft)" font-family="IBM Plex Mono">sh bash python perl ruby node · awk system/getline</text>
+        <rect x="574" y="256" width="430" height="50" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="0.9"/>
+        <text x="588" y="275" font-size="11.5" font-weight="600">Env deny-after-allow</text>
+        <text x="588" y="292" font-size="10" fill="var(--ink-soft)" font-family="IBM Plex Mono">dotnet · ld* · python · perl · ruby · node …</text>
+
+        <rect x="116" y="314" width="430" height="50" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="0.9"/>
+        <text x="130" y="333" font-size="11.5" font-weight="600">/var/lib/sift hard block</text>
+        <text x="130" y="350" font-size="10" fill="var(--ink-soft)">+ cross-case access denied</text>
+        <rect x="574" y="314" width="430" height="50" rx="6" fill="var(--surface)" stroke="var(--gate)" stroke-width="0.9"/>
+        <text x="588" y="333" font-size="11.5" font-weight="600">Output sanitation</text>
+        <text x="588" y="350" font-size="10" fill="var(--ink-soft)">ANSI/OSC strip · untrusted label · secret redaction</text>
+      </g>
+      <line x1="560" y1="370" x2="560" y2="392" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#c5down)"/>
+
+      <!-- FLOOR -->
+      <rect x="96" y="396" width="928" height="208" rx="10" fill="var(--exec-tint)" stroke="var(--exec)" stroke-width="1.8"/>
+      <text x="116" y="420" class="t-zone" font-size="12" fill="var(--exec)">FLOOR — KERNEL / OS</text>
+      <text x="1004" y="420" text-anchor="end" font-size="9.5" fill="var(--exec)">dfir_exec_launcher.py + worker.py</text>
+      <g font-family="IBM Plex Sans">
+        <rect x="116" y="432" width="430" height="50" rx="6" fill="var(--surface)" stroke="var(--exec)" stroke-width="0.9"/>
+        <text x="130" y="451" font-size="11.5" font-weight="600">Runtime-user fail-closed</text>
+        <text x="130" y="468" font-size="10" fill="var(--ink-soft)" font-family="IBM Plex Mono">SIFT_EXECUTE_REQUIRE_RUNTIME_USER · agent_runtime uid</text>
+        <rect x="574" y="432" width="430" height="50" rx="6" fill="var(--surface)" stroke="var(--exec)" stroke-width="0.9"/>
+        <text x="588" y="451" font-size="11.5" font-weight="600">systemd-run --scope</text>
+        <text x="588" y="468" font-size="10" fill="var(--ink-soft)" font-family="IBM Plex Mono">MemoryMax=4G TasksMax=64 · OOMPolicy=kill · IPAddressDeny=any</text>
+
+        <rect x="116" y="490" width="208" height="50" rx="6" fill="var(--surface)" stroke="var(--exec)" stroke-width="0.9"/>
+        <text x="130" y="509" font-size="11.5" font-weight="600">no-new-privs</text>
+        <text x="130" y="526" font-size="10" fill="var(--ink-soft)">privilege escalation off</text>
+        <rect x="338" y="490" width="208" height="50" rx="6" fill="var(--surface)" stroke="var(--exec)" stroke-width="0.9"/>
+        <text x="352" y="509" font-size="11.5" font-weight="600">Landlock ABI v4</text>
+        <text x="352" y="526" font-size="10" fill="var(--ink-soft)">FS + net deny-default</text>
+        <rect x="574" y="490" width="208" height="50" rx="6" fill="var(--deny-tint)" stroke="var(--deny)" stroke-width="1"/>
+        <text x="588" y="509" font-size="11.5" font-weight="600" fill="var(--deny)">seccomp = KILL</text>
+        <text x="588" y="526" font-size="10" fill="var(--deny)" font-family="IBM Plex Mono">SIGSYS on disallowed syscall</text>
+        <rect x="796" y="490" width="208" height="50" rx="6" fill="var(--surface)" stroke="var(--exec)" stroke-width="0.9"/>
+        <text x="810" y="509" font-size="11.5" font-weight="600">AppArmor 'dfir-exec'</text>
+        <text x="810" y="526" font-size="10" fill="var(--ink-soft)">profile = ENFORCE</text>
+
+        <rect x="116" y="548" width="888" height="42" rx="6" fill="none" stroke="var(--exec)" stroke-width="0.8" stroke-dasharray="4 3"/>
+        <text x="130" y="574" font-size="10.5" fill="var(--ink-soft)">Landlock grants (read-only): case/evidence paths · /etc/mime.types · /proc/N/fd — nothing else is reachable</text>
+      </g>
+      <line x1="560" y1="604" x2="560" y2="626" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#c5down)"/>
+
+      <!-- output -->
+      <rect x="320" y="630" width="480" height="56" rx="8" fill="var(--evid-tint)" stroke="var(--evid)" stroke-width="1.6"/>
+      <text x="560" y="654" text-anchor="middle" class="t-title" font-size="13" fill="var(--ink)">forensic binary executes</text>
+      <text x="560" y="672" text-anchor="middle" font-size="10" fill="var(--ink-soft)" font-family="IBM Plex Mono">grep · fls · vol · EvtxECmd · curl/wget (read-only) …</text>
+
+      <!-- proof tab -->
+      <rect x="36" y="700" width="1048" height="40" rx="6" fill="var(--surface)" stroke="var(--evid)" stroke-width="1"/>
+      <text x="56" y="725" font-size="10.5" fill="var(--ink)" font-family="IBM Plex Mono"><tspan fill="var(--evid)" font-weight="600">RUN-3 proven:</tspan> positive forensic matrix green under jail · ~25 negative red-team rows fail closed (zero approval_required) · evidence sha256 unchanged post-run</text>
+    </svg>
+  </div>
+  <p class="cap"><span class="lead">Reading it:</span> the ceiling reasons about <em>intent</em> — is this program allowed, does its text smuggle a shell, does the environment leak an interpreter — and the floor enforces <em>capability</em> at the kernel: even a command that talked its way past policy can't read outside the case paths (Landlock), can't make a disallowed syscall (seccomp kills it), can't reach the network or exceed its memory (cgroup), and can't regain privilege (no-new-privs). The defaults are deny on both layers, which is why the red-team rows fail without ever asking for approval.</p>
+</section>
+<section class="vp wrap" id="legend">
+  <div class="vp-head">
+    <span class="vp-id">KEY</span>
+    <span class="vp-std">Notation — color encodes plane authority</span>
+  </div>
+  <h2>How to read the diagrams</h2>
+  <p class="concern">One convention across all five viewpoints. Color is semantic, not decorative: it tells you a node's plane and how much the system trusts it.</p>
+  <div class="legend">
+    <h3>Planes (fill / stroke)</h3>
+    <div class="lg"><span class="sw" style="background:var(--gate-tint);border:2px solid var(--gate)"></span><div><span class="nm">Gateway</span><span class="ds">The single policy boundary. Everything crosses it.</span></div></div>
+    <div class="lg"><span class="sw" style="background:var(--ctrl-tint);border:2px solid var(--ctrl)"></span><div><span class="nm">Control plane</span><span class="ds">Postgres — authoritative source of truth, RLS-forced.</span></div></div>
+    <div class="lg"><span class="sw" style="background:var(--data-tint);border:2px solid var(--data)"></span><div><span class="nm">Data plane</span><span class="ds">OpenSearch — derived, never authoritative.</span></div></div>
+    <div class="lg"><span class="sw" style="background:var(--exec-tint);border:2px solid var(--exec)"></span><div><span class="nm">Execution</span><span class="ds">Confined sandbox plane on the SIFT VM.</span></div></div>
+    <div class="lg"><span class="sw" style="background:var(--evid-tint);border:2px solid var(--evid)"></span><div><span class="nm">Evidence / reports</span><span class="ds">Immutable bytes; approved-only outputs.</span></div></div>
+    <div class="lg"><span class="sw" style="background:var(--client-tint);border:2px solid var(--client)"></span><div><span class="nm">Client</span><span class="ds">Human operator and AI agent. Untrusted by default.</span></div></div>
+
+    <h3 style="margin-top:14px">Shapes &amp; lines</h3>
+    <div class="lg"><span class="sw" style="border:1.6px solid var(--ink);border-radius:6px"></span><div><span class="nm">rounded</span><span class="ds">process / container / component</span></div></div>
+    <div class="lg"><span class="sw" style="border:1.6px solid var(--ink);border-radius:0"></span><div><span class="nm">sharp</span><span class="ds">external entity / actor</span></div></div>
+    <div class="lg"><span class="sw" style="border:1.6px solid var(--ctrl);border-radius:9px/4px"></span><div><span class="nm">cylinder</span><span class="ds">persistent data store</span></div></div>
+    <div class="lg"><span class="sw" style="border:1.6px dashed var(--deny)"></span><div><span class="nm">red dashed</span><span class="ds">trust boundary (VP-4)</span></div></div>
+    <div class="lg"><span class="sw" style="background:var(--ctrl);height:4px;margin-top:8px"></span><div><span class="nm">double line</span><span class="ds">workers claim durable jobs (lease)</span></div></div>
+    <div class="lg"><span class="sw" style="background:repeating-linear-gradient(90deg,var(--ink) 0 5px,transparent 5px 8px);height:3px;margin-top:8px"></span><div><span class="nm">dashed arrow</span><span class="ds">async / derived / poll</span></div></div>
+
+    <h3 style="margin-top:14px">STRIDE letters (VP-4)</h3>
+    <div class="lg"><span class="s s-s">S</span><div><span class="nm">Spoofing</span></div></div>
+    <div class="lg"><span class="s s-t">T</span><div><span class="nm">Tampering</span></div></div>
+    <div class="lg"><span class="s s-r">R</span><div><span class="nm">Repudiation</span></div></div>
+    <div class="lg"><span class="s s-i">I</span><div><span class="nm">Info disclosure</span></div></div>
+    <div class="lg"><span class="s s-d">D</span><div><span class="nm">Denial of service</span></div></div>
+    <div class="lg"><span class="s s-e">E</span><div><span class="nm">Elevation of priv.</span></div></div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <b>Protocol SIFT Gateway — Architecture Description.</b> Generated from the code-grounded source-of-truth spec (commit 156e810, 2026-06-14).
+    Viewpoints follow ISO/IEC/IEEE 42010; notation per C4 Model (Brown), UML 2.5 (OMG), and STRIDE (Microsoft).
+    Color encodes plane authority and is defined once in the notation key. &nbsp;·&nbsp; Diagrams are derived artifacts; the repository remains authoritative.
+  </div>
+</footer>
+
+</body>
+</html>

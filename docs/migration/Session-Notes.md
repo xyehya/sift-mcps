@@ -13,6 +13,61 @@ Last updated: 2026-06-14.
 
 ## Current Change Log
 
+### 2026-06-14 - case-dashboard React subscription optimization
+
+Status: DONE (B-MVP-031 guard slice; frontend behavior unchanged)
+
+Changed:
+- Added `useStoreSlice`, a Zustand shallow-selector helper, and converted `case-dashboard` shell/tabs
+  from whole-store `useStore()` subscriptions to explicit state/action slices.
+- Indexed repeated finding/delta lookups in the command palette, commit drawer, findings list/detail,
+  and consolidated Overview KPI/ATT&CK derivation into one memoized findings scan.
+- Added `packages/case-dashboard/frontend/src/test/useStore.interface.test.js` to freeze the current
+  `useStore.js` state/action contract before future portal store refactors.
+- Rebuilt the checked-in portal v2 static dashboard bundle.
+
+Validation:
+- `npm test` (85 passed), `npm run build`.
+- `uv run --extra dev --extra full pytest packages/case-dashboard/tests -q` (361 passed).
+- `git diff --check -- packages/case-dashboard`.
+- Live VM: active gateway `WorkingDirectory=/opt/sift-mcps`; rsynced `packages/case-dashboard` there,
+  restarted `sift-gateway.service`, verified service active, `/health` returned `status=ok`, and portal
+  v2 index references deployed asset `index-DwBgAHAv.js`.
+- `npm run lint` still fails on existing package-wide React compiler/no-unused findings unrelated to
+  this selector pass.
+
+Next:
+- B-MVP-031's store-coupling guard is landed; gateway complex-density remains a later review target.
+
+### 2026-06-14 - Knowledge-graph codebase assessment; "legacy" markers grounded against real code
+
+Status: DONE (planning; no behavior change)
+
+Changed:
+- Ran a 4-lens assessment off `.understand-anything/knowledge-graph.json` (2,126 nodes / 3,201 edges)
+  and grilled the 4 graph "legacy" markers against actual code. All 4 were false positives for deletion:
+  - `_legacy_token_id` (sift-gateway/audit_helpers.py) is a correctness guard, not legacy — stops a
+    Supabase principal id being written into `audit_events.actor_token_id` (FK → `app.mcp_tokens.id`).
+  - opensearch-mcp `_legacy_server`/`_legacy_error`/`_search_hit_from_legacy` are NOT dead: `registry.py`
+    is the deployed typed contract (`create_server()` is what `server.main()` stdio + `http_server` build),
+    and `opensearch_mcp.server` is the live implementation engine it delegates into. Stale naming, not cruft.
+  - v1 `/dashboard` mount (`create_dashboard_app` + `serve_index`) is the `legacy_portal_session_enabled`
+    plane; v2 `/portal` is the real app. Genuine residue, already owned by B-MVP-023/CL2.
+- Operator decision: KEEP the locked 2026-06-14 sequence. Do NOT spin a parallel de-legacy sprint.
+  - opensearch `_legacy_*`→`_impl_*` rename folds into B-MVP-029 (same files, zero extra scope).
+  - v1 `/dashboard` removal stays in B-MVP-023 / CL2 (step 5), not pulled forward.
+- AGENTS.md gained two durable invariants (opensearch two-layer contract/engine; v1 /dashboard = legacy
+  portal-session plane) so the graph/Opus misread does not recur.
+
+Validation:
+- `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`, `git diff --check`.
+
+Next:
+- Architecture diagram revamped: new code-grounded Excalidraw at `docs/architecture/sift-architecture.excalidraw`
+  (84 elements, 7 zones, validated; 4 anchor facts spot-checked against code). Old
+  `docs/regenerate/Architecture.mmd` relabelled SUPERSEDED (kept for its charter D# annotations).
+- B-MVP-029 remains the next sanctioned implementation item (now carries the opensearch rename bolt-on).
+
 ### 2026-06-14 - Tool-surface audit + host-side PTC (bridge/recipes/skill) landed
 
 Status: DONE (B-MVP-028 optimization track; pushed `4138092`)
@@ -173,7 +228,9 @@ Next:
 | B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green + committed 4ee3d1f pushed to origin/main 2026-06-14. | BATCH-R3-* |
 | B-MVP-027 | Backlog | OPEN | `run_command_job` durable lane (Postgres job state machine) fails with `unhandled worker error: KeyError` before exec; synchronous `run_command` lane unaffected. Pre-existing; fix the durable path. | BATCH-R3-* |
 | B-MVP-028 | Backlog | DONE | Optimization track defined + first deliverable landed: tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`. On-wire fixes split to B-MVP-029. | B-MVP-028 |
-| B-MVP-029 | Backlog | OPEN | On-wire MCP response-efficiency + schema fixes from the audit: run_command receipt dedup (audit_id/job_id/provenance ×4), `opensearch_search` large-result autosave, hoist per-hit constants, define `outputSchema`, fix ingest poll dead-end + `audit_ids` required-labeling, and the opensearch-mcp absolute-path leaks (SECURITY). Touches live opensearch-mcp + sift-core → deploy + re-validate. | B-MVP-029 |
+| B-MVP-029 | Backlog | OPEN | On-wire MCP response-efficiency + schema fixes from the audit: run_command receipt dedup (audit_id/job_id/provenance ×4), `opensearch_search` large-result autosave, hoist per-hit constants, define `outputSchema`, fix ingest poll dead-end + `audit_ids` required-labeling, and the opensearch-mcp absolute-path leaks (SECURITY). Bolt-on (same files): rename opensearch `registry.py` `_legacy_*`→`_impl_*` + add contract/engine module docstring (naming-only, `server.py` stays). Touches live opensearch-mcp + sift-core → deploy + re-validate. | B-MVP-029 |
+| B-MVP-030 | Backlog | OPEN | Cosmetic correctness-naming: rename `sift-gateway/audit_helpers.py` `_legacy_token_id`→`_resolve_db_token_id` and add a unit test asserting a Supabase principal id is NOT written to `audit_events.actor_token_id` (FK guard). Not legacy; low priority. | BATCH-CL2 |
+| B-MVP-031 | Backlog | OPEN | Dashboard coupling guard source slice DONE 2026-06-14: `useStore.js` interface characterization test added and dashboard selectors landed. Remaining: track gateway complex-density (21/32 nodes) as a review target. No deletion. | BATCH-PT1 |
 
 ## Validation Commands
 

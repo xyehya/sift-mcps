@@ -29,6 +29,13 @@ Do not create extra migration runbooks.
 - Core stack: Gateway, sift-core, portal, Supabase/Postgres, OpenSearch, forensic-rag-mcp/pgvector,
   forensic-knowledge, Hayabusa, local worker, installer/system services.
 - External add-ons (OpenCTI, Windows-triage candidate): add-on contract only, not native core install.
+- opensearch-mcp is two layers, not legacy-vs-new: `registry.py` is the deployed typed FastMCP-3 tool
+  **contract** (both `server.main()` stdio and `http_server` build it via `create_server()`);
+  `opensearch_mcp.server` is the implementation **engine** registry delegates into (OpenSearch client,
+  ingest, subprocess reaper, host-fix). The `_legacy_*` helper names in `registry.py` are stale naming,
+  NOT deletable code — `server.py` is live and bound by `__main__`, `ingest_job`, and the worker.
+- The v1 `/dashboard` mount (`create_dashboard_app` + `serve_index`) is the `legacy_portal_session_enabled`
+  plane; the real operator app is v2 at `/portal`. v1 removal is tracked under B-MVP-023 / BATCH-CL2.
 
 ## Host And VM Constraints
 

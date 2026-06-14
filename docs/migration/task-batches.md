@@ -37,6 +37,9 @@ Remaining sequence (operator decision 2026-06-14):
    - DONE (B-MVP-028): tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side
      PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`.
    - OPEN (B-MVP-029): on-wire response-efficiency + schema + path-leak fixes — finish before PT2.
+     Bolt-on (zero extra scope, same opensearch-mcp files): rename `registry.py` `_legacy_server`/
+     `_legacy_error`/`_search_hit_from_legacy` → `_impl_*` and add a "registry = typed contract /
+     `opensearch_mcp.server` = implementation engine" module docstring. Naming-only; `server.py` stays.
 2. **Portal RAG** — BATCH-PT2 (knowledge-plane document management).
 3. **Supabase default-key research** — BATCH-SB1, reframed: research a lighter remediation for the
    default CLI demo keys (rotate/replace post-install) that does NOT require a full self-managed

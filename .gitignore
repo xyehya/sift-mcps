@@ -22,3 +22,6 @@ coverage/
 
 # Code knowledge-graph artifacts (understand-anything) — local tooling, not source
 .understand-anything/
+
+# Playwright MCP render scratch (excalidraw export)
+.playwright-mcp/
