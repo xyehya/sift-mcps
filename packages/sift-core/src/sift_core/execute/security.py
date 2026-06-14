@@ -16,7 +16,11 @@ from sift_core.execute.exceptions import DeniedBinaryError, ExecutionError
 
 from sift_core.execute.catalog import load_security_policy
 from sift_core.execute.config import resolve_case_dir
-from sift_core.execute.security_policy import matches_allowed_binary, matches_denied_binary
+from sift_core.execute.security_policy import (
+    load_policy_from_env,
+    matches_allowed_binary,
+    matches_denied_binary,
+)
 
 _DANGEROUS_PATTERNS = ["`", "$("]
 logger = logging.getLogger(__name__)
@@ -33,7 +37,12 @@ _REDIR_MARK = "\x01"
 
 def _get_policy() -> dict:
     """Lazy-load security policy from YAML catalog."""
-    return load_security_policy()
+    policy = load_security_policy()
+    if "unlisted_policy" not in policy:
+        env_policy = load_policy_from_env()
+        if env_policy and "unlisted_policy" in env_policy:
+            policy = {**policy, "unlisted_policy": env_policy["unlisted_policy"]}
+    return policy
 
 
 # awk can execute arbitrary commands via language syntax (not flags).
@@ -41,12 +50,39 @@ def _get_policy() -> dict:
 _AWK_DANGEROUS_RE = re.compile(
     r"system\s*\(|getline|\".*\||\|.*\"|>\s*\"|>>\s*\"", re.IGNORECASE
 )
+_SED_EXEC_RE = re.compile(
+    r"(?:^|[;\n])\s*(?:\d+(?:,\d+)?\s*)?e(?:\s|$)"
+    r"|s([^\w\s\\]).*\1.*\1[a-z]*e[a-z]*(?:\s|;|$)",
+    re.IGNORECASE,
+)
+_SQLITE_DOT_RE = re.compile(
+    r"\.(shell|system|load|import|output|once|excel|backup)\b",
+    re.IGNORECASE,
+)
 
 # Tools whose positional args are program text and need content scanning
-_PROGRAM_TEXT_TOOLS = {"awk", "gawk", "mawk", "nawk"}
+_PROGRAM_TEXT_TOOLS = {"awk", "gawk", "mawk", "nawk", "sed", "sqlite3"}
 
 
-def sanitize_extra_args(extra_args: list[str], tool_name: str = "") -> list[str]:
+def _flag_matches(flag: str, blocked_flags: set[str] | frozenset[str]) -> bool:
+    if flag in blocked_flags:
+        return True
+    for blocked in blocked_flags:
+        # Short flags often carry their value in the same argv token (-ffile,
+        # -Xlua_script). Treat those as the blocked flag plus an attached value.
+        if (
+            blocked.startswith("-")
+            and not blocked.startswith("--")
+            and len(blocked) == 2
+            and flag.startswith(blocked)
+        ):
+            return True
+    return False
+
+
+def sanitize_extra_args(
+    extra_args: list[str], tool_name: str = "", *, risk_tier: str = "standard"
+) -> list[str]:
     """Validate extra_args to block dangerous flags and shell metacharacters.
 
     Raises ValueError if a dangerous flag or pattern is detected.
@@ -55,8 +91,11 @@ def sanitize_extra_args(extra_args: list[str], tool_name: str = "") -> list[str]
         return []
 
     policy = _get_policy()
-    tool_allowed = policy["tool_allowed_flags"].get(tool_name, set())
-    tool_blocked = policy["tool_blocked_flags"].get(tool_name, set())
+    tool_key = tool_name.lower()
+    tool_allowed = policy["tool_allowed_flags"].get(tool_key, set())
+    tool_blocked = policy["tool_blocked_flags"].get(tool_key, set())
+    output_flags = policy.get("output_flags", frozenset())
+    contained = risk_tier == "contained"
 
     sanitized = []
     for arg in extra_args:
@@ -78,9 +117,14 @@ def sanitize_extra_args(extra_args: list[str], tool_name: str = "") -> list[str]
             )
             arg = normalized
         flag = arg.lower().split("=")[0]
-        if flag in tool_blocked:
+        if _flag_matches(flag, tool_blocked):
             raise ValueError(f"Blocked dangerous flag '{arg}' for {tool_name}")
-        if flag in policy["dangerous_flags"] and flag not in tool_allowed:
+        if contained and _flag_matches(flag, output_flags) and flag != "-o":
+            raise ValueError(
+                f"Blocked output flag '{arg}' for contained unlisted tool {tool_name}; "
+                "only -o may write to the case output jail"
+            )
+        if flag in policy["dangerous_flags"] and (contained or flag not in tool_allowed):
             raise ValueError(
                 f"Blocked dangerous flag '{arg}' in extra_args for {tool_name}"
             )
@@ -91,16 +135,32 @@ def sanitize_extra_args(extra_args: list[str], tool_name: str = "") -> list[str]
                 )
         sanitized.append(arg)
 
-    # Scan awk program text for dangerous constructs (system(), getline, pipes)
-    if tool_name in _PROGRAM_TEXT_TOOLS:
+    # Scan program text for dangerous constructs that turn a data tool into an
+    # interpreter. This mirrors the existing awk scanner style.
+    if tool_key in _PROGRAM_TEXT_TOOLS:
         for arg in sanitized:
             if arg.startswith("-"):
                 continue  # skip flags
-            if _AWK_DANGEROUS_RE.search(arg):
+            if tool_key in {"awk", "gawk", "mawk", "nawk"} and _AWK_DANGEROUS_RE.search(arg):
                 raise ValueError(
                     f"Blocked dangerous awk construct in program text for {tool_name}: "
                     f"system(), getline, and pipe operators are not allowed"
                 )
+            if tool_key == "sed" and _SED_EXEC_RE.search(arg):
+                raise ValueError(
+                    "Blocked dangerous sed construct in program text: "
+                    "the sed e command and s///e flag are not allowed"
+                )
+            if tool_key == "sqlite3" and _SQLITE_DOT_RE.search(arg):
+                raise ValueError(
+                    "Blocked dangerous sqlite3 dot-command in program text: "
+                    ".shell, .system, .load, import/export, and backup commands are not allowed"
+                )
+        if contained:
+            raise ValueError(
+                f"Unlisted program-text tool '{tool_name}' must be allowlisted "
+                "before program text can be executed"
+            )
 
     return sanitized
 
@@ -133,11 +193,24 @@ def is_allowed_by_mode(binary_name: str) -> bool:
     pattern. The caller must still apply the denylist first.
     """
     policy = _get_policy()
+    return classify_binary_risk(binary_name) != "reject"
+
+
+def classify_binary_risk(binary_name: str) -> str:
+    """Return ``standard`` or ``contained`` for a non-denied binary.
+
+    In allowlist mode, unlisted binaries are not an approval gate. They are
+    deterministic contained-tier runs unless the operator explicitly set
+    ``unlisted_policy: reject``.
+    """
+    policy = _get_policy()
     if policy.get("mode") != "allowlist":
-        return True
-    return matches_allowed_binary(
-        binary_name, policy.get("allowed_binaries", frozenset())
-    )
+        return "standard"
+    if matches_allowed_binary(binary_name, policy.get("allowed_binaries", frozenset())):
+        return "standard"
+    if str(policy.get("unlisted_policy") or "contained").lower() == "contained":
+        return "contained"
+    return "reject"
 
 
 def _resolve_user_path(path: str, *, base_dir: str | Path | None = None) -> Path:
@@ -277,6 +350,7 @@ _BLOCKED_DIRECTORIES = (
     "/sys",
     "/dev",
     "/boot",
+    "/var/lib/sift",
     os.path.expanduser("~/.sift"),
 )
 
@@ -843,7 +917,8 @@ def validate_shell_command(
                 f"Binary '{binary}' is blocked by security policy. "
                 f"This restriction cannot be overridden."
             )
-        if not is_allowed_by_mode(binary):
+        risk_tier = classify_binary_risk(binary)
+        if risk_tier == "reject":
             raise DeniedBinaryError(
                 f"Binary '{binary}' is not allowed by execute.security allowlist mode."
             )
@@ -929,7 +1004,7 @@ def validate_shell_command(
                 prev_was_output_flag = False
             
         # Sanitize extra args
-        sanitize_extra_args(argv[1:], tool_name=binary)
+        sanitize_extra_args(argv[1:], tool_name=binary, risk_tier=risk_tier)
         
         # rm protection
             
@@ -1048,6 +1123,7 @@ def validate_shell_command(
             "binary": binary,
             "resolved": resolved,
             "privileged": binary in _PRIVILEGED_TARGETS,
+            "risk_tier": risk_tier,
         })
 
     return validated_stages

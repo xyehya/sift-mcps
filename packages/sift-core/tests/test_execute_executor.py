@@ -65,6 +65,7 @@ def test_allowlist_blocked_command_rejected_before_executor_is_invoked(monkeypat
         {
             "mode": "allowlist",
             "allowed_binaries": ["date"],
+            "unlisted_policy": "reject",
             "denied_binaries": ["env"],
         },
     )
@@ -78,7 +79,7 @@ def test_allowlist_blocked_command_rejected_before_executor_is_invoked(monkeypat
     monkeypatch.setattr(generic, "execute", _fail_if_called)
 
     with pytest.raises(DeniedBinaryError, match="not allowed"):
-        generic.run_command(["cat", "--version"], purpose="test allowlist preflight")
+        generic.run_command(["git", "--version"], purpose="test allowlist preflight")
 
     assert called is False
 
@@ -277,7 +278,7 @@ def test_sudo_validation_rules(tmp_path, monkeypatch):
         generic.run_command(["sudo"], purpose="test empty sudo")
 
 
-def test_privileged_path_direct_success(tmp_path, monkeypatch):
+def test_mount_denied_before_privileged_execution(tmp_path, monkeypatch):
     import shutil
     case_dir = tmp_path / "case"
     case_dir.mkdir()
@@ -307,17 +308,13 @@ def test_privileged_path_direct_success(tmp_path, monkeypatch):
         return {"exit_code": 0, "stdout": "mounted ok\n", "stderr": "", "stdout_total_bytes": 11}
     monkeypatch.setattr(generic, "execute", fake_execute)
 
-    res = generic.run_command(["mount", "/dev/sdb1", str(case_dir / "tmp")], purpose="test mount success")
-
-    assert res["exit_code"] == 0
-    assert res["privilege_escalation"]["mechanism"] == "direct_unprivileged"
-    assert res["privilege_escalation"]["status"] == "success"
-    assert len(calls) == 1
-    assert calls[0] == [{"argv": ["/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
+    with pytest.raises(DeniedBinaryError, match="Binary 'mount' is blocked"):
+        generic.run_command(["mount", "/dev/sdb1", str(case_dir / "tmp")], purpose="test mount denied")
+    assert calls == []
 
 
 
-def test_privileged_path_sudo_fallback(tmp_path, monkeypatch):
+def test_mount_sudo_fallback_is_not_available(tmp_path, monkeypatch):
     import shutil
     import os
     case_dir = tmp_path / "case"
@@ -357,21 +354,13 @@ def test_privileged_path_sudo_fallback(tmp_path, monkeypatch):
             return {"exit_code": 0, "stdout": "sudo mounted ok\n", "stderr": "", "stdout_total_bytes": 16}
     monkeypatch.setattr(generic, "execute", fake_execute)
 
-    res = generic.run_command(["mount", "/dev/sdb1", str(case_dir / "tmp")], purpose="test mount fallback")
-
-    assert res["exit_code"] == 0
-    assert res["privilege_escalation"]["mechanism"] == "sudo_fallback"
-    assert res["privilege_escalation"]["status"] == "success"
-    assert len(calls) == 2
-    assert calls[0] == [{"argv": ["/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
-    assert calls[1] == [{"argv": ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": [], "runtime_user": ""}]
-    assert len(res["privilege_events"]) == 2
-    assert res["privilege_events"][0]["status"] == "fallback_attempt"
-    assert res["privilege_events"][1]["status"] == "success"
+    with pytest.raises(DeniedBinaryError, match="Binary 'mount' is blocked"):
+        generic.run_command(["mount", "/dev/sdb1", str(case_dir / "tmp")], purpose="test mount fallback denied")
+    assert calls == []
 
 
 
-def test_privileged_path_non_permission_failure(tmp_path, monkeypatch):
+def test_mount_non_permission_path_is_not_reached(tmp_path, monkeypatch):
     import shutil
     case_dir = tmp_path / "case"
     case_dir.mkdir()
@@ -401,14 +390,9 @@ def test_privileged_path_non_permission_failure(tmp_path, monkeypatch):
         return {"exit_code": 1, "stdout": "", "stderr": "mount: bad usage\n", "stdout_total_bytes": 0}
     monkeypatch.setattr(generic, "execute", fake_execute)
 
-    res = generic.run_command(["mount", "/dev/sdb1", str(case_dir / "tmp")], purpose="test syntax error")
-
-    # Exit code is 1, and no sudo was called (only 1 execute call)
-    assert res["exit_code"] == 1
-    assert len(calls) == 1
-    assert calls[0] == [{"argv": ["/usr/bin/mount", "/dev/sdb1", str(case_dir / "tmp")], "redirects": []}]
-    # No escalation metadata because it failed and didn't fall back
-    assert "privilege_escalation" not in res
+    with pytest.raises(DeniedBinaryError, match="Binary 'mount' is blocked"):
+        generic.run_command(["mount", "/dev/sdb1", str(case_dir / "tmp")], purpose="test syntax path denied")
+    assert calls == []
 
 
 
@@ -435,24 +419,22 @@ def test_privileged_validators_fail_before_execution(tmp_path, monkeypatch):
         return None
     monkeypatch.setattr(shutil, "which", fake_which)
 
-    # 1. dd with invalid output target (outside case)
-    with pytest.raises(ValueError, match="of= target.*must be inside the active case"):
+    # Acquisition/mount primitives are blocked at DENY_FLOOR before older
+    # privileged validators or sudo fallback paths can run.
+    with pytest.raises(DeniedBinaryError, match="Binary 'dd' is blocked"):
         generic.run_command(["dd", "if=/dev/sdb", "of=/etc/passwd"], purpose="test dd validator")
 
-    # 2. mount with invalid target (outside case)
-    with pytest.raises(ValueError, match="mount target directory must be inside the case"):
+    with pytest.raises(DeniedBinaryError, match="Binary 'mount' is blocked"):
         generic.run_command(["mount", "/dev/sda", "/"], purpose="test mount validator")
 
-    # 3. losetup without -r flag for setup
-    with pytest.raises(ValueError, match="losetup loop device setup requires the read-only flag"):
+    with pytest.raises(DeniedBinaryError, match="Binary 'losetup' is blocked"):
         generic.run_command(["losetup", "/dev/loop0", str(case_dir / "evidence.raw")], purpose="test losetup validator")
 
-    # 4. Wildcard/glob arguments in command
-    with pytest.raises(ValueError, match="Wildcard/glob characters"):
+    with pytest.raises(DeniedBinaryError, match="Binary 'dd' is blocked"):
         generic.run_command(["dd", "if=/dev/sdb*", "of=" + str(case_dir / "tmp/out")], purpose="test wildcard validator")
 
 
-def test_allowlist_mode_sudo_target(tmp_path, monkeypatch):
+def test_allowlist_cannot_override_deny_floor_for_mount(tmp_path, monkeypatch):
     import shutil
     case_dir = tmp_path / "case"
     case_dir.mkdir()
@@ -476,18 +458,17 @@ def test_allowlist_mode_sudo_target(tmp_path, monkeypatch):
         return None
     monkeypatch.setattr(shutil, "which", fake_which)
 
-    # Allowed target should pass validation
     calls = []
     def fake_execute(cmd_list, **kwargs):
         calls.append(cmd_list)
         return {"exit_code": 0, "stdout": "", "stderr": ""}
     monkeypatch.setattr(generic, "execute", fake_execute)
 
-    res = generic.run_command(["mount", "/dev/sdb1", str(case_dir / "tmp")], purpose="test allowed target")
-    assert res["exit_code"] == 0
+    with pytest.raises(DeniedBinaryError, match="Binary 'mount' is blocked"):
+        generic.run_command(["mount", "/dev/sdb1", str(case_dir / "tmp")], purpose="test denied target")
+    assert calls == []
 
     # Denied binary (by deny floor or denylist reboot) should be rejected
-    from sift_core.execute.exceptions import DeniedBinaryError
     with pytest.raises(DeniedBinaryError, match="blocked by security policy"):
         generic.run_command(["reboot"], purpose="test denied target")
 

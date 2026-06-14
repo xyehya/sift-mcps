@@ -142,6 +142,7 @@ async def test_run_command_allowlist_mode_permits_configured_command(tmp_path, m
                 "security": {
                     "mode": "allowlist",
                     "allowed_binaries": ["date"],
+                    "unlisted_policy": "reject",
                     "denied_binaries": ["echo"],
                 }
             },
@@ -183,6 +184,7 @@ async def test_run_command_allowlist_mode_blocks_unlisted_command(tmp_path, monk
                 "security": {
                     "mode": "allowlist",
                     "allowed_binaries": ["date"],
+                    "unlisted_policy": "reject",
                     "denied_binaries": ["echo"],
                 }
             },
@@ -191,7 +193,7 @@ async def test_run_command_allowlist_mode_blocks_unlisted_command(tmp_path, monk
 
     result = await gateway.call_tool(
         "run_command",
-        {"command": ["cat", "--version"], "purpose": "verify allowlist deny"},
+        {"command": ["git", "--version"], "purpose": "verify allowlist deny"},
         examiner="alice",
     )
     payload = json.loads(result[0].text)
@@ -300,7 +302,7 @@ async def test_run_command_preserves_case_cwd_jail(tmp_path, monkeypatch):
     assert payload["error"] == "Path must be within the case directory"
 
 
-async def test_run_command_privileged_escalation_integration(tmp_path, monkeypatch):
+async def test_run_command_mount_denied_integration(tmp_path, monkeypatch):
     import shutil
     import os
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -329,16 +331,12 @@ async def test_run_command_privileged_escalation_integration(tmp_path, monkeypat
     monkeypatch.setattr(shutil, "which", lambda cmd: f"/usr/bin/{cmd}" if cmd in ("mount", "sudo") else None)
     monkeypatch.setattr(os.path, "exists", lambda path: path == "/usr/bin/sudo" or os.path.exists(path))
 
-    # Mock isolated execution inside generic to fail directly first, then succeed via sudo
+    # Mock isolated execution inside generic; DENY_FLOOR must stop before this.
     from sift_core.execute.tools import generic
     calls = []
     def fake_execute(cmd_list, **kwargs):
         calls.append(cmd_list)
-        first_argv = cmd_list[0]["argv"]
-        if first_argv[0] != "/usr/bin/sudo":
-            return {"exit_code": 1, "stdout": "", "stderr": "mount: requires root\n", "stdout_total_bytes": 0}
-        else:
-            return {"exit_code": 0, "stdout": "ok\n", "stderr": "", "stdout_total_bytes": 3}
+        return {"exit_code": 0, "stdout": "should not run\n", "stderr": ""}
     monkeypatch.setattr(generic, "execute", fake_execute)
 
     result = await gateway.call_tool(
@@ -351,30 +349,6 @@ async def test_run_command_privileged_escalation_integration(tmp_path, monkeypat
     )
     payload = json.loads(result[0].text)
 
-    # 1. Verify the response metadata privilege details are returned
-    assert payload["success"] is True
-    assert payload["privilege_escalation"]["mechanism"] == "sudo_fallback"
-    assert payload["privilege_escalation"]["status"] == "success"
-
-    # 2. Verify that calls were made directly then with sudo
-    assert len(calls) == 2
-    assert calls[0] == [{"argv": ["/usr/bin/mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")], "redirects": []}]
-    assert calls[1] == [{"argv": ["/usr/bin/sudo", "-n", "--", "/usr/bin/mount", "/dev/sdb1", str(Path(case["case_dir"]) / "tmp")], "redirects": [], "runtime_user": ""}]
-
-    # 3. Verify audit entries are written under SIFT_STATE_DIR / PRIV-001 / audit / sift-gateway.jsonl
-    audit_file = state_dir / "PRIV-001" / "audit" / "sift-gateway.jsonl"
-    assert audit_file.is_file()
-    lines = audit_file.read_text().splitlines()
-    entries = [json.loads(line) for line in lines]
-
-    # There should be entries for:
-    # - fallback_attempt privilege event
-    # - success outcome privilege event
-    # - main run_command audit entry (which should contain privilege_escalation and privilege_events)
-    pe_events = [e for e in entries if e.get("tool") == "privilege_escalation"]
-    assert len(pe_events) == 2
-    assert pe_events[0]["result_summary"]["status"] == "fallback_attempt"
-    assert pe_events[1]["result_summary"]["status"] == "success"
-
-    main_entry = [e for e in entries if e.get("tool") == "run_command"][0]
-    assert main_entry["privilege_escalation"]["mechanism"] == "sudo_fallback"
+    assert payload["success"] is False
+    assert "Binary 'mount' is blocked by security policy" in payload["error"]
+    assert calls == []
