@@ -203,6 +203,37 @@ def test_run_command_passes_memory_limit_to_worker(monkeypatch):
     assert payloads[0]["memory_limit_bytes"] == 50_000_000
 
 
+def test_run_command_passes_seccomp_kill_mode_to_worker(monkeypatch):
+    import json
+    import subprocess
+
+    payloads = []
+
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = json.dumps({"exit_code": 0, "stdout": "mode-ok", "stderr": ""})
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        payloads.append(json.loads(kwargs["input"]))
+        return FakeCompletedProcess()
+
+    monkeypatch.setenv("SIFT_EXECUTE_SECCOMP_MODE", "kill")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    from sift_core.execute.executor import _run_isolated_worker
+
+    _run_isolated_worker(
+        ["/usr/bin/date"],
+        timeout=5,
+        cwd=None,
+        max_output_bytes=1024,
+        memory_limit_bytes=0,
+    )
+
+    assert payloads[0]["seccomp_mode"] == "kill"
+
+
 def test_required_runtime_user_rejects_current_user_dev_mode(monkeypatch):
     from sift_core.execute.exceptions import ExecutionError
 
@@ -287,6 +318,7 @@ def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
     assert cmd[sep + 1 : sep + 4] == [sys.executable, "-m", "sift_core.execute.worker"]
     assert captured["payload"]["launcher_enabled"] is True
     assert captured["payload"]["runtime_user_already_applied"] is True
+    assert captured["payload"]["seccomp_mode"] == "log"
 
 
 def test_native_runtime_user_requires_existing_local_account(monkeypatch):
@@ -400,6 +432,51 @@ def test_worker_skips_inner_sudo_when_runtime_user_already_applied(monkeypatch):
         "sift_core.execute.dfir_exec_launcher",
     ]
     assert "/usr/bin/sudo" not in calls[0]
+
+
+def test_seccomp_kill_mode_reaches_launcher_policy(monkeypatch):
+    calls = []
+
+    class FakeProcess:
+        pid = 12345
+        returncode = 0
+        stdout = io.BytesIO(b"ok\n")
+        stderr = io.BytesIO(b"")
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+        def poll(self):
+            return self.returncode
+
+    def fake_popen(cmd, **kwargs):
+        calls.append(cmd)
+        return FakeProcess()
+
+    monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
+
+    result = worker._execute_payload(
+        {
+            "cmd": ["/usr/bin/id"],
+            "runtime_user": "agent_runtime",
+            "runtime_user_already_applied": True,
+            "seccomp_mode": "kill",
+            "timeout": 5,
+            "cwd": None,
+            "max_output_bytes": 1024,
+            "memory_limit_bytes": 0,
+        }
+    )
+
+    assert result["stdout"] == "ok\n"
+
+    from sift_core.execute.dfir_exec_launcher import decode_policy
+
+    policy_arg = calls[0][calls[0].index("--policy") + 1]
+    assert decode_policy(policy_arg)["seccomp_mode"] == "kill"
 
 
 def test_sudo_validation_rules(tmp_path, monkeypatch):

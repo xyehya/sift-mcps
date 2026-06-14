@@ -126,6 +126,11 @@ def _launcher_requested(runtime_user: str) -> bool:
     )
 
 
+def _seccomp_mode() -> str:
+    mode = os.environ.get("SIFT_EXECUTE_SECCOMP_MODE", "log").strip().lower()
+    return "kill" if mode in {"kill", "enforce", "enforced"} else "log"
+
+
 def _run_isolated_worker(
     cmd_list: list[str] | list[dict[str, Any]],
     *,
@@ -151,6 +156,7 @@ def _run_isolated_worker(
         "launcher_required": _env_flag("SIFT_EXECUTE_REQUIRE_LANDLOCK")
         or _env_flag("SIFT_EXECUTE_LAUNCHER"),
         "require_landlock": _env_flag("SIFT_EXECUTE_REQUIRE_LANDLOCK"),
+        "seccomp_mode": _seccomp_mode(),
         "service_uid": os.getuid() if hasattr(os, "getuid") else None,
         "service_gid": os.getgid() if hasattr(os, "getgid") else None,
     }

@@ -104,6 +104,9 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     launcher_enabled = bool(payload.get("launcher_enabled", bool(runtime_user)))
     launcher_required = bool(payload.get("launcher_required"))
     require_landlock = bool(payload.get("require_landlock"))
+    seccomp_mode = str(payload.get("seccomp_mode") or "log").strip().lower()
+    if seccomp_mode not in {"log", "kill"}:
+        seccomp_mode = "log"
     service_uid = payload.get("service_uid")
     service_gid = payload.get("service_gid")
 
@@ -197,6 +200,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 launcher_enabled=launcher_enabled,
                 launcher_required=launcher_required,
                 require_landlock=require_landlock,
+                seccomp_mode=seccomp_mode,
                 timeout=timeout,
                 cwd=cwd,
                 case_dir=case_dir,
@@ -458,6 +462,7 @@ def _argv_for_launcher(
     launcher_enabled: bool,
     launcher_required: bool,
     require_landlock: bool,
+    seccomp_mode: str,
     timeout: int,
     cwd: str | None,
     case_dir: str,
@@ -485,7 +490,7 @@ def _argv_for_launcher(
         "service_uid": service_uid,
         "service_gid": service_gid,
         "require_landlock": require_landlock,
-        "seccomp_mode": "log",
+        "seccomp_mode": seccomp_mode,
         "vol_symbols_dir": vol_symbols_dir,
     }
     return [
