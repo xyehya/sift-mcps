@@ -13,6 +13,44 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-14 - BUILT: OpenSearch decoupled scalable workers (branch feat/opensearch-workers; deployed to TEST)
+
+Status: IN_PROGRESS (build + unit tests DONE; deployed to VM; first live smoke pending joint test).
+
+Implements the 2026-06-14 DECISION below. Branch `feat/opensearch-workers` (do NOT
+merge/push yet — `/security-review` required before merge). 5 commits:
+- 5628af0 gateway dispatch boundary + realtime status (`OpenSearchJobDispatchMiddleware`,
+  innermost; redirects `opensearch_ingest`/`opensearch_enrich_intel` to a NON-BLOCKING
+  durable job, returns opaque job_id; query tools stay on the thin proxy).
+- fedd6d1 ingest/enrich job handlers + lane-scoped worker CLI
+  (`opensearch_mcp/ingest_job.py`; `job_worker_cli.build_handlers(job_types=...)` wires
+  only the requested lane).
+- 3817a98 `configs/systemd/sift-opensearch-worker@.service` template (only relaxation vs
+  sift-job-worker: `MountFlags=shared`) + install.sh render/enable N instances.
+- 402851b unit + concurrency + anti-spoof tests.
+- a2dfc51 agentic-security skill docs (environment-profile + repo-security-baseline:
+  control A dispatch + control H FUSE OPEN→RESOLVED-via-decoupled-worker).
+Migration `202606150900_opensearch_worker_status.sql` (per-step/worker realtime status).
+
+Architecture honored: gateway stays the SOLE policy boundary and is NOT loosened
+(`MountFlags=` empty kept); every ingest/query call still passes auth → active-case →
+audit → evidence-gate before dispatch; worker sees only the gateway-resolved
+DB-authoritative `case_dir` in `spec_internal` (client-supplied `case_dir`/`case_id`/
+`case_key` dropped — anti-spoof); N workers claim distinct jobs via `FOR UPDATE SKIP
+LOCKED`; non-blocking dispatch.
+
+Test proof (per-package, host .venv): sift-core job worker 18 passed; opensearch-mcp
+ingest-job handler 7 passed; sift-gateway dispatch middleware 6 passed + job/binding
+regression (test_mvp_d2 + test_mvp_binding) 35 passed. 4 build commits confirmed green
+after the API-interruption resume.
+
+Live proof: <FILLED AFTER VM SMOKE>
+
+STILL OPEN after this entry: full 40GB E01 ingest completion, Hayabusa index verify on
+the live disk ingest, N-worker parallel proof, `/security-review` before merge. Updated
+mcp_tool_assessment.md §0 with the resolution status (FUSE/Hayabusa/single-threaded →
+RESOLVED; WOF extractor + PTC bridge + sandbox still OPEN).
+
 ### 2026-06-14 - DECISION: decouple OpenSearch into scalable least-privilege workers (design-first; in progress)
 
 Status: APPROVED (operator), design-first; partial fixes landed, decoupling build pending.
