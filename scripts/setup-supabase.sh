@@ -197,6 +197,41 @@ install_supabase_cli() {
   rm -rf "$tmpdir"
 }
 
+# ── SB1 (B-MVP-012): per-install Supabase JWT secret ──────────────────────────
+# The Supabase CLI HS256-signs the local anon/service_role keys with
+# auth.jwt_secret (config.toml). When unset it falls back to the PUBLIC demo
+# secret, so `supabase status` would emit the well-known public anon/service_role
+# keys — anyone could mint a service_role token. We generate a unique secret per
+# install and persist it to supabase/.env, which the CLI auto-loads on every
+# `supabase start` (keys stay stable across restarts, including manual ones).
+# config.toml references it via env(SUPABASE_AUTH_JWT_SECRET).
+_DEMO_JWT_SECRET="super-secret-jwt-token-with-at-least-32-characters-long"
+ensure_jwt_secret() {
+  local env_file="$REPO_DIR/supabase/.env"
+  mkdir -p "$REPO_DIR/supabase"
+  if [[ -n "${SUPABASE_AUTH_JWT_SECRET:-}" ]]; then
+    : # explicit env wins (operator override); persisted below for reuse.
+  elif [[ -f "$env_file" ]] && grep -q '^SUPABASE_AUTH_JWT_SECRET=' "$env_file" 2>/dev/null; then
+    SUPABASE_AUTH_JWT_SECRET="$(grep '^SUPABASE_AUTH_JWT_SECRET=' "$env_file" | head -1 | cut -d= -f2-)"
+    log "Reusing the persisted Supabase JWT secret from supabase/.env."
+  else
+    command -v openssl >/dev/null 2>&1 || die "openssl required to generate the Supabase JWT secret."
+    SUPABASE_AUTH_JWT_SECRET="$(openssl rand -hex 32)"  # 256-bit; CLI requires >=16 chars
+    log "Generated a fresh per-install Supabase JWT secret."
+  fi
+  [[ "$SUPABASE_AUTH_JWT_SECRET" != "$_DEMO_JWT_SECRET" ]] \
+    || die "SUPABASE_AUTH_JWT_SECRET is the PUBLIC demo default. Refusing to provision a default-key install (B-MVP-012). Unset it and re-run to auto-generate a unique secret."
+  export SUPABASE_AUTH_JWT_SECRET
+  # Persist (600) to supabase/.env so the CLI loads it on every start. The file
+  # is gitignored (.env). Rewrite the single key idempotently.
+  local tmp; tmp="$(mktemp)"
+  if [[ -f "$env_file" ]]; then grep -v '^SUPABASE_AUTH_JWT_SECRET=' "$env_file" > "$tmp" || true; fi
+  printf 'SUPABASE_AUTH_JWT_SECRET=%s\n' "$SUPABASE_AUTH_JWT_SECRET" >> "$tmp"
+  install -m 600 "$tmp" "$env_file"
+  rm -f "$tmp"
+  log "Supabase JWT secret persisted to supabase/.env (chmod 600, gitignored)."
+}
+
 # ── Ensure config.toml exists ─────────────────────────────────────────────────
 ensure_config_toml() {
   local config_toml="$REPO_DIR/supabase/config.toml"
@@ -289,6 +324,15 @@ capture_credentials() {
   SUPABASE_ANON_KEY="$anon_key"
   SUPABASE_SERVICE_ROLE_KEY="$service_key"
 
+  # SB1 (B-MVP-012) guard: refuse to proceed on the PUBLIC demo keys. These are
+  # the CLI's hardcoded demo anon/service_role JWTs (iss "supabase-demo", signed
+  # by the public demo secret); a unique jwt_secret must have re-signed them.
+  local demo_anon="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+  local demo_service="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
+  if [[ "$SUPABASE_ANON_KEY" == "$demo_anon" || "$SUPABASE_SERVICE_ROLE_KEY" == "$demo_service" ]]; then
+    die "Supabase emitted the PUBLIC demo anon/service_role keys — the per-install JWT secret did not take effect. Refusing a default-key install (B-MVP-012). Confirm supabase/.env has SUPABASE_AUTH_JWT_SECRET, then 'supabase stop && supabase start' and re-run."
+  fi
+
   # DB_URL from status is the full DSN; if absent, build it from known defaults.
   if [[ -n "$db_url" ]]; then
     SIFT_CONTROL_PLANE_DSN="$db_url"
@@ -358,6 +402,7 @@ main() {
     do_reset
   fi
 
+  ensure_jwt_secret
   ensure_config_toml
   supabase_start
   capture_credentials

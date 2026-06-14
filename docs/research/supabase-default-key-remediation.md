@@ -280,3 +280,152 @@ last resort.
 - [Introducing JWT Signing Keys | Supabase Blog](https://supabase.com/blog/jwt-signing-keys)
 - [docker/CHANGELOG.md](https://github.com/supabase/supabase/blob/master/docker/CHANGELOG.md) (PRs #43554, #45941)
 - [Discussion #19560 — Can't change JWT secret on self-hosted](https://github.com/orgs/supabase/discussions/19560) — **community, no staff reply; ALTER DATABASE step UNVERIFIED**
+
+---
+
+## Addendum — CLI local-stack (`supabase start`) rotation
+
+**Status:** Research — decision-grade. Verified against the **Supabase CLI source at the exact
+pinned tag `v2.105.0`** (stronger than docs prose for this question; the public docs site
+returned 404 for the live config page during this pass, so the struct/source is the authority).
+**Date:** 2026-06-15.
+**Scope:** This addendum is about the **CLI-provisioned local stack** (`supabase start`), which is
+what `scripts/setup-supabase.sh` runs — NOT the docker-compose self-hosted stack covered above.
+
+### Ground truth — why a fresh install comes up on demo keys
+
+The CLI generates the local `anon`/`service_role` keys at `supabase start` time **in Go code**, not
+from a fixed table. The relevant logic is in `apps/cli-go/pkg/config/apikeys.go` at `v2.105.0`:
+
+```go
+const (
+    defaultJwtSecret      = "super-secret-jwt-token-with-at-least-32-characters-long"
+    defaultJwtExpiry      = 1983812996
+    defaultPublishableKey = "sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH"
+    defaultSecretKey      = "sb_secret_N7UND0UgjKTVK-Uodkm0Hg_xSvEMPvz"
+)
+
+func (a *auth) generateAPIKeys() error {
+    if len(a.JwtSecret.Value) == 0 {
+        a.JwtSecret.Value = defaultJwtSecret          // <-- falls back to the PUBLIC demo secret
+    } else if len(a.JwtSecret.Value) < 16 {
+        return errors.Errorf("Invalid config for auth.jwt_secret. Must be at least 16 characters")
+    }
+    if len(a.AnonKey.Value) == 0 {
+        signed, _ := a.generateJWT("anon")            // HS256 over JwtSecret, iss "supabase-demo"
+        a.AnonKey.Value = signed
+    }
+    if len(a.ServiceRoleKey.Value) == 0 {
+        signed, _ := a.generateJWT("service_role")
+        a.ServiceRoleKey.Value = signed
+    }
+    if len(a.PublishableKey.Value) == 0 { a.PublishableKey.Value = defaultPublishableKey }
+    if len(a.SecretKey.Value) == 0      { a.SecretKey.Value = defaultSecretKey }
+    return nil
+}
+```
+
+So: our `config.toml` sets `jwt_expiry` only and leaves `auth.jwt_secret` empty ⇒ the CLI takes the
+`defaultJwtSecret` branch ⇒ it HS256-signs `anon`/`service_role` over the **published** demo secret
+with `iss:"supabase-demo"` ⇒ `supabase status -o env` emits the well-known public demo keys. (The
+`sb_publishable_…`/`sb_secret_…` opaque keys are likewise hardcoded constants when unset.)
+([apps/cli-go/pkg/config/apikeys.go @ v2.105.0](https://github.com/supabase/cli/blob/v2.105.0/apps/cli-go/pkg/config/apikeys.go))
+
+### Q1 — Can the CLI local stack take a CUSTOM JWT secret so `status` emits OUR keys? **YES — config-time.**
+
+The `[auth]` config struct (`apps/cli-go/pkg/config/auth.go @ v2.105.0`) exposes these TOML keys,
+each typed `Secret` so they accept literal values **or** `env(VAR)` interpolation / `.env` injection
+(the struct comment is literally `// Custom secrets can be injected from .env file`):
+
+| `config.toml` key (under `[auth]`) | Go field | Type | Effect when set |
+|---|---|---|---|
+| `jwt_secret` | `JwtSecret` | `Secret` | Root HS256 secret; min **16 chars** or `supabase start` errors. When set, `anon`/`service_role` are signed by THIS (unique per install) instead of the demo secret. |
+| `anon_key` | `AnonKey` | `Secret` | Override the emitted anon key outright (else minted from `jwt_secret`). |
+| `service_role_key` | `ServiceRoleKey` | `Secret` | Override the emitted service_role key (else minted from `jwt_secret`). |
+| `publishable_key` | `PublishableKey` | `Secret` | Override `sb_publishable_…` (else hardcoded demo constant). |
+| `secret_key` | `SecretKey` | `Secret` | Override `sb_secret_…` (else hardcoded demo constant). |
+| `signing_keys_path` | `SigningKeysPath` | `string` | Path to a JWK file; if present (with a loaded key), keys are minted **asymmetrically** (ES256/RS256) instead of HS256 — see Q3. |
+
+Source: `auth.go @ v2.105.0`, struct fields with `toml:"jwt_secret"`, `toml:"anon_key"`,
+`toml:"service_role_key"`, `toml:"publishable_key"`, `toml:"secret_key"`, `toml:"signing_keys_path"`.
+([apps/cli-go/pkg/config/auth.go @ v2.105.0](https://github.com/supabase/cli/blob/v2.105.0/apps/cli-go/pkg/config/auth.go))
+
+**Version landed:** `auth.jwt_secret` / `anon_key` / `service_role_key` as `[auth]` config keys are
+present and load-bearing in the generation path at our pin **v2.105.0** (confirmed in source). They
+predate it (the "inject from .env" comment and `generateAPIKeys` fallback have been in the CLI's
+config-as-code model since the v2 line; `gen signing-key` + `signing_keys_path` + the ES256 default
+arrived earlier in the v2.71.x range per cli issue #4726). The exact first-introduction tag was not
+pinned down in this pass and is **UNVERIFIED**, but is moot — they exist at v2.105.0, which is what we run.
+
+So the answer is concretely: set **`auth.jwt_secret`** (literal or `env(SUPABASE_JWT_SECRET)`) in
+`supabase/config.toml`, run `supabase start`, and `supabase status -o env` will emit `ANON_KEY` /
+`SERVICE_ROLE_KEY` HS256-signed by OUR secret — unique per install. No demo keys.
+
+### Q2 — If it did NOT support it (it does)
+
+Not applicable: config-time custom secret IS supported at v2.105.0 (Q1). Post-start re-minting and
+re-keying GoTrue/PostgREST/Kong containers by hand is therefore **unnecessary** and not recommended
+for the CLI stack — the CLI owns those containers and wires them from `config.toml` at start. Doing
+it by hand would be fought by the next `supabase start`/`stop`. (Recorded only to close the question.)
+
+### Q3 — Asymmetric signing keys / `sb_publishable_*` / `sb_secret_*` on the LOCAL stack at v2.105.0
+
+**Available: YES.**
+- `signing_keys_path = "./signing_key.json"` under `[auth]` makes the local stack mint tokens with an
+  **asymmetric** key (ES256 P-256 or RS256). Generate the key with `supabase gen signing-key
+  --algorithm ES256` (also supports `RS256`; `--append` to add to an existing file) and save it as a
+  **single raw JSON object** (not an array) at that path. When `signing_keys_path` is set and a key is
+  loaded, `generateJWT` calls `GenerateAsymmetricJWT` (ES256/RS256) with a 10-year expiry instead of
+  the HS256 path. ([apikeys.go @ v2.105.0](https://github.com/supabase/cli/blob/v2.105.0/apps/cli-go/pkg/config/apikeys.go);
+  [gen signing-key CLI ref](https://supabase.com/docs/reference/cli/supabase-gen-signing-key))
+- The opaque `sb_publishable_…` / `sb_secret_…` keys are overridable via `auth.publishable_key` /
+  `auth.secret_key`; **unset, they fall back to hardcoded demo constants** (see code above), so they
+  must be set explicitly if you care about them locally.
+- **Cleaner provision story?** For our goal (fresh install never on demo keys), asymmetric is **not
+  simpler** — it adds a generated key file to manage and the `gen signing-key` step. The single
+  `jwt_secret` HS256 override is the leaner config-time fix. Asymmetric is the better long-term posture
+  (public-key verification, decoupled rotation) but is optional for this remediation. Note the default
+  algorithm flipped to ES256 in the v2.71.x line (cli issue #4726); HS256 minting only happens when
+  `signing_keys_path` is empty — which is our current state, hence HS256 demo keys today.
+
+### Q4 — Bottom line: single recommended mechanism for `scripts/setup-supabase.sh`
+
+**Config-time, one key. Write a unique `auth.jwt_secret` before `supabase start`.** Concrete bash:
+
+1. Generate a unique secret per install (≥16 chars; 32+ recommended), e.g.
+   `JWT_SECRET="$(openssl rand -hex 32)"` (or `head -c 32 /dev/urandom | base64`).
+2. Make `config.toml` read it from env rather than hardcoding — add under `[auth]`:
+   ```toml
+   [auth]
+   jwt_secret = "env(SUPABASE_AUTH_JWT_SECRET)"
+   ```
+   and export `SUPABASE_AUTH_JWT_SECRET="$JWT_SECRET"` (or place it in the project-root `.env` the CLI
+   reads) **before** calling `supabase start`. (Literal-in-toml also works but persists the secret in
+   a tracked file — prefer `env()`.)
+3. `supabase start` (already pinned v2.105.0). The CLI mints `anon`/`service_role` HS256-signed by our
+   secret automatically — no container re-keying, no post-start re-mint.
+4. Read keys as today: `supabase status -o env` ⇒ `ANON_KEY` / `SERVICE_ROLE_KEY` are now ours.
+5. If `supabase start` was already run once with the old/empty secret, the change takes effect after
+   **`supabase stop && supabase start`** (config is read at start; a restart reloads it). `db reset` is
+   NOT required for key generation (it concerns DB state, not key minting).
+6. Optional hardening: also set `auth.publishable_key` / `auth.secret_key` (else they stay demo
+   constants), and/or move to `signing_keys_path` asymmetric keys later.
+
+**UNVERIFIED / needs VM confirmation:**
+- That a fresh `supabase start` with `auth.jwt_secret` set propagates the new secret to **all** local
+  containers our agents hit (GoTrue, PostgREST/Kong) in one shot — the source says the CLI owns that
+  wiring, but we have not empirically run `supabase status -o env` + a `service_role` smoke against the
+  local `/rest`/`/auth` with a custom secret on the VM. Confirm by diffing the emitted `ANON_KEY`
+  against the known demo string and authenticating once.
+- The exact earliest CLI tag that introduced `auth.jwt_secret` as a config key (moot — present at our
+  pinned v2.105.0).
+- The live config-doc page (`/docs/guides/local-development/cli/config`) 404'd during this pass; the
+  config keys above are sourced from CLI **source at the v2.105.0 tag**, which is authoritative for our
+  pin. If a doc-prose citation is later needed, that page (rendered) is the home for these keys.
+
+### Addendum sources (official only)
+- [supabase/cli `apps/cli-go/pkg/config/apikeys.go` @ v2.105.0](https://github.com/supabase/cli/blob/v2.105.0/apps/cli-go/pkg/config/apikeys.go) — key generation + demo constants
+- [supabase/cli `apps/cli-go/pkg/config/auth.go` @ v2.105.0](https://github.com/supabase/cli/blob/v2.105.0/apps/cli-go/pkg/config/auth.go) — `[auth]` struct (`jwt_secret`, `anon_key`, `service_role_key`, `publishable_key`, `secret_key`, `signing_keys_path`)
+- [Managing config and secrets | Supabase Docs](https://supabase.com/docs/guides/local-development/managing-config) — `env(VAR)` interpolation + `.env` at project root
+- [supabase gen signing-key | CLI Reference](https://supabase.com/docs/reference/cli/supabase-gen-signing-key) — `--algorithm ES256|RS256`, `--append`
+- [supabase/cli issue #4726](https://github.com/supabase/cli/issues/4726) — default flipped HS256→ES256 in v2.71.1; `jwt_algorithm` request

@@ -13,6 +13,35 @@ Last updated: 2026-06-15.
 
 ## Current Change Log
 
+### 2026-06-15 - BATCH-SB1 / B-MVP-012: per-install Supabase JWT secret (kill the public demo keys)
+
+Status: IMPL DONE on host (verified); VM key-minting propagation is the LV1 proof step.
+
+Operator decision: fresh installs are cheap (2 images) → fix at INSTALL time so a fresh install never
+comes up on the public demo keys; no in-place rotation of a running prod DB needed.
+
+Root mechanism (verified against the Supabase CLI source at the PINNED tag v2.105.0 —
+`apps/cli-go/pkg/config/apikeys.go`+`auth.go`): the CLI HS256-mints local `anon`/`service_role` over
+`auth.jwt_secret`; when empty it falls back to the public demo secret
+(`super-secret-jwt-token-with-at-least-32-characters-long`), so `supabase status` emits the well-known
+PUBLIC keys. Our `config.toml [auth]` had no `jwt_secret` → demo keys. (Research addendum in
+`docs/research/supabase-default-key-remediation.md`.)
+
+Fix (config-time, no container hand-re-keying — the CLI owns GoTrue/PostgREST/Kong wiring):
+- `supabase/config.toml [auth]`: `jwt_secret = "env(SUPABASE_AUTH_JWT_SECRET)"`.
+- `scripts/setup-supabase.sh`: new `ensure_jwt_secret()` (runs before `ensure_config_toml`/`supabase_start`)
+  generates a per-install 256-bit secret (`openssl rand -hex 32`), persists it to `supabase/.env`
+  (chmod 600, gitignored) which the CLI auto-loads on EVERY `supabase start` (keys stable across restarts,
+  incl. manual ones), and exports it. Idempotent: explicit env wins, else reuse persisted, else generate.
+  Refuses the public demo secret. Plus a `capture_credentials` GUARD that DIES if `supabase status` still
+  emits the known demo anon/service_role JWTs — a default-key install is impossible (fails loud, not silent).
+- Verified on host: bash -n OK; `supabase/.env` gitignored; generate→persist(600)→reuse-stable→demo-reject
+  all pass (extracted-logic harness).
+
+UNVERIFIED (VM proof, folds into B-MVP-019/LV1): confirm a fresh `supabase start` with the custom secret
+propagates to all CLI-managed containers in one shot — diff emitted `ANON_KEY` vs the demo constant +
+one `service_role` smoke against local `/rest`. `db reset` not needed; `supabase stop && start` reloads.
+
 ### 2026-06-15 - windows-triage-mcp restored + re-bound as external add-on (add-on contract proof #2)
 
 Status: DONE (landed on local `main`; not pushed). Self-provisioning add-on (operator decision).
@@ -336,7 +365,7 @@ Next:
 | --- | --- | --- | --- | --- |
 | B-MVP-002 | Backlog | OPEN | Rename repo to `ProtocolSiftGateway` is decided at architecture level; CL2 pending operator/infra timing. | BATCH-CL2 |
 | B-MVP-006 | Backlog | OPEN | Confirm portal knowledge-document policy for shared/reference-only behavior in PT2. | BATCH-PT2 |
-| B-MVP-012 | Backlog | OPEN | DECISION (2026-06-14): research-first. Research a lighter remediation for the default `supabase` CLI demo JWT secret + anon/service_role keys (rotate/re-mint in place post-install) that avoids a full self-managed compose; compose is the fallback only if rotation is insufficient. No install may run with the public demo keys. | BATCH-SB1 |
+| B-MVP-012 | Backlog | DONE | 2026-06-15: resolved at INSTALL time (operator: fresh installs are cheap, 2 images). NOT a self-managed compose. `supabase/config.toml [auth] jwt_secret = env(SUPABASE_AUTH_JWT_SECRET)` + `setup-supabase.sh ensure_jwt_secret()` generates a per-install 256-bit secret, persists to gitignored `supabase/.env` (CLI auto-loads on every start), and a `capture_credentials` guard DIES if `supabase status` still emits the known demo anon/service_role keys → default-key install impossible. Mechanism verified vs CLI source @v2.105.0; host-verified (gen/persist/reuse/demo-reject). VM key-minting propagation proof folds into B-MVP-019/LV1. | BATCH-SB1 |
 | B-MVP-019 | Backlog | OPEN | Ensure add-on register path fields are sourced from staged `/opt/sift-mcps` paths for first real add-on launch. | BATCH-LV1 |
 | B-MVP-023 | Backlog | OPEN | DECISION (2026-06-14): REMOVE. Delete the `legacy_portal_session_enabled` fallback and sweep + delete any remaining legacy code paths/tests (operator: remove anything legacy still in code). | BATCH-CL2 |
 | B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green + committed 4ee3d1f pushed to origin/main 2026-06-14. | BATCH-R3-* |

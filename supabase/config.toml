@@ -87,6 +87,11 @@ max_indexes = 5
 # ── Auth (GoTrue) ─────────────────────────────────────────────────────────────
 [auth]
 enabled = true
+# SB1 (B-MVP-012): per-install JWT secret so the CLI HS256-mints UNIQUE anon/
+# service_role keys instead of the well-known PUBLIC demo keys. Generated +
+# persisted to supabase/.env by scripts/setup-supabase.sh; the CLI auto-loads
+# that .env on every `supabase start`, so keys stay stable across restarts.
+jwt_secret = "env(SUPABASE_AUTH_JWT_SECRET)"
 site_url = "http://127.0.0.1:54321"
 additional_redirect_urls = []
 # AUT2-B0: 48-hour tokens for autonomous forensic agent sessions.
