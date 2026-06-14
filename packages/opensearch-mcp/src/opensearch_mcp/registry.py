@@ -150,6 +150,12 @@ class SearchIn(CaseScopedQueryBase):
             "for full docs (prefer opensearch_get_event for one doc)."
         ),
     )
+    # B-MVP-029: search now spills large result sets to <case>/agent/searches/.
+    # That write needs the DB-authoritative case directory, which the Gateway
+    # only injects when the tool's input schema advertises a case_dir field
+    # (sift_gateway.server schema-gated injection). Exposing it here also lets
+    # the index scope to the exact active case instead of the case-* fallback.
+    case_dir: str = _case_dir_field()
 
     @field_validator("sort")
     @classmethod

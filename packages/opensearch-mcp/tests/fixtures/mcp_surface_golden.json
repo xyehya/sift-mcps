@@ -132,6 +132,12 @@
       "description": "Search indexed evidence with query_string syntax. Use for targeted lookups by indicator, user, IP, hash, or field value. Do not use for frequency counts (use opensearch_aggregate) or activity spikes (use opensearch_timeline); for one full document use opensearch_get_event. Example: opensearch_search(query='event.code:4688 AND process.name:*powershell*', case_id='rocba-drive-20260526-1417').",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "case_id": {
             "default": "",
             "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
