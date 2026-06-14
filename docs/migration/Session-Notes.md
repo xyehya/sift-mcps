@@ -13,6 +13,37 @@ Last updated: 2026-06-15.
 
 ## Current Change Log
 
+### 2026-06-15 - windows-triage-mcp restored + re-bound as external add-on (add-on contract proof #2)
+
+Status: DONE (landed on local `main`; not pushed). Self-provisioning add-on (operator decision).
+
+Restored the windows-triage-mcp package (removed by BATCH-NW2 `77dfb58`) and re-bound it to the
+gateway via the Backend Contract as the SECOND conformant add-on after opencti — a query-only OFFLINE
+**known-good/known-bad baseline** database backend (LOLBAS / LOLDrivers / HijackLibs / process
+expectations; namespace `wintriage`, global reference plane, no case_dir). Exercises the add-on
+spec→registration→binding chain end to end.
+
+- **Restore:** `git checkout 77dfb58^ -- packages/windows-triage-mcp/` (46 files; byte-identical to the
+  `sift-mcps-v1` backup — confirmed). Manifest already spec_version 1.0 conformant (matches the opencti
+  gold standard).
+- **Bug fix:** collapsed a package-wide doubled-module typo `windows_triage_mcp_mcp` → `windows_triage_mcp`
+  (14 files incl. `scripts/__main__.py`, `config.py`, `exceptions.py`, `analysis/*`, `db/*`) that broke
+  `python -m windows_triage_mcp.scripts.*`; package now `compileall`-clean.
+- **Re-bind (reverse the NW2 gateway/workspace removals, opensearch stays decoupled):**
+  `pyproject.toml` (`windows-triage-mcp` workspace source + opt-in `windows-triage` extra, NOT in
+  `standard` — mirrors opencti); `sift_common/instructions.py` (restore `WINDOWS_TRIAGE` constant only —
+  opensearch `enrich_triage`→`enrich_intel` decoupling left intact); `test_phase6.py` (windows-triage-mcp
+  back in shipped-manifests + reference-backends sets); restored `test_windows_triage_backend.py`.
+- **External discipline preserved:** AD2 conformance (`test_ad2_addon_conformance`) still green — core
+  installer seeds NO wintriage; it is operator-registered only. install.sh left untouched (no core wiring).
+- **Registration + provisioning:** restored `setup_wintriage()` in `scripts/setup-addon.sh` (menu 4;
+  `a`→"1 2 3 4") as a SELF-PROVISIONING add-on — it calls the package's OWN
+  `windows_triage_mcp.scripts.download_databases`, not the (deleted) install.sh `download_triage_databases`.
+  env_refs only (`SIFT_WINDOWS_TRIAGE_DB_DIR` name→name, gateway-resolved); no raw path stored.
+
+Verification: windows-triage 24 tests; gateway phase6 + backend + ad2 + f1-opensearch-registry 59 tests;
+`compileall` clean; `bash -n` setup-addon/install OK; `git diff --check` clean; both doc validators pass.
+
 ### 2026-06-15 - Backlog parallel sweep: B-MVP-027 + B-MVP-030 + B-MVP-032 (3-worktree orchestration)
 
 Status: DONE (landed on local `main`; not pushed)

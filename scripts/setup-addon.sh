@@ -252,6 +252,33 @@ setup_rag() {
   echo_vars_and_emit
 }
 
+setup_wintriage() {
+  reset_payload
+  PAYLOAD_NAME="windows-triage-mcp"
+  PAYLOAD_MANIFEST="$REPO_DIR/packages/windows-triage-mcp/sift-backend.json"
+  log "== windows-triage-mcp (reference backend, provides: reference, baseline) =="
+  print_manifest_summary "$PAYLOAD_MANIFEST" || true
+  warn "Query-only OFFLINE Windows baseline validation (known-good/known-bad:"
+  warn "LOLBAS, LOLDrivers, HijackLibs, process expectations). UNKNOWN is neutral."
+  SIFT_WINDOWS_TRIAGE_DB_DIR="$(ask 'Triage baseline DB dir' "${SIFT_WINDOWS_TRIAGE_DB_DIR:-$SIFT_HOME/windows-triage-db}")"
+  if ask_yes "Provision prerequisites (download baseline databases via the add-on's own downloader)?"; then
+    SIFT_WINDOWS_TRIAGE_DB_DIR="$SIFT_WINDOWS_TRIAGE_DB_DIR" \
+      "$UV_BIN" run --project "$SIFT_MCPS_ROOT" --extra windows-triage \
+      python -m windows_triage_mcp.scripts.download_databases \
+      || warn "Baseline DB download incomplete — backend may start degraded (UNKNOWN-only)."
+  fi
+  warn "SIFT_WINDOWS_TRIAGE_DB_DIR is resolved from the gateway's own environment;"
+  warn "set it there before registering. No raw value is stored in the payload."
+  stdio_args "windows-triage-mcp" "windows-triage"
+  PAYLOAD_COMMAND="$UV_BIN"
+  # env_refs only (CHILD=GATEWAY name->name); the gateway resolves the DB dir from
+  # its own process env at backend startup. No raw path is stored in the payload.
+  PAYLOAD_ENV_REFS=(
+    "SIFT_WINDOWS_TRIAGE_DB_DIR=SIFT_WINDOWS_TRIAGE_DB_DIR"
+  )
+  echo_vars_and_emit
+}
+
 setup_opensearch() {
   reset_payload
   PAYLOAD_NAME="opensearch-mcp"
@@ -354,14 +381,15 @@ main_menu() {
   printf '   1) opensearch-mcp        (provides: search, ingest, enrichment; needs Docker)\n'
   printf '   2) opencti-mcp           (provides: reference, threat-intel; needs Docker + RAM)\n'
   printf '   3) forensic-rag-mcp      (provides: reference; pgvector knowledge corpus)\n'
-  printf '   4) custom / community backend (bring your own conformant manifest)\n'
-  printf '   a) all reference backends (1-3)\n'
+  printf '   4) windows-triage-mcp    (provides: reference, baseline; offline known-good/bad DBs)\n'
+  printf '   5) custom / community backend (bring your own conformant manifest)\n'
+  printf '   a) all reference backends (1-4)\n'
   printf '   q) quit\n'
   hr
   local sel
   sel="$(ask 'Selection (e.g. "1 2" or "a")' '')"
   [[ -z "$sel" || "$sel" == "q" ]] && { log "Nothing selected — exiting."; exit 0; }
-  if [[ "$sel" == "a" ]]; then sel="1 2 3"; fi
+  if [[ "$sel" == "a" ]]; then sel="1 2 3 4"; fi
   sel="${sel//,/ }"
   local tok
   for tok in $sel; do
@@ -369,7 +397,8 @@ main_menu() {
       1) setup_opensearch ;;
       2) setup_opencti ;;
       3) setup_rag ;;
-      4) setup_custom ;;
+      4) setup_wintriage ;;
+      5) setup_custom ;;
       *) warn "Unknown selection: $tok (ignored)" ;;
     esac
   done

@@ -13,6 +13,7 @@ opensearch-mcp = { workspace = true }
 rag-mcp = { workspace = true }
 opencti-mcp = { workspace = true }
 case-dashboard = { workspace = true }
+windows-triage-mcp = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -45,6 +46,9 @@ full = [
 ]
 opencti = [
     "opencti-mcp",
+]
+windows-triage = [
+    "windows-triage-mcp",
 ]
 chroma-import = [
     "rag-mcp[chroma-import]",

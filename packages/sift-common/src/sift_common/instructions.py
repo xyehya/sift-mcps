@@ -77,6 +77,17 @@ GATEWAY = (
     "- YARA SWEEPS: Run YARA only when a family/hash is known. Execute: run_command(command=['yara', '-r', '-s', 'rules.yar', 'evidence/'], save_output=True, purpose='<reasoning>'). Retrieve the hit file from the returned full_output_path (under agent/run_commands/outputN/). Report rule name, hit file path, and byte offset only. Record hits as SPECULATIVE findings pending corroboration.\n"
 )
 
+WINDOWS_TRIAGE = (
+    "Baseline validation service for Windows artifacts. "
+    "Returns SUSPICIOUS, EXPECTED_LOLBIN, EXPECTED, or UNKNOWN for files, processes, "
+    "services, drivers, and autorun entries. UNKNOWN means 'not in the "
+    "baseline database' — it is a neutral result, not an indicator of "
+    "malice. Do not escalate based on UNKNOWN alone. "
+    "When presenting triage results as findings, use the evidence "
+    "format: Source, Extraction, Content, Observation, Interpretation, "
+    "Confidence. Ask the human to review before concluding."
+)
+
 FORENSIC_RAG = (
     "Forensic knowledge search. Query for tool documentation, artifact "
     "interpretation guides, and investigation procedures. Results are "

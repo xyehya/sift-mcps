@@ -1,0 +1,112 @@
+{
+  "spec_version": "1.0",
+  "name": "windows-triage-mcp",
+  "version": "1.0.0",
+  "tier": "addon",
+  "transport": "stdio",
+  "namespace": "wintriage",
+  "instructions": "Use this backend for offline Windows baseline checks. UNKNOWN means not present in the local baseline and is neutral unless case evidence adds suspicion.",
+  "authority_contract": {
+    "non_authoritative": true,
+    "plane": "reference",
+    "authority_disclaimer": "This add-on is a derived/reference plane. It queries local offline baselines only and does not authorize cases, seal evidence, approve findings, approve reports, or bypass Gateway. All baseline verdicts are supporting context only.",
+    "prohibited_operations": [
+      "create_case",
+      "activate_case",
+      "seal_evidence",
+      "register_evidence",
+      "approve_finding",
+      "reject_finding",
+      "approve_report",
+      "include_in_report",
+      "issue_agent_credential",
+      "bypass_gateway"
+    ],
+    "query_only": true
+  },
+  "capabilities": {
+    "provides": ["reference", "baseline"],
+    "requires": [],
+    "enriches_responses": false
+  },
+  "tools": [
+    {
+      "name": "wintriage_check_artifact",
+      "description": "Validate one Windows artifact (file/hash/filename/LOLBin/DLL) against local offline baselines.",
+      "when_to_use": "Use after identifying a Windows file, hash, filename, LOLBin, driver, or DLL from case evidence.",
+      "avoid_when": "Avoid escalating UNKNOWN results without additional suspicious evidence.",
+      "output_notes": "Baseline verdicts help prioritize; they do not prove maliciousness by themselves.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
+      "category": "baseline-check",
+      "recommended_phase": "CORRELATE"
+    },
+    {
+      "name": "wintriage_check_process_tree",
+      "description": "Validate a process parent-child relationship against the Windows process tree baseline.",
+      "when_to_use": "Use when process creation evidence shows a parent/child pair that needs baseline context.",
+      "avoid_when": "Avoid treating unusual parentage as malicious without corroborating execution or user context.",
+      "output_notes": "Returns expected/suspicious baseline context for the relationship.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
+      "category": "baseline-check",
+      "recommended_phase": "CORRELATE"
+    },
+    {
+      "name": "wintriage_check_system",
+      "description": "Validate Windows persistence/system configuration (service/scheduled_task/autorun) against OS-version baselines.",
+      "when_to_use": "Use for services, scheduled tasks, autoruns, and similar Windows persistence artifacts.",
+      "output_notes": "Use results to guide deeper inspection of suspicious persistence locations.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
+      "category": "baseline-check",
+      "recommended_phase": "CORRELATE"
+    },
+    {
+      "name": "wintriage_check_registry",
+      "description": "Check a registry key or value against the full registry baseline (requires the optional 12GB known_good_registry.db).",
+      "when_to_use": "Use when registry evidence needs comparison against a known-good Windows baseline.",
+      "avoid_when": "Avoid this if the optional registry database is unavailable; use narrower checks instead.",
+      "output_notes": "Registry baseline coverage depends on the optional local database.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
+      "category": "baseline-check",
+      "recommended_phase": "CORRELATE"
+    },
+    {
+      "name": "wintriage_check_pipe",
+      "description": "Check a named pipe against known Windows pipes and known C2 framework pipes.",
+      "when_to_use": "Use when named pipe evidence appears in process, EDR, Sysmon, or memory artifacts.",
+      "output_notes": "Known C2 pipe matches are investigation pivots requiring case corroboration.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
+      "category": "baseline-check",
+      "recommended_phase": "CORRELATE"
+    },
+    {
+      "name": "wintriage_server_status",
+      "description": "Report Windows triage backend readiness (health, db_stats, or all).",
+      "when_to_use": "Use as the backend health/readiness check before relying on baseline checks.",
+      "output_notes": "Health/status output only; it is not case evidence.",
+      "read_only": true,
+      "readOnlyHint": true,
+      "evidence_class": "read_only",
+      "required_scopes": ["wintriage:read"],
+      "category": "baseline-check",
+      "recommended_phase": "SURVEY",
+      "health": true,
+      "health_args": {"resource": "health"}
+    }
+  ],
+  "health": "wintriage_server_status"
+}
