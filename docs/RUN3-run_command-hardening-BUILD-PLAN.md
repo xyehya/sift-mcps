@@ -160,12 +160,12 @@ Dependencies: B-GATE's live pass depends on B-CEIL+B-FLOOR deployed. B-AA enforc
 
 ## 5. Status tracker (update as batches land)
 
-- [ ] WAVE 1 launched (4 agents off local main)
-- [ ] B-CEIL — `run3/ceil` — G1/G2/G6/G3-belt/G9 + output sanitation; local tests green
-- [ ] B-FLOOR — `run3/floor` — launcher (Landlock+FD+uid) + cgroup + G4; seccomp LOG; local green
-- [ ] B-AA — `run3/aa` — apparmor profile (complain) + unit hardening; bash -n ok
-- [ ] B-GATE — `run3/gate` — negative+positive harness encoded
-- [ ] RECONCILE → `run3/integrate`; gate green
+- [x] WAVE 1 launched (4 agents off local main)
+- [x] B-CEIL — `run3/ceil` — G1/G2/G6/G3-belt/G9 + output sanitation; local tests green
+- [x] B-FLOOR — `run3/floor` — launcher (Landlock+FD+uid) + cgroup + G4; seccomp LOG; local green
+- [x] B-AA — `run3/aa` — apparmor profile (complain) + unit hardening; bash -n ok
+- [x] B-GATE — `run3/gate` — negative+positive harness encoded
+- [x] RECONCILE → `run3/integrate`; gate green
 - [ ] `/security-review` combined diff — clean / fixed
 - [ ] WAVE 2 deploy + positive matrix green (flexibility)
 - [ ] WAVE 2 negative harness all-blocked

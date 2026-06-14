@@ -2068,6 +2068,18 @@ execute = cfg.setdefault("execute", {})
 if isinstance(execute, dict) and "runtime_user" not in execute:
     execute["runtime_user"] = os.environ.get("SIFT_EXECUTE_AS_USER") or "agent_runtime"
     changed = True
+if isinstance(execute, dict):
+    security = execute.setdefault("security", {})
+    if isinstance(security, dict):
+        if security.get("mode") != "allowlist":
+            security["mode"] = "allowlist"
+            changed = True
+        if security.get("allowed_binaries") in (None, [], ()):
+            security["allowed_binaries"] = ["@mvp_forensic"]
+            changed = True
+        if security.get("unlisted_policy") != "contained":
+            security["unlisted_policy"] = "contained"
+            changed = True
 
 # Backend arg normalisation (ensure --python, --no-managed-python, --no-python-downloads)
 root = os.environ.get("SIFT_MCPS_ROOT") or ""

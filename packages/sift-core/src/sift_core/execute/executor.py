@@ -73,10 +73,11 @@ def _systemd_scope_command(
     *,
     timeout: int,
     memory_limit_bytes: int,
-) -> list[str]:
+    runtime_user: str = "",
+) -> tuple[list[str], bool]:
     mode = _systemd_scope_mode()
     if mode == "off" or os.name != "posix":
-        return worker_cmd
+        return worker_cmd, False
 
     systemd_run = shutil.which("systemd-run")
     if not systemd_run:
@@ -86,7 +87,7 @@ def _systemd_scope_command(
     if not systemd_run:
         if mode == "auto":
             logger.warning("systemd-run requested in auto mode but not found; using direct worker")
-            return worker_cmd
+            return worker_cmd, False
         raise ExecutionError(
             "SIFT run_command cgroup isolation was requested, but systemd-run "
             "was not found. Install systemd-run or disable only for local dev "
@@ -106,9 +107,17 @@ def _systemd_scope_command(
         "IPAccounting=yes",
     ]
     scope_cmd = [systemd_run, "--scope", "--quiet", "--collect"]
+    runtime_user_applied = False
+    if runtime_user:
+        scope_cmd.extend(["--uid", runtime_user])
+        try:
+            scope_cmd.extend(["--gid", str(pwd.getpwnam(runtime_user).pw_gid)])
+        except KeyError:
+            pass
+        runtime_user_applied = True
     for prop in props:
         scope_cmd.extend(["-p", prop])
-    return [*scope_cmd, "--", *worker_cmd]
+    return [*scope_cmd, "--", *worker_cmd], runtime_user_applied
 
 
 def _launcher_requested(runtime_user: str) -> bool:
@@ -152,11 +161,13 @@ def _run_isolated_worker(
         payload["cmd"] = cmd_list
         cmd_str = " ".join(cmd_list)
 
-    worker_cmd = _systemd_scope_command(
+    worker_cmd, runtime_user_already_applied = _systemd_scope_command(
         [sys.executable, "-m", "sift_core.execute.worker"],
         timeout=timeout,
         memory_limit_bytes=memory_limit_bytes,
+        runtime_user=runtime_user,
     )
+    payload["runtime_user_already_applied"] = runtime_user_already_applied
     logger.debug("Starting native user execution worker: %s", cmd_str)
     # K5 authority isolation: the worker subprocess (and, downstream, the
     # forensic tool it launches) must not inherit DB DSNs, Supabase/service-role
@@ -234,6 +245,9 @@ def _native_runtime_identity(config) -> tuple[str, str]:
             "Create it with scripts/setup-agent-runtime.sh or set "
             "execute.runtime_user to a valid restricted account."
         ) from exc
+
+    if _systemd_scope_mode() != "off":
+        return runtime_user, ""
 
     sudo_path = shutil.which("sudo") or "/usr/bin/sudo"
     if not Path(sudo_path).exists():

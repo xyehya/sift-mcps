@@ -229,7 +229,9 @@ def test_required_runtime_user_rejects_service_user(monkeypatch):
 
 def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
     import json
+    import pwd
     import subprocess
+    from types import SimpleNamespace
 
     from sift_core.execute import executor as executor_module
     from sift_core.execute.executor import _run_isolated_worker
@@ -240,6 +242,7 @@ def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
         "which",
         lambda cmd: "/usr/bin/systemd-run" if cmd == "systemd-run" else None,
     )
+    monkeypatch.setattr(pwd, "getpwnam", lambda name: SimpleNamespace(pw_gid=995))
 
     captured = {}
 
@@ -268,6 +271,10 @@ def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
     cmd = captured["cmd"]
     assert res["stdout"] == "scope-ok"
     assert cmd[:4] == ["/usr/bin/systemd-run", "--scope", "--quiet", "--collect"]
+    assert "--uid" in cmd
+    assert cmd[cmd.index("--uid") + 1] == "agent_runtime"
+    assert "--gid" in cmd
+    assert cmd[cmd.index("--gid") + 1] == "995"
     assert "-p" in cmd
     assert "MemoryHigh=3G" in cmd
     assert "MemoryMax=4G" in cmd
@@ -279,6 +286,7 @@ def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
     sep = cmd.index("--")
     assert cmd[sep + 1 : sep + 4] == [sys.executable, "-m", "sift_core.execute.worker"]
     assert captured["payload"]["launcher_enabled"] is True
+    assert captured["payload"]["runtime_user_already_applied"] is True
 
 
 def test_native_runtime_user_requires_existing_local_account(monkeypatch):
@@ -346,6 +354,52 @@ def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
     assert policy["runtime_user"] == "agent_runtime"
     assert policy["seccomp_mode"] == "log"
     assert policy["require_landlock"] is False
+
+
+def test_worker_skips_inner_sudo_when_runtime_user_already_applied(monkeypatch):
+    calls = []
+
+    class FakeProcess:
+        pid = 12345
+        returncode = 0
+        stdout = io.BytesIO(b"ok\n")
+        stderr = io.BytesIO(b"")
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+        def poll(self):
+            return self.returncode
+
+    def fake_popen(cmd, **kwargs):
+        calls.append(cmd)
+        return FakeProcess()
+
+    monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
+
+    result = worker._execute_payload(
+        {
+            "cmd": ["/usr/bin/id"],
+            "runtime_user": "agent_runtime",
+            "runtime_user_already_applied": True,
+            "sudo_path": "/usr/bin/sudo",
+            "timeout": 5,
+            "cwd": None,
+            "max_output_bytes": 1024,
+            "memory_limit_bytes": 0,
+        }
+    )
+
+    assert result["stdout"] == "ok\n"
+    assert calls[0][:3] == [
+        sys.executable,
+        "-m",
+        "sift_core.execute.dfir_exec_launcher",
+    ]
+    assert "/usr/bin/sudo" not in calls[0]
 
 
 def test_sudo_validation_rules(tmp_path, monkeypatch):
@@ -782,6 +836,30 @@ def test_native_runtime_fails_when_sudo_missing(monkeypatch):
 
     with pytest.raises(ExecutionError, match="requires sudo"):
         execute(["date"])
+
+
+def test_scoped_runtime_identity_does_not_require_sudo(monkeypatch):
+    import pwd
+    from types import SimpleNamespace
+
+    from sift_core.execute import executor as executor_module
+
+    monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "agent_runtime")
+    monkeypatch.setenv("SIFT_EXECUTE_SYSTEMD_SCOPE", "1")
+    monkeypatch.setattr(
+        pwd,
+        "getpwnam",
+        lambda name: SimpleNamespace(pw_uid=995, pw_gid=995),
+    )
+    monkeypatch.setattr(executor_module.shutil, "which", lambda cmd: None)
+    monkeypatch.setattr(executor_module.Path, "exists", lambda self: False)
+
+    runtime_user, sudo_path = executor_module._native_runtime_identity(
+        executor_module.get_config()
+    )
+
+    assert runtime_user == "agent_runtime"
+    assert sudo_path == ""
 
 
 def test_stages_auditing(tmp_path, monkeypatch):

@@ -16,19 +16,21 @@ case:
 
 execute:
   # Native Linux user isolation for run_command. The gateway validates the
-  # structured command plan, then launches each resolved binary as this
-  # low-privilege local account with sudo -n -u <runtime_user> -- <binary>.
-  # Host ACLs must grant this user read access to evidence and write access
-  # only to case agent/, extractions/, and tmp/. Use "__current__" only for
-  # local development tests.
+  # structured command plan, then launches the short-lived execution worker in a
+  # transient systemd scope as this low-privilege local account. Host ACLs must
+  # grant this user read access to evidence and write access only to case
+  # agent/, extractions/, and tmp/. Use "__current__" only for local development
+  # tests.
   runtime_user: "${SIFT_EXECUTE_AS_USER}"
   security:
-    # Denylist-default executor policy. Operators may add entries here, but
+    # Allowlist-default executor policy. Operators may add entries here, but
     # the gateway always unions this with a non-weakenable built-in deny floor.
-    # Set mode: "allowlist" to permit only allowed_binaries, after the deny
-    # floor is applied. Default: "denylist".
-    mode: "denylist"
-    allowed_binaries: []
+    # Unlisted non-denied forensic binaries run in the contained kernel-jailed
+    # tier; they are never blocked waiting for human approval.
+    mode: "allowlist"
+    allowed_binaries:
+      - "@mvp_forensic"
+    unlisted_policy: "contained"
     dangerous_flags:
       - "-e"
       - "--exec"

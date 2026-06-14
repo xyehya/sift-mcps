@@ -1,7 +1,8 @@
 """Tiny launcher for kernel-constrained ``run_command`` tool execution.
 
-The worker invokes this module as an argv wrapper after any sudo runtime-user
-transition has already happened. The launcher then closes inherited file
+The worker invokes this module as an argv wrapper after the runtime-user
+transition has already happened, normally through the transient systemd scope
+and with sudo kept only as a non-scoped fallback. The launcher then closes inherited file
 descriptors, applies local process limits, asserts it is not running as root or
 the service uid, enables no-new-privs, installs Landlock/seccomp, and execs the
 real forensic tool.

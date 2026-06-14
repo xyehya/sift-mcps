@@ -44,6 +44,10 @@ EnvironmentFile=-${SIFT_HOME}/control-plane.env
 EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env
 Environment=UV_NO_MANAGED_PYTHON=1
 Environment=UV_PYTHON_DOWNLOADS=never
+Environment=SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1
+Environment=SIFT_EXECUTE_REQUIRE_LANDLOCK=1
+Environment=SIFT_EXECUTE_SYSTEMD_SCOPE=1
+Environment=SIFT_EXECUTE_SECCOMP_MODE=log
 # B-MVP-015 / B-MVP-004 (D3): the worker re-embeds for ingest-time RAG paths and
 # memory-symbol work; point its HF cache at the service home and pin the model.
 Environment=HF_HOME=${SIFT_HF_HOME}

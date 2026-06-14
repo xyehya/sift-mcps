@@ -99,6 +99,11 @@ def sanitize_untrusted_output_text(text: str) -> str:
     return _CONTROL_CHARS_RE.sub("", text)
 
 
+def strip_untrusted_output_controls(text: str) -> str:
+    """Stable acceptance-gate alias for untrusted tool-output sanitation."""
+    return sanitize_untrusted_output_text(text)
+
+
 def _label_untrusted_text(text: str) -> str:
     if not text or text.startswith(UNTRUSTED_OUTPUT_LABEL):
         return text

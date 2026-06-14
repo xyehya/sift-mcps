@@ -100,6 +100,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     memory_limit_bytes = int(payload.get("memory_limit_bytes") or 0)
     runtime_user = str(payload.get("runtime_user") or "").strip()
     sudo_path = str(payload.get("sudo_path") or "/usr/bin/sudo").strip()
+    runtime_user_already_applied = bool(payload.get("runtime_user_already_applied"))
     launcher_enabled = bool(payload.get("launcher_enabled", bool(runtime_user)))
     launcher_required = bool(payload.get("launcher_required"))
     require_landlock = bool(payload.get("require_landlock"))
@@ -187,6 +188,9 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if vol_symbols_dir:
                 original_argv = _inject_vol_symbol_dir(original_argv, vol_symbols_dir)
             stage_runtime_user = str(stage.get("runtime_user", runtime_user) or "").strip()
+            stage_user_already_applied = (
+                runtime_user_already_applied and stage_runtime_user == runtime_user
+            )
             launch_argv = _argv_for_launcher(
                 original_argv,
                 runtime_user=stage_runtime_user,
@@ -203,7 +207,9 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 vol_symbols_dir=vol_symbols_dir,
             )
             argv = _argv_for_runtime_user(
-                launch_argv, stage_runtime_user, sudo_path,
+                launch_argv,
+                "" if stage_user_already_applied else stage_runtime_user,
+                sudo_path,
                 env_overrides=env_overrides,
             )
             redirects = stage["redirects"]

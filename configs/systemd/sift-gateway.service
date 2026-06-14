@@ -46,12 +46,16 @@ EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env
 Environment=HF_HOME=${SIFT_HF_HOME}
 Environment=RAG_MODEL_NAME=${SIFT_RAG_MODEL_NAME}
 Environment=RAG_MODEL_REVISION=${SIFT_RAG_MODEL_REVISION}
+Environment=SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1
+Environment=SIFT_EXECUTE_REQUIRE_LANDLOCK=1
+Environment=SIFT_EXECUTE_SYSTEMD_SCOPE=1
+Environment=SIFT_EXECUTE_SECCOMP_MODE=log
 
 # === BATCH-HR3 systemd hardening ============================================
 # Minimal, tested containment for a service that (a) spawns forensic tooling via
-# `sudo -n -u agent_runtime` for run_command, and (b) mounts forensic images via
-# FUSE/sudo for ingest. Those two facts forbid the strongest directives:
-#   - NoNewPrivileges=yes would break `sudo` (run_command isolation) -> OMITTED.
+# RUN-3 systemd-run/dfir-exec-launcher for run_command, and (b) mounts forensic
+# images via FUSE/sudo for ingest. The ingest fact still forbids the strongest directives:
+#   - NoNewPrivileges=yes would break ingest sudo paths -> OMITTED.
 #   - PrivateDevices/RestrictNamespaces/SystemCallFilter=@system-service can break
 #     FUSE mounts and the sudo transition -> OMITTED (documented residual risk).
 # What is safe and applied (verified: /health=ok, ingest mount, run_command smoke):
@@ -81,13 +85,9 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 #    by install.sh configure_immutable_capability so the gateway can set/clear the
 #    +i flag on sealed evidence). A file-capability binary cannot exec if its caps
 #    are outside the unit bounding set -> status=203/EXEC "Operation not permitted".
-#  - CAP_SETUID/CAP_SETGID/CAP_SETPCAP/CAP_AUDIT_WRITE: the caps `sudo -n -u
-#    agent_runtime` needs for run_command's privilege drop. The bounding set caps a
-#    setuid child too, so even with NoNewPrivileges OFF, omitting these makes EVERY
-#    run_command fail with "sudo: unable to change to root gid: Operation not
-#    permitted" + "error initializing audit plugin sudoers_audit" (BATCH-LV1 caught
-#    this — HR3's immutable-only set silently killed the entire run_command surface).
-#    Verified minimal via systemd-run sandbox replication.
+#  - CAP_SETUID/CAP_SETGID/CAP_SETPCAP/CAP_AUDIT_WRITE: retained for the existing
+#    ingest/mount sudo paths owned by this broader gateway unit. RUN-3 run_command
+#    itself now uses transient systemd scopes plus dfir-exec-launcher.
 CapabilityBoundingSet=CAP_LINUX_IMMUTABLE CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_AUDIT_WRITE
 # MemoryDenyWriteExecute is NOT set: CPython/torch JITs and some native extensions
 # allocate W+X pages; enabling it crashes the embedder. Documented exclusion.
