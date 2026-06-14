@@ -302,6 +302,10 @@ def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
     cmd = captured["cmd"]
     assert res["stdout"] == "scope-ok"
     assert cmd[:4] == ["/usr/bin/systemd-run", "--scope", "--quiet", "--collect"]
+    unit_args = [item for item in cmd if item.startswith("--unit=")]
+    assert len(unit_args) == 1
+    assert unit_args[0].startswith("--unit=sift-run-command-")
+    assert unit_args[0].endswith(".scope")
     assert "--uid" in cmd
     assert cmd[cmd.index("--uid") + 1] == "agent_runtime"
     assert "--gid" in cmd

@@ -17,6 +17,10 @@ runtime identity. If sudoers is used instead, allow only `/usr/bin/systemd-run`
 for the fixed RUN-3 scope wrapper shape; do not grant broad shell, editor, or
 `ALL` command rights.
 
+The native installer renders `configs/polkit/50-sift-run-command-systemd-run.rules`
+to `/etc/polkit-1/rules.d/` for the configured service user. The rule authorizes
+only `sift-run-command-*.scope` transient units.
+
 Any grant must be validated with `visudo -c` or polkit syntax checks, a
 non-interactive `sudo -n`/scope smoke, and a post-run `systemctl status` check.
 The AppArmor profile remains complain-mode until this scope path and the

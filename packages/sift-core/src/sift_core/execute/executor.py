@@ -106,7 +106,14 @@ def _systemd_scope_command(
         "IOAccounting=yes",
         "IPAccounting=yes",
     ]
-    scope_cmd = [systemd_run, "--scope", "--quiet", "--collect"]
+    unit_name = f"sift-run-command-{os.getpid()}-{time.monotonic_ns()}.scope"
+    scope_cmd = [
+        systemd_run,
+        "--scope",
+        "--quiet",
+        "--collect",
+        f"--unit={unit_name}",
+    ]
     runtime_user_applied = False
     if runtime_user:
         scope_cmd.extend(["--uid", runtime_user])

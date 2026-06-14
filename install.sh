@@ -2916,6 +2916,32 @@ configure_apparmor() {
   log "AppArmor profiles installed (complain mode)."
 }
 
+configure_run_command_polkit() {
+  local rules_src="${REPO_DIR}/configs/polkit/50-sift-run-command-systemd-run.rules"
+  local rules_dir="/etc/polkit-1/rules.d"
+  local rules_dst="${rules_dir}/50-sift-run-command-systemd-run.rules"
+  if [[ ! -f "$rules_src" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$rules_dir" ]]; then
+    warn "polkit rules directory not found — run_command systemd scope authorization must be configured manually."
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  sed "s|@@SIFT_GATEWAY_SERVICE_USER@@|${SIFT_GATEWAY_SERVICE_USER}|g" \
+    "$rules_src" > "$tmp"
+  sudo_if_needed cp "$tmp" "$rules_dst"
+  rm -f "$tmp"
+  sudo_if_needed chmod 644 "$rules_dst"
+  sudo_if_needed chown root:root "$rules_dst" 2>/dev/null || true
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo_if_needed systemctl reload polkit.service 2>/dev/null || \
+      sudo_if_needed systemctl restart polkit.service 2>/dev/null || true
+  fi
+  log "RUN-3 run_command polkit scope rule installed."
+}
+
 # =============================================================================
 # Phase 14 — summary
 # =============================================================================
@@ -3383,6 +3409,7 @@ main() {
   # (User=sift-service, WantedBy=multi-user.target), so they start at boot and
   # survive operator logout without per-user lingering.
 
+  configure_run_command_polkit
   configure_immutable_capability
   configure_auditd
   configure_apparmor
