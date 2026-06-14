@@ -251,15 +251,16 @@
     },
     {
       "name": "opensearch_ingest_status",
-      "description": "Check running/recent ingest and enrichment operations for a case (\"*\" for all cases), with the per-host artifact checklist. Also the status channel for async enrichment.",
-      "when_to_use": "Use to monitor ingest progress or troubleshoot recent ingest runs (~every 30s while active); poll async enrichment with artifact_name 'intel'/'triage'.",
+      "description": "Check running/recent ingest and enrichment operations for a case (\"*\" for all cases), with the per-host artifact checklist. In DB-active mode serves the durable worker progress mirror (indexed_docs, artifacts_complete, worker_label) plus authority note pointing at job_status(job_id) for the canonical terminal result. Pass job_id (from the opensearch_ingest dispatch response) to link the mirror to the durable job record. Also the status channel for async enrichment.",
+      "when_to_use": "Use to monitor ingest progress or troubleshoot recent ingest runs (~every 30s while active); poll async enrichment with artifact_name 'intel'/'triage'. In DB-active mode, also pass job_id from the ingest response for linked status.",
       "avoid_when": "Operational status only — inspect indexed records (opensearch_search) for evidence, not this.",
-      "output_notes": "Operational status only; inspect indexed records for evidence.",
-      "output_shape": "IngestStatusOut: ingests[] of {case_id, status, pid, elapsed, total_indexed, bulk_failed, hosts_complete/total, artifacts_complete/total, log_file, checklist[], message, halt_reason, errors[], next_steps[], warnings[], details{}}, message.",
-      "response_shaping": "Returns a structured progress summary plus a log_file reference, not the raw run log.",
+      "output_notes": "In DB-active mode, ingests[] comes from the worker progress mirror; authority and job_id fields link to the canonical durable job. Inspect indexed records for evidence.",
+      "output_shape": "IngestStatusOut: ingests[] of {case_id, status, pid, elapsed, total_indexed, bulk_failed, hosts_complete/total, artifacts_complete/total, log_file, checklist[], message, halt_reason, errors[], next_steps[], warnings[], details{}}, message, authority (DB-active mode), authority_note, job_id, next_step.",
+      "response_shaping": "Returns a structured progress summary plus a log_file reference, not the raw run log. In DB-active mode, authority_note explains the canonical source.",
       "usage_examples": [
         {"description": "Poll the active case's runs", "arguments": {}},
-        {"description": "Show runs across all cases", "arguments": {"case_id": "*"}}
+        {"description": "Show runs across all cases", "arguments": {"case_id": "*"}},
+        {"description": "Poll with job_id linkage (DB-active mode)", "arguments": {"job_id": "<job_id from opensearch_ingest response>"}}
       ],
       "defer_loading": true,
       "defer_loading_rationale": "Used only while an ingest/enrich run is in flight; Tool-Search defer_loading candidate.",
