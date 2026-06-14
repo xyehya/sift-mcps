@@ -136,6 +136,96 @@ def manifest_sha256(manifest: dict[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+@dataclass(frozen=True)
+class ManifestDriftFinding:
+    """A first-party backend whose on-disk manifest no longer matches the row
+    registered in ``app.mcp_backends`` (B-MVP-032).
+
+    ``registered_sha`` is the stale ``manifest_sha256`` the gateway is still
+    serving; ``on_disk_sha`` is the sha of the current ``sift-backend.json`` on
+    disk. When they differ the install is serving a stale snapshot and new
+    manifest-declared features (e.g. ``safe_case_argument_names`` gaining
+    ``case_dir``) are silently disabled until the backend is re-registered.
+    """
+
+    name: str
+    registered_sha: str
+    on_disk_sha: str
+    detail: str | None = None
+
+    @property
+    def drifted(self) -> bool:
+        return self.registered_sha != self.on_disk_sha
+
+
+def detect_manifest_drift(
+    records: list[Any],
+    *,
+    load_manifest: Any,
+) -> list[ManifestDriftFinding]:
+    """Compare each backend's registered manifest sha to its on-disk manifest.
+
+    Pure decision logic — no DB access. ``records`` is any iterable of objects
+    exposing ``name``, ``manifest_sha256``, ``connection`` and ``enabled``.
+    ``load_manifest(name, connection)`` must return the on-disk manifest dict
+    (loaded the same way registration loaded it) or ``None`` when no on-disk
+    manifest source is resolvable (e.g. remote HTTP-only add-ons). Records with
+    no resolvable on-disk manifest are skipped — they cannot drift locally.
+
+    Only records whose recomputed on-disk sha differs from the registered sha
+    are returned, so a fresh install (shas match) yields an empty list.
+    """
+    findings: list[ManifestDriftFinding] = []
+    for record in records:
+        name = getattr(record, "name", None)
+        registered_sha = getattr(record, "manifest_sha256", None)
+        connection = getattr(record, "connection", None)
+        if not name or not registered_sha or not isinstance(connection, dict):
+            continue
+        try:
+            manifest = load_manifest(name, connection)
+        except Exception as exc:  # pragma: no cover - defensive; never block boot
+            logger.debug("manifest-drift: could not load on-disk manifest for %s: %s", name, exc)
+            continue
+        if not isinstance(manifest, dict):
+            # No locally-resolvable manifest source (remote add-on, library
+            # add-on returning None, missing file). Cannot assess local drift.
+            continue
+        on_disk_sha = manifest_sha256(manifest)
+        if on_disk_sha != str(registered_sha):
+            findings.append(
+                ManifestDriftFinding(
+                    name=str(name),
+                    registered_sha=str(registered_sha),
+                    on_disk_sha=on_disk_sha,
+                )
+            )
+    return findings
+
+
+def log_manifest_drift(
+    findings: list[ManifestDriftFinding], *, log: logging.Logger | None = None
+) -> None:
+    """Emit a clear WARNING per drifted backend (warn-and-surface, B-MVP-032).
+
+    Warn-only by design: re-registering a backend is an authority-plane write
+    that must stay an explicit operator action, so this never mutates the
+    registry. The operator re-registers (portal / installer) to clear it.
+    """
+    log = log or logger
+    for finding in findings:
+        log.warning(
+            "manifest-drift: backend '%s' on-disk sift-backend.json (sha256=%s) "
+            "does not match the registered manifest the gateway is serving "
+            "(sha256=%s). The install is serving a STALE manifest snapshot; "
+            "manifest-declared features may be silently disabled. Re-register "
+            "this backend (portal/installer) to pick up the on-disk manifest.",
+            finding.name,
+            finding.on_disk_sha,
+            finding.registered_sha,
+        )
+
+
 def _principal_type(principal: Any) -> str | None:
     if isinstance(principal, Identity):
         return "operator" if principal.principal_type == "user" else principal.principal_type
@@ -297,6 +387,36 @@ class McpBackendRegistry:
                 logger.error("Failed to create DB-registered backend %s: %s", record.name, exc)
                 self.update_health(record.name, "error", _safe_detail(str(exc)))
         return backends, loaded_at
+
+    def check_manifest_drift(
+        self, records: list[BackendRegistryRecord] | None = None
+    ) -> list[ManifestDriftFinding]:
+        """Detect & WARN on registered-vs-on-disk manifest drift (B-MVP-032).
+
+        For each enabled backend with a resolvable on-disk manifest source, the
+        on-disk ``sift-backend.json`` is loaded the same way registration loaded
+        it and its sha is compared to the registered ``manifest_sha256``. On a
+        mismatch a WARNING is emitted naming the backend and both shas. Never
+        raises and never mutates the registry — safe to call from the boot path.
+        """
+        try:
+            from sift_gateway.backends import load_and_validate_manifest
+        except Exception as exc:  # pragma: no cover - import guard
+            logger.debug("manifest-drift: manifest loader unavailable: %s", exc)
+            return []
+
+        def _load(name: str, connection: dict[str, Any]) -> dict[str, Any] | None:
+            return load_and_validate_manifest(name, resolve_runtime_config(connection))
+
+        try:
+            if records is None:
+                records = self.enabled_backends()
+            findings = detect_manifest_drift(records, load_manifest=_load)
+        except Exception as exc:  # pragma: no cover - never block boot on drift check
+            logger.debug("manifest-drift: drift check skipped: %s", exc)
+            return []
+        log_manifest_drift(findings)
+        return findings
 
     def register(
         self,

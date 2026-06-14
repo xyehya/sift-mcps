@@ -195,6 +195,14 @@ class Gateway:
                     "Loaded %d add-on backend(s) from app.mcp_backends",
                     len(self.backends),
                 )
+                # B-MVP-032: warn if any first-party backend's on-disk
+                # sift-backend.json has drifted from the registered manifest
+                # snapshot this install is serving. Warn-only: never blocks boot,
+                # never mutates the registry.
+                try:
+                    self.mcp_backend_registry.check_manifest_drift()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.debug("manifest-drift check skipped: %s", exc)
             except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
                 logger.error("Failed to load app.mcp_backends registry: %s", exc)
                 self.backends = {}
