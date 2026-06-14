@@ -75,7 +75,19 @@ def gateway_job_tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": JOB_STATUS_TOOL,
-            "description": "Read sanitized status for a durable Postgres job (run_command_job or opensearch ingest). Pass the UUID job_id returned by run_command_job or opensearch_ingest.",
+            # B-MVP-029: be accurate about what actually has a pollable UUID job_id.
+            # run_command_job always returns one. opensearch_ingest returns a
+            # durable job_id ONLY when it dispatched to a worker (status="queued");
+            # a non-dispatched ingest returns run_id/audit_id, which are NOT job_ids
+            # and will be rejected here. Real DB-job-row injection so every ingest
+            # exposes a pollable job_id is DEFERRED (depends on B-MVP-027).
+            "description": (
+                "Read sanitized status for a durable Postgres job. Pass the UUID "
+                "job_id from run_command_job, or from opensearch_ingest only when "
+                "it returned status='queued' (worker-dispatched). A plain ingest's "
+                "run_id/audit_id is NOT a job_id; confirm that ingest with "
+                "opensearch_count / opensearch_case_summary instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"job_id": {"type": "string"}},

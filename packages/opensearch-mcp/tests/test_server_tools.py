@@ -247,6 +247,59 @@ class TestStripHits:
 
 
 # ---------------------------------------------------------------------------
+# F-MVP-2 absolute-path leak neutralization (B-MVP-029 STEP 1)
+# ---------------------------------------------------------------------------
+
+
+class TestCaseRelativeRef:
+    def test_in_case_path_collapses_to_relative(self, tmp_path, monkeypatch):
+        case_dir = tmp_path / "case-x"
+        (case_dir / "evidence").mkdir(parents=True)
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+        # The Gateway-injected contextvar takes precedence over the env in
+        # active_case_dir(); bind it to this test's case so prior tests can't leak
+        # a stale injected dir.
+        srv._INJECTED_CASE_DIR.set(str(case_dir))
+        ref = srv._case_relative_ref(str(case_dir / "evidence" / "disk.E01"))
+        assert ref == "evidence/disk.E01"
+        assert not ref.startswith("/")
+
+    def test_empty_returns_none(self):
+        assert srv._case_relative_ref("") is None
+        assert srv._case_relative_ref(None) is None
+
+    def test_idx_ingest_json_error_omits_resolved_path(self, tmp_path, monkeypatch):
+        case_dir = tmp_path / "case-x"
+        (case_dir / "evidence").mkdir(parents=True)
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+        srv._INJECTED_CASE_DIR.set(str(case_dir))
+        resp = srv.idx_ingest_json(path="missing.json", hostname="h", dry_run=True)
+        assert "error" in resp
+        # The absolute resolved path must NOT be echoed back to the agent.
+        assert "resolved_path" not in resp
+        import json as _json
+
+        assert str(case_dir) not in _json.dumps(resp)
+
+    def test_host_fix_missing_case_dir_error_omits_absolute_path(self, tmp_path, monkeypatch):
+        """F-MVP-2 (F5): the host-fix 'case directory not found' error must not
+        leak the absolute case directory."""
+        missing = tmp_path / "no-such-case-dir-abc"
+        srv._INJECTED_CASE_DIR.set(str(missing))
+        try:
+            resp = srv.opensearch_host_fix(raw="a", new_canonical="b")
+        finally:
+            srv._INJECTED_CASE_DIR.set("")
+        assert "error" in resp
+        import json as _json
+
+        assert str(missing) not in _json.dumps(resp)
+        assert not any(
+            isinstance(v, str) and v.startswith("/") for v in resp.values()
+        )
+
+
+# ---------------------------------------------------------------------------
 # opensearch_search
 # ---------------------------------------------------------------------------
 
@@ -290,6 +343,94 @@ class TestIdxSearch:
         with patch.object(srv.audit, "log", return_value="audit-123"):
             resp = opensearch_search(query="*")
         assert resp["audit_id"] == "audit-123"
+
+    def test_small_result_set_has_no_autosave(self, mock_client):
+        hits = [
+            {"_id": str(i), "_index": "idx", "_source": {"event.code": 4624}}
+            for i in range(5)
+        ]
+        mock_client.search.return_value = {"hits": {"total": {"value": 5}, "hits": hits}}
+        resp = opensearch_search(query="*")
+        assert "full_path" not in resp
+        assert len(resp["results"]) == 5
+
+    def test_large_result_set_autosaves_and_returns_relative_ref(
+        self, mock_client, tmp_path, monkeypatch
+    ):
+        case_dir = tmp_path / "case-x"
+        (case_dir / "agent").mkdir(parents=True)
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+        hits = [
+            {"_id": str(i), "_index": "idx", "_source": {"event.code": 4624}}
+            for i in range(50)
+        ]
+        mock_client.search.return_value = {"hits": {"total": {"value": 50}, "hits": hits}}
+        resp = opensearch_search(query="*")
+        # Inline view is capped at the top-N; full set saved to disk.
+        assert resp["returned"] == 50
+        assert len(resp["results"]) == srv._SEARCH_INLINE_TOP_N
+        ref = resp["full_path"]
+        assert ref.startswith("agent/searches/search_")
+        assert "/" in ref and not ref.startswith("/")  # case-relative, not absolute
+        saved = case_dir / ref
+        assert saved.is_file()
+        import json as _json
+
+        with open(saved) as fh:
+            full = _json.load(fh)
+        assert len(full) == 50  # FULL set persisted, not just the inline top-N
+
+    def test_no_active_case_falls_back_to_inline_without_path(self, mock_client, monkeypatch):
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+        monkeypatch.setattr(srv, "active_case_dir", lambda: "")
+        hits = [
+            {"_id": str(i), "_index": "idx", "_source": {"event.code": 4624}}
+            for i in range(40)
+        ]
+        mock_client.search.return_value = {"hits": {"total": {"value": 40}, "hits": hits}}
+        resp = opensearch_search(query="*")
+        assert "full_path" not in resp
+        # Without a case dir to spill to, the full set stays inline (degraded).
+        assert len(resp["results"]) == 40
+
+
+class TestHoistConstantFields:
+    def test_hoists_field_constant_across_all_hits(self):
+        docs = [
+            {"_id": "1", "_index": "i", "vhir.case_id": "C1", "event.code": 4624},
+            {"_id": "2", "_index": "i", "vhir.case_id": "C1", "event.code": 4625},
+        ]
+        common, slim = srv._hoist_constant_fields(docs)
+        assert common == {"vhir.case_id": "C1"}
+        assert all("vhir.case_id" not in d for d in slim)
+        assert slim[0]["event.code"] == 4624
+
+    def test_mixed_values_are_not_hoisted(self):
+        docs = [
+            {"_id": "1", "vhir.case_id": "C1"},
+            {"_id": "2", "vhir.case_id": "C2"},
+        ]
+        common, slim = srv._hoist_constant_fields(docs)
+        assert common == {}
+        assert slim[0]["vhir.case_id"] == "C1"
+
+    def test_field_absent_from_some_hits_is_not_hoisted(self):
+        docs = [
+            {"_id": "1", "vhir.provenance_id": "P"},
+            {"_id": "2"},  # missing the candidate field
+        ]
+        common, _ = srv._hoist_constant_fields(docs)
+        assert "vhir.provenance_id" not in common
+
+    def test_search_response_hoists_common_fields(self, mock_client):
+        hits = [
+            {"_id": "1", "_index": "i", "_source": {"vhir.case_id": "C1", "x": 1}},
+            {"_id": "2", "_index": "i", "_source": {"vhir.case_id": "C1", "x": 2}},
+        ]
+        mock_client.search.return_value = {"hits": {"total": {"value": 2}, "hits": hits}}
+        resp = opensearch_search(query="*")
+        assert resp["common_fields"] == {"vhir.case_id": "C1"}
+        assert all("vhir.case_id" not in r for r in resp["results"])
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +725,33 @@ class TestIdxIngest:
         assert resp["ingests"] == []
         assert "No active" in resp["message"]
 
+    def test_ingest_status_does_not_leak_absolute_log_path(self, mock_client, monkeypatch):
+        """F-MVP-2: the on-disk status file stores an absolute ~/.sift log path;
+        opensearch_ingest_status must surface a non-absolute pointer to the agent."""
+        monkeypatch.setattr("opensearch_mcp.ingest_status.db_status_active", lambda: False)
+        roster = [
+            {
+                "case_id": "TEST-CASE",
+                "status": "running",
+                "pid": 7,
+                "run_id": "run-xyz",
+                "elapsed_seconds": 90,
+                "totals": {"indexed": 5},
+                "log_file": "/home/operator/.sift/ingest-logs/run-xyz.log",
+                "hosts": [],
+            }
+        ]
+        with patch(
+            "opensearch_mcp.ingest_status.read_active_ingests", return_value=roster
+        ):
+            resp = opensearch_ingest_status(case_id="TEST-CASE")
+        log_file = resp["ingests"][0]["log_file"]
+        assert not log_file.startswith("/")
+        assert log_file == "ingest-logs/run-xyz.log"
+        import json as _json
+
+        assert "/home/operator/.sift" not in _json.dumps(resp)
+
 
 # ---------------------------------------------------------------------------
 # opensearch_enrich_intel — async launch (UAT 2026-04-23 B79)
@@ -642,6 +810,13 @@ class TestEnrichIntelAsync:
         # Message points operators at the right status tool.
         assert "opensearch_ingest_status" in resp["message"]
         assert "intel" in resp["message"]
+        # F-MVP-2: no absolute log path leaks to the agent — neither in the
+        # structured log_file field nor embedded in the message string.
+        assert not resp["log_file"].startswith("/")
+        assert resp["log_file"] == f"ingest-logs/{resp['run_id']}.log"
+        assert "Log file:" not in resp["message"]
+        assert str(tmp_path) not in resp["message"]
+        assert str(tmp_path) not in resp["log_file"]
 
     def test_execute_respects_explicit_case_arg(self, mock_client, monkeypatch, tmp_path):
         """Explicit case_id must be passed to the worker, not silently
@@ -829,6 +1004,15 @@ class TestIdxIngestContainerDetection:
         assert len(resp.get("containers", [])) >= 1
         assert "next_step" in resp
         assert "opensearch_ingest" in resp["next_step"]
+        # F-MVP-2 (F1): the dry_run response must not leak the absolute container
+        # path — only the case-relative display path survives.
+        for c in resp["containers"]:
+            assert "path" not in c
+            assert "relative_path" in c
+            assert not str(c["relative_path"]).startswith("/")
+        import json as _json
+
+        assert str(case_dir) not in _json.dumps(resp)
 
     def test_directory_empty_returns_error(self, mock_client, tmp_path, monkeypatch):
         """Empty directory → no containers, falls through to original error."""

@@ -106,6 +106,32 @@ def active_case_dir() -> str:
     return ""
 
 
+def _case_relative_ref(path: str | os.PathLike[str] | None) -> str | None:
+    """Collapse an absolute host path to an agent-safe case-relative ref.
+
+    Several opensearch-mcp responses historically echoed the *resolved* absolute
+    filesystem path of an evidence file or a background log/dictionary back to the
+    agent (e.g. ``resolved_path``, ``log_file``, ``dict_path``). Those absolute
+    case/evidence/mount paths are F-MVP-2 invariant violations: the agent must
+    never receive a host path, and cannot act on one anyway.
+
+    This reuses the sift-core tool-boundary path sanitizer (the same logic the
+    Gateway choke point applies in ``response_guard``): an in-case path becomes a
+    case-relative display path (e.g. ``evidence/disk.E01``); any other host path
+    collapses to ``[REDACTED:absolute_path]``. ``None``/empty pass through so the
+    caller can drop the field entirely.
+    """
+    if not path:
+        return None
+    try:
+        from sift_core.execute.security import sanitize_path_value
+    except Exception:  # pragma: no cover - defensive against packaging issues
+        # Fail closed: never echo a raw absolute path if the sanitizer is absent.
+        text = str(path)
+        return text if not text.startswith("/") else "[REDACTED:absolute_path]"
+    return sanitize_path_value(str(path), case_dir=active_case_dir() or None)
+
+
 def _validate_index(index: str) -> str | None:
     """Validate all index segments start with 'case-'. Returns error or None."""
     if not index or not index.strip():
@@ -368,7 +394,14 @@ def _build_coverage_state(
             try:
                 filesystem_meta_path = str(sidecars[0].relative_to(case_dir))
             except ValueError:
-                filesystem_meta_path = str(sidecars[0])
+                # F-MVP-2: the sidecar resolved outside the case dir — never emit
+                # its absolute path to the agent. Route through the case-relative
+                # sanitizer and drop the field entirely if it can't be made
+                # non-absolute (consistent with the log_file handling).
+                _ref = _case_relative_ref(str(sidecars[0]))
+                filesystem_meta_path = (
+                    _ref if _ref and not _ref.startswith("/") else None
+                )
 
     return {
         "disk_artifacts": disk_artifacts,
@@ -634,6 +667,94 @@ _UUID_RE = _re.compile(
     _re.IGNORECASE,
 )
 
+# Search result fields that are typically constant across an entire result set
+# (provenance/case scoping injected at ingest). When every returned hit carries
+# the same value, they are hoisted into a single response header (`common_fields`)
+# instead of repeated on every hit. This is a candidate list; the hoist still
+# verifies per-call that the value is actually identical across all hits.
+_HOISTABLE_CONSTANT_FIELDS: tuple[str, ...] = (
+    "vhir.case_id",
+    "vhir.provenance_id",
+)
+
+# Marker the hoister stores per-hit-key so a hit that genuinely lacks a field is
+# never confused with a field whose value happens to equal a real document value.
+_HOIST_MISSING = object()
+
+
+def _hoist_constant_fields(
+    docs: list[dict],
+    candidate_fields: tuple[str, ...] = _HOISTABLE_CONSTANT_FIELDS,
+) -> tuple[dict, list[dict]]:
+    """Lift fields that are identical across *all* hits into one header.
+
+    Returns ``(common_fields, slim_docs)``. A candidate field is hoisted only
+    when it is present on every hit with the *same* value (the mixed/partial
+    case is left untouched so correctness is preserved). The hoisted keys are
+    stripped from each per-hit document; ``_id``/``_index`` are never hoisted.
+    """
+    if not docs:
+        return {}, docs
+
+    common: dict = {}
+    for field in candidate_fields:
+        if field in {"_id", "_index"}:
+            continue
+        first = docs[0].get(field, _HOIST_MISSING)
+        if first is _HOIST_MISSING:
+            continue
+        identical = all(hit.get(field, _HOIST_MISSING) == first for hit in docs)
+        if identical:
+            common[field] = first
+
+    if not common:
+        return {}, docs
+
+    slim_docs = [
+        {key: value for key, value in hit.items() if key not in common}
+        for hit in docs
+    ]
+    return common, slim_docs
+
+
+def _save_full_search_results(docs: list[dict]) -> str | None:
+    """Persist the full search hit set under ``<case>/agent/searches/`` and
+    return a case-relative ref (e.g. ``agent/searches/search_<uuid>.json``).
+
+    Mirrors the run_command / output-cap disk-spill pattern so a large result
+    set can be saved once and grepped/transformed on disk by the agent instead
+    of being dumped inline (PTC "query -> save -> grep" loop). Returns ``None``
+    if there is no active case dir or the write fails (the caller then degrades
+    to returning the inline top-N without a path).
+    """
+    import json as _json
+    import uuid as _uuid
+
+    case_dir = active_case_dir()
+    if not case_dir:
+        return None
+    try:
+        case_resolved = Path(case_dir).resolve()
+        out_dir = case_resolved / "agent" / "searches"
+        # Safety: stay under <case>/agent (parallels run_command + output cap).
+        if not out_dir.is_relative_to(case_resolved / "agent"):
+            return None
+        out_dir.mkdir(parents=True, exist_ok=True)
+        fname = f"search_{_uuid.uuid4().hex}.json"
+        target = out_dir / fname
+        with open(target, "w", encoding="utf-8") as fh:
+            _json.dump(docs, fh, ensure_ascii=False, default=str)
+        return f"agent/searches/{fname}"
+    except OSError as exc:  # pragma: no cover - defensive
+        logger.warning("opensearch_search: failed to persist full results: %s", exc)
+        return None
+
+
+# Above this many returned hits, opensearch_search autosaves the full set to
+# disk and returns only the top-N inline (run_command-style disk spill).
+_SEARCH_AUTOSAVE_THRESHOLD = 20
+_SEARCH_INLINE_TOP_N = 20
+
 
 def _resolve_index(index: str, case_id: str) -> str:
     """Resolve index pattern from explicit index, case_id, or active case.
@@ -819,9 +940,15 @@ def opensearch_search(
     Use for targeted lookups by indicator, user, IP, hash, or exact field value.
     Prefer opensearch_aggregate for frequency counts; prefer opensearch_timeline for activity spikes.
 
-    Returns: {hits: [{_id, _index, @timestamp, <fields>}], total, offset, truncated}
+    Returns: {results: [{_id, _index, @timestamp, <fields>}], total, returned, compact,
+      common_fields, full_path}
     Output cap: limit max 200; compact=True strips bloat fields and truncates values
       to 500 chars. Use opensearch_get_event(event_id, index) to fetch a full document.
+    Constant fields shared by every hit (e.g. vhir.case_id, vhir.provenance_id) are
+      hoisted once into common_fields instead of repeated per hit.
+    Large results: when more than 20 hits are returned, the FULL set is saved to
+      agent/searches/search_<uuid>.json (returned as the case-relative full_path) and
+      only the top 20 are inline — read/grep that file instead of re-querying.
 
     Example:
       opensearch_search(query='event.code:4688 AND process.name:*powershell*',
@@ -894,7 +1021,39 @@ def opensearch_search(
     else:
         docs = _strip_hits(result["hits"]["hits"], exclude_fields=frozenset(), max_chars=999999)
 
-    resp: dict = {"total": total, "returned": len(docs), "results": docs, "compact": compact}
+    # Hoist fields that are identical across every hit into one response header
+    # (vhir.case_id / vhir.provenance_id etc.) instead of repeating them per hit.
+    common_fields, docs = _hoist_constant_fields(docs)
+
+    # Large-result autosave: when the hit set exceeds the threshold, persist the
+    # FULL set to <case>/agent/searches/search_<uuid>.json and return only the
+    # inline top-N plus a case-relative `full_path`. Keeps a 200-hit full-doc
+    # response from flooding context (mirrors run_command save-output).
+    full_path: str | None = None
+    if len(docs) > _SEARCH_AUTOSAVE_THRESHOLD:
+        full_path = _save_full_search_results(docs)
+        if full_path:
+            inline_docs = docs[:_SEARCH_INLINE_TOP_N]
+        else:
+            inline_docs = docs
+    else:
+        inline_docs = docs
+
+    resp: dict = {
+        "total": total,
+        "returned": len(docs),
+        "results": inline_docs,
+        "compact": compact,
+    }
+    if common_fields:
+        resp["common_fields"] = common_fields
+    if full_path:
+        resp["full_path"] = full_path
+        resp["full_results_note"] = (
+            f"Full result set ({len(docs)} hits) saved to {full_path}; only the "
+            f"top {len(inline_docs)} are inline. Read or grep the saved file for "
+            "the rest instead of re-querying."
+        )
     if total_capped:
         resp["total_capped"] = True
         resp["total_note"] = f"At least {total} results. Use opensearch_count for exact total."
@@ -1697,7 +1856,9 @@ def opensearch_inspect_container(path: str, case_dir: str = "") -> dict:
 
     result: dict = {
         "path": path,
-        "resolved_path": resolved_str,
+        # F-MVP-2: never echo the absolute resolved path; collapse to a
+        # case-relative display ref (e.g. ``evidence/disk.E01``).
+        "resolved_path": _case_relative_ref(resolved_str) or path,
         "container_type": "unknown",
         "tool_available": False,
     }
@@ -2207,6 +2368,14 @@ def opensearch_ingest(
             pass
         if containers_found:
             if dry_run:
+                # F-MVP-2: each containers_found entry carries an absolute "path"
+                # needed only by the internal (non-dry-run) dispatch below. The
+                # agent-facing dry_run response must expose the case-relative
+                # display path only, so drop "path" from the response copy.
+                containers_display = [
+                    {k: v for k, v in c.items() if k != "path"}
+                    for c in containers_found
+                ]
                 return {
                     "status": "containers_detected",
                     "case_id": case_id,
@@ -2214,7 +2383,7 @@ def opensearch_ingest(
                         f"The directory contains {len(containers_found)} forensic container file(s). "
                         "Re-run opensearch_ingest with the container file path directly."
                     ),
-                    "containers": containers_found,
+                    "containers": containers_display,
                     "next_step": (
                         f"Call opensearch_ingest(path=\"{containers_found[0]['relative_path']}\", "
                         "format=\"auto\", "
@@ -2508,17 +2677,20 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
 
     Defaults to active case. Pass case_id="*" to see all cases.
     In DB-active mode (BATCH-K4), local mirror files are not read. The tool
-    returns ingests=[] + authority="postgres-durable-jobs" and a pointer to
-    job_status(job_id) where the authoritative worker_label, current_step,
-    and terminal result_public live (app.job_status_public).
+    returns ingests=[] + authority="postgres-durable-jobs". Only a worker-
+    dispatched ingest (opensearch_ingest status="queued") yields a durable
+    job_id you can poll with job_status(job_id); a non-dispatched ingest
+    returns only run_id/audit_id and has NO pollable job_id — confirm it landed
+    with opensearch_count / opensearch_case_summary instead.
 
     Args:
         case_id: Filter to this case (default: active case). "*" for all.
         case_dir: Gateway-injected authoritative case directory. Do not set;
             the Gateway populates it from the DB active case.
-        job_id: Optional opaque job_id from opensearch_ingest dispatch response.
-            Included in the DB-active redirect so callers can call
-            job_status(job_id) directly for the durable job record.
+        job_id: Optional durable job_id, only available when opensearch_ingest
+            returned status="queued" (worker-dispatched). When set, the response
+            echoes it with a job_status(job_id) next_step. opensearch_ingest's
+            run_id/audit_id are NOT job_ids and cannot be polled here.
     """
     from opensearch_mcp.ingest_status import db_status_active, read_active_ingests
 
@@ -2535,10 +2707,17 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
     # B3 (K4-preserving): in DB-active mode Postgres is the authoritative
     # ingest-status authority (app.job_status_public). The agent backend has no
     # DB credentials by design; local status JSON files can be tampered and MUST
-    # NOT be read (BATCH-K4 locked contract). Return ingests=[] and a pointer to
-    # the durable job authority. Callers poll job_status(job_id) for worker_label,
-    # current_step, and the terminal result_public.
-    # (Option A — gateway-injected DB row data — deferred; see backlog item.)
+    # NOT be read (BATCH-K4 locked contract). Return ingests=[] and an accurate
+    # pointer to the durable job authority.
+    #
+    # IMPORTANT (B-MVP-029): opensearch_ingest does NOT emit a Postgres job_id —
+    # it returns a `run_id` (background run id) plus an `audit_id`. Only a
+    # *queued* worker-dispatched ingest (status="queued") carries a durable
+    # `job_id`; a non-dispatched/inline ingest never does. So this redirect must
+    # not promise "job_status(job_id=<from ingest>)" unconditionally — that was a
+    # dead-end. Real DB-job-row injection here (so every ingest exposes a
+    # pollable job_id) is DEFERRED; it depends on the durable-lane work tracked
+    # by B-MVP-027.
     _db_active = db_status_active()
     if _db_active:
         resp: dict = {
@@ -2546,9 +2725,13 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
             "authority": "postgres-durable-jobs",
             "message": (
                 "Durable job authority is active. Local ingest-mirror files are "
-                "not read (BATCH-K4). Poll job_status(job_id=<job_id from ingest "
-                "response>) for realtime worker_label, current_step, and the "
-                "terminal result_public from app.job_status_public."
+                "not read (BATCH-K4). If your opensearch_ingest returned a "
+                "job_id (status='queued', worker-dispatched), poll "
+                "job_status(job_id=<that job_id>) for realtime worker_label, "
+                "current_step, and the terminal result_public. A non-dispatched "
+                "ingest returns only a run_id/audit_id and has no pollable "
+                "job_id; confirm completion with opensearch_count / "
+                "opensearch_case_summary on the target indices."
             ),
         }
         if job_id:
@@ -2572,6 +2755,15 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
 
         totals = ing.get("totals", {})
         bf = ing.get("bulk_failed", 0) or totals.get("bulk_failed", 0)
+        # F-MVP-2: the on-disk status file stores the absolute background-run log
+        # path (~/.sift/ingest-logs/<run>.log), which is outside the case dir and
+        # outside the sensitive prefixes, so the sanitizer cannot relativize it.
+        # Collapse it to a non-absolute run-id pointer instead of leaking the host
+        # path; only an in-case log (rare) stays as its relative ref.
+        _log_ref = _case_relative_ref(ing.get("log_file", ""))
+        if not _log_ref or _log_ref.startswith("/"):
+            _run = ing.get("run_id") or ""
+            _log_ref = f"ingest-logs/{_run}.log" if _run else ""
         s = {
             "case_id": ing.get("case_id"),
             "status": status,
@@ -2583,7 +2775,7 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
             "hosts_total": totals.get("hosts_total", 0),
             "artifacts_complete": totals.get("artifacts_complete", 0),
             "artifacts_total": totals.get("artifacts_total", 0),
-            "log_file": ing.get("log_file", ""),
+            "log_file": _log_ref,
         }
         # Warn the LLM/user when rejections occurred — makes silent
         # drops visible in the response payload, not only in stderr.
@@ -2763,7 +2955,8 @@ def idx_ingest_json(
 
         p = resolved
         if not p.exists():
-            return {"error": f"Path not found: {path}", "resolved_path": resolved_path}
+            # F-MVP-2: omit the absolute resolved path; the agent supplied `path`.
+            return {"error": f"Path not found: {path}"}
         if p.is_file():
             fmt = _detect_json_format(p)
             return {"status": "preview", "file": p.name, "format": fmt}
@@ -2806,7 +2999,8 @@ def idx_ingest_delimited(
     assert resolved is not None
     resolved_path = str(resolved)
     if not resolved.exists():
-        return {"error": f"Path not found: {path}", "resolved_path": resolved_path}
+        # F-MVP-2: omit the absolute resolved path; the agent supplied `path`.
+        return {"error": f"Path not found: {path}"}
 
     # Auto-detect mode: flat directory with multi-host files
     if hostname == "auto":
@@ -2934,7 +3128,8 @@ def idx_ingest_accesslog(
     assert resolved is not None
     resolved_path = str(resolved)
     if not resolved.exists():
-        return {"error": f"Path not found: {path}", "resolved_path": resolved_path}
+        # F-MVP-2: omit the absolute resolved path; the agent supplied `path`.
+        return {"error": f"Path not found: {path}"}
     if dry_run:
         p = resolved
         if p.is_file():
@@ -3348,13 +3543,23 @@ def _launch_background(
         log_file=str(log_file),
     )
 
+    # F-MVP-2: never emit the absolute background-run log path to the agent.
+    # Route through the case-relative sanitizer; the ingest log lives under
+    # ~/.sift/ingest-logs (outside the case dir) so the sanitizer cannot make it
+    # relative — fall back to a non-absolute run-id pointer rather than leak the
+    # host path. The absolute path is still persisted to the internal status file
+    # for the operator/worker.
+    _log_ref = _case_relative_ref(log_file)
+    if not _log_ref or _log_ref.startswith("/"):
+        _log_ref = f"ingest-logs/{run_id}.log"
     resp = {
         "status": "started",
         "pid": proc.pid,
         "run_id": run_id,
-        "log_file": str(log_file),
+        "log_file": _log_ref,
         "message": (
-            f"Ingest started. Call opensearch_ingest_status() to monitor progress. Log file: {log_file}"
+            "Ingest started. Call opensearch_ingest_status() to monitor progress "
+            f"(run_id={run_id})."
         ),
     }
     aid = audit.log(
@@ -3476,15 +3681,21 @@ def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
         log_file=str(log_file),
     )
 
+    # F-MVP-2: never emit the absolute background-run log path to the agent
+    # (see _launch_background for the same handling). The absolute path is still
+    # persisted to the internal status file for the operator/worker.
+    _log_ref = _case_relative_ref(log_file)
+    if not _log_ref or _log_ref.startswith("/"):
+        _log_ref = f"ingest-logs/{run_id}.log"
     resp = {
         "status": "started",
         "pid": proc.pid,
         "run_id": run_id,
         "case_id": status_case,
-        "log_file": str(log_file),
+        "log_file": _log_ref,
         "message": (
             "Intel enrichment started. Call opensearch_ingest_status() to monitor "
-            f"progress (artifact_name='intel'). Log file: {log_file}"
+            f"progress (artifact_name='intel', run_id={run_id})."
         ),
     }
     aid = audit.log(
@@ -3520,7 +3731,8 @@ def idx_ingest_memory(
     assert resolved is not None
     resolved_path = str(resolved)
     if not resolved.exists():
-        return {"error": f"Path not found: {path}", "resolved_path": resolved_path}
+        # F-MVP-2: omit the absolute resolved path; the agent supplied `path`.
+        return {"error": f"Path not found: {path}"}
     from opensearch_mcp.parse_memory import TIER_1, TIER_2, TIER_3
 
     if plugins:
@@ -3978,12 +4190,15 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
         else cases_root() / _raw_path.name
     )
     if not case_dir.is_dir():
-        return {"error": f"Case directory not found: {case_dir}"}
+        # F-MVP-2: never echo the absolute case directory to the agent.
+        return {"error": "Case directory not found"}
     dict_path = case_dir / "host-dictionary.yaml"
     if not dict_path.exists():
         return {
             "error": (
-                f"host-dictionary.yaml not found at {dict_path}. "
+                # F-MVP-2: drop the absolute path; the file is a known case-relative
+                # artifact and the remediation does not need the host path.
+                "host-dictionary.yaml not found. "
                 "Run opensearch_ingest at least once to create it."
             )
         }
@@ -4092,7 +4307,8 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
                 "raw": raw,
                 "new_canonical": new_canonical,
                 "dict_saved": True,
-                "dict_path": str(dict_path),
+                # F-MVP-2: relative display ref only, never the absolute path.
+                "dict_path": _case_relative_ref(dict_path),
                 "isError": True,
             }
     except Exception:
@@ -4147,7 +4363,8 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
             "raw": raw,
             "new_canonical": new_canonical,
             "dict_saved": True,
-            "dict_path": str(dict_path),
+            # F-MVP-2: relative display ref only, never the absolute path.
+            "dict_path": _case_relative_ref(dict_path),
             "retry_hint": (
                 "Dict is saved with the new mapping. Re-call opensearch_host_fix "
                 "with the same args to retry the reindex."
@@ -4183,7 +4400,9 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
     if _db_active:
         resp["host_identity_authority"] = "postgres"
     else:
-        resp["dict_path"] = str(dict_path)
+        # F-MVP-2: even in legacy/CLI-compat mode the agent gets a case-relative
+        # display ref, never the absolute host-dictionary path.
+        resp["dict_path"] = _case_relative_ref(dict_path)
     audit_id = None
     try:
         audit_id = audit.log(

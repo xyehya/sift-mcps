@@ -270,10 +270,29 @@
                 "title": "Advisories",
                 "type": "array"
               },
+              "common_fields": {
+                "additionalProperties": true,
+                "description": "Fields identical across every hit, hoisted out of the per-hit docs (e.g. vhir.case_id, vhir.provenance_id). Apply to every hit in results.",
+                "title": "Common Fields",
+                "type": "object"
+              },
               "compact": {
                 "description": "Whether compact projection was applied.",
                 "title": "Compact",
                 "type": "boolean"
+              },
+              "full_path": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Case-relative path (e.g. agent/searches/search_<uuid>.json) holding the FULL hit set when results exceeded the inline cap; only the top-N are in results. Read/grep this file instead of re-querying.",
+                "title": "Full Path"
               },
               "offset": {
                 "default": 0,

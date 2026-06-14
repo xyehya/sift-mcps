@@ -190,3 +190,30 @@ class TestFilesystemMetaPath:
 
         state = _build(case_dir=tmp_path)
         assert "run-new" in state["filesystem_meta_path"]
+
+    def test_relative_to_failure_does_not_leak_absolute_path(self, tmp_path, monkeypatch):
+        """F-MVP-2 (F2): when relative_to raises (sidecar outside case_dir),
+        the coverage_state must NOT carry the absolute sidecar path."""
+        from pathlib import Path as _P
+
+        sidecar_dir = tmp_path / "agent" / "ingest"
+        sidecar_dir.mkdir(parents=True)
+        sidecar = sidecar_dir / "abc-filesystem-meta.json"
+        sidecar.write_text("{}")
+
+        # Force relative_to to raise so the except branch is exercised: pass an
+        # unrelated case_dir while the glob still yields the real sidecar.
+        unrelated = tmp_path / "elsewhere"
+        unrelated.mkdir()
+        real_glob = _P.glob
+
+        def _glob(self, pattern):
+            if "filesystem-meta" in pattern:
+                return iter([sidecar])  # absolute, NOT under `unrelated`
+            return real_glob(self, pattern)
+
+        monkeypatch.setattr(_P, "glob", _glob)
+        state = _build(case_dir=unrelated)
+        meta = state["filesystem_meta_path"]
+        assert meta is None or not str(meta).startswith("/")
+        assert meta is None or str(tmp_path) not in str(meta)

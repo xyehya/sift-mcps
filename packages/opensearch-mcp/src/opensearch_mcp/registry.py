@@ -1,4 +1,18 @@
-"""Exposure-agnostic FastMCP 3 registry for the OpenSearch backend."""
+"""Exposure-agnostic FastMCP 3 registry for the OpenSearch backend.
+
+Layering (B-MVP-029):
+  * ``opensearch_mcp.registry`` (this module) is the **typed contract layer** —
+    it defines the pydantic In/Out models, validates inputs, maps raw dicts onto
+    the typed result/error contracts, and advertises tool metadata.
+  * ``opensearch_mcp.server`` is the **implementation engine** — it does the raw
+    OpenSearch I/O and returns plain dicts.
+
+The ``run_*`` wrappers here call into the implementation engine via
+``_impl_server()`` and reshape its raw dict into a typed ``*Out`` model (or a
+typed error via ``_impl_error``). The helper names use the ``_impl_*`` prefix to
+reflect this engine relationship (formerly ``_legacy_*`` — renamed, the engine is
+not legacy, it is the live implementation).
+"""
 
 from __future__ import annotations
 
@@ -158,6 +172,21 @@ class SearchOut(BaseModel):
     offset: int = Field(0, description="Echoed pagination offset.")
     compact: bool = Field(..., description="Whether compact projection was applied.")
     results: list[SearchHit] = Field(..., description="Matching documents, projected.")
+    common_fields: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Fields identical across every hit, hoisted out of the per-hit docs "
+            "(e.g. vhir.case_id, vhir.provenance_id). Apply to every hit in results."
+        ),
+    )
+    full_path: str | None = Field(
+        None,
+        description=(
+            "Case-relative path (e.g. agent/searches/search_<uuid>.json) holding the "
+            "FULL hit set when results exceeded the inline cap; only the top-N are in "
+            "results. Read/grep this file instead of re-querying."
+        ),
+    )
     advisories: list[Advisory] = Field(
         default_factory=list, description="Optional field-mapping/empty-result/pagination hints."
     )
@@ -668,10 +697,16 @@ def _write_annotations(
     )
 
 
-def _legacy_server():
-    from opensearch_mcp import server as legacy
+def _impl_server():
+    """The implementation engine module (``opensearch_mcp.server``).
 
-    return legacy
+    This registry is the typed contract layer; ``opensearch_mcp.server`` holds the
+    raw OpenSearch I/O. The run_* wrappers below call into it and shape the result
+    into the typed *Out models.
+    """
+    from opensearch_mcp import server as impl
+
+    return impl
 
 
 def _meta_from_raw(raw: dict[str, Any]) -> ResultMeta:
@@ -717,7 +752,7 @@ def _tool_error_result(
     )
 
 
-def _legacy_error(
+def _impl_error(
     raw: dict[str, Any], *, default_code: ErrorCode = ErrorCode.invalid_input
 ) -> ToolResult:
     meta = _meta_from_raw(raw)
@@ -750,6 +785,7 @@ def _advisories_from_raw(raw: dict[str, Any]) -> list[Advisory]:
         "field_hint": "field_mapping",
         "discipline_reminder": "execution_evidence",
         "total_note": "pagination",
+        "full_results_note": "pagination",
         "note": "pagination",
         "hint": "empty_result",
     }
@@ -787,7 +823,7 @@ def _redact_secret_fields(value: Any) -> Any:
     return value
 
 
-def _search_hit_from_legacy(hit: dict[str, Any]) -> SearchHit:
+def _impl_search_hit(hit: dict[str, Any]) -> SearchHit:
     fields = {
         key: value for key, value in hit.items() if key not in {"_id", "_index", "_truncated"}
     }
@@ -800,9 +836,9 @@ def _search_hit_from_legacy(hit: dict[str, Any]) -> SearchHit:
 
 
 async def run_opensearch_search(params: SearchIn) -> ToolResult:
-    raw = _legacy_server().opensearch_search(**params.model_dump())
+    raw = _impl_server().opensearch_search(**params.model_dump())
     if "error" in raw:
-        return _legacy_error(raw)
+        return _impl_error(raw)
     meta = _meta_from_raw(raw)
     advisories = _advisories_from_raw(raw)
     out = SearchOut(
@@ -811,24 +847,26 @@ async def run_opensearch_search(params: SearchIn) -> ToolResult:
         returned=int(raw.get("returned", 0)),
         offset=params.offset,
         compact=bool(raw.get("compact", params.compact)),
-        results=[_search_hit_from_legacy(hit) for hit in raw.get("results", [])],
+        results=[_impl_search_hit(hit) for hit in raw.get("results", [])],
+        common_fields=dict(raw.get("common_fields") or {}),
+        full_path=raw.get("full_path"),
         advisories=advisories,
     )
     return _success_tool_result(out, meta)
 
 
 async def run_opensearch_count(params: CountIn) -> ToolResult:
-    raw = _legacy_server().opensearch_count(**params.model_dump())
+    raw = _impl_server().opensearch_count(**params.model_dump())
     if "error" in raw:
-        return _legacy_error(raw)
+        return _impl_error(raw)
     meta = _meta_from_raw(raw)
     return _success_tool_result(CountOut(count=int(raw.get("count", 0))), meta)
 
 
 async def run_opensearch_aggregate(params: AggregateIn) -> ToolResult:
-    raw = _legacy_server().opensearch_aggregate(**params.model_dump())
+    raw = _impl_server().opensearch_aggregate(**params.model_dump())
     if "error" in raw:
-        return _legacy_error(raw)
+        return _impl_error(raw)
     meta = _meta_from_raw(raw)
     out = AggregateOut(
         field=str(raw.get("field", params.field)),
@@ -841,7 +879,7 @@ async def run_opensearch_aggregate(params: AggregateIn) -> ToolResult:
 
 async def run_opensearch_get_event(params: GetEventIn) -> ToolResult:
     try:
-        raw = _legacy_server().opensearch_get_event(**params.model_dump())
+        raw = _impl_server().opensearch_get_event(**params.model_dump())
     except Exception as exc:  # noqa: BLE001 - sanitized typed error for MCP clients
         message = f"{type(exc).__name__}: document lookup failed."
         code = ErrorCode.not_found if "not" in type(exc).__name__.lower() else ErrorCode.internal
@@ -851,7 +889,7 @@ async def run_opensearch_get_event(params: GetEventIn) -> ToolResult:
             "Confirm event_id and exact case-* index from opensearch_search, then retry.",
         )
     if "error" in raw:
-        return _legacy_error(raw)
+        return _impl_error(raw)
     meta = _meta_from_raw(raw)
     fields = {key: value for key, value in raw.items() if key not in {"_id", "_index", "_note"}}
     out = GetEventOut(
@@ -865,9 +903,9 @@ async def run_opensearch_get_event(params: GetEventIn) -> ToolResult:
 
 
 async def run_opensearch_timeline(params: TimelineIn) -> ToolResult:
-    raw = _legacy_server().opensearch_timeline(**params.model_dump())
+    raw = _impl_server().opensearch_timeline(**params.model_dump())
     if "error" in raw:
-        return _legacy_error(raw)
+        return _impl_error(raw)
     meta = _meta_from_raw(raw)
     buckets = [TimeBucket.model_validate(bucket) for bucket in raw.get("buckets", [])]
     advisories = _advisories_from_raw(raw)
@@ -893,9 +931,9 @@ async def run_opensearch_timeline(params: TimelineIn) -> ToolResult:
 
 
 async def run_opensearch_field_values(params: FieldValuesIn) -> ToolResult:
-    raw = _legacy_server().opensearch_field_values(**params.model_dump())
+    raw = _impl_server().opensearch_field_values(**params.model_dump())
     if "error" in raw:
-        return _legacy_error(raw)
+        return _impl_error(raw)
     meta = _meta_from_raw(raw)
     values = [
         FieldValue(value=value.get("value"), count=int(value.get("count", 0)))
@@ -911,7 +949,7 @@ async def run_opensearch_field_values(params: FieldValuesIn) -> ToolResult:
 
 async def run_opensearch_status(_params: StatusIn) -> ToolResult:
     try:
-        raw = _legacy_server().opensearch_status()
+        raw = _impl_server().opensearch_status()
     except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
         return _tool_error_result(
             ErrorCode.upstream_unavailable,
@@ -920,7 +958,7 @@ async def run_opensearch_status(_params: StatusIn) -> ToolResult:
             retryable=True,
         )
     if "error" in raw:
-        return _legacy_error(raw, default_code=ErrorCode.upstream_unavailable)
+        return _impl_error(raw, default_code=ErrorCode.upstream_unavailable)
     meta = _meta_from_raw(raw)
     out = StatusOut(
         cluster_status=str(raw.get("cluster_status", "unknown")),
@@ -936,7 +974,7 @@ async def opensearch_cluster_status_resource() -> str:
 
 async def run_opensearch_shard_status(_params: ShardStatusIn) -> ToolResult:
     try:
-        raw = _legacy_server().opensearch_shard_status()
+        raw = _impl_server().opensearch_shard_status()
     except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
         return _tool_error_result(
             ErrorCode.upstream_unavailable,
@@ -945,7 +983,7 @@ async def run_opensearch_shard_status(_params: ShardStatusIn) -> ToolResult:
             retryable=True,
         )
     if raw.get("status") == "error" or "error" in raw:
-        return _legacy_error(raw, default_code=ErrorCode.upstream_unavailable)
+        return _impl_error(raw, default_code=ErrorCode.upstream_unavailable)
     meta = _meta_from_raw(raw)
     out = ShardStatusOut(
         current_shards=int(raw.get("current_shards", 0)),
@@ -978,14 +1016,14 @@ def _coverage_state_from_raw(raw: dict[str, Any]) -> CoverageState:
 
 
 async def run_opensearch_case_summary(params: CaseSummaryIn) -> ToolResult:
-    raw = _legacy_server().opensearch_case_summary(**params.model_dump())
+    raw = _impl_server().opensearch_case_summary(**params.model_dump())
     if "error" in raw:
         default = (
             ErrorCode.no_active_case
             if "active case" in str(raw.get("error"))
             else ErrorCode.not_found
         )
-        return _legacy_error(raw, default_code=default)
+        return _impl_error(raw, default_code=default)
     meta = _meta_from_raw(raw)
     fields_per_type = raw.get("fields_per_type")
     out = CaseSummaryOut(
@@ -1014,9 +1052,9 @@ async def opensearch_case_summary_resource(case_id: str) -> str:
 
 
 async def run_opensearch_inspect_container(params: InspectContainerIn) -> ToolResult:
-    raw = _legacy_server().opensearch_inspect_container(**params.model_dump())
+    raw = _impl_server().opensearch_inspect_container(**params.model_dump())
     if "error" in raw:
-        return _legacy_error(raw, default_code=ErrorCode.not_found)
+        return _impl_error(raw, default_code=ErrorCode.not_found)
     meta = _meta_from_raw(raw)
     out = InspectContainerOut(
         path=str(raw.get("path", params.path)),
@@ -1034,7 +1072,7 @@ async def run_opensearch_inspect_container(params: InspectContainerIn) -> ToolRe
 
 
 async def run_opensearch_ingest(params: IngestIn) -> ToolResult:
-    raw = _legacy_server().opensearch_ingest(**params.model_dump(mode="json"))
+    raw = _impl_server().opensearch_ingest(**params.model_dump(mode="json"))
     raw = _redact_secret_fields(raw)
     if "error" in raw and raw.get("status") not in {"failed", "already_indexed"}:
         message = str(raw.get("error"))
@@ -1046,7 +1084,7 @@ async def run_opensearch_ingest(params: IngestIn) -> ToolResult:
             code = ErrorCode.capacity_refused
         else:
             code = ErrorCode.invalid_input
-        return _legacy_error(raw, default_code=code)
+        return _impl_error(raw, default_code=code)
     meta = _meta_from_raw(raw)
     status = str(raw.get("status", "preview"))
     if status == "running":
@@ -1097,9 +1135,9 @@ async def run_opensearch_ingest(params: IngestIn) -> ToolResult:
 
 
 async def run_opensearch_ingest_status(params: IngestStatusIn) -> ToolResult:
-    raw = _legacy_server().opensearch_ingest_status(**params.model_dump())
+    raw = _impl_server().opensearch_ingest_status(**params.model_dump())
     if "error" in raw:
-        return _legacy_error(raw, default_code=ErrorCode.no_active_case)
+        return _impl_error(raw, default_code=ErrorCode.no_active_case)
     meta = _meta_from_raw(raw)
     runs: list[IngestRun] = []
     for item in raw.get("ingests", []):
@@ -1158,7 +1196,7 @@ async def run_opensearch_ingest_status(params: IngestStatusIn) -> ToolResult:
 
 
 async def run_opensearch_enrich_intel(params: EnrichIntelIn) -> ToolResult:
-    raw = _legacy_server().opensearch_enrich_intel(**params.model_dump())
+    raw = _impl_server().opensearch_enrich_intel(**params.model_dump())
     if "error" in raw:
         message = str(raw.get("error"))
         if "No active case" in message:
@@ -1167,7 +1205,7 @@ async def run_opensearch_enrich_intel(params: EnrichIntelIn) -> ToolResult:
             code = ErrorCode.capacity_refused
         else:
             code = ErrorCode.upstream_unavailable
-        return _legacy_error(raw, default_code=code)
+        return _impl_error(raw, default_code=code)
     meta = _meta_from_raw(raw)
     out = EnrichIntelOut(
         status=raw.get("status", "preview"),
@@ -1186,7 +1224,7 @@ async def run_opensearch_enrich_intel(params: EnrichIntelIn) -> ToolResult:
 
 async def run_opensearch_list_detections(params: ListDetectionsIn) -> ToolResult:
     try:
-        raw = _legacy_server().opensearch_list_detections(**params.model_dump())
+        raw = _impl_server().opensearch_list_detections(**params.model_dump())
     except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
         return _tool_error_result(
             ErrorCode.upstream_unavailable,
@@ -1195,7 +1233,7 @@ async def run_opensearch_list_detections(params: ListDetectionsIn) -> ToolResult
             retryable=True,
         )
     if "error" in raw and "Security Analytics plugin not available" not in str(raw.get("error")):
-        return _legacy_error(raw, default_code=ErrorCode.upstream_unavailable)
+        return _impl_error(raw, default_code=ErrorCode.upstream_unavailable)
     raw.pop("error", None)
     meta = _meta_from_raw(raw)
     out = ListDetectionsOut(
@@ -1275,7 +1313,7 @@ async def opensearch_field_catalog_resource(artifact_type: str) -> str:
             }
         )
     try:
-        client = _legacy_server()._get_os()
+        client = _impl_server()._get_os()
         indices = client.cat.indices(
             index=f"case-*-{artifact_type}-*",
             format="json",
@@ -1307,7 +1345,7 @@ async def opensearch_field_catalog_resource(artifact_type: str) -> str:
 
 async def opensearch_detection_catalog_resource() -> str:
     try:
-        client = _legacy_server()._get_os()
+        client = _impl_server()._get_os()
         response = client.transport.perform_request(
             "GET",
             "/_plugins/_security_analytics/detectors/_search",
@@ -1341,7 +1379,7 @@ async def opensearch_detection_catalog_resource() -> str:
 
 
 async def run_opensearch_fix_host_mapping(params: FixHostMappingIn) -> ToolResult:
-    raw = _legacy_server().opensearch_host_fix(**params.model_dump())
+    raw = _impl_server().opensearch_host_fix(**params.model_dump())
     raw = _redact_secret_fields(raw)
     meta = _meta_from_raw(raw)
     legacy_status = raw.get("status")
