@@ -482,8 +482,20 @@ class IngestOut(BaseModel):
         "multi_started",
         "already_indexed",
         "failed",
+        # feat/opensearch-workers: privileged ingest is dispatched (non-blocking)
+        # to a dedicated sift-opensearch-worker@ via the durable job queue; the
+        # gateway returns this immediately instead of running the pipeline inline.
+        "queued",
     ] = Field(..., description="Ingest response status.")
     case_id: str | None = Field(None, description="Resolved active case id.")
+    job_id: str | None = Field(
+        None, description="Durable job id for a queued (worker-dispatched) ingest; poll job_status."
+    )
+    job_type: str | None = Field(None, description="Dispatched job type (ingest/enrich) when queued.")
+    dispatched_to: str | None = Field(
+        None, description="Worker lane a queued ingest was dispatched to."
+    )
+    next_step: str | None = Field(None, description="Operator guidance for a queued dispatch.")
     plan: dict[str, Any] = Field(default_factory=dict, description="Preview plan/details.")
     container: dict[str, Any] | None = Field(None, description="Detected container details.")
     already_indexed: dict[str, Any] | None = Field(
@@ -1709,9 +1721,11 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
         ),
         "output_shape": (
             "IngestOut: status (preview|started|containers_detected|multi_started|"
-            "already_indexed|failed), case_id, plan{}, container{}, already_indexed{}, "
-            "suggested_hostname, warning, pid, run_id, log_file, note, details{}. "
-            "Mutating; poll progress via opensearch_ingest_status."
+            "already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, "
+            "next_step, plan{}, container{}, already_indexed{}, suggested_hostname, "
+            "warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns "
+            "status=queued + job_id (non-blocking, dispatched to a sift-opensearch-worker@); "
+            "poll job_status(job_id) for realtime worker_label/current_step."
         ),
         "response_shaping": (
             "Returns a plan/run reference (run_id, log_file) rather than streaming "
