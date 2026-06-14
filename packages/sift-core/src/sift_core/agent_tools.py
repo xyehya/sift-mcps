@@ -44,6 +44,7 @@ class CoreToolSpec:
     description: str
     input_schema: dict[str, Any]
     read_only: bool = False
+    output_schema: dict[str, Any] | None = None
 
 
 _MAX_TITLE = 500
@@ -93,6 +94,95 @@ def _schema(properties: dict[str, Any] | None = None, required: list[str] | None
     return result
 
 
+_CASE_INFO_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "case_id": {"type": "string"},
+        "name": {"type": "string"},
+        "status": {"type": "string"},
+        "examiner": {"type": "string"},
+        "case_brief": {"type": "string"},
+        "findings": {
+            "type": "object",
+            "properties": {
+                "total": {"type": "integer"},
+                "draft": {"type": "integer"},
+                "approved": {"type": "integer"},
+            },
+        },
+        "timeline_events": {"type": "integer"},
+        "todos": {
+            "type": "object",
+            "properties": {"open": {"type": "integer"}, "total": {"type": "integer"}},
+        },
+        "evidence_chain": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "ok": {"type": "boolean"},
+                "issues": {"type": "array", "items": {"type": "string"}},
+                "manifest_version": {"type": "integer"},
+            },
+        },
+        "file_structure": {"type": "object"},
+        "platform_capabilities": {"type": "object"},
+    },
+    "required": ["case_id", "name", "status", "evidence_chain"],
+}
+
+_EVIDENCE_INFO_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "chain_status": {"type": "string"},
+        "ok_count": {"type": "integer"},
+        "issues": {"type": "array", "items": {"type": "string"}},
+        "manifest_version": {"type": "integer"},
+        "evidence_files": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "evidence_id": {"type": "string"},
+                    "display_path": {"type": "string"},
+                    "sealed": {"type": "boolean"},
+                    "chain_ok": {"type": "boolean"},
+                },
+            },
+        },
+        "total_evidence_files": {"type": "integer"},
+        "unregistered_files": {"type": "array", "items": {"type": "string"}},
+        "requires_examiner_action": {"type": "boolean"},
+    },
+    "required": ["chain_status", "evidence_files"],
+}
+
+_LIST_FINDINGS_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "status": {"type": "string"},
+                    "confidence": {"type": "string"},
+                    "host": {"type": "string"},
+                    "type": {"type": "string"},
+                    "staged": {"type": "string"},
+                    "examiner": {"type": "string"},
+                },
+            },
+        },
+        "total": {"type": "integer"},
+        "limit": {"type": "integer"},
+        "offset": {"type": "integer"},
+        "full_findings_path": {"type": "string"},
+    },
+    "required": ["findings", "total"],
+}
+
 CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
     CoreToolSpec(
         "case_info",
@@ -100,6 +190,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "file structure summary, platform capabilities. Call at session start.",
         _schema(),
         read_only=True,
+        output_schema=_CASE_INFO_OUTPUT_SCHEMA,
     ),
     CoreToolSpec(
         "evidence_info",
@@ -107,6 +198,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "in a single call. Returns sealed evidence and unregistered files with required actions.",
         _schema(),
         read_only=True,
+        output_schema=_EVIDENCE_INFO_OUTPUT_SCHEMA,
     ),
     CoreToolSpec(
         "record_finding",
@@ -232,6 +324,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
             }
         ),
         read_only=True,
+        output_schema=_LIST_FINDINGS_OUTPUT_SCHEMA,
     ),
     CoreToolSpec(
         "manage_todo",
@@ -900,9 +993,10 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         # without exposing any local path. D1 durable jobs are enqueued by the
         # Gateway for long-running work; for the synchronous run_command path the
         # receipt id is derived from the audit id so downstream report/provenance
-        # consumers always have a hash-linked handle.
+        # consumers always have a hash-linked handle. Stored only inside provenance
+        # to avoid duplication at the response root (run_command_job reads provenance
+        # first, with fallback to root, so removing root job_id is safe).
         job_id = f"rc-{audit_id}"
-        response["job_id"] = job_id
         if "warnings" in exec_result:
             response["warnings"] = exec_result["warnings"]
             if "agent_action" in exec_result:
@@ -923,10 +1017,11 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                     "be incomplete. See failed_stages."
                 )
         if output_file_ref:
-            # full_output_path keeps its documented key name but now carries a
-            # case-RELATIVE ref (never an absolute path). full_output_ref is the
-            # I1 alias that makes the path-free contract explicit.
-            response["full_output_path"] = output_file_ref
+            # full_output_ref is the canonical output path key (case-relative,
+            # never absolute). full_output_path was an alias — dropped to avoid
+            # duplication; all consumers (tests, audit_helpers, run_command_job)
+            # use full_output_ref. full_output_sha256/bytes remain at root because
+            # audit_helpers._RUN_COMMAND_DETAIL_KEYS reads them directly.
             response["full_output_ref"] = output_file_ref
             response["full_output_sha256"] = output_sha256
             response["full_output_bytes"] = stdout_total_bytes
@@ -934,9 +1029,13 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         # Provenance receipt: hash-linked, path-free record the agent can cite in
         # findings/reports. Input hashes prove which sealed evidence was read;
         # output hash proves the artifact produced.
+        # job_id is the canonical receipt handle here; audit_id lives at response
+        # root (set by build_response) and is not repeated in provenance to avoid
+        # duplication. run_command_job reads provenance.job_id with fallback to
+        # result.job_id (now absent); it reads provenance.audit_id or result.audit_id
+        # (root still present), so both consumers are satisfied.
         provenance = {
             "job_id": job_id,
-            "audit_id": audit_id,
             "input_sha256s": sorted(set(input_hashes.values())) if input_hashes else [],
             "input_count": len(input_hashes),
             "evidence_refs": public_evidence_refs if evidence_refs else [],

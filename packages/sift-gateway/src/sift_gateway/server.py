@@ -855,14 +855,17 @@ class Gateway:
 
         tools: list[Tool] = []
         for spec in core_tool_specs():
-            tools.append(
-                Tool(
-                    name=spec.name,
-                    description=spec.description,
-                    inputSchema=spec.input_schema,
-                    annotations={"readOnlyHint": True} if spec.read_only else None,
-                )
+            tool = Tool(
+                name=spec.name,
+                description=spec.description,
+                inputSchema=spec.input_schema,
+                outputSchema=spec.output_schema,
+                annotations={"readOnlyHint": True} if spec.read_only else None,
             )
+            if spec.output_schema is not None:
+                from sift_gateway.mcp_server import _normalize_output_schema
+                _normalize_output_schema(tool)
+            tools.append(tool)
         if self.job_service is not None:
             from sift_gateway.job_tools import gateway_job_tool_specs
 

@@ -194,16 +194,18 @@ def test_run_command_with_evidence_ref_returns_provenance_and_job_id(sealed_case
         audit=audit,
     )
     assert out["success"] is True
-    assert out["job_id"].startswith("rc-")
+    # B-MVP-029 dedup: job_id is canonical inside provenance only (no root copy).
     prov = out["provenance"]
-    assert prov["job_id"] == out["job_id"]
+    assert prov["job_id"].startswith("rc-")
+    # audit_id is canonical at the response root only (set by build_response).
+    assert prov["job_id"] == f"rc-{out['audit_id']}"
     assert prov["evidence_refs"] == ["disk.txt"]
     # Input hash present and matches the sealed file.
     assert len(prov["input_sha256s"]) == 1
-    # Output saved and surfaced only as a relative ref (both keys are relative).
+    # Output saved and surfaced only as a relative ref (full_output_ref is the
+    # single canonical output key; full_output_path alias was dropped).
     assert out["full_output_ref"].startswith("agent/run_commands/")
-    assert out["full_output_path"].startswith("agent/run_commands/")
-    assert not out["full_output_path"].startswith("/")
+    assert not out["full_output_ref"].startswith("/")
 
     # No absolute case path anywhere in the agent-facing payload.
     blob = json.dumps(out)
@@ -293,7 +295,6 @@ def test_run_command_saved_output_uses_db_active_case_not_stale_env(
 
     assert out["success"] is True
     assert out["full_output_ref"].startswith("agent/run_commands/dbout/")
-    assert out["full_output_path"] == out["full_output_ref"]
     blob = json.dumps(out)
     assert str(real_case) not in blob
     assert str(stale_case) not in blob
