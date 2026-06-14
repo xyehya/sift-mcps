@@ -39,7 +39,7 @@ def _actor_columns(principal: Any) -> tuple[str, str | None, str | None, str | N
     ptype = _identity_attr(principal, "principal_type")
     pid = _identity_attr(principal, "principal_id")
     token_id = _identity_attr(principal, "token_id")
-    token_id = _legacy_token_id(token_id, pid)
+    token_id = _resolve_db_token_id(token_id, pid)
     if ptype == "user":
         return "user", (str(pid) if pid else None), None, None, token_id
     if ptype == "agent":
@@ -50,13 +50,17 @@ def _actor_columns(principal: Any) -> tuple[str, str | None, str | None, str | N
     return "system", None, None, None, token_id
 
 
-def _legacy_token_id(token_id: Any, principal_id: Any) -> str | None:
-    """Return a DB ``mcp_tokens.id`` value, not a Supabase principal id/hash.
+def _resolve_db_token_id(token_id: Any, principal_id: Any) -> str | None:
+    """Resolve a value safe for the ``audit_events.actor_token_id`` FK column.
 
-    Supabase JWT identities use their principal row id as ``Identity.token_id``
-    for FastMCP client attribution. That value is not an ``app.mcp_tokens`` row
-    and must not be written to ``audit_events.actor_token_id``. Legacy PR02
-    tokens keep a distinct UUID token id, which remains valid for the FK.
+    This is a correctness guard, not a legacy shim. It returns a real
+    ``app.mcp_tokens.id`` value, never a Supabase principal id/hash. Supabase JWT
+    identities reuse their principal row id as ``Identity.token_id`` for FastMCP
+    client attribution; that value is not an ``app.mcp_tokens`` row, so writing it
+    to ``audit_events.actor_token_id`` would violate the foreign key. We therefore
+    drop it (return ``None``) whenever the token id matches the principal id, or is
+    not a UUID. PR02 tokens that carry a distinct UUID token id remain valid for
+    the FK and are passed through unchanged.
     """
     if not token_id:
         return None
