@@ -24,6 +24,12 @@ dependencies = [
 [project.scripts]
 opensearch-mcp = "opensearch_mcp.server:main"
 opensearch-ingest = "opensearch_mcp.ingest_cli:main"
+# feat/opensearch-workers: dedicated least-privilege ingest/enrich worker. Runs
+# the durable job loop restricted to the opensearch lane; the systemd template
+# sift-opensearch-worker@.service starts N of these (the only unit with the
+# MountFlags=shared namespace FUSE needs). Reuses the sift-core job worker main;
+# importing opensearch_mcp.ingest_job wires the ingest/enrich handlers.
+sift-opensearch-worker = "sift_core.execute.job_worker_cli:main"
 
 [project.entry-points."sift.plugins"]
 opensearch = "opensearch_mcp.sift_plugin:register"
