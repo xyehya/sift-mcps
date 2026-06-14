@@ -1121,3 +1121,21 @@ def test_strip_cr_progress_keeps_final_cr_segment():
     cleaned, removed = _strip_cr_progress("step1\rstep2\rDONE result\n")
     assert cleaned == "DONE result\n"
     assert removed == 2
+
+
+def test_resource_preexec_sets_group_readable_umask():
+    """P1 artifact-handoff: preexec sets umask 0027 so extracted files are
+    group-readable (mode 0640) — the next stage/tool and the gateway (both in
+    the `sift` group) can consume them — without becoming world-readable.
+    """
+    import os as _os
+
+    from sift_core.execute.worker import _resource_preexec
+
+    saved = _os.umask(0o022)
+    try:
+        _resource_preexec(0, 0)  # no rlimits; just exercise the umask side effect
+        current = _os.umask(0o022)  # read-and-restore
+        assert current == 0o027, oct(current)
+    finally:
+        _os.umask(saved)
