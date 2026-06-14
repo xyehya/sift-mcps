@@ -1,4 +1,4 @@
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 
 const TYPE_COLORS = {
   info:    'var(--cyan)',
@@ -8,7 +8,10 @@ const TYPE_COLORS = {
 }
 
 export function Toaster() {
-  const { toasts, dismissToast } = useStore()
+  const { toasts, dismissToast } = useStoreSlice((state) => ({
+    toasts: state.toasts,
+    dismissToast: state.dismissToast,
+  }))
   return (
     <div className="fixed bottom-10 right-4 z-50 flex flex-col gap-2 pointer-events-none">
       {toasts.map((t) => (

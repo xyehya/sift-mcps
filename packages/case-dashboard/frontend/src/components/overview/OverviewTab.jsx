@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useStore } from '../../store/useStore'
+import { useMemo, useState } from 'react'
+import { useStoreSlice } from '../../store/useStore'
 import { Skeleton } from '../common/Skeleton'
 import { CaseBriefCard } from './CaseBriefCard'
 import { formatDistanceToNow } from 'date-fns'
@@ -12,28 +12,65 @@ const CONFIDENCE_COLORS = {
 }
 
 export function OverviewTab() {
-  const { activeCase, summary, findings, reports, delta, isLoading, setActiveTab, setFindingsFilter, setCommitDrawerOpen, setSelectedFindingId } = useStore()
+  const { activeCase, summary, findings, reports, delta, isLoading, setActiveTab, setFindingsFilter, setCommitDrawerOpen, setSelectedFindingId } = useStoreSlice((state) => ({
+    activeCase: state.activeCase,
+    summary: state.summary,
+    findings: state.findings,
+    reports: state.reports,
+    delta: state.delta,
+    isLoading: state.isLoading,
+    setActiveTab: state.setActiveTab,
+    setFindingsFilter: state.setFindingsFilter,
+    setCommitDrawerOpen: state.setCommitDrawerOpen,
+    setSelectedFindingId: state.setSelectedFindingId,
+  }))
   const [bannerExpanded, setBannerExpanded] = useState(false)
+
+  const findingStats = useMemo(() => {
+    const stats = {
+      approvedFallback: 0,
+      pendingFallback: 0,
+      highCount: 0,
+      medCount: 0,
+      lowCount: 0,
+      specCount: 0,
+      mitreIds: [],
+    }
+    const mitreIds = new Set()
+    for (const finding of findings) {
+      const status = finding.status
+      if (status === 'approved' || status === 'APPROVED') stats.approvedFallback += 1
+      if (status === 'draft' || status === 'DRAFT') stats.pendingFallback += 1
+
+      const confidence = (finding.confidence ?? '').toUpperCase()
+      if (confidence === 'HIGH') stats.highCount += 1
+      if (confidence === 'MEDIUM') stats.medCount += 1
+      if (confidence === 'LOW') stats.lowCount += 1
+      if (confidence === 'SPECULATIVE') stats.specCount += 1
+
+      for (const mitreId of finding.mitre_ids ?? []) {
+        mitreIds.add(mitreId)
+      }
+    }
+    stats.mitreIds = [...mitreIds]
+    return stats
+  }, [findings])
 
   // API shape: { findings: { total, by_status: {DRAFT, APPROVED, REJECTED} }, timeline, evidence, todos }
   const fstats    = summary?.findings ?? {}
   const byStatus  = fstats.by_status ?? {}
   const total     = fstats.total     ?? findings.length
-  const approved  = byStatus.approved  ?? byStatus.APPROVED  ?? findings.filter((f) => f.status === 'approved' || f.status === 'APPROVED').length
-  const pending   = byStatus.draft     ?? byStatus.DRAFT     ?? findings.filter((f) => f.status === 'draft'    || f.status === 'DRAFT').length
+  const approved  = byStatus.approved  ?? byStatus.APPROVED  ?? findingStats.approvedFallback
+  const pending   = byStatus.draft     ?? byStatus.DRAFT     ?? findingStats.pendingFallback
   const staged    = delta.length
   const reviewPct = findings.length > 0 ? Math.round((delta.length / findings.length) * 100) : 0
 
-  const conf = (f) => (f.confidence ?? '').toUpperCase()
-  const highCount = findings.filter((f) => conf(f) === 'HIGH').length
-  const medCount  = findings.filter((f) => conf(f) === 'MEDIUM').length
-  const lowCount  = findings.filter((f) => conf(f) === 'LOW').length
-  const specCount = findings.filter((f) => conf(f) === 'SPECULATIVE').length
+  const highCount = findingStats.highCount
+  const medCount  = findingStats.medCount
+  const lowCount  = findingStats.lowCount
+  const specCount = findingStats.specCount
   const maxCount  = Math.max(highCount, medCount, lowCount, specCount, 1)
-
-  const mitreIds = [...new Set(
-    findings.flatMap((f) => f.mitre_ids ?? [])
-  )]
+  const mitreIds = findingStats.mitreIds
 
   return (
     <div className="h-full overflow-y-auto p-5" style={{ background: 'var(--bg-base)' }}>

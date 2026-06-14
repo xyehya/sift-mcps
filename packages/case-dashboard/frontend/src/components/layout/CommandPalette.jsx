@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useMemo, useState } from 'react'
 import { Command } from 'cmdk'
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import { postDelta, postLogout } from '../../api/endpoints'
 
 const MAX_RECENT = 5
@@ -12,9 +12,22 @@ export function CommandPalette() {
     setSelectedFindingId, setActiveTab,
     delta, setDelta,
     setCommitDrawerOpen, setUser, addToast,
-  } = useStore()
+  } = useStoreSlice((state) => ({
+    commandPaletteOpen: state.commandPaletteOpen,
+    setCommandPaletteOpen: state.setCommandPaletteOpen,
+    findings: state.findings,
+    selectedFindingId: state.selectedFindingId,
+    setSelectedFindingId: state.setSelectedFindingId,
+    setActiveTab: state.setActiveTab,
+    delta: state.delta,
+    setDelta: state.setDelta,
+    setCommitDrawerOpen: state.setCommitDrawerOpen,
+    setUser: state.setUser,
+    addToast: state.addToast,
+  }))
 
   const [recentItems, setRecentItems] = useState([])
+  const findingById = useMemo(() => new Map(findings.map((finding) => [finding.id, finding])), [findings])
 
   // Close on Escape — cmdk handles this natively, but we also track via store
   function close() {
@@ -30,7 +43,7 @@ export function CommandPalette() {
 
   // --- Finding navigation ---
   function handleFindingSelect(id) {
-    const f = findings.find((f) => f.id === id)
+    const f = findingById.get(id)
     if (!f) return
     addRecent({ id: f.id, label: `${f.id}  ${(f.title ?? '').slice(0, 56)}`, type: 'finding' })
     setSelectedFindingId(id)
@@ -40,7 +53,7 @@ export function CommandPalette() {
 
   // --- Stage approve / reject (same logic as FindingsTab.stageAction) ---
   async function stageAction(findingId, action) {
-    const finding = findings.find((f) => f.id === findingId)
+    const finding = findingById.get(findingId)
     if (!finding) return
     const newItem = {
       id: findingId,
@@ -105,22 +118,18 @@ export function CommandPalette() {
   }
 
   // Build the full item list
-  const findingItems = findings.map((f) => ({
+  const findingItems = useMemo(() => findings.map((f) => ({
     id: f.id,
     label: `${f.id}  ${(f.title ?? '').slice(0, 56)}`,
     type: 'finding',
     keywords: [f.id, f.title ?? ''],
-    onSelect: () => handleFindingSelect(f.id),
-  }))
+  })), [findings])
 
   // Recent items rendered first
-  const recentIds = new Set(recentItems.map((r) => r.id))
-  const recentFindingItems = recentItems
-    .filter((r) => r.type === 'finding' && findings.some((f) => f.id === r.id))
-    .map((r) => ({
-      ...r,
-      onSelect: () => handleFindingSelect(r.id),
-    }))
+  const recentIds = useMemo(() => new Set(recentItems.map((r) => r.id)), [recentItems])
+  const recentFindingItems = useMemo(() => (
+    recentItems.filter((r) => r.type === 'finding' && findingById.has(r.id))
+  ), [findingById, recentItems])
 
   return (
     <Command.Dialog
@@ -185,7 +194,7 @@ export function CommandPalette() {
                 <Command.Item
                   key={`recent-${item.id}`}
                   value={`recent-${item.id}`}
-                  onSelect={item.onSelect}
+                  onSelect={() => handleFindingSelect(item.id)}
                   className="flex items-center gap-2 px-2 py-1.5 rounded text-xs cursor-pointer data-[selected=true]:bg-cyan-dim data-[selected=true]:text-cyan"
                   style={{
                     color: 'var(--text-primary)',
@@ -219,7 +228,7 @@ export function CommandPalette() {
                   key={item.id}
                   value={item.id}
                   keywords={item.keywords}
-                  onSelect={item.onSelect}
+                  onSelect={() => handleFindingSelect(item.id)}
                   className="flex items-center gap-2 px-2 py-1.5 rounded text-xs cursor-pointer data-[selected=true]:bg-cyan-dim data-[selected=true]:text-cyan"
                   style={{ color: 'var(--text-primary)' }}
                 >

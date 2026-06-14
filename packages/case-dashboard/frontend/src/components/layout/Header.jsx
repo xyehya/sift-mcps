@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import { postLogout, postCaseActivate, getCaseActivateChallenge, postCaseCreate } from '../../api/endpoints'
 import { Icon } from '../common/Icon'
 
@@ -9,7 +9,23 @@ export function Header({ onLogout }) {
     setFindings, setTimeline, setDelta, setChainStatus,
     setIocs, setTodos, setReports, setSummary, setIsLoading,
     chainStatus,
-  } = useStore()
+  } = useStoreSlice((state) => ({
+    user: state.user,
+    activeCase: state.activeCase,
+    cases: state.cases,
+    delta: state.delta,
+    setActiveCase: state.setActiveCase,
+    setFindings: state.setFindings,
+    setTimeline: state.setTimeline,
+    setDelta: state.setDelta,
+    setChainStatus: state.setChainStatus,
+    setIocs: state.setIocs,
+    setTodos: state.setTodos,
+    setReports: state.setReports,
+    setSummary: state.setSummary,
+    setIsLoading: state.setIsLoading,
+    chainStatus: state.chainStatus,
+  }))
   const [caseMenuOpen, setCaseMenuOpen] = useState(false)
   const [activatingCase, setActivatingCase] = useState(null)
   const [activatePassword, setActivatePassword] = useState('')
@@ -138,7 +154,6 @@ export function Header({ onLogout }) {
 
   const isError = chainStatus?.status === 'violation'
   const isProcessing = agentPulse
-  const isIdle = !isProcessing && !isError
 
   let agentStatusLabel = 'idle'
   let agentStatusColor = '#94a3b8'

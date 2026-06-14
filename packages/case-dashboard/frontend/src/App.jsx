@@ -23,9 +23,9 @@ import { CommitDrawer } from './components/layout/CommitDrawer'
 import { CommandPalette } from './components/layout/CommandPalette'
 
 export default function App() {
-  const { setUser, user } = useStore()
+  const setUser = useStore((state) => state.setUser)
   const [authed, setAuthed] = useState(null) // null=checking, false=unauthed, true=authed
-  const { activeTab } = useStore()
+  const activeTab = useStore((state) => state.activeTab)
 
   useEffect(() => {
     getMe()
@@ -34,7 +34,7 @@ export default function App() {
         else setAuthed(false)
       })
       .catch(() => setAuthed(false))
-  }, [])
+  }, [setUser])
 
   useEffect(() => {
     return onUnauthorized(() => setAuthed(false))
@@ -58,7 +58,7 @@ export default function App() {
 }
 
 function AuthedApp({ onLogout, activeTab }) {
-  const { setCommandPaletteOpen } = useStore()
+  const setCommandPaletteOpen = useStore((state) => state.setCommandPaletteOpen)
   useDataPolling()
 
   // Ctrl+K / Cmd+K → toggle command palette
@@ -99,4 +99,3 @@ function AuthedApp({ onLogout, activeTab }) {
     </div>
   )
 }
-

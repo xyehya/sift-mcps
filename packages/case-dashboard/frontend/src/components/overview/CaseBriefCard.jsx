@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import { postCaseMetadata, getCase } from '../../api/endpoints'
 
 // Mirror of the examiner-settable schema in sift_core/case_metadata.py.
@@ -49,7 +49,12 @@ function asList(val) {
 }
 
 export function CaseBriefCard() {
-  const { activeCase, user, setActiveCase, addToast } = useStore()
+  const { activeCase, user, setActiveCase, addToast } = useStoreSlice((state) => ({
+    activeCase: state.activeCase,
+    user: state.user,
+    setActiveCase: state.setActiveCase,
+    addToast: state.addToast,
+  }))
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({})

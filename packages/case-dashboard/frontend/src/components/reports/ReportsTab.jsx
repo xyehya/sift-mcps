@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import {
   getReports,
   postReportGenerate,
@@ -35,7 +35,10 @@ const PROFILES = {
 }
 
 export function ReportsTab() {
-  const { addToast, portalState } = useStore()
+  const { addToast, portalState } = useStoreSlice((state) => ({
+    addToast: state.addToast,
+    portalState: state.portalState,
+  }))
   // Approved-only report eligibility (DB authority). When the portal-state
   // endpoint is wired and reports it ineligible, generation is blocked in the UI
   // (the backend also enforces this with a 409). When unavailable (file-backed

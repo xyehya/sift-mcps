@@ -52,7 +52,7 @@ function tokenTypeLabel(principal) {
 }
 
 export function SettingsTab() {
-  const { addToast } = useStore()
+  const addToast = useStore((state) => state.addToast)
 
   // PR03A — target path: agent/service Supabase JWT principals.
   const [principals, setPrincipals] = useState([])

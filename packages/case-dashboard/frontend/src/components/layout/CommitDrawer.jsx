@@ -1,9 +1,16 @@
-import { useState, useRef } from 'react'
-import { useStore } from '../../store/useStore'
+import { useMemo, useState, useRef } from 'react'
+import { useStoreSlice } from '../../store/useStore'
 import { postCommit, deleteDelta } from '../../api/endpoints'
 
 export function CommitDrawer() {
-  const { commitDrawerOpen, setCommitDrawerOpen, delta, setDelta, findings, addToast } = useStore()
+  const { commitDrawerOpen, setCommitDrawerOpen, delta, setDelta, findings, addToast } = useStoreSlice((state) => ({
+    commitDrawerOpen: state.commitDrawerOpen,
+    setCommitDrawerOpen: state.setCommitDrawerOpen,
+    delta: state.delta,
+    setDelta: state.setDelta,
+    findings: state.findings,
+    addToast: state.addToast,
+  }))
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
   const [success, setSuccess] = useState(false)
@@ -12,9 +19,7 @@ export function CommitDrawer() {
   const holdTimer = useRef(null)
   const holdInterval = useRef(null)
 
-  function getFinding(id) {
-    return findings.find((f) => f.id === id)
-  }
+  const findingById = useMemo(() => new Map(findings.map((finding) => [finding.id, finding])), [findings])
 
   // id here is the finding's id (e.g. F-001) — used for DELETE and for local filter
   async function removeItem(findingId) {
@@ -102,7 +107,7 @@ export function CommitDrawer() {
                 <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>No staged changes.</p>
               ) : (
                 delta.map((d) => {
-                  const f = getFinding(d.id)
+                  const f = findingById.get(d.id)
                   const color = DELTA_COLOR[d.action] ?? 'var(--text-muted)'
                   return (
                     <div key={d.id} className="flex items-center gap-2 p-2 rounded text-xs"

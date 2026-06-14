@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import { SkeletonBlock } from '../common/Skeleton'
 
 const CONF_COLOR = {
@@ -54,7 +54,12 @@ function getAccountsForFinding(f) {
 }
 
 export function AccountsTab() {
-  const { findings, setActiveTab, setFindingsAccountFilter, isLoading } = useStore()
+  const { findings, setActiveTab, setFindingsAccountFilter, isLoading } = useStoreSlice((state) => ({
+    findings: state.findings,
+    setActiveTab: state.setActiveTab,
+    setFindingsAccountFilter: state.setFindingsAccountFilter,
+    isLoading: state.isLoading,
+  }))
 
   const uniqueHosts = useMemo(() => {
     return [...new Set(findings.map((f) => f.host).filter(Boolean).map((h) => h.toUpperCase()))]

@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react'
-import { useStore } from '../../store/useStore'
-import { formatDistanceToNow } from 'date-fns'
+import { useStoreSlice } from '../../store/useStore'
 import { SkeletonBlock } from '../common/Skeleton'
 
 function humanizeGap(gapMs) {
@@ -35,7 +34,12 @@ const ALL_TYPES = ['auth','execution','process','file','network','persistence','
 const GAP_THRESHOLD_MS = 30 * 60 * 1000 // 30 min
 
 export function TimelineTab() {
-  const { timeline, findings, setSelectedFindingId, setActiveTab, isLoading } = useStore()
+  const { timeline, setSelectedFindingId, setActiveTab, isLoading } = useStoreSlice((state) => ({
+    timeline: state.timeline,
+    setSelectedFindingId: state.setSelectedFindingId,
+    setActiveTab: state.setActiveTab,
+    isLoading: state.isLoading,
+  }))
   const [typeFilter, setTypeFilter] = useState(new Set())
   const [hostFilter, setHostFilter] = useState('all')
   const [search, setSearch] = useState('')

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import {
   getEvidence,
   getChainStatus,
@@ -35,7 +35,14 @@ export function EvidenceTab() {
     setActiveTab,
     setSelectedFindingId,
     setFindingsFilter
-  } = useStore()
+  } = useStoreSlice((state) => ({
+    chainStatus: state.chainStatus,
+    setChainStatus: state.setChainStatus,
+    addToast: state.addToast,
+    setActiveTab: state.setActiveTab,
+    setSelectedFindingId: state.setSelectedFindingId,
+    setFindingsFilter: state.setFindingsFilter,
+  }))
 
   const [evidence, setEvidence] = useState([])
   const [evidenceLoading, setEvidenceLoading] = useState(true)

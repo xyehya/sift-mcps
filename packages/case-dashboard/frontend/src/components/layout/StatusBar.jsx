@@ -1,9 +1,15 @@
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
 
 export function StatusBar() {
-  const { chainStatus, delta, lastSync, user, setCommitDrawerOpen, setActiveTab } = useStore()
+  const { chainStatus, delta, lastSync, setCommitDrawerOpen, setActiveTab } = useStoreSlice((state) => ({
+    chainStatus: state.chainStatus,
+    delta: state.delta,
+    lastSync: state.lastSync,
+    setCommitDrawerOpen: state.setCommitDrawerOpen,
+    setActiveTab: state.setActiveTab,
+  }))
   const stagedCount = delta.length
 
   const isSealed = chainStatus && chainStatus.status !== 'unsealed' && chainStatus.manifest_version > 0

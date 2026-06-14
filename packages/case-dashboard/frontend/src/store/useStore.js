@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useShallow } from 'zustand/react/shallow'
 
 export const useStore = create((set, get) => ({
   // Navigation
@@ -86,3 +87,7 @@ export const useStore = create((set, get) => ({
   commandPaletteOpen: false,
   setCommandPaletteOpen: (v) => set({ commandPaletteOpen: v }),
 }))
+
+export function useStoreSlice(selector) {
+  return useStore(useShallow(selector))
+}

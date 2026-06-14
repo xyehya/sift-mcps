@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import { SkeletonBlock } from '../common/Skeleton'
 import { createTodo, updateTodo, deleteTodo } from '../../api/endpoints'
 
@@ -21,7 +21,16 @@ const STATUS_COLOR = {
 const EMPTY_CREATE = { description: '', priority: 'medium', assignee: '', related: '' }
 
 export function TodosTab() {
-  const { todos, setTodos, summary, setActiveTab, setSelectedFindingId, isLoading, addToast, user } = useStore()
+  const { todos, setTodos, summary, setActiveTab, setSelectedFindingId, isLoading, addToast, user } = useStoreSlice((state) => ({
+    todos: state.todos,
+    setTodos: state.setTodos,
+    summary: state.summary,
+    setActiveTab: state.setActiveTab,
+    setSelectedFindingId: state.setSelectedFindingId,
+    isLoading: state.isLoading,
+    addToast: state.addToast,
+    user: state.user,
+  }))
   const [priorityFilter, setPriorityFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
 

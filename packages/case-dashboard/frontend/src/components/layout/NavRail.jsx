@@ -1,4 +1,4 @@
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import clsx from 'clsx'
 
 const NAV_ITEMS = [
@@ -19,9 +19,13 @@ const BOTTOM_ITEMS = [
 ]
 
 export function NavRail() {
-  const { activeTab, setActiveTab, findings, delta, summary } = useStore()
+  const { activeTab, setActiveTab, findings, summary } = useStoreSlice((state) => ({
+    activeTab: state.activeTab,
+    setActiveTab: state.setActiveTab,
+    findings: state.findings,
+    summary: state.summary,
+  }))
   const pendingCount = findings.filter((f) => f.status === 'draft').length
-  const stagedCount = delta.length
   const todoOpenCount = summary?.todos?.open ?? 0
 
   function getBadge(key) {
@@ -148,5 +152,3 @@ function IconServer() {
     </svg>
   )
 }
-
-

@@ -14,7 +14,7 @@ import { useStore } from '../../store/useStore'
 import { HealthPanel } from './HealthPanel'
 
 export function BackendsTab() {
-  const { addToast } = useStore()
+  const addToast = useStore((state) => state.addToast)
   const [backends, setBackends] = useState([])
   const [loading, setLoading] = useState(false)
   const [validationResult, setValidationResult] = useState(null)

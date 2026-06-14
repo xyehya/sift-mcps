@@ -1,5 +1,5 @@
 import { useState, useMemo, Fragment } from 'react'
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import { SkeletonBlock } from '../common/Skeleton'
 
 const CONF_COLOR = {
@@ -48,7 +48,13 @@ const STATUS_COLOR = {
 }
 
 export function IocsTab() {
-  const { iocs, findings, setActiveTab, setSelectedFindingId, isLoading } = useStore()
+  const { iocs, findings, setActiveTab, setSelectedFindingId, isLoading } = useStoreSlice((state) => ({
+    iocs: state.iocs,
+    findings: state.findings,
+    setActiveTab: state.setActiveTab,
+    setSelectedFindingId: state.setSelectedFindingId,
+    isLoading: state.isLoading,
+  }))
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')

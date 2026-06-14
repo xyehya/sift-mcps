@@ -1,5 +1,5 @@
 import { usePolling } from './usePolling'
-import { useStore } from '../store/useStore'
+import { useStoreSlice } from '../store/useStore'
 import {
   getCase, getCases, getSummary,
   getFindings, getDelta, getTimeline,
@@ -13,7 +13,21 @@ export function useDataPolling() {
     setFindings, setDelta, setTimeline,
     setChainStatus, setLastSync, setIsLoading, setIocs, setTodos, setReports,
     setPortalState,
-  } = useStore()
+  } = useStoreSlice((state) => ({
+    setActiveCase: state.setActiveCase,
+    setCases: state.setCases,
+    setSummary: state.setSummary,
+    setFindings: state.setFindings,
+    setDelta: state.setDelta,
+    setTimeline: state.setTimeline,
+    setChainStatus: state.setChainStatus,
+    setLastSync: state.setLastSync,
+    setIsLoading: state.setIsLoading,
+    setIocs: state.setIocs,
+    setTodos: state.setTodos,
+    setReports: state.setReports,
+    setPortalState: state.setPortalState,
+  }))
 
   usePolling(async () => {
     const [cas, cases, summary, findings, delta, timeline, chain, iocs, todos, reports, portal] = await Promise.allSettled([

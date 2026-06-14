@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
-import { useStore } from '../../store/useStore'
+import { useStoreSlice } from '../../store/useStore'
 import { postDelta, deleteDelta, getAudit } from '../../api/endpoints'
 import { formatDistanceToNow } from 'date-fns'
 import { Skeleton } from '../common/Skeleton'
@@ -30,12 +30,35 @@ export function getTagString(t) {
 }
 
 export function FindingsTab() {
-  const { findings, delta, setDelta, selectedFindingId, setSelectedFindingId, timeline, addToast, isLoading, findingsFilter, setFindingsFilter, findingsHostFilter, setFindingsHostFilter, findingsAccountFilter, setFindingsAccountFilter, commandPaletteOpen } = useStore()
+  const {
+    findings, delta, setDelta, selectedFindingId, setSelectedFindingId,
+    timeline, addToast, isLoading, findingsFilter, setFindingsFilter,
+    findingsHostFilter, setFindingsHostFilter, findingsAccountFilter,
+    setFindingsAccountFilter, commandPaletteOpen,
+  } = useStoreSlice((state) => ({
+    findings: state.findings,
+    delta: state.delta,
+    setDelta: state.setDelta,
+    selectedFindingId: state.selectedFindingId,
+    setSelectedFindingId: state.setSelectedFindingId,
+    timeline: state.timeline,
+    addToast: state.addToast,
+    isLoading: state.isLoading,
+    findingsFilter: state.findingsFilter,
+    setFindingsFilter: state.setFindingsFilter,
+    findingsHostFilter: state.findingsHostFilter,
+    setFindingsHostFilter: state.setFindingsHostFilter,
+    findingsAccountFilter: state.findingsAccountFilter,
+    setFindingsAccountFilter: state.setFindingsAccountFilter,
+    commandPaletteOpen: state.commandPaletteOpen,
+  }))
   const filter = findingsFilter
   const setFilter = (f) => { setFindingsFilter(f); setSelectedFindingId(null) }
   const [search, setSearch] = useState('')
   const [selectMode, setSelectMode] = useState(false)
   const [selected, setSelected] = useState(new Set())
+  const findingById = useMemo(() => new Map(findings.map((finding) => [finding.id, finding])), [findings])
+  const deltaById = useMemo(() => new Map(delta.map((item) => [item.id, item])), [delta])
 
   const filtered = useMemo(() => {
     let list = findings
@@ -75,12 +98,19 @@ export function FindingsTab() {
     return list
   }, [findings, filter, search, findingsHostFilter, findingsAccountFilter])
 
-  const currentFinding = findings.find((f) => f.id === selectedFindingId) ?? null
-  const stagedItem = currentFinding ? delta.find((d) => d.id === currentFinding.id) : null
+  const currentFinding = selectedFindingId ? findingById.get(selectedFindingId) ?? null : null
+  const stagedItem = currentFinding ? deltaById.get(currentFinding.id) ?? null : null
+  const reviewCounts = useMemo(() => {
+    let pending = 0
+    for (const finding of findings) {
+      if ((finding.status ?? '').toLowerCase() === 'draft') pending += 1
+    }
+    return { pending, reviewed: findings.length - pending }
+  }, [findings])
 
   // POST /api/delta replaces the WHOLE delta file — always send all current items
   async function stageAction(findingId, action, note = '') {
-    const finding = findings.find((f) => f.id === findingId)
+    const finding = findingById.get(findingId)
     if (!finding) return
     const newItem = {
       id: findingId,
@@ -215,7 +245,7 @@ export function FindingsTab() {
           ) : (
             filtered.map((f) => {
               const color = CONF_COLOR[(f.confidence ?? '').toUpperCase()] ?? 'var(--text-muted)'
-              const staged = delta.find((d) => d.id === f.id)
+              const staged = deltaById.get(f.id)
               const isSelected = selectMode && selected.has(f.id)
               const isActive = f.id === (currentFinding?.id)
               return (
@@ -255,7 +285,7 @@ export function FindingsTab() {
         {/* Footer */}
         <div className="p-2 border-t text-[11px] font-sans flex items-center justify-between"
           style={{ borderColor: 'var(--border-faint)', color: 'var(--text-muted)' }}>
-          <span>{findings.filter((f) => (f.status ?? '').toLowerCase() === 'draft').length} pending · {findings.filter((f) => (f.status ?? '').toLowerCase() !== 'draft').length} reviewed</span>
+          <span>{reviewCounts.pending} pending · {reviewCounts.reviewed} reviewed</span>
           <button onClick={() => { setSelectMode(!selectMode); setSelected(new Set()) }}
             style={{ color: selectMode ? 'var(--cyan)' : 'var(--text-muted)' }}>
             {selectMode ? 'cancel' : '☐ select'}
@@ -301,7 +331,13 @@ export function FindingsTab() {
 }
 
 function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onUnstage }) {
-  const { delta, setDelta, findings, addToast, setSelectedFindingId, setActiveTab } = useStore()
+  const { delta, setDelta, addToast, setSelectedFindingId, setActiveTab } = useStoreSlice((state) => ({
+    delta: state.delta,
+    setDelta: state.setDelta,
+    addToast: state.addToast,
+    setSelectedFindingId: state.setSelectedFindingId,
+    setActiveTab: state.setActiveTab,
+  }))
   const confColor = CONF_COLOR[(finding.confidence ?? '').toUpperCase()] ?? 'var(--text-muted)'
   const [showContext, setShowContext] = useState(false)
   const [zone2Open, setZone2Open] = useState(false)
@@ -312,6 +348,7 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
   const [editingField, setEditingField] = useState(null)
   const [editVal, setEditVal] = useState('')
   const [editTags, setEditTags] = useState([])
+  const deltaById = useMemo(() => new Map(delta.map((item) => [item.id, item])), [delta])
 
   // Load audit data when Zone 2 opens
   useEffect(() => {
@@ -382,7 +419,7 @@ function FindingDetail({ finding, stagedItem, timeline, onApprove, onReject, onU
       return
     }
 
-    const existing = delta.find((d) => d.id === finding.id) || {
+    const existing = deltaById.get(finding.id) || {
       id: finding.id,
       type: finding.type ?? 'finding',
       action: 'edit',
