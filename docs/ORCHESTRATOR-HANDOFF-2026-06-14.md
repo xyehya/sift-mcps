@@ -15,11 +15,15 @@
 > - **Deferred to RUN-3/4:** OSW B4 memory durable-lane live proof; Option A
 >   (gateway-injected app.job_status_public realtime) = B-MVP-024; F-HARDEN-01
 >   (Bearer/JTI flag-gated deletion) under B-MVP-023; F3 cross-case gate.
-> - **NEXT = RUN-3 (sandbox impl):** implement bwrap+socat agent code-exec sandbox
->   + callMCPTool shim for Hermes (verify kernel/nested-KVM prereqs from the survey
->   §"Open Questions" on the VM first), optionally the run_command Landlock+seccomp
->   layer; then RUN-4 = PMI4/OS6 e2e + fresh Hermes autonomous run.
-> See `docs/migration/Session-Notes.md` RUN-1 entry for full live proof + B-MVP-018/023/024/025.
+> - **RUN-3 REFOCUSED + DESIGN FROZEN (2026-06-14):** scope changed from a Hermes agent
+>   code-exec sandbox (Hermes runs in Claude Code on a separate operator machine — already
+>   sandboxed, PTC works) to **hardening the `run_command` exec path on SIFT**. Authoritative
+>   design: `docs/research/run_command-FINAL-SPEC.md`. **Operating model + fresh-session launch
+>   prompt: `docs/RUN3-run_command-hardening-BUILD-PLAN.md` (START HERE for RUN-3).** Floor =
+>   Landlock(ABI v4)+seccomp+cgroup+AppArmor (host mount ns, NOT bwrap/LXD — FUSE physics);
+>   Ceiling = allowlist default + `contained` kernel-jailed tier (no HITL) + code-exec scanners.
+>   Tracks B-MVP-026. Then RUN-4 = PMI4/OS6 e2e + fresh Hermes autonomous run (+ deferred OSW B4).
+> See `docs/migration/Session-Notes.md` RUN-1 + RUN-3 entries for full proof + B-MVP-018/023/024/025/026.
 
 Pick up here in a fresh orchestrator session. This is the source of truth for the
 next runs. (RUN-1 above is done; the RUN sections below are the original plan —

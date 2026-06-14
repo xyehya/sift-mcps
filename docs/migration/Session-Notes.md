@@ -13,6 +13,27 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-14 - RUN-3 DESIGN FROZEN: run_command hardening spec + build plan (ready to launch)
+
+Status: DONE (design); build NOT started.
+
+Designed the autonomous (zero-HITL) hardening of the agent's `run_command` deep-dive exec path.
+Three analyses fused into one authoritative spec: a hard red-team of the live exec code (gaps G1-G9),
+a web-grounded sandbox survey, and an operator-supplied research draft — reconciled by an Opus 4.8
+spec-writer that also SSH-corrected the kernel assumption (VM is Ubuntu 24.04 / kernel 6.8 /
+**Landlock ACTIVE ABI v4**, not 22.04/5.15/v1).
+
+- **Authoritative spec:** `docs/research/run_command-FINAL-SPEC.md` (Floor = Landlock+seccomp+cgroup+
+  AppArmor in host mount ns — NOT bwrap/LXD, FUSE physics; Ceiling = allowlist default + per-tool
+  code-exec scanners + env-deny + output sanitation; `contained` tier runs unlisted tools kernel-jailed
+  with NO human approval = the autonomous replacement for HITL).
+- **Operating model / build tracker:** `docs/RUN3-run_command-hardening-BUILD-PLAN.md` — 4 disjoint-fence
+  batches (B-CEIL, B-FLOOR, B-AA, B-GATE) Wave-1 parallel + Wave-2 serial live VM (positive matrix /
+  negative red-team / seccomp LOG->KILL burn-in / apparmor complain->enforce). Self-sufficient fresh-session
+  launch prompt in its §6. Tracks B-MVP-026.
+- Supporting artifacts: `docs/research/sandbox-survey-2026-06-14.md`, `docs/run_command_research.md`
+  (operator draft). (The orchestrator's interim hardening plan was folded into the FINAL-SPEC.)
+
 ### 2026-06-14 - RUN-1 (post-MVP orchestrator): 4 parallel agents reconciled + LIVE-PROVEN on run1/integrate
 
 Status: DONE (code + local gate + `/security-review` + serial VM live-proof all GREEN on `run1/integrate`).
@@ -923,6 +944,7 @@ after portal reset/credential issuance.
 | B-MVP-023 | Backlog | OPEN | CL3b refused-as-fork (2026-06-13): the `sift_session` cookie-verify branch in case-dashboard auth.py is session-ESTABLISHMENT (not the file-HMAC re-auth plane), provably unminted in production but load-bearing for ~11 test suites' auth fixtures (generate_jwt + COOKIE_NAME). Migrate those fixtures to the Supabase-envelope harness, then delete the branch (and its examiner Bearer fallback / JTI logout if also dead). Not security-blocking (reaching it needs an already-secret-signed JWT). PROGRESS 2026-06-14 (RUN-1 HARDEN, run1/harden): the ~11 test fixtures migrated off generate_jwt/COOKIE_NAME to the Supabase-envelope harness (6 files), unblocking deletion from the test side; 361 case-dashboard tests green. RESIDUAL fork F-HARDEN-01: the examiner Bearer fallback (auth.py) + JTI logout revoke (routes.py) are gated by `legacy_portal_session_enabled` (default false in new installs) — unreachable at runtime but flag-controlled, not dead in general. DECISION NEEDED before code deletion: (a) set legacy_portal_session_enabled=false in all remaining installs and delete the sift_session branch + Bearer + JTI code, or (b) keep the flag. Code retained until decided. | Future legacy-session retirement batch |
 | B-MVP-024 | Backlog | OPEN | OPENED 2026-06-14 (RUN-1 OSW, run1/osw): Option A deferred for opensearch_ingest_status realtime status. RUN-1 took Option C (K4-preserving): in DB-active mode the tool returns ingests:[] + authority "postgres-durable-jobs" + a job_id/next_step pointer and never reads the tamperable local mirror JSON (preserves BATCH-K4). FUTURE: have the gateway inject authoritative app.job_status_public rows for in-flight jobs of the active case into the ingest_status call (same mechanism class as case_dir injection), so agents see realtime worker_label/current_step/indexed_docs without any local-file read — satisfies both K4 and B3's realtime goal. Requires gateway middleware/plumbing outside RUN-1's dispatch-only scope fence. | Future opensearch realtime batch (RUN-3+) |
 | B-MVP-025 | Backlog | DONE | FOUND + FIXED 2026-06-14 (RUN-1 VM proof, run1/integrate): the gateway's `_stdio_base_env()` (mcp_server.py) built a minimal whitelist env (PATH/HOME/USER/LOGNAME/SHELL/LANG/TMP*/LC_*) for stdio add-on backends and OMITTED `SIFT_DB_ACTIVE`. So the opensearch-mcp backend subprocess never saw the DB-authority flag → `db_status_active()` defaulted to legacy → the BATCH-K4/B3 DB-active ingest-status contract NEVER engaged in the backend (it would have served tamperable local status JSON instead of the durable-job redirect). PRE-EXISTING (not introduced by RUN-1; surfaced by live proof). FIX: propagate the non-secret `SIFT_DB_ACTIVE` boolean only (never the control-plane DSN) in `_stdio_base_env`; 2 regression tests added. Live-proven on VM: ingest_status now returns the K4 durable-job-authority redirect (ingests=[], no local-mirror read). Workers were a false alarm (job_worker_cli self-sets SIFT_DB_ACTIVE at runtime; not visible in /proc/environ). | RUN-1 reconcile (orchestrator) |
+| B-MVP-026 | Backlog | OPEN | RUN-3 run_command hardening: add kernel Floor (Landlock ABI v4 + seccomp + systemd-cgroup + AppArmor, host mount ns — NOT bwrap/LXD per FUSE physics) + harden Ceiling (allowlist default + `contained` kernel-jailed tier for unlisted tools = autonomous no-HITL; per-tool code-exec scanners sed/sqlite3/tshark/vol/exiftool; DENY_FLOOR adds; .NET/LD/PYTHON env-deny; /var/lib/sift read-block; output ANSI/OSC sanitation). Closes red-team gaps G1-G9. DESIGN FROZEN 2026-06-14: authoritative spec `docs/research/run_command-FINAL-SPEC.md`; build plan + fresh-session launch prompt `docs/RUN3-run_command-hardening-BUILD-PLAN.md` (4 disjoint batches B-CEIL/B-FLOOR/B-AA/B-GATE, Wave-1 parallel + Wave-2 serial live VM). Sub-backlog: C1 run_command_structured entrypoint; C4 LXD/microVM Tier-2; Landlock ioctl-scoping at kernel>=6.10. | RUN-3 (run_command hardening) |
 
 ## Active References
 
