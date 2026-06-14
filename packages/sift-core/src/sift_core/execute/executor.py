@@ -190,9 +190,17 @@ def execute(
 
         stdout = str(worker_result.get("stdout", ""))
         stderr = str(worker_result.get("stderr", ""))
-        stdout_byte_count = int(
-            worker_result.get("stdout_total_bytes", len(stdout.encode("utf-8")))
-        )
+
+        # Collapse \r progress meters (vol3/tqdm) BEFORE counting/saving so the
+        # flood can neither blow context nor bloat the saved file. Both streams
+        # are cleaned (vol3 emits Progress: to stderr even under 2>&1).
+        stdout, _so_progress = _strip_cr_progress(stdout)
+        stderr, _se_progress = _strip_cr_progress(stderr)
+        _progress_frames_removed = _so_progress + _se_progress
+
+        # Recompute byte count from the cleaned stream — the original
+        # stdout_total_bytes counted the progress flood we just discarded.
+        stdout_byte_count = len(stdout.encode("utf-8"))
 
         response: dict[str, Any] = {
             "exit_code": int(worker_result["exit_code"]),
@@ -207,6 +215,8 @@ def execute(
         }
         if runtime_user:
             response["runtime_user"] = runtime_user
+        if _progress_frames_removed:
+            response["progress_frames_removed"] = _progress_frames_removed
         if worker_result.get("truncated"):
             response["truncated"] = True
         if worker_result.get("stages"):
@@ -290,6 +300,43 @@ def _format_command(cmd_list: list[str] | list[dict[str, Any]]) -> str:
     if cmd_list and isinstance(cmd_list[0], dict):
         return " | ".join(" ".join(str(part) for part in stage.get("argv", [])) for stage in cmd_list)
     return " ".join(str(part) for part in cmd_list)
+
+
+import re as _re
+
+# Carriage-return progress meters (Volatility 3 "Progress:  NN.NN ..." emitted
+# with \r to overwrite one line, plus tqdm-style bars) flood the stream with
+# tens of thousands of duplicate frames — a single vol3 windows.info produced
+# ~139k lines / 9.4 MB of pure progress. We collapse them BEFORE byte-counting
+# and saving so they can neither blow the agent context nor bloat the saved
+# output file. Real tool output is preserved.
+_CR_PROGRESS_RE = _re.compile(r"^\s*Progress:\s", _re.IGNORECASE)
+
+
+def _strip_cr_progress(text: str) -> tuple[str, int]:
+    """Collapse \\r progress frames and drop vol3/tqdm progress lines.
+
+    Returns (cleaned_text, frames_removed). For each \\n-delimited line that
+    contains \\r (a meter overwriting itself in place), only the final segment
+    after the last \\r is kept (the last frame the terminal would show); that
+    final segment is then dropped entirely if it is a Progress: meter line.
+    Lines without \\r are passed through untouched, except standalone Progress:
+    lines which are dropped.
+    """
+    if "\r" not in text and "Progress:" not in text:
+        return text, 0
+    removed = 0
+    out_lines: list[str] = []
+    for line in text.split("\n"):
+        if "\r" in line:
+            frames = line.split("\r")
+            removed += sum(1 for f in frames[:-1] if f.strip())
+            line = frames[-1]
+        if _CR_PROGRESS_RE.match(line):
+            removed += 1
+            continue
+        out_lines.append(line)
+    return "\n".join(out_lines), removed
 
 
 def _looks_binary(stdout: str) -> bool:

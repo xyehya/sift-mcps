@@ -1090,3 +1090,34 @@ def test_worker_falls_back_to_jail_when_shared_unwritable(tmp_path, monkeypatch)
     assert result["exit_code"] == 0
     jail = tmp_path / "tmp"
     assert (jail / "vol-symbols").is_dir()
+
+
+def test_strip_cr_progress_collapses_vol3_flood():
+    """vol3 \\r Progress: frames are collapsed before counting/saving."""
+    from sift_core.execute.executor import _strip_cr_progress
+
+    flood = "".join(f"Progress:  {i/100:.2f}\t\tScanning\r" for i in range(2000))
+    flood += "Variable\tValue\nKernel Base\t0xf80\nDTB\t0x1aa000\n"
+    cleaned, removed = _strip_cr_progress(flood)
+
+    assert removed == 2000
+    assert "Progress:" not in cleaned
+    assert "Kernel Base\t0xf80" in cleaned
+    assert "DTB\t0x1aa000" in cleaned
+    assert len(cleaned) < 200  # 100KB+ flood collapsed to real output only
+
+
+def test_strip_cr_progress_passthrough_for_clean_output():
+    from sift_core.execute.executor import _strip_cr_progress
+
+    text = "fls -r output\n0001 file_a\n0002 file_b\n"
+    assert _strip_cr_progress(text) == (text, 0)
+
+
+def test_strip_cr_progress_keeps_final_cr_segment():
+    """A \\r meter on a non-Progress line keeps the last frame only."""
+    from sift_core.execute.executor import _strip_cr_progress
+
+    cleaned, removed = _strip_cr_progress("step1\rstep2\rDONE result\n")
+    assert cleaned == "DONE result\n"
+    assert removed == 2
