@@ -536,16 +536,21 @@ teardown_systemd() {
     run_if_live sudo_if_needed systemctl daemon-reload 2>/dev/null || true
   fi
 
-  # Remove the sudoers drop-ins written by setup-agent-runtime.sh and
-  # setup-ingest-mount-sudoers.sh (configure_agent_runtime / configure_ingest_mount_sudoers):
+  # Remove the sudoers drop-ins written by setup-agent-runtime.sh,
+  # setup-ingest-mount-sudoers.sh, and the RUN-3 systemd scope helper setup:
   #   /etc/sudoers.d/sift-agent-runtime
   #   /etc/sudoers.d/sift-ingest-mount
-  for f in /etc/sudoers.d/sift-agent-runtime /etc/sudoers.d/sift-ingest-mount; do
+  #   /etc/sudoers.d/sift-run-command-systemd-scope
+  for f in /etc/sudoers.d/sift-agent-runtime /etc/sudoers.d/sift-ingest-mount /etc/sudoers.d/sift-run-command-systemd-scope; do
     if [[ -f "$f" ]]; then
       action "remove" "$f (sudoers drop-in)"
       run_if_live sudo_if_needed rm -f "$f"
     fi
   done
+  if [[ -f /usr/local/sbin/sift-run-command-systemd-scope ]]; then
+    action "remove" "/usr/local/sbin/sift-run-command-systemd-scope"
+    run_if_live sudo_if_needed rm -f /usr/local/sbin/sift-run-command-systemd-scope
+  fi
 
   # Remove the hayabusa system-wide symlink (install_hayabusa_system_links):
   #   /usr/local/bin/hayabusa -> $SIFT_HOME/bin/hayabusa

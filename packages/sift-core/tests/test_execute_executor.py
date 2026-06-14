@@ -325,6 +325,64 @@ def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
     assert captured["payload"]["seccomp_mode"] == "log"
 
 
+def test_run_command_uses_systemd_scope_helper_when_configured(monkeypatch):
+    import json
+    import subprocess
+
+    from sift_core.execute import executor as executor_module
+    from sift_core.execute.executor import _run_isolated_worker
+
+    helper = "/usr/local/sbin/sift-run-command-systemd-scope"
+    monkeypatch.setenv("SIFT_EXECUTE_SYSTEMD_SCOPE", "1")
+    monkeypatch.setenv("SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER", helper)
+    monkeypatch.setattr(
+        executor_module.shutil,
+        "which",
+        lambda cmd: f"/usr/bin/{cmd}" if cmd in {"sudo", "systemd-run"} else None,
+    )
+    monkeypatch.setattr(executor_module.Path, "exists", lambda self: True)
+
+    captured = {}
+
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = json.dumps({"exit_code": 0, "stdout": "helper-ok", "stderr": ""})
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        captured["cmd"] = cmd
+        captured["payload"] = json.loads(kwargs["input"])
+        return FakeCompletedProcess()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    res = _run_isolated_worker(
+        ["/usr/bin/date"],
+        timeout=5,
+        cwd="/cases/c",
+        max_output_bytes=1024,
+        memory_limit_bytes=0,
+        runtime_user="agent_runtime",
+        sudo_path="",
+    )
+
+    cmd = captured["cmd"]
+    assert res["stdout"] == "helper-ok"
+    assert cmd[:3] == ["/usr/bin/sudo", "-n", helper]
+    assert "--unit" in cmd
+    assert cmd[cmd.index("--unit") + 1].startswith("sift-run-command-")
+    assert cmd[cmd.index("--unit") + 1].endswith(".scope")
+    assert cmd[cmd.index("--runtime-user") + 1] == "agent_runtime"
+    assert cmd[cmd.index("--memory-high") + 1] == "3G"
+    assert cmd[cmd.index("--memory-max") + 1] == "4G"
+    assert cmd[cmd.index("--cpu-quota") + 1] == "200%"
+    assert cmd[cmd.index("--tasks-max") + 1] == "64"
+    assert cmd[cmd.index("--runtime-max-sec") + 1] == "10"
+    sep = cmd.index("--")
+    assert cmd[sep + 1 : sep + 4] == [sys.executable, "-m", "sift_core.execute.worker"]
+    assert captured["payload"]["runtime_user_already_applied"] is True
+
+
 def test_native_runtime_user_requires_existing_local_account(monkeypatch):
     import pwd
 

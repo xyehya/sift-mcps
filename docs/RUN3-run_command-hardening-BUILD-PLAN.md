@@ -83,7 +83,7 @@ safely, batches own **non-overlapping file sets**:
 - **Does NOT touch:** security.py / security_policy.py / runtime_acl.py (B-CEIL), apparmor/systemd (B-AA).
 - **Gaps/work:** G4 fail-closed runtime_user — `SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1` rejects if no
   distinct runtime_user; launcher aborts if uid 0 or service uid (use `agent_runtime` uid 995).
-  G5 wrap each exec in `systemd-run --scope -p MemoryMax/MemoryHigh/CPUQuota/TasksMax/RuntimeMaxSec/OOMPolicy=kill/IPAddressDeny=any`
+  G5 wrap each exec in `systemd-run --scope --uid agent_runtime --gid <gid> -p MemoryMax/MemoryHigh/CPUQuota/TasksMax/RuntimeMaxSec/OOMPolicy=kill/IPAddressDeny=any`
   in `executor._run_isolated_worker`. G3/G7 the launcher: ABI-detect Landlock (v4), grant RX on
   `/usr,/bin,/sbin,/lib,/lib64,/opt/{sift-mcps,zimmermantools,volatility3,hayabusa},/proc/self`,
   R on `<case_dir>/evidence`, RW+MAKE on `<case_dir>/{agent,extractions,tmp}`, deny all else
@@ -100,9 +100,11 @@ safely, batches own **non-overlapping file sets**:
 
 ### B-AA — AppArmor + systemd-unit backstop  (spec P6 + unit hardening)
 - **Fence (OWNS):** `configs/apparmor/**` (new `dfir-exec`/job-worker profile, complain mode);
-  `configs/systemd/sift-job-worker.service` (`NoNewPrivileges=yes`, `RestrictSUIDSGID`, `LockPersonality`,
-  `SystemCallArchitectures=native`; keep `ProtectSystem` OFF for FUSE); `install.sh` apparmor-gen if needed;
-  a `configs/` note for the `systemd-run --scope` sudoers/polkit grant the worker needs.
+  `configs/systemd/sift-job-worker.service` (`LockPersonality`, `SystemCallArchitectures=native`;
+  keep `ProtectSystem` OFF for FUSE; service-level `NoNewPrivileges`/`RestrictSUIDSGID` stay off
+  because the unit must invoke the root-owned RUN-3 systemd-scope helper); `install.sh`
+  apparmor-gen if needed; a `configs/` note for the `systemd-run --scope` sudoers helper grant the
+  worker needs.
 - **Does NOT touch:** any execute/*.py.
 - **Done:** profile authored (complain), unit hardened, `bash -n install.sh` ok; the complain→enforce
   flip is a Wave-2 live step. Commit on `run3/aa`.

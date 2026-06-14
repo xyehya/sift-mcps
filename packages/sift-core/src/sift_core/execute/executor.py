@@ -24,6 +24,8 @@ from sift_core.execute.runtime_acl import build_sandbox_env, is_authority_path
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_SYSTEMD_SCOPE_HELPER = "/usr/local/sbin/sift-run-command-systemd-scope"
+
 
 def _active_or_env_case_dir() -> str:
     try:
@@ -68,6 +70,23 @@ def _systemd_memory_props(memory_limit_bytes: int) -> tuple[str, str]:
     return memory_high, memory_max
 
 
+def _systemd_scope_helper_path() -> str:
+    raw = os.environ.get("SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER")
+    if raw is not None:
+        value = raw.strip()
+        if value.lower() in {"", "0", "false", "no", "off"}:
+            return ""
+        if not Path(value).exists():
+            raise ExecutionError(
+                "SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER points to a missing helper: "
+                f"{value}"
+            )
+        return value
+    if Path(DEFAULT_SYSTEMD_SCOPE_HELPER).exists():
+        return DEFAULT_SYSTEMD_SCOPE_HELPER
+    return ""
+
+
 def _systemd_scope_command(
     worker_cmd: list[str],
     *,
@@ -107,6 +126,37 @@ def _systemd_scope_command(
         "IPAccounting=yes",
     ]
     unit_name = f"sift-run-command-{os.getpid()}-{time.monotonic_ns()}.scope"
+    helper = _systemd_scope_helper_path()
+    if helper and runtime_user:
+        sudo_path = shutil.which("sudo") or "/usr/bin/sudo"
+        if not Path(sudo_path).exists():
+            raise ExecutionError(
+                "SIFT run_command systemd scope helper requires sudo, but sudo "
+                "was not found."
+            )
+        helper_cmd = [
+            sudo_path,
+            "-n",
+            helper,
+            "--unit",
+            unit_name,
+            "--runtime-user",
+            runtime_user,
+            "--memory-high",
+            memory_high,
+            "--memory-max",
+            memory_max,
+            "--cpu-quota",
+            os.environ.get("SIFT_EXECUTE_SYSTEMD_CPU_QUOTA", "200%"),
+            "--tasks-max",
+            os.environ.get("SIFT_EXECUTE_SYSTEMD_TASKS_MAX", "64"),
+            "--runtime-max-sec",
+            str(max(1, int(timeout) + 5)),
+            "--",
+            *worker_cmd,
+        ]
+        return helper_cmd, True
+
     scope_cmd = [
         systemd_run,
         "--scope",

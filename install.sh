@@ -2916,30 +2916,14 @@ configure_apparmor() {
   log "AppArmor profiles installed (complain mode)."
 }
 
-configure_run_command_polkit() {
-  local rules_src="${REPO_DIR}/configs/polkit/50-sift-run-command-systemd-run.rules"
-  local rules_dir="/etc/polkit-1/rules.d"
-  local rules_dst="${rules_dir}/50-sift-run-command-systemd-run.rules"
-  if [[ ! -f "$rules_src" ]]; then
-    return 0
+configure_run_command_systemd_scope() {
+  if ! command -v visudo >/dev/null 2>&1 && [[ ! -x /usr/sbin/visudo ]]; then
+    die "Missing required command: visudo"
   fi
-  if [[ ! -d "$rules_dir" ]]; then
-    warn "polkit rules directory not found — run_command systemd scope authorization must be configured manually."
-    return 0
-  fi
-  local tmp
-  tmp="$(mktemp)"
-  sed "s|@@SIFT_GATEWAY_SERVICE_USER@@|${SIFT_GATEWAY_SERVICE_USER}|g" \
-    "$rules_src" > "$tmp"
-  sudo_if_needed cp "$tmp" "$rules_dst"
-  rm -f "$tmp"
-  sudo_if_needed chmod 644 "$rules_dst"
-  sudo_if_needed chown root:root "$rules_dst" 2>/dev/null || true
-  if command -v systemctl >/dev/null 2>&1; then
-    sudo_if_needed systemctl reload polkit.service 2>/dev/null || \
-      sudo_if_needed systemctl restart polkit.service 2>/dev/null || true
-  fi
-  log "RUN-3 run_command polkit scope rule installed."
+  log "Configuring RUN-3 run_command systemd scope helper for service user: ${SIFT_GATEWAY_SERVICE_USER}."
+  sudo_if_needed "$REPO_DIR/scripts/setup-run-command-systemd-scope-sudoers.sh" \
+    --service-user "$SIFT_GATEWAY_SERVICE_USER" \
+    --helper-src "$REPO_DIR/scripts/sift-run-command-systemd-scope"
 }
 
 # =============================================================================
@@ -3118,6 +3102,14 @@ uninstall_system_hardening() {
   if [[ -f /etc/sudoers.d/sift-agent-runtime ]]; then
     sudo_if_needed rm -f /etc/sudoers.d/sift-agent-runtime
     log "Removed run_command runtime sudoers bridge."
+  fi
+  if [[ -f /etc/sudoers.d/sift-run-command-systemd-scope ]]; then
+    sudo_if_needed rm -f /etc/sudoers.d/sift-run-command-systemd-scope
+    log "Removed run_command systemd scope sudoers helper."
+  fi
+  if [[ -f /usr/local/sbin/sift-run-command-systemd-scope ]]; then
+    sudo_if_needed rm -f /usr/local/sbin/sift-run-command-systemd-scope
+    log "Removed run_command systemd scope helper."
   fi
 }
 
@@ -3409,7 +3401,7 @@ main() {
   # (User=sift-service, WantedBy=multi-user.target), so they start at boot and
   # survive operator logout without per-user lingering.
 
-  configure_run_command_polkit
+  configure_run_command_systemd_scope
   configure_immutable_capability
   configure_auditd
   configure_apparmor

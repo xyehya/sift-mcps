@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Root-owned validator for RUN-3 run_command systemd scopes.
+#
+# The service process reaches this script through a command-specific sudoers
+# drop-in. Keep all privileged work here: validate the fixed scope shape, derive
+# the runtime group from passwd, then exec systemd-run as root so --uid/--gid can
+# be applied without granting broad service capabilities or broad polkit unit
+# management.
+set -euo pipefail
+
+die() {
+  printf 'sift-run-command-systemd-scope: %s\n' "$*" >&2
+  exit 2
+}
+
+unit=""
+runtime_user=""
+memory_high=""
+memory_max=""
+cpu_quota=""
+tasks_max=""
+runtime_max_sec=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --unit) unit="${2:-}"; shift 2 ;;
+    --runtime-user) runtime_user="${2:-}"; shift 2 ;;
+    --memory-high) memory_high="${2:-}"; shift 2 ;;
+    --memory-max) memory_max="${2:-}"; shift 2 ;;
+    --cpu-quota) cpu_quota="${2:-}"; shift 2 ;;
+    --tasks-max) tasks_max="${2:-}"; shift 2 ;;
+    --runtime-max-sec) runtime_max_sec="${2:-}"; shift 2 ;;
+    --) shift; break ;;
+    *) die "unknown option: $1" ;;
+  esac
+done
+
+[[ "${EUID}" -eq 0 ]] || die "must run as root"
+[[ "${unit}" =~ ^sift-run-command-[A-Za-z0-9_.-]+\.scope$ ]] || die "invalid unit name"
+[[ "${runtime_user}" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || die "invalid runtime user"
+runtime_gid="$(id -g "${runtime_user}" 2>/dev/null)" || die "runtime user not found"
+
+[[ "${memory_high}" =~ ^[0-9]+([KMGTP]?)$ ]] || die "invalid MemoryHigh"
+[[ "${memory_max}" =~ ^[0-9]+([KMGTP]?)$ ]] || die "invalid MemoryMax"
+[[ "${cpu_quota}" =~ ^[0-9]+%$ ]] || die "invalid CPUQuota"
+[[ "${tasks_max}" =~ ^[0-9]+$ ]] || die "invalid TasksMax"
+[[ "${runtime_max_sec}" =~ ^[0-9]+$ ]] || die "invalid RuntimeMaxSec"
+
+[[ "$#" -eq 3 ]] || die "worker argv must be: <python> -m sift_core.execute.worker"
+python_bin="$1"
+[[ "${python_bin}" = /* ]] || die "worker python must be absolute"
+[[ -x "${python_bin}" ]] || die "worker python is not executable"
+case "$(basename "${python_bin}")" in
+  python|python3|python3.*) ;;
+  *) die "worker executable must be python" ;;
+esac
+[[ "$2" == "-m" && "$3" == "sift_core.execute.worker" ]] || \
+  die "worker module must be sift_core.execute.worker"
+
+systemd_run="${SYSTEMD_RUN:-/usr/bin/systemd-run}"
+[[ -x "${systemd_run}" ]] || die "systemd-run not found"
+
+exec "${systemd_run}" \
+  --scope \
+  --quiet \
+  --collect \
+  "--unit=${unit}" \
+  --uid "${runtime_user}" \
+  --gid "${runtime_gid}" \
+  -p "MemoryHigh=${memory_high}" \
+  -p "MemoryMax=${memory_max}" \
+  -p "CPUQuota=${cpu_quota}" \
+  -p "TasksMax=${tasks_max}" \
+  -p "RuntimeMaxSec=${runtime_max_sec}" \
+  -p "OOMPolicy=kill" \
+  -p "IPAddressDeny=any" \
+  -p "IOAccounting=yes" \
+  -p "IPAccounting=yes" \
+  -- \
+  "${python_bin}" -m sift_core.execute.worker
+

@@ -291,6 +291,7 @@ worker subprocess is launched under the scope; the tool inherits it):
 
 ```
 systemd-run --scope --quiet --collect \
+  --uid agent_runtime --gid <agent_runtime gid> \
   -p MemoryHigh=3G -p MemoryMax=4G \
   -p CPUQuota=200% \
   -p TasksMax=64 \
@@ -305,9 +306,13 @@ systemd-run --scope --quiet --collect \
 - `IPAddressDeny=any` is the network floor (defense in depth with Landlock NET deny + seccomp
   AF_INET deny). `TasksMax` is the fork-bomb floor; `MemoryMax` the OOM floor — neither is reachable
   by `RLIMIT_*` alone for grandchildren (research draft §8.3, correct).
-- The gateway service user must be allowed to create transient scopes. It already drives `sudo`;
-  `systemd-run --scope` as a non-root user creates a user-manager scope — verify on VM during burn-in
-  (B# if a polkit rule is needed; fallback: `sudo systemd-run` via the existing narrow sudoers).
+- Live VM burn-in correction: systemd 255 does not let an unprivileged service caller perform
+  `--uid/--gid` for a system scope, and polkit does not expose transient scope names as action
+  details for a narrow unit-name rule. Production therefore uses the root-owned
+  `sift-run-command-systemd-scope` helper via a command-specific sudoers drop-in. The helper
+  validates the `sift-run-command-*.scope` unit name, runtime user, resource-control values, and
+  exact worker argv before calling raw `/usr/bin/systemd-run` as root. Do not grant broad polkit
+  `manage-units`, raw `systemd-run`, shell, editor, or `ALL` root command rights.
 
 ### 4.4 Landlock FS grant set (kernel 6.8 / ABI v4)
 
@@ -578,7 +583,7 @@ to enforce when positive passes AND negative all-blocked.
 | **P0** Inventory + ABI probe | record kernel/LSM/cgroup/ABI; tool realpaths | (script) | VM facts logged (done: 6.8/ABI4/cgroup2/aa-loaded) |
 | **P1** Ceiling-G1/G2/G6/G9 | allowlist default + `contained` tier; sed/sqlite/tshark/vol scanners; DENY_FLOOR adds; env-deny .NET/LD/PYTHON | `security_policy.py`, `security.py`, `runtime_acl.py` | negative suite (Ceiling rows) green; positive green |
 | **P2** Ceiling-G3 belt + G4 fail-closed | `/var/lib/sift` in `_BLOCKED_DIRECTORIES`; `SIFT_EXECUTE_REQUIRE_RUNTIME_USER` reject path | `security.py`, `executor.py` | secret-read denied; no-runtime-user rejected |
-| **P3** Floor cgroup (G5) | `systemd-run --scope` wrap in `_run_isolated_worker` | `executor.py`, sudoers/polkit note | fork/mem/exfil bomb rows green |
+| **P3** Floor cgroup (G5) | `systemd-run --scope` wrap in `_run_isolated_worker` via root-owned validated helper | `executor.py`, sudoers helper note | fork/mem/exfil bomb rows green |
 | **P4** Floor launcher (G3/G7) | `dfir_exec_launcher.py` (Landlock FS+NET, FD close, uid assert) wired via `worker.py` argv | NEW `dfir_exec_launcher.py`, `worker.py` | Landlock rows green; positive matrix still green |
 | **P5** Floor seccomp | seccomp filter in launcher, RET_LOG burn-in -> KILL | `dfir_exec_launcher.py` | syscall rows green; positive matrix green after burn-in |
 | **P6** AppArmor backstop | `dfir-exec` profile, complain->enforce | `configs/apparmor/` | aa denials clean on positive matrix |

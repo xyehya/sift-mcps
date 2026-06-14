@@ -49,6 +49,7 @@ Environment=RAG_MODEL_REVISION=${SIFT_RAG_MODEL_REVISION}
 Environment=SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1
 Environment=SIFT_EXECUTE_REQUIRE_LANDLOCK=1
 Environment=SIFT_EXECUTE_SYSTEMD_SCOPE=1
+Environment=SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER=/usr/local/sbin/sift-run-command-systemd-scope
 Environment=SIFT_EXECUTE_SECCOMP_MODE=log
 
 # === BATCH-HR3 systemd hardening ============================================

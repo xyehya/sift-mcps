@@ -47,6 +47,7 @@ Environment=UV_PYTHON_DOWNLOADS=never
 Environment=SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1
 Environment=SIFT_EXECUTE_REQUIRE_LANDLOCK=1
 Environment=SIFT_EXECUTE_SYSTEMD_SCOPE=1
+Environment=SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER=/usr/local/sbin/sift-run-command-systemd-scope
 Environment=SIFT_EXECUTE_SECCOMP_MODE=log
 # B-MVP-015 / B-MVP-004 (D3): the worker re-embeds for ingest-time RAG paths and
 # memory-symbol work; point its HF cache at the service home and pin the model.
@@ -61,10 +62,12 @@ Environment=RAG_MODEL_REVISION=${SIFT_RAG_MODEL_REVISION}
 # ReadWritePaths= here. The per-exec Floor (Landlock/seccomp/cgroup/AppArmor)
 # provides the filesystem blast-radius boundary for dfir-exec.
 UMask=0077
-NoNewPrivileges=yes
+# NoNewPrivileges cannot be set on this service: RUN-3 intentionally reaches a
+# root-owned, argv-validating sudo helper to create the transient systemd scope.
+# The helper is the only root grant; dfir-exec-launcher sets no-new-privs again
+# before Landlock/seccomp and before the forensic tool execs.
 ProtectClock=true
 ProtectHostname=true
-RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
 SystemCallArchitectures=native

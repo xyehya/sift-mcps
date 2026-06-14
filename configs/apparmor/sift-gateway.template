@@ -108,6 +108,7 @@
   /home/*/.local/share/uv/python/**/bin/**   rix,
   /home/*/.local/bin/uv                      rix,
   /usr/bin/python3*                          rix,
+  /usr/local/sbin/sift-run-command-systemd-scope rix,
   /usr/bin/systemd-run                       rix,
   /usr/bin/systemctl                         rix,
 
