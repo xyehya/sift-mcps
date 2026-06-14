@@ -1,0 +1,12 @@
+interface:
+  display_name: "Agentic Security"
+  short_description: "Assess MCP, agent, DFIR worker, Supabase, OpenSearch, and host command security."
+  brand_color: "#1F6FEB"
+  default_prompt: "Assess this MCP or agentic AI system for ASI01-ASI10 risks, focusing on tool misuse, prompt injection, identity, RCE, memory poisoning, auditability, and least privilege."
+policy:
+  allow_implicit_invocation: true
+dependencies:
+  tools:
+    - type: "shell"
+      value: "python3"
+      description: "Runs bundled static triage scripts that use only Python standard library."

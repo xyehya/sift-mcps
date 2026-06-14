@@ -1,0 +1,35 @@
+# MCP tool contract template for security review.
+name: tool_name_here
+owner: security-or-dfir-owner
+purpose: one sentence only
+risk_tier: read_only # read_only | analysis | high_impact | destructive
+asi_mapping: [ASI01, ASI02]
+inputs:
+  schema: pydantic-model-or-json-schema-name
+  requires_case_id: true
+  path_fields: []
+  user_controlled_fields: []
+outputs:
+  schema: output-schema-name
+  trust_label: untrusted_evidence # trusted_control | untrusted_evidence | derived_analysis
+  max_bytes: 65536
+identity:
+  allowed_roles: [investigator]
+  required_scopes: [case.read]
+  service_account: none
+execution:
+  sandbox: not_applicable
+  timeout_seconds: 30
+  network_access: false
+  filesystem_roots: []
+approval:
+  required: false
+  reason: none
+audit:
+  event_type: mcp.tool.invoked
+  include_args: normalized_only
+  include_output_hash: true
+security_tests:
+  - prompt_injection_ignored
+  - cross_case_rejected
+  - oversized_output_truncated

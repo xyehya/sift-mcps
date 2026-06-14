@@ -1,0 +1,53 @@
+# Example deny-by-default MCP tool policy.
+# Adapt names to your actual FastMCP/FastAPI policy middleware.
+version: 1
+default: deny
+risk_tiers:
+  read_only:
+    approval_required: false
+    max_runtime_seconds: 30
+    max_output_bytes: 65536
+  analysis:
+    approval_required: false
+    max_runtime_seconds: 300
+    max_output_bytes: 262144
+  high_impact:
+    approval_required: true
+    max_runtime_seconds: 120
+    max_output_bytes: 65536
+  destructive:
+    approval_required: true
+    disabled_by_default: true
+controls:
+  require_case_id: true
+  require_actor_id: true
+  require_audit_event: true
+  require_policy_decision_id: true
+  reject_model_generated_shell: true
+  reject_cross_case_access: true
+  truncate_tool_output: true
+tools:
+  search_case_artifacts:
+    tier: read_only
+    allowed_roles: [investigator, lead]
+    required_scopes: [case.read]
+    allowed_case_states: [open, review]
+    output_trust: untrusted_evidence
+  parse_evidence_artifact:
+    tier: analysis
+    allowed_roles: [investigator, lead]
+    required_scopes: [case.read, artifact.parse]
+    path_roots: [evidence_vault, derived_artifacts]
+  run_host_command:
+    tier: high_impact
+    allowed_roles: [lead]
+    required_scopes: [host.execute]
+    approval_required: true
+    executable_allowlist: [/usr/bin/sha256sum, /usr/bin/file]
+    deny_args_matching:
+      - "sudo"
+      - "rm -rf"
+      - "curl"
+      - "wget"
+      - "bash -c"
+      - "sh -c"

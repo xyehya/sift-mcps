@@ -13,6 +13,43 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-14 - DECISION: decouple OpenSearch into scalable least-privilege workers (design-first; in progress)
+
+Status: APPROVED (operator), design-first; partial fixes landed, decoupling build pending.
+
+Driver: an autonomous opus DFIR run (Hermes, see mcp_tool_assessment.md) found the
+OpenSearch ingest→search workflow non-functional: opensearch-mcp runs as a FastMCPProxy
+stdio CHILD of the gateway, inheriting the gateway's HR3 sandbox (ProtectSystem=strict +
+private mount ns), so E01 FUSE mounts fail (`fusermount: Operation not permitted`) →
+disk ingest + Hayabusa blocked. Patching the gateway sandbox was rejected as wrong.
+
+DECISION (architecture): the Gateway stays a THIN POLICY BOUNDARY (auth, evidence gate,
+active-case authority, audit envelope, redaction) and SPAWNS dedicated OpenSearch
+WORKER(s) that run the full pipeline end-to-end (ingest: FUSE-mount E01 + Hayabusa +
+vol3 → index; AND query). The WORKER gets the privileges the pipeline needs via
+least-privilege + boundary controls + lifecycle mgmt — loosen the worker, never the
+gateway. Requirements: NON-BLOCKING dispatch (a job never blocks further MCP calls);
+MULTIPLE workers (N, parallel ingest on the existing Postgres job-claim pattern);
+job/status reflects REALTIME per-worker progress; case_dir reaches workers via the
+merged P0 injection.
+
+LANDED so far (branch fix/mcp-assessment-p0; P0 + quick wins merged to local main
+d09c6a1; crown jewel proven live on the MEMORY image — 180,892 docs/23 indices, RDP
+intrusion IPs surfaced): P0 active-case case_dir injection (+anti-spoof), hashlib IOC
+fix, grep -e/-E allowed, vol3 progress collapse, record_finding grounding-credit +
+supersedes, worker umask 0027. run_command in-case read/write + redaction relax
+(approved; separate path; keep evidence-write guard + secret redaction + out-of-case
+jail) in progress.
+
+STILL OPEN (the fresh builder, from docs/migration/OPENSEARCH-WORKER-HANDOFF.md):
+build the decoupled multi-worker; then E01 disk ingest + Hayabusa unblock. Docs to
+update WHEN BUILT + live-proven (not before — docs track reality): agentic-security
+environment-profile.md (opensearch runs in workers, not gateway child) + repo-security
+-baseline.md (worker security profile; FUSE OPEN→resolved); configs/systemd (new
+worker unit + HR3 comments, no silent drift); docs/operator/* (job/worker status,
+case-dir layout if changed); mcp_tool_assessment.md (mark resolved). FixCrew (first
+builder) handed off at ~520k ctx.
+
 ### 2026-06-14 - DB-audit unit landed: run_command/add-on audit detail + approval ledger DB hash chain (security-reviewed, live-proven)
 
 Status: DONE (local main, not pushed; deployed + live-verified on VM). Built by two

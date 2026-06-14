@@ -1,0 +1,137 @@
+{
+  "name": "agentic-security",
+  "version": "1.0.0",
+  "generated_at": "2026-06-09T15:25:47.358559+00:00",
+  "files": [
+    {
+      "path": "LICENSE.txt",
+      "sha256": "ae0f5939a6bd5ead3e1df3989a7e56ce4b8336246f7af5fdddde6a72bdcbb0bb",
+      "bytes": 1066
+    },
+    {
+      "path": "README.md",
+      "sha256": "bbaeca81ad2a3c1330f8cf123ed78bbc5fcb2c514062e1c1c42090833b410a2d",
+      "bytes": 3526
+    },
+    {
+      "path": "SKILL.md",
+      "sha256": "ddd845496283be29bfb1df00244272a75e21fa5f547acdd457d045ed52573c58",
+      "bytes": 6763
+    },
+    {
+      "path": "agents/openai.yaml",
+      "sha256": "2e1280dfcf4a225ce8350ccfe4c430aaf306f3ce00c5c1591c9895950724dece",
+      "bytes": 569
+    },
+    {
+      "path": "assets/aibom-template.json",
+      "sha256": "7e08f1343c2631250a12d4544ce9dfb52f39a30e5d51ea9d8b3caf6d17cb7032",
+      "bytes": 1084
+    },
+    {
+      "path": "assets/assessment-report-template.md",
+      "sha256": "74317ae35ecafb7eeb889c9bf7f88c18e4704ff5e34cbc41f0ec1c36e07b7262",
+      "bytes": 893
+    },
+    {
+      "path": "assets/finding-template.md",
+      "sha256": "32a45c8e0cbdb4cd3eef193e3bf2fe464e9eafe88dfdcdac6c29a5d7f233a28f",
+      "bytes": 672
+    },
+    {
+      "path": "assets/mcp-tool-contract-template.yaml",
+      "sha256": "0db42727299d91e80579117bfeb91fabee2fe73335397b63358013f36e84ecfb",
+      "bytes": 946
+    },
+    {
+      "path": "assets/policy_middleware_example.py",
+      "sha256": "30fc5b32366c428d08a915d699a409be0362fe48b0a3ac1686311c545871a18f",
+      "bytes": 2057
+    },
+    {
+      "path": "assets/risk-matrix.yaml",
+      "sha256": "a76a7a8c3cfe08b2f2c91a9fc9c98e7ae945dfed9f1bc2e27bed7631deb4dcf2",
+      "bytes": 1215
+    },
+    {
+      "path": "assets/supabase-rls-checklist.md",
+      "sha256": "a8fd8e70a9d6e591232c80c4449f6cb5ab15cc70a2e3a517533a2234768a047b",
+      "bytes": 1050
+    },
+    {
+      "path": "assets/threat-model-template.md",
+      "sha256": "3cd00f2d3c30665b0761a2402cc9bbf40e7a53fdbd52438cabc322cb0fdbd489",
+      "bytes": 713
+    },
+    {
+      "path": "assets/tool-policy-template.yaml",
+      "sha256": "a171577f261b49f3885c42530302c14d181828836d248834e91873cc4b0b50c6",
+      "bytes": 1438
+    },
+    {
+      "path": "install.sh",
+      "sha256": "b07566e7d4e39e95b21b6301dc6280cc2846c76ee45802e9494225d121de7e19",
+      "bytes": 1666
+    },
+    {
+      "path": "references/asi-risk-register.md",
+      "sha256": "9540301f4451d7663ba5cc3aaae419a45f19bd8759b59917f801abb03e9eb598",
+      "bytes": 10336
+    },
+    {
+      "path": "references/assessment-methodology.md",
+      "sha256": "442e2aa72160cc28bfc7fa819ceb07d37377c25900a0a5ffe7837e3878750879",
+      "bytes": 2635
+    },
+    {
+      "path": "references/command-tool-hardening.md",
+      "sha256": "32a2903797983569e37c4ea19289a1a992941865bed849124f39671d63eb5ca9",
+      "bytes": 3147
+    },
+    {
+      "path": "references/environment-profile.md",
+      "sha256": "d9f63e3d57cfda10b8f60be2ea7d32de387304b79f7382207e7b58e66048b6ff",
+      "bytes": 6779
+    },
+    {
+      "path": "references/repo-security-baseline.md",
+      "sha256": "ad916fd63adf8e28877d9f17c1266c40a110a3283b26f34fc5ca9e7cc0c30ea4",
+      "bytes": 8141
+    },
+    {
+      "path": "references/mcp-fastapi-supabase-review.md",
+      "sha256": "7fdd009f2f24b67841df28e17f52c488be37ef6b46934e865217f6b27819ddff",
+      "bytes": 3307
+    },
+    {
+      "path": "references/safe-redteam-test-cases.md",
+      "sha256": "eff11f89adbebbede4341c2ecbd696f6cbc41950234a6c723c9bf60c1c7e1a41",
+      "bytes": 2409
+    },
+    {
+      "path": "references/sources.md",
+      "sha256": "92dc6e97010037f22d6d0abba063601bf92aa2b72feb7de0c5e0c0533b660e47",
+      "bytes": 1128
+    },
+    {
+      "path": "references/supply-chain-governance.md",
+      "sha256": "14634419efb6046a88f8eb0d3cc5f3aa341830556577a945aa027f91d8eff255",
+      "bytes": 1823
+    },
+    {
+      "path": "scripts/agentic_security_scan.py",
+      "sha256": "922cf1ea10d3b80c17a1264f771e01ae00f08b99d7fafa94b20269939b87a48d",
+      "bytes": 24538
+    },
+    {
+      "path": "scripts/generate_report_skeleton.py",
+      "sha256": "402e000f0715e975b2a912981f7504640b746b60189195ea378b318e904a533d",
+      "bytes": 6839
+    },
+    {
+      "path": "scripts/validate_skill.py",
+      "sha256": "8b83f9a32e85b81ac6d16ee064e15a33876dfe1affa2f03d5978c8e7bcc2adc8",
+      "bytes": 4630
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+severity:
+  critical:
+    impact: "RCE, credential compromise, cross-case evidence disclosure, destructive action without approval, or loss of chain of custody."
+    response: "Fix before merge or before real evidence exposure."
+  high:
+    impact: "Privileged tool misuse, missing RLS on sensitive tables, unauthenticated MCP, prompt injection to sensitive action."
+    response: "Fix before multi-user or production-like use."
+  medium:
+    impact: "Defense-in-depth gap, weak auditability, excessive scopes, unsafe defaults with limited exploitability."
+    response: "Fix in hardening sprint."
+  low:
+    impact: "Documentation, consistency, or minor hardening gap."
+    response: "Track and fix opportunistically."
+likelihood:
+  high: "Reachable by normal user, agent, tool output, or evidence content."
+  medium: "Requires special case setup, developer mistake, or limited local access."
+  low: "Requires admin access or unlikely deployment state."
+priority:
+  p0: "Critical/high issue on command execution, credentials, auth, RLS, evidence integrity, or remote exposure."
+  p1: "High issue that blocks production-like multi-user workflow."
+  p2: "Medium hardening gap."
+  p3: "Low cleanup or documentation."
