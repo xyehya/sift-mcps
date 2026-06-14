@@ -166,7 +166,7 @@ Dependencies: B-GATE's live pass depends on B-CEIL+B-FLOOR deployed. B-AA enforc
 - [x] B-AA — `run3/aa` — apparmor profile (complain) + unit hardening; bash -n ok
 - [x] B-GATE — `run3/gate` — negative+positive harness encoded
 - [x] RECONCILE → `run3/integrate`; gate green
-- [ ] `/security-review` combined diff — clean / fixed
+- [x] `/security-review` combined diff — clean / fixed
 - [ ] WAVE 2 deploy + positive matrix green (flexibility)
 - [ ] WAVE 2 negative harness all-blocked
 - [ ] seccomp LOG→KILL flipped; positive still green
