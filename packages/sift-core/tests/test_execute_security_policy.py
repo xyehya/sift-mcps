@@ -107,3 +107,83 @@ def test_e_flag_still_blocked_for_exec_style_tools():
     for tool in ("sed", "xargs"):
         with _pytest.raises(ValueError, match="dangerous flag"):
             sanitize_extra_args(["-e", "payload"], tool_name=tool)
+
+
+class TestInCaseWritePosture:
+    """Operator-approved in-case path relaxation: run_command may write anywhere
+    under the ACTIVE case dir except sealed evidence + protected integrity
+    records. Out-of-case and host paths stay hard-denied. Uses the DB-authority
+    AuthorityContext so the active case resolves under DB authority.
+    """
+
+    def _ctx(self, case_dir):
+        from sift_core.active_case_context import (
+            AuthorityContext,
+            use_active_case_context,
+        )
+
+        return use_active_case_context(
+            AuthorityContext(
+                case_id="11111111-1111-1111-1111-111111111111",
+                case_key="case-x",
+                artifact_path=str(case_dir),
+                db_active=True,
+            )
+        )
+
+    def _case(self, tmp_path):
+        case = tmp_path / "case-x"
+        for d in ("agent", "extractions", "tmp", "evidence", "scratch", "reports"):
+            (case / d).mkdir(parents=True, exist_ok=True)
+        return case
+
+    def test_write_allowed_in_extractions(self, tmp_path):
+        from sift_core.execute.security import validate_output_path
+
+        case = self._case(tmp_path)
+        with self._ctx(case):
+            out = validate_output_path("extractions/hive.dat", base_dir=case)
+        assert out == str((case / "extractions" / "hive.dat").resolve())
+
+    def test_write_allowed_in_nonstandard_in_case_subdir(self, tmp_path):
+        """The relaxation: a subdir that is NOT agent/extractions/tmp is allowed."""
+        from sift_core.execute.security import validate_output_path
+
+        case = self._case(tmp_path)
+        with self._ctx(case):
+            out = validate_output_path("scratch/notes.txt", base_dir=case)
+        assert out == str((case / "scratch" / "notes.txt").resolve())
+
+    def test_write_to_evidence_denied(self, tmp_path):
+        from sift_core.execute.security import validate_output_path
+
+        case = self._case(tmp_path)
+        with self._ctx(case):
+            with pytest.raises(ValueError, match="protected case|integrity|evidence"):
+                validate_output_path("evidence/tamper.txt", base_dir=case)
+
+    def test_write_to_protected_record_denied(self, tmp_path):
+        from sift_core.execute.security import validate_output_path
+
+        case = self._case(tmp_path)
+        with self._ctx(case):
+            with pytest.raises(ValueError, match="protected|integrity"):
+                validate_output_path("evidence-manifest.json", base_dir=case)
+
+    def test_write_out_of_case_denied(self, tmp_path):
+        from sift_core.execute.security import validate_output_path
+
+        case = self._case(tmp_path)
+        other = tmp_path / "other-case"
+        other.mkdir()
+        with self._ctx(case):
+            with pytest.raises(ValueError, match="outside the active case"):
+                validate_output_path(str(other / "x.txt"))
+
+    def test_write_to_secret_env_dir_denied(self, tmp_path):
+        from sift_core.execute.security import validate_output_path
+
+        case = self._case(tmp_path)
+        with self._ctx(case):
+            with pytest.raises(ValueError, match="outside the active case"):
+                validate_output_path("/var/lib/sift/.sift/control-plane.env")
