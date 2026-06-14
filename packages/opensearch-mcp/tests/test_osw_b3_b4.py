@@ -1,10 +1,11 @@
-"""OSW RUN-1 targeted tests for B3 (ingest_status durable-mirror) and B4 (memory lane).
+"""OSW RUN-1 targeted tests for B3 (ingest_status K4-preserving redirect) and B4 (memory lane).
 
-B3: opensearch_ingest_status in DB-active mode must serve the durable worker
-    progress mirror (written by ingest_job._mirror_until_terminal via
-    ingest_status.write_status) rather than returning an empty redirect.  The
-    canonical authority (postgres-durable-jobs / app.job_status_public) is
-    surfaced alongside via the authority + authority_note keys.
+B3 (K4-preserving): opensearch_ingest_status in DB-active mode must NOT read
+    local ingest-status mirror files (BATCH-K4 locked contract — tamper vector).
+    It must return ingests=[] + authority="postgres-durable-jobs" + a redirect
+    pointer to job_status(job_id) for the authoritative app.job_status_public
+    record. The get-mirror-and-label-it-supplemental approach is rejected: serving
+    any local mirror content in DB-active mode reopens the K4 spoof vector.
 
 B4: idx_ingest_memory must expose run_id in its response so the durable
     ingest_job handler can track the memory-ingest subprocess via
@@ -113,43 +114,41 @@ def _reset_server_state():
 
 
 class TestB3IngestStatusDBActive:
-    """B3: ingest_status must serve the durable worker progress mirror in DB-active mode."""
+    """B3 (K4-preserving): ingest_status in DB-active mode must NOT read local
+    mirror files and must always return ingests=[] + authority redirect."""
 
     def _active_case(self, monkeypatch):
         monkeypatch.setattr(srv, "_get_active_case", lambda: _CASE_ID)
 
-    def test_running_mirror_returned_with_authority_note(self, monkeypatch):
-        """When the worker has written progress, ingests[] carries live counts
-        alongside an authority note pointing at the durable job."""
+    def test_db_active_always_returns_empty_ingests_no_mirror_read(self, monkeypatch):
+        """Even when mirror files exist, DB-active mode must NOT read them.
+        K4 locked contract: local files are tamperable; ingests=[] always."""
         self._active_case(monkeypatch)
+        read_called = []
         with (
             patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
             patch(
                 "opensearch_mcp.ingest_status.read_active_ingests",
-                return_value=_RUNNING_MIRROR,
+                side_effect=lambda: read_called.append(1) or _RUNNING_MIRROR,
             ),
         ):
             resp = opensearch_ingest_status()
 
-        assert len(resp["ingests"]) == 1
-        ing = resp["ingests"][0]
-        assert ing["status"] == "running"
-        assert ing["total_indexed"] == 12000
-        assert ing["artifacts_complete"] == 3
-        assert ing["artifacts_total"] == 11
-        # B3: authority keys must be present in DB-active mode.
+        # Must not surface mirror content.
+        assert resp["ingests"] == []
+        # Local files must not have been consulted.
+        assert read_called == [], "read_active_ingests must NOT be called in DB-active mode"
+        # Authority pointer must be present.
         assert resp.get("authority") == "postgres-durable-jobs"
-        assert "authority_note" in resp
-        assert "job_status" in resp["authority_note"]
+        assert "job_status" in resp.get("message", "")
+        # Tamper values from _RUNNING_MIRROR must not appear.
+        assert "srl-forge" not in repr(resp)
+        assert "12000" not in repr(resp)
 
     def test_no_mirror_data_returns_redirect_with_job_id(self, monkeypatch):
-        """When no worker mirror data exists, return a redirect message.
-        If a job_id is supplied, include it in the response for linkage."""
+        """When job_id is supplied, include it in the redirect for direct linkage."""
         self._active_case(monkeypatch)
-        with (
-            patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
-            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
-        ):
+        with patch("opensearch_mcp.ingest_status.db_status_active", return_value=True):
             resp = opensearch_ingest_status(job_id="abc-job-1")
 
         assert resp["ingests"] == []
@@ -158,22 +157,18 @@ class TestB3IngestStatusDBActive:
         assert "next_step" in resp
         assert "abc-job-1" in resp["next_step"]
 
-    def test_no_mirror_data_no_job_id_returns_redirect(self, monkeypatch):
-        """When no mirror data and no job_id, return a plain redirect message."""
+    def test_no_job_id_returns_redirect_without_job_id_key(self, monkeypatch):
+        """Without a job_id argument, redirect has no job_id key."""
         self._active_case(monkeypatch)
-        with (
-            patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
-            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
-        ):
+        with patch("opensearch_mcp.ingest_status.db_status_active", return_value=True):
             resp = opensearch_ingest_status()
 
         assert resp["ingests"] == []
         assert resp.get("authority") == "postgres-durable-jobs"
-        # No job_id key when caller didn't supply one.
         assert "job_id" not in resp
 
-    def test_complete_mirror_returned_with_authority_note(self, monkeypatch):
-        """Completed ingest mirror is surfaced even in DB-active mode."""
+    def test_complete_mirror_not_surfaced_in_db_active_mode(self, monkeypatch):
+        """Completed mirror file content must not appear in DB-active response."""
         self._active_case(monkeypatch)
         with (
             patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
@@ -184,14 +179,13 @@ class TestB3IngestStatusDBActive:
         ):
             resp = opensearch_ingest_status()
 
-        assert len(resp["ingests"]) == 1
-        ing = resp["ingests"][0]
-        assert ing["status"] == "complete"
-        assert ing["total_indexed"] == 18500
+        # Still empty — complete mirror must not be served.
+        assert resp["ingests"] == []
         assert resp.get("authority") == "postgres-durable-jobs"
+        assert "18500" not in repr(resp)
 
-    def test_job_id_in_response_when_mirror_data_present(self, monkeypatch):
-        """job_id supplied alongside mirror data links the caller to the durable job."""
+    def test_job_id_in_redirect_when_supplied_with_mirror_present(self, monkeypatch):
+        """job_id in redirect even when (ignored) mirror files exist."""
         self._active_case(monkeypatch)
         with (
             patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
@@ -204,11 +198,11 @@ class TestB3IngestStatusDBActive:
 
         assert resp.get("job_id") == "xyz-job-99"
         assert "xyz-job-99" in resp.get("next_step", "")
-        # Mirror data still present.
-        assert len(resp["ingests"]) == 1
+        # Mirror content must still be absent.
+        assert resp["ingests"] == []
 
-    def test_case_filter_applied_in_db_active_mode(self, monkeypatch):
-        """case_id filter works the same in DB-active mode."""
+    def test_db_active_ignores_mirror_regardless_of_active_case(self, monkeypatch):
+        """K4 applies globally: mirror is ignored even on active case."""
         monkeypatch.setattr(srv, "_get_active_case", lambda: "other-case")
         with (
             patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
@@ -217,8 +211,6 @@ class TestB3IngestStatusDBActive:
                 return_value=_RUNNING_MIRROR,
             ),
         ):
-            # _RUNNING_MIRROR has case_id=_CASE_ID ("case-rocba-test"); filtering
-            # by "other-case" should yield empty ingests.
             resp = opensearch_ingest_status()
 
         assert resp["ingests"] == []
