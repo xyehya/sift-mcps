@@ -100,13 +100,15 @@ def main(argv: list[str] | None = None) -> int:
             "(missing add-on, or unknown job type)"
         )
     # Default a stable, human-readable worker id per lane so the realtime
-    # worker_label in job_status reads e.g. ``osw-ingest-<host>-<pid>`` and N-way
-    # parallelism is visible. An explicit --worker-id / SIFT_WORKER_ID overrides.
+    # worker_label in job_status reads e.g. ``osw-ingest-<pid>`` and N-way
+    # parallelism is visible. SEC-F1: the hostname is deliberately NOT included —
+    # worker_label is surfaced to case members via app.job_status_public, which
+    # documents the label as non-sensitive (no host path / DSN / token); embedding
+    # socket.gethostname() would leak the internal VM host. An explicit
+    # --worker-id / SIFT_WORKER_ID (e.g. the systemd unit's osw-%i) overrides.
     if not args.worker_id:
-        import socket
-
         lane = "-".join(sorted(handlers)) if requested_types else "all"
-        args.worker_id = f"osw-{lane}-{socket.gethostname()}-{os.getpid()}"[:120]
+        args.worker_id = f"osw-{lane}-{os.getpid()}"[:120]
     job_types = sorted(handlers)
     worker = JobWorker(
         psycopg_connection_factory(args.dsn),

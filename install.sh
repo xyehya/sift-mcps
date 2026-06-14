@@ -2567,7 +2567,8 @@ install_systemd_service() {
 
   # feat/opensearch-workers: dedicated OpenSearch ingest/enrich worker template.
   # Only when OpenSearch is enabled — the FUSE-mount ingest pipeline runs here
-  # (the only unit with MountFlags=shared), NOT in the hardened gateway/job-worker.
+  # (the only unit with CAP_SYS_ADMIN + host mount namespace for FUSE), NOT in the
+  # hardened gateway/job-worker.
   local _os_worker_instances=()
   if [[ "${SIFT_OPENSEARCH_ENABLED:-true}" == "true" ]]; then
     if [[ -x "$VENV_DIR/bin/sift-opensearch-worker" ]]; then

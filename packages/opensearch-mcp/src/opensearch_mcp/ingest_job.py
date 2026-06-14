@@ -14,8 +14,11 @@ mount the disk.
 The fix is to decouple: the gateway stays the thin policy boundary
 (auth/active-case/audit/evidence-gate) and ENQUEUES a durable ``ingest`` /
 ``enrich`` job (non-blocking); a dedicated, least-privilege
-``sift-opensearch-worker@`` unit — whose ONLY relaxation vs the gateway is
-``MountFlags=shared`` — claims the job and runs the pipeline here.
+``sift-opensearch-worker@`` unit — whose only relaxation vs the gateway is
+CAP_SYS_ADMIN plus running in the HOST mount namespace (it omits the
+private-namespace protections so fusermount works; there is no
+``MountFlags=shared`` — that does not rescue a private-ns unit) — claims the job
+and runs the pipeline here.
 
 These handlers run *inside the worker process* (shared mount namespace). They:
 
