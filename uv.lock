@@ -20,6 +20,7 @@ members = [
     "sift-core",
     "sift-gateway",
     "sift-mcps",
+    "windows-triage-mcp",
 ]
 
 [[package]]
@@ -1078,6 +1079,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f5/22/900cb125c76b7aaa450ce02fd727f452243f2e91a61af068b40adba60ea9/email_validator-2.3.0.tar.gz", hash = "sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426", size = 51238, upload-time = "2025-08-26T13:09:06.831Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/de/15/545e2b6cf2e3be84bc1ed85613edd75b8aea69807a71c26f4ca6a9258e82/email_validator-2.3.0-py3-none-any.whl", hash = "sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4", size = 35604, upload-time = "2025-08-26T13:09:05.858Z" },
+]
+
+[[package]]
+name = "enum-compat"
+version = "0.0.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/46/8ed2368976d934652d8f33f1fdd86f5580fab45e890c90a848e83097a093/enum-compat-0.0.3.tar.gz", hash = "sha256:3677daabed56a6f724451d585662253d8fb4e5569845aafa8bb0da36b1a8751e", size = 1389, upload-time = "2019-10-14T18:48:35.264Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/55/ae/467bc4509246283bb59746e21a1a2f5a8aecbef56b1fa6eaca78cd438c8b/enum_compat-0.0.3-py3-none-any.whl", hash = "sha256:88091b617c7fc3bbbceae50db5958023c48dc40b50520005aa3bf27f8f7ea157", size = 1322, upload-time = "2019-10-14T18:48:37.663Z" },
 ]
 
 [[package]]
@@ -3928,6 +3938,19 @@ wheels = [
 ]
 
 [[package]]
+name = "python-registry"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "enum-compat" },
+    { name = "unicodecsv" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a4/82/c9ae8e9764eae863a4d63c05d5f2d767e392b523c2976c16c56f9a3b17b4/python-registry-1.3.1.tar.gz", hash = "sha256:99185f67d5601be3e7843e55902d5769aea1740869b0882f34ff1bd4b43b1eb2", size = 20336, upload-time = "2019-05-08T19:47:00.918Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/0f/2605f98bb9c7ef92f926fdf3295583363fe42fc6e8f64cf38b24a029e767/python_registry-1.3.1-py3-none-any.whl", hash = "sha256:b5b8ae07c271dce12dacd24e16af8aa8d56167ebdb360112a4f152b6d04a4ca9", size = 23553, upload-time = "2019-05-08T19:46:59.5Z" },
+]
+
+[[package]]
 name = "pytz"
 version = "2026.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4878,6 +4901,9 @@ standard = [
     { name = "sift-core" },
     { name = "sift-gateway" },
 ]
+windows-triage = [
+    { name = "windows-triage-mcp" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -4902,8 +4928,9 @@ requires-dist = [
     { name = "sift-gateway", marker = "extra == 'core'", editable = "packages/sift-gateway" },
     { name = "sift-mcps", extras = ["core"], marker = "extra == 'standard'" },
     { name = "sift-mcps", extras = ["standard"], marker = "extra == 'full'" },
+    { name = "windows-triage-mcp", marker = "extra == 'windows-triage'", editable = "packages/windows-triage-mcp" },
 ]
-provides-extras = ["core", "standard", "full", "opencti", "chroma-import", "dev"]
+provides-extras = ["core", "standard", "full", "opencti", "windows-triage", "chroma-import", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5366,6 +5393,12 @@ wheels = [
 ]
 
 [[package]]
+name = "unicodecsv"
+version = "0.14.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6f/a4/691ab63b17505a26096608cc309960b5a6bdf39e4ba1a793d5f9b1a53270/unicodecsv-0.14.1.tar.gz", hash = "sha256:018c08037d48649a0412063ff4eda26eaa81eff1546dbffa51fa5293276ff7fc", size = 10267, upload-time = "2015-09-22T22:00:19.516Z" }
+
+[[package]]
 name = "urllib3"
 version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5636,6 +5669,38 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/9a/3f/f70e03f40ffc9a30d817eef7da1be72ee4956ba8d7255c399a01b135902a/websockets-16.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:a653aea902e0324b52f1613332ddf50b00c06fdaf7e92624fbf8c77c78fa5767", size = 178735, upload-time = "2026-01-10T09:23:42.259Z" },
     { url = "https://files.pythonhosted.org/packages/6f/28/258ebab549c2bf3e64d2b0217b973467394a9cea8c42f70418ca2c5d0d2e/websockets-16.0-py3-none-any.whl", hash = "sha256:1637db62fad1dc833276dded54215f2c7fa46912301a24bd94d45d46a011ceec", size = 171598, upload-time = "2026-01-10T09:23:45.395Z" },
 ]
+
+[[package]]
+name = "windows-triage-mcp"
+version = "0.1.0"
+source = { editable = "packages/windows-triage-mcp" }
+dependencies = [
+    { name = "fastmcp" },
+    { name = "mcp" },
+    { name = "python-registry" },
+    { name = "pyyaml" },
+    { name = "sift-common" },
+    { name = "zstandard" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=3" },
+    { name = "mcp", specifier = ">=1.26" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.21" },
+    { name = "python-registry", specifier = ">=1.3" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "sift-common", editable = "packages/sift-common" },
+    { name = "zstandard", specifier = ">=0.20" },
+]
+provides-extras = ["test"]
 
 [[package]]
 name = "yarl"
