@@ -38,7 +38,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_count",
@@ -59,7 +59,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_aggregate",
@@ -80,7 +80,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_get_event",
@@ -121,7 +121,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_field_values",
@@ -142,7 +142,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_status",
