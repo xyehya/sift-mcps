@@ -197,6 +197,13 @@ DEFAULT_SECURITY_POLICY: dict[str, Any] = {
     ],
     "tool_allowed_flags": {
         "run_bulk_extractor": ["-e", "-x"],
+        # grep -e PATTERN (pattern) and -E (extended regex) are harmless and
+        # ubiquitous in forensic pipelines. They are not exec flags. The flag
+        # validator lowercases, so allowing "-e" also clears "-E". egrep is the
+        # -E alias and gets the same allowance.
+        "grep": ["-e", "-E"],
+        "egrep": ["-e", "-E"],
+        "zgrep": ["-e", "-E"],
     },
     "tool_blocked_flags": {
         "find": ["-exec", "-execdir", "-delete", "-fls", "-fprint", "-fprint0", "-fprintf"],

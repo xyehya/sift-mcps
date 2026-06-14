@@ -81,3 +81,29 @@ def test_allowlist_mode_requires_allowed_binaries():
 def test_invalid_policy_mode_is_rejected():
     with pytest.raises(ValueError, match="mode must be"):
         build_security_policy({"mode": "blocklist"}, require_operator_policy=True)
+
+
+def test_grep_e_and_E_flags_are_allowed():
+    """grep -e/-E are harmless pattern/regex flags, not exec flags.
+
+    The arg validator lowercases flags (so -E maps to -e). grep/egrep/zgrep
+    must allow -e via tool_allowed_flags while -e stays globally dangerous for
+    exec-style tools (sed/xargs).
+    """
+    from sift_core.execute.security import sanitize_extra_args
+
+    # grep allowance: -e PATTERN, -E (extended regex), and combined with -i.
+    assert sanitize_extra_args(["-e", "foo"], tool_name="grep") == ["-e", "foo"]
+    assert sanitize_extra_args(["-E", "a|b"], tool_name="grep") == ["-E", "a|b"]
+    assert sanitize_extra_args(["-i", "-e", "x"], tool_name="egrep") == ["-i", "-e", "x"]
+
+
+def test_e_flag_still_blocked_for_exec_style_tools():
+    """-e must remain blocked where it is exec-style (not allowlisted)."""
+    import pytest as _pytest
+
+    from sift_core.execute.security import sanitize_extra_args
+
+    for tool in ("sed", "xargs"):
+        with _pytest.raises(ValueError, match="dangerous flag"):
+            sanitize_extra_args(["-e", "payload"], tool_name=tool)
