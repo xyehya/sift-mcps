@@ -429,7 +429,7 @@ class Gateway:
                     if isinstance(_raw_scans, list):
                         _scans_value: list[str] | None = [
                             str(s) for s in _raw_scans
-                            if s in ("case_id", "case_key")
+                            if s in ("case_id", "case_key", "case_dir")
                         ]
                     else:
                         _scans_value = None
@@ -809,7 +809,7 @@ class Gateway:
         tool = self._tool_cache.get(tool_name)
         schema = getattr(tool, "inputSchema", None) if tool else None
         props = schema.get("properties", {}) if isinstance(schema, dict) else {}
-        found = {name for name in ("case_id", "case_key") if name in props}
+        found = {name for name in ("case_id", "case_key", "case_dir") if name in props}
         # Return None (not an empty set) when neither manifest nor schema has
         # an answer — the middleware must deny fail-closed in that case.
         return found if found else None
