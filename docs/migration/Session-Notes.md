@@ -13,6 +13,57 @@ Last updated: 2026-06-14.
 
 ## Current Change Log
 
+### 2026-06-15 - B-MVP-029 on-wire MCP response fixes (dedup + path-leaks + autosave + ingest-poll + rename)
+
+Status: DONE (landed on local `main`; live-proven on VM)
+
+Changed (2-unit parallel team off `main`, orchestrator reviewed/merged/cherry-picked):
+- Unit A (`5233cd8`): run_command receipt dedup — one canonical of each field (`provenance.job_id`
+  kept, root `job_id` dropped; root `audit_id` kept, `provenance.audit_id` dropped; `full_output_ref`
+  kept, `full_output_path` alias dropped). Durable lane unaffected (`receipt.job_id == job.id` set
+  independently). Added `output_schema` to `CoreToolSpec` + JSON schema for `case_info`/`evidence_info`/
+  `list_existing_findings`; gateway passes `outputSchema` and normalizes it.
+- Unit B (`ec9b8d6`): closed F-MVP-2 agent-facing absolute-path leaks in opensearch-mcp via new
+  `_case_relative_ref` (reuses `sift_core...sanitize_path_value`, fail-closed + non-absolute fallback):
+  `resolved_path`, `log_file` (status + background-launch responses/messages), `dict_path`,
+  `coverage_state.filesystem_meta_path`, dry_run container `path`, host-fix "not found" errors.
+  `opensearch_search` large-result autosave (>20 hits → full set to `agent/searches/search_<uuid>.json`,
+  case-relative `full_path`, top-20 inline) + equality-guarded per-hit constant hoist into
+  `common_fields`. Ingest-poll dead-end wording corrected (run_id vs job_id; DB-job-row injection
+  deferred → B-MVP-027). Renamed `_legacy_*`→`_impl_*` in `registry.py` + contract/engine docstring.
+- Follow-up (`7977fa7`): added gateway-injected `case_dir` field to `SearchIn` so the manifest-declared
+  case_dir injection reaches the autosave write (was being dropped at pydantic validation).
+- Security audit (DoD gate) found + we closed 3 extra pre-existing path leaks (F2 HIGH coverage_state,
+  F1 MED dry_run container path, F5 LOW host-fix case_dir error).
+
+Validation (host, merged `main`, root env):
+- sift-core run_command slice 165 passed (2 xfail); gateway response/binding/refactor 110 passed;
+  opensearch-mcp 1027 passed (71 skip). `validate_docs.py` + `validate_migration_docs.py` OK;
+  `git diff --check` clean.
+
+Live VM proof (`sansforensics@…`, gateway `WorkingDirectory=/opt/sift-mcps`, services active, `/health`
+status=ok), portal-credential `/mcp` smoke:
+- run_command receipt slim — `audit_id` once at root, `provenance.job_id` once (no root `job_id`),
+  `full_output_ref` only (no `full_output_path`), no `provenance.audit_id`.
+- opensearch responses carry no absolute paths (`case_dir` redacted; `full_path` case-relative).
+- ingest-poll wording corrected live.
+- per-hit hoist live (`common_fields` populated with `vhir.case_id`/`vhir.provenance_id`).
+- search autosave live: 30-hit query → 20 inline + `full_path=agent/searches/search_<uuid>.json`;
+  confirmed 30-doc file on disk under the case write-jail.
+
+Root-cause fix for autosave (live deployment-state): autosave initially no-op'd live because the
+opensearch-mcp manifest registered in `app.mcp_backends` (install 2026-06-13) listed
+`opensearch_search.safe_case_argument_names=['case_id']` — stale; the current `sift-backend.json`
+lists `['case_id','case_dir']`. The Gateway honours the DB-registered manifest (priority over schema),
+so it never injected `case_dir`. Refreshed the registered manifest in `app.mcp_backends` to the current
+source (recomputed `manifest_sha256` via `mcp_backends_registry.manifest_sha256`) and restarted the
+gateway. A fresh install registers the current manifest, so this stale state is install-age-specific;
+manifest-drift auto-refresh tracked as B-MVP-032.
+
+Next:
+- B-MVP-029 closed. Next sanctioned item is BATCH-PT2 (Portal RAG). `main` is ahead of origin
+  (`5233cd8`, `ec9b8d6`, `7977fa7` + this doc commit) — operator to `git push origin main`.
+
 ### 2026-06-14 - case-dashboard React subscription optimization
 
 Status: DONE (B-MVP-031 guard slice; frontend behavior unchanged)
@@ -228,9 +279,10 @@ Next:
 | B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green + committed 4ee3d1f pushed to origin/main 2026-06-14. | BATCH-R3-* |
 | B-MVP-027 | Backlog | OPEN | `run_command_job` durable lane (Postgres job state machine) fails with `unhandled worker error: KeyError` before exec; synchronous `run_command` lane unaffected. Pre-existing; fix the durable path. | BATCH-R3-* |
 | B-MVP-028 | Backlog | DONE | Optimization track defined + first deliverable landed: tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`. On-wire fixes split to B-MVP-029. | B-MVP-028 |
-| B-MVP-029 | Backlog | OPEN | On-wire MCP response-efficiency + schema fixes from the audit: run_command receipt dedup (audit_id/job_id/provenance ×4), `opensearch_search` large-result autosave, hoist per-hit constants, define `outputSchema`, fix ingest poll dead-end + `audit_ids` required-labeling, and the opensearch-mcp absolute-path leaks (SECURITY). Bolt-on (same files): rename opensearch `registry.py` `_legacy_*`→`_impl_*` + add contract/engine module docstring (naming-only, `server.py` stays). Touches live opensearch-mcp + sift-core → deploy + re-validate. | B-MVP-029 |
+| B-MVP-029 | Backlog | DONE | On-wire MCP response fixes landed + live-proven 2026-06-15 (`5233cd8`/`ec9b8d6`/`7977fa7`): run_command receipt dedup, opensearch_search large-result autosave + per-hit hoist, `outputSchema` on core tools, ingest-poll wording, opensearch-mcp absolute-path leaks closed (SECURITY; +3 found by audit), `_legacy_*`→`_impl_*` rename. Autosave live-activation required refreshing the stale DB-registered opensearch manifest (case_dir in safe_case_argument_names). DB-job-row injection for real ingest polling deferred → B-MVP-027; manifest-drift auto-refresh → B-MVP-032. | B-MVP-029 |
 | B-MVP-030 | Backlog | OPEN | Cosmetic correctness-naming: rename `sift-gateway/audit_helpers.py` `_legacy_token_id`→`_resolve_db_token_id` and add a unit test asserting a Supabase principal id is NOT written to `audit_events.actor_token_id` (FK guard). Not legacy; low priority. | BATCH-CL2 |
 | B-MVP-031 | Backlog | OPEN | Dashboard coupling guard source slice DONE 2026-06-14: `useStore.js` interface characterization test added and dashboard selectors landed. Remaining: track gateway complex-density (21/32 nodes) as a review target. No deletion. | BATCH-PT1 |
+| B-MVP-032 | Backlog | OPEN | Manifest-drift: `app.mcp_backends.manifest` is a snapshot taken at backend registration; when a first-party backend's `sift-backend.json` changes (e.g. opensearch_search gaining `case_dir` in `safe_case_argument_names`) an existing install keeps serving the stale registered manifest until re-registered, silently disabling features (B-MVP-029 autosave hit this). Add install/startup manifest-drift detection (compare `manifest_sha256` to the on-disk source) that auto-refreshes or warns. Fresh installs are unaffected. | BATCH-LV1 |
 
 ## Validation Commands
 

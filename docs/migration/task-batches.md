@@ -36,10 +36,12 @@ Remaining sequence (operator decision 2026-06-14):
 1. **Optimizations first** — run_command / agent execution optimizations.
    - DONE (B-MVP-028): tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side
      PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`.
-   - OPEN (B-MVP-029): on-wire response-efficiency + schema + path-leak fixes — finish before PT2.
-     Bolt-on (zero extra scope, same opensearch-mcp files): rename `registry.py` `_legacy_server`/
-     `_legacy_error`/`_search_hit_from_legacy` → `_impl_*` and add a "registry = typed contract /
-     `opensearch_mcp.server` = implementation engine" module docstring. Naming-only; `server.py` stays.
+   - DONE (B-MVP-029, 2026-06-15): on-wire response-efficiency + schema + path-leak fixes landed +
+     live-proven (`5233cd8`/`ec9b8d6`/`7977fa7`): receipt dedup, opensearch_search autosave + per-hit
+     hoist, core `outputSchema`, ingest-poll wording, F-MVP-2 absolute-path leaks closed (SECURITY),
+     `_legacy_*`→`_impl_*` rename. Autosave live-activation needed a stale DB-registered opensearch
+     manifest refresh (case_dir); manifest-drift auto-refresh → B-MVP-032. Deferred: ingest DB-job-row
+     injection (B-MVP-027).
 2. **Portal RAG** — BATCH-PT2 (knowledge-plane document management).
 3. **Supabase default-key research** — BATCH-SB1, reframed: research a lighter remediation for the
    default CLI demo keys (rotate/replace post-install) that does NOT require a full self-managed
