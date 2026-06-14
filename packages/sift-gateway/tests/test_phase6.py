@@ -547,6 +547,31 @@ def test_stdio_proxy_env_does_not_inherit_unreferenced_process_secrets(monkeypat
     assert "SIFT_BACKEND_SECRET" not in transport.env
 
 
+def test_stdio_proxy_env_propagates_db_active_authority_flag(monkeypatch):
+    # The stdio add-on backend (opensearch-mcp) must agree with the gateway on
+    # Postgres ingest-status authority; SIFT_DB_ACTIVE is a non-secret boolean and
+    # MUST be propagated or the BATCH-K4/B3 DB-active contract silently degrades to
+    # the legacy local-status-JSON path inside the backend process.
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("SIFT_DB_ACTIVE", "1")
+    monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgres://secret")
+
+    transport = _stdio_transport({"type": "stdio", "command": "true"})
+
+    assert transport.env["SIFT_DB_ACTIVE"] == "1"
+    # The authority flag travels; the control-plane DSN (a secret) does not.
+    assert "SIFT_CONTROL_PLANE_DSN" not in transport.env
+
+
+def test_stdio_proxy_env_omits_db_active_when_unset(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.delenv("SIFT_DB_ACTIVE", raising=False)
+
+    transport = _stdio_transport({"type": "stdio", "command": "true"})
+
+    assert "SIFT_DB_ACTIVE" not in transport.env
+
+
 def test_gateway_core_has_no_hardcoded_addon_names():
     # This invariant disciplines EXTERNAL/third-party MCP add-on backends so they
     # plug into the modular schema-registered surface without the gateway core

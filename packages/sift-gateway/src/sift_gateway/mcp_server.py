@@ -624,6 +624,16 @@ def _stdio_base_env() -> dict[str, str]:
     for key, value in os.environ.items():
         if key.startswith("LC_") and value:
             env[key] = value
+    # Authority flag (not a secret): stdio add-on backends (opensearch-mcp, rag)
+    # must agree with the gateway on whether Postgres is the active-case /
+    # ingest-status authority. Without SIFT_DB_ACTIVE the child process defaults
+    # db_authority_active()/db_status_active() to legacy mode, so the BATCH-K4 /
+    # B3 DB-active ingest-status contract never engages in the backend (it would
+    # silently serve the tamperable local status JSON instead of the durable-job
+    # redirect). Propagate the boolean flag only — never the control-plane DSN.
+    db_active = os.environ.get("SIFT_DB_ACTIVE")
+    if db_active:
+        env["SIFT_DB_ACTIVE"] = db_active
     return env
 
 
