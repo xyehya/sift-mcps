@@ -295,13 +295,6 @@ after portal reset/credential issuance.
 | B-MVP-025 | Backlog | DONE | FOUND + FIXED 2026-06-14 (RUN-1 VM proof, run1/integrate): the gateway's `_stdio_base_env()` (mcp_server.py) built a minimal whitelist env (PATH/HOME/USER/LOGNAME/SHELL/LANG/TMP*/LC_*) for stdio add-on backends and OMITTED `SIFT_DB_ACTIVE`. So the opensearch-mcp backend subprocess never saw the DB-authority flag → `db_status_active()` defaulted to legacy → the BATCH-K4/B3 DB-active ingest-status contract NEVER engaged in the backend (it would have served tamperable local status JSON instead of the durable-job redirect). PRE-EXISTING (not introduced by RUN-1; surfaced by live proof). FIX: propagate the non-secret `SIFT_DB_ACTIVE` boolean only (never the control-plane DSN) in `_stdio_base_env`; 2 regression tests added. Live-proven on VM: ingest_status now returns the K4 durable-job-authority redirect (ingests=[], no local-mirror read). Workers were a false alarm (job_worker_cli self-sets SIFT_DB_ACTIVE at runtime; not visible in /proc/environ). | RUN-1 reconcile (orchestrator) |
 | B-MVP-026 | Backlog | OPEN | RUN-3 run_command hardening: add kernel Floor (Landlock ABI v4 + seccomp + systemd-cgroup + AppArmor, host mount ns — NOT bwrap/LXD per FUSE physics) + harden Ceiling (allowlist default + `contained` kernel-jailed tier for unlisted tools = autonomous no-HITL; per-tool code-exec scanners sed/sqlite3/tshark/vol/exiftool; DENY_FLOOR adds; .NET/LD/PYTHON env-deny; /var/lib/sift read-block; output ANSI/OSC sanitation). Closes red-team gaps G1-G9. DESIGN FROZEN 2026-06-14: authoritative spec `docs/research/run_command-FINAL-SPEC.md`; build plan + fresh-session launch prompt `docs/RUN3-run_command-hardening-BUILD-PLAN.md` (4 disjoint batches B-CEIL/B-FLOOR/B-AA/B-GATE, Wave-1 parallel + Wave-2 serial live VM). Sub-backlog: C1 run_command_structured entrypoint; C4 LXD/microVM Tier-2; Landlock ioctl-scoping at kernel>=6.10. | RUN-3 (run_command hardening) |
 
-## Active References
-
-- `AGENTS.md` - operating instructions, VM constraints, Context7 docs rule, and
-  current architecture invariants.
-- `docs/migration/task-batches.md` - executable batch tracker and worker hints.
-- `docs/regenerate/**` - stale first-phase docs to be verified and regenerated,
-  not source of truth until BATCH-RG1.
 
 ## Validation Commands
 

@@ -4,49 +4,12 @@ This repo is in the operator-readiness and hardening phase after the core MVP
 migration. Work from the real checkout, verify current code/runtime state, and
 keep the docs useful for the next session.
 
-## Context7 Rule
-
-Use the `ctx7` CLI to fetch current documentation whenever the user asks about a
-library, framework, SDK, API, CLI tool, or cloud service. This includes API
-syntax, configuration, version migration, library-specific debugging, setup
-instructions, and CLI usage. Prefer this over web search for library docs.
-
-Do not use Context7 for refactoring, writing scripts from scratch, debugging
-business logic, code review, or general programming concepts.
-
-Workflow:
-
-1. Resolve library:
-   `npx ctx7@latest library <name> "<user's question>"`
-2. Pick the best `/org/project` match by exact name, relevance, snippet count,
-   source reputation, and benchmark score.
-3. Fetch docs:
-   `npx ctx7@latest docs <libraryId> "<user's question>"`
-4. Answer or implement using the fetched docs.
-
-Use the user's full question as the query. Do not run more than three Context7
-commands per question. Do not include secrets, tokens, keys, passwords, or DSNs
-in Context7 queries. If Context7 fails with quota, tell the user and suggest
-`npx ctx7@latest login` or `CONTEXT7_API_KEY`.
-
-For version-specific docs, use the versioned library ID from `library` output
-when available, for example `/org/project/v1.2.3`. If a Context7 command fails
-with DNS, host resolution, or fetch errors in a sandboxed environment, rerun it
-outside that sandbox rather than retrying the same failing context.
-
 ## Source Of Truth
 
-Read these first:
+Read only last updates from 
 
-- `docs/migration/task-batches.md` - executable batch tracker, dependencies,
-  hints, and acceptance checks.
 - `docs/migration/Session-Notes.md` - latest decisions, live proof, blockers,
   and needs-input table.
-
-`docs/regenerate/**` is first-phase reference material that the user added for
-regeneration. Treat it as stale until a batch verifies it against code and the
-live VM. Do not treat old `docs/product/**`, `docs/status.md`, or deleted docs as
-current source of truth.
 
 ## Current Architecture Decisions
 
