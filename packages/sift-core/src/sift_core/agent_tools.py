@@ -471,6 +471,18 @@ def _evidence_info() -> dict:
     }
 
 
+def _is_transient_mount_dir(name: str) -> bool:
+    """Skip transient ingest-mount staging dirs (B2).
+
+    OpenSearch ingest workers FUSE-mount evidence (e01) under
+    ``tmp/ingest-<id>/xmount-<...>/``. Those mounts can raise
+    ``OSError: [Errno 5] Input/output error`` while being walked and must
+    never be descended into by ``case_info`` — the mount staging is not part
+    of the case file structure.
+    """
+    return name.startswith("ingest-") or name.startswith("xmount-")
+
+
 def _case_file_structure() -> dict:
     case_dir = get_case_dir()
     case_resolved = case_dir.resolve()
@@ -479,20 +491,49 @@ def _case_file_structure() -> dict:
     exclude_basenames = {"evidence-ledger.jsonl", "evidence-verify-state.json"}
     exclude_dirs = {"audit", ".git", "__pycache__"}
 
-    for path in sorted(case_resolved.rglob("*")):
+    # Manual stack walk (not rglob) so we can prune transient ingest-mount
+    # subtrees BEFORE descending into them, and so a per-entry OSError on an
+    # erroring path (e.g. a FUSE mount mid-ingest) skips that entry instead of
+    # taking down case_info for every agent. B2: while an OpenSearch worker has
+    # an E01 FUSE-mounted under tmp/, walking into it raises Errno 5.
+    stack: list[Path] = [case_resolved]
+    while stack:
+        current = stack.pop()
         try:
-            rel_parts = path.relative_to(case_resolved).parts
-        except ValueError:
+            entries = list(os.scandir(current))
+        except OSError:
+            # Transient/IO-erroring directory (e.g. live FUSE mount) — skip,
+            # never crash the whole tool.
             continue
-        if any(part in exclude_dirs for part in rel_parts):
-            continue
-        if path.name in exclude_basenames or path.name.endswith(".tmp"):
-            continue
-        rel_path = str(path.relative_to(case_resolved))
-        if path.is_dir():
-            dirs_list.append(rel_path)
-        elif path.is_file():
-            files_list.append({"path": rel_path, "size_bytes": path.stat().st_size})
+        for entry in sorted(entries, key=lambda e: e.name):
+            try:
+                rel_path_obj = Path(entry.path).relative_to(case_resolved)
+            except ValueError:
+                continue
+            rel_parts = rel_path_obj.parts
+            if any(part in exclude_dirs for part in rel_parts):
+                continue
+            # Prune transient ingest-mount staging dirs (do not descend).
+            if any(_is_transient_mount_dir(part) for part in rel_parts):
+                continue
+            if entry.name in exclude_basenames or entry.name.endswith(".tmp"):
+                continue
+            rel_path = str(rel_path_obj)
+            try:
+                is_dir = entry.is_dir(follow_symlinks=False)
+                is_file = entry.is_file(follow_symlinks=False)
+            except OSError:
+                # Stat on the entry failed (transient/io-erroring path) — skip.
+                continue
+            if is_dir:
+                dirs_list.append(rel_path)
+                stack.append(Path(entry.path))
+            elif is_file:
+                try:
+                    size_bytes = entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+                files_list.append({"path": rel_path, "size_bytes": size_bytes})
 
     full = {
         "case_id": case_resolved.name,
