@@ -169,41 +169,85 @@ Dependencies: B-GATE's live pass depends on B-CEIL+B-FLOOR deployed. B-AA enforc
 - [x] B-GATE — `run3/gate` — negative+positive harness encoded
 - [x] RECONCILE → `run3/integrate`; gate green
 - [x] `/security-review` combined diff — clean / fixed
-- [ ] WAVE 2 deploy + positive matrix green (flexibility)
-- [ ] WAVE 2 negative harness all-blocked
-- [ ] seccomp LOG→KILL flipped; positive still green
+- [x] WAVE 2 deploy + non-MCP live gate green (health, helper, runtime user, direct floor probes)
+- [ ] WAVE 2 MCP positive forensic matrix green (flexibility)
+- [ ] WAVE 2 MCP negative harness all-blocked
+- [ ] seccomp LOG→KILL flipped in service units; positive still green
 - [ ] AppArmor dfir-exec complain→enforce; 0 denials
-- [ ] evidence integrity pre/post intact
+- [ ] evidence integrity pre/post intact and immutable bit present
 - [ ] spec §10 checklist all-true
-- [ ] merge main + push origin + log + memory
+- [x] merge `run3/integrate` → local `main` + log
+- [ ] push origin + memory update (only when explicitly requested)
+
+Latest non-MCP validation snapshot (2026-06-14):
+
+- Host gate on local `main`: `sift-core` 597 passed / 2 xfailed; `sift-gateway` 510 passed;
+  RUN-3 strict security slice 64 passed / 2 xfailed; docs validators, shell syntax, and
+  `git diff --check` passed.
+- Live VM gate without MCP tool calls or portal APIs: `/health` `status=ok`; `sift-gateway` and
+  `sift-job-worker` active from `/opt/sift-mcps`; Landlock ABI 4 confirmed by syscall; cgroup v2
+  and systemd 255 confirmed; `agent_runtime` uid 995 present.
+- Root-owned systemd scope helper and sudoers drop-in installed and parsed; stale broad polkit
+  `systemd-run` rule absent. Direct executor/helper smoke (not MCP) ran `id -u` as uid 995.
+- Direct floor probes (not MCP) failed closed for control-plane read, evidence write, and outbound
+  connect; no evidence test file was created. A direct `seccomp=kill` network probe died with
+  `SIGSYS` as expected.
+- Deferred by operator request: all MCP tool calls and portal/API checks. The positive forensic
+  matrix and negative red-team harness must be run through the configured in-session SIFT MCP tools,
+  not curl/Python API shims.
+
+Known follow-up findings before final go/no-go:
+
+- `SIFT_EXECUTE_SECCOMP_MODE` is still `log` in rendered service units. Do not flip the unit default
+  to `kill` until the MCP positive matrix is green; a direct kill-mode network probe already proved
+  SIGSYS behavior.
+- `dfir-exec` remains AppArmor complain-mode. Audit burn-in showed allowed launcher reads of
+  `/proc/<pid>/fd/` and Python bytecode creation attempts under `/opt/sift-mcps/**/__pycache__/`;
+  fix/profile these before enforce.
+- Active evidence files are root-owned and floor-protected from `agent_runtime`, but the host
+  immutable `i` bit was absent in `lsattr`. Restore/prove immutable sealing before checking the
+  evidence-integrity item.
 
 ---
 
-## 6. Fresh-session launch prompt (paste to start RUN-3)
+## 6. Fresh-session continuation prompt (paste to finish RUN-3)
 
 ```
-You are the orchestrator for RUN-3 (run_command hardening). Operating model + tracker:
-docs/RUN3-run_command-hardening-BUILD-PLAN.md. Authoritative design: docs/research/
-run_command-FINAL-SPEC.md. Read both first, plus the §1 invariants (AUTONOMOUS — zero HITL)
-and §2 live VM facts.
+You are continuing RUN-3 (run_command hardening) in /home/yk/AI/SIFTHACK/sift-mcps.
+Read docs/RUN3-run_command-hardening-BUILD-PLAN.md, docs/research/run_command-FINAL-SPEC.md,
+and the latest docs/migration/Session-Notes.md entry first. Do NOT redo Wave 1 or create
+new worktrees: RUN-3 code is already merged into local main, deployed to /opt/sift-mcps, locally
+tested, security-reviewed, and non-MCP live-smoked.
 
-Execute the plan:
-1. Confirm local main is clean + synced to origin; make 4 worktrees MANUALLY off LOCAL main
-   (run3/ceil, run3/floor, run3/aa, run3/gate) — do NOT use isolation:worktree (stale-origin bug).
-2. Launch WAVE 1: 4 parallel agents, one per batch (§3), each hard-bound to its FENCE + the §1
-   invariants + repo conventions (no new abstractions; raise a fork, don't decide; no secrets).
-   Suggested agents: B-CEIL/B-FLOOR = voltagent-core-dev:backend-developer; B-AA =
-   general-purpose; B-GATE = voltagent-qa-sec test author or general-purpose. seccomp ships LOG-mode.
-3. Reconcile → run3/integrate; per-package pytest + validate_docs + bash -n; /security-review the
-   combined diff; fix findings.
-4. WAVE 2 serial on the live VM (rsync deploy; sshpass inline + dangerouslyDisableSandbox; restart
-   sift-job-worker+gateway): runtime_user check → positive forensic matrix → negative red-team
-   harness → seccomp LOG→KILL burn-in → AppArmor complain→enforce (audit-log-driven) → evidence
-   integrity → spec §10 checklist.
-5. Land: merge run3/integrate→main, push origin, log Session-Notes + update memory.
+Operator constraint from the prior session: do not use curl/Python/API shims for MCP or portal
+validation. The operator will configure the SIFT MCP tools in-session; portal UI/API checks are
+operator-driven from the browser. If an MCP token is needed, ask the operator to issue/configure it;
+do not print secrets into docs or chat.
 
-Gate every step; the positive forensic matrix must stay green (flexibility) and every negative PoC
-must fail closed. Update the §5 status tracker as batches land.
+Already green:
+- Host: sift-core 597 passed / 2 xfailed; sift-gateway 510 passed; RUN-3 strict security slice
+  64 passed / 2 xfailed; docs validators, bash -n, and diff check passed.
+- VM non-MCP: services active, /health ok, Landlock ABI 4, systemd helper installed, direct
+  executor smoke ran as agent_runtime uid 995, floor denied control-plane read/evidence write/network,
+  and direct seccomp=kill network probe returned SIGSYS.
+
+Next steps, gated in order:
+1. With the in-session SIFT MCP tools, run tools/list and evidence_info only after the operator
+   confirms the token is configured.
+2. Run the MCP positive forensic matrix from packages/sift-core/tests/security/RUN3_LIVE_GATE_RUNBOOK.md
+   against real evidence; every row must stay green.
+3. Run the MCP negative red-team harness; every PoC must fail closed and must not return or wait on
+   approval_required.
+4. Patch the AppArmor enforce-readiness findings from audit burn-in: /proc/<pid>/fd launcher reads
+   and Python __pycache__ creation attempts under /opt/sift-mcps. Prefer disabling bytecode writes
+   for launcher/runtime if that fits repo patterns; otherwise profile narrowly.
+5. Flip service units from SIFT_EXECUTE_SECCOMP_MODE=log to kill, restart gateway + job-worker,
+   rerun the MCP positive and negative matrices.
+6. Flip dfir-exec AppArmor complain -> enforce, restart/smoke, rerun enough positive coverage to
+   prove 0 denials.
+7. Restore/prove evidence immutability (host immutable bit plus pre/post sha256) and walk spec §10.
+8. Update this tracker and Session-Notes with sanitized proof, then push origin when the operator
+   authorizes. Update memory only if explicitly requested.
 ```
 
 ---

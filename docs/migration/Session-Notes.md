@@ -1,7 +1,7 @@
 # Session Notes
 
 Status: sprint log and decision register.
-Last updated: 2026-06-12.
+Last updated: 2026-06-14.
 
 ## Format Rules
 
@@ -12,6 +12,45 @@ Last updated: 2026-06-12.
 - Do not create more migration runbooks.
 
 ## Current Change Log
+
+### 2026-06-14 - RUN-3 implementation merged locally; non-MCP live gate green, MCP/portal matrix pending
+
+Status: IN_PROGRESS (code + local gate + security review + live non-MCP proof done; final MCP/portal
+acceptance still pending).
+
+RUN-3 `run_command` hardening is now on local `main` after fast-forwarding `run3/integrate`. The
+one pending main-worktree diff was only the stale Wave-1 tracker checkbox; the integrated tracker
+superseded it and this note records the landing point.
+
+Host validation on local `main`:
+- `uv run --extra dev --extra full pytest packages/sift-core/tests -q` -> 597 passed, 2 xfailed.
+- `uv run --extra dev --extra full pytest packages/sift-gateway/tests -q` -> 510 passed.
+- `SIFT_RUN3_GATE_STRICT=1 uv run --extra dev --extra full pytest packages/sift-core/tests/security -q`
+  -> 64 passed, 2 xfailed.
+- `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`, touched script
+  `bash -n`, and `git diff --check` passed.
+
+Live VM non-MCP proof (operator asked to exclude MCP tool calls and portal APIs):
+- Services active from `/opt/sift-mcps`; `/health` returned `status=ok`.
+- Landlock ABI 4 confirmed by syscall; cgroup v2, systemd 255, and `agent_runtime` uid 995 confirmed.
+- Root-owned RUN-3 systemd scope helper installed, sudoers parsed, unit verify passed, stale broad
+  polkit `systemd-run` rule absent.
+- Direct executor/helper smoke (not MCP) ran `id -u` as `agent_runtime` and returned uid 995.
+- Direct floor probes (not MCP) failed closed for control-plane read, evidence write, and outbound
+  connect. A direct `seccomp=kill` network probe died with `SIGSYS`, proving kill-mode behavior.
+
+Remaining gates:
+- Configure/use the in-session SIFT MCP tools for `tools/list`, `evidence_info`, the positive
+  forensic matrix, and the negative red-team harness. Do not use curl/Python MCP API shims unless the
+  operator changes this constraint.
+- Keep service units in `SIFT_EXECUTE_SECCOMP_MODE=log` until the MCP positive matrix is green; then
+  flip to `kill`, restart, and rerun positive + negative matrices.
+- `dfir-exec` is still AppArmor complain-mode. Audit burn-in showed launcher `/proc/<pid>/fd` reads
+  and Python `__pycache__` create attempts under `/opt/sift-mcps`; patch/profile these before enforce.
+- Evidence is root-owned and floor-protected from the runtime user, but the host immutable bit was
+  absent in `lsattr`. Restore/prove immutable sealing plus pre/post hashes before checking the final
+  evidence-integrity box.
+- Push origin only after the final MCP/portal/security gates pass and the operator authorizes it.
 
 ### 2026-06-14 - RUN-3 DESIGN FROZEN: run_command hardening spec + build plan (ready to launch)
 
