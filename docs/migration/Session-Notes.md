@@ -1,7 +1,7 @@
 # Session Notes
 
 Status: sprint log and decision register.
-Last updated: 2026-06-14.
+Last updated: 2026-06-15.
 
 ## Format Rules
 
@@ -12,6 +12,38 @@ Last updated: 2026-06-14.
 - Do not create extra migration runbooks.
 
 ## Current Change Log
+
+### 2026-06-15 - Backlog parallel sweep: B-MVP-027 + B-MVP-030 + B-MVP-032 (3-worktree orchestration)
+
+Status: DONE (landed on local `main`; not pushed)
+
+Orchestrated 3 background agents, one per backlog item, each in its own manual worktree off
+`main@495037d` (caveat 1) with a zero-overlap file scope-fence. All merged clean (disjoint files),
+reviewed, tested on merged `main`.
+
+- **B-MVP-027** (`e95692d`, merge `035ff41`) - durable `run_command_job` KeyError. Root cause: handler
+  dropped `_resolved_evidence_refs` + `db_active=True` from the sync-lane contract; teardown surfaced as
+  opaque `unhandled worker error: KeyError`. Code fix had ALREADY landed in `0d440a7` (AUT2, 2026-06-10)
+  but the row was never closed and had no regression guard. Added 2 regression tests driving the real
+  `JobWorker.run_once` loop to exec; evidence-ref test proven to fail against the pre-`0d440a7` handler.
+  Tests-only change.
+- **B-MVP-030** (`457dc11`, merge `f06ae2e`) - single-file rename `_legacy_token_id`->`_resolve_db_token_id`
+  in `audit_helpers.py` + docstring reframed as a correctness FK guard. New `test_audit_token_fk_guard.py`
+  (3 tests, no DB dep) asserts a Supabase principal id never lands in `audit_events.actor_token_id`.
+- **B-MVP-032** (`9584a97`, merge `f36b0fc`) - startup manifest-drift DETECTION (warn-only) in
+  `mcp_backends_registry.py` (`detect_manifest_drift`/`log_manifest_drift`/`check_manifest_drift`) wired
+  into `Gateway.__init__` (`server.py`), try/except-guarded so it never blocks boot and never mutates the
+  registry. Auto-refresh deliberately NOT done (authority-plane write stays an explicit operator action).
+  5 unit tests.
+
+Verification (merged `main`, root env, per-package): sift-core durable/job 45 passed; sift-gateway
+audit+drift+job 47 passed; registry (d22a/osx1/backends_registry) 15 passed. `/code-review low` = (none);
+both production diffs (b030 rename, b032 warn-only) reviewed, record-field names verified against
+`BackendRegistryRecord`. No `/security-review`: b030 is a pure rename + docstring with unchanged FK-guard
+logic (now better tested); no new security surface.
+
+NOT pulled forward: **B-MVP-023** (legacy `/dashboard` + `legacy_portal_session_enabled` removal) - large
+and coupled to the CL2 rename; wave order pins it to step 5. Left OPEN for the operator to sequence.
 
 ### 2026-06-15 - B-MVP-029 on-wire MCP response fixes (dedup + path-leaks + autosave + ingest-poll + rename)
 
@@ -277,12 +309,12 @@ Next:
 | B-MVP-019 | Backlog | OPEN | Ensure add-on register path fields are sourced from staged `/opt/sift-mcps` paths for first real add-on launch. | BATCH-LV1 |
 | B-MVP-023 | Backlog | OPEN | DECISION (2026-06-14): REMOVE. Delete the `legacy_portal_session_enabled` fallback and sweep + delete any remaining legacy code paths/tests (operator: remove anything legacy still in code). | BATCH-CL2 |
 | B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green + committed 4ee3d1f pushed to origin/main 2026-06-14. | BATCH-R3-* |
-| B-MVP-027 | Backlog | OPEN | `run_command_job` durable lane (Postgres job state machine) fails with `unhandled worker error: KeyError` before exec; synchronous `run_command` lane unaffected. Pre-existing; fix the durable path. | BATCH-R3-* |
+| B-MVP-027 | Backlog | DONE | Durable lane KeyError root-caused: handler dropped `_resolved_evidence_refs` + `ActiveCaseContext(db_active=True)` from the sync-lane contract → teardown surfaced as opaque `unhandled worker error: KeyError`. Code fix already landed in `0d440a7` (2026-06-10, AUT2) but row was never closed and had NO regression guard. Added regression coverage 2026-06-15 (`e95692d`): two tests drive the real `JobWorker.run_once` loop (plain + evidence-ref) to exec; evidence-ref test proven to FAIL against the pre-`0d440a7` handler. No prod change needed. | BATCH-R3-* |
 | B-MVP-028 | Backlog | DONE | Optimization track defined + first deliverable landed: tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`. On-wire fixes split to B-MVP-029. | B-MVP-028 |
 | B-MVP-029 | Backlog | DONE | On-wire MCP response fixes landed + live-proven 2026-06-15 (`5233cd8`/`ec9b8d6`/`7977fa7`): run_command receipt dedup, opensearch_search large-result autosave + per-hit hoist, `outputSchema` on core tools, ingest-poll wording, opensearch-mcp absolute-path leaks closed (SECURITY; +3 found by audit), `_legacy_*`→`_impl_*` rename. Autosave live-activation required refreshing the stale DB-registered opensearch manifest (case_dir in safe_case_argument_names). DB-job-row injection for real ingest polling deferred → B-MVP-027; manifest-drift auto-refresh → B-MVP-032. | B-MVP-029 |
-| B-MVP-030 | Backlog | OPEN | Cosmetic correctness-naming: rename `sift-gateway/audit_helpers.py` `_legacy_token_id`→`_resolve_db_token_id` and add a unit test asserting a Supabase principal id is NOT written to `audit_events.actor_token_id` (FK guard). Not legacy; low priority. | BATCH-CL2 |
+| B-MVP-030 | Backlog | DONE | 2026-06-15 (`457dc11`): single-file rename `_legacy_token_id`→`_resolve_db_token_id` in `audit_helpers.py` (helper is module-private, def+call both internal) + docstring reframed as a correctness FK guard (not a legacy shim). New `tests/test_audit_token_fk_guard.py` (3 tests, no DB dep via injected fake conn) asserts a Supabase principal id never lands in `audit_events.actor_token_id` while legitimate agent attribution is still recorded. | BATCH-CL2 |
 | B-MVP-031 | Backlog | OPEN | Dashboard coupling guard source slice DONE 2026-06-14: `useStore.js` interface characterization test added and dashboard selectors landed. Remaining: track gateway complex-density (21/32 nodes) as a review target. No deletion. | BATCH-PT1 |
-| B-MVP-032 | Backlog | OPEN | Manifest-drift: `app.mcp_backends.manifest` is a snapshot taken at backend registration; when a first-party backend's `sift-backend.json` changes (e.g. opensearch_search gaining `case_dir` in `safe_case_argument_names`) an existing install keeps serving the stale registered manifest until re-registered, silently disabling features (B-MVP-029 autosave hit this). Add install/startup manifest-drift detection (compare `manifest_sha256` to the on-disk source) that auto-refreshes or warns. Fresh installs are unaffected. | BATCH-LV1 |
+| B-MVP-032 | Backlog | DONE | 2026-06-15 (`9584a97`): startup manifest-drift DETECTION (warn-only) added. `detect_manifest_drift()` (pure, DB-free) + `log_manifest_drift()` + `McpBackendRegistry.check_manifest_drift()` in `mcp_backends_registry.py`; wired into `Gateway.__init__` after the `app.mcp_backends` load (`server.py`), try/except so it never blocks boot and never mutates the registry. Recomputes on-disk `sift-backend.json` sha via existing `manifest_sha256` + `load_and_validate_manifest`, WARNs naming backend + both shas on mismatch; operator re-registers to clear. Auto-refresh deliberately NOT done (authority-plane write must stay explicit operator action). 5 unit tests; fresh installs unaffected (shas match). | BATCH-LV1 |
 
 ## Validation Commands
 
