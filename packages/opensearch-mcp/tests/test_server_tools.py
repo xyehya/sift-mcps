@@ -889,3 +889,69 @@ class TestInjectedCaseDirPropagation:
         monkeypatch.setattr(_paths, "sift_dir", lambda: _paths.Path("/nonexistent-sift"))
         resp = opensearch_ingest(path="evidence/x.e01", case_dir="")
         assert resp.get("error") == "No active case."
+
+
+class TestSpawnIngestUserBusFallback:
+    """_spawn_ingest must skip systemd-run --user when no user bus exists.
+
+    System service accounts (e.g. sift-service) have no login session and no
+    /run/user/<uid>/bus, so systemd-run --user fails with 'Failed to connect to
+    bus' and the ingest never runs. Without a reachable user bus the spawn must
+    go straight to a bare Popen (which still isolates via start_new_session).
+    """
+
+    def test_no_user_bus_skips_systemd_run(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        import opensearch_mcp.server as s
+
+        # XDG_RUNTIME_DIR points at a dir with NO 'bus' socket → no user bus.
+        env = {"XDG_RUNTIME_DIR": str(tmp_path)}
+        captured = {}
+
+        def fake_popen(cmd, **kw):
+            captured["cmd"] = list(cmd)
+            m = MagicMock()
+            m.poll.return_value = None
+            return m
+
+        with patch("subprocess.Popen", side_effect=fake_popen):
+            s._spawn_ingest(
+                ["python", "-m", "opensearch_mcp.ingest_cli", "scan"],
+                env,
+                None,
+                "run-1234567890ab",
+            )
+
+        assert captured["cmd"][0] != "systemd-run", captured["cmd"]
+        assert captured["cmd"][0] == "python"
+
+    def test_user_bus_present_uses_systemd_run_scope(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        import opensearch_mcp.server as s
+
+        # Create a fake bus socket so the user-bus probe passes.
+        (tmp_path / "bus").write_text("")
+        env = {"XDG_RUNTIME_DIR": str(tmp_path)}
+        captured = {}
+
+        def fake_popen(cmd, **kw):
+            captured["cmd"] = list(cmd)
+            m = MagicMock()
+            m.poll.return_value = None  # still running → no fallback
+            return m
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/systemd-run"),
+            patch("subprocess.Popen", side_effect=fake_popen),
+        ):
+            s._spawn_ingest(
+                ["python", "-m", "opensearch_mcp.ingest_cli", "scan"],
+                env,
+                None,
+                "run-1234567890ab",
+            )
+
+        assert captured["cmd"][0] == "systemd-run"
+        assert "--scope" in captured["cmd"]

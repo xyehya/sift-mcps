@@ -3055,20 +3055,42 @@ def _spawn_ingest(cmd, env, stdout, run_id):
     the ingest, not the gateway. Falls back to bare Popen if systemd-run
     is unavailable or fails (missing D-Bus, non-systemd host, etc.).
     """
+    import os
+    import shutil as _shutil
     import subprocess as _sp
     import time as _time
 
+    uid = os.getuid()
+
+    # systemd-run --user needs a reachable per-user D-Bus session. System
+    # service accounts (e.g. sift-service) have no login session, no
+    # /run/user/<uid>, and no user bus, so systemd-run --user fails with
+    # "Failed to connect to bus" and the ingest never runs. Probe for a usable
+    # user runtime/bus up front and skip the scope wrapper when it is absent —
+    # going straight to a bare Popen (which still gets its own session via
+    # start_new_session=True). cgroup isolation is preserved wherever a user
+    # bus IS available (interactive/dev hosts).
+    runtime_dir = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+    bus_path = f"{runtime_dir}/bus"
+    user_bus_available = (
+        _shutil.which("systemd-run") is not None
+        and os.path.isdir(runtime_dir)
+        and os.path.exists(bus_path)
+    )
+    if not user_bus_available:
+        return _sp.Popen(
+            cmd,
+            stdout=stdout,
+            stderr=_sp.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+
     # Ensure D-Bus address is available for systemd-run --user
     if "DBUS_SESSION_BUS_ADDRESS" not in env:
-        import os
-
-        uid = os.getuid()
-        bus = f"unix:path=/run/user/{uid}/bus"
-        env["DBUS_SESSION_BUS_ADDRESS"] = bus
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus_path}"
     if "XDG_RUNTIME_DIR" not in env:
-        import os
-
-        env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
+        env["XDG_RUNTIME_DIR"] = runtime_dir
 
     scope_cmd = [
         "systemd-run",
