@@ -993,7 +993,14 @@ class Gateway:
                 )
             if safe_args:
                 arguments = dict(arguments)
-                for key, expected in (("case_id", active_case.case_id), ("case_key", active_case.case_key)):
+                # case_dir carries the DB-authoritative case directory
+                # (artifact_path) for filesystem-touching backends. Gateway-
+                # injected; a mismatching client value is rejected.
+                for key, expected in (
+                    ("case_id", active_case.case_id),
+                    ("case_key", active_case.case_key),
+                    ("case_dir", active_case.artifact_path or ""),
+                ):
                     if key not in safe_args:
                         continue
                     supplied = arguments.get(key)

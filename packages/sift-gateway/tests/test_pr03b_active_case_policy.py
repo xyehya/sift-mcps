@@ -331,3 +331,68 @@ async def test_os2_matching_case_id_not_double_denied(tmp_path):
 
     assert not result.is_error, result.content[0].text
     assert seen["case_id"] == "11111111-1111-1111-1111-111111111111"
+
+
+# ---------------------------------------------------------------------------
+# P0 fix: DB active-case DIRECTORY (artifact_path) propagation to backends.
+# The opensearch backend subprocess can read no DB and (by D32) gets no
+# SIFT_CASE_DIR; the Gateway must propagate the authoritative case dir into
+# filesystem-touching tool calls via the injected ``case_dir`` argument so
+# ingest/inspect/enrich/summary/host-fix resolve the correct, current case
+# without any authoritative file/pointer/env resolution in the subprocess.
+# ---------------------------------------------------------------------------
+
+
+async def test_db_case_dir_injected_for_filesystem_tool(tmp_path):
+    """The DB active case artifact_path is injected into ``case_dir``."""
+    seen = {}
+    child = FastMCP("child")
+
+    @child.tool(name="ingest")
+    async def opensearch_ingest(path: str = "", case_dir: str = ""):
+        seen["case_dir"] = case_dir
+        seen["path"] = path
+        return {"status": "preview"}
+
+    # opensearch_ingest declares safe_case_argument_names: ["case_dir"].
+    gw = _Gateway(_case(tmp_path), {"addon_ingest": {"case_dir"}})
+    parent = FastMCP("parent", middleware=gateway_policy_middlewares(gw))
+    parent.mount(create_proxy(child), namespace="addon")
+
+    with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=_identity()), patch(
+        "sift_gateway.policy_middleware.check_evidence_gate",
+        return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
+    ):
+        result = await parent.call_tool("addon_ingest", {"path": "evidence/x.e01"})
+
+    assert not result.is_error, result.content[0].text
+    # Gateway injected the DB-authoritative case directory (artifact_path).
+    assert seen["case_dir"] == str(tmp_path)
+    assert seen["path"] == "evidence/x.e01"
+
+
+async def test_client_supplied_mismatched_case_dir_is_denied(tmp_path):
+    """A client-supplied ``case_dir`` that differs from the DB path is denied."""
+    ran = False
+    child = FastMCP("child")
+
+    @child.tool(name="ingest")
+    async def opensearch_ingest(path: str = "", case_dir: str = ""):
+        nonlocal ran
+        ran = True
+        return {"status": "preview"}
+
+    gw = _Gateway(_case(tmp_path), {"addon_ingest": {"case_dir"}})
+    parent = FastMCP("parent", middleware=gateway_policy_middlewares(gw))
+    parent.mount(create_proxy(child), namespace="addon")
+
+    with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=_identity()):
+        result = await parent.call_tool(
+            "addon_ingest",
+            {"path": "evidence/x.e01", "case_dir": "/cases/some-other-case"},
+        )
+
+    # Spoofed case dir must be rejected BEFORE the backend runs.
+    assert ran is False
+    assert result.is_error
+    assert "active_case_mismatch" in result.content[0].text

@@ -817,3 +817,75 @@ class TestIdxIngestContainerDetection:
         spawned_cmds = [call.args[0] for call in mock_spawn.call_args_list]
         assert any("scan" in cmd and "--clean" in cmd for cmd in spawned_cmds)
         assert any("memory" in cmd for cmd in spawned_cmds)
+
+
+class TestInjectedCaseDirPropagation:
+    """P0 fix: Gateway-injected case_dir is the authoritative case directory.
+
+    The opensearch backend subprocess gets no DB access and (by D32) no
+    SIFT_CASE_DIR; the Gateway propagates the DB active-case artifact_path into
+    each filesystem-touching tool call via the injected ``case_dir`` argument.
+    These tests pin that the injected value resolves the case (without env or a
+    pointer file) and wins over a stale env value.
+    """
+
+    def test_active_case_dir_prefers_injection(self, monkeypatch):
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+        with srv._use_injected_case_dir("/cases/injected-case"):
+            assert srv.active_case_dir() == "/cases/injected-case"
+            assert srv._get_active_case() == "injected-case"
+
+    def test_active_case_dir_injection_wins_over_env(self, monkeypatch):
+        monkeypatch.setenv("SIFT_CASE_DIR", "/cases/stale-env-case")
+        with srv._use_injected_case_dir("/cases/injected-case"):
+            assert srv.active_case_dir() == "/cases/injected-case"
+        # Outside the injection scope, env is the standalone-CLI fallback.
+        assert srv.active_case_dir() == "/cases/stale-env-case"
+
+    def test_active_case_dir_empty_without_any_source(self, monkeypatch):
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+        # Point the legacy pointer lookup at an empty dir so no pointer resolves.
+        import opensearch_mcp.paths as _paths
+
+        monkeypatch.setattr(_paths, "sift_dir", lambda: _paths.Path("/nonexistent-sift"))
+        assert srv.active_case_dir() == ""
+
+    def test_ingest_uses_injected_case_dir(self, mock_client, tmp_path, monkeypatch):
+        """opensearch_ingest resolves the case from the injected case_dir alone."""
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+        case_dir = tmp_path / "case-injected-001"
+        evidence_dir = case_dir / "evidence"
+        evidence_dir.mkdir(parents=True)
+        (evidence_dir / "rocba-cdrive.e01").write_bytes(b"EVF" + b"\x00" * 100)
+
+        proc = MagicMock(pid=303)
+        with (
+            patch("opensearch_mcp.ingest.discover", return_value=[]),
+            patch(
+                "opensearch_mcp.shard_capacity.check_shard_headroom",
+                return_value=(True, "ok"),
+            ),
+            patch("opensearch_mcp.server._spawn_ingest", return_value=proc) as mock_spawn,
+        ):
+            resp = opensearch_ingest(
+                path="evidence/rocba-cdrive.e01",
+                hostname="srl-forge",
+                dry_run=False,
+                force=True,
+                case_dir=str(case_dir),
+            )
+
+        # No "no_active_case" — the injected dir resolved the case end-to-end.
+        assert resp.get("status") in {"started", "multi_started", "containers_detected"}
+        assert "error" not in resp or "active case" not in str(resp.get("error", "")).lower()
+        # The ingest worker child gets the authoritative dir propagated via env.
+        spawned_env = mock_spawn.call_args_list[0].args[1]
+        assert spawned_env.get("SIFT_CASE_DIR") == str(case_dir)
+
+    def test_ingest_no_active_case_when_nothing_injected(self, mock_client, monkeypatch):
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+        import opensearch_mcp.paths as _paths
+
+        monkeypatch.setattr(_paths, "sift_dir", lambda: _paths.Path("/nonexistent-sift"))
+        resp = opensearch_ingest(path="evidence/x.e01", case_dir="")
+        assert resp.get("error") == "No active case."

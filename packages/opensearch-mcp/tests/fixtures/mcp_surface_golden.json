@@ -799,6 +799,12 @@
       "description": "Correct a wrong host.id mapping in the active case by updating the case host dictionary and reindexing docs where host.name equals raw. host.name is never changed. Use when ingest applied a wrong canonical host id. Example: opensearch_fix_host_mapping(raw='wksn01', new_canonical='wksn01').",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "new_canonical": {
             "description": "The correct canonical host.id to assign.",
             "minLength": 1,
@@ -1010,6 +1016,12 @@
       "description": "DEPRECATED alias for `opensearch_fix_host_mapping`. Use the canonical name; this alias will be removed after one cutover cycle.\n\nCorrect a wrong host.id mapping in the active case by updating the case host dictionary and reindexing docs where host.name equals raw. host.name is never changed. Use when ingest applied a wrong canonical host id. Example: opensearch_fix_host_mapping(raw='wksn01', new_canonical='wksn01').",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "new_canonical": {
             "description": "The correct canonical host.id to assign.",
             "minLength": 1,
@@ -1206,6 +1218,12 @@
       "description": "Extract unique IOCs from indexed docs, optionally look them up in OpenCTI, and stamp matching docs with threat_intel fields. Use dry_run=True to size the work, then dry_run=False to launch the existing async enrichment path. Example: opensearch_enrich_intel(dry_run=True).",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "case_id": {
             "default": "",
             "description": "Case to enrich; default active.",
@@ -1449,6 +1467,12 @@
       "description": "Return status for running or recent ingest and enrichment runs. Use to poll every roughly 30 seconds while a run is active and present the per-host artifact checklist. Default is active case; case_id='*' shows all cases. Example: opensearch_ingest_status().",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "case_id": {
             "default": "",
             "description": "Filter to this case; default active. '*' for all.",
@@ -1769,6 +1793,12 @@
             "description": "Parse all evtx, not only forensic logs.",
             "title": "All Logs",
             "type": "boolean"
+          },
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
           },
           "delimiter": {
             "default": "",
@@ -3068,6 +3098,12 @@
       "description": "Survey a forensic container without mounting it: integrity, size, partitions, and available inspection details. Use before opensearch_ingest; follow with opensearch_ingest(dry_run=True) for the full plan. Example: opensearch_inspect_container(path='evidence/rocba-cdrive.e01').",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "path": {
             "description": "Container path under the active case; bare names resolve to evidence/.",
             "title": "Path",
@@ -3274,6 +3310,12 @@
       "description": "Complete coverage overview for a case. Call this first in every indexed session to see hosts, artifact families, doc counts, enrichment state, and coverage_state.gaps with exact commands to fill missing coverage. Example: opensearch_case_summary(case_id='rocba-drive-20260526-1417').",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "case_id": {
             "default": "",
             "description": "Case id; empty resolves to active case.",

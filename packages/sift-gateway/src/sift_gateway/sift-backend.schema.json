@@ -114,11 +114,11 @@
             "uniqueItems": true
           },
           "safe_case_argument_names": {
-            "description": "OS2: argument names the Gateway may safely inject the DB active case_id into. An empty list means the tool is case-scoped but resolves the active case internally (no injection argument). Absent means unknown — the Gateway falls back to schema-property detection and denies fail-closed if nothing is found.",
+            "description": "OS2: argument names the Gateway may safely inject the DB active case into. 'case_id'/'case_key' receive the DB case identity; 'case_dir' receives the DB-authoritative case directory (artifact_path) for filesystem-touching backends that cannot resolve the case from any local file/env. An empty list means the tool is case-scoped but resolves the active case internally (no injection argument). Absent means unknown — the Gateway falls back to schema-property detection and denies fail-closed if nothing is found.",
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["case_id", "case_key"]
+              "enum": ["case_id", "case_key", "case_dir"]
             },
             "uniqueItems": true
           },

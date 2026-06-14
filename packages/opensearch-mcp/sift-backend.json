@@ -205,7 +205,7 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_inspect_container",
@@ -225,7 +225,7 @@
       "evidence_class": "read_only",
       "category": "evidence-survey",
       "recommended_phase": "SURVEY",
-      "safe_case_argument_names": []
+      "safe_case_argument_names": ["case_dir"]
     },
     {
       "name": "opensearch_ingest",
@@ -247,7 +247,7 @@
       "evidence_class": "mutating",
       "category": "ingest",
       "recommended_phase": "INGEST",
-      "safe_case_argument_names": []
+      "safe_case_argument_names": ["case_dir"]
     },
     {
       "name": "opensearch_ingest_status",
@@ -268,7 +268,7 @@
       "evidence_class": "read_only",
       "category": "ingest",
       "recommended_phase": "INGEST",
-      "safe_case_argument_names": ["case_id"]
+      "safe_case_argument_names": ["case_id", "case_dir"]
     },
     {
       "name": "opensearch_enrich_intel",
@@ -289,7 +289,7 @@
       "evidence_class": "mutating",
       "category": "enrichment",
       "recommended_phase": "CORRELATE",
-      "safe_case_argument_names": ["case_id"],
+      "safe_case_argument_names": ["case_id", "case_dir"],
       "required_scopes": ["enrichment:intel"],
       "scope_enforcement": "gateway_primary_env_fallback",
       "enrichment_policy": {
@@ -341,7 +341,7 @@
       "evidence_class": "mutating",
       "category": "admin",
       "recommended_phase": "INGEST",
-      "safe_case_argument_names": [],
+      "safe_case_argument_names": ["case_dir"],
       "receipt_policy": {
         "db_active_mode": "write_receipt_or_deny",
         "receipt_fields": ["source", "canonical", "actor_type", "tool", "index_names", "docs_updated", "audit_event_id"],
