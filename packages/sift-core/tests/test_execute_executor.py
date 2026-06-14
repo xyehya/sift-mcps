@@ -696,7 +696,7 @@ def test_run_command_tool_description_disambiguates_sync_receipt_id():
     assert "synchronous" in spec.description
     assert "rc-* receipt id is not a durable job id" in spec.description
     assert "use run_command_job" in spec.description
-    assert "job_status" in spec.description
+    assert "running_commands_status" in spec.description
 
 
 def test_native_runtime_fails_when_sudo_missing(monkeypatch):

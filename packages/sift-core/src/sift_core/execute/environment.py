@@ -53,7 +53,7 @@ def find_binary(name: str, extra_paths: list[str] | None = None) -> str | None:
     # Check extra paths
     search_paths = extra_paths or [
         "/usr/local/bin",
-        "/opt/zimmerman",
+        "/opt/zimmermantools",
         "/opt/volatility3",
         "/opt/hayabusa",
     ]

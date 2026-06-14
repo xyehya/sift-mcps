@@ -979,6 +979,34 @@ install_hayabusa_system_links() {
   sudo_if_needed ln -sf "$binary" /usr/local/bin/hayabusa 2>/dev/null || true
 }
 
+install_zimmerman_symlinks() {
+  # Zimmerman EZ Tools are installed at /opt/zimmermantools by SIFT.
+  # Symlink each tool into /usr/local/bin so they are on PATH for run_command.
+  # Idempotent: re-linking an existing symlink is a no-op.
+  local zimmerman_dir="/opt/zimmermantools"
+  if ! sudo_if_needed test -d "$zimmerman_dir"; then
+    log "Zimmerman tools not found at $zimmerman_dir — skipping symlinks."
+    return 0
+  fi
+  local linked=0
+  # Known EZ Tools — link each if the binary exists under /opt/zimmermantools.
+  local tools=(
+    EvtxECmd MFTECmd RECmd PECmd AmcacheParser AppCompatCacheParser
+    JLECmd LECmd SBECmd RBCmd SrumECmd SQLECmd WxTCmd bstrings
+  )
+  for tool in "${tools[@]}"; do
+    if sudo_if_needed test -x "$zimmerman_dir/$tool"; then
+      sudo_if_needed ln -sf "$zimmerman_dir/$tool" "/usr/local/bin/$tool" 2>/dev/null || true
+      linked=$((linked + 1))
+    fi
+  done
+  if [[ "$linked" -gt 0 ]]; then
+    log "Zimmerman EZ Tools: linked $linked tool(s) from $zimmerman_dir into /usr/local/bin."
+  else
+    log "Zimmerman tools dir exists but no known EZ Tool binaries found inside — skipping."
+  fi
+}
+
 fix_volatility_permissions() {
   # NO-OP (intentional). Volatility3 symbols no longer go to /opt/volatility3.
   # They now live in the shared, group-writable cache at
@@ -3300,6 +3328,7 @@ main() {
     fi
 
     install_hayabusa_system_links
+    install_zimmerman_symlinks
     fix_volatility_permissions
   else
     log "CORE-ONLY: skipped add-on backends, OpenSearch/Docker, and forensic-tool downloads."

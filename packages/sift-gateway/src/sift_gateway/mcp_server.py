@@ -49,7 +49,7 @@ _CORE_TOOL_CATEGORIES: dict[str, str] = {
     "record_timeline_event": "findings",
     "list_existing_findings": "findings",
     "manage_todo": "findings",
-    "job_status": "ingest",
+    "running_commands_status": "ingest",
     "run_command_job": "detection",
 }
 
@@ -63,7 +63,7 @@ _CORE_TOOL_PHASES: dict[str, str] = {
     "record_timeline_event": "FINDINGS",
     "list_existing_findings": "FINDINGS",
     "manage_todo": "FINDINGS",
-    "job_status": "INGEST",
+    "running_commands_status": "INGEST",
     "run_command_job": "TRIAGE",
 }
 

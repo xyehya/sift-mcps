@@ -194,13 +194,17 @@ def build_tool_inventory() -> dict:
         available = find_binary(binary) is not None
         if available:
             available_count += 1
-        tools.append(
-            {
-                "name": t["name"],
-                "category": t.get("category", ""),
-                "available": available,
-            }
-        )
+        entry: dict = {
+            "name": t["name"],
+            "category": t.get("category", ""),
+            "available": available,
+        }
+        # Surface the invocable binary name when it differs from the catalog
+        # name, so agents never have to guess what to pass to run_command.
+        # Example: catalog name "regripper" → invocable binary "rip.pl".
+        if binary != t["name"]:
+            entry["invoke_as"] = binary
+        tools.append(entry)
 
     # run_command's security allowlist permits binaries beyond the catalog;
     # surface those too so the agent does not discover gaps via failed runs.

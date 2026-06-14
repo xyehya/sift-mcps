@@ -264,7 +264,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "Execute a quick, synchronous validated command on this SIFT VM and return "
         "inline preview/receipt output. The returned rc-* receipt id is not a "
         "durable job id; use run_command_job for long-running or parallel work "
-        "that should be polled with job_status. Pass a single command string; "
+        "that should be polled with running_commands_status. Pass a single command string; "
         "pipes (|), sequencing (&&/||/;), and redirects (>,>>,<,2>&1) are supported. "
         "Set preview_lines to cap inline stdout and save_output for large output. "
         "Case path jails, audit logging, and provenance hashing are enforced.",

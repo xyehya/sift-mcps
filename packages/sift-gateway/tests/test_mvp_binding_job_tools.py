@@ -109,7 +109,7 @@ class _Gateway:
         self.job_service = _JobService()
         self.evidence_service = _EvidenceService(case_dir)
         self._audit = None
-        self._gateway_local_tools = {"run_command_job", "job_status"}
+        self._gateway_local_tools = {"run_command_job", "running_commands_status"}
         self._tool_manifest_meta = {}
         self.backends = {}
 
@@ -133,7 +133,7 @@ def test_ingest_job_tool_is_fully_retired():
     assert "opensearch_ingest" not in names, (
         "the gateway must not shadow/intercept the add-on opensearch_ingest tool"
     )
-    assert GATEWAY_JOB_TOOLS == frozenset({"run_command_job", "job_status"})
+    assert GATEWAY_JOB_TOOLS == frozenset({"run_command_job", "running_commands_status"})
     # The retired handlers and policy enforcer no longer exist on the module.
     import sift_gateway.job_tools as jt
 
@@ -184,7 +184,7 @@ def test_run_command_job_description_advertises_pollable_uuid():
     description = spec["description"]
     assert "long-running or parallel work" in description
     assert "pollable UUID job_id" in description
-    assert "job_status" in description
+    assert "running_commands_status" in description
 
 
 def test_job_status_returns_sanitized_service_payload(tmp_path):
@@ -204,7 +204,7 @@ def test_job_status_rejects_malformed_job_id_with_typed_error(tmp_path):
         handle_job_status(gateway, {"job_id": "rc-agent-20260609-001"}, "agent-1")
     )
     body = _payload(result)
-    assert body == {"error": "invalid_job_id", "tool": "job_status"}
+    assert body == {"error": "invalid_job_id", "tool": "running_commands_status"}
 
 
 def test_job_status_internal_error_is_not_leaked(tmp_path):
@@ -222,7 +222,7 @@ def test_job_status_internal_error_is_not_leaked(tmp_path):
         )
     )
     body = _payload(result)
-    assert body == {"error": "internal_error", "tool": "job_status"}
+    assert body == {"error": "internal_error", "tool": "running_commands_status"}
     assert "CONTEXT" not in json.dumps(body)
     assert "secret" not in json.dumps(body)
 
@@ -242,7 +242,7 @@ async def test_gateway_mcp_registers_local_binding_tools(tmp_path):
         mcp = create_gateway_mcp_server(gateway, api_keys={})
         tools = {tool.name for tool in await mcp.list_tools()}
 
-    assert {"run_command_job", "job_status"} <= tools
+    assert {"run_command_job", "running_commands_status"} <= tools
     # wave8/ingest-tools: the retired ingest_job tool must NOT reappear.
     assert "ingest_job" not in tools
     # The gateway must not register/shadow opensearch_ingest as a local tool —

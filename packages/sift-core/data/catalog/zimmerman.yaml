@@ -1,5 +1,5 @@
 category: zimmerman
-common_binary_dir: /usr/local/bin
+common_binary_dir: /opt/zimmermantools
 
 tools:
   - name: AmcacheParser
