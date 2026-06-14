@@ -17,11 +17,15 @@ import threading
 import time
 from typing import Any
 
+from sift_core.execute.dfir_exec_launcher import (
+    encode_policy as _encode_launcher_policy,
+)
 from sift_core.execute.runtime_acl import (
     assert_no_authority_write_target as _assert_no_authority_write_target,
+)
+from sift_core.execute.runtime_acl import (
     build_sandbox_env,
 )
-
 
 _pipe_lock = threading.Lock()
 
@@ -92,15 +96,22 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     timeout = int(payload["timeout"])
     max_bytes = int(payload["max_output_bytes"])
     cwd = payload.get("cwd") or None
+    case_dir = str(payload.get("case_dir") or cwd or os.environ.get("SIFT_CASE_DIR") or "").strip()
     memory_limit_bytes = int(payload.get("memory_limit_bytes") or 0)
     runtime_user = str(payload.get("runtime_user") or "").strip()
     sudo_path = str(payload.get("sudo_path") or "/usr/bin/sudo").strip()
+    launcher_enabled = bool(payload.get("launcher_enabled", bool(runtime_user)))
+    launcher_required = bool(payload.get("launcher_required"))
+    require_landlock = bool(payload.get("require_landlock"))
+    service_uid = payload.get("service_uid")
+    service_gid = payload.get("service_gid")
 
     start = time.monotonic()
     truncated = False
     preexec_fn = None
     if os.name == "posix":
-        preexec_fn = lambda: _resource_preexec(timeout, memory_limit_bytes)
+        def preexec_fn() -> None:
+            _resource_preexec(timeout, memory_limit_bytes)
 
     # K5 authority isolation: scrub the environment the forensic tool runs with.
     # The worker process itself was already spawned with a scrubbed env, but we
@@ -171,13 +182,28 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     prev_stdout = None
     
     try:
-        for i, stage in enumerate(stages):
+        for _i, stage in enumerate(stages):
             original_argv = list(stage["argv"])
             if vol_symbols_dir:
                 original_argv = _inject_vol_symbol_dir(original_argv, vol_symbols_dir)
             stage_runtime_user = str(stage.get("runtime_user", runtime_user) or "").strip()
+            launch_argv = _argv_for_launcher(
+                original_argv,
+                runtime_user=stage_runtime_user,
+                launcher_enabled=launcher_enabled,
+                launcher_required=launcher_required,
+                require_landlock=require_landlock,
+                timeout=timeout,
+                cwd=cwd,
+                case_dir=case_dir,
+                memory_limit_bytes=memory_limit_bytes,
+                max_output_bytes=max_bytes,
+                service_uid=service_uid,
+                service_gid=service_gid,
+                vol_symbols_dir=vol_symbols_dir,
+            )
             argv = _argv_for_runtime_user(
-                original_argv, stage_runtime_user, sudo_path,
+                launch_argv, stage_runtime_user, sudo_path,
                 env_overrides=env_overrides,
             )
             redirects = stage["redirects"]
@@ -407,6 +433,64 @@ def _inject_vol_symbol_dir(argv: list[str], symbols_dir: str) -> list[str]:
     if any(a in ("-s", "--symbol-dirs") for a in argv[1:]):
         return argv
     return [argv[0], "--symbol-dirs", symbols_dir, *argv[1:]]
+
+
+def _runtime_ids(runtime_user: str) -> tuple[int | None, int | None]:
+    if not runtime_user:
+        return None, None
+    try:
+        pw = pwd.getpwnam(runtime_user)
+    except KeyError:
+        return None, None
+    return int(pw.pw_uid), int(pw.pw_gid)
+
+
+def _argv_for_launcher(
+    argv: list[str],
+    *,
+    runtime_user: str,
+    launcher_enabled: bool,
+    launcher_required: bool,
+    require_landlock: bool,
+    timeout: int,
+    cwd: str | None,
+    case_dir: str,
+    memory_limit_bytes: int,
+    max_output_bytes: int,
+    service_uid: int | None,
+    service_gid: int | None,
+    vol_symbols_dir: str,
+) -> list[str]:
+    if not launcher_enabled:
+        return argv
+    if not runtime_user and not launcher_required:
+        return argv
+
+    runtime_uid, runtime_gid = _runtime_ids(runtime_user)
+    policy = {
+        "case_dir": case_dir,
+        "cwd": cwd or case_dir,
+        "timeout": timeout,
+        "memory_limit_bytes": memory_limit_bytes,
+        "max_output_bytes": max_output_bytes,
+        "runtime_user": runtime_user,
+        "runtime_uid": runtime_uid,
+        "runtime_gid": runtime_gid,
+        "service_uid": service_uid,
+        "service_gid": service_gid,
+        "require_landlock": require_landlock,
+        "seccomp_mode": "log",
+        "vol_symbols_dir": vol_symbols_dir,
+    }
+    return [
+        sys.executable,
+        "-m",
+        "sift_core.execute.dfir_exec_launcher",
+        "--policy",
+        _encode_launcher_policy(policy),
+        "--",
+        *argv,
+    ]
 
 
 def _argv_for_runtime_user(
