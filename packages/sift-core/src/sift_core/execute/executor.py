@@ -37,6 +37,86 @@ def _active_or_env_case_dir() -> str:
     return resolve_case_dir()
 
 
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _systemd_scope_mode() -> str:
+    raw = os.environ.get("SIFT_EXECUTE_SYSTEMD_SCOPE")
+    if raw is None:
+        return "required" if _env_flag("SIFT_EXECUTE_REQUIRE_RUNTIME_USER") else "off"
+    value = raw.strip().lower()
+    if value in {"", "0", "false", "no", "off"}:
+        return "off"
+    if value == "auto":
+        return "auto"
+    return "required"
+
+
+def _systemd_memory_props(memory_limit_bytes: int) -> tuple[str, str]:
+    memory_max = os.environ.get("SIFT_EXECUTE_SYSTEMD_MEMORY_MAX", "").strip()
+    memory_high = os.environ.get("SIFT_EXECUTE_SYSTEMD_MEMORY_HIGH", "").strip()
+    if memory_limit_bytes > 0:
+        memory_max = memory_max or str(int(memory_limit_bytes))
+        memory_high = memory_high or str(max(1, int(memory_limit_bytes * 0.75)))
+    else:
+        memory_high = memory_high or "3G"
+        memory_max = memory_max or "4G"
+    return memory_high, memory_max
+
+
+def _systemd_scope_command(
+    worker_cmd: list[str],
+    *,
+    timeout: int,
+    memory_limit_bytes: int,
+) -> list[str]:
+    mode = _systemd_scope_mode()
+    if mode == "off" or os.name != "posix":
+        return worker_cmd
+
+    systemd_run = shutil.which("systemd-run")
+    if not systemd_run:
+        candidate = Path("/usr/bin/systemd-run")
+        if candidate.exists():
+            systemd_run = str(candidate)
+    if not systemd_run:
+        if mode == "auto":
+            logger.warning("systemd-run requested in auto mode but not found; using direct worker")
+            return worker_cmd
+        raise ExecutionError(
+            "SIFT run_command cgroup isolation was requested, but systemd-run "
+            "was not found. Install systemd-run or disable only for local dev "
+            "with SIFT_EXECUTE_SYSTEMD_SCOPE=0."
+        )
+
+    memory_high, memory_max = _systemd_memory_props(memory_limit_bytes)
+    props = [
+        f"MemoryHigh={memory_high}",
+        f"MemoryMax={memory_max}",
+        f"CPUQuota={os.environ.get('SIFT_EXECUTE_SYSTEMD_CPU_QUOTA', '200%')}",
+        f"TasksMax={os.environ.get('SIFT_EXECUTE_SYSTEMD_TASKS_MAX', '64')}",
+        f"RuntimeMaxSec={max(1, int(timeout) + 5)}",
+        "OOMPolicy=kill",
+        "IPAddressDeny=any",
+        "IOAccounting=yes",
+        "IPAccounting=yes",
+    ]
+    scope_cmd = [systemd_run, "--scope", "--quiet", "--collect"]
+    for prop in props:
+        scope_cmd.extend(["-p", prop])
+    return [*scope_cmd, "--", *worker_cmd]
+
+
+def _launcher_requested(runtime_user: str) -> bool:
+    return bool(runtime_user) or _env_flag("SIFT_EXECUTE_LAUNCHER") or _env_flag(
+        "SIFT_EXECUTE_REQUIRE_LANDLOCK"
+    )
+
+
 def _run_isolated_worker(
     cmd_list: list[str] | list[dict[str, Any]],
     *,
@@ -48,14 +128,22 @@ def _run_isolated_worker(
     sudo_path: str = "",
     cache_dir: str = "",
 ) -> dict[str, Any]:
+    case_dir = _active_or_env_case_dir()
     payload = {
         "timeout": timeout,
         "cwd": cwd,
+        "case_dir": case_dir,
         "max_output_bytes": max_output_bytes,
         "memory_limit_bytes": memory_limit_bytes,
         "runtime_user": runtime_user,
         "sudo_path": sudo_path,
         "cache_dir": cache_dir,
+        "launcher_enabled": _launcher_requested(runtime_user),
+        "launcher_required": _env_flag("SIFT_EXECUTE_REQUIRE_LANDLOCK")
+        or _env_flag("SIFT_EXECUTE_LAUNCHER"),
+        "require_landlock": _env_flag("SIFT_EXECUTE_REQUIRE_LANDLOCK"),
+        "service_uid": os.getuid() if hasattr(os, "getuid") else None,
+        "service_gid": os.getgid() if hasattr(os, "getgid") else None,
     }
     if cmd_list and isinstance(cmd_list[0], dict):
         payload["stages"] = cmd_list
@@ -64,7 +152,11 @@ def _run_isolated_worker(
         payload["cmd"] = cmd_list
         cmd_str = " ".join(cmd_list)
 
-    worker_cmd = [sys.executable, "-m", "sift_core.execute.worker"]
+    worker_cmd = _systemd_scope_command(
+        [sys.executable, "-m", "sift_core.execute.worker"],
+        timeout=timeout,
+        memory_limit_bytes=memory_limit_bytes,
+    )
     logger.debug("Starting native user execution worker: %s", cmd_str)
     # K5 authority isolation: the worker subprocess (and, downstream, the
     # forensic tool it launches) must not inherit DB DSNs, Supabase/service-role
@@ -76,8 +168,7 @@ def _run_isolated_worker(
     proc = subprocess.run(
         worker_cmd,
         input=json.dumps(payload),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         timeout=timeout + 3,
         shell=False,
@@ -113,7 +204,13 @@ def _run_isolated_worker(
 def _native_runtime_identity(config) -> tuple[str, str]:
     """Return (runtime_user, sudo_path), or empty strings for same-user dev mode."""
     runtime_user = str(config.execute_as_user or "").strip()
+    require_runtime_user = _env_flag("SIFT_EXECUTE_REQUIRE_RUNTIME_USER")
     if not runtime_user or runtime_user == "__current__":
+        if require_runtime_user:
+            raise ExecutionError(
+                "SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1 requires execute.runtime_user "
+                "to name a distinct restricted local account."
+            )
         return "", ""
 
     try:
@@ -121,6 +218,11 @@ def _native_runtime_identity(config) -> tuple[str, str]:
     except KeyError:
         current_user = ""
     if runtime_user == current_user:
+        if require_runtime_user:
+            raise ExecutionError(
+                "SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1 requires execute.runtime_user "
+                "to be distinct from the service user."
+            )
         return "", ""
 
     try:

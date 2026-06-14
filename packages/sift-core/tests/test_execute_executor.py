@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from sift_core.execute import worker
 from sift_core.execute.catalog import clear_catalog_cache
 from sift_core.execute.exceptions import DeniedBinaryError, ExecutionTimeoutError
@@ -204,6 +203,84 @@ def test_run_command_passes_memory_limit_to_worker(monkeypatch):
     assert payloads[0]["memory_limit_bytes"] == 50_000_000
 
 
+def test_required_runtime_user_rejects_current_user_dev_mode(monkeypatch):
+    from sift_core.execute.exceptions import ExecutionError
+
+    monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "__current__")
+    monkeypatch.setenv("SIFT_EXECUTE_REQUIRE_RUNTIME_USER", "1")
+
+    with pytest.raises(ExecutionError, match="requires execute.runtime_user"):
+        execute(["/usr/bin/date"], timeout=5, cwd=None)
+
+
+def test_required_runtime_user_rejects_service_user(monkeypatch):
+    import os
+    import pwd
+
+    from sift_core.execute.exceptions import ExecutionError
+
+    current_user = pwd.getpwuid(os.getuid()).pw_name
+    monkeypatch.setenv("SIFT_EXECUTE_AS_USER", current_user)
+    monkeypatch.setenv("SIFT_EXECUTE_REQUIRE_RUNTIME_USER", "1")
+
+    with pytest.raises(ExecutionError, match="distinct from the service user"):
+        execute(["/usr/bin/date"], timeout=5, cwd=None)
+
+
+def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
+    import json
+    import subprocess
+
+    from sift_core.execute import executor as executor_module
+    from sift_core.execute.executor import _run_isolated_worker
+
+    monkeypatch.setenv("SIFT_EXECUTE_SYSTEMD_SCOPE", "1")
+    monkeypatch.setattr(
+        executor_module.shutil,
+        "which",
+        lambda cmd: "/usr/bin/systemd-run" if cmd == "systemd-run" else None,
+    )
+
+    captured = {}
+
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = json.dumps({"exit_code": 0, "stdout": "scope-ok", "stderr": ""})
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):
+        captured["cmd"] = cmd
+        captured["payload"] = json.loads(kwargs["input"])
+        return FakeCompletedProcess()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    res = _run_isolated_worker(
+        ["/usr/bin/date"],
+        timeout=5,
+        cwd="/cases/c",
+        max_output_bytes=1024,
+        memory_limit_bytes=0,
+        runtime_user="agent_runtime",
+        sudo_path="/usr/bin/sudo",
+    )
+
+    cmd = captured["cmd"]
+    assert res["stdout"] == "scope-ok"
+    assert cmd[:4] == ["/usr/bin/systemd-run", "--scope", "--quiet", "--collect"]
+    assert "-p" in cmd
+    assert "MemoryHigh=3G" in cmd
+    assert "MemoryMax=4G" in cmd
+    assert "CPUQuota=200%" in cmd
+    assert "TasksMax=64" in cmd
+    assert "RuntimeMaxSec=10" in cmd
+    assert "OOMPolicy=kill" in cmd
+    assert "IPAddressDeny=any" in cmd
+    sep = cmd.index("--")
+    assert cmd[sep + 1 : sep + 4] == [sys.executable, "-m", "sift_core.execute.worker"]
+    assert captured["payload"]["launcher_enabled"] is True
+
+
 def test_native_runtime_user_requires_existing_local_account(monkeypatch):
     import pwd
 
@@ -254,11 +331,24 @@ def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
 
     assert result["stdout"] == "ok\n"
     assert calls[0][:5] == ["/usr/bin/sudo", "-n", "-u", "agent_runtime", "--"]
-    assert calls[0][5:] == ["/usr/bin/id"]
+    launcher_argv = calls[0][5:]
+    assert launcher_argv[:3] == [
+        sys.executable,
+        "-m",
+        "sift_core.execute.dfir_exec_launcher",
+    ]
+    assert "--policy" in launcher_argv
+    assert launcher_argv[-2:] == ["--", "/usr/bin/id"]
+
+    from sift_core.execute.dfir_exec_launcher import decode_policy
+
+    policy = decode_policy(launcher_argv[launcher_argv.index("--policy") + 1])
+    assert policy["runtime_user"] == "agent_runtime"
+    assert policy["seccomp_mode"] == "log"
+    assert policy["require_landlock"] is False
 
 
 def test_sudo_validation_rules(tmp_path, monkeypatch):
-    import shutil
     from sift_core.execute.exceptions import DeniedBinaryError
 
     # Set up case
@@ -315,8 +405,8 @@ def test_mount_denied_before_privileged_execution(tmp_path, monkeypatch):
 
 
 def test_mount_sudo_fallback_is_not_available(tmp_path, monkeypatch):
-    import shutil
     import os
+    import shutil
     case_dir = tmp_path / "case"
     case_dir.mkdir()
     (case_dir / "CASE.yaml").write_text("case_id: EXEC-005\n", encoding="utf-8")
@@ -684,7 +774,6 @@ def test_native_runtime_fails_when_sudo_missing(monkeypatch):
     import pwd
 
     from sift_core.execute import executor as executor_module
-
     from sift_core.execute.exceptions import ExecutionError
 
     monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "agent_runtime")
@@ -767,8 +856,8 @@ def test_stderr_merge_2to1_supported(tmp_path, monkeypatch):
     """'2>&1' must survive splitting/parsing and become a redirect directive
     rather than being treated as a statement separator ('&') or a file open."""
     from sift_core.execute.security import (
-        split_command_by_operators,
         parse_subcommand_argv_and_redirects,
+        split_command_by_operators,
     )
 
     # '&' inside 2>&1 must not split the command.
