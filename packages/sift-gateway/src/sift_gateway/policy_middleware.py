@@ -752,7 +752,17 @@ class ProxyActiveCaseMiddleware(Middleware):
             # Manifest says no injection args — pass through unmodified.
             return await call_next(context)
         args = _tool_args(context)
-        for key, expected in (("case_id", case.case_id), ("case_key", case.case_key)):
+        # case_dir carries the DB-authoritative active-case directory
+        # (artifact_path) so backends that touch the case filesystem (ingest,
+        # inspect, enrich, summary, host-fix) never resolve the case from a
+        # local file/env. It is gateway-injected; a mismatching client value is
+        # denied. artifact_path is the authority and must never leak from the
+        # client, so an empty DB artifact_path means we still overwrite (clear).
+        for key, expected in (
+            ("case_id", case.case_id),
+            ("case_key", case.case_key),
+            ("case_dir", case.artifact_path or ""),
+        ):
             if key not in safe_args:
                 continue
             supplied = args.get(key)

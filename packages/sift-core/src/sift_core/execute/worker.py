@@ -40,6 +40,20 @@ def _read_pipe(pipe, chunks: list[bytes], limit: int, total: list[int]) -> None:
 
 
 def _resource_preexec(timeout: int, memory_limit_bytes: int) -> None:
+    # Artifact-handoff (P1): forensic pipelines extract a file with one tool
+    # (e.g. `icat > extractions/hive`) and parse it with the next call/stage
+    # (rip.pl, EvtxECmd). When stages run as the low-priv runtime user a
+    # restrictive inherited umask produced 0600 files that the next stage and
+    # the gateway (response-guard / saved-output reads) could not read. Set a
+    # 0027 umask so artifacts under the case jail are group-readable (mode 0640,
+    # group `sift` — shared by the runtime user and the service user) while
+    # staying non-world-readable. Strictly inside the case write-jail; this only
+    # affects the bits on files the tool creates, never which paths are writable.
+    try:
+        os.umask(0o027)
+    except OSError:  # pragma: no cover - defensive
+        pass
+
     try:
         import resource
     except ImportError:

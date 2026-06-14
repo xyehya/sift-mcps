@@ -299,3 +299,39 @@ def test_evaluate_requirement_http_localhost_9200_reachable_vs_not():
     with patch("socket.create_connection", side_effect=OSError("refused")):
         result = gateway.evaluate_requirement("http://localhost:9200")
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# P0 regression: the manifest meta builder must NOT drop case_dir from
+# safe_case_argument_names. Filtering it out (case_id/case_key only) silently
+# disabled gateway injection of the DB-authoritative case directory, so
+# ingest/inspect/enrich resolved no_active_case and a client could supply an
+# arbitrary case_dir unchecked.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_case_dir_is_preserved_in_safe_case_argument_names():
+    gateway = Gateway({"backends": {}, "execute": {"security": {"denied_binaries": ["env"]}}})
+    gateway.backends["opensearch-mcp"] = _FakeOSBackend(started=True)
+
+    with patch.object(gateway, "evaluate_requirement", return_value=True):
+        await gateway._build_tool_map()
+
+    # The shipped manifest declares case_dir for these filesystem-touching tools.
+    for tool in (
+        "opensearch_ingest",
+        "opensearch_inspect_container",
+        "opensearch_case_summary",
+        "opensearch_ingest_status",
+        "opensearch_enrich_intel",
+        "opensearch_fix_host_mapping",
+    ):
+        safe = gateway.safe_case_argument_names(tool)
+        assert safe is not None, f"{tool} should declare safe case args"
+        assert "case_dir" in safe, (
+            f"{tool} safe_case_argument_names dropped case_dir: {safe}"
+        )
+
+    # Pure-query tools keep case_id only (no spurious case_dir).
+    search_safe = gateway.safe_case_argument_names("opensearch_search")
+    assert search_safe == {"case_id"}, search_safe

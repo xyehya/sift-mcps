@@ -6,6 +6,7 @@ Local-first: each examiner owns a flat case directory. Case lifecycle
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -209,6 +210,7 @@ _ALLOWED_FINDING_FIELDS = {
     "event_type",
     "artifact_ref",
     "related_findings",
+    "supersedes",
     "host",
     "event_timestamp",
     "affected_account",
@@ -1006,6 +1008,25 @@ class CaseManager:
         # Allowlist: only accepted fields pass through from user input
         sanitized = {k: v for k, v in finding.items() if k in _ALLOWED_FINDING_FIELDS}
 
+        # supersedes: native self-correction chain (e.g. F-006 supersedes
+        # F-003) instead of overloading related_findings. Accept a single id or
+        # a list of ids; normalize to a deduped list of trimmed strings.
+        if "supersedes" in sanitized:
+            raw_sup = sanitized["supersedes"]
+            if isinstance(raw_sup, str):
+                raw_sup = [raw_sup]
+            if isinstance(raw_sup, list):
+                seen_sup: set[str] = set()
+                norm_sup: list[str] = []
+                for sid in raw_sup:
+                    sid = str(sid).strip()[:128]
+                    if sid and sid not in seen_sup:
+                        seen_sup.add(sid)
+                        norm_sup.append(sid)
+                sanitized["supersedes"] = norm_sup
+            else:
+                del sanitized["supersedes"]
+
         # Truncate string fields with explicit limits.
         # host is uppercased so aggregation by host doesn't split on casing.
         if sanitized.get("host"):
@@ -1629,6 +1650,8 @@ class CaseManager:
             )
         if timeline_event_id:
             result["timeline_event_id"] = timeline_event_id
+        if sanitized.get("supersedes"):
+            result["supersedes"] = sanitized["supersedes"]
         if iocs_extracted:
             result["iocs_extracted"] = iocs_extracted
         if dropped_artifact_count > 0:
@@ -1902,12 +1925,31 @@ class CaseManager:
         if not available:
             return self._grounding_result([], finding)
 
-        audit_dir = case_audit_dir(case_dir)
-        consulted = []
+        # A reference backend counts as consulted when EITHER:
+        #  (1) the finding cites an audit_id produced by that backend, or
+        #  (2) the backend left a non-empty per-case audit JSONL.
+        # Crediting cited audit_ids is essential in DB-active mode, where the
+        # transport audit is written to Postgres and the local JSONL may be
+        # absent/empty even though kb_search_knowledge actually ran — the prior
+        # JSONL-only check made every finding read "WEAK / forensic-rag missing"
+        # after real KB searches, training the agent to ignore the signal.
+        cited_prefixes = {
+            str(aid).split("-", 1)[0].lower()
+            for aid in (finding.get("audit_ids") or [])
+            if isinstance(aid, str) and "-" in str(aid)
+        }
+        consulted: list[str] = []
         for mcp_name in available:
-            audit_file = audit_dir / f"{mcp_name}.jsonl"
-            if audit_file.exists() and audit_file.stat().st_size > 0:
+            # Mirror AuditWriter's prefix derivation: strip "-mcp" and dashes.
+            prefix = mcp_name.replace("-mcp", "").replace("-", "").lower()
+            if prefix and prefix in cited_prefixes:
                 consulted.append(mcp_name)
+                continue
+            for audit_dir in self._candidate_audit_dirs(case_dir):
+                audit_file = audit_dir / f"{mcp_name}.jsonl"
+                if audit_file.exists() and audit_file.stat().st_size > 0:
+                    consulted.append(mcp_name)
+                    break
 
         return self._grounding_result(consulted, finding, available)
 

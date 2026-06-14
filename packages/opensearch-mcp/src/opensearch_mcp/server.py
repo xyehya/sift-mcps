@@ -47,6 +47,64 @@ def set_host_identity_recorder(recorder) -> None:
     _HOST_IDENTITY_RECORDER = recorder
 
 
+# --- DB-authoritative active-case directory propagation --------------------
+# The Gateway is the sole active-case authority: it reads the deployment active
+# case from Postgres (app.active_case_state) and propagates the authoritative
+# case directory into each case-scoped backend tool call via the injected
+# ``case_dir`` argument. This contextvar holds that per-call value for the
+# duration of one tool invocation. There is intentionally NO authoritative
+# file/pointer/env resolution in the backend subprocess: SIFT_CASE_DIR / the
+# legacy pointer file are honored ONLY as a standalone-CLI fallback when the
+# Gateway did not inject a directory (e.g. direct CLI use without the Gateway).
+from contextlib import contextmanager as _contextmanager
+from contextvars import ContextVar as _ContextVar
+
+_INJECTED_CASE_DIR: _ContextVar[str] = _ContextVar(
+    "opensearch_injected_case_dir", default=""
+)
+
+
+@_contextmanager
+def _use_injected_case_dir(case_dir: str):
+    """Bind the Gateway-injected authoritative case dir for one tool call."""
+    token = _INJECTED_CASE_DIR.set((case_dir or "").strip())
+    try:
+        yield
+    finally:
+        _INJECTED_CASE_DIR.reset(token)
+
+
+def active_case_dir() -> str:
+    """Resolve the authoritative active-case directory for this tool call.
+
+    Resolution order:
+      1. Gateway-injected ``case_dir`` (DB authority; the only authoritative
+         source in a Gateway deployment).
+      2. ``SIFT_CASE_DIR`` env — standalone-CLI fallback only.
+      3. Legacy ``~/.sift/active_case`` pointer file — standalone-CLI fallback
+         only.
+
+    Returns "" when none resolve.
+    """
+    injected = _INJECTED_CASE_DIR.get()
+    if injected:
+        return injected
+    env_dir = os.environ.get("SIFT_CASE_DIR", "").strip()
+    if env_dir:
+        return env_dir
+    try:
+        from opensearch_mcp.paths import sift_dir
+
+        active_case_file = sift_dir() / "active_case"
+        if active_case_file.is_file():
+            raw = active_case_file.read_text().strip()
+            if raw:
+                return raw
+    except OSError:
+        pass
+    return ""
+
+
 def _validate_index(index: str) -> str | None:
     """Validate all index segments start with 'case-'. Returns error or None."""
     if not index or not index.strip():
@@ -705,9 +763,15 @@ def _validate_path(path: str) -> str | None:
 
 
 def _resolve_tool_path(path: str, *, default_subdir: str = "evidence") -> tuple[Path | None, dict | None]:
-    """Resolve a tool path under the active case and return a structured error."""
+    """Resolve a tool path under the active case and return a structured error.
+
+    Uses the Gateway-injected authoritative case directory when present so the
+    backend subprocess never has to read SIFT_CASE_DIR/pointer as authority.
+    """
     try:
-        return resolve_case_path(path, default_subdir=default_subdir), None
+        _cd = active_case_dir()
+        case_dir = Path(_cd) if _cd else None
+        return resolve_case_path(path, case_dir=case_dir, default_subdir=default_subdir), None
     except ValueError as exc:
         msg = str(exc)
         return None, {
@@ -1297,7 +1361,7 @@ def opensearch_shard_status() -> dict:
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def opensearch_case_summary(case_id: str = "", include_fields: bool = False) -> dict:
+def opensearch_case_summary(case_id: str = "", include_fields: bool = False, case_dir: str = "") -> dict:
     """Get complete coverage overview for a case — first call every indexed session.
 
     Returns hosts, artifact types with doc counts, enrichment state, and
@@ -1337,6 +1401,7 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False) -> 
     """
     from opensearch_mcp.paths import sanitize_index_component
 
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     cid = case_id or _get_active_case()
     if not cid:
         return {
@@ -1539,7 +1604,7 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False) -> 
     if fields_per_type:
         resp["fields_per_type"] = fields_per_type
     _add_investigation_hints(resp, artifacts)
-    _case_dir_env = os.environ.get("SIFT_CASE_DIR", "").strip()
+    _case_dir_env = active_case_dir()
     _summary_case_dir = Path(_case_dir_env) if _case_dir_env else None
     resp["coverage_state"] = _build_coverage_state(artifacts, enrichment, case_dir=_summary_case_dir)
     aid = audit.log(
@@ -1553,7 +1618,7 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False) -> 
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def opensearch_inspect_container(path: str) -> dict:
+def opensearch_inspect_container(path: str, case_dir: str = "") -> dict:
     """Inspect a forensic container (E01, raw image) without mounting — pre-ingest survey.
 
     Use before opensearch_ingest to verify integrity, check size, and identify partitions.
@@ -1576,6 +1641,7 @@ def opensearch_inspect_container(path: str) -> dict:
     """
     import subprocess
 
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     resolved, err = _resolve_tool_path(path, default_subdir="evidence")
     if err or resolved is None:
         return {"error": f"Container not found: {path}", "detail": err}
@@ -1743,6 +1809,13 @@ def _launch_container_ingest(
     run_id = str(_uuid.uuid4())
     env = os.environ.copy()
     env["SIFT_INGEST_RUN_ID"] = run_id
+    # Propagate the Gateway-injected authoritative case dir into the ingest
+    # worker child process. This is transient request-scoped propagation of the
+    # Gateway's DB authority into the child env, not a persistent/authoritative
+    # file resolution source. No-op for standalone CLI (env already carries it).
+    _acd_child = active_case_dir()
+    if _acd_child:
+        env["SIFT_CASE_DIR"] = _acd_child
 
     cmd = [
         sys.executable,
@@ -1790,7 +1863,7 @@ def _launch_container_ingest(
 
     _fs_meta = _collect_filesystem_meta(resolved_path, "disk")
     _fs_meta_rel: str | None = None
-    _case_dir_env_ci = os.environ.get("SIFT_CASE_DIR", "").strip()
+    _case_dir_env_ci = active_case_dir()
     if _case_dir_env_ci and _fs_meta.get("image_type") != "unknown":
         import json as _json_ci
 
@@ -1854,6 +1927,7 @@ def opensearch_ingest(
     vss: bool = False,
     password: str = "",
     no_hayabusa: bool = False,
+    case_dir: str = "",
 ) -> dict:
     """Preview or ingest evidence into OpenSearch.
 
@@ -1918,6 +1992,7 @@ def opensearch_ingest(
     from opensearch_mcp.containers import detect_container
     from opensearch_mcp.ingest import discover
 
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     case_id = _get_active_case()
     if not case_id:
         return {
@@ -2070,7 +2145,8 @@ def opensearch_ingest(
                     ctype = detect_container(f)
                     if ctype in ("ewf", "raw", "nbd", "archive"):
                         try:
-                            rel = str(f.relative_to(Path(os.environ.get("SIFT_CASE_DIR", "")).resolve()))
+                            _acd = active_case_dir()
+                            rel = str(f.relative_to(Path(_acd).resolve())) if _acd else str(f)
                         except ValueError:
                             rel = str(f)
                         containers_found.append({
@@ -2379,7 +2455,7 @@ def opensearch_ingest(
 
 
 @server.tool(annotations={"readOnlyHint": True})
-def opensearch_ingest_status(case_id: str = "") -> dict:
+def opensearch_ingest_status(case_id: str = "", case_dir: str = "") -> dict:
     """Check status of running or recent ingest operations.
 
     Defaults to active case. Pass case_id="*" to see all cases.
@@ -2389,6 +2465,7 @@ def opensearch_ingest_status(case_id: str = "") -> dict:
     """
     from opensearch_mcp.ingest_status import db_status_active, read_active_ingests
 
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     # Filter by case (default: active case)
     filter_case = case_id or _get_active_case() or ""
     if not filter_case:
@@ -2815,6 +2892,7 @@ def opensearch_enrich_intel(
     case_id: str = "",
     dry_run: bool = True,
     force: bool = False,
+    case_dir: str = "",
 ) -> dict:
     """Enrich indexed evidence with OpenCTI threat intelligence.
 
@@ -2851,6 +2929,7 @@ def opensearch_enrich_intel(
     from opensearch_mcp.paths import sanitize_index_component
     from opensearch_mcp.threat_intel import extract_unique_iocs
 
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     # BATCH-OS5: scope gate for enrichment mutation.
     # Dry-run IOC extraction is allowed without scope (read-only path).
     # Actual enrichment (dry_run=False) requires enrichment:intel scope.
@@ -2976,20 +3055,42 @@ def _spawn_ingest(cmd, env, stdout, run_id):
     the ingest, not the gateway. Falls back to bare Popen if systemd-run
     is unavailable or fails (missing D-Bus, non-systemd host, etc.).
     """
+    import os
+    import shutil as _shutil
     import subprocess as _sp
     import time as _time
 
+    uid = os.getuid()
+
+    # systemd-run --user needs a reachable per-user D-Bus session. System
+    # service accounts (e.g. sift-service) have no login session, no
+    # /run/user/<uid>, and no user bus, so systemd-run --user fails with
+    # "Failed to connect to bus" and the ingest never runs. Probe for a usable
+    # user runtime/bus up front and skip the scope wrapper when it is absent —
+    # going straight to a bare Popen (which still gets its own session via
+    # start_new_session=True). cgroup isolation is preserved wherever a user
+    # bus IS available (interactive/dev hosts).
+    runtime_dir = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+    bus_path = f"{runtime_dir}/bus"
+    user_bus_available = (
+        _shutil.which("systemd-run") is not None
+        and os.path.isdir(runtime_dir)
+        and os.path.exists(bus_path)
+    )
+    if not user_bus_available:
+        return _sp.Popen(
+            cmd,
+            stdout=stdout,
+            stderr=_sp.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+
     # Ensure D-Bus address is available for systemd-run --user
     if "DBUS_SESSION_BUS_ADDRESS" not in env:
-        import os
-
-        uid = os.getuid()
-        bus = f"unix:path=/run/user/{uid}/bus"
-        env["DBUS_SESSION_BUS_ADDRESS"] = bus
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus_path}"
     if "XDG_RUNTIME_DIR" not in env:
-        import os
-
-        env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
+        env["XDG_RUNTIME_DIR"] = runtime_dir
 
     scope_cmd = [
         "systemd-run",
@@ -3117,6 +3218,13 @@ def _launch_background(
     run_id = str(_uuid.uuid4())
     env = _os.environ.copy()
     env["SIFT_INGEST_RUN_ID"] = run_id
+    # Propagate the Gateway-injected authoritative case dir into the ingest
+    # worker child process. This is transient request-scoped propagation of the
+    # Gateway's DB authority into the child env, not a persistent/authoritative
+    # file resolution source. No-op for standalone CLI (env already carries it).
+    _acd_child = active_case_dir()
+    if _acd_child:
+        env["SIFT_CASE_DIR"] = _acd_child
 
     cmd = [
         _sys.executable,
@@ -3250,6 +3358,13 @@ def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
     run_id = str(_uuid.uuid4())
     env = _os.environ.copy()
     env["SIFT_INGEST_RUN_ID"] = run_id
+    # Propagate the Gateway-injected authoritative case dir into the ingest
+    # worker child process. This is transient request-scoped propagation of the
+    # Gateway's DB authority into the child env, not a persistent/authoritative
+    # file resolution source. No-op for standalone CLI (env already carries it).
+    _acd_child = active_case_dir()
+    if _acd_child:
+        env["SIFT_CASE_DIR"] = _acd_child
 
     cmd = [
         _sys.executable,
@@ -3445,6 +3560,13 @@ def idx_ingest_memory(
     run_id = str(_uuid.uuid4())
     env = _os.environ.copy()
     env["SIFT_INGEST_RUN_ID"] = run_id
+    # Propagate the Gateway-injected authoritative case dir into the ingest
+    # worker child process. This is transient request-scoped propagation of the
+    # Gateway's DB authority into the child env, not a persistent/authoritative
+    # file resolution source. No-op for standalone CLI (env already carries it).
+    _acd_child = active_case_dir()
+    if _acd_child:
+        env["SIFT_CASE_DIR"] = _acd_child
 
     cmd = [
         _sys.executable,
@@ -3501,7 +3623,7 @@ def idx_ingest_memory(
 
     _fs_meta_m = _cfm_mem(resolved_path, "memory")
     _fs_meta_rel_m: str | None = None
-    _case_dir_env_m = _os.environ.get("SIFT_CASE_DIR", "").strip()
+    _case_dir_env_m = active_case_dir()
     if _case_dir_env_m and _fs_meta_m.get("image_type") != "unknown":
         _sidecar_dir_m = Path(_case_dir_env_m) / "agent" / "ingest"
         _sidecar_dir_m.mkdir(parents=True, exist_ok=True)
@@ -3535,26 +3657,22 @@ def idx_ingest_memory(
 def _get_active_case() -> str | None:
     """Return active case ID for index construction.
 
-    Portal workflow: reads SIFT_CASE_DIR set by gateway in every
-    stdio subprocess environment. CLI fallback: reads the legacy pointer file.
-    Returns None when neither source is set — callers must handle this.
-    """
-    import os
-    from pathlib import Path
+    Portal/DB workflow: the Gateway reads the deployment active case from
+    Postgres (``app.active_case_state``) and propagates the authoritative case
+    directory into each case-scoped backend tool call via the injected
+    ``case_dir`` argument (see :func:`active_case_dir`). The case id is derived
+    from that directory's basename.
 
-    # Primary: SIFT_CASE_DIR set by gateway in every stdio subprocess env
-    case_dir = os.environ.get("SIFT_CASE_DIR", "").strip()
+    CLI fallback (standalone use without the Gateway): ``SIFT_CASE_DIR`` env or
+    the legacy pointer file. These are NOT authoritative under the Gateway — in
+    DB-active deployments the Gateway always injects ``case_dir`` and never sets
+    ``SIFT_CASE_DIR`` in the backend subprocess.
+
+    Returns None when no source resolves — callers must handle this.
+    """
+    case_dir = active_case_dir()
     if case_dir:
         return Path(case_dir).name.lower()  # lowercase required for OpenSearch indices
-
-    # Legacy CLI fallback — not used in portal workflow
-    from opensearch_mcp.paths import sift_dir
-
-    active_case_file = sift_dir() / "active_case"
-    if active_case_file.exists():
-        raw = active_case_file.read_text().strip()
-        if raw:
-            return Path(raw).name.lower()
     return None
 
 
@@ -3693,7 +3811,7 @@ def opensearch_list_detections(
 
 
 @server.tool()
-def opensearch_host_fix(raw: str, new_canonical: str) -> dict:
+def opensearch_host_fix(raw: str, new_canonical: str, case_dir: str = "") -> dict:
     """Correct a wrong host.id mapping in the active case.
 
     Use this tool when an earlier `opensearch_ingest` auto-applied a wrong
@@ -3722,6 +3840,7 @@ def opensearch_host_fix(raw: str, new_canonical: str) -> dict:
     """
     from opensearch_mcp.host_dictionary import InvalidHostnameValue
 
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
     try:
         return _case_host_fix_impl(raw, new_canonical)
     except InvalidHostnameValue as e:
@@ -3775,36 +3894,22 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
     """
     from opensearch_mcp.host_dictionary import HostDictionary
 
-    # Resolve active case → case dir → dict path.
-    # Use SIFT_CASE_DIR directly if set (preserves actual dir name including case).
-    # Fall back to legacy pointer file without lowercasing (filesystem names may be uppercase).
-    import os as _os
-
-    _case_dir_env = _os.environ.get("SIFT_CASE_DIR", "").strip()
-    if _case_dir_env:
-        case_dir = Path(_case_dir_env)
-        case_id = case_dir.name.lower()  # lowercase for index naming only
-    else:
-        # Legacy CLI fallback — not used in portal workflow
-        from opensearch_mcp.paths import sift_dir as _sift_dir
-
-        _active_case_file = _sift_dir() / "active_case"  # Legacy CLI fallback
-        if not _active_case_file.exists():
-            return {
-                "error": "No active case.",
-                "action": "Create a case in the Examiner Portal first.",
-                "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
-            }
-        _raw = _active_case_file.read_text().strip()
-        if not _raw:
-            return {
-                "error": "No active case.",
-                "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
-            }
-        case_id = Path(_raw).name
-        # Try absolute path first, then cases_root/<case_id>
-        _raw_path = Path(_raw)
-        case_dir = _raw_path if _raw_path.is_absolute() and _raw_path.is_dir() else cases_root() / case_id
+    # Resolve active case → case dir → dict path. The Gateway-injected
+    # authoritative case dir (DB authority) is preferred; SIFT_CASE_DIR / the
+    # legacy pointer file are honored only for standalone CLI use.
+    _case_dir_resolved = active_case_dir()
+    if not _case_dir_resolved:
+        return {
+            "error": "No active case.",
+            "action": "Create a case in the Examiner Portal first.",
+            "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
+        }
+    _raw_path = Path(_case_dir_resolved)
+    case_id = _raw_path.name.lower()  # lowercase for index naming only
+    case_dir = (
+        _raw_path if _raw_path.is_absolute() and _raw_path.is_dir()
+        else cases_root() / _raw_path.name
+    )
     if not case_dir.is_dir():
         return {"error": f"Case directory not found: {case_dir}"}
     dict_path = case_dir / "host-dictionary.yaml"

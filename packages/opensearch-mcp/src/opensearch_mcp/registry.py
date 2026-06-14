@@ -41,6 +41,22 @@ RESOURCE_REGISTRY: list[ResourceDef] = []
 _TOOL_META: dict[str, dict[str, Any]] = {}
 
 
+# Gateway-injected authoritative case directory. The Gateway reads the
+# deployment active case from Postgres (app.active_case_state) and propagates
+# the case's artifact_path into each filesystem-touching tool call via this
+# argument. Agents do not set it; the Gateway overwrites any client-supplied
+# value with the DB-authoritative path (and denies a mismatching client value).
+_CASE_DIR_DESCRIPTION = (
+    "Gateway-injected authoritative case directory (from Postgres "
+    "active_case_state). Do not set this; the Gateway populates it from the DB "
+    "active case and rejects a mismatching client value."
+)
+
+
+def _case_dir_field() -> Any:
+    return Field("", description=_CASE_DIR_DESCRIPTION)
+
+
 class Advisory(BaseModel):
     kind: Literal["field_mapping", "execution_evidence", "pagination", "empty_result"] = Field(
         ..., description="Machine-readable advisory category."
@@ -306,6 +322,7 @@ class CaseSummaryIn(BaseModel):
             "'.keyword' suffixes."
         ),
     )
+    case_dir: str = _case_dir_field()
 
 
 class ArtifactCoverage(BaseModel):
@@ -379,6 +396,7 @@ class InspectContainerIn(BaseModel):
         ...,
         description="Container path under the active case; bare names resolve to evidence/.",
     )
+    case_dir: str = _case_dir_field()
 
 
 class InspectContainerOut(BaseModel):
@@ -453,6 +471,7 @@ class IngestIn(BaseModel):
         description="Archive/container password. SECRET - redacted from audit/logs/results.",
     )
     no_hayabusa: bool = Field(False, description="Skip Hayabusa Sigma scan.")
+    case_dir: str = _case_dir_field()
 
 
 class IngestOut(BaseModel):
@@ -483,6 +502,7 @@ class IngestOut(BaseModel):
 
 class IngestStatusIn(BaseModel):
     case_id: str = Field("", description="Filter to this case; default active. '*' for all.")
+    case_dir: str = _case_dir_field()
 
 
 class ChecklistItem(BaseModel):
@@ -528,6 +548,7 @@ class EnrichIntelIn(BaseModel):
     case_id: str = Field("", description="Case to enrich; default active.")
     dry_run: bool = Field(True, description="Extract and count IOCs without lookup.")
     force: bool = Field(False, description="Re-enrich already-enriched docs.")
+    case_dir: str = _case_dir_field()
 
 
 class EnrichIntelOut(BaseModel):
@@ -582,6 +603,7 @@ class FixHostMappingIn(BaseModel):
     new_canonical: str = Field(
         ..., min_length=1, description="The correct canonical host.id to assign."
     )
+    case_dir: str = _case_dir_field()
 
 
 class FixHostMappingOut(BaseModel):
