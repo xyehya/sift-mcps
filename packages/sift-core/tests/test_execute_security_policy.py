@@ -4,6 +4,7 @@ from sift_core.execute.security_policy import (
     build_security_policy,
     matches_allowed_binary,
     matches_denied_binary,
+    policy_to_env_json,
 )
 
 
@@ -23,10 +24,13 @@ def test_empty_operator_policy_is_rejected():
         build_security_policy({}, require_operator_policy=True)
 
 
-def test_default_policy_preserves_current_denylist_behavior():
+def test_default_policy_is_allowlist_with_contained_unlisted_tier():
     policy = build_security_policy()
-    assert policy["mode"] == "denylist"
-    assert policy["allowed_binaries"] == []
+    assert policy["mode"] == "allowlist"
+    assert policy["unlisted_policy"] == "contained"
+    assert matches_allowed_binary("mmls", policy["allowed_binaries"])
+    assert matches_allowed_binary("strings", policy["allowed_binaries"])
+    assert not matches_allowed_binary("ssh", policy["allowed_binaries"])
     denied = set(policy["denied_binaries"])
 
     for binary in (
@@ -38,14 +42,35 @@ def test_default_policy_preserves_current_denylist_behavior():
         "printenv",
         "nc",
         "ncat",
+        "chattr",
+        "lsattr",
+        "setfattr",
+        "getfattr",
+        "setcap",
+        "getcap",
+        "mount",
+        "umount",
+        "umount2",
+        "losetup",
+        "qemu-nbd",
+        "modprobe",
+        "insmod",
+        "rmmod",
+        "unshare",
+        "nsenter",
+        "capsh",
+        "dd",
+        "dc3dd",
     ):
         assert matches_denied_binary(binary, denied)
 
     assert "-exec" in policy["tool_blocked_flags"]["find"]
+    assert "-e" in policy["tool_blocked_flags"]["sed"]
+    assert "-x" in policy["tool_blocked_flags"]["tshark"]
     assert "-o" in policy["output_flags"]
 
 
-def test_allowlist_mode_preserves_operator_allowlist():
+def test_allowlist_mode_extends_seeded_forensic_allowlist():
     policy = build_security_policy(
         {"mode": "allowlist", "allowed_binaries": ["date", "fls*"]},
         require_operator_policy=True,
@@ -56,7 +81,8 @@ def test_allowlist_mode_preserves_operator_allowlist():
     assert matches_allowed_binary("date", allowed)
     assert matches_allowed_binary("fls", allowed)
     assert matches_allowed_binary("fls-mactime", allowed)
-    assert not matches_allowed_binary("cat", allowed)
+    assert matches_allowed_binary("cat", allowed)
+    assert not matches_allowed_binary("ssh", allowed)
 
 
 def test_allowlist_mode_still_enforces_deny_floor():
@@ -73,9 +99,15 @@ def test_allowlist_mode_still_enforces_deny_floor():
     assert matches_denied_binary("mkfs.ext4", denied)
 
 
-def test_allowlist_mode_requires_allowed_binaries():
-    with pytest.raises(ValueError, match="allowed_binaries is required"):
-        build_security_policy({"mode": "allowlist"}, require_operator_policy=True)
+def test_allowlist_mode_without_operator_allowlist_uses_mvp_seed():
+    policy = build_security_policy({"mode": "allowlist"}, require_operator_policy=True)
+    assert policy["mode"] == "allowlist"
+    assert matches_allowed_binary("fls", policy["allowed_binaries"])
+
+
+def test_invalid_unlisted_policy_is_rejected():
+    with pytest.raises(ValueError, match="unlisted_policy"):
+        build_security_policy({"unlisted_policy": "approve"}, require_operator_policy=True)
 
 
 def test_invalid_policy_mode_is_rejected():
@@ -107,6 +139,82 @@ def test_e_flag_still_blocked_for_exec_style_tools():
     for tool in ("sed", "xargs"):
         with _pytest.raises(ValueError, match="dangerous flag"):
             sanitize_extra_args(["-e", "payload"], tool_name=tool)
+
+
+def test_allowlist_unlisted_policy_classifies_contained_or_reject(monkeypatch):
+    from sift_core.execute.catalog import clear_catalog_cache
+    from sift_core.execute.security import classify_binary_risk, is_allowed_by_mode
+
+    contained = build_security_policy(
+        {
+            "mode": "allowlist",
+            "allowed_binaries": ["date"],
+            "unlisted_policy": "contained",
+        },
+        require_operator_policy=True,
+    )
+    monkeypatch.setenv("SIFT_EXECUTE_SECURITY_POLICY", policy_to_env_json(contained))
+    clear_catalog_cache()
+    assert classify_binary_risk("date") == "standard"
+    assert classify_binary_risk("customtool") == "contained"
+    assert is_allowed_by_mode("customtool") is True
+
+    rejected = build_security_policy(
+        {
+            "mode": "allowlist",
+            "allowed_binaries": ["date"],
+            "unlisted_policy": "reject",
+        },
+        require_operator_policy=True,
+    )
+    monkeypatch.setenv("SIFT_EXECUTE_SECURITY_POLICY", policy_to_env_json(rejected))
+    clear_catalog_cache()
+    assert classify_binary_risk("customtool") == "reject"
+    assert is_allowed_by_mode("customtool") is False
+
+
+@pytest.mark.parametrize(
+    ("tool", "args", "message"),
+    [
+        ("sed", ["s/.*/id/e", "evidence/log.txt"], "sed construct"),
+        ("sqlite3", ["evidence/case.db", ".shell id"], "sqlite3 dot-command"),
+        ("sqlite3", ["evidence/case.db", ".load ./evil"], "sqlite3 dot-command"),
+    ],
+)
+def test_program_text_scanners_block_code_exec_constructs(tool, args, message):
+    from sift_core.execute.security import sanitize_extra_args
+
+    with pytest.raises(ValueError, match=message):
+        sanitize_extra_args(args, tool_name=tool)
+
+
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        ("sed", ["--expression=s/.*/id/e"]),
+        ("sqlite3", ["-cmd", ".shell id"]),
+        ("tshark", ["-X", "lua_script:/tmp/x.lua"]),
+        ("tshark", ["-i", "eth0"]),
+        ("vol", ["--plugin-dirs", "/tmp/plugins"]),
+        ("vol3", ["-p/tmp/plugins"]),
+        ("exiftool", ["-config", "evil.cfg"]),
+        ("exiftool", ["-execute"]),
+    ],
+)
+def test_tool_blocked_flags_close_code_exec_primitives(tool, args):
+    from sift_core.execute.security import sanitize_extra_args
+
+    with pytest.raises(ValueError, match="Blocked dangerous flag"):
+        sanitize_extra_args(args, tool_name=tool)
+
+
+def test_contained_tier_blocks_program_text_and_non_o_output_flags():
+    from sift_core.execute.security import sanitize_extra_args
+
+    with pytest.raises(ValueError, match="Unlisted program-text tool"):
+        sanitize_extra_args(["print $1"], tool_name="awk", risk_tier="contained")
+    with pytest.raises(ValueError, match="only -o"):
+        sanitize_extra_args(["--json", "out.json"], tool_name="customtool", risk_tier="contained")
 
 
 class TestInCaseWritePosture:

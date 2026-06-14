@@ -28,6 +28,29 @@ DENY_FLOOR = frozenset(
         "nc",
         "ncat",
         "socat",
+        "chattr",
+        "lsattr",
+        "setfattr",
+        "getfattr",
+        "setcap",
+        "getcap",
+        "capsh",
+        "mount",
+        "umount",
+        "umount2",
+        "losetup",
+        "qemu-nbd",
+        "modprobe",
+        "insmod",
+        "rmmod",
+        "unshare",
+        "nsenter",
+        "setns",
+        "pivot_root",
+        "chroot",
+        "dd",
+        "dc3dd",
+        "dcfldd",
         # Added — media/device destruction (P2.1)
         "wipefs",
         "shred",
@@ -204,8 +227,9 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
 )
 
 DEFAULT_SECURITY_POLICY: dict[str, Any] = {
-    "mode": "denylist",
-    "allowed_binaries": [],
+    "mode": "allowlist",
+    "allowed_binaries": ["@mvp_forensic"],
+    "unlisted_policy": "contained",
     "dangerous_flags": [
         "-e",
         "--exec",
@@ -227,7 +251,14 @@ DEFAULT_SECURITY_POLICY: dict[str, Any] = {
     },
     "tool_blocked_flags": {
         "find": ["-exec", "-execdir", "-delete", "-fls", "-fprint", "-fprint0", "-fprintf"],
-        "sed": ["-i", "--in-place"],
+        "sed": ["-i", "--in-place", "-e", "--expression", "-f", "--file"],
+        "sqlite3": ["-cmd", "-init"],
+        "tshark": ["-X", "--lua-script", "-z", "--extcap-interface", "-i", "-G"],
+        "vol": ["--plugin-dirs", "-p", "--config"],
+        "vol3": ["--plugin-dirs", "-p", "--config"],
+        "volatility3": ["--plugin-dirs", "-p", "--config"],
+        "exiftool": ["-config", "-execute", "-p", "-if", "-api"],
+        "7z": ["-so", "-sfx"],
         "tar": [
             "-x",
             "--extract",
@@ -317,6 +348,15 @@ def _merge_maps(base: dict[str, list[str]], overlay: dict[str, list[str]]) -> di
     return result
 
 
+def _unlisted_policy(value: Any) -> str:
+    policy = "contained" if value is None else str(value).strip().lower()
+    if policy not in {"contained", "reject"}:
+        raise ValueError(
+            "execute.security.unlisted_policy must be 'contained' or 'reject'"
+        )
+    return policy
+
+
 def build_security_policy(
     operator_policy: dict[str, Any] | None = None,
     *,
@@ -342,9 +382,13 @@ def build_security_policy(
     mode = str(operator.get("mode") or base["mode"]).strip().lower()
     if mode not in {"denylist", "allowlist"}:
         raise ValueError("execute.security.mode must be 'denylist' or 'allowlist'")
+    unlisted_policy = _unlisted_policy(
+        operator.get("unlisted_policy", base.get("unlisted_policy", "contained"))
+    )
 
     policy = {
         "mode": mode,
+        "unlisted_policy": unlisted_policy,
         "allowed_binaries": _dedupe_lower(
             _expand_allowlist_tokens(
                 _as_list(base.get("allowed_binaries"), name="allowed_binaries")

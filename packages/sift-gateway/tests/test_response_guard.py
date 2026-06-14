@@ -5,17 +5,23 @@ Covers: scan_tool_result, redact_tool_result, override state lifecycle.
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
+from fastmcp.tools import ToolResult
+from mcp.types import TextContent
 
 import sift_gateway.response_guard as rg
 from sift_gateway.response_guard import (
+    UNTRUSTED_OUTPUT_LABEL,
     cancel_override,
     enable_override,
     get_override_status,
+    guard_tool_result,
     is_override_active,
     redact_tool_result,
+    sanitize_untrusted_output_text,
     scan_tool_result,
 )
 
@@ -135,6 +141,66 @@ class TestRedactToolResult:
         text = "AKIAIOSFODNN7EXAMPLE"
         redacted, findings = redact_tool_result(text)
         assert findings[0]["char_offset"] == 0
+
+
+# ---------------------------------------------------------------------------
+# untrusted output sanitation
+# ---------------------------------------------------------------------------
+
+
+class TestUntrustedOutputSanitation:
+    def test_sanitize_untrusted_output_strips_ansi_osc_and_controls(self):
+        text = "\x1b[31mred\x1b[0m \x1b]8;;http://x\x07click\x1b]8;;\x07\x00\x1f\nok\t"
+        sanitized = sanitize_untrusted_output_text(text)
+        assert "\x1b" not in sanitized
+        assert "\x00" not in sanitized
+        assert "\x1f" not in sanitized
+        assert sanitized == "red click\nok\t"
+
+    def test_guard_labels_run_command_json_output_fields(self):
+        payload = {
+            "success": True,
+            "stdout": "\x1b]8;;http://x\x07click\x1b]8;;\x07\n",
+            "stderr": "\x1b[31merr\x1b[0m",
+        }
+        result = ToolResult(content=[TextContent(type="text", text=json.dumps(payload))])
+
+        guarded, findings, cap_events = guard_tool_result(
+            result,
+            override_active=False,
+            case_dir=None,
+            tool_name="run_command",
+            cap_bytes=100_000,
+        )
+
+        body = json.loads(guarded.content[0].text)
+        assert body["stdout"].startswith(UNTRUSTED_OUTPUT_LABEL)
+        assert "\x1b" not in body["stdout"]
+        assert body["stderr"].startswith(UNTRUSTED_OUTPUT_LABEL)
+        assert guarded.meta["_sift_untrusted_output"]["label"] == UNTRUSTED_OUTPUT_LABEL
+        assert findings == []
+        assert cap_events == []
+
+    def test_guard_sanitizes_and_labels_structured_run_command_output(self):
+        result = ToolResult(
+            structured_content={
+                "stdout": "\x1b[32mok\x1b[0m",
+                "nested": {"stderr_tail": "\x1b]0;bad\x07tail"},
+            }
+        )
+
+        guarded, _, _ = guard_tool_result(
+            result,
+            override_active=False,
+            case_dir=None,
+            tool_name="run_command_job",
+            cap_bytes=100_000,
+        )
+
+        assert guarded.structured_content["stdout"] == f"{UNTRUSTED_OUTPUT_LABEL}\nok"
+        assert guarded.structured_content["nested"]["stderr_tail"] == (
+            f"{UNTRUSTED_OUTPUT_LABEL}\ntail"
+        )
 
 
 # ---------------------------------------------------------------------------

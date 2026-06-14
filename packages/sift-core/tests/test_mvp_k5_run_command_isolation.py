@@ -117,6 +117,57 @@ def test_sandbox_env_overrides_cannot_smuggle_secret():
     assert "API_TOKEN" not in env
 
 
+def test_sandbox_env_strips_runtime_code_injection_vectors():
+    env = build_sandbox_env(
+        base_env={
+            "PATH": "/bin",
+            "DOTNET_STARTUP_HOOKS": "/tmp/hook.dll",
+            "CORECLR_PROFILER": "{evil}",
+            "LD_PRELOAD": "/tmp/x.so",
+            "LD_AUDIT": "/tmp/audit.so",
+            "PYTHONPATH": "/tmp/py",
+            "PYTHONHOME": "/tmp/pyhome",
+            "PYTHONSTARTUP": "/tmp/start.py",
+            "PERL5LIB": "/tmp/perl",
+            "RUBYOPT": "-r/tmp/r.rb",
+            "NODE_OPTIONS": "--require /tmp/n.js",
+            "LUA_PATH": "/tmp/?.lua",
+            "BASH_ENV": "/tmp/bashenv",
+            "GCONV_PATH": "/tmp/gconv",
+            "IFS": ":",
+        },
+        overrides={
+            "DOTNET_ADDITIONAL_DEPS": "/tmp/deps",
+            "CORECLR_ENABLE_PROFILING": "1",
+            "NODE_PATH": "/tmp/node",
+            "FOO": "ok",
+        },
+    )
+
+    assert env["PATH"] == "/bin"
+    assert env["FOO"] == "ok"
+    for name in (
+        "DOTNET_STARTUP_HOOKS",
+        "CORECLR_PROFILER",
+        "LD_PRELOAD",
+        "LD_AUDIT",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PERL5LIB",
+        "RUBYOPT",
+        "NODE_OPTIONS",
+        "LUA_PATH",
+        "BASH_ENV",
+        "GCONV_PATH",
+        "IFS",
+        "DOTNET_ADDITIONAL_DEPS",
+        "CORECLR_ENABLE_PROFILING",
+        "NODE_PATH",
+    ):
+        assert name not in env
+
+
 def test_worker_spawns_tool_with_scrubbed_env(monkeypatch):
     """The forensic tool subprocess receives the scrubbed env, not parent secrets."""
     from sift_core.execute import worker

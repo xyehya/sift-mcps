@@ -123,6 +123,25 @@ _SECRET_ENV_PATTERNS: tuple[str, ...] = (
     "auth",
     "bearer",
     "ssh",
+    # Runtime code-injection vectors. These are not credentials, but they can
+    # make allowed forensic runtimes load attacker-controlled code.
+    "dotnet_",
+    "coreclr_",
+    "ld_",
+    "ld_preload",
+    "ld_library_path",
+    "ld_audit",
+    "python",
+    "perl5",
+    "rubyopt",
+    "gem_",
+    "node_options",
+    "node_path",
+    "lua_",
+    "bash_env",
+    "gconv_path",
+    "nlspath",
+    "ifs",
 )
 
 

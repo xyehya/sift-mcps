@@ -30,7 +30,9 @@ def test_gateway_config_exports_effective_executor_policy(tmp_path, monkeypatch)
 
     assert os.environ[SECURITY_POLICY_ENV]
     policy = load_security_policy()
-    assert policy["mode"] == "denylist"
+    assert policy["mode"] == "allowlist"
+    assert "mmls" in policy["allowed_binaries"]
+    assert "strings" in policy["allowed_binaries"]
     assert "echo" in policy["denied_binaries"]
     assert "env" in policy["denied_binaries"]
     assert Path(os.environ["SIFT_CASES_ROOT"]) == tmp_path / "cases"
