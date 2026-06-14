@@ -1005,6 +1005,156 @@ class AuditEnvelopeMiddleware(Middleware):
         return getattr(self.gateway, "_tool_map", {}).get(tool_name, "unknown")
 
 
+_OPENSEARCH_JOB_DISPATCH_TOOLS = frozenset({"opensearch_ingest", "opensearch_enrich_intel"})
+
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in _TRUTHY
+
+
+def _str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        parts = [str(p).strip() for p in value]
+    else:
+        return []
+    return [p for p in parts if p]
+
+
+def _drop_empty(data: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in data.items() if v not in (None, "", [], False)}
+
+
+class OpenSearchJobDispatchMiddleware(Middleware):
+    """feat/opensearch-workers: redirect privileged OpenSearch ingest/enrich to a durable job.
+
+    The ingest pipeline (FUSE-mount E01 + Hayabusa + vol3 -> index) and intel
+    enrichment cannot run inside the gateway's hardened, private mount namespace
+    (FUSE -> ``Operation not permitted``). Instead of proxying these two tools to
+    the in-gateway opensearch stdio child, the gateway ENQUEUES a durable
+    ``ingest``/``enrich`` job that the dedicated, least-privilege
+    ``sift-opensearch-worker@`` units (the only place with a shared mount
+    namespace) claim and run. Dispatch is NON-BLOCKING: it returns an opaque
+    job_id immediately so the MCP surface never blocks on a long ingest; the agent
+    polls ``job_status`` for realtime ``worker_label`` / ``current_step``.
+
+    Placement: INNERMOST middleware. By the time on_call_tool runs here the call
+    has already passed auth, addon-authority, active-case, the pre-dispatch audit
+    envelope, and the evidence gate; the active case is resolved and the case_dir
+    has been injected by ProxyActiveCaseMiddleware. The job_id result is still
+    wrapped by the response guard. ``dry_run`` previews stay on the thin proxy
+    (fast, read-only, no FUSE/worker needed). The gateway never gains privilege:
+    it only enqueues opaque ids + a path-free spec; the worker does the work.
+    """
+
+    def __init__(self, gateway: Any) -> None:
+        self.gateway = gateway
+
+    async def on_call_tool(self, context, call_next):
+        name = _tool_name(context)
+        if name not in _OPENSEARCH_JOB_DISPATCH_TOOLS:
+            return await call_next(context)
+        job_service = getattr(self.gateway, "job_service", None)
+        case = _current_gateway_active_case()
+        # If the durable-job plane is not wired or there is no active case, fall
+        # back to the existing proxy path (the proxy/active-case middleware will
+        # surface the appropriate error rather than this one swallowing it).
+        if job_service is None or case is None:
+            return await call_next(context)
+        args = _tool_args(context)
+        # dry_run planning previews are fast, read-only, and need no FUSE/worker.
+        if name == "opensearch_ingest" and _is_truthy(args.get("dry_run", True)):
+            return await call_next(context)
+        try:
+            return await asyncio.to_thread(self._enqueue, name, dict(args), case)
+        except Exception as exc:  # defensive: never leak a raw DB/driver error
+            logger.warning("opensearch job dispatch failed for %s: %s", name, exc)
+            return _error_result(
+                "opensearch_job_dispatch_failed",
+                "could not enqueue the opensearch worker job",
+                tool=name,
+            )
+
+    def _enqueue(self, name: str, args: dict[str, Any], case: ActiveCase) -> ToolResult:
+        identity = current_mcp_identity()
+        job_type = "enrich" if name == "opensearch_enrich_intel" else "ingest"
+        spec_public = self._spec_public(name, args)
+        # spec_internal carries the DB-authoritative case dir to the worker (P0
+        # injection). It NEVER reaches the agent (job_status excludes it).
+        spec_internal = {
+            "case_dir": case.artifact_path or "",
+            "case_key": case.case_key,
+            "examiner": getattr(identity, "principal", None) or "agent",
+            "tool": name,
+        }
+        job = self.gateway.job_service.enqueue_job(
+            job_type=job_type,
+            case_id=case.case_id,
+            spec_public=spec_public,
+            spec_internal=spec_internal,
+            priority=int(args.get("priority") or 100),
+            max_attempts=int(args.get("max_attempts") or 1),
+            actor=identity,
+        )
+        payload = {
+            "job_id": job.job_id,
+            "status": "queued",
+            "job_type": job_type,
+            "dispatched_to": "opensearch-worker",
+            "next_step": (
+                "Dispatched to a dedicated OpenSearch worker (non-blocking). Poll "
+                "job_status(job_id) for realtime progress (worker_label, "
+                "current_step) and the terminal result_public."
+            ),
+        }
+        return ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content=payload,
+        )
+
+    @staticmethod
+    def _spec_public(name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Path-free public mirror of the tool args for the worker.
+
+        case_id / case_key / case_dir are NEVER copied here — the worker reads the
+        DB-authoritative case_dir from spec_internal only. ``path`` is the
+        case-relative evidence ref (e.g. ``evidence/x.e01``); the worker resolves
+        it under the active case dir.
+        """
+        if name == "opensearch_enrich_intel":
+            return _drop_empty({"force": bool(args.get("force", False))})
+        spec = {
+            "path": str(args.get("path") or ""),
+            "format": str(args.get("format") or "auto").strip().lower(),
+            "hostname": str(args.get("hostname") or ""),
+            "index_suffix": str(args.get("index_suffix") or ""),
+            "time_field": str(args.get("time_field") or ""),
+            "delimiter": str(args.get("delimiter") or ""),
+            "recursive": bool(args.get("recursive", False)),
+            "include": _str_list(args.get("include")),
+            "exclude": _str_list(args.get("exclude")),
+            "source_timezone": str(args.get("source_timezone") or ""),
+            "all_logs": bool(args.get("all_logs", False)),
+            "reduced_ids": bool(args.get("reduced_ids", False)),
+            "full": bool(args.get("full", False)),
+            "tier": int(args.get("tier") or 1),
+            "plugins": _str_list(args.get("plugins")),
+            "force": bool(args.get("force", False)),
+            "vss": bool(args.get("vss", False)),
+            "no_hayabusa": bool(args.get("no_hayabusa", False)),
+        }
+        return _drop_empty(spec)
+
+
 def gateway_policy_middlewares(
     gateway: Any, *, auth_enabled: bool = False
 ) -> list[Middleware]:
@@ -1025,4 +1175,10 @@ def gateway_policy_middlewares(
         ProxyActiveCaseMiddleware(gateway),
         EvidenceGateMiddleware(gateway),
         ResponseGuardMiddleware(gateway),
+        # feat/opensearch-workers: INNERMOST — runs only after the call has
+        # cleared auth, active-case injection, audit, and the evidence gate.
+        # Redirects opensearch_ingest/opensearch_enrich_intel to a durable worker
+        # job (non-blocking) instead of proxying to the in-gateway stdio child;
+        # its job_id result is still wrapped/redacted by the response guard above.
+        OpenSearchJobDispatchMiddleware(gateway),
     ]

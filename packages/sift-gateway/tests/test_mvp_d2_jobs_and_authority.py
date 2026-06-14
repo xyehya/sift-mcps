@@ -169,6 +169,14 @@ def test_job_status_is_sanitized_and_uses_public_view():
         "2026-06-08T00:01:00+00:00",  # updated_at
         2,                       # step_count
         1,                       # steps_succeeded
+        "osw-1-ab12cd",         # worker_label (non-sensitive liveness label)
+        {                        # current_step (path-free realtime progress)
+            "step_index": 1,
+            "name": "index",
+            "status": "running",
+            "detail": {"indexed_docs": 1024},
+            "updated_at": "2026-06-08T00:01:00+00:00",
+        },
     )
 
     def responder(sql):
@@ -186,6 +194,10 @@ def test_job_status_is_sanitized_and_uses_public_view():
     assert status["status"] == "running"
     assert status["spec_public"] == {"label": "parse"}
     assert status["step_count"] == 2
+    # feat/opensearch-workers: realtime worker progress fields surface.
+    assert status["worker_label"] == "osw-1-ab12cd"
+    assert status["current_step"]["name"] == "index"
+    assert status["current_step"]["detail"]["indexed_docs"] == 1024
 
     serialized = json.dumps(status, default=str)
     # No worker/lease/internal/path leakage.
@@ -194,7 +206,7 @@ def test_job_status_is_sanitized_and_uses_public_view():
 
 
 def test_job_status_denies_non_member():
-    row = ("j1", "ingest", "queued", "other-case") + (None,) * 14
+    row = ("j1", "ingest", "queued", "other-case") + (None,) * 16
 
     def responder(sql):
         if "app.job_status_public" in sql:
@@ -208,7 +220,7 @@ def test_job_status_denies_non_member():
 
 
 def test_job_status_allows_agent_default_case_binding():
-    row = ("j1", "run_command", "succeeded", "case-1") + (None,) * 14
+    row = ("j1", "run_command", "succeeded", "case-1") + (None,) * 16
 
     def responder(sql):
         if "app.job_status_public" in sql:
