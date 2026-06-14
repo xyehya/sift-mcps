@@ -16,6 +16,7 @@ from sift_core.execute.exceptions import DeniedBinaryError, ExecutionError
 
 from sift_core.execute.catalog import load_security_policy
 from sift_core.execute.config import resolve_case_dir
+from sift_core.execute.runtime_acl import AUTHORITY_FILE_BASENAMES
 from sift_core.execute.security_policy import (
     load_policy_from_env,
     matches_allowed_binary,
@@ -270,12 +271,8 @@ def _case_protected_dirs(case_dir: Path, *, include_evidence: bool = True) -> tu
 
 
 def _case_protected_record_files(case_dir: Path) -> tuple[Path, ...]:
-    names = (
-        "approvals.jsonl",
-        "evidence-ledger.jsonl",
-        "evidence-manifest.json",
-        "evidence-verify-state.json",
-    )
+    names = set(AUTHORITY_FILE_BASENAMES)
+    names.add("CASE.yaml")
     return tuple((case_dir / name).resolve() for name in names)
 
 

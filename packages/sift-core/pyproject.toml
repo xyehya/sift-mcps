@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
+dfir-exec-launcher = "sift_core.execute.dfir_exec_launcher:main"
 sift-job-worker = "sift_core.execute.job_worker_cli:main"
 
 [project.optional-dependencies]

@@ -61,6 +61,15 @@ def test_default_policy_is_allowlist_with_contained_unlisted_tier():
         "capsh",
         "dd",
         "dc3dd",
+        "python3.12",
+        "pypy3",
+        "perl5.38",
+        "ruby3.2",
+        "node20",
+        "php8.3",
+        "lua5.4",
+        "busybox",
+        "fish",
     ):
         assert matches_denied_binary(binary, denied)
 

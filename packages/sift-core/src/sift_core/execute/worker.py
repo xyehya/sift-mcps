@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import pwd
+import shutil
 import signal
 import subprocess
 import sys
@@ -455,6 +456,19 @@ def _runtime_ids(runtime_user: str) -> tuple[int | None, int | None]:
     return int(pw.pw_uid), int(pw.pw_gid)
 
 
+def _launcher_invocation() -> list[str]:
+    configured = str(os.environ.get("SIFT_DFIR_EXEC_LAUNCHER") or "").strip()
+    if configured:
+        return [configured]
+    discovered = shutil.which("dfir-exec-launcher")
+    if discovered:
+        return [discovered]
+    sibling = os.path.join(os.path.dirname(sys.executable), "dfir-exec-launcher")
+    if os.path.exists(sibling):
+        return [sibling]
+    return [sys.executable, "-m", "sift_core.execute.dfir_exec_launcher"]
+
+
 def _argv_for_launcher(
     argv: list[str],
     *,
@@ -494,9 +508,7 @@ def _argv_for_launcher(
         "vol_symbols_dir": vol_symbols_dir,
     }
     return [
-        sys.executable,
-        "-m",
-        "sift_core.execute.dfir_exec_launcher",
+        *_launcher_invocation(),
         "--policy",
         _encode_launcher_policy(policy),
         "--",

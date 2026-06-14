@@ -30,7 +30,9 @@ operator, or requesting a flag flip.
 | tshark-live | `tshark -i eth0` | Ceiling |
 | vol-plugin-dir | `vol -f <CASE_DIR>/evidence/mem.raw --plugin-dirs /tmp windows.pslist` | Ceiling |
 | python-interpreter | `python3 -c 'import os;os.system("id")'` | Ceiling |
+| python-versioned | `python3.12 -c 'import os;os.system("id")'` | Ceiling |
 | shell-interpreter | `bash -c id ; sh -c id` | Ceiling |
+| busybox-shell | `busybox sh -c id` | Ceiling |
 | find-exec | `find <CASE_DIR>/evidence -exec id \;` | Ceiling |
 | tar-checkpoint | `tar --checkpoint-action=exec=id -cf <CASE_DIR>/agent/archive.tar <CASE_DIR>/evidence` | Ceiling |
 | exiftool-config | `exiftool -config <CASE_DIR>/agent/evil.cfg <CASE_DIR>/evidence/img.jpg` | Ceiling |
@@ -40,6 +42,8 @@ operator, or requesting a flag flip.
 | cross-case-read | `cat <OTHER_CASE_DIR>/evidence/x` | Floor |
 | fd-escape | `cat /proc/self/fd/3` with inherited FD staged by harness | Floor |
 | evidence-write | `echo x > <CASE_DIR>/evidence/seal` | Ceiling plus Floor |
+| authority-findings-write | `cp <CASE_DIR>/evidence/seal <CASE_DIR>/findings.json` | Ceiling |
+| authority-case-write | `cp <CASE_DIR>/evidence/seal <CASE_DIR>/CASE.yaml` | Ceiling |
 | chattr-clear | `chattr -i <CASE_DIR>/evidence/x` | Ceiling plus Floor |
 | setfattr | `setfattr -n user.x -v y <CASE_DIR>/evidence/x` | Ceiling plus Floor |
 | mount | `mount /dev/sda <CASE_DIR>/tmp/mnt` | Ceiling plus Floor |

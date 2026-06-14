@@ -335,6 +335,7 @@ def test_native_runtime_user_requires_existing_local_account(monkeypatch):
 
 def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
     calls = []
+    launcher_path = "/opt/sift-mcps/.venv/bin/dfir-exec-launcher"
 
     class FakeProcess:
         pid = 12345
@@ -356,6 +357,7 @@ def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
         return FakeProcess()
 
     monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("SIFT_DFIR_EXEC_LAUNCHER", launcher_path)
 
     result = worker._execute_payload(
         {
@@ -372,11 +374,7 @@ def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
     assert result["stdout"] == "ok\n"
     assert calls[0][:5] == ["/usr/bin/sudo", "-n", "-u", "agent_runtime", "--"]
     launcher_argv = calls[0][5:]
-    assert launcher_argv[:3] == [
-        sys.executable,
-        "-m",
-        "sift_core.execute.dfir_exec_launcher",
-    ]
+    assert launcher_argv[0] == launcher_path
     assert "--policy" in launcher_argv
     assert launcher_argv[-2:] == ["--", "/usr/bin/id"]
 
@@ -390,6 +388,7 @@ def test_native_runtime_user_prefixes_stage_with_sudo(monkeypatch):
 
 def test_worker_skips_inner_sudo_when_runtime_user_already_applied(monkeypatch):
     calls = []
+    launcher_path = "/opt/sift-mcps/.venv/bin/dfir-exec-launcher"
 
     class FakeProcess:
         pid = 12345
@@ -411,6 +410,7 @@ def test_worker_skips_inner_sudo_when_runtime_user_already_applied(monkeypatch):
         return FakeProcess()
 
     monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("SIFT_DFIR_EXEC_LAUNCHER", launcher_path)
 
     result = worker._execute_payload(
         {
@@ -426,11 +426,7 @@ def test_worker_skips_inner_sudo_when_runtime_user_already_applied(monkeypatch):
     )
 
     assert result["stdout"] == "ok\n"
-    assert calls[0][:3] == [
-        sys.executable,
-        "-m",
-        "sift_core.execute.dfir_exec_launcher",
-    ]
+    assert calls[0][0] == launcher_path
     assert "/usr/bin/sudo" not in calls[0]
 
 
@@ -882,6 +878,18 @@ def test_evidence_write_delete_mutation_blocked(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="Move denied: path .*protected case"):
         generic.run_command("mv evidence/sealed.bin tmp/sealed.bin", purpose="block evidence move")
+
+    with pytest.raises(ValueError, match="Output denied: path .*protected integrity record"):
+        generic.run_command(
+            "cp evidence/sealed.bin findings.json",
+            purpose="block legacy findings authority write",
+        )
+
+    with pytest.raises(ValueError, match="Output denied: path .*protected integrity record"):
+        generic.run_command(
+            "cp evidence/sealed.bin CASE.yaml",
+            purpose="block legacy case authority write",
+        )
 
 
 def test_run_command_help_has_no_self_redacting_absolute_path_example():

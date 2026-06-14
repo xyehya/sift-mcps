@@ -149,9 +149,19 @@ CEILING_NEGATIVE_CASES = [
         id="ceiling-python-deny-floor",
     ),
     pytest.param(
+        "python3.12 -c 'import os;os.system(\"id\")'",
+        "DENY_FLOOR must reject versioned python interpreters",
+        id="ceiling-python-versioned-deny-floor",
+    ),
+    pytest.param(
         "bash -c id ; sh -c id",
         "DENY_FLOOR must reject shell interpreters",
         id="ceiling-shell-deny-floor",
+    ),
+    pytest.param(
+        "busybox sh -c id",
+        "DENY_FLOOR must reject shell multiplexers",
+        id="ceiling-busybox-shell-deny-floor",
     ),
     pytest.param(
         r"find evidence -exec id \;",
@@ -201,6 +211,16 @@ CEILING_NEGATIVE_CASES = [
         "echo x > evidence/seal",
         "B-FLOOR evidence RO plus Ceiling output policy must reject evidence writes",
         id="floor-evidence-write",
+    ),
+    pytest.param(
+        "cp evidence/seal findings.json",
+        "B-CEIL must reject positional writes to legacy finding authority files",
+        id="ceiling-positional-findings-authority-write",
+    ),
+    pytest.param(
+        "cp evidence/seal CASE.yaml",
+        "B-CEIL must reject positional writes to legacy case authority files",
+        id="ceiling-positional-case-authority-write",
     ),
     pytest.param(
         "chattr -i evidence/x",
