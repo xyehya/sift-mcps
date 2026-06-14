@@ -1,4 +1,7 @@
 """Tests for reports endpoints in Examiner Portal.
+
+B-MVP-023: migrated from the legacy sift_session JWT cookie to the
+Supabase-envelope harness.
 """
 
 from __future__ import annotations
@@ -13,29 +16,44 @@ from starlette.testclient import TestClient
 
 import case_dashboard.routes as routes_mod
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+
+from _supabase_reauth_harness import (
+    ReauthFakeSupabaseAuth,
+    operator_principal,
+    set_operator_session,
+)
 
 _SECRET = secrets.token_hex(32)
 
 
 @pytest.fixture()
 def client():
-    app = create_dashboard_v2_app(session_secret=_SECRET)
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        supabase_auth=ReauthFakeSupabaseAuth(),
+        legacy_portal_session_enabled=False,
+    )
     return TestClient(app)
 
 
 @pytest.fixture()
 def auth_examiner_cookie(client):
-    cookie_val = generate_jwt("alice", "examiner", _SECRET, max_age=3600)
-    client.cookies.set(COOKIE_NAME, cookie_val)
+    set_operator_session(client, _SECRET)
     return client
 
 
 @pytest.fixture()
-def auth_readonly_cookie(client):
-    cookie_val = generate_jwt("bob", "readonly", _SECRET, max_age=3600)
-    client.cookies.set(COOKIE_NAME, cookie_val)
-    return client
+def auth_readonly_cookie():
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        supabase_auth=ReauthFakeSupabaseAuth(
+            principal=operator_principal(system_role="readonly")
+        ),
+        legacy_portal_session_enabled=False,
+    )
+    c = TestClient(app)
+    set_operator_session(c, _SECRET)
+    return c
 
 
 class TestReportsEndpoints:

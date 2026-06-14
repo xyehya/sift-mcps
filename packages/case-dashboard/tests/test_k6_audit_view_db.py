@@ -13,7 +13,8 @@ import secrets
 from starlette.testclient import TestClient
 
 from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import COOKIE_NAME, generate_jwt
+
+from _supabase_reauth_harness import ReauthFakeSupabaseAuth, set_operator_session
 
 _SECRET = secrets.token_hex(32)
 _CASE_ID = "22222222-2222-2222-2222-222222222222"
@@ -53,13 +54,16 @@ class FakeInvestigationDB:
 
 
 def _client(inv):
+    # B-MVP-023: migrated to Supabase-envelope harness.
     app = create_dashboard_v2_app(
         session_secret=_SECRET,
         active_case_service=FakeActiveCases(),
         investigation_service=inv,
+        supabase_auth=ReauthFakeSupabaseAuth(),
+        legacy_portal_session_enabled=False,
     )
     c = TestClient(app)
-    c.cookies.set(COOKIE_NAME, generate_jwt("alice", "examiner", _SECRET, max_age=3600))
+    set_operator_session(c, _SECRET)
     return c
 
 
