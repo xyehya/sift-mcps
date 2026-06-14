@@ -33,8 +33,10 @@ Hardening (HR1-HR3), Add-on (AD1-AD2), PT1, TLS1, DB1, CL1, CL3a/b, UN1, RG1.
 
 Remaining sequence (operator decision 2026-06-14):
 
-1. **Optimizations first** — run_command / agent execution optimizations (define + sequence; see
-   B-MVP-028). This is the immediate next priority before any product-gap batch.
+1. **Optimizations first** — run_command / agent execution optimizations.
+   - DONE (B-MVP-028): tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side
+     PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`.
+   - OPEN (B-MVP-029): on-wire response-efficiency + schema + path-leak fixes — finish before PT2.
 2. **Portal RAG** — BATCH-PT2 (knowledge-plane document management).
 3. **Supabase default-key research** — BATCH-SB1, reframed: research a lighter remediation for the
    default CLI demo keys (rotate/replace post-install) that does NOT require a full self-managed

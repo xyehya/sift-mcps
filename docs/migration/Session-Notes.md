@@ -13,6 +13,35 @@ Last updated: 2026-06-14.
 
 ## Current Change Log
 
+### 2026-06-14 - Tool-surface audit + host-side PTC (bridge/recipes/skill) landed
+
+Status: DONE (B-MVP-028 optimization track; pushed `4138092`)
+
+Changed:
+- Full MCP tool-surface audit (live brute-force on the 2.08M-doc Rocba index + a qa-expert
+  static code pass) → `docs/optimization/tool-audit-2026-06-14.md`. Two axes: response efficiency
+  (run_command quadruple provenance receipt; `opensearch_search` has no large-result autosave;
+  `case_brief`/`case_context` dumped every call; per-hit constants `vhir.*`/`host.id`; compact
+  `event_data` = unparseable `str(dict)[:500]`) and schema accuracy (zero `outputSchema`; ingest
+  poll dead-end `run_id` vs `job_id`; `audit_ids` OPTIONAL-but-rejection-required; `input_files`
+  deprecated-unmarked) + SECURITY (opensearch-mcp leaks absolute host paths past the redactor).
+- PTC (programmatic tool calling) runs HOST-SIDE in the local terminal (operator correction), not
+  in the run_command jail → full Python, gateway still the policy boundary. Bridge + recipes + skill:
+  `scripts/ptc/ptc.py` (CA-pinned MCP-over-HTTPS, live token from `~/.claude.json`),
+  `scripts/ptc/recipes/{ioc_pivot,aggregate_then_fetch,timeline_drill}.py`, `scripts/ptc/README.md`,
+  `.claude/skills/ptc/SKILL.md`. `out/` + `ca-cert.pem` gitignored.
+
+Validation:
+- Live-proven: 200-hit `opensearch_search` = ~256 KB on disk / ~10 lines in context (~99% cut);
+  2-IOC pivot over 2M docs correlated both external RDP IPs (F-claude-004) into vol-netscan+netstat.
+- `python3 -m py_compile` all PTC scripts; recipes run green on the live case.
+
+Next:
+- On-wire response-efficiency + schema fixes (B-MVP-029) — complement PTC by slimming the summaries
+  that DO return; touch live opensearch-mcp + sift-core, so deploy + re-validate.
+- QA-probe artifacts left on the case: timeline event `T-claude-007` + completed `TODO-claude-008`
+  (labeled QA-TEST; no delete tool — operator cleanup).
+
 ### 2026-06-14 - Post-RUN-3 pipeline decisions locked (sequence, Supabase, legacy, kernel baseline)
 
 Status: DONE
@@ -143,7 +172,8 @@ Next:
 | B-MVP-023 | Backlog | OPEN | DECISION (2026-06-14): REMOVE. Delete the `legacy_portal_session_enabled` fallback and sweep + delete any remaining legacy code paths/tests (operator: remove anything legacy still in code). | BATCH-CL2 |
 | B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green + committed 4ee3d1f pushed to origin/main 2026-06-14. | BATCH-R3-* |
 | B-MVP-027 | Backlog | OPEN | `run_command_job` durable lane (Postgres job state machine) fails with `unhandled worker error: KeyError` before exec; synchronous `run_command` lane unaffected. Pre-existing; fix the durable path. | BATCH-R3-* |
-| B-MVP-028 | Backlog | OPEN | Define + sequence the run_command / agent execution optimizations (operator: "optimizations first" before PT2). Scope to be specified next session. | BATCH-R3-* |
+| B-MVP-028 | Backlog | DONE | Optimization track defined + first deliverable landed: tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`. On-wire fixes split to B-MVP-029. | B-MVP-028 |
+| B-MVP-029 | Backlog | OPEN | On-wire MCP response-efficiency + schema fixes from the audit: run_command receipt dedup (audit_id/job_id/provenance ×4), `opensearch_search` large-result autosave, hoist per-hit constants, define `outputSchema`, fix ingest poll dead-end + `audit_ids` required-labeling, and the opensearch-mcp absolute-path leaks (SECURITY). Touches live opensearch-mcp + sift-core → deploy + re-validate. | B-MVP-029 |
 
 ## Validation Commands
 
