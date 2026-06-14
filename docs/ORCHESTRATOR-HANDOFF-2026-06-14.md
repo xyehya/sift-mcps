@@ -1,7 +1,29 @@
 # Orchestrator Handoff — 2026-06-14 (post worker-decoupling)
 
+> ## STATUS UPDATE 2026-06-14 — RUN-1 COMPLETE + PUSHED
+> RUN-1 (OSW + TOOL + HARDEN + RESEARCH) landed, live-proven on the VM, and
+> `main` was **pushed to origin** (`87be91a`, origin synced). Plan is now **4 runs**
+> (sandbox split into its own run, per the open question below — confirmed).
+> - **DONE:** tool rename `job_status`→`running_commands_status` + tool inventory
+>   real-names (vol/EvtxECmd live); opensearch B3 K4-fix (Option C) + case_dir
+>   injection; AppArmor COMPLAIN→ENFORCE (0 denials, live); sandbox survey at
+>   `docs/research/sandbox-survey-2026-06-14.md` (pick: bwrap+socat for agent
+>   code-exec; Landlock+seccomp+AppArmor-fuse for run_command).
+> - **Bonus fix (B-MVP-025):** gateway `_stdio_base_env()` did not propagate
+>   `SIFT_DB_ACTIVE` to stdio add-on backends → K4/B3 DB-active path never ran in
+>   the opensearch backend; found+fixed+proven live.
+> - **Deferred to RUN-3/4:** OSW B4 memory durable-lane live proof; Option A
+>   (gateway-injected app.job_status_public realtime) = B-MVP-024; F-HARDEN-01
+>   (Bearer/JTI flag-gated deletion) under B-MVP-023; F3 cross-case gate.
+> - **NEXT = RUN-3 (sandbox impl):** implement bwrap+socat agent code-exec sandbox
+>   + callMCPTool shim for Hermes (verify kernel/nested-KVM prereqs from the survey
+>   §"Open Questions" on the VM first), optionally the run_command Landlock+seccomp
+>   layer; then RUN-4 = PMI4/OS6 e2e + fresh Hermes autonomous run.
+> See `docs/migration/Session-Notes.md` RUN-1 entry for full live proof + B-MVP-018/023/024/025.
+
 Pick up here in a fresh orchestrator session. This is the source of truth for the
-next 3 runs. The Cline kanban board is flaky (cascade-trashes, lost cards across
+next runs. (RUN-1 above is done; the RUN sections below are the original plan —
+RUN-2 reconcile+review+push is folded into RUN-1's completion.) The Cline kanban board is flaky (cascade-trashes, lost cards across
 CLI rebuilds) — trust THIS doc + `mcp_tool_assessment.md` §0 + Session-Notes, not
 the board. Repopulate the board from §"Batches" if you want the GUI.
 
