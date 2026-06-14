@@ -150,15 +150,33 @@ Last synced: 2026-06-14.
   mounts (`fusermount: Operation not permitted`); the opensearch backend, as a
   stdio child of the gateway, inherited that sandbox and disk ingest could never
   mount. RESOLVED by decoupling (see A): the ingest pipeline runs in a dedicated
-  `sift-opensearch-worker@` unit whose ONLY relaxation vs `sift-job-worker.service`
-  is `MountFlags=shared` (changes mount-namespace PROPAGATION only — not a cap,
-  device, syscall, or path). The gateway keeps `MountFlags=` (empty) + every HR3
-  directive. Acceptable on the worker because it has no listener, no auth surface,
-  no inbound request path; mounts stay gated by the existing narrow
-  `/etc/sudoers.d/sift-ingest-mount` allowlist. Anchor:
-  `configs/systemd/sift-opensearch-worker@.service` (documented relaxation),
-  `install.sh` (renders + enables N instances), `opensearch_mcp/containers.py`
-  (plain `sudo` mounts, band-aid reverted). (2026-06-14)
+  `sift-opensearch-worker@` unit. The TRUE FUSE constraints were established by live
+  systemd-run probes against the real E01 (2026-06-14) and CORRECT the original
+  design (which wrongly assumed `MountFlags=shared` would let a hardened, private-
+  namespace unit mount): fusermount needs (1) CAP_SYS_ADMIN in the bounding set (the
+  setuid-root helper is still capped by the bounding set) AND (2) the HOST mount
+  namespace — EVERY private-mount-namespace directive (ProtectSystem=*, ProtectHome,
+  PrivateTmp, ReadWrite/ReadOnlyPaths, ProtectKernel*, ProtectControlGroups) makes
+  the mount fail `Operation not permitted` even WITH CAP_SYS_ADMIN + MountFlags=
+  shared. So the worker runs the NAMESPACE-FREE hardening subset (ProtectClock,
+  ProtectHostname, RestrictSUIDSGID/Realtime, LockPersonality, RestrictAddress-
+  Families) + the gateway's privilege-drop caps (CAP_SETUID/SETGID/SETPCAP/
+  AUDIT_WRITE — the immutable-only sift-job-worker set fails sudo→root with `unable
+  to change to root gid: Operation not permitted`) + CAP_SYS_ADMIN. It therefore
+  CANNOT carry ProtectSystem=strict — a REAL, NARROW posture reduction vs the
+  gateway. 🟡-grade: justified (the worker has no listener / no auth surface / no
+  inbound request path; it only claims durable jobs and runs forensic tooling on
+  sealed evidence in the case jail; mounts gated by the narrow
+  /etc/sudoers.d/sift-ingest-mount allowlist; the gateway is untouched —
+  MountFlags= empty, full HR3) but PENDING /security-review before merge; a bwrap/
+  nsjail FUSE shim or non-systemd mount helper could tighten it later. The default
+  sift-job-worker is pinned `--job-types run_command` so the cap-starved worker
+  never claims the privileged ingest/enrich lane. Anchor:
+  `configs/systemd/sift-opensearch-worker@.service` (documented profile + probe
+  evidence), `configs/systemd/sift-job-worker.service` (lane pin), `install.sh`
+  (renders + enables N instances), `opensearch_mcp/containers.py` (plain `sudo`
+  mounts). LIVE-PROVEN: E01 mounted (xmount→ntfs-3g) + 14 disk-family indices for
+  host srl-forge. (2026-06-14)
 - 🟥 BATCH-SB1 self-managed Supabase compose (generated secrets) — required before
   any non-lab deploy; deferred.
 - 🟥 AppArmor COMPLAIN-only until post-LV1 enforce pass.
