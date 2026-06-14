@@ -33,6 +33,15 @@ server-side at the Gateway, not client-side.
 - `case-dashboard` — operator portal backend (REST routes, review/approval path).
 - `opensearch-mcp` — add-on backend: ingest (disk/memory/logs via Hayabusa,
   Volatility, etc.) + search/aggregate/timeline. The ONLY ingest+query driver.
+  SPLIT execution (2026-06-14): the privileged ingest/enrich pipeline does NOT run
+  as a stdio child of the gateway — it would inherit the gateway's private/slave
+  mount namespace and FUSE E01 mounts fail. The gateway enqueues a durable
+  ingest/enrich job; a dedicated least-privilege `sift-opensearch-worker@` systemd
+  unit (`MountFlags=shared` is its only relaxation vs `sift-job-worker`) claims and
+  runs it (`opensearch_mcp/ingest_job.py`, console script `sift-opensearch-worker`,
+  N instances via `FOR UPDATE SKIP LOCKED`). Query tools (search/aggregate/timeline
+  /count/field_values/list_detections) need no FUSE and stay on the thin in-gateway
+  proxy.
 - `forensic-rag-mcp` (namespace `kb`) — add-on backend: global IR/DFIR knowledge
   corpus in Supabase pgvector. Non-authoritative reference plane; `query_only`.
 - `forensic-knowledge` — FK enrichment data loader (tool guidance bundled with

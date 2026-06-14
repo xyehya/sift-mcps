@@ -35,6 +35,19 @@ Last synced: 2026-06-14.
 - 🟡 Add-on authority contract (prohibited_operations / required_scopes) enforced
   by `AddonAuthorityMiddleware`, but only opencti/rag exercise it; windows-triage
   unbuilt. Anchor: `policy_middleware.py`, `app.mcp_backends.authority_contract`.
+- ✅ Privileged OpenSearch ingest/enrich are decoupled out of the gateway: the
+  gateway no longer runs them in its hardened mount namespace (which made FUSE
+  E01 mounts fail — see H). `OpenSearchJobDispatchMiddleware` (innermost, runs
+  only after auth/active-case/audit/evidence-gate) redirects
+  `opensearch_ingest`/`opensearch_enrich_intel` to a NON-BLOCKING durable job; a
+  dedicated least-privilege `sift-opensearch-worker@` unit claims and runs them.
+  Anti-spoof: the worker spec carries only the gateway-resolved DB-authoritative
+  `case_dir` (a client-supplied `case_dir`/`case_id` is dropped); `spec_public`
+  is path-free; the gateway gains no privilege. Query tools stay on the thin
+  proxy. Anchor: `policy_middleware.py:OpenSearchJobDispatchMiddleware`,
+  `opensearch_mcp/ingest_job.py`, tests
+  `test_opensearch_dispatch_middleware.py` (anti-spoof) +
+  `test_ingest_job_handler.py` (N-worker SKIP LOCKED claim safety). (2026-06-14)
 
 ## B. run_command host execution (ASI05 — highest risk)
 
@@ -131,6 +144,21 @@ Last synced: 2026-06-14.
   skips fetches. Anchor: `install.sh` (HR3 block).
 - ✅ auditd installed with SIFT rules; OpenSearch container CapDrop=ALL +
   no-new-privileges + digest-pinned. Anchor: `install.sh`, `docker-compose.yml`.
+- ✅ (was 🟥 OPEN) FUSE E01 disk-image mount under the hardened sandbox. Root
+  cause: `ProtectSystem=strict`+`ProtectHome`+`PrivateTmp` put the unit in a
+  PRIVATE mount namespace with SLAVE propagation, so the kernel refused new FUSE
+  mounts (`fusermount: Operation not permitted`); the opensearch backend, as a
+  stdio child of the gateway, inherited that sandbox and disk ingest could never
+  mount. RESOLVED by decoupling (see A): the ingest pipeline runs in a dedicated
+  `sift-opensearch-worker@` unit whose ONLY relaxation vs `sift-job-worker.service`
+  is `MountFlags=shared` (changes mount-namespace PROPAGATION only — not a cap,
+  device, syscall, or path). The gateway keeps `MountFlags=` (empty) + every HR3
+  directive. Acceptable on the worker because it has no listener, no auth surface,
+  no inbound request path; mounts stay gated by the existing narrow
+  `/etc/sudoers.d/sift-ingest-mount` allowlist. Anchor:
+  `configs/systemd/sift-opensearch-worker@.service` (documented relaxation),
+  `install.sh` (renders + enables N instances), `opensearch_mcp/containers.py`
+  (plain `sudo` mounts, band-aid reverted). (2026-06-14)
 - 🟥 BATCH-SB1 self-managed Supabase compose (generated secrets) — required before
   any non-lab deploy; deferred.
 - 🟥 AppArmor COMPLAIN-only until post-LV1 enforce pass.
