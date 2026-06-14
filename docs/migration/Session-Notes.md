@@ -13,6 +13,39 @@ Last updated: 2026-06-12.
 
 ## Current Change Log
 
+### 2026-06-14 - RUN-1 (post-MVP orchestrator): 4 parallel agents reconciled on run1/integrate (host-side DONE; VM proof pending)
+
+Status: IN_PROGRESS (code + local gate DONE on `run1/integrate`; serial VM live-proof pending).
+
+Orchestrated 4 disjoint-fence agents off LOCAL main (origin 63 behind), reconciled to
+`run1/integrate` (zero file overlap). Plan + decisions: `docs/ORCHESTRATOR-HANDOFF-2026-06-14.md`.
+
+- **TOOL** (run1/tool): renamed core MCP tool `job_status` -> `running_commands_status`
+  (DB view app.job_status_public + JobService method intentionally NOT renamed); tool
+  inventory real-name alignment — catalog `vol3`->`vol`, Zimmerman at /opt/zimmermantools
+  run natively + allowlisted + symlink installer in install.sh, `regripper`->`rip.pl` via
+  new `invoke_as` field; surfaced via list_available_tools. 503+505 tests green, bash -n ok.
+- **OSW** (run1/osw): B3 ingest_status realtime + B4 memory-lane durable parity + item-2
+  case_dir injection audit (only ingest_status lacked it). RECONCILE BLOCKER caught + fixed:
+  first B3 cut served the tamperable local mirror JSON in DB-active mode, reopening the
+  BATCH-K4 anti-tamper vector; corrected to Option C (K4-preserving redirect + job_id
+  pointer, no local-file read). Option A (gateway DB-status injection) -> B-MVP-024.
+  opensearch-mcp full suite 1014 passed, K4 test untouched + green.
+- **HARDEN** (run1/harden): migrated ~11 sift_session test fixtures to the Supabase harness
+  (progress on B-MVP-023); AppArmor profile prep (added cases/*/agent/** rw, dedup, scope
+  note) + an enforce-flip runbook for the VM pass. Residual fork F-HARDEN-01 (Bearer/JTI
+  flag-gated deletion) logged under B-MVP-023. 361 tests green. The COMPLAIN->enforce flip
+  is the LAST serial VM step (after OSW+TOOL load exercised so aa-logprof sees real syscalls).
+- **RESEARCH** (web): sandbox survey -> `docs/research/sandbox-survey-2026-06-14.md`. Picks:
+  bwrap+socat for Hermes agent code-exec (A); Landlock+seccomp+AppArmor-fuse for run_command
+  forensic-exec (B). RUN-3 input. Supersedes B-MVP-018's "revisit enforce post-LV1" only for
+  the apparmor flip, which RUN-1 brings forward.
+
+Local gate on run1/integrate: sift-core 503, sift-gateway 505, opensearch-mcp 1014,
+case-dashboard 361, validate_docs + validate_migration_docs PASS, bash -n install.sh ok,
+git diff --check clean. NEXT: serial VM live-proof (OSW -> TOOL -> HARDEN enforce-flip last),
+then RUN-2 (/security-review combined diff + push main->origin).
+
 ### 2026-06-14 - BUILT: OpenSearch decoupled scalable workers (branch feat/opensearch-workers; deployed to TEST)
 
 Status: IN_PROGRESS (build + unit tests DONE; deployed to VM; first live smoke pending joint test).
@@ -876,7 +909,8 @@ after portal reset/credential issuance.
 | B-MVP-020 | Backlog | DONE | DONE 2026-06-13 (operator-requested, live-proven): ran rotate-tls.sh --rotate-ca on the existing VM. New CA CN="Protocol SIFT Gateway local CA" with critical basicConstraints CA:TRUE + critical keyUsage(keyCertSign,cRLSign); leaf re-issued with serverAuth EKU + IP/DNS SANs; keys 0600 / certs 0644 sift-service; gateway restarted, /health ok, both services active; curl --cacert verifies WITHOUT -k on the IP SAN. Clients must re-import /var/lib/sift/.sift/tls/ca-cert.pem. | BATCH-TLS1 / live |
 | B-MVP-021 | Backlog | OPEN | Pre-existing gap (surfaced by CL3a security review, NOT a CL3a regression): `post_case_activate` DB-active branch (`_ACTIVE_CASES is not None`, the live VM path) returns before any re-auth, so case activation — a CLAUDE.md sensitive action — is NOT re-authed under DB authority. DONE 2026-06-13 (CL3b, 718684e): the DB-active branch now `await _supabase_reverify` before `set_active_case`; fail-closed tested (wrong-pw 401, control-plane-down 503, success). | BATCH-CL3b |
 | B-MVP-022 | Backlog | OPEN | Pre-existing gap (surfaced by CL3a security review): agent/service credential issuance (`create_principal`, POST /api/auth/principals) gates only on owner/admin role — no operator-password re-verify, though agent-credential issuance is a CLAUDE.md sensitive action. DONE 2026-06-13 (CL3b, 718684e): `create_principal` now requires Supabase re-verify in addition to the owner/admin gate; fail-closed tested (wrong-pw 401, missing-pw 400, success). | BATCH-CL3b |
-| B-MVP-023 | Backlog | OPEN | CL3b refused-as-fork (2026-06-13): the `sift_session` cookie-verify branch in case-dashboard auth.py is session-ESTABLISHMENT (not the file-HMAC re-auth plane), provably unminted in production but load-bearing for ~11 test suites' auth fixtures (generate_jwt + COOKIE_NAME). Migrate those fixtures to the Supabase-envelope harness, then delete the branch (and its examiner Bearer fallback / JTI logout if also dead). Not security-blocking (reaching it needs an already-secret-signed JWT). | Future legacy-session retirement batch |
+| B-MVP-023 | Backlog | OPEN | CL3b refused-as-fork (2026-06-13): the `sift_session` cookie-verify branch in case-dashboard auth.py is session-ESTABLISHMENT (not the file-HMAC re-auth plane), provably unminted in production but load-bearing for ~11 test suites' auth fixtures (generate_jwt + COOKIE_NAME). Migrate those fixtures to the Supabase-envelope harness, then delete the branch (and its examiner Bearer fallback / JTI logout if also dead). Not security-blocking (reaching it needs an already-secret-signed JWT). PROGRESS 2026-06-14 (RUN-1 HARDEN, run1/harden): the ~11 test fixtures migrated off generate_jwt/COOKIE_NAME to the Supabase-envelope harness (6 files), unblocking deletion from the test side; 361 case-dashboard tests green. RESIDUAL fork F-HARDEN-01: the examiner Bearer fallback (auth.py) + JTI logout revoke (routes.py) are gated by `legacy_portal_session_enabled` (default false in new installs) — unreachable at runtime but flag-controlled, not dead in general. DECISION NEEDED before code deletion: (a) set legacy_portal_session_enabled=false in all remaining installs and delete the sift_session branch + Bearer + JTI code, or (b) keep the flag. Code retained until decided. | Future legacy-session retirement batch |
+| B-MVP-024 | Backlog | OPEN | OPENED 2026-06-14 (RUN-1 OSW, run1/osw): Option A deferred for opensearch_ingest_status realtime status. RUN-1 took Option C (K4-preserving): in DB-active mode the tool returns ingests:[] + authority "postgres-durable-jobs" + a job_id/next_step pointer and never reads the tamperable local mirror JSON (preserves BATCH-K4). FUTURE: have the gateway inject authoritative app.job_status_public rows for in-flight jobs of the active case into the ingest_status call (same mechanism class as case_dir injection), so agents see realtime worker_label/current_step/indexed_docs without any local-file read — satisfies both K4 and B3's realtime goal. Requires gateway middleware/plumbing outside RUN-1's dispatch-only scope fence. | Future opensearch realtime batch (RUN-3+) |
 
 ## Active References
 
