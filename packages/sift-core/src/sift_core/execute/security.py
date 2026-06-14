@@ -155,8 +155,29 @@ def _path_is_under(path: Path, parent: Path) -> bool:
         return False
 
 
+def _active_case_dir_str() -> str:
+    """Resolve the active case dir for policy decisions, DB-authority aware.
+
+    Mirrors executor._active_or_env_case_dir: prefer the request-local
+    AuthorityContext (set by the Gateway/worker from Postgres active-case state)
+    over the legacy SIFT_CASE_DIR/pointer fallback. Without this, run_command's
+    path validators see no case dir under DB authority and collapse to the
+    "/tmp + cwd only" branch — the reason in-case writes were blocked even
+    though the case dir is the (non-authoritative, see module note) working area.
+    """
+    try:
+        from sift_core.active_case_context import current_active_case
+
+        ctx = current_active_case()
+        if ctx and ctx.case_dir is not None:
+            return str(ctx.case_dir)
+    except ImportError:  # pragma: no cover - defensive
+        pass
+    return resolve_case_dir()
+
+
 def _case_dir_path() -> Path | None:
-    case_dir = resolve_case_dir()
+    case_dir = _active_case_dir_str()
     if not case_dir:
         return None
     return Path(case_dir).resolve()
@@ -229,7 +250,7 @@ def validate_rm_targets(args: list[str], *, base_dir: str | Path | None = None) 
         resolved = str(resolved_path)
         if resolved_path == Path("/"):
             raise ValueError("Blocked: rm targeting filesystem root")
-        case_dir = resolve_case_dir()
+        case_dir = _active_case_dir_str()
         if case_dir:
             case_resolved_path = Path(case_dir).resolve()
             if any(_path_is_under(resolved_path, d) for d in _case_writable_dirs(case_resolved_path)):
@@ -285,12 +306,23 @@ _OUTPUT_BLOCKED_DIRECTORIES = _BLOCKED_DIRECTORIES + (
 def validate_output_path(path: str, *, base_dir: str | Path | None = None) -> str:
     """Validate that an output path is safe to write to.
 
-    Stricter than validate_input_path. When SIFT_CASE_DIR is set, the
-    output path must be inside the case directory. When not set, only
-    /tmp and the current working directory are allowed.
+    In-case write posture (operator-approved): when an active case is resolved,
+    run_command may write ANYWHERE under the active case directory EXCEPT the
+    sealed-evidence dir and the protected integrity records. This is safe because
+    nothing writable under the case dir is authoritative anymore — audit lives in
+    Postgres (app.audit_events, append-only/hash-chained), the manifest/ledger are
+    DB-authoritative (the files are export/proof only), and sealed evidence is
+    chattr +i immutable. Fencing the agent to agent//extractions//tmp/ only
+    crippled the save-output -> read-back -> filter loop for no security gain.
 
-    Case-dir containment is checked first so that case directories
-    under /home are allowed.
+    HARD boundaries that stay (NOT relaxed):
+      * sealed evidence/ and integrity records: write/mutation denied
+        (_reject_if_protected_case_path) — belt-and-suspenders with chattr +i.
+      * out-of-case + host paths: denied (only the ACTIVE case dir opens up;
+        /var/lib/sift, /etc, other case dirs, mount points all stay blocked).
+
+    When no active case is resolved, only /tmp and the current working directory
+    are allowed (unchanged).
     """
     resolved = str(_resolve_user_path(path, base_dir=base_dir))
 
@@ -299,21 +331,21 @@ def validate_output_path(path: str, *, base_dir: str | Path | None = None) -> st
     if resolved == "/dev/null":
         return resolved
 
-    # Case-dir containment: must resolve only under agent/, extractions/, or tmp/.
-    case_dir = resolve_case_dir()
+    # Case-dir containment (DB-authority aware): allow anywhere under the active
+    # case dir except sealed evidence + protected integrity records.
+    case_dir = _active_case_dir_str()
     if case_dir:
         case_resolved = Path(case_dir).resolve()
-        allowed_subdirs = [
-            case_resolved / "agent",
-            case_resolved / "extractions",
-            case_resolved / "tmp",
-        ]
-        for subdir in allowed_subdirs:
-            if resolved == str(subdir) or resolved.startswith(str(subdir) + "/"):
-                return resolved
+        resolved_path = Path(resolved)
+        if _path_is_under(resolved_path, case_resolved):
+            # Deny only the sealed-evidence dir and protected integrity records;
+            # everything else under the case dir is writable scratch.
+            _reject_if_protected_case_path(resolved_path, action="Output")
+            return resolved
         raise ValueError(
-            f"Output path '{path}' must be inside the case agent, extractions, or tmp directory: "
-            f"'{case_resolved}/agent/', '{case_resolved}/extractions/' or '{case_resolved}/tmp/'"
+            f"Output path '{path}' resolves to '{resolved}', outside the active "
+            f"case directory '{case_resolved}'. run_command may only write under "
+            "the active case dir (excluding evidence/ and integrity records)."
         )
 
     # No case dir: allow /tmp and cwd before checking blocked dirs
@@ -822,7 +854,7 @@ def validate_shell_command(
             raise ValueError(f"Binary '{binary}' not found on this system.")
 
         # P2.3 (Basename-Evasion Prevention): Verify resolved binary is not in the case directory
-        case_dir_str = resolve_case_dir()
+        case_dir_str = _active_case_dir_str()
         if case_dir_str:
             case_resolved = Path(case_dir_str).resolve()
             resolved_path = Path(resolved).resolve()
@@ -908,7 +940,7 @@ def validate_shell_command(
                      if char in arg:
                          raise ValueError(f"Wildcard/glob characters ('{char}') are not permitted in command arguments.")
                          
-            case_dir_str = resolve_case_dir()
+            case_dir_str = _active_case_dir_str()
             case_dir = Path(case_dir_str) if case_dir_str else None
             cases_root_dir = cases_root()
             
@@ -992,9 +1024,15 @@ def validate_shell_command(
                     
                 if not case_dir:
                     raise ValueError("An active case is required to execute dd.")
-                allowed_of_dirs = [case_dir / "agent", case_dir / "extractions", case_dir / "tmp"]
-                if not any(_is_in_directory(of_val, d, base_dir=cwd) for d in allowed_of_dirs):
-                    raise ValueError(f"{binary} of= target must be under case agent/, extractions/, or tmp/ directories.")
+                # In-case write posture: dd may write anywhere under the active
+                # case dir except sealed evidence + protected integrity records
+                # (same rule as validate_output_path / redirect targets).
+                of_resolved = _resolve_user_path(of_val, base_dir=cwd)
+                if not _path_is_under(of_resolved, case_dir.resolve()):
+                    raise ValueError(
+                        f"{binary} of= target '{of_val}' must be inside the active case directory."
+                    )
+                _reject_if_protected_case_path(of_resolved, action="Output")
                     
             elif binary == "fdisk":
                 fdisk_flags = set(argv[1:])
@@ -1071,7 +1109,7 @@ def resolve_evidence_ref(ref: str, *, case_dir: str | Path | None = None) -> str
     if "\x00" in ref:
         raise EvidenceRefError("evidence reference contains a null byte")
 
-    case_str = str(case_dir) if case_dir else resolve_case_dir()
+    case_str = str(case_dir) if case_dir else _active_case_dir_str()
     if not case_str:
         raise EvidenceRefError(
             "No active case: an evidence reference can only be resolved with an "
@@ -1128,7 +1166,7 @@ def resolve_output_ref(ref: str, *, case_dir: str | Path | None = None) -> str:
     if ".." in safe or "/" in safe or "\x00" in safe:
         raise EvidenceRefError("output reference must not contain path separators")
 
-    case_str = str(case_dir) if case_dir else resolve_case_dir()
+    case_str = str(case_dir) if case_dir else _active_case_dir_str()
     if not case_str:
         raise EvidenceRefError(
             "No active case: an output reference can only be resolved with an "
@@ -1212,7 +1250,7 @@ def sanitize_path_value(value: str, *, case_dir: str | Path | None = None) -> st
     """
     if not isinstance(value, str) or "/" not in value:
         return value
-    case_str = str(case_dir) if case_dir else resolve_case_dir()
+    case_str = str(case_dir) if case_dir else _active_case_dir_str()
     case_resolved: Path | None = None
     if case_str:
         try:

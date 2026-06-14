@@ -436,7 +436,7 @@ def test_privileged_validators_fail_before_execution(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, "which", fake_which)
 
     # 1. dd with invalid output target (outside case)
-    with pytest.raises(ValueError, match="of= target must be under case"):
+    with pytest.raises(ValueError, match="of= target.*must be inside the active case"):
         generic.run_command(["dd", "if=/dev/sdb", "of=/etc/passwd"], purpose="test dd validator")
 
     # 2. mount with invalid target (outside case)
@@ -563,7 +563,7 @@ def test_validate_shell_command_safety_checks(tmp_path, monkeypatch):
     assert res2["exit_code"] == 0
 
     # Output to invalid location (should fail)
-    with pytest.raises(ValueError, match="Output path.*must be inside the case"):
+    with pytest.raises(ValueError, match="outside the active case"):
         generic.run_command("echo 'hi' > /etc/passwd", purpose="invalid output redirection")
 
 
@@ -844,7 +844,7 @@ def test_exotic_fd_redirect_rejected(tmp_path, monkeypatch):
             generic.run_command(cmd, purpose="test exotic fd reject")
 
     # Valid op but target outside the case is rejected by output-path validation.
-    with pytest.raises(ValueError, match="must be inside the case"):
+    with pytest.raises(ValueError, match="outside the active case"):
         generic.run_command("tool 2>/etc/x", purpose="test stderr file outside case")
 
 
