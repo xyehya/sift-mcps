@@ -13,6 +13,25 @@ Last updated: 2026-06-15.
 
 ## Current Change Log
 
+### 2026-06-16 - Forensic re-verify on the fresh case: B-MVP-042 memory hostname auto-derive RE-CONFIRMED live; run_command posture green
+
+Status: DONE (live, via agent MCP on case `case-rocba-round-2-06151840`, gate open after the B-MVP-048 reseal).
+
+- **B-MVP-042 (memory-ingest hostname auto-derivation) RE-CONFIRMED on a fresh case with ZERO hostname input:**
+  `opensearch_ingest(path='evidence/Rocba-Memory.raw', format='memory', dry_run=false, tier=1)` with NO `hostname`
+  did NOT fail validation (the pre-B-MVP-042 behaviour failed in <1s); the worker step 1 derived the host, then ingested.
+  Job `b2379d2b…` succeeded: **10 vol plugins, 10,276 docs, 1 host = `SRL-FORGE`** (derived; `host.name`/`host.id`
+  = `SRL-FORGE`, index segment `…-srl-forge`). time_range 2020-11-11→2020-11-16 (matches the SRL break-in window).
+  Searchable: `svchost.exe` in pslist → 103 hits with full vol3 fields (ImageFileName/PID/PPID/CreateTime). B-MVP-042
+  was already marked DONE; this is the fresh-install/new-case live re-confirmation.
+- **run_command posture green (live, sealed case):** `run_command("ls -la evidence/ | head -20")` ran as a multi-stage
+  `shell=False` argv pipeline under the OS sandbox, exit 0, audited with provenance (`siftgateway-claude1-…`), output
+  tagged untrusted. Confirms the hardened exec works under the active sealed-evidence gate. (Evidence now `sift-service`
+  -owned, uid/gid 996:980, from the B-MVP-048 intake chown.)
+- **Known minor cosmetic (non-blocking, pre-existing B-MVP-042 note):** index names carry a doubled `case-case-` prefix
+  (case_id already includes `case-`; the indexer prepends another). Harmless (queries work); flagged for an optional
+  cleanup pass — NOT changed here (index-name changes risk existing indices + the gateway's `case-`-segment guard).
+
 ### 2026-06-16 - B-MVP-048 LIVE TEST PASSED (operator-driven) + 2 fixes; intake-chown requirement found — B-MVP-048 DONE
 
 Status: DONE (deployed live + operator-driven test green). Deployed the immutable-only seal + unseal stack to the VM
