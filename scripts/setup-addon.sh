@@ -82,7 +82,42 @@ fi
 # --- resolve the bits the payloads need ------------------------------------
 UV_BIN="$(resolve_uv)"
 [[ -n "$UV_BIN" ]] || die "uv not found. Run ./install.sh --core-only first."
-SIFT_MCPS_ROOT="$REPO_DIR"
+
+# B-MVP-049 (path independence): the runtime tree the gateway's sift-service user
+# actually execs from is the STAGED root, NOT wherever this script file happens to
+# live. install.sh sources above set REPO_DIR to the script's own checkout and
+# SIFT_MCPS_INSTALL_ROOT to the staged default (/opt/sift-mcps, overridable). We
+# stage into and emit commands for the STAGED root so a clone-run from any cwd
+# still produces a sift-service-executable console-script command — or fails fast
+# with a crisp message — instead of silently falling back to operator-uv (RED).
+#
+# Resolution order for the staged root:
+#   1. SIFT_MCPS_INSTALL_ROOT env var (set by the operator or by install.sh), else
+#   2. the default /opt/sift-mcps that install.sh stages to.
+# We deliberately do NOT use REPO_DIR here: REPO_DIR follows the script file, the
+# staged root does not.
+SIFT_MCPS_INSTALL_ROOT="${SIFT_MCPS_INSTALL_ROOT:-/opt/sift-mcps}"
+SIFT_MCPS_INSTALL_ROOT="${SIFT_MCPS_INSTALL_ROOT%/}"
+SIFT_MCPS_ROOT="$SIFT_MCPS_INSTALL_ROOT"
+
+# Fail fast if the staged runtime tree (the thing the gateway execs from) is not
+# present — staging into / emitting a command for a venv that is not the real
+# runtime would only produce a RED backend. Keep the message actionable.
+if [[ ! -d "$SIFT_MCPS_ROOT" ]]; then
+  die "Staged runtime root not found: $SIFT_MCPS_ROOT
+  setup-addon stages the add-on extra into the STAGED runtime venv that the
+  gateway's sift-service user execs from (default /opt/sift-mcps). It does NOT
+  use this script's own checkout location.
+  - If the SPG core is installed, point at its staged tree:
+      SIFT_MCPS_INSTALL_ROOT=/opt/sift-mcps $0
+  - If you have not run ./install.sh yet, run it first (it stages to $SIFT_MCPS_INSTALL_ROOT)."
+fi
+if [[ ! -d "$SIFT_MCPS_ROOT/.venv/bin" ]]; then
+  die "Staged runtime venv not found: $SIFT_MCPS_ROOT/.venv
+  The staged root $SIFT_MCPS_ROOT exists but has no .venv. Run ./install.sh
+  (or set SIFT_MCPS_INSTALL_ROOT to the staged tree that has a built .venv)."
+fi
+
 PYTHON_BIN="$SYSTEM_PYTHON"
 # AD2 live fix: SIFT_HOME is the sift-service-owned state dir
 # (/var/lib/sift/.sift after the HR3 hardening) which the OPERATOR running this
@@ -101,11 +136,16 @@ declare -a PAYLOAD_ARGS=()
 # its OWN process environment at backend startup, so no secret value is ever
 # written to ~/.sift/addon-register/<name>.json or stored in app.mcp_backends.
 declare -a PAYLOAD_ENV_REFS=()
+# B-MVP-051: per-backend "operator must set this gateway env var first" notes for
+# env-refs we KNOW the gateway needs a value for (else _resolve_env_ref RAISES at
+# backend instantiation). Printed by print_portal_form_block; reset per backend.
+declare -a PAYLOAD_ENV_NOTES=()
 
 reset_payload() {
   PAYLOAD_NAME="" PAYLOAD_TYPE="stdio" PAYLOAD_COMMAND="" PAYLOAD_URL="" PAYLOAD_MANIFEST=""
   PAYLOAD_ARGS=()
   PAYLOAD_ENV_REFS=()
+  PAYLOAD_ENV_NOTES=()
 }
 
 stdio_args() {
@@ -307,6 +347,71 @@ print(out)
 PY
 }
 
+print_portal_form_block() {
+  # B-MVP-050: print a labeled, copy-paste-ready block that maps each discrete
+  # portal "REGISTER NEW BACKEND" form field, derived from the SAME PAYLOAD_*
+  # globals that build the JSON so the two can never drift. Includes explicit
+  # "(none)" / "(leave empty)" for empty fields so the operator never guesses.
+  hr
+  log "Portal 'REGISTER NEW BACKEND' form — copy each field exactly:"
+  printf '  Transport type : %s\n' "$PAYLOAD_TYPE"
+  printf '  Backend name   : %s\n' "$PAYLOAD_NAME"
+  if [[ -n "$PAYLOAD_MANIFEST" ]]; then
+    printf '  Manifest path  : %s\n' "$PAYLOAD_MANIFEST"
+  else
+    printf '  Manifest path  : (leave empty)\n'
+  fi
+  if [[ -n "$PAYLOAD_COMMAND" ]]; then
+    printf '  Command        : %s\n' "$PAYLOAD_COMMAND"
+  else
+    printf '  Command        : (leave empty)\n'
+  fi
+  if [[ -n "$PAYLOAD_URL" ]]; then
+    printf '  URL            : %s\n' "$PAYLOAD_URL"
+  fi
+  # Arguments: one per line so the operator can paste straight into the form's
+  # arg list (or a JSON array). Explicit "(none)" when there are no args — the
+  # console-script command shape carries zero args.
+  if [[ ${#PAYLOAD_ARGS[@]} -gt 0 ]]; then
+    printf '  Arguments      : (one per line)\n'
+    local a
+    for a in "${PAYLOAD_ARGS[@]}"; do printf '      %s\n' "$a"; done
+    printf '    JSON array   : [%s]\n' "$(_json_array_inline "${PAYLOAD_ARGS[@]}")"
+  else
+    printf '  Arguments      : (none)\n'
+  fi
+  # Env var references: backend env var <- gateway env var. Explicit "(leave
+  # empty)" when there are none — the gateway resolves each gateway-side name
+  # from its OWN process env at startup; no secret value is ever entered here.
+  if [[ ${#PAYLOAD_ENV_REFS[@]} -gt 0 ]]; then
+    printf '  Env refs (backend env var <- gateway env var):\n'
+    local kv child gw
+    for kv in "${PAYLOAD_ENV_REFS[@]}"; do
+      child="${kv%%=*}"; gw="${kv#*=}"
+      printf '      %s  <-  %s\n' "$child" "$gw"
+    done
+  else
+    printf '  Env refs       : (leave empty)\n'
+  fi
+  # B-MVP-051: surface any "you must set this gateway env var first" notes right
+  # next to the form so the operator does not register a backend that will RAISE.
+  if [[ ${#PAYLOAD_ENV_NOTES[@]} -gt 0 ]]; then
+    local note
+    for note in "${PAYLOAD_ENV_NOTES[@]}"; do
+      warn "$note"
+    done
+  fi
+}
+
+_json_array_inline() {
+  # Emit comma-separated JSON string literals for the given args (no brackets),
+  # built by python so quoting/escaping is correct for the form's JSON-array mode.
+  "$SYSTEM_PYTHON" - "$@" <<'PY'
+import json, sys
+print(", ".join(json.dumps(a) for a in sys.argv[1:]))
+PY
+}
+
 echo_vars_and_emit() {
   # Echo every variable, write the payload, print next-step hints.
   hr
@@ -326,6 +431,9 @@ echo_vars_and_emit() {
   [[ -n "$PAYLOAD_MANIFEST" ]] && printf '  manifest    : %s\n' "$PAYLOAD_MANIFEST"
   local out
   out="$(write_payload)"
+  # B-MVP-050: also print the discrete portal-form field mapping (derived from the
+  # same PAYLOAD_* globals as the JSON above).
+  print_portal_form_block
   hr
   log "Register payload written: $out"
   log "Integrate it through the ONE generic contract door (NOT this script):"
@@ -349,7 +457,7 @@ echo_vars_and_emit() {
 setup_rag() {
   reset_payload
   PAYLOAD_NAME="forensic-rag-mcp"
-  PAYLOAD_MANIFEST="$REPO_DIR/packages/forensic-rag-mcp/sift-backend.json"
+  PAYLOAD_MANIFEST="$SIFT_MCPS_ROOT/packages/forensic-rag-mcp/sift-backend.json"
   log "== forensic-rag-mcp (reference backend, provides: reference; pgvector knowledge) =="
   print_manifest_summary "$PAYLOAD_MANIFEST" || true
   warn "This backend reads the shared knowledge corpus from Supabase pgvector."
@@ -374,37 +482,66 @@ setup_rag() {
 setup_wintriage() {
   reset_payload
   PAYLOAD_NAME="windows-triage-mcp"
-  PAYLOAD_MANIFEST="$REPO_DIR/packages/windows-triage-mcp/sift-backend.json"
+  PAYLOAD_MANIFEST="$SIFT_MCPS_ROOT/packages/windows-triage-mcp/sift-backend.json"
   log "== windows-triage-mcp (reference backend, provides: reference, baseline) =="
   print_manifest_summary "$PAYLOAD_MANIFEST" || true
   warn "Query-only OFFLINE Windows baseline validation (known-good/known-bad:"
   warn "LOLBAS, LOLDrivers, HijackLibs, process expectations). UNKNOWN is neutral."
-  SIFT_WINDOWS_TRIAGE_DB_DIR="$(ask 'Triage baseline DB dir' "${SIFT_WINDOWS_TRIAGE_DB_DIR:-$SIFT_HOME/windows-triage-db}")"
+  # B-MVP-051: the add-on's OWN config default (windows_triage_mcp/config.py: when
+  # neither SIFT_WINDOWS_TRIAGE_DB_DIR nor WT_DATA_DIR is set) is
+  # /var/lib/sift/windows-triage. If the operator keeps THIS dir, the running
+  # backend resolves it WITHOUT any gateway env var — so we emit NO env-ref and
+  # the payload registers out of the box. If they pick a different dir, we keep
+  # the env-ref but tell them to set the gateway env var first (else the gateway
+  # _resolve_env_ref RAISES at backend instantiation).
+  local wt_config_default="/var/lib/sift/windows-triage"
+  SIFT_WINDOWS_TRIAGE_DB_DIR="$(ask 'Triage baseline DB dir' "${SIFT_WINDOWS_TRIAGE_DB_DIR:-$wt_config_default}")"
   if ask_yes "Provision prerequisites (download baseline databases via the add-on's own downloader)?"; then
     SIFT_WINDOWS_TRIAGE_DB_DIR="$SIFT_WINDOWS_TRIAGE_DB_DIR" \
       "$UV_BIN" run --project "$SIFT_MCPS_ROOT" --extra windows-triage \
       python -m windows_triage_mcp.scripts.download_databases \
       || warn "Baseline DB download incomplete — backend may start degraded (UNKNOWN-only)."
   fi
-  warn "SIFT_WINDOWS_TRIAGE_DB_DIR is resolved from the gateway's own environment;"
-  warn "set it there before registering. No raw value is stored in the payload."
   # B-MVP-034: the native installer does NOT sync the windows-triage extra, so
   # this stages it into the runtime venv and registers the sift-service-
   # executable console script (.venv/bin/windows-triage-mcp) — the launch shape
   # the LV1 live test proved, matching the seeded opensearch/rag backends.
   stage_runtime_command "windows-triage-mcp" "windows-triage"
-  # env_refs only (CHILD=GATEWAY name->name); the gateway resolves the DB dir from
-  # its own process env at backend startup. No raw path is stored in the payload.
-  PAYLOAD_ENV_REFS=(
-    "SIFT_WINDOWS_TRIAGE_DB_DIR=SIFT_WINDOWS_TRIAGE_DB_DIR"
-  )
+  # B-MVP-051: only emit the env-ref when the chosen dir is NOT the add-on config
+  # default. At the default, the running backend finds its DBs without any gateway
+  # env var, so an env-ref would only make the gateway RAISE (it exports no such
+  # var). When it IS overridden, keep the env-ref AND queue the operator note.
+  if [[ "$SIFT_WINDOWS_TRIAGE_DB_DIR" == "$wt_config_default" ]]; then
+    log "DB dir is the add-on config default ($wt_config_default) — emitting NO"
+    log "env-ref; the backend resolves its DBs without any gateway env var, so the"
+    log "payload registers out of the box."
+    PAYLOAD_ENV_REFS=()
+  else
+    warn "DB dir differs from the add-on config default ($wt_config_default)."
+    warn "SIFT_WINDOWS_TRIAGE_DB_DIR is resolved from the GATEWAY's own environment;"
+    warn "you MUST set it there before registering or the gateway will refuse to"
+    warn "instantiate the backend (_resolve_env_ref raises on a missing env var)."
+    # env_refs only (CHILD=GATEWAY name->name); no raw path is stored in the payload.
+    PAYLOAD_ENV_REFS=(
+      "SIFT_WINDOWS_TRIAGE_DB_DIR=SIFT_WINDOWS_TRIAGE_DB_DIR"
+    )
+    # The sift-gateway.service unit reads EnvironmentFile=-${SIFT_HOME}/*.env
+    # (SIFT_HOME=/var/lib/sift/.sift, sift-service-owned), e.g. opensearch.env /
+    # forensic-knowledge.env. Add the var to such a file the unit reads, then
+    # restart. (Adding a NEW EnvironmentFile line is a unit edit — out of scope
+    # for this helper; reuse one the unit already references, or have the
+    # installer wire one.)
+    PAYLOAD_ENV_NOTES+=(
+      "Before registering: add  SIFT_WINDOWS_TRIAGE_DB_DIR=$SIFT_WINDOWS_TRIAGE_DB_DIR  to a gateway EnvironmentFile the sift-gateway.service unit reads (an EnvironmentFile=-${SIFT_HOME}/*.env entry, sift-service-owned), then: sudo systemctl restart sift-gateway.service"
+    )
+  fi
   echo_vars_and_emit
 }
 
 setup_opensearch() {
   reset_payload
   PAYLOAD_NAME="opensearch-mcp"
-  PAYLOAD_MANIFEST="$REPO_DIR/packages/opensearch-mcp/sift-backend.json"
+  PAYLOAD_MANIFEST="$SIFT_MCPS_ROOT/packages/opensearch-mcp/sift-backend.json"
   log "== opensearch-mcp (reference backend, provides: search, ingest, enrichment) =="
   print_manifest_summary "$PAYLOAD_MANIFEST" || true
   if ! command -v docker >/dev/null 2>&1; then
@@ -435,7 +572,7 @@ setup_opensearch() {
 setup_opencti() {
   reset_payload
   PAYLOAD_NAME="opencti-mcp"
-  PAYLOAD_MANIFEST="$REPO_DIR/packages/opencti-mcp/sift-backend.json"
+  PAYLOAD_MANIFEST="$SIFT_MCPS_ROOT/packages/opencti-mcp/sift-backend.json"
   log "== opencti-mcp (reference backend, provides: reference, threat-intel) =="
   print_manifest_summary "$PAYLOAD_MANIFEST" || true
   if ! command -v docker >/dev/null 2>&1; then
