@@ -1,22 +1,26 @@
 # Task Batches
 
-Status: operator-readiness, hardening, add-on, and documentation tracker.
-Last updated: 2026-06-14.
+Status: historical batch index and final-proof bridge. Linear is the active
+execution tracker.
+Last updated: 2026-06-16.
 
-This is the primary execution tracker. `docs/migration/Session-Notes.md` holds the session-level
-status log and backlog decisions. Older implementation notes are in git history, not in this file.
+Linear project `ProtocolSIFTGateway` is the active execution tracker. This file
+remains repo-versioned historical context for completed migration-era batches,
+backlog IDs, and acceptance/proof references. It is not the live queue and should
+not be used as the default session note stream.
 
 ## Rules
 
-- Read `AGENTS.md`, this file, and the latest `docs/migration/Session-Notes.md` entry before work.
-- Runner sessions start with **RUN-3** sections if the task touches `run_command`.
-- Keep entries compact and context-frugal: only in-session essentials, acceptance criteria, and required
-  owner actions.
+- Read the assigned Linear issue and the Linear `Protocol SIFT Gateway Operating Model` document
+  before work. Use this file only when the issue needs historical batch context.
+- `run_command` hardening is landed. For new `run_command` changes, treat current code/tests and
+  issue acceptance as authority. Archived RUN-3 plans/specs are background only when explicitly
+  linked by the issue or operator.
+- Keep entries compact and context-frugal: durable invariants, acceptance criteria, and required owner actions only.
 - `docs/regenerate/**` is reference seed only; treat it as stale until revalidated by active batches.
-- For `run_command` hardening, treat `docs/research/run_command-FINAL-SPEC.md` as authoritative.
-  Do **targeted extraction only** (specific sections), not full-file dump.
 - Keep batch planning in this file only; do not add extra migration runbooks.
 - Keep batch checkboxes unchecked until acceptance checks pass.
+- Use Linear issue comments for working session notes, blockers, branch names, and handoffs.
 
 ## Current Baseline
 
@@ -31,25 +35,16 @@ Live baseline (from prior sessions): clone-entry `./install.sh` stages into `/op
 Completed waves (landed): RUN-3 (R3-CEIL/FLOOR/AA/GATE), Discovery/operators (OR1-OR4),
 Hardening (HR1-HR3), Add-on (AD1-AD2), PT1, TLS1, DB1, CL1, CL3a/b, UN1, RG1.
 
-Remaining sequence (operator decision 2026-06-14):
+Current Linear lanes (seeded 2026-06-16):
 
-1. **Optimizations first** — run_command / agent execution optimizations.
-   - DONE (B-MVP-028): tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side
-     PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`.
-   - DONE (B-MVP-029, 2026-06-15): on-wire response-efficiency + schema + path-leak fixes landed +
-     live-proven (`5233cd8`/`ec9b8d6`/`7977fa7`): receipt dedup, opensearch_search autosave + per-hit
-     hoist, core `outputSchema`, ingest-poll wording, F-MVP-2 absolute-path leaks closed (SECURITY),
-     `_legacy_*`→`_impl_*` rename. Autosave live-activation needed a stale DB-registered opensearch
-     manifest refresh (case_dir); manifest-drift auto-refresh → B-MVP-032. Deferred: ingest DB-job-row
-     injection (B-MVP-027).
-2. **Portal RAG** — BATCH-PT2 (knowledge-plane document management).
-3. **Supabase default-key research** — BATCH-SB1, reframed: research a lighter remediation for the
-   default CLI demo keys (rotate/replace post-install) that does NOT require a full self-managed
-   compose. Full compose is the fallback, not the first move.
-4. **Repo rename at the end** — BATCH-CL2 (`ProtocolSiftGateway` + add_ons layout).
-5. **Legacy removal sweep** — resolve B-MVP-023: remove `legacy_portal_session_enabled` fallback and
-   delete any remaining legacy code paths/tests (fold under CL-cleanup discipline).
-6. **End-to-end LAST** — BATCH-LV1 is the final closeout run, after the above. Do not pull it forward.
+1. **PT2 Portal RAG policy** - `XYE-6` / B-MVP-006.
+2. **CL2 repo rename** - `XYE-7` / B-MVP-002.
+3. **Rocba DFIR investigation** - `XYE-8`.
+4. **Ops verification and polish** - `XYE-9`, `XYE-10`, `XYE-11`.
+
+Historical completed sequence is preserved below for acceptance context. If active status in this file
+conflicts with Linear, Linear wins for queue state; repo invariants and validation rules still win for
+safety.
 
 Baseline constraint (operator): the SIFT VM ships a fixed default kernel; kernel upgrades are NOT
 encouraged. Every Floor control must hold at that baseline (Landlock ABI v4). ioctl-scoping (ABI v5)
@@ -205,9 +200,10 @@ Acceptance:
 
 Note for agent behavior:
 
-- Use `docs/RUN3-run_command-hardening-BUILD-PLAN.md` for sequencing (`WAVE 1/WAVE 2`) and status checks.
-- Use targeted extracts from `docs/research/run_command-FINAL-SPEC.md` for exact policy constants.
-- Do not load the entire FINAL-SPEC file in one session context.
+- This RUN-3 section is historical acceptance context.
+- Do not assume the archived RUN-3 build plan or final spec exists in the repo.
+- For future `run_command` work, start from the Linear issue, current code, targeted tests, and any
+  operator-linked archive path.
 
 ## BATCH-OR0 - Rebase docs operating model around operator-hardening track
 

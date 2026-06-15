@@ -1,17 +1,67 @@
 # Session Notes
 
-Status: sprint log and decision register.
-Last updated: 2026-06-15.
+Status: historical final-proof and decision ledger. Linear issue comments are the active session notes.
+Last updated: 2026-06-16.
 
 ## Format Rules
 
 - Latest change entry stays at the top of `Current Change Log`.
 - Use `Status: DONE`, `Status: IN_PROGRESS`, or `Status: BLOCKED`.
-- Keep forks/backlog/needs-input in the single table below.
+- Keep active backlog/needs-input in Linear. Keep only durable mirrors in the table below.
 - Use IDs beginning with `B-MVP-` for backlog/needs-input.
 - Do not create extra migration runbooks.
+- Record working notes, branch names, blockers, and handoffs on Linear issues.
 
 ## Current Change Log
+
+### 2026-06-16 - Static overview and Linear-only active pipeline cleanup
+
+Status: DONE
+
+Changed:
+- Added root `README.md` as the stable product overview for Protocol SIFT Gateway: agentic DFIR
+  Gateway purpose, case/evidence workflow, `run_command`, OpenSearch, RAG, auditability, custody,
+  reporting, and add-on extensibility.
+- Replaced the generated `docs/new-docs/SYSTEM_OVERVIEW.md` with a compact system overview and
+  explicit pointer to Linear for active tasks, decisions, forks, and handoffs.
+- Updated `AGENTS.md`, `CLAUDE.md`, and this historical batch/notes bridge to remove default startup
+  dependencies on archived RUN-3/spec material and to route active work through Linear issues.
+- Removed the VM password from auto-loaded repo instruction files; credentials remain operator-held
+  and must not be copied into Linear, commits, or docs.
+
+Validation:
+- `python3 scripts/validate_docs.py`
+- `python3 scripts/validate_migration_docs.py`
+- `git diff --check`
+
+Next:
+- Keep new session progress on the assigned Linear issue.
+- Link archived local plans/specs from Linear only when a future issue needs targeted extraction.
+
+### 2026-06-16 - Linear-first operating model seeded
+
+Status: DONE
+
+Changed:
+- Linear project `ProtocolSIFTGateway` is now the active operating pipeline for task state, agent
+  handoffs, issue comments, decisions, and assignments.
+- Created the Linear document `Protocol SIFT Gateway Operating Model` and seeded milestones for:
+  Linear operating model, PT2 Portal RAG policy, CL2 rename, Rocba DFIR investigation, and ops/polish.
+- Seeded current Linear issues: `XYE-5` operating model rollout, `XYE-6` B-MVP-006 RAG policy,
+  `XYE-7` B-MVP-002 repo rename, `XYE-8` Rocba DFIR, `XYE-9` AppArmor/migration live verification,
+  `XYE-10` case-index-prefix polish, and `XYE-11` hostname-source label polish.
+- Updated `AGENTS.md`, `CLAUDE.md`, and `task-batches.md` so agents entering from a repo checkout
+  start from Linear and use repo docs as the compact invariant/proof bridge.
+
+Validation:
+- `python3 scripts/validate_docs.py`
+- `python3 scripts/validate_migration_docs.py`
+- `git diff --check`
+
+Next:
+- Use Linear issue comments for session notes and handoffs.
+- Start from `XYE-8` for the Rocba DFIR investigation, `XYE-6` for PT2 policy, or `XYE-7` only when
+  the operator approves rename timing.
 
 ### 2026-06-16 - B-MVP-052 RESOLVED (option c): removed the unused deprecated_aliases add-on mechanism
 
@@ -845,8 +895,9 @@ Next:
 Status: DONE
 
 Changed:
-- Canonical spec set for `run_command` hardening is `docs/research/run_command-FINAL-SPEC.md`.
-- Canonical execution model for implementation is `docs/RUN3-run_command-hardening-BUILD-PLAN.md` (4 batches in Wave-1/Wave-2 flow).
+- At the time, the canonical spec/build-plan set lived under repo `docs/` for RUN-3.
+  Those heavy references have since been archived out of the active repo context; use only an
+  operator-linked archive path and targeted extraction if a future issue needs them.
 
 Validation:
 - `docs/migration/Session-Notes.md` and `docs/migration/task-batches.md` updated as the two active planning docs.
@@ -877,8 +928,8 @@ Next:
 
 | ID | Type | Status | Decision / Input Needed | Owner Batch |
 | --- | --- | --- | --- | --- |
-| B-MVP-002 | Backlog | OPEN | Rename repo to `ProtocolSiftGateway` is decided at architecture level; CL2 pending operator/infra timing. | BATCH-CL2 |
-| B-MVP-006 | Backlog | OPEN | Confirm portal knowledge-document policy for shared/reference-only behavior in PT2. | BATCH-PT2 |
+| B-MVP-002 | Backlog | OPEN | Active Linear issue: `XYE-7`. Rename repo to `ProtocolSiftGateway` is decided at architecture level; CL2 pending operator/infra timing. | BATCH-CL2 |
+| B-MVP-006 | Backlog | OPEN | Active Linear issue: `XYE-6`. Confirm portal knowledge-document policy for shared/reference-only behavior in PT2. | BATCH-PT2 |
 | B-MVP-012 | Backlog | DONE | 2026-06-15: resolved at INSTALL time (operator: fresh installs are cheap, 2 images). NOT a self-managed compose. `supabase/config.toml [auth] jwt_secret = env(SUPABASE_AUTH_JWT_SECRET)` + `setup-supabase.sh ensure_jwt_secret()` generates a per-install 256-bit secret, persists to gitignored `supabase/.env` (CLI auto-loads on every start), and a `capture_credentials` guard DIES if `supabase status` still emits the known demo anon/service_role keys → default-key install impossible. Mechanism verified vs CLI source @v2.105.0; host-verified (gen/persist/reuse/demo-reject). VM key-minting propagation proof folds into B-MVP-019/LV1. VM-PROVEN 2026-06-15 (LV1): public demo `service_role` JWT -> 401, our `service_role` -> 200, emitted keys byte-stable on `setup-supabase` re-run. | BATCH-SB1 |
 | B-MVP-019 | Backlog | DONE | 2026-06-15 (LV1, live VM): PROVEN end-to-end. `setup-addon.sh` run FROM the staged `/opt/sift-mcps` emits an `env_refs`-only payload with `manifest_path`=`/opt/sift-mcps/packages/windows-triage-mcp/sift-backend.json` (REPO_DIR derives from script location, so running from the operator clone would emit the wrong path). The registered `app.mcp_backends` row carries the staged `/opt` `manifest_path` (sha `0601cd54...`); after register+restart the 6 `wintriage_*` tools surface (`/health` `tools_count` 18->24). AD2 held (only seeded after explicit operator re-auth'd register). | BATCH-LV1 |
 | B-MVP-023 | Backlog | DONE | 2026-06-15 (`44b120d`, merge `620dceb`): legacy v1 `/dashboard` mount + `create_dashboard_app`/`serve_index`/v1 static, the `legacy_portal_session_enabled` flag end-to-end, and the `sift_session` cookie + examiner Bearer (`_verify_bearer`) legacy auth branches REMOVED (−3361 lines). Kept shared `_dashboard_api_routes`, `generate_jwt`/`verify_jwt`, logout cookie-clear; v2 `/portal` intact. Auth collapses to Supabase-envelope→401, fail-closed. `/security-review` CLEAN (no bypass). case-dashboard 357 + gateway 519 green. Plan: `docs/B-MVP-023-legacy-dashboard-removal-impact.md`. | BATCH-CL2 |
