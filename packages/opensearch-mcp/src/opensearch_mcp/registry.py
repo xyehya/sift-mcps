@@ -29,6 +29,7 @@ from fastmcp.tools import FunctionTool, ToolResult
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sift_common.instructions import OPENSEARCH as _INSTRUCTIONS
+from sift_common.mcp_schema import output_schema
 
 from .contracts import ErrorCode, ResultMeta, ToolDef, ToolError
 
@@ -2404,45 +2405,14 @@ def register_all(mcp: FastMCP) -> None:
 
 
 def _output_schema(out_model: type[BaseModel]) -> dict[str, Any]:
-    """Advertised output schema: the success model OR a structured ToolError.
+    """Advertised output schema: the success model OR a structured ``ToolError``.
 
-    Every tool can return ``ToolError`` in ``structured_content`` on the error
-    path, so the declared schema must admit both shapes; a schema-validating
-    client (and the D27b gateway response-guard) otherwise rejects error
-    results as schema-violating.
-
-    The root carries ``"type": "object"`` because the MCP spec requires an
-    ``outputSchema`` to be an object-typed JSON Schema, and strict clients (e.g.
-    the Claude Code MCP loader) reject a bare ``anyOf`` whose root ``type`` is
-    absent with ``Invalid input: expected "object"``. Both ``anyOf`` branches are
-    pydantic models (objects), so the added root type is always satisfied.
-
-    Each branch's own ``$defs`` are hoisted to the combined document root and the
-    branch bodies are referenced via ``#/$defs/...``. A bare ``anyOf`` of two
-    ``model_json_schema()`` outputs leaves each branch's ``$defs`` nested, so a
-    nested ``$ref`` such as ``#/$defs/IndexInfo`` (which resolves against the
-    document root) dangles -> the structured-output validator raises
-    ``PointerToNowhere`` the moment such a tool actually returns. Hoisting keeps
-    every pointer resolvable at the root.
+    Thin wrapper over the shared SIFT add-on standard
+    :func:`sift_common.mcp_schema.output_schema`; see that module for the full
+    rationale (root ``type``, ``$defs`` hoisting, ``PointerToNowhere`` avoidance,
+    and the strict-client / B-MVP-038 gateway concerns).
     """
-    success = out_model.model_json_schema()
-    error = ToolError.model_json_schema()
-    defs: dict[str, Any] = {}
-    defs.update(success.pop("$defs", None) or {})
-    defs.update(error.pop("$defs", None) or {})
-    # Branch bodies live in $defs too (prefixed names cannot collide with
-    # pydantic's PascalCase model names) so the anyOf is a pair of resolvable
-    # refs and every nested model ref shares the same root $defs namespace.
-    defs["__SuccessResult"] = success
-    defs["__ToolErrorResult"] = error
-    return {
-        "type": "object",
-        "$defs": defs,
-        "anyOf": [
-            {"$ref": "#/$defs/__SuccessResult"},
-            {"$ref": "#/$defs/__ToolErrorResult"},
-        ],
-    }
+    return output_schema(out_model, ToolError)
 
 
 def _function_tool(

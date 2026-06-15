@@ -103,9 +103,28 @@ class TestResolveIndexB1:
         assert kwargs["index"] == "case-case-rocba-case-06132304-*"
 
 
+def _served_tools() -> dict:
+    """The tools actually SERVED over stdio: ``registry.create_server()`` (what
+    ``server.py:main`` runs and the Gateway aggregates).
+
+    B-MVP-041: ``opensearch_mcp.server`` no longer carries its own FastMCP tool
+    surface — the unserved ``server = FastMCP(...)`` shadow and its ``@server.tool``
+    decorators were removed (they masked the B-MVP-036 audit). The registry's
+    ``create_server`` is the single, layer-correct surface to assert on; the
+    ``server`` module now holds only the plain implementation-engine functions the
+    registry wrappers call.
+    """
+    import asyncio as _asyncio
+
+    from opensearch_mcp.registry import create_server
+
+    tools = _asyncio.run(create_server().list_tools())
+    return {t.name: t for t in tools}
+
+
 class TestToolRegistry:
     def test_ingest_format_variants_are_consolidated_under_idx_ingest(self):
-        tools = srv.server._tool_manager._tools
+        tools = _served_tools()
 
         assert "opensearch_ingest" in tools
         for old_name in (
@@ -116,7 +135,7 @@ class TestToolRegistry:
         ):
             assert old_name not in tools
 
-        schema = tools["opensearch_ingest"].fn_metadata.arg_model.model_json_schema()
+        schema = tools["opensearch_ingest"].parameters
         assert "format" in schema["properties"]
 
     def test_query_and_status_tools_are_marked_read_only(self):
@@ -132,7 +151,7 @@ class TestToolRegistry:
             "opensearch_case_summary",
             "opensearch_list_detections",
         ]
-        tools = srv.server._tool_manager._tools
+        tools = _served_tools()
 
         for name in read_only_tools:
             assert getattr(tools[name].annotations, "readOnlyHint", None) is True
@@ -144,7 +163,7 @@ class TestToolRegistry:
         setup now runs via ensure_winlog_pipeline at server first-connection. Guard
         that it does not reappear under either the old or namespaced name.
         """
-        tools = srv.server._tool_manager._tools
+        tools = _served_tools()
         assert "idx_install_pipelines" not in tools
         assert "opensearch_install_pipelines" not in tools
         assert not hasattr(srv, "idx_install_pipelines")
