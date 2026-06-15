@@ -843,16 +843,24 @@ def _file_owner_name(path: Path) -> str | None:
         return None
 
 
-def _harden_via_helper(helper: str, abs_path: Path, service_user: str) -> None:
+def _harden_via_helper(
+    helper: str, case_dir: Path, abs_path: Path, service_user: str
+) -> None:
     sudo_path = shutil.which("sudo") or "/usr/bin/sudo"
     if not Path(sudo_path).exists():
         raise EvidenceHardeningError(
             "evidence hardening helper requires sudo, but sudo was not found"
         )
+    # SECURITY (B-MVP-048 review): pass the canonical case dir so the root helper
+    # can anchor --path strictly under <case-dir>/evidence/ rather than trusting
+    # an unanchored "/evidence/" substring. The helper re-resolves and
+    # re-validates independently; the gateway-side resolution is not the only guard.
     cmd = [
         sudo_path,
         "-n",
         helper,
+        "--case-dir",
+        str(case_dir.resolve()),
         "--service-user",
         service_user,
         "--path",
@@ -910,7 +918,7 @@ def harden_sealed_evidence(
         abs_path = _resolve_sealed_target(case_dir, rel_path)
 
         if helper:
-            _harden_via_helper(helper, abs_path, service_user)
+            _harden_via_helper(helper, case_dir, abs_path, service_user)
         else:
             # No privileged helper: set the immutable flag directly. Ownership
             # can only change here if the process is already privileged.

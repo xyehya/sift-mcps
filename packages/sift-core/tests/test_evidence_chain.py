@@ -751,8 +751,8 @@ class TestHardenSealedEvidence:
         monkeypatch.setattr(ec, "_harden_helper_path", lambda: "/usr/local/sbin/sift-seal-evidence")
         used = {}
 
-        def fake_helper(helper, abs_path, service_user):
-            used["called"] = (helper, str(abs_path), service_user)
+        def fake_helper(helper, case_dir, abs_path, service_user):
+            used["called"] = (helper, str(case_dir), str(abs_path), service_user)
 
         monkeypatch.setattr(ec, "_harden_via_helper", fake_helper)
         # After the (mocked) helper runs, the file appears owned + immutable.
@@ -764,7 +764,10 @@ class TestHardenSealedEvidence:
         )
 
         results = ec.harden_sealed_evidence(initialized, ["evidence/disk.E01"])
-        assert used["called"][2] == "sift-service"
+        # B-MVP-048 review: the case dir is passed so the helper can anchor the
+        # path under <case-dir>/evidence/ (not a loose "/evidence/" substring).
+        assert used["called"][1] == str(initialized.resolve())
+        assert used["called"][3] == "sift-service"
         assert results[0]["immutable"] is True
 
     def test_fails_closed_when_immutable_cannot_be_set(self, initialized, monkeypatch):
