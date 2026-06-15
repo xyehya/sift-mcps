@@ -61,6 +61,13 @@ export const postChainRetire = (body) => apiPost('/api/evidence/chain/retire', b
 // Re-acquire re-hashes the mounted replacement bytes synchronously (large
 // disk/memory images) — long timeout like seal.
 export const postChainReacquire = (body) => apiPost('/api/evidence/chain/reacquire', body, REAUTH_HASH_OPTS)
+// Unseal (B-MVP-048) clears the immutable flag so the operator can replace /
+// re-image / add evidence; the case becomes non-sealed and agent tools are
+// blocked until re-sealed. Re-authenticated; no full-file hashing, so the
+// normal re-auth opts (not the long-hash timeout) apply.
+export const postChainUnseal = (body) => apiPost('/api/evidence/chain/unseal', body, REAUTH_OPTS)
+export const unsealEvidence = (path, reason, password) =>
+  postChainUnseal({ path, reason, password })
 
 // --- Response guard ---
 export const getResponseGuardStatus = () => apiFetch('/api/response-guard/status')
