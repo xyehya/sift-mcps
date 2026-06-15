@@ -117,6 +117,17 @@ def service(monkeypatch, tmp_path):
     svc = EvidenceAuthorityService("postgresql://service@localhost/sift")
     monkeypatch.setattr(svc, "_case_artifact_path", lambda case_id: tmp_path)
     (tmp_path / "evidence").mkdir()
+    # reacquire now re-hardens the re-imaged bytes (B-MVP-048). Mock the FS
+    # posture call so the no-DB test does not need chattr/CAP_LINUX_IMMUTABLE.
+    harden_calls: list = []
+
+    def fake_harden(self, case_id, file_specs):
+        harden_calls.append((case_id, file_specs))
+
+    monkeypatch.setattr(
+        EvidenceAuthorityService, "_harden_sealed_files", fake_harden
+    )
+    db.harden_calls = harden_calls
     return svc, db, tmp_path
 
 
@@ -151,6 +162,11 @@ class TestReacquire:
         assert call[3] == len(content)
         assert call[6] == "Original acquisition corrupted; re-imaged from source"
         assert call[7] == "reauth-1"
+        # B-MVP-048: the re-acquired (re-sealed) item is re-hardened on disk so it
+        # ends immutable again rather than left operator-mutable.
+        assert db.harden_calls, "expected reacquire to re-harden the bytes"
+        _case, specs = db.harden_calls[-1]
+        assert specs == [{"path": "evidence/Rocba-Memory.raw"}]
 
     def test_reacquire_missing_file_raises_retire_hint(self, service):
         svc, db, tmp_path = service
