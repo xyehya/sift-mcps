@@ -112,6 +112,10 @@ stdio_args() {
   # stdio_args <entry-script> [extra ...] -> fills PAYLOAD_ARGS with the
   # standard uv invocation. Extras let external reference add-ons stay out of
   # the native installer while remaining runnable through the same checkout.
+  # NOTE: this is the OPERATOR-uv fallback shape used by stage_runtime_command
+  # when the staged console script cannot be produced (e.g. offline sync).
+  # The gateway runs backends as the sift-service user, which CANNOT execute the
+  # operator's ~/.local/bin/uv, so a console-script command is always preferred.
   local entry_script="$1"
   shift || true
   PAYLOAD_ARGS=(run --project "$SIFT_MCPS_ROOT")
@@ -121,6 +125,76 @@ stdio_args() {
   done
   PAYLOAD_ARGS+=(--python "$PYTHON_BIN"
                 --no-managed-python --no-python-downloads "$entry_script")
+}
+
+stage_runtime_command() {
+  # stage_runtime_command <console-script> <stdio-entry-script> [extra ...]
+  #
+  # B-MVP-034: the gateway launches a registered stdio backend AS the
+  # sift-service system user, which cannot execute the operator's
+  # ~/.local/bin/uv. So the register payload's `command` must be a backend the
+  # sift-service user can exec directly: the staged-runtime console script at
+  #   $SIFT_MCPS_ROOT/.venv/bin/<console-script>
+  # with NO args — exactly the shape install.sh::_seed_one_addon_backend writes
+  # for the seeded opensearch-mcp / forensic-rag-mcp backends.
+  #
+  # The staged runtime tree (/opt/sift-mcps) and its .venv are OPERATOR-owned
+  # (stage_repo_to_install_root chowns to the install operator; sync_workspace
+  # builds .venv in place as that operator). So this script — run by the same
+  # operator — can `uv sync` the add-on's extra into that .venv. The native
+  # installer only syncs `--extra full` (core + opensearch + rag), so
+  # opensearch-mcp / rag-mcp console scripts already exist there, while
+  # windows-triage-mcp / opencti-mcp must have their extra synced in here.
+  # `--inexact` keeps the already-installed `full` packages instead of pruning
+  # them, so syncing an add-on extra never tears down the core backends.
+  local console_script="$1" stdio_entry="$2"
+  shift 2 || true
+  local -a extras=("$@")
+  local venv_bin="$SIFT_MCPS_ROOT/.venv/bin"
+  local console_path="$venv_bin/$console_script"
+
+  # Sync the add-on's extra(s) into the staged runtime venv so the console
+  # script is present and executable by the sift-service user.
+  if [[ ${#extras[@]} -gt 0 ]]; then
+    local -a sync_extra_flags=()
+    local extra
+    for extra in "${extras[@]}"; do
+      sync_extra_flags+=(--extra "$extra")
+    done
+    log "Syncing add-on extra(s) [${extras[*]}] into the staged runtime venv ($venv_bin) so the sift-service user can launch $console_script."
+    if ! UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never \
+        "$UV_BIN" sync --inexact \
+          "${sync_extra_flags[@]}" \
+          --project "$SIFT_MCPS_ROOT" \
+          --python "$PYTHON_BIN" \
+          --no-managed-python --no-python-downloads; then
+      warn "uv sync of extra(s) [${extras[*]}] into $venv_bin failed (offline / network?)."
+    fi
+  fi
+
+  if [[ -x "$console_path" ]]; then
+    # Sift-service-executable launch: matches the seeded opensearch/rag pattern.
+    PAYLOAD_COMMAND="$console_path"
+    PAYLOAD_ARGS=()
+    return 0
+  fi
+
+  # Fallback: the staged console script is not present (e.g. setup-addon run
+  # against a non-staged checkout, or an offline sync failure). Keep the backend
+  # registerable via the operator-uv shape, but make it loud that the gateway's
+  # sift-service user will NOT be able to exec the operator uv — the backend will
+  # start RED until the extra is synced into $venv_bin.
+  local extra_hint="" extra
+  for extra in "${extras[@]}"; do extra_hint+=" --extra $extra"; done
+  warn "Staged console script not found: $console_path"
+  warn "Falling back to operator-uv command ($UV_BIN). The gateway runs backends"
+  warn "as sift-service, which cannot exec the operator's uv — this backend will"
+  warn "start RED. To fix: sync the extra into the staged runtime venv, e.g."
+  warn "  $UV_BIN sync --inexact${extra_hint} --project \"$SIFT_MCPS_ROOT\" --python \"$PYTHON_BIN\" --no-managed-python --no-python-downloads"
+  warn "then re-run this helper, or register with command=$console_path."
+  stdio_args "$stdio_entry" "${extras[@]}"
+  PAYLOAD_COMMAND="$UV_BIN"
+  return 0
 }
 
 print_manifest_summary() {
@@ -241,8 +315,10 @@ setup_rag() {
   warn "no raw DSN is stored in the register payload."
   warn "RAG_MODEL_NAME (query embedding model) is read from the gateway's own"
   warn "environment; set it there (default BAAI/bge-base-en-v1.5) before registering."
-  stdio_args "rag-mcp" "full"
-  PAYLOAD_COMMAND="$UV_BIN"
+  # B-MVP-034: register a sift-service-executable console-script command from the
+  # staged runtime venv (rag-mcp ships in --extra full, already synced by the
+  # native installer), matching install.sh::_seed_one_addon_backend.
+  stage_runtime_command "rag-mcp" "rag-mcp" "full"
   # env_refs only (CHILD=GATEWAY name->name): the gateway resolves both names
   # from its OWN process env at backend startup. No raw DSN or value is stored.
   PAYLOAD_ENV_REFS=(
@@ -269,8 +345,11 @@ setup_wintriage() {
   fi
   warn "SIFT_WINDOWS_TRIAGE_DB_DIR is resolved from the gateway's own environment;"
   warn "set it there before registering. No raw value is stored in the payload."
-  stdio_args "windows-triage-mcp" "windows-triage"
-  PAYLOAD_COMMAND="$UV_BIN"
+  # B-MVP-034: the native installer does NOT sync the windows-triage extra, so
+  # this stages it into the runtime venv and registers the sift-service-
+  # executable console script (.venv/bin/windows-triage-mcp) — the launch shape
+  # the LV1 live test proved, matching the seeded opensearch/rag backends.
+  stage_runtime_command "windows-triage-mcp" "windows-triage-mcp" "windows-triage"
   # env_refs only (CHILD=GATEWAY name->name); the gateway resolves the DB dir from
   # its own process env at backend startup. No raw path is stored in the payload.
   PAYLOAD_ENV_REFS=(
@@ -298,8 +377,10 @@ setup_opensearch() {
   warn "environment (matching install.sh seed_addon_backends). Set them there"
   warn "(e.g. OPENSEARCH_CONFIG=$SIFT_HOME/opensearch.yaml,"
   warn " OPENSEARCH_HOST=http://127.0.0.1:9200) before registering."
-  stdio_args "opensearch-mcp" "standard"
-  PAYLOAD_COMMAND="$UV_BIN"
+  # B-MVP-034: register a sift-service-executable console-script command from the
+  # staged runtime venv (opensearch-mcp ships in --extra standard/full, already
+  # synced by the native installer), matching install.sh::_seed_one_addon_backend.
+  stage_runtime_command "opensearch-mcp" "opensearch-mcp" "standard"
   # env_refs only: name->name, resolved from gateway env. Matches install.sh.
   PAYLOAD_ENV_REFS=(
     "OPENSEARCH_CONFIG=OPENSEARCH_CONFIG"
@@ -326,8 +407,11 @@ setup_opencti() {
   warn "OPENCTI_URL / OPENCTI_TOKEN are resolved by the gateway from its OWN env"
   warn "vars SIFT_OPENCTI_URL / SIFT_OPENCTI_TOKEN at backend startup. Set those"
   warn "in the gateway environment (systemd EnvironmentFile) before registering."
-  stdio_args "opencti-mcp" "opencti"
-  PAYLOAD_COMMAND="$UV_BIN"
+  # B-MVP-034: the native installer does NOT sync the opencti extra, so this
+  # stages it into the runtime venv and registers the sift-service-executable
+  # console script (.venv/bin/opencti-mcp), matching the seeded opensearch/rag
+  # backends rather than the operator's uv.
+  stage_runtime_command "opencti-mcp" "opencti-mcp" "opencti"
   # env_refs only (spec §4.3): CHILD=GATEWAY name->name. The raw token never
   # touches this file or app.mcp_backends; the registry rejects a raw `env` map.
   PAYLOAD_ENV_REFS=(
