@@ -974,11 +974,15 @@ export function EvidenceTab() {
                         </div>
                       </td>
                       <td className="py-2 px-3 text-right whitespace-nowrap">
-                        {/* Unseal/Unlock (B-MVP-048): only for sealed items.
+                        {/* Unseal/Unlock (B-MVP-048): only for items that are
+                            individually sealed (chainStatus.ok = sealed paths).
+                            Must be PER-ITEM, not the case aggregate seal_status —
+                            otherwise unsealing one item (case → non-sealed) would
+                            hide the button on every other still-sealed item.
                             Clears immutability so the operator can replace /
                             re-image / add evidence; blocks agent tools until
                             re-sealed. */}
-                        {(chainStatus?.seal_status || chainStatus?.status) === 'sealed' && (
+                        {(chainStatus?.ok || []).includes(ev.path) && (
                           <button
                             data-testid={`unseal-btn-${ev.path}`}
                             onClick={() => {

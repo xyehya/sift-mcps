@@ -73,8 +73,8 @@ class _FakeDb:
     def __init__(self):
         self.statements: list = []
         self.evidence_id: str | None = "ev-obj-1"
-        # Per-object status AFTER unseal (the RPC flips it to registered/unsealed).
-        self.object_status = "registered"
+        # Per-object status AFTER unseal (the RPC flips it to detected/unsealed).
+        self.object_status = "detected"
         self.object_seal_status = "unsealed"
         # Aggregate head AFTER unseal: case drops to unsealed -> agent gate blocks.
         self.head_seal_status = "unsealed"
@@ -144,7 +144,7 @@ class TestUnseal:
         assert result == {
             "evidence_id": "ev-obj-1",
             "display_path": "evidence/disk.E01",
-            "status": "registered",
+            "status": "detected",
             "seal_status": "unsealed",
             "immutable": False,
         }

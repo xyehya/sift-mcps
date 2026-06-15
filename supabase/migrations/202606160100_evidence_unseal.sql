@@ -97,12 +97,15 @@ begin
   v_prior_status := v_obj.status;
   v_prior_seal := v_obj.seal_status;
 
-  -- Take the item back to a mutable, non-sealed posture. registered (not
-  -- detected) preserves the operator's name/description/source; seal_status
-  -- 'unsealed' + status 'registered' makes the recompute treat it as pending so
-  -- the case aggregate drops to 'unsealed' and the agent gate blocks until reseal.
+  -- Take the item back to a mutable, non-sealed posture. status 'detected'
+  -- (name/description/source columns are untouched and persist) routes the item
+  -- back into the actionable Seal-Manifest set (app.evidence_recompute_seal_status
+  -- and the portal both treat 'detected' as the re-sealable/pending state), so the
+  -- operator can re-seal it through the normal Seal flow; seal_status 'unsealed' +
+  -- a pending object drops the case aggregate to 'unsealed' so the agent gate
+  -- blocks until reseal.
   update app.evidence_objects
-    set status = 'registered',
+    set status = 'detected',
         seal_status = 'unsealed',
         updated_at = now()
     where id = p_evidence_id;
