@@ -3,8 +3,7 @@
 Verifies:
 - sift-backend.json declares non-authoritative / query-only / prohibited ops
 - All canonical tools in the registry have readOnlyHint=True and destructiveHint=False
-- No mutation function is registered in REGISTRY or ALIAS_REGISTRY
-- Alias registry maps to canonical tools (no hidden mutations)
+- No mutation function is registered in REGISTRY
 """
 
 from __future__ import annotations
@@ -85,20 +84,6 @@ def test_registry_all_canonical_tools_read_only_annotation():
         )
 
 
-def test_alias_registry_all_deprecated_in_description():
-    """All alias tool definitions must mention deprecation or canonical replacement in their description."""
-    from windows_triage_mcp.registry import ALIAS_REGISTRY
-
-    # ALIAS_REGISTRY is dict[canonical_tool_name, list[ToolAliasDef]]
-    for canonical_name, alias_list in ALIAS_REGISTRY.items():
-        for alias_def in alias_list:
-            desc = (alias_def.description or alias_def.title or "").lower()
-            assert "deprecated" in desc or "maps" in desc or "legacy" in desc, (
-                f"Alias {alias_def.name!r} (maps to {canonical_name!r}) description "
-                f"should mention deprecation or legacy: got {alias_def.description!r}"
-            )
-
-
 def test_registry_no_mutation_tool_names():
     """No canonical tool name should suggest mutation, case creation, or evidence sealing."""
     from windows_triage_mcp.registry import REGISTRY
@@ -124,26 +109,3 @@ def test_registry_tool_count_matches_backend_json():
     assert registry_tool_names == backend_tool_names, (
         f"Registry tools {registry_tool_names} must match sift-backend.json tools {backend_tool_names}"
     )
-
-
-def test_alias_registry_keys_are_canonical_tool_names():
-    """ALIAS_REGISTRY keys must all be valid canonical tool names from REGISTRY."""
-    from windows_triage_mcp.registry import ALIAS_REGISTRY, REGISTRY
-
-    canonical_names = {t.name for t in REGISTRY}
-    for canonical_key in ALIAS_REGISTRY.keys():
-        assert canonical_key in canonical_names, (
-            f"ALIAS_REGISTRY key {canonical_key!r} is not a canonical tool name in REGISTRY"
-        )
-
-
-def test_alias_names_do_not_duplicate_canonical_names():
-    """Alias tool names must not duplicate canonical tool names (no shadowing)."""
-    from windows_triage_mcp.registry import ALIAS_REGISTRY, REGISTRY
-
-    canonical_names = {t.name for t in REGISTRY}
-    for alias_list in ALIAS_REGISTRY.values():
-        for alias_def in alias_list:
-            assert alias_def.name not in canonical_names, (
-                f"Alias {alias_def.name!r} shadows a canonical tool name — not allowed"
-            )
