@@ -81,6 +81,29 @@ def test_raw_secret_connection_fields_are_rejected(raw_key):
         normalize_connection_config(config)
 
 
+def test_stdio_command_whitespace_is_stripped():
+    # B-MVP-035: a stray trailing/leading space pasted into the portal register
+    # form must be trimmed before storage. Untrimmed, the space reached spawn as
+    # a non-existent executable path (FileNotFoundError) and hung tools/list.
+    stored = normalize_connection_config(
+        {
+            "type": "stdio",
+            "command": "  /opt/backend/bin/server  ",
+            "args": [" --stdio ", "  --flag"],
+        }
+    )
+
+    assert stored["command"] == "/opt/backend/bin/server"
+    assert stored["args"] == ["--stdio", "--flag"]
+
+
+def test_stdio_command_only_whitespace_is_rejected():
+    # A command that is nothing but whitespace strips to empty -> must fail the
+    # same "stdio backend requires command" guard, not silently store "".
+    with pytest.raises(BackendRegistryError, match="stdio backend requires command"):
+        normalize_connection_config({"type": "stdio", "command": "   "})
+
+
 def test_missing_runtime_env_reference_blocks_backend_load():
     stored = normalize_connection_config(
         {

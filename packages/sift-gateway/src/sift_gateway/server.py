@@ -123,6 +123,35 @@ _RETIRED_CORE_BACKENDS = frozenset(
 )
 
 
+def _sanitize_proxied_output_schema(tool: Tool) -> None:
+    """B-MVP-038 gateway defense: repair/strip a proxied tool's invalid
+    ``outputSchema`` during aggregation.
+
+    The MCP spec requires ``outputSchema`` to be an object-typed JSON Schema.
+    A single add-on backend advertising an invalid schema (observed in the wild:
+    ``outputSchema.type = null``) is rejected wholesale by
+    strict MCP clients (the Claude Code harness) with ``expected "object"`` —
+    which drops the *entire* aggregated tools/list and degrades the whole MCP
+    surface. The FastMCP-facing path already normalizes via the catalog
+    middleware; this applies the same single-source repair to the
+    aggregation-built Tool objects (``get_tools_list`` / ``_tool_cache``) that
+    feed the REST surface and the ``run_middleware=False`` warm-up, so no single
+    backend can poison the catalog on any path. Best-effort: never raises.
+    """
+    try:
+        from sift_gateway.mcp_server import _normalize_output_schema
+
+        _normalize_output_schema(tool)
+    except Exception as exc:  # pragma: no cover - defensive; must not break list
+        logger.warning(
+            "outputSchema sanitization failed for tool %r: %s; stripping schema",
+            getattr(tool, "name", "?"),
+            exc,
+        )
+        with contextlib.suppress(Exception):
+            tool.outputSchema = None
+
+
 class Gateway:
     """Aggregates multiple MCP backends behind a single HTTP service.
 
@@ -541,7 +570,7 @@ class Gateway:
         new_cache: dict[str, Tool] = {}
         for mapped_name in new_map:
             if mapped_name in tool_objects:
-                new_cache[mapped_name] = Tool(
+                cached_tool = Tool(
                     name=mapped_name,
                     title=tool_objects[mapped_name].title,
                     description=tool_objects[mapped_name].description or "",
@@ -552,6 +581,15 @@ class Gateway:
                     meta=tool_objects[mapped_name].meta,
                     execution=tool_objects[mapped_name].execution,
                 )
+                # B-MVP-038 (gateway defense): a single proxied backend that
+                # advertises an invalid outputSchema (e.g. type:null) must not be
+                # able to poison the aggregate tools/list — strict MCP clients
+                # reject the whole list and the entire surface drops. Repair (or
+                # as a last resort strip) any non-object outputSchema here so the
+                # tool still surfaces. Applied to the cached copy that is served
+                # whenever the live backend list_tools is unavailable.
+                _sanitize_proxied_output_schema(cached_tool)
+                new_cache[mapped_name] = cached_tool
         self._tool_cache = new_cache
         # Keep metadata only for tools that survived into the live map.
         self._tool_manifest_meta = {
@@ -906,19 +944,23 @@ class Gateway:
                         )
                     )
             else:
-                tools.append(
-                    Tool(
-                        name=mapped_name,
-                        title=src.title,
-                        description=src.description or "",
-                        inputSchema=src.inputSchema,
-                        outputSchema=src.outputSchema,
-                        icons=src.icons,
-                        annotations=src.annotations,
-                        meta=src.meta,
-                        execution=src.execution,
-                    )
+                proxied_tool = Tool(
+                    name=mapped_name,
+                    title=src.title,
+                    description=src.description or "",
+                    inputSchema=src.inputSchema,
+                    outputSchema=src.outputSchema,
+                    icons=src.icons,
+                    annotations=src.annotations,
+                    meta=src.meta,
+                    execution=src.execution,
                 )
+                # B-MVP-038 (gateway defense): sanitize the live-proxied tool's
+                # outputSchema the same way core tools are normalized above, so a
+                # backend advertising an invalid (e.g. type:null) outputSchema
+                # cannot break the aggregate list for strict MCP clients.
+                _sanitize_proxied_output_schema(proxied_tool)
+                tools.append(proxied_tool)
         return tools
 
     async def call_tool(

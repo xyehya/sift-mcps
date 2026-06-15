@@ -304,9 +304,18 @@ def normalize_connection_config(config: dict[str, Any]) -> dict[str, Any]:
         elif key == "args":
             if not isinstance(value, list):
                 raise BackendRegistryError("args must be a list")
-            value = [str(item) for item in value]
+            # B-MVP-035: strip each arg. A stray space pasted into the portal
+            # register form (e.g. "--stdio ") must not be passed verbatim to the
+            # spawned process where it can change argument parsing.
+            value = [str(item).strip() for item in value]
         elif key in {"manifest_path", "command", "cwd", "url"}:
-            value = str(value)
+            # B-MVP-035: trim surrounding whitespace. A trailing space on a
+            # registered stdio `command` reached spawn as a non-existent
+            # executable path -> FileNotFoundError on backend start, which then
+            # hung the aggregated tools/list (-32001) and degraded the whole MCP
+            # surface. These are not secrets; secret material is referenced only
+            # via *_env names and resolved at load time, so trimming here is safe.
+            value = str(value).strip()
         connection[key] = value
 
     if transport == "stdio" and not connection.get("command"):
