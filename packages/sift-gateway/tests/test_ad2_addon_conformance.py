@@ -107,6 +107,8 @@ def _addon_manifest(
         "tier": "addon",
         "transport": "stdio",
         "namespace": namespace,
+        # B-MVP-053: reference-plane manifests must declare default_case_scoped.
+        "default_case_scoped": False,
         "capabilities": {
             "provides": ["reference", "threat-intel"],
             "requires": [],
@@ -528,6 +530,37 @@ def test_read_only_evidence_class_inconsistency_is_rejected(tmp_path):
     manifest["tools"][0]["evidence_class"] = "mutating"
     with pytest.raises(ValueError):
         load_and_validate_manifest("opencti-mcp", _write_manifest(tmp_path, manifest))
+
+
+def test_reference_plane_without_default_case_scoped_is_rejected(tmp_path):
+    """B-MVP-053: a reference-plane manifest (capabilities.provides includes
+    'reference') MUST declare a boolean default_case_scoped, or the gateway's
+    category-based case-scoping heuristic mis-classifies its offline reference
+    tools as case-scoped and denies them whenever a case is active."""
+    manifest = _addon_manifest()
+    manifest.pop("default_case_scoped", None)
+    with pytest.raises(ValueError, match="default_case_scoped"):
+        load_and_validate_manifest("opencti-mcp", _write_manifest(tmp_path, manifest))
+
+
+def test_reference_plane_with_non_bool_default_case_scoped_is_rejected(tmp_path):
+    """The declaration must be a real boolean — a truthy string does not satisfy
+    the gateway's isinstance(bool) check in is_case_scoped_tool."""
+    manifest = _addon_manifest()
+    manifest["default_case_scoped"] = "false"
+    with pytest.raises(ValueError, match="default_case_scoped"):
+        load_and_validate_manifest("opencti-mcp", _write_manifest(tmp_path, manifest))
+
+
+def test_non_reference_plane_without_default_case_scoped_is_allowed(tmp_path):
+    """The rule is scoped to the reference plane: a non-reference backend is not
+    forced to declare default_case_scoped (its tools resolve case-scoping via
+    schema/category as before)."""
+    manifest = _addon_manifest(name="ex", namespace="ex")
+    manifest["capabilities"]["provides"] = ["search", "ingest"]
+    manifest.pop("default_case_scoped", None)
+    loaded = load_and_validate_manifest("ex", _write_manifest(tmp_path, manifest))
+    assert loaded is not None
 
 
 # ---------------------------------------------------------------------------

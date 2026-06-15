@@ -5,6 +5,7 @@
   "tier": "addon",
   "transport": "stdio",
   "namespace": "wintriage",
+  "default_case_scoped": false,
   "instructions": "Use this backend for offline Windows baseline checks. UNKNOWN means not present in the local baseline and is neutral unless case evidence adds suspicion.",
   "authority_contract": {
     "non_authoritative": true,

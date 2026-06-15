@@ -103,6 +103,28 @@ def validate_manifest_contract(manifest: dict, manifest_path: Path | None = None
     if not tools:
         raise ValueError("Manifest must declare at least one tool.")
 
+    # B-MVP-053: a reference-plane backend (capabilities.provides includes
+    # "reference") MUST explicitly declare a boolean top-level
+    # ``default_case_scoped``. The gateway's case-scoping fallback heuristic
+    # (server.is_case_scoped_tool) keys off the per-tool ``category`` string and
+    # treats anything whose category lacks the substring "reference" as
+    # case-scoped — so reference/baseline/threat-intel tools (categories like
+    # "baseline-check"/"threat-intel") get mis-classified as case-scoped and,
+    # exposing no case argument, are denied fail-closed by ProxyActiveCaseMiddleware
+    # whenever a case is active. Requiring the explicit declaration kills that
+    # silent footgun: a reference plane states its case-scoping intent outright
+    # instead of relying on the brittle category-substring fallback.
+    _provides = (manifest.get("capabilities") or {}).get("provides") or []
+    if "reference" in _provides and not isinstance(
+        manifest.get("default_case_scoped"), bool
+    ):
+        raise ValueError(
+            "Reference-plane manifest (capabilities.provides includes "
+            "'reference') must explicitly declare a boolean "
+            "'default_case_scoped' (use false for offline/reference tools that "
+            "carry no case context)."
+        )
+
     declared_tools: dict[str, dict] = {}
     health_tools: list[str] = []
     for tool in tools:

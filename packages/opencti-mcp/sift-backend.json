@@ -5,6 +5,7 @@
   "tier": "addon",
   "transport": "stdio",
   "namespace": "cti",
+  "default_case_scoped": false,
   "instructions": "Use this backend for threat intelligence context and IOC enrichment. Treat intelligence as supporting context that must be correlated with case evidence.",
   "authority_contract": {
     "non_authoritative": true,
