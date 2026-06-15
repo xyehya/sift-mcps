@@ -46,4 +46,3 @@ class ToolDef(BaseModel, arbitrary_types_allowed=True):
     annotations: ToolAnnotations
     title: str
     description: str
-    deprecated_aliases: list[str] = []   # §6 change-map

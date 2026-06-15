@@ -498,7 +498,6 @@ def _function_tool(tool_def: ToolDef, name: str) -> FunctionTool:
         context = {
             "tool_name": name,
             "canonical_name": tool_def.name,
-            "deprecated_alias": False,
         }
         try:
             result = _call_with_optional_context(tool_def.fn, params, context)

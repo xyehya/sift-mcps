@@ -2135,14 +2135,6 @@ REGISTRY.append(
             "host id. Example: opensearch_fix_host_mapping(raw='wksn01', "
             "new_canonical='wksn01')."
         ),
-        # Cutover complete: the deprecated `opensearch_host_fix` alias is no
-        # longer served. The gateway enforces served-tools ⊆ manifest 'tools'
-        # (server.py _build_tool_map), and the alias was never declared there,
-        # so serving it broke every started-backend tools/list rebuild. The
-        # canonical name is the sole served tool. (Design follow-up: reconcile
-        # the shared `deprecated_aliases` contract feature with that gateway
-        # enforcement before reusing it — Session-Notes B-MVP-052.)
-        deprecated_aliases=[],
     )
 )
 
@@ -2390,11 +2382,9 @@ def create_server() -> FastMCP:
 
 
 def register_all(mcp: FastMCP) -> None:
-    """Register tools, deprecated aliases, prompts, and resources."""
+    """Register tools, prompts, and resources."""
     for tool_def in REGISTRY:
         mcp.add_tool(_function_tool(tool_def, tool_def.name))
-        for alias in tool_def.deprecated_aliases:
-            mcp.add_tool(_function_tool(tool_def, alias, deprecated_alias_of=tool_def.name))
     for prompt_def in PROMPT_REGISTRY:
         mcp.prompt(
             name=prompt_def.name,
@@ -2425,17 +2415,9 @@ def _output_schema(out_model: type[BaseModel]) -> dict[str, Any]:
 def _function_tool(
     tool_def: ToolDef,
     name: str,
-    deprecated_alias_of: str | None = None,
 ) -> FunctionTool:
     description = tool_def.description
     meta: dict[str, Any] | None = _TOOL_META.get(name)
-    if deprecated_alias_of is not None:
-        description = (
-            f"DEPRECATED alias for `{deprecated_alias_of}`. "
-            "Use the canonical name; this alias will be removed after one cutover cycle.\n\n"
-            f"{tool_def.description}"
-        )
-        meta = {**(meta or {}), "deprecated": True, "canonical_name": deprecated_alias_of}
 
     async def invoke(**kwargs: Any) -> ToolResult:
         try:

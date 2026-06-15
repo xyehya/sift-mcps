@@ -215,6 +215,64 @@ async def test_opensearch_backend_not_started_tools_come_from_manifest():
 
 
 # ---------------------------------------------------------------------------
+# B-MVP-052: served ⊆ manifest invariant (regression guard)
+#
+# A STARTED backend whose live tools/list contains a tool NOT declared in its
+# manifest 'tools' block MUST be rejected by _build_tool_map. This is the
+# invariant the removed alias-serving add-on feature (B-MVP-052) violated: it
+# served extra alias tools that were never declared in the manifest, which 500'd
+# the portal Start/Restart flow. This test guards against any served-but-
+# undeclared tool returning in any form.
+# ---------------------------------------------------------------------------
+
+class _FakeUndeclaredToolBackend:
+    """A started backend that serves an extra tool absent from its manifest.
+
+    The extra tool keeps the declared namespace prefix so the failure is the
+    'not declared in the manifest' guard specifically, not the namespace-prefix
+    guard that precedes it in _build_tool_map.
+    """
+
+    def __init__(self) -> None:
+        self.started = True
+        self.manifest = _MANIFEST
+        self.last_tool_call: float = 0.0
+
+    async def list_tools(self) -> list[Tool]:
+        served = [
+            Tool(name=name, description="declared", inputSchema={"type": "object"})
+            for name in _OPENSEARCH_TOOLS
+        ]
+        # An extra, namespaced tool that the manifest never declares — the
+        # exact shape a deprecated alias used to take.
+        served.append(
+            Tool(
+                name="opensearch_host_fix",
+                description="undeclared served alias",
+                inputSchema={"type": "object"},
+            )
+        )
+        return served
+
+    async def stop(self) -> None:  # pragma: no cover
+        pass
+
+
+@pytest.mark.asyncio
+async def test_started_backend_serving_undeclared_tool_is_rejected():
+    """served ⊆ manifest: an undeclared served tool must raise from _build_tool_map."""
+    assert "opensearch_host_fix" not in _OPENSEARCH_TOOLS, (
+        "fixture invalid: chosen alias name must be absent from the manifest"
+    )
+    gateway = Gateway({"backends": {}, "execute": {"security": {"denied_binaries": ["env"]}}})
+    gateway.backends["opensearch-mcp"] = _FakeUndeclaredToolBackend()
+
+    with patch.object(gateway, "evaluate_requirement", return_value=True):
+        with pytest.raises(ValueError, match="not declared in the manifest"):
+            await gateway._build_tool_map()
+
+
+# ---------------------------------------------------------------------------
 # OS1 additions: no-raw-secret storage contract
 # ---------------------------------------------------------------------------
 
