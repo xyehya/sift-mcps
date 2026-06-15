@@ -14,6 +14,7 @@ from fastmcp.tools import FunctionTool, ToolResult
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from sift_common.instructions import WINDOWS_TRIAGE as _INSTRUCTIONS
+from sift_common.mcp_schema import output_schema
 
 from .contracts import ErrorCode, ResultMeta, ToolDef, ToolError
 from .exceptions import DatabaseError, ValidationError as TriageValidationError
@@ -35,14 +36,6 @@ class ResourceDef(BaseModel, arbitrary_types_allowed=True):
     title: str
     description: str
     mime_type: str = Field("application/json", description="MCP resource MIME type.")
-
-
-class ToolAliasDef(BaseModel, arbitrary_types_allowed=True):
-    name: str
-    in_model: type[BaseModel]
-    transform: Callable[[BaseModel], BaseModel]
-    title: str | None = None
-    description: str | None = None
 
 
 class Verdict(str, Enum):
@@ -158,80 +151,6 @@ class CheckArtifactOut(VerdictOut):
     )
 
 
-class CheckFileAliasIn(BaseModel):
-    path: str = Field(
-        ...,
-        min_length=1,
-        max_length=4096,
-        description="Deprecated alias argument: Windows file path.",
-    )
-    hash: str | None = Field(
-        None,
-        max_length=128,
-        description="Deprecated alias argument: optional file hash.",
-    )
-    os_version: str | None = Field(
-        None,
-        max_length=256,
-        description="Deprecated alias argument: optional OS filter.",
-    )
-
-    @field_validator("path", "hash", "os_version")
-    @classmethod
-    def _reject_null_bytes(cls, value: str | None) -> str | None:
-        if value is not None and "\x00" in value:
-            raise ValueError("null bytes are not allowed")
-        return value
-
-
-class CheckHashAliasIn(BaseModel):
-    hash: str = Field(
-        ...,
-        min_length=1,
-        max_length=128,
-        description="Deprecated alias argument: MD5, SHA1, or SHA256 hash.",
-    )
-
-    @field_validator("hash")
-    @classmethod
-    def _reject_null_bytes(cls, value: str) -> str:
-        if "\x00" in value:
-            raise ValueError("null bytes are not allowed")
-        return value
-
-
-class FilenameAliasIn(BaseModel):
-    filename: str = Field(
-        ...,
-        min_length=1,
-        max_length=4096,
-        description="Deprecated alias argument: filename to analyze.",
-    )
-
-    @field_validator("filename")
-    @classmethod
-    def _reject_null_bytes(cls, value: str) -> str:
-        if "\x00" in value:
-            raise ValueError("null bytes are not allowed")
-        return value
-
-
-class DllAliasIn(BaseModel):
-    dll_name: str = Field(
-        ...,
-        min_length=1,
-        max_length=4096,
-        description="Deprecated alias argument: DLL name to check.",
-    )
-
-    @field_validator("dll_name")
-    @classmethod
-    def _reject_null_bytes(cls, value: str) -> str:
-        if "\x00" in value:
-            raise ValueError("null bytes are not allowed")
-        return value
-
-
 class CheckProcessTreeIn(BaseModel):
     process_name: str = Field(
         ...,
@@ -335,82 +254,6 @@ class CheckSystemOut(VerdictOut):
     lookup_performed: bool = Field(
         True, description="False only when validation prevented a baseline lookup."
     )
-
-
-class CheckServiceAliasIn(BaseModel):
-    service_name: str = Field(
-        ...,
-        min_length=1,
-        max_length=256,
-        description="Deprecated alias argument: service name.",
-    )
-    binary_path: str | None = Field(
-        None,
-        max_length=4096,
-        description="Deprecated alias argument: optional service binary path.",
-    )
-    os_version: str = Field(
-        ...,
-        min_length=1,
-        max_length=256,
-        description="Deprecated alias argument: required target OS version.",
-    )
-
-    @field_validator("service_name", "binary_path", "os_version")
-    @classmethod
-    def _reject_null_bytes(cls, value: str | None) -> str | None:
-        if value is not None and "\x00" in value:
-            raise ValueError("null bytes are not allowed")
-        return value
-
-
-class CheckScheduledTaskAliasIn(BaseModel):
-    task_path: str = Field(
-        ...,
-        min_length=1,
-        max_length=1024,
-        description="Deprecated alias argument: scheduled task path.",
-    )
-    os_version: str = Field(
-        ...,
-        min_length=1,
-        max_length=256,
-        description="Deprecated alias argument: required target OS version.",
-    )
-
-    @field_validator("task_path", "os_version")
-    @classmethod
-    def _reject_null_bytes(cls, value: str | None) -> str | None:
-        if value is not None and "\x00" in value:
-            raise ValueError("null bytes are not allowed")
-        return value
-
-
-class CheckAutorunAliasIn(BaseModel):
-    key_path: str = Field(
-        ...,
-        min_length=1,
-        max_length=1024,
-        description="Deprecated alias argument: autorun registry key path.",
-    )
-    value_name: str | None = Field(
-        None,
-        max_length=256,
-        description="Deprecated alias argument: optional registry value name.",
-    )
-    os_version: str = Field(
-        ...,
-        min_length=1,
-        max_length=256,
-        description="Deprecated alias argument: required target OS version.",
-    )
-
-    @field_validator("key_path", "value_name", "os_version")
-    @classmethod
-    def _reject_null_bytes(cls, value: str | None) -> str | None:
-        if value is not None and "\x00" in value:
-            raise ValueError("null bytes are not allowed")
-        return value
 
 
 class RegistryValueSummary(BaseModel):
@@ -564,12 +407,7 @@ class ServerStatusOut(BaseModel):
     )
 
 
-class EmptyAliasIn(BaseModel):
-    pass
-
-
 REGISTRY: list[ToolDef] = []
-ALIAS_REGISTRY: dict[str, list[ToolAliasDef]] = {}
 PROMPT_REGISTRY: list[PromptDef] = []
 RESOURCE_REGISTRY: list[ResourceDef] = []
 
@@ -605,13 +443,11 @@ def register_all(mcp: FastMCP) -> None:
 
     Only the namespaced ``wintriage_*`` canonical tools are exposed, so the
     advertised ``tools/list`` matches ``sift-backend.json`` exactly. The
-    pre-namespacing legacy aliases (``check_file``, ``get_health``, ...) defined
-    in ``ALIAS_REGISTRY`` are intentionally NOT advertised: every other SIFT
-    backend namespaces its entire surface, this add-on was disabled before any
-    agent could call an un-namespaced alias through the gateway, and leaking
+    pre-namespacing legacy aliases (``check_file``, ``get_health``, ...) were
+    never advertised through the gateway and the dead alias plumbing was removed
+    in B-MVP-039: every SIFT backend namespaces its entire surface, and leaking
     un-namespaced tools both breaks the namespace convention and desyncs the
-    exposed surface from the manifest (B-MVP-038). ``ALIAS_REGISTRY`` is retained
-    as a code-level mapping/record (and is still covered by the contract tests).
+    exposed surface from the manifest (B-MVP-038).
     """
     for tool_def in REGISTRY:
         mcp.add_tool(_function_tool(tool_def, tool_def.name))
@@ -632,74 +468,25 @@ def register_all(mcp: FastMCP) -> None:
 
 
 def _output_schema(out_model: type[BaseModel]) -> dict[str, Any]:
-    """Advertised output schema: the success model OR a structured ToolError.
+    """Advertised output schema: the success model OR a structured ``ToolError``.
 
-    Every tool can return ``ToolError`` in ``structured_content`` on the error
-    path, so the declared schema must admit both shapes; a schema-validating
-    client (and the D27b gateway response-guard) otherwise rejects error
-    results as schema-violating.
-
-    The root carries ``"type": "object"`` because the MCP spec requires an
-    ``outputSchema`` to be an object-typed JSON Schema, and strict clients (e.g.
-    the Claude Code MCP loader) reject a bare ``anyOf`` whose root ``type`` is
-    absent with ``Invalid input: expected "object"`` -- which drops the ENTIRE
-    aggregated ``tools/list`` and takes the whole gateway MCP surface down
-    (B-MVP-038). Both ``anyOf`` branches are pydantic models (objects), so the
-    added root type is always satisfied.
-
-    Each branch's own ``$defs`` are hoisted to the combined document root and the
-    branch bodies are referenced via ``#/$defs/...``. A bare ``anyOf`` of two
-    ``model_json_schema()`` outputs leaves each branch's ``$defs`` nested, so a
-    nested ``$ref`` such as ``#/$defs/Finding`` (which resolves against the
-    document root) dangles -> the structured-output validator raises
-    ``PointerToNowhere`` the moment such a tool actually returns. Hoisting keeps
-    every pointer resolvable at the root.
+    Thin wrapper over the shared SIFT add-on standard
+    :func:`sift_common.mcp_schema.output_schema`; see that module for the full
+    rationale (root ``type``, ``$defs`` hoisting, ``PointerToNowhere`` avoidance,
+    and the strict-client / B-MVP-038 gateway concerns).
     """
-    success = out_model.model_json_schema()
-    error = ToolError.model_json_schema()
-    defs: dict[str, Any] = {}
-    defs.update(success.pop("$defs", None) or {})
-    defs.update(error.pop("$defs", None) or {})
-    # Branch bodies live in $defs too (prefixed names cannot collide with
-    # pydantic's PascalCase model names) so the anyOf is a pair of resolvable
-    # refs and every nested model ref shares the same root $defs namespace.
-    defs["__SuccessResult"] = success
-    defs["__ToolErrorResult"] = error
-    return {
-        "type": "object",
-        "$defs": defs,
-        "anyOf": [
-            {"$ref": "#/$defs/__SuccessResult"},
-            {"$ref": "#/$defs/__ToolErrorResult"},
-        ],
-    }
+    return output_schema(out_model, ToolError)
 
 
-def _function_tool(
-    tool_def: ToolDef,
-    name: str,
-    alias: ToolAliasDef | None = None,
-) -> FunctionTool:
-    in_model = alias.in_model if alias else tool_def.in_model
+def _function_tool(tool_def: ToolDef, name: str) -> FunctionTool:
+    in_model = tool_def.in_model
     description = tool_def.description
     title = tool_def.title
     meta: dict[str, Any] | None = None
-    if alias is not None:
-        title = alias.title or f"Deprecated: {tool_def.title}"
-        alias_description = alias.description or ""
-        description = (
-            f"DEPRECATED alias for `{tool_def.name}`. "
-            "Use the canonical tool; this alias will be removed after one cutover cycle."
-        )
-        if alias_description:
-            description = f"{description}\n\n{alias_description}"
-        description = f"{description}\n\n{tool_def.description}"
-        meta = {"deprecated": True, "canonical_name": tool_def.name}
 
     async def invoke(**kwargs: Any) -> ToolResult:
         try:
             params = in_model.model_validate(kwargs)
-            canonical_params = alias.transform(params) if alias else params
         except ValidationError as exc:
             return _error_result(
                 ErrorCode.invalid_input,
@@ -711,10 +498,10 @@ def _function_tool(
         context = {
             "tool_name": name,
             "canonical_name": tool_def.name,
-            "deprecated_alias": alias is not None,
+            "deprecated_alias": False,
         }
         try:
-            result = _call_with_optional_context(tool_def.fn, canonical_params, context)
+            result = _call_with_optional_context(tool_def.fn, params, context)
             if inspect.isawaitable(result):
                 result = await result
             return _success_result(result, tool_def.out_model)
@@ -1593,73 +1380,6 @@ def _server_status_out(raw: dict[str, Any]) -> ServerStatusOut:
     )
 
 
-def _check_file_alias(params: BaseModel) -> CheckArtifactIn:
-    alias = CheckFileAliasIn.model_validate(params)
-    return CheckArtifactIn(
-        type=ArtifactType.file,
-        value=alias.path,
-        hash=alias.hash,
-        os_version=alias.os_version,
-    )
-
-
-def _check_hash_alias(params: BaseModel) -> CheckArtifactIn:
-    alias = CheckHashAliasIn.model_validate(params)
-    return CheckArtifactIn(type=ArtifactType.hash, value=alias.hash)
-
-
-def _filename_alias(artifact_type: ArtifactType) -> Callable[[BaseModel], CheckArtifactIn]:
-    def transform(params: BaseModel) -> CheckArtifactIn:
-        alias = FilenameAliasIn.model_validate(params)
-        return CheckArtifactIn(type=artifact_type, value=alias.filename)
-
-    return transform
-
-
-def _dll_alias(params: BaseModel) -> CheckArtifactIn:
-    alias = DllAliasIn.model_validate(params)
-    return CheckArtifactIn(type=ArtifactType.dll, value=alias.dll_name)
-
-
-def _check_service_alias(params: BaseModel) -> CheckSystemIn:
-    alias = CheckServiceAliasIn.model_validate(params)
-    return CheckSystemIn(
-        type=SystemType.service,
-        name=alias.service_name,
-        binary_path=alias.binary_path,
-        os_version=alias.os_version,
-    )
-
-
-def _check_scheduled_task_alias(params: BaseModel) -> CheckSystemIn:
-    alias = CheckScheduledTaskAliasIn.model_validate(params)
-    return CheckSystemIn(
-        type=SystemType.scheduled_task,
-        name=alias.task_path,
-        os_version=alias.os_version,
-    )
-
-
-def _check_autorun_alias(params: BaseModel) -> CheckSystemIn:
-    alias = CheckAutorunAliasIn.model_validate(params)
-    return CheckSystemIn(
-        type=SystemType.autorun,
-        name=alias.key_path,
-        value_name=alias.value_name,
-        os_version=alias.os_version,
-    )
-
-
-def _get_health_alias(params: BaseModel) -> ServerStatusIn:
-    EmptyAliasIn.model_validate(params)
-    return ServerStatusIn(resource="health")
-
-
-def _get_db_stats_alias(params: BaseModel) -> ServerStatusIn:
-    EmptyAliasIn.model_validate(params)
-    return ServerStatusIn(resource="db_stats")
-
-
 REGISTRY.append(
     ToolDef(
         name="wintriage_check_artifact",
@@ -1839,112 +1559,3 @@ PROMPT_REGISTRY.extend(
         ),
     ]
 )
-
-ALIAS_REGISTRY["wintriage_check_artifact"] = [
-    ToolAliasDef(
-        name="check_file",
-        in_model=CheckFileAliasIn,
-        transform=_check_file_alias,
-        title="Deprecated: Check File",
-        description=(
-            "Maps legacy `check_file(path, hash, os_version)` calls to "
-            "`wintriage_check_artifact(type='file', value=path, ...)`."
-        ),
-    ),
-    ToolAliasDef(
-        name="check_hash",
-        in_model=CheckHashAliasIn,
-        transform=_check_hash_alias,
-        title="Deprecated: Check Hash",
-        description=(
-            "Maps legacy `check_hash(hash)` calls to "
-            "`wintriage_check_artifact(type='hash', value=hash)`."
-        ),
-    ),
-    ToolAliasDef(
-        name="analyze_filename",
-        in_model=FilenameAliasIn,
-        transform=_filename_alias(ArtifactType.filename),
-        title="Deprecated: Analyze Filename",
-        description=(
-            "Maps legacy `analyze_filename(filename)` calls to "
-            "`wintriage_check_artifact(type='filename', value=filename)`."
-        ),
-    ),
-    ToolAliasDef(
-        name="check_lolbin",
-        in_model=FilenameAliasIn,
-        transform=_filename_alias(ArtifactType.lolbin),
-        title="Deprecated: Check LOLBin",
-        description=(
-            "Maps legacy `check_lolbin(filename)` calls to "
-            "`wintriage_check_artifact(type='lolbin', value=filename)`."
-        ),
-    ),
-    ToolAliasDef(
-        name="check_hijackable_dll",
-        in_model=DllAliasIn,
-        transform=_dll_alias,
-        title="Deprecated: Check Hijackable DLL",
-        description=(
-            "Maps legacy `check_hijackable_dll(dll_name)` calls to "
-            "`wintriage_check_artifact(type='dll', value=dll_name)`."
-        ),
-    ),
-]
-
-ALIAS_REGISTRY["wintriage_check_system"] = [
-    ToolAliasDef(
-        name="check_service",
-        in_model=CheckServiceAliasIn,
-        transform=_check_service_alias,
-        title="Deprecated: Check Service",
-        description=(
-            "Maps legacy `check_service(service_name, binary_path, os_version)` "
-            "calls to `wintriage_check_system(type='service', name=service_name, ...)`."
-        ),
-    ),
-    ToolAliasDef(
-        name="check_scheduled_task",
-        in_model=CheckScheduledTaskAliasIn,
-        transform=_check_scheduled_task_alias,
-        title="Deprecated: Check Scheduled Task",
-        description=(
-            "Maps legacy `check_scheduled_task(task_path, os_version)` calls to "
-            "`wintriage_check_system(type='scheduled_task', name=task_path, ...)`."
-        ),
-    ),
-    ToolAliasDef(
-        name="check_autorun",
-        in_model=CheckAutorunAliasIn,
-        transform=_check_autorun_alias,
-        title="Deprecated: Check Autorun",
-        description=(
-            "Maps legacy `check_autorun(key_path, value_name, os_version)` calls to "
-            "`wintriage_check_system(type='autorun', name=key_path, ...)`."
-        ),
-    ),
-]
-
-ALIAS_REGISTRY["wintriage_server_status"] = [
-    ToolAliasDef(
-        name="get_db_stats",
-        in_model=EmptyAliasIn,
-        transform=_get_db_stats_alias,
-        title="Deprecated: Get DB Stats",
-        description=(
-            "Maps legacy `get_db_stats()` calls to "
-            "`wintriage_server_status(resource='db_stats')`."
-        ),
-    ),
-    ToolAliasDef(
-        name="get_health",
-        in_model=EmptyAliasIn,
-        transform=_get_health_alias,
-        title="Deprecated: Get Health",
-        description=(
-            "Maps legacy `get_health()` calls to "
-            "`wintriage_server_status(resource='health')`."
-        ),
-    ),
-]
