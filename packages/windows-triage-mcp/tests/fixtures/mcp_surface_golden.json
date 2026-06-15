@@ -159,8 +159,9 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "ArtifactType": {
+            "properties": {
+              "artifact_type": {
+                "description": "Artifact subtype checked.",
                 "enum": [
                   "file",
                   "hash",
@@ -170,61 +171,6 @@
                 ],
                 "title": "ArtifactType",
                 "type": "string"
-              },
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "artifact_type": {
-                "$ref": "#/$defs/ArtifactType",
-                "description": "Artifact subtype checked."
               },
               "confidence": {
                 "description": "Confidence in the baseline verdict.",
@@ -252,7 +198,42 @@
               "findings": {
                 "description": "Suspicious or contextual findings.",
                 "items": {
-                  "$ref": "#/$defs/Finding"
+                  "properties": {
+                    "description": {
+                      "description": "Human-readable finding summary.",
+                      "title": "Description",
+                      "type": "string"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific finding details.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "severity": {
+                      "description": "Finding severity.",
+                      "enum": [
+                        "critical",
+                        "high",
+                        "medium",
+                        "low"
+                      ],
+                      "title": "Severity",
+                      "type": "string"
+                    },
+                    "type": {
+                      "description": "Machine-readable finding type.",
+                      "title": "Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "severity",
+                    "description"
+                  ],
+                  "title": "Finding",
+                  "type": "object"
                 },
                 "title": "Findings",
                 "type": "array"
@@ -312,8 +293,16 @@
                 "type": "object"
               },
               "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
+                "description": "Offline Windows baseline verdict.",
+                "enum": [
+                  "EXPECTED",
+                  "EXPECTED_LOLBIN",
+                  "SUSPICIOUS",
+                  "UNKNOWN",
+                  "ERROR"
+                ],
+                "title": "Verdict",
+                "type": "string"
               }
             },
             "required": [
@@ -326,8 +315,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -341,18 +337,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -379,1322 +363,10 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Check Windows Artifact"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Check Windows Artifact"
-      },
-      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_file(path, hash, os_version)` calls to `wintriage_check_artifact(type='file', value=path, ...)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
-      "input_schema": {
-        "properties": {
-          "hash": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Deprecated alias argument: optional file hash.",
-            "title": "Hash"
-          },
-          "os_version": {
-            "anyOf": [
-              {
-                "maxLength": 256,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Deprecated alias argument: optional OS filter.",
-            "title": "Os Version"
-          },
-          "path": {
-            "description": "Deprecated alias argument: Windows file path.",
-            "maxLength": 4096,
-            "minLength": 1,
-            "title": "Path",
-            "type": "string"
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "title": "CheckFileAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_check_artifact",
-        "deprecated": true
-      },
-      "name": "check_file",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "ArtifactType": {
-                "enum": [
-                  "file",
-                  "hash",
-                  "filename",
-                  "lolbin",
-                  "dll"
-                ],
-                "title": "ArtifactType",
-                "type": "string"
-              },
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "artifact_type": {
-                "$ref": "#/$defs/ArtifactType",
-                "description": "Artifact subtype checked."
-              },
-              "confidence": {
-                "description": "Confidence in the baseline verdict.",
-                "enum": [
-                  "high",
-                  "medium",
-                  "low"
-                ],
-                "title": "Confidence",
-                "type": "string"
-              },
-              "filename_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': filename exists anywhere in the baseline.",
-                "title": "Filename In Baseline"
-              },
-              "findings": {
-                "description": "Suspicious or contextual findings.",
-                "items": {
-                  "$ref": "#/$defs/Finding"
-                },
-                "title": "Findings",
-                "type": "array"
-              },
-              "is_lolbin": {
-                "default": false,
-                "description": "True when the filename is a known living-off-the-land binary.",
-                "title": "Is Lolbin",
-                "type": "boolean"
-              },
-              "is_system_path": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': path is under a Windows system directory.",
-                "title": "Is System Path"
-              },
-              "lolbin_functions": {
-                "description": "LOLBAS abuse functions when known.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Lolbin Functions",
-                "type": "array"
-              },
-              "path_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': exact path exists in the baseline.",
-                "title": "Path In Baseline"
-              },
-              "reasons": {
-                "description": "Why this verdict was assigned.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Reasons",
-                "type": "array"
-              },
-              "subtype_data": {
-                "additionalProperties": true,
-                "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
-                "title": "Subtype Data",
-                "type": "object"
-              },
-              "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
-              }
-            },
-            "required": [
-              "verdict",
-              "reasons",
-              "confidence",
-              "artifact_type"
-            ],
-            "title": "CheckArtifactOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Check File"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Check Windows Artifact"
-      },
-      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_hash(hash)` calls to `wintriage_check_artifact(type='hash', value=hash)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
-      "input_schema": {
-        "properties": {
-          "hash": {
-            "description": "Deprecated alias argument: MD5, SHA1, or SHA256 hash.",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Hash",
-            "type": "string"
-          }
-        },
-        "required": [
-          "hash"
-        ],
-        "title": "CheckHashAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_check_artifact",
-        "deprecated": true
-      },
-      "name": "check_hash",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "ArtifactType": {
-                "enum": [
-                  "file",
-                  "hash",
-                  "filename",
-                  "lolbin",
-                  "dll"
-                ],
-                "title": "ArtifactType",
-                "type": "string"
-              },
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "artifact_type": {
-                "$ref": "#/$defs/ArtifactType",
-                "description": "Artifact subtype checked."
-              },
-              "confidence": {
-                "description": "Confidence in the baseline verdict.",
-                "enum": [
-                  "high",
-                  "medium",
-                  "low"
-                ],
-                "title": "Confidence",
-                "type": "string"
-              },
-              "filename_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': filename exists anywhere in the baseline.",
-                "title": "Filename In Baseline"
-              },
-              "findings": {
-                "description": "Suspicious or contextual findings.",
-                "items": {
-                  "$ref": "#/$defs/Finding"
-                },
-                "title": "Findings",
-                "type": "array"
-              },
-              "is_lolbin": {
-                "default": false,
-                "description": "True when the filename is a known living-off-the-land binary.",
-                "title": "Is Lolbin",
-                "type": "boolean"
-              },
-              "is_system_path": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': path is under a Windows system directory.",
-                "title": "Is System Path"
-              },
-              "lolbin_functions": {
-                "description": "LOLBAS abuse functions when known.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Lolbin Functions",
-                "type": "array"
-              },
-              "path_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': exact path exists in the baseline.",
-                "title": "Path In Baseline"
-              },
-              "reasons": {
-                "description": "Why this verdict was assigned.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Reasons",
-                "type": "array"
-              },
-              "subtype_data": {
-                "additionalProperties": true,
-                "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
-                "title": "Subtype Data",
-                "type": "object"
-              },
-              "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
-              }
-            },
-            "required": [
-              "verdict",
-              "reasons",
-              "confidence",
-              "artifact_type"
-            ],
-            "title": "CheckArtifactOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Check Hash"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Check Windows Artifact"
-      },
-      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `analyze_filename(filename)` calls to `wintriage_check_artifact(type='filename', value=filename)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
-      "input_schema": {
-        "properties": {
-          "filename": {
-            "description": "Deprecated alias argument: filename to analyze.",
-            "maxLength": 4096,
-            "minLength": 1,
-            "title": "Filename",
-            "type": "string"
-          }
-        },
-        "required": [
-          "filename"
-        ],
-        "title": "FilenameAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_check_artifact",
-        "deprecated": true
-      },
-      "name": "analyze_filename",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "ArtifactType": {
-                "enum": [
-                  "file",
-                  "hash",
-                  "filename",
-                  "lolbin",
-                  "dll"
-                ],
-                "title": "ArtifactType",
-                "type": "string"
-              },
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "artifact_type": {
-                "$ref": "#/$defs/ArtifactType",
-                "description": "Artifact subtype checked."
-              },
-              "confidence": {
-                "description": "Confidence in the baseline verdict.",
-                "enum": [
-                  "high",
-                  "medium",
-                  "low"
-                ],
-                "title": "Confidence",
-                "type": "string"
-              },
-              "filename_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': filename exists anywhere in the baseline.",
-                "title": "Filename In Baseline"
-              },
-              "findings": {
-                "description": "Suspicious or contextual findings.",
-                "items": {
-                  "$ref": "#/$defs/Finding"
-                },
-                "title": "Findings",
-                "type": "array"
-              },
-              "is_lolbin": {
-                "default": false,
-                "description": "True when the filename is a known living-off-the-land binary.",
-                "title": "Is Lolbin",
-                "type": "boolean"
-              },
-              "is_system_path": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': path is under a Windows system directory.",
-                "title": "Is System Path"
-              },
-              "lolbin_functions": {
-                "description": "LOLBAS abuse functions when known.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Lolbin Functions",
-                "type": "array"
-              },
-              "path_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': exact path exists in the baseline.",
-                "title": "Path In Baseline"
-              },
-              "reasons": {
-                "description": "Why this verdict was assigned.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Reasons",
-                "type": "array"
-              },
-              "subtype_data": {
-                "additionalProperties": true,
-                "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
-                "title": "Subtype Data",
-                "type": "object"
-              },
-              "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
-              }
-            },
-            "required": [
-              "verdict",
-              "reasons",
-              "confidence",
-              "artifact_type"
-            ],
-            "title": "CheckArtifactOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Analyze Filename"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Check Windows Artifact"
-      },
-      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_lolbin(filename)` calls to `wintriage_check_artifact(type='lolbin', value=filename)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
-      "input_schema": {
-        "properties": {
-          "filename": {
-            "description": "Deprecated alias argument: filename to analyze.",
-            "maxLength": 4096,
-            "minLength": 1,
-            "title": "Filename",
-            "type": "string"
-          }
-        },
-        "required": [
-          "filename"
-        ],
-        "title": "FilenameAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_check_artifact",
-        "deprecated": true
-      },
-      "name": "check_lolbin",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "ArtifactType": {
-                "enum": [
-                  "file",
-                  "hash",
-                  "filename",
-                  "lolbin",
-                  "dll"
-                ],
-                "title": "ArtifactType",
-                "type": "string"
-              },
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "artifact_type": {
-                "$ref": "#/$defs/ArtifactType",
-                "description": "Artifact subtype checked."
-              },
-              "confidence": {
-                "description": "Confidence in the baseline verdict.",
-                "enum": [
-                  "high",
-                  "medium",
-                  "low"
-                ],
-                "title": "Confidence",
-                "type": "string"
-              },
-              "filename_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': filename exists anywhere in the baseline.",
-                "title": "Filename In Baseline"
-              },
-              "findings": {
-                "description": "Suspicious or contextual findings.",
-                "items": {
-                  "$ref": "#/$defs/Finding"
-                },
-                "title": "Findings",
-                "type": "array"
-              },
-              "is_lolbin": {
-                "default": false,
-                "description": "True when the filename is a known living-off-the-land binary.",
-                "title": "Is Lolbin",
-                "type": "boolean"
-              },
-              "is_system_path": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': path is under a Windows system directory.",
-                "title": "Is System Path"
-              },
-              "lolbin_functions": {
-                "description": "LOLBAS abuse functions when known.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Lolbin Functions",
-                "type": "array"
-              },
-              "path_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': exact path exists in the baseline.",
-                "title": "Path In Baseline"
-              },
-              "reasons": {
-                "description": "Why this verdict was assigned.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Reasons",
-                "type": "array"
-              },
-              "subtype_data": {
-                "additionalProperties": true,
-                "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
-                "title": "Subtype Data",
-                "type": "object"
-              },
-              "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
-              }
-            },
-            "required": [
-              "verdict",
-              "reasons",
-              "confidence",
-              "artifact_type"
-            ],
-            "title": "CheckArtifactOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Check LOLBin"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Check Windows Artifact"
-      },
-      "description": "DEPRECATED alias for `wintriage_check_artifact`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_hijackable_dll(dll_name)` calls to `wintriage_check_artifact(type='dll', value=dll_name)`.\n\nValidate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
-      "input_schema": {
-        "properties": {
-          "dll_name": {
-            "description": "Deprecated alias argument: DLL name to check.",
-            "maxLength": 4096,
-            "minLength": 1,
-            "title": "Dll Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "dll_name"
-        ],
-        "title": "DllAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_check_artifact",
-        "deprecated": true
-      },
-      "name": "check_hijackable_dll",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "ArtifactType": {
-                "enum": [
-                  "file",
-                  "hash",
-                  "filename",
-                  "lolbin",
-                  "dll"
-                ],
-                "title": "ArtifactType",
-                "type": "string"
-              },
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "artifact_type": {
-                "$ref": "#/$defs/ArtifactType",
-                "description": "Artifact subtype checked."
-              },
-              "confidence": {
-                "description": "Confidence in the baseline verdict.",
-                "enum": [
-                  "high",
-                  "medium",
-                  "low"
-                ],
-                "title": "Confidence",
-                "type": "string"
-              },
-              "filename_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': filename exists anywhere in the baseline.",
-                "title": "Filename In Baseline"
-              },
-              "findings": {
-                "description": "Suspicious or contextual findings.",
-                "items": {
-                  "$ref": "#/$defs/Finding"
-                },
-                "title": "Findings",
-                "type": "array"
-              },
-              "is_lolbin": {
-                "default": false,
-                "description": "True when the filename is a known living-off-the-land binary.",
-                "title": "Is Lolbin",
-                "type": "boolean"
-              },
-              "is_system_path": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': path is under a Windows system directory.",
-                "title": "Is System Path"
-              },
-              "lolbin_functions": {
-                "description": "LOLBAS abuse functions when known.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Lolbin Functions",
-                "type": "array"
-              },
-              "path_in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "For type='file': exact path exists in the baseline.",
-                "title": "Path In Baseline"
-              },
-              "reasons": {
-                "description": "Why this verdict was assigned.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Reasons",
-                "type": "array"
-              },
-              "subtype_data": {
-                "additionalProperties": true,
-                "description": "Type-specific fields such as vulnerable_driver, algorithm, hash, scenarios_by_type, or filename analysis.",
-                "title": "Subtype Data",
-                "type": "object"
-              },
-              "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
-              }
-            },
-            "required": [
-              "verdict",
-              "reasons",
-              "confidence",
-              "artifact_type"
-            ],
-            "title": "CheckArtifactOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Check Hijackable DLL"
     },
     {
       "annotations": {
@@ -1762,57 +434,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
             "properties": {
               "confidence": {
                 "description": "Confidence in the baseline verdict.",
@@ -1835,7 +456,42 @@
               "findings": {
                 "description": "Suspicious or contextual findings.",
                 "items": {
-                  "$ref": "#/$defs/Finding"
+                  "properties": {
+                    "description": {
+                      "description": "Human-readable finding summary.",
+                      "title": "Description",
+                      "type": "string"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific finding details.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "severity": {
+                      "description": "Finding severity.",
+                      "enum": [
+                        "critical",
+                        "high",
+                        "medium",
+                        "low"
+                      ],
+                      "title": "Severity",
+                      "type": "string"
+                    },
+                    "type": {
+                      "description": "Machine-readable finding type.",
+                      "title": "Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "severity",
+                    "description"
+                  ],
+                  "title": "Finding",
+                  "type": "object"
                 },
                 "title": "Findings",
                 "type": "array"
@@ -1876,8 +532,16 @@
                 "title": "User Context"
               },
               "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
+                "description": "Offline Windows baseline verdict.",
+                "enum": [
+                  "EXPECTED",
+                  "EXPECTED_LOLBIN",
+                  "SUSPICIOUS",
+                  "UNKNOWN",
+                  "ERROR"
+                ],
+                "title": "Verdict",
+                "type": "string"
               }
             },
             "required": [
@@ -1890,8 +554,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -1905,18 +576,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -1943,7 +602,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Check Process Tree"
     },
@@ -2024,66 +684,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "SystemType": {
-                "enum": [
-                  "service",
-                  "scheduled_task",
-                  "autorun"
-                ],
-                "title": "SystemType",
-                "type": "string"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
             "properties": {
               "baseline_info": {
                 "anyOf": [
@@ -2112,7 +712,42 @@
               "findings": {
                 "description": "Suspicious or contextual findings.",
                 "items": {
-                  "$ref": "#/$defs/Finding"
+                  "properties": {
+                    "description": {
+                      "description": "Human-readable finding summary.",
+                      "title": "Description",
+                      "type": "string"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific finding details.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "severity": {
+                      "description": "Finding severity.",
+                      "enum": [
+                        "critical",
+                        "high",
+                        "medium",
+                        "low"
+                      ],
+                      "title": "Severity",
+                      "type": "string"
+                    },
+                    "type": {
+                      "description": "Machine-readable finding type.",
+                      "title": "Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "severity",
+                    "description"
+                  ],
+                  "title": "Finding",
+                  "type": "object"
                 },
                 "title": "Findings",
                 "type": "array"
@@ -2166,8 +801,14 @@
                 "type": "array"
               },
               "system_type": {
-                "$ref": "#/$defs/SystemType",
-                "description": "System artifact subtype checked."
+                "description": "System artifact subtype checked.",
+                "enum": [
+                  "service",
+                  "scheduled_task",
+                  "autorun"
+                ],
+                "title": "SystemType",
+                "type": "string"
               },
               "task_name": {
                 "anyOf": [
@@ -2183,8 +824,16 @@
                 "title": "Task Name"
               },
               "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
+                "description": "Offline Windows baseline verdict.",
+                "enum": [
+                  "EXPECTED",
+                  "EXPECTED_LOLBIN",
+                  "SUSPICIOUS",
+                  "UNKNOWN",
+                  "ERROR"
+                ],
+                "title": "Verdict",
+                "type": "string"
               }
             },
             "required": [
@@ -2197,8 +846,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -2212,18 +868,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -2250,850 +894,10 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Check System Persistence"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Check System Persistence"
-      },
-      "description": "DEPRECATED alias for `wintriage_check_system`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_service(service_name, binary_path, os_version)` calls to `wintriage_check_system(type='service', name=service_name, ...)`.\n\nValidate Windows persistence and system configuration against OS-version baselines: `type='service'`, `type='scheduled_task'`, or `type='autorun'`. `os_version` is required because services, tasks, and autoruns vary by release. UNKNOWN is neutral unless the result includes concrete suspicious findings. Example: `wintriage_check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro', binary_path='C:\\\\Windows\\\\System32\\\\svchost.exe')`.",
-      "input_schema": {
-        "properties": {
-          "binary_path": {
-            "anyOf": [
-              {
-                "maxLength": 4096,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Deprecated alias argument: optional service binary path.",
-            "title": "Binary Path"
-          },
-          "os_version": {
-            "description": "Deprecated alias argument: required target OS version.",
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Os Version",
-            "type": "string"
-          },
-          "service_name": {
-            "description": "Deprecated alias argument: service name.",
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Service Name",
-            "type": "string"
-          }
-        },
-        "required": [
-          "service_name",
-          "os_version"
-        ],
-        "title": "CheckServiceAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_check_system",
-        "deprecated": true
-      },
-      "name": "check_service",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "SystemType": {
-                "enum": [
-                  "service",
-                  "scheduled_task",
-                  "autorun"
-                ],
-                "title": "SystemType",
-                "type": "string"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "baseline_info": {
-                "anyOf": [
-                  {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Baseline service metadata when available.",
-                "title": "Baseline Info"
-              },
-              "confidence": {
-                "description": "Confidence in the baseline verdict.",
-                "enum": [
-                  "high",
-                  "medium",
-                  "low"
-                ],
-                "title": "Confidence",
-                "type": "string"
-              },
-              "findings": {
-                "description": "Suspicious or contextual findings.",
-                "items": {
-                  "$ref": "#/$defs/Finding"
-                },
-                "title": "Findings",
-                "type": "array"
-              },
-              "hive": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Autorun hive for matching entries.",
-                "title": "Hive"
-              },
-              "in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "True when the service/task/autorun is present in baseline.",
-                "title": "In Baseline"
-              },
-              "lookup_performed": {
-                "default": true,
-                "description": "False only when validation prevented a baseline lookup.",
-                "title": "Lookup Performed",
-                "type": "boolean"
-              },
-              "os_versions": {
-                "description": "OS versions associated with the match.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Os Versions",
-                "type": "array"
-              },
-              "reasons": {
-                "description": "Why this verdict was assigned.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Reasons",
-                "type": "array"
-              },
-              "system_type": {
-                "$ref": "#/$defs/SystemType",
-                "description": "System artifact subtype checked."
-              },
-              "task_name": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Scheduled task display name.",
-                "title": "Task Name"
-              },
-              "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
-              }
-            },
-            "required": [
-              "verdict",
-              "reasons",
-              "confidence",
-              "system_type"
-            ],
-            "title": "CheckSystemOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Check Service"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Check System Persistence"
-      },
-      "description": "DEPRECATED alias for `wintriage_check_system`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_scheduled_task(task_path, os_version)` calls to `wintriage_check_system(type='scheduled_task', name=task_path, ...)`.\n\nValidate Windows persistence and system configuration against OS-version baselines: `type='service'`, `type='scheduled_task'`, or `type='autorun'`. `os_version` is required because services, tasks, and autoruns vary by release. UNKNOWN is neutral unless the result includes concrete suspicious findings. Example: `wintriage_check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro', binary_path='C:\\\\Windows\\\\System32\\\\svchost.exe')`.",
-      "input_schema": {
-        "properties": {
-          "os_version": {
-            "description": "Deprecated alias argument: required target OS version.",
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Os Version",
-            "type": "string"
-          },
-          "task_path": {
-            "description": "Deprecated alias argument: scheduled task path.",
-            "maxLength": 1024,
-            "minLength": 1,
-            "title": "Task Path",
-            "type": "string"
-          }
-        },
-        "required": [
-          "task_path",
-          "os_version"
-        ],
-        "title": "CheckScheduledTaskAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_check_system",
-        "deprecated": true
-      },
-      "name": "check_scheduled_task",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "SystemType": {
-                "enum": [
-                  "service",
-                  "scheduled_task",
-                  "autorun"
-                ],
-                "title": "SystemType",
-                "type": "string"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "baseline_info": {
-                "anyOf": [
-                  {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Baseline service metadata when available.",
-                "title": "Baseline Info"
-              },
-              "confidence": {
-                "description": "Confidence in the baseline verdict.",
-                "enum": [
-                  "high",
-                  "medium",
-                  "low"
-                ],
-                "title": "Confidence",
-                "type": "string"
-              },
-              "findings": {
-                "description": "Suspicious or contextual findings.",
-                "items": {
-                  "$ref": "#/$defs/Finding"
-                },
-                "title": "Findings",
-                "type": "array"
-              },
-              "hive": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Autorun hive for matching entries.",
-                "title": "Hive"
-              },
-              "in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "True when the service/task/autorun is present in baseline.",
-                "title": "In Baseline"
-              },
-              "lookup_performed": {
-                "default": true,
-                "description": "False only when validation prevented a baseline lookup.",
-                "title": "Lookup Performed",
-                "type": "boolean"
-              },
-              "os_versions": {
-                "description": "OS versions associated with the match.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Os Versions",
-                "type": "array"
-              },
-              "reasons": {
-                "description": "Why this verdict was assigned.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Reasons",
-                "type": "array"
-              },
-              "system_type": {
-                "$ref": "#/$defs/SystemType",
-                "description": "System artifact subtype checked."
-              },
-              "task_name": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Scheduled task display name.",
-                "title": "Task Name"
-              },
-              "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
-              }
-            },
-            "required": [
-              "verdict",
-              "reasons",
-              "confidence",
-              "system_type"
-            ],
-            "title": "CheckSystemOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Check Scheduled Task"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Check System Persistence"
-      },
-      "description": "DEPRECATED alias for `wintriage_check_system`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `check_autorun(key_path, value_name, os_version)` calls to `wintriage_check_system(type='autorun', name=key_path, ...)`.\n\nValidate Windows persistence and system configuration against OS-version baselines: `type='service'`, `type='scheduled_task'`, or `type='autorun'`. `os_version` is required because services, tasks, and autoruns vary by release. UNKNOWN is neutral unless the result includes concrete suspicious findings. Example: `wintriage_check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro', binary_path='C:\\\\Windows\\\\System32\\\\svchost.exe')`.",
-      "input_schema": {
-        "properties": {
-          "key_path": {
-            "description": "Deprecated alias argument: autorun registry key path.",
-            "maxLength": 1024,
-            "minLength": 1,
-            "title": "Key Path",
-            "type": "string"
-          },
-          "os_version": {
-            "description": "Deprecated alias argument: required target OS version.",
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Os Version",
-            "type": "string"
-          },
-          "value_name": {
-            "anyOf": [
-              {
-                "maxLength": 256,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Deprecated alias argument: optional registry value name.",
-            "title": "Value Name"
-          }
-        },
-        "required": [
-          "key_path",
-          "os_version"
-        ],
-        "title": "CheckAutorunAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_check_system",
-        "deprecated": true
-      },
-      "name": "check_autorun",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "SystemType": {
-                "enum": [
-                  "service",
-                  "scheduled_task",
-                  "autorun"
-                ],
-                "title": "SystemType",
-                "type": "string"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "baseline_info": {
-                "anyOf": [
-                  {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Baseline service metadata when available.",
-                "title": "Baseline Info"
-              },
-              "confidence": {
-                "description": "Confidence in the baseline verdict.",
-                "enum": [
-                  "high",
-                  "medium",
-                  "low"
-                ],
-                "title": "Confidence",
-                "type": "string"
-              },
-              "findings": {
-                "description": "Suspicious or contextual findings.",
-                "items": {
-                  "$ref": "#/$defs/Finding"
-                },
-                "title": "Findings",
-                "type": "array"
-              },
-              "hive": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Autorun hive for matching entries.",
-                "title": "Hive"
-              },
-              "in_baseline": {
-                "anyOf": [
-                  {
-                    "type": "boolean"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "True when the service/task/autorun is present in baseline.",
-                "title": "In Baseline"
-              },
-              "lookup_performed": {
-                "default": true,
-                "description": "False only when validation prevented a baseline lookup.",
-                "title": "Lookup Performed",
-                "type": "boolean"
-              },
-              "os_versions": {
-                "description": "OS versions associated with the match.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Os Versions",
-                "type": "array"
-              },
-              "reasons": {
-                "description": "Why this verdict was assigned.",
-                "items": {
-                  "type": "string"
-                },
-                "title": "Reasons",
-                "type": "array"
-              },
-              "system_type": {
-                "$ref": "#/$defs/SystemType",
-                "description": "System artifact subtype checked."
-              },
-              "task_name": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Scheduled task display name.",
-                "title": "Task Name"
-              },
-              "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
-              }
-            },
-            "required": [
-              "verdict",
-              "reasons",
-              "confidence",
-              "system_type"
-            ],
-            "title": "CheckSystemOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Check Autorun"
     },
     {
       "annotations": {
@@ -3172,102 +976,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "Finding": {
-                "properties": {
-                  "description": {
-                    "description": "Human-readable finding summary.",
-                    "title": "Description",
-                    "type": "string"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific finding details.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "severity": {
-                    "description": "Finding severity.",
-                    "enum": [
-                      "critical",
-                      "high",
-                      "medium",
-                      "low"
-                    ],
-                    "title": "Severity",
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Machine-readable finding type.",
-                    "title": "Type",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "severity",
-                  "description"
-                ],
-                "title": "Finding",
-                "type": "object"
-              },
-              "RegistryValueSummary": {
-                "properties": {
-                  "hive": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Registry hive.",
-                    "title": "Hive"
-                  },
-                  "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Registry value name.",
-                    "title": "Name"
-                  },
-                  "type": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Registry value type.",
-                    "title": "Type"
-                  }
-                },
-                "title": "RegistryValueSummary",
-                "type": "object"
-              },
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
             "properties": {
               "confidence": {
                 "description": "Confidence in the baseline verdict.",
@@ -3282,7 +990,42 @@
               "findings": {
                 "description": "Suspicious or contextual findings.",
                 "items": {
-                  "$ref": "#/$defs/Finding"
+                  "properties": {
+                    "description": {
+                      "description": "Human-readable finding summary.",
+                      "title": "Description",
+                      "type": "string"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific finding details.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "severity": {
+                      "description": "Finding severity.",
+                      "enum": [
+                        "critical",
+                        "high",
+                        "medium",
+                        "low"
+                      ],
+                      "title": "Severity",
+                      "type": "string"
+                    },
+                    "type": {
+                      "description": "Machine-readable finding type.",
+                      "title": "Type",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "severity",
+                    "description"
+                  ],
+                  "title": "Finding",
+                  "type": "object"
                 },
                 "title": "Findings",
                 "type": "array"
@@ -3350,14 +1093,64 @@
               "values": {
                 "description": "Up to 10 matching values as {name,type,hive}.",
                 "items": {
-                  "$ref": "#/$defs/RegistryValueSummary"
+                  "properties": {
+                    "hive": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Registry hive.",
+                      "title": "Hive"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Registry value name.",
+                      "title": "Name"
+                    },
+                    "type": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Registry value type.",
+                      "title": "Type"
+                    }
+                  },
+                  "title": "RegistryValueSummary",
+                  "type": "object"
                 },
                 "title": "Values",
                 "type": "array"
               },
               "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Offline Windows baseline verdict."
+                "description": "Offline Windows baseline verdict.",
+                "enum": [
+                  "EXPECTED",
+                  "EXPECTED_LOLBIN",
+                  "SUSPICIOUS",
+                  "UNKNOWN",
+                  "ERROR"
+                ],
+                "title": "Verdict",
+                "type": "string"
               }
             },
             "required": [
@@ -3370,8 +1163,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -3385,18 +1185,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -3423,7 +1211,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Check Registry Baseline"
     },
@@ -3457,19 +1246,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "Verdict": {
-                "enum": [
-                  "EXPECTED",
-                  "EXPECTED_LOLBIN",
-                  "SUSPICIOUS",
-                  "UNKNOWN",
-                  "ERROR"
-                ],
-                "title": "Verdict",
-                "type": "string"
-              }
-            },
             "properties": {
               "description": {
                 "anyOf": [
@@ -3549,8 +1325,16 @@
                 "title": "Tool Name"
               },
               "verdict": {
-                "$ref": "#/$defs/Verdict",
-                "description": "Named-pipe baseline verdict."
+                "description": "Named-pipe baseline verdict.",
+                "enum": [
+                  "EXPECTED",
+                  "EXPECTED_LOLBIN",
+                  "SUSPICIOUS",
+                  "UNKNOWN",
+                  "ERROR"
+                ],
+                "title": "Verdict",
+                "type": "string"
               }
             },
             "required": [
@@ -3560,8 +1344,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -3575,18 +1366,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -3613,7 +1392,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Check Named Pipe"
     },
@@ -3648,81 +1428,32 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "WintriageDbStats": {
-                "properties": {
-                  "context_db": {
-                    "additionalProperties": true,
-                    "description": "context.db coverage counts.",
-                    "title": "Context Db",
-                    "type": "object"
-                  },
-                  "known_good_db": {
-                    "additionalProperties": true,
-                    "description": "known_good.db coverage counts.",
-                    "title": "Known Good Db",
-                    "type": "object"
-                  },
-                  "registry_db": {
-                    "additionalProperties": true,
-                    "description": "known_good_registry.db availability/stats.",
-                    "title": "Registry Db",
-                    "type": "object"
-                  }
-                },
-                "title": "WintriageDbStats",
-                "type": "object"
-              },
-              "WintriageHealth": {
-                "properties": {
-                  "cache": {
-                    "additionalProperties": true,
-                    "description": "Cache statistics by database.",
-                    "title": "Cache",
-                    "type": "object"
-                  },
-                  "config": {
-                    "additionalProperties": true,
-                    "description": "Non-secret runtime configuration summary.",
-                    "title": "Config",
-                    "type": "object"
-                  },
-                  "databases": {
-                    "additionalProperties": {
-                      "type": "string"
-                    },
-                    "description": "Database connectivity status by database.",
-                    "title": "Databases",
-                    "type": "object"
-                  },
-                  "status": {
-                    "description": "Backend readiness status.",
-                    "enum": [
-                      "healthy",
-                      "degraded"
-                    ],
-                    "title": "Status",
-                    "type": "string"
-                  },
-                  "uptime_seconds": {
-                    "description": "Server uptime in seconds.",
-                    "title": "Uptime Seconds",
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "status",
-                  "uptime_seconds"
-                ],
-                "title": "WintriageHealth",
-                "type": "object"
-              }
-            },
             "properties": {
               "db_stats": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/WintriageDbStats"
+                    "properties": {
+                      "context_db": {
+                        "additionalProperties": true,
+                        "description": "context.db coverage counts.",
+                        "title": "Context Db",
+                        "type": "object"
+                      },
+                      "known_good_db": {
+                        "additionalProperties": true,
+                        "description": "known_good.db coverage counts.",
+                        "title": "Known Good Db",
+                        "type": "object"
+                      },
+                      "registry_db": {
+                        "additionalProperties": true,
+                        "description": "known_good_registry.db availability/stats.",
+                        "title": "Registry Db",
+                        "type": "object"
+                      }
+                    },
+                    "title": "WintriageDbStats",
+                    "type": "object"
                   },
                   {
                     "type": "null"
@@ -3734,7 +1465,48 @@
               "health": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/WintriageHealth"
+                    "properties": {
+                      "cache": {
+                        "additionalProperties": true,
+                        "description": "Cache statistics by database.",
+                        "title": "Cache",
+                        "type": "object"
+                      },
+                      "config": {
+                        "additionalProperties": true,
+                        "description": "Non-secret runtime configuration summary.",
+                        "title": "Config",
+                        "type": "object"
+                      },
+                      "databases": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "description": "Database connectivity status by database.",
+                        "title": "Databases",
+                        "type": "object"
+                      },
+                      "status": {
+                        "description": "Backend readiness status.",
+                        "enum": [
+                          "healthy",
+                          "degraded"
+                        ],
+                        "title": "Status",
+                        "type": "string"
+                      },
+                      "uptime_seconds": {
+                        "description": "Server uptime in seconds.",
+                        "title": "Uptime Seconds",
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "uptime_seconds"
+                    ],
+                    "title": "WintriageHealth",
+                    "type": "object"
                   },
                   {
                     "type": "null"
@@ -3761,8 +1533,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -3776,18 +1555,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -3814,393 +1581,10 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Triage Backend Status"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Triage Backend Status"
-      },
-      "description": "DEPRECATED alias for `wintriage_server_status`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `get_db_stats()` calls to `wintriage_server_status(resource='db_stats')`.\n\nReport Windows triage backend readiness. Use `resource='health'` for connectivity/cache health, `resource='db_stats'` for local baseline coverage counts, or `resource='all'` before a triage-heavy investigation. This is a resource-compatible tool kept for one cutover cycle; prefer `wintriage://status` or `wintriage://catalog/baselines` where resource access is available. Example: `wintriage_server_status(resource='all')`.",
-      "input_schema": {
-        "properties": {},
-        "title": "EmptyAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_server_status",
-        "deprecated": true
-      },
-      "name": "get_db_stats",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "WintriageDbStats": {
-                "properties": {
-                  "context_db": {
-                    "additionalProperties": true,
-                    "description": "context.db coverage counts.",
-                    "title": "Context Db",
-                    "type": "object"
-                  },
-                  "known_good_db": {
-                    "additionalProperties": true,
-                    "description": "known_good.db coverage counts.",
-                    "title": "Known Good Db",
-                    "type": "object"
-                  },
-                  "registry_db": {
-                    "additionalProperties": true,
-                    "description": "known_good_registry.db availability/stats.",
-                    "title": "Registry Db",
-                    "type": "object"
-                  }
-                },
-                "title": "WintriageDbStats",
-                "type": "object"
-              },
-              "WintriageHealth": {
-                "properties": {
-                  "cache": {
-                    "additionalProperties": true,
-                    "description": "Cache statistics by database.",
-                    "title": "Cache",
-                    "type": "object"
-                  },
-                  "config": {
-                    "additionalProperties": true,
-                    "description": "Non-secret runtime configuration summary.",
-                    "title": "Config",
-                    "type": "object"
-                  },
-                  "databases": {
-                    "additionalProperties": {
-                      "type": "string"
-                    },
-                    "description": "Database connectivity status by database.",
-                    "title": "Databases",
-                    "type": "object"
-                  },
-                  "status": {
-                    "description": "Backend readiness status.",
-                    "enum": [
-                      "healthy",
-                      "degraded"
-                    ],
-                    "title": "Status",
-                    "type": "string"
-                  },
-                  "uptime_seconds": {
-                    "description": "Server uptime in seconds.",
-                    "title": "Uptime Seconds",
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "status",
-                  "uptime_seconds"
-                ],
-                "title": "WintriageHealth",
-                "type": "object"
-              }
-            },
-            "properties": {
-              "db_stats": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/WintriageDbStats"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Database statistics payload when requested."
-              },
-              "health": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/WintriageHealth"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Health payload when requested."
-              },
-              "resource": {
-                "description": "Status resource returned.",
-                "enum": [
-                  "health",
-                  "db_stats",
-                  "all"
-                ],
-                "title": "Resource",
-                "type": "string"
-              }
-            },
-            "required": [
-              "resource"
-            ],
-            "title": "ServerStatusOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Get DB Stats"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": false,
-        "readOnlyHint": true,
-        "title": "Triage Backend Status"
-      },
-      "description": "DEPRECATED alias for `wintriage_server_status`. Use the canonical tool; this alias will be removed after one cutover cycle.\n\nMaps legacy `get_health()` calls to `wintriage_server_status(resource='health')`.\n\nReport Windows triage backend readiness. Use `resource='health'` for connectivity/cache health, `resource='db_stats'` for local baseline coverage counts, or `resource='all'` before a triage-heavy investigation. This is a resource-compatible tool kept for one cutover cycle; prefer `wintriage://status` or `wintriage://catalog/baselines` where resource access is available. Example: `wintriage_server_status(resource='all')`.",
-      "input_schema": {
-        "properties": {},
-        "title": "EmptyAliasIn",
-        "type": "object"
-      },
-      "meta": {
-        "canonical_name": "wintriage_server_status",
-        "deprecated": true
-      },
-      "name": "get_health",
-      "output_schema": {
-        "anyOf": [
-          {
-            "$defs": {
-              "WintriageDbStats": {
-                "properties": {
-                  "context_db": {
-                    "additionalProperties": true,
-                    "description": "context.db coverage counts.",
-                    "title": "Context Db",
-                    "type": "object"
-                  },
-                  "known_good_db": {
-                    "additionalProperties": true,
-                    "description": "known_good.db coverage counts.",
-                    "title": "Known Good Db",
-                    "type": "object"
-                  },
-                  "registry_db": {
-                    "additionalProperties": true,
-                    "description": "known_good_registry.db availability/stats.",
-                    "title": "Registry Db",
-                    "type": "object"
-                  }
-                },
-                "title": "WintriageDbStats",
-                "type": "object"
-              },
-              "WintriageHealth": {
-                "properties": {
-                  "cache": {
-                    "additionalProperties": true,
-                    "description": "Cache statistics by database.",
-                    "title": "Cache",
-                    "type": "object"
-                  },
-                  "config": {
-                    "additionalProperties": true,
-                    "description": "Non-secret runtime configuration summary.",
-                    "title": "Config",
-                    "type": "object"
-                  },
-                  "databases": {
-                    "additionalProperties": {
-                      "type": "string"
-                    },
-                    "description": "Database connectivity status by database.",
-                    "title": "Databases",
-                    "type": "object"
-                  },
-                  "status": {
-                    "description": "Backend readiness status.",
-                    "enum": [
-                      "healthy",
-                      "degraded"
-                    ],
-                    "title": "Status",
-                    "type": "string"
-                  },
-                  "uptime_seconds": {
-                    "description": "Server uptime in seconds.",
-                    "title": "Uptime Seconds",
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "status",
-                  "uptime_seconds"
-                ],
-                "title": "WintriageHealth",
-                "type": "object"
-              }
-            },
-            "properties": {
-              "db_stats": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/WintriageDbStats"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Database statistics payload when requested."
-              },
-              "health": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/WintriageHealth"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Health payload when requested."
-              },
-              "resource": {
-                "description": "Status resource returned.",
-                "enum": [
-                  "health",
-                  "db_stats",
-                  "all"
-                ],
-                "title": "Resource",
-                "type": "string"
-              }
-            },
-            "required": [
-              "resource"
-            ],
-            "title": "ServerStatusOut",
-            "type": "object"
-          },
-          {
-            "$defs": {
-              "ErrorCode": {
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ]
-      },
-      "title": "Deprecated: Get Health"
     }
   ]
 }
