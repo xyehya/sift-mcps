@@ -65,6 +65,7 @@ class FakeEvidenceDB:
         self.retire_calls: list = []
         self.delete_calls: list = []
         self.reacquire_calls: list = []
+        self.unseal_calls: list = []
 
     def record_reauth_event(self, *, case_id, actor, examiner, action):
         self.reauth_calls.append((case_id, examiner, action))
@@ -107,6 +108,18 @@ class FakeEvidenceDB:
             "display_path": display_path,
             "sha256": "sha256:" + "c" * 64,
             "bytes": 4096,
+        }
+
+    def unseal(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
+        assert reauth_audit_event_id, "unseal must receive a re-auth audit event id"
+        self.unseal_calls.append((display_path, reason, reauth_audit_event_id))
+        self.seal_status = "unsealed"
+        return {
+            "evidence_id": "ev-unsealed",
+            "display_path": display_path,
+            "status": "registered",
+            "seal_status": "unsealed",
+            "immutable": False,
         }
 
     def delete_object(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
@@ -736,6 +749,84 @@ class TestEvidenceChainReacquire:
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
         resp = c.post(
             "/api/evidence/chain/reacquire",
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "r"},
+        )
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# unseal (clear immutable flag so bytes can be replaced/re-imaged) endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceChainUnseal:
+    def test_no_auth_returns_403(self, client):
+        resp = client.post("/api/evidence/chain/unseal", json={})
+        assert resp.status_code == 403
+
+    def test_missing_password_returns_400(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/unseal", json={"path": "evidence/x", "reason": "r"}
+        )
+        assert resp.status_code == 400
+
+    def test_missing_path_returns_400(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/unseal",
+            json={"password": GOOD_PASSWORD, "reason": "r"},
+        )
+        assert resp.status_code == 400
+
+    def test_missing_reason_returns_400(self, authed_client):
+        resp = authed_client.post(
+            "/api/evidence/chain/unseal",
+            json={"password": GOOD_PASSWORD, "path": "evidence/x"},
+        )
+        assert resp.status_code == 400
+
+    def test_control_plane_down_fails_closed(self, authed_client, evidence_db, fake_auth):
+        fake_auth.control_plane_down = True
+        resp = authed_client.post(
+            "/api/evidence/chain/unseal",
+            json={"password": GOOD_PASSWORD,
+                  "path": "evidence/x.bin", "reason": "re-image"},
+        )
+        assert resp.status_code == 503
+        assert not evidence_db.unseal_calls
+
+    def test_unseal_succeeds(self, authed_client, evidence_db):
+        resp = authed_client.post(
+            "/api/evidence/chain/unseal",
+            json={"password": GOOD_PASSWORD,
+                  "path": "evidence/Rocba-Memory.raw",
+                  "reason": "re-image corrupt acquisition"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["unsealed"] is True
+        assert data["authority"] == "db"
+        assert data["path"] == "evidence/Rocba-Memory.raw"
+        assert data["display_path"] == "evidence/Rocba-Memory.raw"
+        assert data["evidence_id"] == "ev-unsealed"
+        assert data["seal_status"] == "unsealed"
+        assert evidence_db.unseal_calls
+        assert evidence_db.unseal_calls[0] == (
+            "evidence/Rocba-Memory.raw", "re-image corrupt acquisition", "audit-evt-001",
+        )
+
+    def test_unseal_wrong_password_returns_401(self, authed_client, evidence_db):
+        resp = authed_client.post(
+            "/api/evidence/chain/unseal",
+            json={"password": "wrong-password",
+                  "path": "evidence/x.bin", "reason": "re-image"},
+        )
+        assert resp.status_code == 401
+        assert not evidence_db.unseal_calls
+
+    def test_unseal_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
+        c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
+        resp = c.post(
+            "/api/evidence/chain/unseal",
             json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "r"},
         )
         assert resp.status_code == 404
