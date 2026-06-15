@@ -662,11 +662,116 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 row = cur.fetchone()
             conn.commit()
+        # B-MVP-048: a re-acquired item is sealed again, so re-apply the
+        # service-owned + immutable FS posture to its new bytes (the operator
+        # re-imaged with a mutable, operator-owned file). Fail CLOSED with the
+        # same mapping used by _harden_sealed_files so a reacquire never leaves
+        # the DB sealed while the bytes stay mutable.
+        self._harden_sealed_files(case_id, [{"path": rel}])
         result = _chain_head_dict(row)
         result["display_path"] = rel
         result["sha256"] = f"sha256:{sha256}"
         result["bytes"] = size
         return result
+
+    def unseal(
+        self,
+        *,
+        case_id: str,
+        display_path: str,
+        reason: str,
+        reauth_audit_event_id: str,
+        actor: Any,
+        examiner: str,
+    ) -> dict[str, Any]:
+        """Operator unlock of a sealed evidence item so its bytes can be replaced.
+
+        The deliberate inverse of seal: clears the on-disk immutable (+i) flag via
+        ``sift_core.evidence_chain.unharden_sealed_evidence`` and records the
+        logical transition through ``app.evidence_unseal`` (object -> status
+        ``registered``, seal_status ``unsealed``). The recompute drops the case
+        aggregate seal status to ``unsealed`` so the fail-closed agent evidence
+        gate BLOCKS every agent MCP tool until the operator re-seals — that gate
+        block is the intended control while bytes are being swapped/re-imaged.
+
+        Re-auth gated: ``reauth_audit_event_id`` must be non-empty. The item must
+        already exist and be present on disk (a missing item is a retire, not an
+        unseal). DB is the authority; no file manifest/ledger is consulted.
+        """
+        del examiner
+        if not str(reauth_audit_event_id or "").strip():
+            raise PortalServiceError("unseal_requires_reauth", http_status=403)
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        del actor_type
+        rel = _relative_display_path(display_path)
+        evidence_id = self._evidence_id_for_path(case_id, rel)
+        if not evidence_id:
+            raise PortalServiceError("evidence_object_not_found", http_status=404)
+        # The bytes must be present to unlock them (otherwise there is nothing to
+        # clear +i on — a missing item is a retire, not an unseal).
+        self._resolve_evidence_path(case_id, rel)
+        # Clear the immutable flag BEFORE the DB write: if the FS posture cannot
+        # be relaxed we must not record an unsealed transition (which would tell
+        # the operator the bytes are now editable when they are not).
+        self._unharden_sealed_files(case_id, [rel])
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select seal_status
+                    from app.evidence_unseal(%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        evidence_id,
+                        reason,
+                        reauth_audit_event_id,
+                        actor_user,
+                        actor_service,
+                    ),
+                )
+                cur.fetchone()
+                # Read back the item's resulting per-object status for the
+                # contract return (the RPC returns the case chain head).
+                cur.execute(
+                    "select status, seal_status from app.evidence_objects where id = %s",
+                    (evidence_id,),
+                )
+                obj = cur.fetchone()
+            conn.commit()
+        status = str(obj[0]) if obj else "registered"
+        seal_status = str(obj[1]) if obj else "unsealed"
+        return {
+            "evidence_id": evidence_id,
+            "display_path": rel,
+            "status": status,
+            "seal_status": seal_status,
+            "immutable": False,
+        }
+
+    def _unharden_sealed_files(self, case_id: str, rel_paths: list[str]) -> None:
+        """Clear the immutable flag on the given sealed evidence files.
+
+        Mirrors ``_harden_sealed_files`` but in reverse: resolves the case dir,
+        re-validates each case-relative path inside ``evidence/`` (delegated to
+        ``sift_core.evidence_chain.unharden_sealed_evidence``), and maps any
+        failure to a fail-closed unseal error so an unseal is never recorded for
+        bytes that are still immutable.
+        """
+        from sift_core.evidence_chain import (
+            EvidenceHardeningError,
+            unharden_sealed_evidence,
+        )
+
+        case_dir = self._case_artifact_path(case_id)
+        if case_dir is None:
+            raise PortalServiceError("case_artifact_path_unavailable", http_status=404)
+        try:
+            unharden_sealed_evidence(case_dir, rel_paths)
+        except EvidenceHardeningError as exc:
+            logger.error("evidence unseal unhardening failed for case %s: %s", case_id, exc)
+            raise PortalServiceError(
+                "evidence_unseal_failed", http_status=500
+            ) from exc
 
     def ignore(
         self,
