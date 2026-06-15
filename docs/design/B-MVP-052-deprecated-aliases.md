@@ -1,6 +1,14 @@
 # B-MVP-052 — Shared `deprecated_aliases` add-on feature vs. gateway strict manifest enforcement
 
-Status: DESIGN PROPOSAL (no code change). Decision pending operator sign-off.
+Status: DECIDED — **Option (c) adopted and IMPLEMENTED** (2026-06-16, branch
+`fix/b052-remove-deprecated-aliases`). The `deprecated_aliases` mechanism was removed
+from the shared add-on contract (both `register_all` alias loops, the
+`deprecated_alias_of` branch in both `_function_tool`s, and the `ToolDef` field in all
+three packages' `contracts.py`). Add-on authoring guidance now documents the safe
+rename path (new manifest tool name + `manifest_sha256` bump + re-register) and a
+gateway regression test pins the served ⊆ manifest invariant
+(`packages/sift-gateway/tests/test_f1_opensearch_backend_registry.py::test_started_backend_serving_undeclared_tool_is_rejected`).
+The analysis below is preserved as-written (append-only history).
 Source: backlog B-MVP-052, root-caused 2026-06-15 via the `opensearch_host_fix` incident.
 Scope-fence: this doc only. The orchestrator folds the outcome into `REGISTER.md`,
 `Session-Notes.md`, and (if implemented) the code/CONVENTIONS.

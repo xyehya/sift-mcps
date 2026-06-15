@@ -504,6 +504,39 @@ The REST validation endpoint (`POST /api/v1/backends/validate`) accepts the
 same payload but is read-only (no DB write). Run it first to catch errors
 before the actual registration.
 
+### 6.7 Served-but-undeclared tool (served ⊆ manifest)
+
+Every tool your backend actually serves on its live `tools/list` MUST be
+declared in the manifest `tools[]` block. For a **started** backend the gateway
+`_build_tool_map` compares the backend's real served tools against
+`{t["name"] for t in manifest["tools"]}` and raises
+
+```
+ValueError: Tool '<name>' from backend '<backend>' is not declared in the manifest 'tools' block
+```
+
+which surfaces as an HTTP 500 on the next portal Start/Restart of the backend.
+Note the asymmetry: a *not-started* backend builds its tool map from the
+manifest alone, so an undeclared served tool passes every static and boot-time
+check and only detonates on the first live Start. `validate_manifest_contract`
+is manifest-only and cannot catch it either. The pin is `manifest_sha256`: the
+operator-registered manifest bounds your served surface, so do not serve any
+tool you have not declared.
+
+**Renaming a tool (the safe path).** There is no alias mechanism — the add-on
+contract does not let you keep serving an old tool name after a rename (the
+former `deprecated_aliases` field was removed under B-MVP-052 because a served
+alias is undeclared by construction and trips the guard above). To rename a
+tool:
+
+1. Add the **new** tool name to the manifest `tools[]` block and serve it under
+   that name in your Python server.
+2. Bump `manifest_sha256` to match the new manifest and re-register (via
+   `POST /api/v1/backends` or Portal -> Backends).
+3. The gateway now legally serves the new name; remove the old name from both
+   the manifest and your server in the same or the next cutover cycle. Do not
+   serve both names simultaneously unless **both** are declared in `tools[]`.
+
 ---
 
 ## 7. Development Workflow Summary

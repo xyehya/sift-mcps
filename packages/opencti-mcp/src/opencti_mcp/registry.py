@@ -894,14 +894,10 @@ def create_server(
 
 
 def register_all(mcp: FastMCP, context: RuntimeContext | None = None) -> None:
-    """Register tools, deprecated aliases, prompts, and resources."""
+    """Register tools, prompts, and resources."""
     runtime = context or RuntimeContext()
     for tool_def in REGISTRY:
         mcp.add_tool(_function_tool(tool_def, tool_def.name, runtime))
-        for alias in tool_def.deprecated_aliases:
-            mcp.add_tool(
-                _function_tool(tool_def, alias, runtime, deprecated_alias_of=tool_def.name)
-            )
     for prompt_def in PROMPT_REGISTRY:
         mcp.prompt(
             name=prompt_def.name,
@@ -922,17 +918,9 @@ def _function_tool(
     tool_def: ToolDef,
     name: str,
     context: RuntimeContext,
-    deprecated_alias_of: str | None = None,
 ) -> FunctionTool:
     description = tool_def.description
     meta: dict[str, Any] = dict(TOOL_CATALOG_META.get(tool_def.name, {}))
-    if deprecated_alias_of is not None:
-        description = (
-            f"DEPRECATED alias for `{deprecated_alias_of}`. "
-            "Use the canonical name; this alias will be removed after one cutover cycle.\n\n"
-            f"{tool_def.description}"
-        )
-        meta.update({"deprecated": True, "canonical_name": deprecated_alias_of})
 
     async def invoke(**kwargs: Any) -> ToolResult:
         audit_id = context.audit_writer()._next_audit_id()
