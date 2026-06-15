@@ -218,8 +218,18 @@ def run_vol3_plugin(
     image_path: Path,
     plugin: str,
     timeout: int = 3600,
+    plugin_args: list[str] | None = None,
 ) -> list[dict]:
-    """Run a single vol3 plugin with JSON output."""
+    """Run a single vol3 plugin with JSON output.
+
+    Args:
+        image_path: Path to the memory image.
+        plugin: Vol3 plugin name (e.g. "windows.pslist").
+        timeout: Per-plugin subprocess timeout in seconds.
+        plugin_args: Optional extra args appended AFTER the plugin name
+            (e.g. ``["--key", "ControlSet001\\Control\\ComputerName\\ActiveComputerName"]``).
+            Backward-compatible: callers that omit this get the existing behaviour.
+    """
     vol_cmd = _find_vol3()
     sym_dir = _user_symbol_dir()
     cmd = vol_cmd.split() + [
@@ -229,6 +239,8 @@ def run_vol3_plugin(
         "-q",
         plugin,
     ]
+    if plugin_args:
+        cmd.extend(plugin_args)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         stderr = result.stderr[:500] if result.stderr else ""
@@ -254,6 +266,113 @@ def run_vol3_plugin(
     elif isinstance(raw, list):
         return raw
     return []
+
+
+def _derive_hostname_from_image(image_path: Path, timeout: int = 60) -> tuple[str | None, str]:
+    """Auto-derive the hostname from a Windows memory image via Volatility 3.
+
+    Implements the proven probe recipe from B-MVP-042:
+
+    PRIMARY — ``windows.registry.printkey`` on the SYSTEM-hive ComputerName key.
+    Fallback key order per the spec:
+      1. ControlSet001\\Control\\ComputerName\\ActiveComputerName
+      2. ControlSet001\\Control\\ComputerName\\ComputerName
+      3. ControlSet002\\Control\\ComputerName\\ActiveComputerName
+      4. ControlSet002\\Control\\ComputerName\\ComputerName
+
+    SECONDARY (if all registry probes yield nothing) — ``windows.envars``.
+    Filters ``Variable.upper() == "COMPUTERNAME"``; takes the majority/first Value.
+
+    Returns:
+        ``(hostname, source)`` where ``source`` is ``"registry"`` or ``"envars"``,
+        or ``(None, "")`` if both probes fail / image is unsupported.
+
+    Notes:
+        - REG_SZ Data is rendered as ``"\"SRL-FORGE\""`` (literal surrounding
+          double-quotes inside the JSON string) — they are stripped here.
+        - printkey returns ~45 rows (all hives in memory); only the
+          ``\\REGISTRY\\MACHINE\\SYSTEM\\`` row with ``Name=="ComputerName"``
+          and ``Type=="REG_SZ"`` carries the machine name.
+        - All probes use short timeouts; a first-ever run on an uncached Windows
+          build pays ISF generation cost (~30–120 s). The caller's timeout is
+          forwarded to each probe.
+    """
+    # Verbatim prefix as emitted by vol3 -r json (single backslashes).
+    # Cannot use a raw string ending in a single backslash; use a regular
+    # escaped string instead: "\\X" → the one-character '\X' at runtime.
+    _SYSTEM_PREFIX = "\\REGISTRY\\MACHINE\\SYSTEM\\"
+    # Registry key probe order (ControlSet001 preferred, ActiveComputerName preferred)
+    _REG_KEYS = [
+        r"ControlSet001\Control\ComputerName\ActiveComputerName",
+        r"ControlSet001\Control\ComputerName\ComputerName",
+        r"ControlSet002\Control\ComputerName\ActiveComputerName",
+        r"ControlSet002\Control\ComputerName\ComputerName",
+    ]
+
+    # --- PRIMARY: registry ---
+    for key in _REG_KEYS:
+        try:
+            rows = run_vol3_plugin(
+                image_path,
+                "windows.registry.printkey",
+                timeout=timeout,
+                plugin_args=["--key", key],
+            )
+        except (RuntimeError, Exception):
+            # Plugin failed (exit != 0) — try next key
+            continue
+
+        for row in rows:
+            # Filter: must be the SYSTEM hive row with the right name/type
+            key_field = row.get("Key", "")
+            name = row.get("Name", "")
+            rtype = row.get("Type", "")
+            data = row.get("Data", "")
+            if (
+                name == "ComputerName"
+                and rtype == "REG_SZ"
+                and _SYSTEM_PREFIX.lower() in key_field.lower()
+                and data
+                and data != "-"
+            ):
+                # Strip surrounding literal double-quotes (REG_SZ renders as
+                # '"SRL-FORGE"' inside the JSON string value)
+                hostname = data.strip('"')
+                if hostname:
+                    print(
+                        f"[memory-hostname] derived from registry key {key!r}: {hostname!r}",
+                        file=sys.stderr,
+                    )
+                    return hostname, "registry"
+
+    # --- SECONDARY: envars COMPUTERNAME ---
+    try:
+        rows = run_vol3_plugin(image_path, "windows.envars", timeout=timeout)
+    except (RuntimeError, Exception):
+        rows = []
+
+    values: list[str] = [
+        row["Value"]
+        for row in rows
+        if row.get("Variable", "").upper() == "COMPUTERNAME" and row.get("Value")
+    ]
+    if values:
+        # Majority vote: the most frequent value (all 181 rows were unanimous
+        # on the test image, so first is fine; majority handles edge cases)
+        from collections import Counter
+
+        hostname = Counter(values).most_common(1)[0][0]
+        print(
+            f"[memory-hostname] derived from envars COMPUTERNAME ({len(values)} rows): {hostname!r}",
+            file=sys.stderr,
+        )
+        return hostname, "envars"
+
+    print(
+        "[memory-hostname] auto-derivation failed: registry and envars probes returned nothing.",
+        file=sys.stderr,
+    )
+    return None, ""
 
 
 def _flatten_records(records: list[dict], _depth: int = 0) -> list[dict]:
@@ -381,7 +500,14 @@ def ingest_memory(
 ) -> dict:
     """Run vol3 plugins and index results.
 
-    Returns dict with per-plugin results.
+    When ``hostname`` is empty/falsy, attempts to auto-derive it from the
+    memory image itself via vol3 (registry ComputerName, then envars COMPUTERNAME).
+    If derivation fails the function returns the same structured error as before
+    (hostname is required) so callers get a clear last-resort message.
+
+    Returns dict with per-plugin results (includes ``"hostname_source"`` key
+    indicating ``"operator"``, ``"registry"``, or ``"envars"`` so the agent
+    can see which source was used).
     """
     if plugins is not None and len(plugins) > 0:
         plugin_list = plugins
@@ -391,6 +517,28 @@ def ingest_memory(
         plugin_list = TIER_2
     else:
         plugin_list = TIER_1
+
+    # --- B-MVP-042: auto-derive hostname when operator did not supply one ---
+    hostname_source: str
+    if not hostname:
+        derived, hostname_source = _derive_hostname_from_image(image_path, timeout=min(timeout, 120))
+        if not derived:
+            return {
+                "error": "hostname is required for format='memory'.",
+                "detail": (
+                    "Auto-derivation was attempted (windows.registry.printkey + "
+                    "windows.envars) but both probes returned nothing. "
+                    "Supply hostname= explicitly."
+                ),
+                "next_step": (
+                    "Call opensearch_ingest(..., format='memory', "
+                    "hostname='<source-host>', dry_run=True)."
+                ),
+            }
+        hostname = derived
+    else:
+        hostname_source = "operator"
+    # --- end B-MVP-042 ---
 
     source_file = str(image_path)
     results: dict = {}
@@ -495,4 +643,7 @@ def ingest_memory(
         if on_progress:
             on_progress("plugin_done", plugin=plugin, indexed=count)
 
+    # Surface which source was used to determine the hostname so the agent can
+    # see it in the MCP tool response (B-MVP-042).
+    results["_meta"] = {"hostname": hostname, "hostname_source": hostname_source}
     return results

@@ -2247,11 +2247,11 @@ def opensearch_ingest(
             }
         return idx_ingest_accesslog(path, hostname, index_suffix or "accesslog", dry_run)
     if ingest_format == "memory":
-        if not hostname:
-            return {
-                "error": "hostname is required for format='memory'.",
-                "next_step": "Call opensearch_ingest(..., format='memory', hostname='<source-host>', dry_run=True).",
-            }
+        # B-MVP-042: hostname is now optional here — idx_ingest_memory (and the
+        # underlying ingest_memory in parse_memory.py) auto-derive it from the
+        # image via vol3 when omitted. The early guard is removed; the last-resort
+        # "hostname is required" error now lives in parse_memory.ingest_memory so
+        # it fires only after both registry and envars probes have been attempted.
         return idx_ingest_memory(path, hostname, tier=tier, plugins=plugins, dry_run=dry_run)
 
     evidence_path, path_error = _resolve_tool_path(path)
@@ -3720,7 +3720,8 @@ def idx_ingest_memory(
     Args:
         path: Memory image path under the active case. Bare filenames resolve
             to SIFT_CASE_DIR/evidence/.
-        hostname: Source hostname for the memory image.
+        hostname: Source hostname for the memory image. When empty/falsy, the
+            hostname is auto-derived from the image via vol3 (B-MVP-042).
         tier: Analysis depth (1=fast/essential, 2=moderate, 3=deep).
         plugins: Override tier — run only these specific plugins.
         dry_run: Preview plugins (default True). Set False to execute.
@@ -3733,6 +3734,31 @@ def idx_ingest_memory(
     if not resolved.exists():
         # F-MVP-2: omit the absolute resolved path; the agent supplied `path`.
         return {"error": f"Path not found: {path}"}
+
+    # B-MVP-042: auto-derive hostname from the image when operator did not supply one.
+    # Derivation runs here (before subprocess spawn) so the subprocess always
+    # receives a concrete --hostname value (the CLI arg is required=True).
+    hostname_source: str = "operator"
+    if not hostname:
+        from opensearch_mcp.parse_memory import _derive_hostname_from_image as _derive_hn
+        from pathlib import Path as _Path
+
+        _derived, hostname_source = _derive_hn(_Path(resolved_path), timeout=120)
+        if not _derived:
+            return {
+                "error": "hostname is required for format='memory'.",
+                "detail": (
+                    "Auto-derivation was attempted (windows.registry.printkey + "
+                    "windows.envars) but both probes returned nothing. "
+                    "Supply hostname= explicitly."
+                ),
+                "next_step": (
+                    "Call opensearch_ingest(..., format='memory', "
+                    "hostname='<source-host>', dry_run=True)."
+                ),
+            }
+        hostname = _derived
+
     from opensearch_mcp.parse_memory import TIER_1, TIER_2, TIER_3
 
     if plugins:
@@ -3750,11 +3776,15 @@ def idx_ingest_memory(
             "tier": tier,
             "plugins": plugin_list,
             "plugin_count": len(plugin_list),
+            # B-MVP-042: surface derived hostname in dry-run so agent can confirm
+            "hostname": hostname,
+            "hostname_source": hostname_source,
         }
         aid = audit.log(
             tool="idx_ingest_memory",
-            params={"path": resolved_path, "dry_run": True, "tier": tier},
-            result_summary=f"preview: {len(plugin_list)} plugins",
+            params={"path": resolved_path, "dry_run": True, "tier": tier,
+                    "hostname": hostname, "hostname_source": hostname_source},
+            result_summary=f"preview: {len(plugin_list)} plugins hostname={hostname} ({hostname_source})",
         )
         if aid:
             resp["audit_id"] = aid
@@ -3915,6 +3945,9 @@ def idx_ingest_memory(
         "run_id": run_id,
         "tier": tier,
         "plugins": plugin_list,
+        # B-MVP-042: surface which source determined the hostname
+        "hostname": hostname,
+        "hostname_source": hostname_source,
         "message": (
             f"Memory analysis started ({len(plugin_list)} plugins). "
             "This may take several minutes. Use opensearch_ingest_status() to monitor."
@@ -3924,8 +3957,9 @@ def idx_ingest_memory(
         resp["filesystem_meta_path"] = _fs_meta_rel_m
     aid = audit.log(
         tool="idx_ingest_memory",
-        params={"path": resolved_path, "tier": tier, "pid": proc.pid, "run_id": run_id},
-        result_summary=f"started tier {tier} ({len(plugin_list)} plugins)",
+        params={"path": resolved_path, "tier": tier, "pid": proc.pid, "run_id": run_id,
+                "hostname": hostname, "hostname_source": hostname_source},
+        result_summary=f"started tier {tier} ({len(plugin_list)} plugins) hostname={hostname} ({hostname_source})",
         input_files=[resolved_path],
     )
     if aid:
