@@ -109,6 +109,7 @@ from sift_gateway.config import apply_case_env, apply_execute_security_env
 from sift_gateway.health import health_routes
 from sift_gateway.mcp_endpoint import MCPAuthASGIApp
 from sift_gateway.mcp_server import (
+    _normalize_output_schema,
     create_gateway_mcp_server,
     expected_mounted_tool_names,
 )
@@ -121,6 +122,34 @@ logger = logging.getLogger(__name__)
 _RETIRED_CORE_BACKENDS = frozenset(
     {"forensic-mcp", "case-mcp", "sift-mcp", "report-mcp"}
 )
+
+
+def _sanitize_output_schema(tool: Tool) -> None:
+    """B-MVP-038 gateway defense: repair/strip any aggregated tool's invalid
+    ``outputSchema`` before it is advertised.
+
+    The MCP spec requires ``outputSchema`` to be an object-typed JSON Schema.
+    A single tool advertising an invalid schema (observed in the wild:
+    ``outputSchema.type = null``) is rejected wholesale by
+    strict MCP clients (the Claude Code harness) with ``expected "object"`` —
+    which drops the *entire* aggregated tools/list and degrades the whole MCP
+    surface. The FastMCP ``/mcp`` path already normalizes via the catalog
+    middleware; this applies the same single-source repair to every
+    aggregation-built Tool object on the REST/``get_tools_list`` and
+    ``_tool_cache`` paths — core tools and proxied backends alike — so no single
+    tool can poison the catalog. Best-effort: never raises (a non-dict / None
+    ``outputSchema`` is a safe no-op in ``_normalize_output_schema``).
+    """
+    try:
+        _normalize_output_schema(tool)
+    except Exception as exc:  # pragma: no cover - defensive; must not break list
+        logger.warning(
+            "outputSchema sanitization failed for tool %r: %s; stripping schema",
+            getattr(tool, "name", "?"),
+            exc,
+        )
+        with contextlib.suppress(Exception):
+            tool.outputSchema = None
 
 
 class Gateway:
@@ -541,7 +570,7 @@ class Gateway:
         new_cache: dict[str, Tool] = {}
         for mapped_name in new_map:
             if mapped_name in tool_objects:
-                new_cache[mapped_name] = Tool(
+                cached_tool = Tool(
                     name=mapped_name,
                     title=tool_objects[mapped_name].title,
                     description=tool_objects[mapped_name].description or "",
@@ -552,6 +581,15 @@ class Gateway:
                     meta=tool_objects[mapped_name].meta,
                     execution=tool_objects[mapped_name].execution,
                 )
+                # B-MVP-038 (gateway defense): a single proxied backend that
+                # advertises an invalid outputSchema (e.g. type:null) must not be
+                # able to poison the aggregate tools/list — strict MCP clients
+                # reject the whole list and the entire surface drops. Repair (or
+                # as a last resort strip) any non-object outputSchema here so the
+                # tool still surfaces. Applied to the cached copy that is served
+                # whenever the live backend list_tools is unavailable.
+                _sanitize_output_schema(cached_tool)
+                new_cache[mapped_name] = cached_tool
         self._tool_cache = new_cache
         # Keep metadata only for tools that survived into the live map.
         self._tool_manifest_meta = {
@@ -870,9 +908,10 @@ class Gateway:
                 outputSchema=spec.output_schema,
                 annotations={"readOnlyHint": True} if spec.read_only else None,
             )
-            if spec.output_schema is not None:
-                from sift_gateway.mcp_server import _normalize_output_schema
-                _normalize_output_schema(tool)
+            # B-MVP-038 (gateway defense): same never-raise repair as proxied
+            # tools, so a core tool with a malformed outputSchema also cannot
+            # break the aggregate tools/list. No-op when output_schema is None.
+            _sanitize_output_schema(tool)
             tools.append(tool)
         if self.job_service is not None:
             from sift_gateway.job_tools import gateway_job_tool_specs
@@ -906,19 +945,23 @@ class Gateway:
                         )
                     )
             else:
-                tools.append(
-                    Tool(
-                        name=mapped_name,
-                        title=src.title,
-                        description=src.description or "",
-                        inputSchema=src.inputSchema,
-                        outputSchema=src.outputSchema,
-                        icons=src.icons,
-                        annotations=src.annotations,
-                        meta=src.meta,
-                        execution=src.execution,
-                    )
+                proxied_tool = Tool(
+                    name=mapped_name,
+                    title=src.title,
+                    description=src.description or "",
+                    inputSchema=src.inputSchema,
+                    outputSchema=src.outputSchema,
+                    icons=src.icons,
+                    annotations=src.annotations,
+                    meta=src.meta,
+                    execution=src.execution,
                 )
+                # B-MVP-038 (gateway defense): sanitize the live-proxied tool's
+                # outputSchema the same way core tools are normalized above, so a
+                # backend advertising an invalid (e.g. type:null) outputSchema
+                # cannot break the aggregate list for strict MCP clients.
+                _sanitize_output_schema(proxied_tool)
+                tools.append(proxied_tool)
         return tools
 
     async def call_tool(

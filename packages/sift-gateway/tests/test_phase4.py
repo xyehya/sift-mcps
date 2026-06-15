@@ -329,6 +329,141 @@ def test_unknown_requirement_fails_closed():
     assert gateway.evaluate_requirement("opensearchh::badport") is False
 
 
+# --- B-MVP-038 gateway-side defense: one backend's invalid outputSchema must
+# --- not poison the aggregate tools/list. ---------------------------------
+
+def _bad_output_schema_manifest() -> dict:
+    return {
+        "spec_version": "1.0",
+        "name": "tri-addon",
+        "version": "1.0.0",
+        "tier": "addon",
+        "transport": "stdio",
+        "namespace": "tri",
+        "capabilities": {"provides": [], "requires": [], "enriches_responses": False},
+        "tools": [
+            _manifest_tool("tri_bad", description="invalid outputSchema"),
+            _manifest_tool("tri_none", description="no outputSchema"),
+            _manifest_tool("tri_good", description="valid object outputSchema"),
+        ],
+        "health": "tri_good",
+    }
+
+
+class _TriOutputSchemaBackend:
+    """Started backend advertising three tools: one with an invalid
+    ``outputSchema`` (``type: null`` — exactly the windows-triage shape that
+    took down LV1 tools/list), one with no outputSchema, one valid."""
+
+    started = True
+    manifest = _bad_output_schema_manifest()
+
+    async def list_tools(self):
+        from mcp.types import Tool
+
+        return [
+            Tool(
+                name="tri_bad",
+                description="invalid outputSchema",
+                inputSchema={"type": "object", "properties": {}},
+                outputSchema={"type": None},
+            ),
+            Tool(
+                name="tri_none",
+                description="no outputSchema",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            Tool(
+                name="tri_good",
+                description="valid object outputSchema",
+                inputSchema={"type": "object", "properties": {}},
+                outputSchema={"type": "object", "properties": {"k": {"type": "string"}}},
+            ),
+        ]
+
+
+def test_invalid_output_schema_sanitized_in_get_tools_list():
+    import asyncio
+
+    gateway = Gateway({"backends": {}, **_execute_security()})
+    gateway.backends["tri-addon"] = _TriOutputSchemaBackend()
+
+    # Aggregation must not raise on the invalid schema...
+    asyncio.run(gateway._build_tool_map())
+    tools = asyncio.run(gateway.get_tools_list())
+    by_name = {t.name: t for t in tools}
+
+    # ...all three tools still surface (we repair/strip, never drop the tool).
+    for name in ("tri_bad", "tri_none", "tri_good"):
+        assert name in by_name, f"{name} missing from aggregate tools/list"
+
+    # The invalid outputSchema is stripped (type:null -> None), not propagated.
+    assert by_name["tri_bad"].outputSchema is None
+    # A tool that never had an outputSchema stays None.
+    assert by_name["tri_none"].outputSchema is None
+    # A valid object schema passes through untouched.
+    assert by_name["tri_good"].outputSchema == {
+        "type": "object",
+        "properties": {"k": {"type": "string"}},
+    }
+
+
+def test_invalid_output_schema_sanitized_in_tool_cache():
+    import asyncio
+
+    gateway = Gateway({"backends": {}, **_execute_security()})
+    gateway.backends["tri-addon"] = _TriOutputSchemaBackend()
+    asyncio.run(gateway._build_tool_map())
+
+    # The cached Tool objects (served when the live backend list_tools is
+    # unavailable / on the run_middleware=False warm path) are also clean.
+    cache = gateway._tool_cache
+    assert cache["tri_bad"].outputSchema is None
+    assert cache["tri_none"].outputSchema is None
+    assert cache["tri_good"].outputSchema == {
+        "type": "object",
+        "properties": {"k": {"type": "string"}},
+    }
+
+
+def test_failing_backend_is_isolated_from_tools_list():
+    """server.py:338 contract — if a backend's list_tools raises, it is omitted
+    from the aggregate and the core surface stays up (no propagation)."""
+    import asyncio
+
+    raising_manifest = {
+        "spec_version": "1.0",
+        "name": "boom-addon",
+        "version": "1.0.0",
+        "tier": "addon",
+        "transport": "stdio",
+        "namespace": "boom",
+        "capabilities": {"provides": [], "requires": [], "enriches_responses": False},
+        "tools": [_manifest_tool("boom_tool", description="explodes on list")],
+        "health": "boom_tool",
+    }
+
+    class _RaisingBackend:
+        started = True
+        manifest = raising_manifest
+
+        async def list_tools(self):
+            raise RuntimeError("backend list_tools blew up")
+
+    gateway = Gateway({"backends": {}, **_execute_security()})
+    gateway.backends["boom-addon"] = _RaisingBackend()
+
+    # Must NOT raise — the failing backend is isolated...
+    asyncio.run(gateway._build_tool_map())
+    assert "boom_tool" not in gateway._tool_map
+
+    # ...and the aggregate tools/list builds with the core tools intact.
+    tools = asyncio.run(gateway.get_tools_list())
+    names = {t.name for t in tools}
+    assert "boom_tool" not in names
+    assert names, "core tools should still be present after backend isolation"
+
+
 # Test probe_backends.py script execution and validation logic
 def test_probe_backends_script_offline(tmp_path):
     import subprocess

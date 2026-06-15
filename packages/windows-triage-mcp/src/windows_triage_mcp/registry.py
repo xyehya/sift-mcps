@@ -601,11 +601,20 @@ def create_server() -> FastMCP:
 
 
 def register_all(mcp: FastMCP) -> None:
-    """Register tools, deprecated aliases, prompts, and resources."""
+    """Register canonical tools, prompts, and resources.
+
+    Only the namespaced ``wintriage_*`` canonical tools are exposed, so the
+    advertised ``tools/list`` matches ``sift-backend.json`` exactly. The
+    pre-namespacing legacy aliases (``check_file``, ``get_health``, ...) defined
+    in ``ALIAS_REGISTRY`` are intentionally NOT advertised: every other SIFT
+    backend namespaces its entire surface, this add-on was disabled before any
+    agent could call an un-namespaced alias through the gateway, and leaking
+    un-namespaced tools both breaks the namespace convention and desyncs the
+    exposed surface from the manifest (B-MVP-038). ``ALIAS_REGISTRY`` is retained
+    as a code-level mapping/record (and is still covered by the contract tests).
+    """
     for tool_def in REGISTRY:
         mcp.add_tool(_function_tool(tool_def, tool_def.name))
-        for alias in ALIAS_REGISTRY.get(tool_def.name, []):
-            mcp.add_tool(_function_tool(tool_def, alias.name, alias=alias))
     for prompt_def in PROMPT_REGISTRY:
         mcp.prompt(
             name=prompt_def.name,
@@ -629,12 +638,40 @@ def _output_schema(out_model: type[BaseModel]) -> dict[str, Any]:
     path, so the declared schema must admit both shapes; a schema-validating
     client (and the D27b gateway response-guard) otherwise rejects error
     results as schema-violating.
+
+    The root carries ``"type": "object"`` because the MCP spec requires an
+    ``outputSchema`` to be an object-typed JSON Schema, and strict clients (e.g.
+    the Claude Code MCP loader) reject a bare ``anyOf`` whose root ``type`` is
+    absent with ``Invalid input: expected "object"`` -- which drops the ENTIRE
+    aggregated ``tools/list`` and takes the whole gateway MCP surface down
+    (B-MVP-038). Both ``anyOf`` branches are pydantic models (objects), so the
+    added root type is always satisfied.
+
+    Each branch's own ``$defs`` are hoisted to the combined document root and the
+    branch bodies are referenced via ``#/$defs/...``. A bare ``anyOf`` of two
+    ``model_json_schema()`` outputs leaves each branch's ``$defs`` nested, so a
+    nested ``$ref`` such as ``#/$defs/Finding`` (which resolves against the
+    document root) dangles -> the structured-output validator raises
+    ``PointerToNowhere`` the moment such a tool actually returns. Hoisting keeps
+    every pointer resolvable at the root.
     """
+    success = out_model.model_json_schema()
+    error = ToolError.model_json_schema()
+    defs: dict[str, Any] = {}
+    defs.update(success.pop("$defs", None) or {})
+    defs.update(error.pop("$defs", None) or {})
+    # Branch bodies live in $defs too (prefixed names cannot collide with
+    # pydantic's PascalCase model names) so the anyOf is a pair of resolvable
+    # refs and every nested model ref shares the same root $defs namespace.
+    defs["__SuccessResult"] = success
+    defs["__ToolErrorResult"] = error
     return {
+        "type": "object",
+        "$defs": defs,
         "anyOf": [
-            out_model.model_json_schema(),
-            ToolError.model_json_schema(),
-        ]
+            {"$ref": "#/$defs/__SuccessResult"},
+            {"$ref": "#/$defs/__ToolErrorResult"},
+        ],
     }
 
 
