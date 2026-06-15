@@ -128,7 +128,7 @@ stdio_args() {
 }
 
 stage_runtime_command() {
-  # stage_runtime_command <console-script> <stdio-entry-script> [extra ...]
+  # stage_runtime_command <console-script> [extra ...]
   #
   # B-MVP-034: the gateway launches a registered stdio backend AS the
   # sift-service system user, which cannot execute the operator's
@@ -137,6 +137,10 @@ stage_runtime_command() {
   #   $SIFT_MCPS_ROOT/.venv/bin/<console-script>
   # with NO args — exactly the shape install.sh::_seed_one_addon_backend writes
   # for the seeded opensearch-mcp / forensic-rag-mcp backends.
+  #
+  # B-MVP-040(c): the console-script name IS the stdio entry-script name in every
+  # caller, so this takes ONE positional and derives the operator-uv fallback
+  # entry from it — no two-positional mismatch foot-gun.
   #
   # The staged runtime tree (/opt/sift-mcps) and its .venv are OPERATOR-owned
   # (stage_repo_to_install_root chowns to the install operator; sync_workspace
@@ -147,11 +151,35 @@ stage_runtime_command() {
   # windows-triage-mcp / opencti-mcp must have their extra synced in here.
   # `--inexact` keeps the already-installed `full` packages instead of pruning
   # them, so syncing an add-on extra never tears down the core backends.
-  local console_script="$1" stdio_entry="$2"
-  shift 2 || true
+  local console_script="$1"
+  shift || true
+  local stdio_entry="$console_script"
   local -a extras=("$@")
+
+  # B-MVP-040(b): set -u does NOT catch a set-but-empty variable, so an empty
+  # SIFT_MCPS_ROOT / PYTHON_BIN would silently build a broken --project ''/
+  # --python '' fallback payload (and a console_path of "/.venv/bin/<name>").
+  # Fail fast with a clear message instead.
+  [[ -n "${SIFT_MCPS_ROOT:-}" ]] \
+    || die "stage_runtime_command: SIFT_MCPS_ROOT is empty — cannot build a register payload for '$console_script'."
+  [[ -n "${PYTHON_BIN:-}" ]] \
+    || die "stage_runtime_command: PYTHON_BIN is empty — cannot build a register payload for '$console_script'."
+
   local venv_bin="$SIFT_MCPS_ROOT/.venv/bin"
   local console_path="$venv_bin/$console_script"
+
+  # B-MVP-040(a): the gateway execs the command as the sift-service user, which
+  # can only reach the STAGED runtime tree ($SIFT_MCPS_INSTALL_ROOT, default
+  # /opt/sift-mcps). When setup-addon is run from an operator checkout,
+  # $SIFT_MCPS_ROOT points at that checkout's .venv — the -x test below would
+  # PASS on a path the sift-service user cannot exec, silently skipping the loud
+  # fallback. Detect that the resolved venv bin is not the staged one and treat
+  # it as a fallback (with remediation) regardless of -x.
+  local staged_root="${SIFT_MCPS_INSTALL_ROOT:-/opt/sift-mcps}"
+  staged_root="${staged_root%/}"
+  local staged_venv_bin="$staged_root/.venv/bin"
+  local under_staged_root=1
+  [[ "$venv_bin" == "$staged_venv_bin" ]] || under_staged_root=0
 
   # Sync the add-on's extra(s) into the staged runtime venv so the console
   # script is present and executable by the sift-service user.
@@ -172,21 +200,36 @@ stage_runtime_command() {
     fi
   fi
 
-  if [[ -x "$console_path" ]]; then
+  if [[ -x "$console_path" && "$under_staged_root" -eq 1 ]]; then
     # Sift-service-executable launch: matches the seeded opensearch/rag pattern.
     PAYLOAD_COMMAND="$console_path"
     PAYLOAD_ARGS=()
     return 0
   fi
 
-  # Fallback: the staged console script is not present (e.g. setup-addon run
-  # against a non-staged checkout, or an offline sync failure). Keep the backend
-  # registerable via the operator-uv shape, but make it loud that the gateway's
-  # sift-service user will NOT be able to exec the operator uv — the backend will
-  # start RED until the extra is synced into $venv_bin.
+  # Fallback: either the staged console script is not present (e.g. offline sync
+  # failure) OR setup-addon is running from a non-staged operator checkout whose
+  # .venv the sift-service user cannot reach. Keep the backend registerable via
+  # the operator-uv shape, but make it loud that the gateway's sift-service user
+  # will NOT be able to exec the operator uv — the backend will start RED until
+  # the extra is synced into the STAGED $venv_bin.
   local extra_hint="" extra
-  for extra in "${extras[@]}"; do extra_hint+=" --extra $extra"; done
-  warn "Staged console script not found: $console_path"
+  for extra in "${extras[@]:-}"; do
+    [[ -n "$extra" ]] && extra_hint+=" --extra $extra"
+  done
+  if [[ "$under_staged_root" -ne 1 ]]; then
+    warn "Console script is NOT under the staged runtime root — the sift-service"
+    warn "user cannot exec it:"
+    warn "  resolved : $console_path"
+    warn "  expected : $staged_venv_bin/$console_script"
+    warn "setup-addon appears to be running from an operator checkout, not the"
+    warn "staged tree. To fix: run this helper from the staged install tree"
+    warn "  $staged_root"
+    warn "(or set SIFT_MCPS_INSTALL_ROOT to your staged root) so the emitted"
+    warn "command resolves under $staged_venv_bin."
+  else
+    warn "Staged console script not found: $console_path"
+  fi
   warn "Falling back to operator-uv command ($UV_BIN). The gateway runs backends"
   warn "as sift-service, which cannot exec the operator's uv — this backend will"
   warn "start RED. To fix: sync the extra into the staged runtime venv, e.g."
@@ -318,7 +361,7 @@ setup_rag() {
   # B-MVP-034: register a sift-service-executable console-script command from the
   # staged runtime venv (rag-mcp ships in --extra full, already synced by the
   # native installer), matching install.sh::_seed_one_addon_backend.
-  stage_runtime_command "rag-mcp" "rag-mcp" "full"
+  stage_runtime_command "rag-mcp" "full"
   # env_refs only (CHILD=GATEWAY name->name): the gateway resolves both names
   # from its OWN process env at backend startup. No raw DSN or value is stored.
   PAYLOAD_ENV_REFS=(
@@ -349,7 +392,7 @@ setup_wintriage() {
   # this stages it into the runtime venv and registers the sift-service-
   # executable console script (.venv/bin/windows-triage-mcp) — the launch shape
   # the LV1 live test proved, matching the seeded opensearch/rag backends.
-  stage_runtime_command "windows-triage-mcp" "windows-triage-mcp" "windows-triage"
+  stage_runtime_command "windows-triage-mcp" "windows-triage"
   # env_refs only (CHILD=GATEWAY name->name); the gateway resolves the DB dir from
   # its own process env at backend startup. No raw path is stored in the payload.
   PAYLOAD_ENV_REFS=(
@@ -380,7 +423,7 @@ setup_opensearch() {
   # B-MVP-034: register a sift-service-executable console-script command from the
   # staged runtime venv (opensearch-mcp ships in --extra standard/full, already
   # synced by the native installer), matching install.sh::_seed_one_addon_backend.
-  stage_runtime_command "opensearch-mcp" "opensearch-mcp" "standard"
+  stage_runtime_command "opensearch-mcp" "standard"
   # env_refs only: name->name, resolved from gateway env. Matches install.sh.
   PAYLOAD_ENV_REFS=(
     "OPENSEARCH_CONFIG=OPENSEARCH_CONFIG"
@@ -411,7 +454,7 @@ setup_opencti() {
   # stages it into the runtime venv and registers the sift-service-executable
   # console script (.venv/bin/opencti-mcp), matching the seeded opensearch/rag
   # backends rather than the operator's uv.
-  stage_runtime_command "opencti-mcp" "opencti-mcp" "opencti"
+  stage_runtime_command "opencti-mcp" "opencti"
   # env_refs only (spec §4.3): CHILD=GATEWAY name->name. The raw token never
   # touches this file or app.mcp_backends; the registry rejects a raw `env` map.
   PAYLOAD_ENV_REFS=(
