@@ -714,6 +714,12 @@ configure_agent_runtime() {
     --service-user "$SIFT_GATEWAY_SERVICE_USER" \
     --cases-root "$SIFT_CASES_ROOT" \
     --state-root "$SIFT_STATE_DIR"
+  # B-MVP-045: write_gateway_config (below, in main()) already sets
+  # execute.runtime_user="${SIFT_EXECUTE_AS_USER}" in gateway.yaml programmatically.
+  # Restate that here so the setup-agent-runtime.sh hint ("Set execute.runtime_user
+  # ... in gateway.yaml") is not mistaken for an unfulfilled manual TODO: it is the
+  # configured default; only a service restart (after ACL changes) is needed to apply.
+  log "configured execute.runtime_user=${SIFT_EXECUTE_AS_USER} in gateway.yaml (restart applies after ACL changes)."
 }
 
 configure_ingest_mount_sudoers() {
@@ -1922,9 +1928,42 @@ except ImportError as exc:
     print(f"skip:psycopg_unavailable:{exc}", file=sys.stderr)
     sys.exit(0)
 
+
+def _migration_version(name):
+    # The Supabase CLI records each migration under the leading timestamp prefix
+    # of the filename (the digits before the first underscore). We mirror that so
+    # we can recognise migrations that `supabase start` already applied.
+    stem = name[:-4] if name.endswith(".sql") else name
+    head = stem.split("_", 1)[0]
+    return head if head.isdigit() else stem
+
+
+# B-MVP-043: `supabase start` already applies supabase/migrations/* and records
+# each in supabase_migrations.schema_migrations. Re-running the same files here
+# via psycopg produces noisy "already exists" / "cannot drop columns from view"
+# warnings. Read the recorded versions up front and SKIP any migration that the
+# CLI already applied. On a fresh DB (no Supabase CLI, table absent) this set is
+# empty, so every migration still runs — fresh-install behaviour is unchanged.
+applied_versions = set()
+try:
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        cur = conn.execute(
+            "select version from supabase_migrations.schema_migrations"
+        )
+        applied_versions = {str(row[0]) for row in cur.fetchall()}
+except Exception as exc:
+    # Table/schema absent (non-Supabase DB or pre-CLI) — treat as nothing applied.
+    print(f"info:migration_ledger_unavailable:{str(exc).split(chr(10))[0][:80]}",
+          file=sys.stderr)
+
 first_file = True
 for fpath in files:
     p = Path(fpath)
+    version = _migration_version(p.name)
+    if version in applied_versions:
+        print(f"skip:{p.name}:already recorded by supabase start")
+        first_file = False
+        continue
     sql_text = p.read_text(encoding="utf-8")
     try:
         # autocommit + no params = simple-query protocol; handles multi-statement DDL.
@@ -2882,6 +2921,20 @@ configure_auditd() {
   fi
 }
 
+# Load an AppArmor profile in either complain (default) or enforce mode.
+# B-MVP-046: complain mode (apparmor_parser -C -r) is the install default; the
+# proven enforce posture (RUN-3/B-MVP-026) is reached deliberately via
+# `install.sh --apparmor-enforce` or scripts/../harden.sh, both of which set
+# SIFT_APPARMOR_ENFORCE=1 so this loads with `apparmor_parser -r` (no -C).
+_apparmor_load_profile() {
+  local profile_dst="$1"
+  if [[ "${SIFT_APPARMOR_ENFORCE:-0}" == "1" ]]; then
+    sudo_if_needed apparmor_parser -r "$profile_dst" 2>/dev/null || true
+  else
+    sudo_if_needed apparmor_parser -C -r "$profile_dst" 2>/dev/null || true
+  fi
+}
+
 configure_apparmor() {
   if ! command -v aa-status &>/dev/null; then
     warn "AppArmor not found — skipping profile."
@@ -2896,7 +2949,7 @@ configure_apparmor() {
   sudo_if_needed cp "$tmp" "$profile_dst"
   rm -f "$tmp"
   sudo_if_needed chmod 644 "$profile_dst"
-  sudo_if_needed apparmor_parser -C -r "$profile_dst" 2>/dev/null || true
+  _apparmor_load_profile "$profile_dst"
 
   profile_src="${REPO_DIR}/configs/apparmor/dfir-exec.template"
   profile_dst="/etc/apparmor.d/dfir-exec"
@@ -2911,9 +2964,14 @@ configure_apparmor() {
     sudo_if_needed cp "$tmp" "$profile_dst"
     rm -f "$tmp"
     sudo_if_needed chmod 644 "$profile_dst"
-    sudo_if_needed apparmor_parser -C -r "$profile_dst" 2>/dev/null || true
+    _apparmor_load_profile "$profile_dst"
   fi
-  log "AppArmor profiles installed (complain mode)."
+  if [[ "${SIFT_APPARMOR_ENFORCE:-0}" == "1" ]]; then
+    log "AppArmor profiles installed (ENFORCE mode)."
+  else
+    log "AppArmor profiles installed (complain mode). Run ./harden.sh (or"
+    log "  ./install.sh --apparmor-enforce) for the proven enforce posture."
+  fi
 }
 
 configure_run_command_systemd_scope() {
@@ -3193,6 +3251,8 @@ main() {
   # Track compatibility flags.
   local flag_no_opencti=0 flag_no_rag=0
   SIFT_EXTERNAL_SUPABASE="${SIFT_EXTERNAL_SUPABASE:-0}"
+  # B-MVP-046: AppArmor stays in complain mode unless explicitly opted into enforce.
+  SIFT_APPARMOR_ENFORCE="${SIFT_APPARMOR_ENFORCE:-0}"
 
   # Parse flags (#1: new flags + existing)
   while [[ $# -gt 0 ]]; do
@@ -3206,6 +3266,7 @@ main() {
       --external-supabase)    SIFT_EXTERNAL_SUPABASE=1; shift ;;
       --offline)              SIFT_OFFLINE=1; shift ;;
       --enable-geoip)         SIFT_GEOIP_ENABLED=1; shift ;;
+      --apparmor-enforce)     SIFT_APPARMOR_ENFORCE=1; shift ;;
       -h|--help)
         printf 'Usage: ./install.sh [OPTIONS]\n\n'
         printf 'Provisions (or removes) a sift-mcps stack on SIFT Workstation.\n'
@@ -3226,6 +3287,9 @@ main() {
         printf '                       Supabase CLI). Equivalent to SIFT_OFFLINE=1.\n'
         printf '  --enable-geoip       Enable the OpenSearch ip2geo datasource (off by default; it\n'
         printf '                       fetches from a live endpoint). Equivalent to SIFT_GEOIP_ENABLED=1.\n'
+        printf '  --apparmor-enforce   Load the SIFT AppArmor profiles in ENFORCE mode instead of\n'
+        printf '                       the complain-mode default. Opt-in hardening (B-MVP-046); the\n'
+        printf '                       same posture is available post-install via ./harden.sh.\n'
         printf '  --uninstall          Reverse the install: stop/remove the systemd service, venv,\n'
         printf '                       ~/.sift (config/TLS/secrets), auditd + AppArmor configs, the\n'
         printf '                       hayabusa symlink, and docker containers. Preserves data\n'
