@@ -12,7 +12,8 @@ import {
   postChainIgnore,
   postChainDelete,
   postChainRetire,
-  postChainReacquire
+  postChainReacquire,
+  unsealEvidence
 } from '../../api/endpoints'
 import { SkeletonBlock } from '../common/Skeleton'
 
@@ -54,7 +55,7 @@ export function EvidenceTab() {
   const [verifyStatus, setVerifyStatus] = useState({})
 
   // Modal State
-  const [activeModal, setActiveModal] = useState(null) // 'verify_hmac' | 'seal' | 'ignore' | 'retire' | 'reacquire' | null
+  const [activeModal, setActiveModal] = useState(null) // 'verify_hmac' | 'seal' | 'ignore' | 'retire' | 'reacquire' | 'unseal' | null
   const [pendingPath, setPendingPath] = useState(null)
   const [modalPassword, setModalPassword] = useState('')
   const [modalReason, setModalReason] = useState('')
@@ -323,6 +324,43 @@ export function EvidenceTab() {
       }
     } catch (err) {
       setModalError(err.message || 'Re-acquire failed')
+    } finally {
+      setModalLoading(false)
+    }
+  }
+
+  async function handleUnsealEvidence(e) {
+    e.preventDefault()
+    if (!modalReason) {
+      setModalError('Reason is required.')
+      return
+    }
+    if (!modalPassword) {
+      setModalError('Password required.')
+      return
+    }
+    setModalLoading(true)
+    setModalError('')
+    setModalResult(null)
+    try {
+      // CL3a (B-MVP-017): password re-verified against Supabase server-side.
+      const res = await unsealEvidence(pendingPath, modalReason, modalPassword)
+
+      if (res.unsealed) {
+        addToast('Evidence unsealed — immutability cleared. Re-seal before agent tools can run.', 'success')
+        setModalResult({ success: true })
+        setTimeout(() => {
+          setActiveModal(null)
+          setModalPassword('')
+          setModalReason('')
+          setModalResult(null)
+          refreshData()
+        }, 1500)
+      } else {
+        throw new Error(res.error || 'Unseal failed')
+      }
+    } catch (err) {
+      setModalError(err.message || 'Unseal failed')
     } finally {
       setModalLoading(false)
     }
@@ -935,7 +973,29 @@ export function EvidenceTab() {
                           )}
                         </div>
                       </td>
-                      <td className="py-2 px-3 text-right">
+                      <td className="py-2 px-3 text-right whitespace-nowrap">
+                        {/* Unseal/Unlock (B-MVP-048): only for sealed items.
+                            Clears immutability so the operator can replace /
+                            re-image / add evidence; blocks agent tools until
+                            re-sealed. */}
+                        {(chainStatus?.seal_status || chainStatus?.status) === 'sealed' && (
+                          <button
+                            data-testid={`unseal-btn-${ev.path}`}
+                            onClick={() => {
+                              setPendingPath(ev.path)
+                              setActiveModal('unseal')
+                              setModalPassword('')
+                              setModalReason('')
+                              setModalError('')
+                              setModalResult(null)
+                            }}
+                            className="mr-2 px-2 py-1 rounded text-[10px] font-semibold border transition-colors hover:text-[var(--amber)] hover:border-[var(--amber)] cursor-pointer"
+                            style={{ background: 'transparent', borderColor: 'var(--border-hard)', color: 'var(--text-muted)' }}
+                            title="Unseal: clear the immutable flag so this evidence can be replaced/re-imaged; blocks agent tools until re-sealed"
+                          >
+                            Unseal
+                          </button>
+                        )}
                         {status === 'checking' ? (
                           <span className="text-xs font-mono text-[var(--text-muted)] animate-pulse">Checking...</span>
                         ) : status === 'verified' ? (
@@ -1518,6 +1578,104 @@ export function EvidenceTab() {
                   style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}
                 >
                   Re-seal
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Unseal (Unlock) Modal (B-MVP-048) */}
+      {activeModal === 'unseal' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[rgba(7,9,14,0.8)] backdrop-blur-sm">
+          <div className="w-full max-w-md p-5 rounded border space-y-4" style={{ background: 'var(--bg-surface)', borderColor: 'var(--amber)' }}>
+            <h3 className="font-display font-bold text-base" style={{ color: 'var(--amber)' }}>Unseal Evidence</h3>
+            <div className="space-y-1">
+              <span className="text-[10px] font-sans font-semibold uppercase tracking-wider block" style={{ color: 'var(--text-muted)' }}>
+                Target File Path
+              </span>
+              <div className="text-xs font-mono break-all p-2 rounded" style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)' }}>
+                {pendingPath}
+              </div>
+            </div>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Unsealing <strong style={{ color: 'var(--amber)' }}>clears the immutable (write-protection) flag</strong> on this evidence so you can replace, re-image, or add evidence. The case becomes <strong style={{ color: 'var(--text-bright)' }}>non-sealed</strong> and <strong style={{ color: 'var(--amber)' }}>all agent tools are blocked until you re-seal</strong>. This action is recorded in the append-only custody log and requires examiner justification and credentials. Re-seal as soon as your changes are complete.
+            </p>
+
+            <form onSubmit={handleUnsealEvidence} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] font-sans font-semibold uppercase tracking-wider block" style={{ color: 'var(--text-muted)' }}>
+                  Justification Reason
+                </label>
+                <input
+                  type="text"
+                  value={modalReason}
+                  onChange={(e) => setModalReason(e.target.value)}
+                  placeholder="e.g. Replacing corrupted image / adding newly acquired evidence"
+                  disabled={modalLoading}
+                  required
+                  className="w-full px-3 py-2 rounded text-xs focus:outline-none"
+                  style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-sans font-semibold uppercase tracking-wider block" style={{ color: 'var(--text-muted)' }}>
+                  Examiner Password
+                </label>
+                <input
+                  type="password"
+                  value={modalPassword}
+                  onChange={(e) => setModalPassword(e.target.value)}
+                  placeholder="Enter password..."
+                  disabled={modalLoading}
+                  required
+                  className="w-full px-3 py-2 rounded text-xs font-mono focus:outline-none"
+                  style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-primary)' }}
+                />
+              </div>
+
+              {modalError && (
+                <div className="text-xs p-2.5 rounded bg-[rgba(255,56,100,0.06)] border border-[rgba(255,56,100,0.2)] text-[var(--crimson)]">
+                  {modalError}
+                </div>
+              )}
+
+              {modalLoading && (
+                <div className="text-xs font-mono text-[var(--text-muted)] animate-pulse">
+                  Submitting unseal request...
+                </div>
+              )}
+
+              {modalResult && (
+                <div className="text-xs p-3 rounded bg-[rgba(0,255,148,0.05)] border border-[rgba(0,255,148,0.2)] text-[var(--jade)]">
+                  ✓ Evidence unsealed. Re-seal before agent tools can run.
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveModal(null)
+                    setModalPassword('')
+                    setModalReason('')
+                    setModalResult(null)
+                    setModalError('')
+                  }}
+                  className="px-3 py-1.5 rounded text-xs font-semibold border cursor-pointer"
+                  style={{ background: 'transparent', borderColor: 'var(--border-hard)', color: 'var(--text-muted)' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  data-testid="unseal-submit"
+                  disabled={modalLoading}
+                  className="px-4 py-1.5 rounded text-xs font-semibold cursor-pointer"
+                  style={{ background: 'var(--amber-dim)', color: 'var(--amber)', border: '1px solid var(--amber)' }}
+                >
+                  Unseal
                 </button>
               </div>
             </form>
