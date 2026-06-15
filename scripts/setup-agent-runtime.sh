@@ -175,6 +175,6 @@ Cases root:   ${CASES_ROOT}
 State root:   ${STATE_ROOT}
 Sudoers:      ${sudoers_file}
 
-Set execute.runtime_user: "${RUNTIME_USER}" in gateway.yaml and restart the
-gateway service after changing ACLs.
+Ensure gateway.yaml has execute.runtime_user: "${RUNTIME_USER}" (install.sh
+configures this by default); restart the gateway service after ACL changes to apply.
 EOF
