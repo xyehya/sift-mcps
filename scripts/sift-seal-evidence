@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Root-owned privileged helper for sealed-evidence filesystem hardening
+# (B-MVP-048).
+#
+# Why this exists
+# ---------------
+# When an operator seals evidence, the bytes must end up (a) owned by the
+# gateway service user and (b) immutable (chattr +i / FS_IMMUTABLE_FL). The
+# gateway/worker run as the NON-root service user and the unit deliberately does
+# NOT carry CAP_CHOWN/CAP_FOWNER, so re-owning a root:root operator-copied file
+# is not possible in-process. This narrow helper is reached through a
+# command-specific sudoers drop-in (`sudo -n /usr/local/sbin/sift-seal-evidence
+# --service-user <u> --path <abs>`), keeps ALL privileged work here, and does
+# only two things to ONE server-revalidated path: chown -> service user, then
+# set the immutable flag.
+#
+# Hostile-input discipline (the caller is trusted, the args are not)
+# -----------------------------------------------------------------
+#   * --path must be an ABSOLUTE, fully-resolved path (realpath == argument).
+#   * the path must contain an "/evidence/" segment (sealed evidence lives there)
+#     and must NOT be a symlink and MUST be a regular file.
+#   * --service-user must be an existing local account.
+# Any deviation aborts with a non-zero status BEFORE any privileged action.
+set -euo pipefail
+
+die() {
+  printf 'sift-seal-evidence: %s\n' "$*" >&2
+  exit 2
+}
+
+service_user=""
+path=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --service-user) service_user="${2:-}"; shift 2 ;;
+    --path) path="${2:-}"; shift 2 ;;
+    --) shift; break ;;
+    *) die "unknown option: $1" ;;
+  esac
+done
+
+[[ "${EUID}" -eq 0 ]] || die "must run as root"
+[[ -n "${service_user}" ]] || die "missing --service-user"
+[[ -n "${path}" ]] || die "missing --path"
+
+# Service user must exist; refuse otherwise (no chown to an unknown uid).
+id -u "${service_user}" >/dev/null 2>&1 || die "service user not found: ${service_user}"
+[[ "${service_user}" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || die "invalid service user name"
+
+# Path must be absolute and already canonical (no symlinks / .. / relative bits).
+[[ "${path}" = /* ]] || die "path must be absolute"
+case "${path}" in
+  *$'\n'*|*$'\t'*) die "path contains control characters" ;;
+esac
+resolved="$(realpath -e -- "${path}" 2>/dev/null)" || die "path does not resolve: ${path}"
+[[ "${resolved}" == "${path}" ]] || die "path is not canonical (symlink/.. component): ${path}"
+
+# Must live under an evidence/ directory and be a plain regular file.
+case "${resolved}" in
+  */evidence/*) : ;;
+  *) die "path is not inside an evidence/ directory: ${resolved}" ;;
+esac
+[[ -L "${resolved}" ]] && die "refusing to operate on a symlink: ${resolved}"
+[[ -f "${resolved}" ]] || die "not a regular file: ${resolved}"
+
+# Privileged actions, in order: chown first (chattr +i would block chown), then
+# set the immutable flag.
+chown -- "${service_user}:${service_user}" "${resolved}" || die "chown failed: ${resolved}"
+chattr +i -- "${resolved}" || die "chattr +i failed: ${resolved}"
+
+exit 0
