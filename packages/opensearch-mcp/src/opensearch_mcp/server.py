@@ -1,4 +1,14 @@
-"""OpenSearch MCP server — 17 tools for forensic evidence querying, ingest, and enrichment.
+"""OpenSearch backend implementation engine — raw OpenSearch I/O for forensic
+evidence querying, ingest, and enrichment.
+
+This module is the IMPLEMENTATION ENGINE only (B-MVP-041). The functions below
+(``opensearch_search``, ``opensearch_count``, ``opensearch_ingest``, ...) are
+plain callables invoked by the typed contract layer in ``opensearch_mcp.registry``
+via ``_impl_server()``; that registry's ``create_server()`` is the single MCP
+tool surface served over stdio and aggregated by the Gateway. There is no
+``FastMCP`` tool surface here — the former unserved ``server = FastMCP(...)``
+shadow (and its ``@server.tool`` decorators) was removed because it masked the
+B-MVP-036 audit (the served schema, not this surface, is authoritative).
 
 Module-import side effect: installs a SIGCHLD reaper (see
 `_install_sigchld_reaper`) so child zombies from ingest subprocesses
@@ -14,7 +24,6 @@ import re as _re
 from pathlib import Path
 
 from sift_core.case_io import cases_root, resolve_case_path
-from mcp.server.fastmcp import FastMCP
 from opensearchpy.exceptions import (
     AuthorizationException,
     ConnectionTimeout,
@@ -22,7 +31,6 @@ from opensearchpy.exceptions import (
 )
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
 from sift_common.audit import AuditWriter
-from sift_common.instructions import OPENSEARCH
 
 from opensearch_mcp.client import get_client
 from opensearch_mcp.host_dictionary import detect_host_id_mapping_type
@@ -148,7 +156,6 @@ def _validate_index(index: str) -> str | None:
     return None
 
 
-server = FastMCP("opensearch-mcp", instructions=OPENSEARCH)
 audit = AuditWriter(mcp_name="opensearch-mcp")
 
 # --- Enrichment Token Budget: Layer 11 shimcache/amcache decay ---
@@ -922,7 +929,6 @@ def _resolve_tool_path(path: str, *, default_subdir: str = "evidence") -> tuple[
         }
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_search(
     query: str,
     index: str = "",
@@ -1085,7 +1091,6 @@ def opensearch_search(
     return resp
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_count(
     query: str = "*",
     index: str = "",
@@ -1133,7 +1138,6 @@ def opensearch_count(
     return resp
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_aggregate(
     field: str,
     query: str = "*",
@@ -1211,7 +1215,6 @@ def opensearch_aggregate(
     return resp
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_get_event(
     event_id: str,
     index: str,
@@ -1254,7 +1257,6 @@ def opensearch_get_event(
     return doc
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_timeline(
     query: str = "*",
     index: str = "",
@@ -1357,7 +1359,6 @@ def opensearch_timeline(
     return resp
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_field_values(
     field: str,
     query: str = "*",
@@ -1429,7 +1430,6 @@ def opensearch_field_values(
     return resp
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_status() -> dict:
     """Show OpenSearch cluster health and all case index doc counts.
 
@@ -1475,7 +1475,6 @@ def opensearch_status() -> dict:
     return resp
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_shard_status() -> dict:
     """Report OpenSearch shard usage and capacity headroom.
 
@@ -1559,7 +1558,6 @@ def opensearch_shard_status() -> dict:
     return resp
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_case_summary(case_id: str = "", include_fields: bool = False, case_dir: str = "") -> dict:
     """Get complete coverage overview for a case — first call every indexed session.
 
@@ -1824,7 +1822,6 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False, cas
     return resp
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_inspect_container(path: str, case_dir: str = "") -> dict:
     """Inspect a forensic container (E01, raw image) without mounting — pre-ingest survey.
 
@@ -2114,7 +2111,6 @@ def _launch_container_ingest(
     return resp
 
 
-@server.tool()
 def opensearch_ingest(
     path: str,
     format: str = "auto",
@@ -2671,7 +2667,6 @@ def opensearch_ingest(
     )
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str = "") -> dict:
     """Check status of running or recent ingest operations.
 
@@ -3144,7 +3139,6 @@ def idx_ingest_accesslog(
     return _launch_background("accesslog", resolved_path, hostname, index_suffix)
 
 
-@server.tool()
 def opensearch_enrich_intel(
     case_id: str = "",
     dry_run: bool = True,
@@ -3989,7 +3983,6 @@ def _get_active_case() -> str | None:
     return None
 
 
-@server.tool(annotations={"readOnlyHint": True})
 def opensearch_list_detections(
     severity: str = "",
     detector_type: str = "",
@@ -4123,7 +4116,6 @@ def opensearch_list_detections(
     return resp
 
 
-@server.tool()
 def opensearch_host_fix(raw: str, new_canonical: str, case_dir: str = "") -> dict:
     """Correct a wrong host.id mapping in the active case.
 
