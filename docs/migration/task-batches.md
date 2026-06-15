@@ -76,13 +76,13 @@ is therefore NOT a planned dependency — ioctl is covered by the seccomp filter
 - [x] BATCH-PT1 - Portal operator workflow and health features
 - [ ] BATCH-PT2 - Portal RAG document management flow
 - [x] BATCH-TLS1 - Installer certificate and trust strategy
-- [ ] BATCH-SB1 - Self-managed Supabase compose with generated secrets
+- [x] BATCH-SB1 - Self-managed Supabase compose with generated secrets
 - [x] BATCH-CL3a - Supabase fail-closed operator-password re-verification
 - [x] BATCH-CL3b - Complete re-auth migration (delete dead plane + close gaps)
 - [x] BATCH-DB1 - FORCE RLS on `app.*` tables
 - [x] BATCH-UN1 - Component uninstaller and selective teardown
 - [x] BATCH-RG1 - Documentation regeneration modernization pass
-- [ ] BATCH-LV1 - End-to-end live VM validation and Rocba proof
+- [x] BATCH-LV1 - End-to-end live VM validation and Rocba proof
 
 ## BATCH-R3-CEIL - Ceiling hardening (`run_command`: allowlist policy, scanners, output sanitation)
 

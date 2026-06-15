@@ -13,6 +13,79 @@ Last updated: 2026-06-15.
 
 ## Current Change Log
 
+### 2026-06-15 - BATCH-LV1: fresh first-run install + live MCP forensic proof (SB1 / B-MVP-019 / wintriage / E2E)
+
+Status: DONE. True clean-slate first-run install + live operator/agent forensic workflow proven on the SIFT
+VM. All proof sanitized (no raw keys/tokens/DSNs/passwords/absolute case paths). Harness MCP reached the
+gateway over TLS via `NODE_EXTRA_CA_CERTS` (VM CA copied to host; leaf SAN carries the VM IP, openssl verify
+rc 0); agent credential portal-minted.
+
+Step 1 - install (`git clone` @`235fe3c` -> `setup-supabase.sh` -> `./install.sh`): `/health`=status=ok
+supabase=ok; `sift-gateway` + `sift-job-worker` active; operator `examiner@operators.sift.local` provisioned
+(forced-reset); `db_migrations_applied`; `opensearch_backend_seeded`; handoff written.
+- FIRST-RUN INSTALL BUG (blocks any fresh install): `uv sync` aborts with a hardlink EPERM
+  (`fs.protected_hardlinks=1` vs uv's read-only cache) on `nvidia-cufft`. Worked around this run with
+  `UV_LINK_MODE=copy`. Fix -> B-MVP-033 (set it in `install.sh` `sync_workspace` + addon uv calls).
+
+Step 2 - SB1 / B-MVP-012 (was UNVERIFIED on VM): PROVEN. `supabase/.env` 600 holds the per-install secret;
+emitted ANON/SERVICE keys are re-signed (iss label stays `supabase-demo`, but token strings differ from the
+public demo constants). Live REST vs `127.0.0.1:54321/rest/v1/`: our `service_role` -> 200, public demo
+`service_role` JWT -> 401 (instance validates against our secret, not the demo one). Re-run `setup-supabase`
+-> emitted keys byte-identical (secret reused).
+
+Step 3 - B-MVP-019 + AD2 + windows-triage add-on: PROVEN.
+- Payload: `setup-addon.sh` run FROM staged `/opt` (REPO_DIR derives from script location) -> `env_refs`-only
+  + `manifest_path` = `/opt` staged path. Running from the operator clone would emit the wrong (clone) path.
+- AD2: core install seeded ONLY `opensearch-mcp` + `forensic-rag-mcp` (`app.mcp_backends`); 0 opencti, 0
+  wintriage. windows-triage appeared only after an explicit operator register (re-auth password prompt =
+  sensitive-action gate proven).
+- Provisioning gaps surfaced: (a) generated payload command = operator uv (`~/.local/bin/uv`), NOT
+  executable by `sift-service` -> worked around by syncing the `windows-triage` extra into the runtime venv
+  (`/opt/sift-mcps/.venv/bin/windows-triage-mcp`, sift-service-exec), matching the seeded console-script
+  pattern -> B-MVP-034. (b) the portal register form stored the command with a TRAILING SPACE ->
+  `FileNotFoundError` on backend start AND it hung the aggregated `tools/list` (`-32001`); fixed by `btrim`
+  on the stored command + restart -> gateway should `.strip()` the command -> B-MVP-035.
+- Registered (DB row: `manifest_path`=`/opt` staged, sha `0601cd54...`). Restart (D34) -> `/health`
+  `tools_count` 18->24, `windows-triage-mcp` mounted, 6 `wintriage_*` in catalog. After the command-fix the
+  server launches; it hard-fails closed without baseline DBs, so `known_good.db`/`context.db` were
+  provisioned to `/var/lib/sift/windows-triage` (1.14 GB `known_good.db.zst`) for the live tool-call capstone.
+- Live wintriage capstone (DIRECT stdio to the backend, bypassing the harness): server boots healthy, BOTH
+  baselines loaded (`known_good` + `context` healthy). Real `wintriage_check_artifact` verdicts vs the
+  2.68 M-row baseline: `lolbin certutil.exe` -> EXPECTED_LOLBIN (funcs ADS/Decode/Download/Encode, MITRE
+  T1105/T1140/T1027.013/T1564.004); `file C:\Windows\System32\svchost.exe` -> EXPECTED (path matches Windows
+  baseline); `filename scvhost.exe` -> SUSPICIOUS (typosquat of svchost.exe, edit distance 2). Add-on is
+  FULLY FUNCTIONAL.
+- HARNESS BLOCKER (B-MVP-038): enabling wintriage in the gateway broke the Claude Code harness `tools/list`
+  (`-32001`, then schema-reject). The backend exposes 16 tools (manifest declares only 6; the 10
+  un-namespaced `check_*`/`get_*` also leak through -> namespacing gap), and ALL 16 carry
+  `outputSchema.type=null`, which the strict MCP client rejects (it requires `"object"`), failing the WHOLE
+  tools/list. Left wintriage `enabled=false` in the gateway so the harness surface stays valid; the
+  registration row is kept. Fix tracked B-MVP-038.
+
+Step 4 - E2E MCP on live case `case-rocba-exfiltration-06150051` (real SANS Rocba evidence: `rocba-cdrive.e01`
+~81 GiB + `Rocba-Memory.raw`, both sealed, chain ok):
+- run_command POSITIVE: `ewfinfo` on sealed E01 (audit `...-022`) -> real acquisition metadata; response
+  redaction (`[REDACTED:Generic Password]` + `secret_warning`), untrusted-output wrapper, evidence_ref ->
+  sealed `evidence_id` provenance, autosave + preview cap.
+- run_command POSITIVE pipe: `ewfinfo | grep` -> 2 parsed argv stages, both rc 0 (RUN-3 shell=False
+  multi-stage).
+- run_command NEGATIVE: `bash -c` blocked ("Binary 'bash' is blocked"); `cat /etc/shadow` denied (path-jail
+  `/etc`). Both audited.
+- Ingest: decoupled `opensearch-worker` (osw-1/osw-2 units) indexed 4800 evtx docs from the E01 (scoped
+  `evtx`/`reduced_ids`/`no_hayabusa`) in ~11s. Memory `pslist` ingest returned 0 docs (vol symbol/profile
+  issue -> note B-MVP-037).
+- opensearch_search >20 autosave (B-MVP-029): total 5799, returned 50, full set saved to `agent/searches/...`
+  (relative path, no leak), top-20 inline. Real Rocba content surfaced (host `SRL-FORGE`, `SRL-FORGE\fredr`
+  RDP/local sessions, 7045 MagnetRAMCapture driver install, BITS jobs).
+- record_finding `F-claude-001` + record_timeline_event `T-claude-002` staged DRAFT (examiner approval gate).
+- manifest-drift (B-MVP-032) quiet at boot AND after the wintriage register/restart.
+- Bug: `opensearch_count` rejects the gateway-injected `case_dir` kwarg -> B-MVP-036.
+
+Outcome: BATCH-LV1 acceptance met (`/health` healthy post-restart; MCP positive + negative proofs recorded
+with sanitized evidence). B-MVP-012 + B-MVP-019 CLOSED. windows-triage add-on proven fully functional
+(direct-stdio capstone) but left DISABLED in the gateway pending B-MVP-038 (its tool outputSchemas break the
+harness `tools/list`). New backlog from this run: B-MVP-033..038.
+
 ### 2026-06-15 - Pushed to origin + SIFT VM wiped to a fresh slate (for live-test reinstall)
 
 Status: DONE. `main` pushed `495037d..82d82c5` (origin now current — was 14 behind). SIFT VM
@@ -415,8 +488,8 @@ Next:
 | --- | --- | --- | --- | --- |
 | B-MVP-002 | Backlog | OPEN | Rename repo to `ProtocolSiftGateway` is decided at architecture level; CL2 pending operator/infra timing. | BATCH-CL2 |
 | B-MVP-006 | Backlog | OPEN | Confirm portal knowledge-document policy for shared/reference-only behavior in PT2. | BATCH-PT2 |
-| B-MVP-012 | Backlog | DONE | 2026-06-15: resolved at INSTALL time (operator: fresh installs are cheap, 2 images). NOT a self-managed compose. `supabase/config.toml [auth] jwt_secret = env(SUPABASE_AUTH_JWT_SECRET)` + `setup-supabase.sh ensure_jwt_secret()` generates a per-install 256-bit secret, persists to gitignored `supabase/.env` (CLI auto-loads on every start), and a `capture_credentials` guard DIES if `supabase status` still emits the known demo anon/service_role keys → default-key install impossible. Mechanism verified vs CLI source @v2.105.0; host-verified (gen/persist/reuse/demo-reject). VM key-minting propagation proof folds into B-MVP-019/LV1. | BATCH-SB1 |
-| B-MVP-019 | Backlog | OPEN | Ensure add-on register path fields are sourced from staged `/opt/sift-mcps` paths for first real add-on launch. | BATCH-LV1 |
+| B-MVP-012 | Backlog | DONE | 2026-06-15: resolved at INSTALL time (operator: fresh installs are cheap, 2 images). NOT a self-managed compose. `supabase/config.toml [auth] jwt_secret = env(SUPABASE_AUTH_JWT_SECRET)` + `setup-supabase.sh ensure_jwt_secret()` generates a per-install 256-bit secret, persists to gitignored `supabase/.env` (CLI auto-loads on every start), and a `capture_credentials` guard DIES if `supabase status` still emits the known demo anon/service_role keys → default-key install impossible. Mechanism verified vs CLI source @v2.105.0; host-verified (gen/persist/reuse/demo-reject). VM key-minting propagation proof folds into B-MVP-019/LV1. VM-PROVEN 2026-06-15 (LV1): public demo `service_role` JWT -> 401, our `service_role` -> 200, emitted keys byte-stable on `setup-supabase` re-run. | BATCH-SB1 |
+| B-MVP-019 | Backlog | DONE | 2026-06-15 (LV1, live VM): PROVEN end-to-end. `setup-addon.sh` run FROM the staged `/opt/sift-mcps` emits an `env_refs`-only payload with `manifest_path`=`/opt/sift-mcps/packages/windows-triage-mcp/sift-backend.json` (REPO_DIR derives from script location, so running from the operator clone would emit the wrong path). The registered `app.mcp_backends` row carries the staged `/opt` `manifest_path` (sha `0601cd54...`); after register+restart the 6 `wintriage_*` tools surface (`/health` `tools_count` 18->24). AD2 held (only seeded after explicit operator re-auth'd register). | BATCH-LV1 |
 | B-MVP-023 | Backlog | DONE | 2026-06-15 (`44b120d`, merge `620dceb`): legacy v1 `/dashboard` mount + `create_dashboard_app`/`serve_index`/v1 static, the `legacy_portal_session_enabled` flag end-to-end, and the `sift_session` cookie + examiner Bearer (`_verify_bearer`) legacy auth branches REMOVED (−3361 lines). Kept shared `_dashboard_api_routes`, `generate_jwt`/`verify_jwt`, logout cookie-clear; v2 `/portal` intact. Auth collapses to Supabase-envelope→401, fail-closed. `/security-review` CLEAN (no bypass). case-dashboard 357 + gateway 519 green. Plan: `docs/B-MVP-023-legacy-dashboard-removal-impact.md`. | BATCH-CL2 |
 | B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green + committed 4ee3d1f pushed to origin/main 2026-06-14. | BATCH-R3-* |
 | B-MVP-027 | Backlog | DONE | Durable lane KeyError root-caused: handler dropped `_resolved_evidence_refs` + `ActiveCaseContext(db_active=True)` from the sync-lane contract → teardown surfaced as opaque `unhandled worker error: KeyError`. Code fix already landed in `0d440a7` (2026-06-10, AUT2) but row was never closed and had NO regression guard. Added regression coverage 2026-06-15 (`e95692d`): two tests drive the real `JobWorker.run_once` loop (plain + evidence-ref) to exec; evidence-ref test proven to FAIL against the pre-`0d440a7` handler. No prod change needed. | BATCH-R3-* |
@@ -425,6 +498,12 @@ Next:
 | B-MVP-030 | Backlog | DONE | 2026-06-15 (`457dc11`): single-file rename `_legacy_token_id`→`_resolve_db_token_id` in `audit_helpers.py` (helper is module-private, def+call both internal) + docstring reframed as a correctness FK guard (not a legacy shim). New `tests/test_audit_token_fk_guard.py` (3 tests, no DB dep via injected fake conn) asserts a Supabase principal id never lands in `audit_events.actor_token_id` while legitimate agent attribution is still recorded. | BATCH-CL2 |
 | B-MVP-031 | Backlog | OPEN | Dashboard coupling guard source slice DONE 2026-06-14: `useStore.js` interface characterization test added and dashboard selectors landed. Remaining: track gateway complex-density (21/32 nodes) as a review target. No deletion. | BATCH-PT1 |
 | B-MVP-032 | Backlog | DONE | 2026-06-15 (`9584a97`): startup manifest-drift DETECTION (warn-only) added. `detect_manifest_drift()` (pure, DB-free) + `log_manifest_drift()` + `McpBackendRegistry.check_manifest_drift()` in `mcp_backends_registry.py`; wired into `Gateway.__init__` after the `app.mcp_backends` load (`server.py`), try/except so it never blocks boot and never mutates the registry. Recomputes on-disk `sift-backend.json` sha via existing `manifest_sha256` + `load_and_validate_manifest`, WARNs naming backend + both shas on mismatch; operator re-registers to clear. Auto-refresh deliberately NOT done (authority-plane write must stay explicit operator action). 5 unit tests; fresh installs unaffected (shas match). | BATCH-LV1 |
+| B-MVP-033 | Backlog | OPEN | First-run install blocker (LV1): `uv sync` aborts with a hardlink EPERM (`fs.protected_hardlinks=1` vs uv's read-only cache, `~/.cache/uv` -> `/opt/sift-mcps/.venv`, same ext4 fs) on `nvidia-cufft`. Worked around this run via `UV_LINK_MODE=copy` env var. ROOT-CAUSE FIRST, do not just force copy mode: prior installs on this VM completed WITHOUT copy mode, so investigate whether recent HARDENING regressed the hardlink path (e.g. file ownership/perms or umask changes, uv cache location/ownership, the `sift-service`/`agent_runtime` user setup, or an install re-exec under a different uid than the cache owner). Only then decide between `UV_LINK_MODE=copy` in `install.sh` `sync_workspace` vs a perms/cache fix. | BATCH-LV1 |
+| B-MVP-034 | Backlog | OPEN | `setup-addon.sh` emits a register payload whose `command` is the OPERATOR uv (`~/.local/bin/uv`), which `sift-service` cannot execute -> backend starts red. LV1 workaround: synced the `windows-triage` extra into the runtime venv and registered with the `/opt/sift-mcps/.venv/bin/windows-triage-mcp` console-script command (matching the seeded opensearch/rag pattern). Helper should emit a sift-service-executable launch (or document the venv-sync step). | BATCH-LV1 |
+| B-MVP-035 | Backlog | OPEN | Gateway does not trim whitespace from a registered stdio `command`: a trailing space (entered via the portal register form) caused `FileNotFoundError` on backend start AND hung the aggregated `tools/list` (`-32001`, degrading the whole MCP surface). Fix: `.strip()` the command in `normalize_connection_config`; consider isolating one failing backend from `tools/list`. LV1 workaround: `btrim` on the stored command + restart. | BATCH-LV1 |
+| B-MVP-036 | Backlog | OPEN | `opensearch_count` raises "unexpected keyword argument(s): case_dir": the gateway injects `case_dir` for case-scoped tools but `opensearch_count`'s signature omits it (unlike `opensearch_search`, which accepts it). Accept/ignore `case_dir` in `opensearch_count` and audit other tools for the same arg-injection mismatch. | BATCH-LV1 |
+| B-MVP-037 | Backlog | OPEN | Memory ingest (`opensearch_ingest format=memory plugins=[pslist]`) on `Rocba-Memory.raw` returned `indexed_docs=0` in ~5s (vol did not actually run); likely missing Volatility symbols/profile for the Win10 19042 image on a fresh install. Investigate vol symbol provisioning. Disk evtx ingest path worked (4800 docs). | BATCH-LV1 |
+| B-MVP-038 | Backlog | OPEN | windows-triage tool `outputSchema` breaks strict MCP clients (Claude Code harness): the backend exposes 16 tools all with `outputSchema.type=null`; the client requires `"object"` and rejects the ENTIRE `tools/list` -> enabling wintriage takes down the whole MCP surface (`-32001`/schema error). Backend itself is fully functional (proven via direct stdio: healthy DBs + correct `check_artifact` verdicts). Fix: emit valid `outputSchema` (type `object`) or omit it; have the gateway sanitize/strip invalid proxied schemas so one backend can't break `tools/list`. Also: the server exposes 16 tools but the manifest declares only 6 (10 un-namespaced `check_*`/`get_*` leak through) -> namespacing gap. LV1 workaround: wintriage left `enabled=false`. | BATCH-LV1 |
 
 ## Validation Commands
 
