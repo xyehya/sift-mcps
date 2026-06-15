@@ -709,3 +709,133 @@ class TestAnchorManifest:
         assert p1["manifest_version"] == 1
         assert p2["manifest_version"] == 2
         assert p1["manifest_hash"] != p2["manifest_hash"]
+
+
+# ---------------------------------------------------------------------------
+# harden_sealed_evidence (B-MVP-048)
+# ---------------------------------------------------------------------------
+
+class TestHardenSealedEvidence:
+    def _make_evidence(self, case_dir, name="disk.E01", data=b"bytes"):
+        p = case_dir / "evidence" / name
+        p.write_bytes(data)
+        return p
+
+    def test_success_in_process_sets_immutable(self, initialized, monkeypatch):
+        import sift_core.evidence_chain as ec
+
+        self._make_evidence(initialized)
+        # No helper configured -> in-process path.
+        monkeypatch.setenv("SIFT_EVIDENCE_HARDEN_HELPER", "off")
+        calls = {}
+
+        def fake_set_immutable(path, immutable):
+            calls["set"] = (str(path), immutable)
+            return True
+
+        monkeypatch.setattr(ec, "_set_immutable", fake_set_immutable)
+        monkeypatch.setattr(ec, "get_immutable_flag", lambda p: True)
+        # Pretend the file is already service-owned so no warning path is taken.
+        monkeypatch.setattr(ec, "_file_owner_name", lambda p: ec.DEFAULT_SERVICE_USER)
+
+        results = ec.harden_sealed_evidence(initialized, ["evidence/disk.E01"])
+        assert calls["set"][1] is True
+        assert results == [
+            {"path": "evidence/disk.E01", "owner": ec.DEFAULT_SERVICE_USER, "immutable": True}
+        ]
+
+    def test_uses_helper_when_present(self, initialized, monkeypatch):
+        import sift_core.evidence_chain as ec
+
+        self._make_evidence(initialized)
+        monkeypatch.setattr(ec, "_harden_helper_path", lambda: "/usr/local/sbin/sift-seal-evidence")
+        used = {}
+
+        def fake_helper(helper, abs_path, service_user):
+            used["called"] = (helper, str(abs_path), service_user)
+
+        monkeypatch.setattr(ec, "_harden_via_helper", fake_helper)
+        # After the (mocked) helper runs, the file appears owned + immutable.
+        monkeypatch.setattr(ec, "_file_owner_name", lambda p: "sift-service")
+        monkeypatch.setattr(ec, "get_immutable_flag", lambda p: True)
+        # _set_immutable must NOT be called when the helper is used.
+        monkeypatch.setattr(
+            ec, "_set_immutable", lambda *a, **k: pytest.fail("_set_immutable used with helper")
+        )
+
+        results = ec.harden_sealed_evidence(initialized, ["evidence/disk.E01"])
+        assert used["called"][2] == "sift-service"
+        assert results[0]["immutable"] is True
+
+    def test_fails_closed_when_immutable_cannot_be_set(self, initialized, monkeypatch):
+        import sift_core.evidence_chain as ec
+
+        self._make_evidence(initialized)
+        monkeypatch.setenv("SIFT_EVIDENCE_HARDEN_HELPER", "off")
+        # Simulate unprivileged process: ioctl SETFLAGS denied.
+        monkeypatch.setattr(ec, "_set_immutable", lambda p, imm: False)
+
+        with pytest.raises(ec.EvidenceHardeningError):
+            ec.harden_sealed_evidence(initialized, ["evidence/disk.E01"])
+
+    def test_fails_closed_when_flag_absent_after_helper(self, initialized, monkeypatch):
+        import sift_core.evidence_chain as ec
+
+        self._make_evidence(initialized)
+        monkeypatch.setattr(ec, "_harden_helper_path", lambda: "/usr/local/sbin/sift-seal-evidence")
+        monkeypatch.setattr(ec, "_harden_via_helper", lambda *a, **k: None)
+        monkeypatch.setattr(ec, "_file_owner_name", lambda p: "sift-service")
+        # Helper "succeeded" but the flag is not actually present -> fail closed.
+        monkeypatch.setattr(ec, "get_immutable_flag", lambda p: False)
+
+        with pytest.raises(ec.EvidenceHardeningError):
+            ec.harden_sealed_evidence(initialized, ["evidence/disk.E01"])
+
+    def test_require_owner_raises_when_not_service_owned(self, initialized, monkeypatch):
+        import sift_core.evidence_chain as ec
+
+        self._make_evidence(initialized)
+        monkeypatch.setenv("SIFT_EVIDENCE_HARDEN_HELPER", "off")
+        monkeypatch.setattr(ec, "_set_immutable", lambda p, imm: True)
+        monkeypatch.setattr(ec, "get_immutable_flag", lambda p: True)
+        monkeypatch.setattr(ec, "_file_owner_name", lambda p: "root")
+
+        with pytest.raises(ec.EvidenceHardeningError):
+            ec.harden_sealed_evidence(
+                initialized, ["evidence/disk.E01"], require_owner=True
+            )
+
+    def test_path_traversal_rejected(self, initialized, monkeypatch):
+        import sift_core.evidence_chain as ec
+
+        monkeypatch.setenv("SIFT_EVIDENCE_HARDEN_HELPER", "off")
+        with pytest.raises(ValueError):
+            ec.harden_sealed_evidence(initialized, ["../../etc/passwd"])
+
+    def test_symlink_rejected(self, initialized, monkeypatch):
+        import sift_core.evidence_chain as ec
+
+        monkeypatch.setenv("SIFT_EVIDENCE_HARDEN_HELPER", "off")
+        target = initialized / "evidence" / "real.bin"
+        target.write_bytes(b"x")
+        link = initialized / "evidence" / "link.bin"
+        link.symlink_to(target)
+        # A symlink escaping evidence/ would be caught by _resolve_evidence_path;
+        # an in-tree symlink is rejected by the explicit symlink guard.
+        with pytest.raises((ec.EvidenceHardeningError, ValueError)):
+            ec.harden_sealed_evidence(initialized, ["evidence/link.bin"])
+
+    def test_missing_file_rejected(self, initialized, monkeypatch):
+        import sift_core.evidence_chain as ec
+
+        monkeypatch.setenv("SIFT_EVIDENCE_HARDEN_HELPER", "off")
+        with pytest.raises(ec.EvidenceHardeningError):
+            ec.harden_sealed_evidence(initialized, ["evidence/nope.bin"])
+
+    def test_helper_missing_path_is_error(self, initialized, monkeypatch):
+        import sift_core.evidence_chain as ec
+
+        self._make_evidence(initialized)
+        monkeypatch.setenv("SIFT_EVIDENCE_HARDEN_HELPER", "/nonexistent/helper")
+        with pytest.raises(ec.EvidenceHardeningError):
+            ec.harden_sealed_evidence(initialized, ["evidence/disk.E01"])

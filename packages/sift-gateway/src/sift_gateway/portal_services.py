@@ -534,6 +534,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
             raise PortalServiceError("seal_requires_items", http_status=400)
         manifest_version = self._next_manifest_version(case_id)
         manifest_hash = _manifest_hash(case_id, manifest_version, items)
+        # B-MVP-048: harden the bytes on disk (service-owned + immutable) BEFORE
+        # recording the logical seal, so a seal can never be recorded as sealed
+        # while the evidence is still operator-copied root:root and mutable. Fail
+        # CLOSED: if the FS posture cannot be applied, the DB seal is not written.
+        self._harden_sealed_files(case_id, file_specs)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -556,6 +561,37 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 row = cur.fetchone()
             conn.commit()
         return _chain_head_dict(row)
+
+    def _harden_sealed_files(
+        self, case_id: str, file_specs: list[dict[str, Any]]
+    ) -> None:
+        """Apply the service-owned + immutable FS posture to the sealed files.
+
+        Resolves the case dir, derives case-relative paths, and delegates to
+        ``sift_core.evidence_chain.harden_sealed_evidence`` which re-validates each
+        path inside ``evidence/`` and fails closed if immutability cannot be set.
+        Maps any hardening failure to a fail-closed seal error so the DB seal is
+        never written for un-hardened bytes.
+        """
+        from sift_core.evidence_chain import (
+            EvidenceHardeningError,
+            harden_sealed_evidence,
+        )
+
+        case_dir = self._case_artifact_path(case_id)
+        if case_dir is None:
+            raise PortalServiceError("case_artifact_path_unavailable", http_status=404)
+        rel_paths = [
+            _relative_display_path(str(spec.get("path") or "")) for spec in file_specs
+        ]
+        service_user = os.environ.get("SIFT_GATEWAY_SERVICE_USER", "sift-service")
+        try:
+            harden_sealed_evidence(case_dir, rel_paths, service_user=service_user)
+        except EvidenceHardeningError as exc:
+            logger.error("evidence seal hardening failed for case %s: %s", case_id, exc)
+            raise PortalServiceError(
+                "evidence_immutability_failed", http_status=500
+            ) from exc
 
     def reacquire(
         self,

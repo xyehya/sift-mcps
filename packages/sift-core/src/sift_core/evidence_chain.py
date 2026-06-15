@@ -24,12 +24,35 @@ import hmac
 import json
 import logging
 import os
+import pwd
+import shutil
+import subprocess
 import tempfile
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Default service user that should own sealed evidence bytes. install.sh creates
+# this dedicated non-admin account; the gateway/worker run as it.
+DEFAULT_SERVICE_USER = "sift-service"
+
+# Optional root-owned helper that performs the privileged chown+chattr on a
+# single, server-revalidated evidence path. Mirrors the RUN-3 systemd-scope
+# helper pattern (sudo -n <helper> ...). When absent, hardening falls back to
+# in-process syscalls (immutable works when the interpreter carries
+# CAP_LINUX_IMMUTABLE; chown only works when the process is privileged).
+DEFAULT_HARDEN_HELPER = "/usr/local/sbin/sift-seal-evidence"
+
+
+class EvidenceHardeningError(RuntimeError):
+    """Sealed-evidence filesystem hardening could not be applied.
+
+    Raised so the seal path fails CLOSED: the operator must never believe a file
+    is fully sealed (sift-service-owned + immutable) when the integrity posture
+    was not actually achieved on disk.
+    """
 
 
 class ChainStatus(str, Enum):
@@ -744,6 +767,186 @@ def get_immutable_flag(path: Path) -> bool | None:
         return bool(flags_val.value & _FS_IMMUTABLE_FL)
     except (OSError, IOError, AttributeError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Sealed-evidence filesystem hardening (B-MVP-048)
+# ---------------------------------------------------------------------------
+#
+# On seal, evidence bytes must end up (a) owned by the gateway service user and
+# (b) immutable (FS_IMMUTABLE_FL). The runtime user is the NON-root service
+# account, so:
+#   * setting/clearing +i needs CAP_LINUX_IMMUTABLE — install.sh grants this to
+#     the venv interpreter (configure_immutable_capability), so _set_immutable
+#     works in-process even on a root:root file (it is world-readable 0644).
+#   * chown -> service user needs CAP_CHOWN/CAP_FOWNER, which the gateway unit
+#     deliberately does NOT carry. A narrow root-owned helper (DEFAULT_HARDEN_
+#     HELPER, reached via `sudo -n`) performs the chown+immutable atomically on a
+#     single, server-revalidated path. Without the helper we fall back to direct
+#     syscalls (immutable only).
+#
+# Every path is re-resolved here and proven to be a regular file strictly inside
+# the active case's evidence/ dir, with symlinks rejected: this is a privileged
+# operation, so the input is treated as hostile even though the caller is trusted.
+
+
+def _harden_helper_path() -> str:
+    """Resolve the privileged hardening helper, or "" when none is configured.
+
+    SIFT_EVIDENCE_HARDEN_HELPER overrides the default; an explicit empty/false
+    value disables helper use (force in-process fallback). A configured-but-
+    missing helper is an error so a misconfiguration cannot silently downgrade.
+    """
+    raw = os.environ.get("SIFT_EVIDENCE_HARDEN_HELPER")
+    if raw is not None:
+        value = raw.strip()
+        if value.lower() in {"", "0", "false", "no", "off"}:
+            return ""
+        if not Path(value).exists():
+            raise EvidenceHardeningError(
+                f"SIFT_EVIDENCE_HARDEN_HELPER points to a missing helper: {value}"
+            )
+        return value
+    if Path(DEFAULT_HARDEN_HELPER).exists():
+        return DEFAULT_HARDEN_HELPER
+    return ""
+
+
+def _resolve_sealed_target(case_dir: Path, rel_path: str) -> Path:
+    """Resolve a path to a regular evidence file, hostile-input safe.
+
+    Reuses _resolve_evidence_path (blocks traversal/symlink escape via resolve),
+    then additionally rejects a final symlink and any non-regular file. Returns
+    the fully resolved absolute path.
+    """
+    # Reject a symlink at the literal (unresolved) target before following it:
+    # _resolve_evidence_path .resolve()s the path, which would hide a symlink by
+    # returning its destination. A privileged chattr/chown must never act through
+    # a symlink the operator (or anything) planted in evidence/.
+    literal = case_dir / rel_path
+    if literal.is_symlink():
+        raise EvidenceHardeningError(f"Refusing to harden a symlink: {rel_path!r}")
+    abs_path = _resolve_evidence_path(case_dir, rel_path)
+    if abs_path.is_symlink():  # pragma: no cover - resolve() removes symlinks
+        raise EvidenceHardeningError(f"Refusing to harden a symlink: {rel_path!r}")
+    if not abs_path.exists():
+        raise EvidenceHardeningError(f"Evidence file not found for hardening: {rel_path!r}")
+    if abs_path.is_dir() or not abs_path.is_file():
+        raise EvidenceHardeningError(f"Not a regular evidence file: {rel_path!r}")
+    return abs_path
+
+
+def _file_owner_name(path: Path) -> str | None:
+    try:
+        return pwd.getpwuid(path.stat().st_uid).pw_name
+    except (KeyError, OSError):
+        return None
+
+
+def _harden_via_helper(helper: str, abs_path: Path, service_user: str) -> None:
+    sudo_path = shutil.which("sudo") or "/usr/bin/sudo"
+    if not Path(sudo_path).exists():
+        raise EvidenceHardeningError(
+            "evidence hardening helper requires sudo, but sudo was not found"
+        )
+    cmd = [
+        sudo_path,
+        "-n",
+        helper,
+        "--service-user",
+        service_user,
+        "--path",
+        str(abs_path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:  # pragma: no cover - env dep
+        raise EvidenceHardeningError(
+            f"evidence hardening helper failed to launch: {exc}"
+        ) from exc
+    if proc.returncode != 0:
+        # Helper stderr is operator-local and does not echo the path back to the
+        # agent surface; the gateway maps this to a fail-closed seal error.
+        raise EvidenceHardeningError(
+            "evidence hardening helper returned a non-zero status "
+            f"({proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+
+
+def harden_sealed_evidence(
+    case_dir: Path,
+    rel_paths: list[str],
+    *,
+    service_user: str = DEFAULT_SERVICE_USER,
+    require_owner: bool = False,
+) -> list[dict]:
+    """Apply the sealed-evidence FS posture (service-owned + immutable).
+
+    For each path (relative to ``case_dir``, resolving strictly inside
+    ``evidence/``), ensure the bytes are owned by ``service_user`` and carry the
+    immutable flag. Prefers the narrow root helper; otherwise sets +i in-process.
+
+    Fails CLOSED:
+      * any path that cannot be resolved to a regular evidence file -> raise.
+      * immutable flag cannot be set on a file -> raise (this is the load-bearing
+        integrity property).
+      * ``require_owner=True`` and ownership is not ``service_user`` -> raise.
+
+    Ownership defaults to best-effort (logged) because re-owning a root:root file
+    needs privilege the gateway lacks without the helper; the immutable flag still
+    protects the bytes from in-place modification regardless of owner.
+
+    Returns one ``{path, owner, immutable}`` dict per input path.
+    """
+    helper = _harden_helper_path()
+    results: list[dict] = []
+    for rel_path in rel_paths:
+        abs_path = _resolve_sealed_target(case_dir, rel_path)
+
+        if helper:
+            _harden_via_helper(helper, abs_path, service_user)
+        else:
+            # No privileged helper: set the immutable flag directly. Ownership
+            # can only change here if the process is already privileged.
+            if not _set_immutable(abs_path, True):
+                raise EvidenceHardeningError(
+                    f"Could not set the immutable flag on sealed evidence {rel_path!r}. "
+                    "The interpreter must carry CAP_LINUX_IMMUTABLE (install.sh "
+                    "configure_immutable_capability) or a hardening helper must be "
+                    "provisioned. The seal was NOT hardened on disk."
+                )
+
+        owner = _file_owner_name(abs_path)
+        immutable = get_immutable_flag(abs_path)
+
+        if not immutable:
+            raise EvidenceHardeningError(
+                f"Immutable flag is not present on sealed evidence {rel_path!r} "
+                "after hardening; refusing to report a hardened seal."
+            )
+        if require_owner and owner != service_user:
+            raise EvidenceHardeningError(
+                f"Sealed evidence {rel_path!r} is owned by {owner!r}, not the "
+                f"service user {service_user!r}; ownership hardening was required."
+            )
+        if owner != service_user:
+            logger.warning(
+                "harden_sealed_evidence: %s is owned by %s (not %s); immutable flag "
+                "applied but ownership not re-assigned (no privileged helper / "
+                "CAP_CHOWN). Provision the hardening helper to re-own sealed bytes.",
+                abs_path,
+                owner,
+                service_user,
+            )
+
+        results.append({"path": rel_path, "owner": owner, "immutable": bool(immutable)})
+    return results
 
 
 # ---------------------------------------------------------------------------
