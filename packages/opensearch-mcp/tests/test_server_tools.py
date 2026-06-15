@@ -1198,3 +1198,148 @@ class TestSpawnIngestUserBusFallback:
 
         assert captured["cmd"][0] == "systemd-run"
         assert "--scope" in captured["cmd"]
+
+
+# ---------------------------------------------------------------------------
+# B-MVP-036: gateway case_dir kwarg-injection must never raise
+# ---------------------------------------------------------------------------
+
+import inspect as _inspect
+import json as _json
+from pathlib import Path as _Path
+
+# The manifest is the source of truth for which tool calls the Gateway injects
+# arguments into: every tool whose ``safe_case_argument_names`` lists
+# ``case_dir`` receives an extra ``case_dir=<active-case>`` kwarg at call time.
+# If such a tool's Python signature does not accept ``case_dir`` the real call
+# raises ``TypeError: <tool>() got an unexpected keyword argument 'case_dir'``
+# (the original B-MVP-036 failure, observed for opensearch_count).
+_MANIFEST_PATH = _Path(__file__).resolve().parent.parent / "sift-backend.json"
+
+# Canonical-manifest-name -> registered-registry-name. The host-fix tool is
+# registered under its deprecated alias for one cutover cycle, so the manifest
+# canonical name resolves to a different registry key (see registry/manifest
+# description). Both point at the same underlying function.
+_MANIFEST_TO_REGISTRY = {"opensearch_fix_host_mapping": "opensearch_host_fix"}
+
+
+def _case_dir_injected_tool_names() -> list[str]:
+    manifest = _json.loads(_MANIFEST_PATH.read_text())
+    return [
+        t["name"]
+        for t in manifest["tools"]
+        if "case_dir" in t.get("safe_case_argument_names", [])
+    ]
+
+
+_CASE_DIR_TOOLS = _case_dir_injected_tool_names()
+
+
+class TestCaseDirArgInjectionInvariant:
+    """B-MVP-036: every Gateway-injected ``case_dir`` target must accept it.
+
+    These are manifest-driven so a newly added case-scoped tool (or a manifest
+    entry that starts listing ``case_dir``) is automatically covered against the
+    arg-injection regression that previously broke ``opensearch_count``.
+    """
+
+    def test_manifest_has_case_dir_tools(self):
+        # Guard against the manifest path/shape silently breaking the sweep.
+        assert _CASE_DIR_TOOLS, "expected >=1 tool with case_dir in safe_case_argument_names"
+        assert "opensearch_count" in _CASE_DIR_TOOLS
+        assert "opensearch_search" in _CASE_DIR_TOOLS
+
+    @pytest.mark.parametrize("manifest_name", _CASE_DIR_TOOLS)
+    def test_registered_tool_signature_accepts_case_dir(self, manifest_name):
+        registry = srv.server._tool_manager._tools
+        registry_name = _MANIFEST_TO_REGISTRY.get(manifest_name, manifest_name)
+        assert registry_name in registry, (
+            f"manifest tool {manifest_name!r} (registry {registry_name!r}) "
+            "is not registered on the server"
+        )
+        fn = registry[registry_name].fn
+        params = _inspect.signature(fn).parameters
+        accepts_case_dir = "case_dir" in params or any(
+            p.kind is _inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+        assert accepts_case_dir, (
+            f"{registry_name}() does not accept the Gateway-injected 'case_dir' "
+            "kwarg — a real call would raise TypeError (B-MVP-036)"
+        )
+        # Binding the injected kwarg must succeed (this is what the Gateway does).
+        try:
+            _inspect.signature(fn).bind_partial(case_dir="/cases/x")
+        except TypeError as exc:  # pragma: no cover - explicit failure message
+            pytest.fail(f"{registry_name}() rejects case_dir kwarg: {exc}")
+
+
+class TestCaseDirKwargNoRaiseLive:
+    """Read-path tools must behave identically with and without injected case_dir.
+
+    Mirrors test_count_uses_injected_case_dir_basename_as_key but pins the
+    no-raise / parity invariant across the easily-mockable query tools. The
+    fixed tool (opensearch_count) is the lead case; the rest guard regressions.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_env_case(self, monkeypatch):
+        monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+        # The query tools set the _INJECTED_CASE_DIR ContextVar directly (not via
+        # the _use_injected_case_dir context manager), so a leaked value would
+        # bleed the injected case_dir into unrelated later tests. Snapshot and
+        # restore it so these no-raise calls stay hermetic.
+        token = srv._INJECTED_CASE_DIR.set(srv._INJECTED_CASE_DIR.get())
+        try:
+            yield
+        finally:
+            srv._INJECTED_CASE_DIR.reset(token)
+
+    def test_count_with_case_dir_matches_without(self, mock_client, tmp_path):
+        case_dir = tmp_path / "case-rocba-case-06132304"
+        case_dir.mkdir()
+        mock_client.count.return_value = {"count": 11}
+
+        plain = opensearch_count(query="event.code:4624", index="case-x-*")
+        injected = opensearch_count(
+            query="event.code:4624", index="case-x-*", case_dir=str(case_dir)
+        )
+        assert plain["count"] == injected["count"] == 11
+
+    def test_search_with_case_dir_matches_without(self, mock_client):
+        mock_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
+        plain = opensearch_search(query="*", index="case-x-*")
+        injected = opensearch_search(query="*", index="case-x-*", case_dir="/cases/c1")
+        assert plain["total"] == injected["total"] == 0
+
+    def test_aggregate_with_case_dir_matches_without(self, mock_client):
+        mock_client.search.return_value = {
+            "hits": {"total": {"value": 0}},
+            "aggregations": {"agg": {"buckets": []}},
+        }
+        plain = opensearch_aggregate(field="host.name", index="case-x-*")
+        injected = opensearch_aggregate(
+            field="host.name", index="case-x-*", case_dir="/cases/c1"
+        )
+        assert plain["buckets"] == injected["buckets"] == []
+
+    def test_timeline_with_case_dir_matches_without(self, mock_client):
+        mock_client.search.return_value = {
+            "hits": {"total": {"value": 0}},
+            "aggregations": {"timeline": {"buckets": []}},
+        }
+        plain = opensearch_timeline(query="*", index="case-x-*", interval="1h")
+        injected = opensearch_timeline(
+            query="*", index="case-x-*", interval="1h", case_dir="/cases/c1"
+        )
+        assert plain.get("buckets") == injected.get("buckets")
+        assert "error" not in plain and "error" not in injected
+
+    def test_field_values_with_case_dir_matches_without(self, mock_client):
+        mock_client.search.return_value = {
+            "aggregations": {"values": {"buckets": []}},
+        }
+        plain = opensearch_field_values(field="user.name", index="case-x-*")
+        injected = opensearch_field_values(
+            field="user.name", index="case-x-*", case_dir="/cases/c1"
+        )
+        assert plain["values"] == injected["values"] == []
