@@ -2135,7 +2135,14 @@ REGISTRY.append(
             "host id. Example: opensearch_fix_host_mapping(raw='wksn01', "
             "new_canonical='wksn01')."
         ),
-        deprecated_aliases=["opensearch_host_fix"],
+        # Cutover complete: the deprecated `opensearch_host_fix` alias is no
+        # longer served. The gateway enforces served-tools ⊆ manifest 'tools'
+        # (server.py _build_tool_map), and the alias was never declared there,
+        # so serving it broke every started-backend tools/list rebuild. The
+        # canonical name is the sole served tool. (Design follow-up: reconcile
+        # the shared `deprecated_aliases` contract feature with that gateway
+        # enforcement before reusing it — Session-Notes B-MVP-052.)
+        deprecated_aliases=[],
     )
 )
 

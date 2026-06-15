@@ -1240,11 +1240,11 @@ from pathlib import Path as _Path
 # (it inspected ``server.py``'s separate, unserved @server.tool surface).
 _MANIFEST_PATH = _Path(__file__).resolve().parent.parent / "sift-backend.json"
 
-# Canonical-manifest-name -> registered-registry-name. The host-fix tool is
-# registered under its deprecated alias for one cutover cycle, so the manifest
-# canonical name resolves to a different registry key (see registry/manifest
-# description). Both point at the same underlying function.
-_MANIFEST_TO_REGISTRY = {"opensearch_fix_host_mapping": "opensearch_host_fix"}
+# Canonical-manifest-name -> registered-registry-name. Identity today: the
+# served surface == the manifest 'tools' block (the gateway enforces that). The
+# deprecated `opensearch_host_fix` alias cutover is complete, so the host-fix
+# tool is served under its canonical name only.
+_MANIFEST_TO_REGISTRY: dict[str, str] = {}
 
 
 def _case_dir_injected_tool_names() -> list[str]:

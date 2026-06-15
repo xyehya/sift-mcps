@@ -13,6 +13,36 @@ Last updated: 2026-06-15.
 
 ## Current Change Log
 
+### 2026-06-15 - wintriage live-register: opensearch deprecated-alias drift fixed (the real blocker) + design fork B-MVP-052
+
+Status: DONE (host + live VM). Registering wintriage exposed a PRE-EXISTING opensearch contract violation that
+blocked the portal Start/health flow. Root-caused, fixed (operator chose "drop the alias"), deployed, live-verified.
+
+- **SYMPTOM:** portal registered wintriage but Start threw 500 then showed `Stopped`/health `error`. Gateway log:
+  `ValueError: Tool 'opensearch_host_fix' from backend 'opensearch-mcp' is not declared in the manifest 'tools'
+  block`.
+- **ROOT CAUSE:** opensearch-mcp served **16** tools but its manifest declares **15** — the extra was the
+  deprecated alias `opensearch_host_fix` (registry `deprecated_aliases`). The gateway `_build_tool_map`
+  (`server.py:498-527`) is LENIENT at boot (builds not-yet-started backends from the manifest → 15, no error) but
+  STRICT on the portal "start backend" action (lists the REAL served tools of a *started* opensearch → 16 → the
+  undeclared alias → ValueError → 500), which aborted the wintriage start. wintriage itself was always healthy
+  (loads `known_good.db` 2.68M files / 8M hashes, serves stdio) — proven by standalone run + a plain gateway
+  restart (lenient path) bringing `tools_count` to 24. NOT caused by the wintriage/B-MVP-047 work.
+- **FIX (operator decision — "drop the alias"):** `registry.py` `deprecated_aliases=[]` (cutover complete); the
+  canonical `opensearch_fix_host_mapping` is the sole served host-fix tool (the impl fn `server.opensearch_host_fix`
+  is internal, untouched). Regenerated the opensearch surface golden (−202 lines, alias block only); fixed the now
+  stale `_MANIFEST_TO_REGISTRY` map in `test_server_tools.py` (identity — served == manifest). opensearch suite
+  **1060 passed / 71 skipped**. NO gateway change; no auth/secret/evidence surface.
+- **LIVE-PROVEN:** synced `registry.py` to `/opt` (editable install), restarted gateway. Served opensearch surface
+  now **15** (alias `False`, canonical `True`); gateway logs clean (no `not declared`/`host_fix`/ValueError);
+  `/health` `tools_count` 24, all 3 backends mounted. The strict rebuild can no longer fail on opensearch
+  (served 15 == declared 15). **Operator final step:** click Start/Restart on wintriage in the portal → health
+  flips to `ok` (the DB `health_status` still shows the stale `error` from the pre-fix attempt).
+- **DESIGN FORK → B-MVP-052:** the shared `deprecated_aliases` contract feature (opensearch + opencti `contracts.py`)
+  is fundamentally incompatible with the gateway's strict served⊆manifest enforcement — ANY served alias breaks a
+  started-backend rebuild. Decide the canonical resolution (declare aliases in the manifest / gateway exempts
+  `meta.canonical_name`∈declared / drop the feature) before anyone reuses it.
+
 ### 2026-06-15 - B-MVP-047 wintriage baseline-dir root-cause + add-on-internal fix (host); B-MVP-044 verified-DONE
 
 Status: DONE (host code + tests + docs); live re-verify of wintriage register carries forward. Add-on-INTERNAL
@@ -662,6 +692,7 @@ Next:
 | B-MVP-049 | Backlog | OPEN | setup-addon.sh PATH-INDEPENDENCE (operator request, 2026-06-15): the script must be runnable from ANY cwd/path and still stage into the runtime venv + emit the staged command. Today it derives REPO_DIR from script location and the B-MVP-040(a) staged-root guard only WARNS + falls back to the operator-uv command when run from a non-`/opt` checkout (registerable-but-RED). Enhancement: auto-detect the staged runtime root (default `/opt/sift-mcps`, overridable by a clearly-named `SIFT_MCPS_INSTALL_ROOT`/prompt) independent of where the script lives, so a clone-run still stages into `/opt/.venv` and emits the staged console-script command (or fails fast with a crisp "set SIFT_MCPS_INSTALL_ROOT=/opt/sift-mcps"). | BATCH-LV1 |
 | B-MVP-050 | Backlog | OPEN | setup-addon.sh should emit PORTAL-FORM-READY output (operator request, 2026-06-15): the portal "REGISTER NEW BACKEND" form needs discrete fields — Transport type, Backend name, Manifest path/URL, Command, Arguments (one per line / JSON array), Env var references (backend env ← gateway env). Today setup-addon writes only a raw JSON payload (`~/.sift/addon-register/<name>.json`); the operator must hand-map it to the form. Enhancement: also print a labeled, copy-paste-ready block mapping each portal field (incl. "Arguments: (none)" and explicit Env-var-reference rows or "leave empty"), so the operator fills the form with zero guesswork. | BATCH-LV1 |
 | B-MVP-051 | Backlog | OPEN | setup-addon env_refs payload FAILS register when the gateway env var is unset (root-caused 2026-06-15): the wintriage payload carries `env_refs {SIFT_WINDOWS_TRIAGE_DB_DIR → SIFT_WINDOWS_TRIAGE_DB_DIR}`, but the gateway `_resolve_env_ref` (`packages/sift-gateway/src/sift_gateway/mcp_backends_registry.py:351`) RAISES `BackendRegistryError("…references missing environment variable")` if the gateway process has no such var (it doesn't — no gateway EnvironmentFile sets it). So registering the emitted payload as-is FAILS at backend instantiation. setup-addon WARNS "resolved from the gateway's own environment; set it there before registering" but provides NO mechanism/location to set it. Options: (a) when the chosen DB dir == the add-on's config default, emit the payload WITHOUT the env-ref so it works out of the box (chosen as the immediate manual path this run); (b) provision the gateway env var (write `SIFT_WINDOWS_TRIAGE_DB_DIR` into a gateway EnvironmentFile under `/var/lib/sift/.sift/` + prompt a `systemctl restart`); (c) DESIGN FORK — let the gateway tolerate a missing env-ref by falling back to the child's own default instead of hard-raising (cross-cuts the add-on contract; raise as F#). Document the canonical way to set add-on gateway env. | BATCH-LV1 |
+| B-MVP-052 | Backlog | OPEN | DESIGN: shared `deprecated_aliases` add-on feature vs gateway strict manifest enforcement (root-caused 2026-06-15 via the opensearch `opensearch_host_fix` incident). The add-on contract (`contracts.py` in opensearch-mcp AND opencti-mcp) lets a ToolDef declare `deprecated_aliases`, which `register_tools` SERVES as extra MCP tools. But the gateway `_build_tool_map` (`packages/sift-gateway/src/sift_gateway/server.py:498-527`) enforces served-tools ⊆ manifest `tools` for any STARTED backend, raising `ValueError(... not declared in the manifest 'tools' block)` → 500 on the next backend Start/Restart. So a served alias is a latent footgun that breaks the portal start flow. The opensearch case was fixed by DROPPING its alias (cutover complete), but the FEATURE remains defined and will re-bite the next user. Decide the canonical resolution and apply it consistently: (a) the add-on author MUST declare each deprecated alias in the manifest `tools` (then the feature is gateway-legal); (b) gateway exempts a served tool whose `meta.canonical_name` is a declared manifest tool (requires /security-review — it relaxes the tools/list surface guard); or (c) remove the `deprecated_aliases` mechanism from the shared contract entirely. Update CONVENTIONS/add-on authoring docs accordingly. | BATCH-LV1 |
 | B-MVP-048 | Backlog | OPEN | Evidence intake friction (fresh-install run): the active case evidence dir `/cases/<case>/evidence` is `sift-service`-owned (`drwxr-xr-x+`) and NOT operator-writable — so the operator cannot `cp` evidence in directly (arch: "evidence bytes are copied only by the operator"). Document/streamline the supported intake (operator `sudo cp` + `chown sift-service` into the case evidence dir, OR a portal evidence-import that copies from a source path), so the "copy evidence into the active case" step in the install epilogue is actionable. POST-SEAL RECHECK (this run): after the operator `sudo cp`s the evidence into `/cases/case-rocba-round-2-06151840/evidence/` and SEALS it via the portal, RE-VERIFY the result matches expectations — file **ownership** (`sift-service`), perms, and the post-seal **immutability** (`chattr +i`, cf. S-1 evidence immutability proven in RUN-3). An operator `sudo cp` can leave operator-owned / non-immutable files where the seal + evidence integrity chain expect `sift-service`-owned + immutable; confirm the seal flow re-chowns/`chattr +i`s them (or flag if it doesn't). | BATCH-LV1 |
 
 ## Validation Commands
