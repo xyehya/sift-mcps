@@ -13,6 +13,33 @@ Last updated: 2026-06-15.
 
 ## Current Change Log
 
+### 2026-06-15 - B-MVP-023: legacy v1 /dashboard + legacy_portal_session_enabled plane REMOVED
+
+Status: DONE (landed on local `main` via `44b120d`, merge `620dceb`; not pushed). Auth-plane change —
+`/security-review` run (CLEAN).
+
+Executed the saved impact trace (`docs/B-MVP-023-legacy-dashboard-removal-impact.md`) in an isolated
+worktree (builder agent), reviewed + security-reviewed, merged. Net −3361 lines.
+
+- Removed: v1 `/dashboard` mount + `create_dashboard_app` + `serve_index` + v1 `static/index.html`; the
+  `legacy_portal_session_enabled` flag end-to-end (supabase_auth field/parse, server.py kwarg, routes.py
+  param/var/passthrough, auth.py param/branch, gateway.yaml.template key); the legacy `sift_session`
+  cookie branch + the examiner Bearer fallback (`_verify_bearer`) + `COOKIE_*`/`revoke_jti`.
+- KEPT (guardrails): `_dashboard_api_routes()` (shared v1+v2 REST backbone); `generate_jwt`/`verify_jwt`/
+  `is_revoked` (internal utils + still test-used); the `post_auth_logout` cookie-clear (literals inlined);
+  v2 `/portal` fully intact (`create_dashboard_v2_app`, `serve_v2_*`, redirects, middleware).
+- Auth path now collapses to EXACTLY: valid Supabase session-envelope → operator principal; else
+  unauthenticated (principal/examiner/role=None) → route handlers 401/403. No elevated default; fail-closed
+  verified. Non-operator principals get role=None (denied); refresh accepts operator only.
+- Deviation (flagged + reviewed): `test_token_lifecycle.py` (not in the original plan) authenticated its
+  `/api/tokens` suite via the now-deleted Bearer fallback → migrated to the Supabase-envelope harness; it
+  still asserts the real gate (401 unauth, 403 readonly, 201 examiner). Removed orphaned `_verify_bearer`
+  + dead imports as a direct consequence.
+- Security review (auth-plane): CLEAN — no weakened-auth/bypass introduced; points 1-4 confirmed against
+  post-change code. Fixed one stale docstring (`routes.py` create_dashboard_v2_app: "legacy auth path").
+
+Verify (merged `main`): case-dashboard 357 passed; sift-gateway 519 passed; 0 failed; doc validators pass.
+
 ### 2026-06-15 - BATCH-SB1 / B-MVP-012: per-install Supabase JWT secret (kill the public demo keys)
 
 Status: IMPL DONE on host (verified); VM key-minting propagation is the LV1 proof step.
@@ -367,7 +394,7 @@ Next:
 | B-MVP-006 | Backlog | OPEN | Confirm portal knowledge-document policy for shared/reference-only behavior in PT2. | BATCH-PT2 |
 | B-MVP-012 | Backlog | DONE | 2026-06-15: resolved at INSTALL time (operator: fresh installs are cheap, 2 images). NOT a self-managed compose. `supabase/config.toml [auth] jwt_secret = env(SUPABASE_AUTH_JWT_SECRET)` + `setup-supabase.sh ensure_jwt_secret()` generates a per-install 256-bit secret, persists to gitignored `supabase/.env` (CLI auto-loads on every start), and a `capture_credentials` guard DIES if `supabase status` still emits the known demo anon/service_role keys → default-key install impossible. Mechanism verified vs CLI source @v2.105.0; host-verified (gen/persist/reuse/demo-reject). VM key-minting propagation proof folds into B-MVP-019/LV1. | BATCH-SB1 |
 | B-MVP-019 | Backlog | OPEN | Ensure add-on register path fields are sourced from staged `/opt/sift-mcps` paths for first real add-on launch. | BATCH-LV1 |
-| B-MVP-023 | Backlog | OPEN | DECISION (2026-06-14): REMOVE. Delete the `legacy_portal_session_enabled` fallback and sweep + delete any remaining legacy code paths/tests (operator: remove anything legacy still in code). | BATCH-CL2 |
+| B-MVP-023 | Backlog | DONE | 2026-06-15 (`44b120d`, merge `620dceb`): legacy v1 `/dashboard` mount + `create_dashboard_app`/`serve_index`/v1 static, the `legacy_portal_session_enabled` flag end-to-end, and the `sift_session` cookie + examiner Bearer (`_verify_bearer`) legacy auth branches REMOVED (−3361 lines). Kept shared `_dashboard_api_routes`, `generate_jwt`/`verify_jwt`, logout cookie-clear; v2 `/portal` intact. Auth collapses to Supabase-envelope→401, fail-closed. `/security-review` CLEAN (no bypass). case-dashboard 357 + gateway 519 green. Plan: `docs/B-MVP-023-legacy-dashboard-removal-impact.md`. | BATCH-CL2 |
 | B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green + committed 4ee3d1f pushed to origin/main 2026-06-14. | BATCH-R3-* |
 | B-MVP-027 | Backlog | DONE | Durable lane KeyError root-caused: handler dropped `_resolved_evidence_refs` + `ActiveCaseContext(db_active=True)` from the sync-lane contract → teardown surfaced as opaque `unhandled worker error: KeyError`. Code fix already landed in `0d440a7` (2026-06-10, AUT2) but row was never closed and had NO regression guard. Added regression coverage 2026-06-15 (`e95692d`): two tests drive the real `JobWorker.run_once` loop (plain + evidence-ref) to exec; evidence-ref test proven to FAIL against the pre-`0d440a7` handler. No prod change needed. | BATCH-R3-* |
 | B-MVP-028 | Backlog | DONE | Optimization track defined + first deliverable landed: tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`. On-wire fixes split to B-MVP-029. | B-MVP-028 |

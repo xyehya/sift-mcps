@@ -6071,7 +6071,9 @@ def create_dashboard_v2_app(
             logout/list_principals) return plain dicts (or None, or raise an
             exception carrying int .http_status and str .reason). case_dashboard
             never imports sift_gateway; all Supabase/principal logic is reached
-            through this object. When None, the portal uses the legacy auth path.
+            through this object. When None, no Supabase auth backend is wired, so
+            the portal has no operator auth plane (protected routes are not
+            authenticated; bootstrap/forced-reset endpoints report unavailable).
         active_case_service: PR03B Gateway-injected DB active-case service. When
             present, case list/create/activate/metadata use Postgres authority
             and never write active-case env/config/pointer exports.
