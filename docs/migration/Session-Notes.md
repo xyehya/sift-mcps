@@ -13,6 +13,44 @@ Last updated: 2026-06-15.
 
 ## Current Change Log
 
+### 2026-06-16 - B-MVP-048 REWORK: immutable-only seal + operator unseal action (full stack, 4 parallel teams) — SUPERSEDES the root-helper/chown approach
+
+Status: DONE (code on main; live deploy operator-gated). Per operator design call, the earlier B-MVP-048 root-helper +
+chown + sudoers approach (commits `ccb4336`/`330dfb6`) is SUPERSEDED and fully removed. New model: evidence sealing sets
+the immutable flag (`+i`) IN-PROCESS only (the venv interpreter already carries `CAP_LINUX_IMMUTABLE`, so sift-service can
+set AND clear it); a new re-auth operator UNSEAL action clears `+i` so the operator can replace/re-image/add evidence,
+then re-seals. `+i` is the load-bearing, owner-independent integrity property (no one, even root, can modify/delete/rename
+until it is cleared); leaving bytes `root:root 0644` keeps the gateway a reader-not-owner (tighter than chowning to it).
+Built by 4 parallel agent teams on manual worktrees off main, contracts frozen up front; merged in dependency order.
+
+- **WHY drop chown/helper/sudoers:** chown needed a root helper reachable via a NOPASSWD sudoers grant — a privileged
+  attack surface (a `/security-review` found a HIGH: unanchored `/evidence/` substring → arbitrary chown/`+i`) for
+  negative value. Removing it (incl. `scripts/sift-seal-evidence`, `_harden_via_helper`, `_harden_helper_path`) is a net
+  attack-surface reduction.
+- **core** (`fix/b048-core-immutable-only`): `harden_sealed_evidence` is now `+i`-only in-process (fail-closed if `+i`
+  not set); new `unharden_sealed_evidence` clears `+i` (fail-closed if still set; idempotent); strict
+  `<case>/evidence/` path resolution (symlink/traversal rejected). sift-core evidence suite 88.
+- **gateway** (`fix/b048-gateway-unseal`): `EvidenceAuthorityService.unseal()` (re-auth gated; clears `+i` then DB
+  transition; returns `{evidence_id,display_path,status,seal_status,immutable:False}`); `reacquire()` now re-hardens;
+  new migration `202606160100_evidence_unseal.sql` (`app.evidence_unseal`, SECURITY DEFINER, pinned search_path,
+  service_role grant, reauth+state guards, sets item `registered`/`unsealed` + recompute → case non-sealed → agent gate
+  BLOCKS all MCP tools for the whole mutable window; adds `FILE_UNSEALED` to the custody event-type CHECK). gateway 532.
+- **portal route** (`fix/b048-portal-unseal-route`): `POST /api/evidence/chain/unseal` mirroring `reacquire`'s re-auth
+  (Supabase password reverify, action `evidence_unseal`; 400/401/404/503 fail-closed). case-dashboard 365.
+- **portal UI** (`fix/b048-portal-unseal-ui`): per-row "Unseal" action on sealed evidence (amber modal: reason +
+  examiner password, warns it clears immutability and blocks agent tools until reseal; refreshes on success). New
+  `unsealEvidence(path,reason,password)` API helper. frontend vitest 89.
+- **`/security-review`: CLEAN** (no findings >=8): triple-independent re-auth (route reverify + service non-empty + DB
+  null-guard), path-safe `+i` clear, parameterized SECURITY-DEFINER SQL, deterministic gate-block during the mutable
+  window, helper removal leaves no dangling refs.
+- **Lifecycle:** seal -> `+i`; add-new-evidence -> copy in (existing `+i` files untouched) -> tamper-watch flags ->
+  reseal (`+i` new file); replace/re-image -> unseal (clear `+i`, gate blocks) -> operator overwrites -> reseal/reacquire.
+- **LIVE DEPLOY (operator-gated — to do together):** (1) apply `202606160100_evidence_unseal.sql` on the VM; (2) verify
+  `/opt/.venv` interpreter has `CAP_LINUX_IMMUTABLE` and `/cases` supports `chattr +i` BEFORE deploying (else fail-closed
+  seal would 500 future seals); (3) deploy synced code + restart; (4) harden the CURRENT case's 2 evidence files;
+  (5) operator-driven portal test: seal/unseal/reacquire while the agent verifies gate-block + `lsattr` `+i` transitions
+  over MCP. B-MVP-048 stays OPEN until this live test passes.
+
 ### 2026-06-16 - Parallel agent-team batch: install polish (043/045/046) + setup-addon UX (049/050/051) + B-MVP-052 design + B-MVP-048 seal hardening — 4 units merged to main
 
 (B-MVP-048 added below the original batch entry; the other 3 units are detailed in the same entry that follows.)
