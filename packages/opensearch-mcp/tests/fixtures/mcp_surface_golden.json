@@ -437,6 +437,12 @@
       "description": "Return an exact match count without documents. Use to verify index population or gauge magnitude before opensearch_search. Do not use when you need per-value counts; use opensearch_aggregate. Example: opensearch_count(query='event.code:4624').",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "case_id": {
             "default": "",
             "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
@@ -2300,6 +2306,12 @@
       "description": "Enumerate distinct values of a field with counts before writing targeted queries. Use for value discovery such as usernames or process names; prefer opensearch_aggregate when ranking matters. Example: opensearch_field_values(field='winlog.provider_name').",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "case_id": {
             "default": "",
             "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
@@ -2478,6 +2490,12 @@
       "description": "Build a date histogram of event counts to find activity bursts before drilling in. Use to locate spikes, then scope opensearch_search with time_from/time_to. Buckets are warned at the configured ceiling and never silently truncated. Example: opensearch_timeline(query='event.code:4688', interval='1h').",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "case_id": {
             "default": "",
             "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",
@@ -2844,6 +2862,12 @@
       "description": "Group by a field for top-N frequency analysis such as event codes, users, hosts, or process names. Use for distributions. Do not use when you want individual documents; use opensearch_search. Example: opensearch_aggregate(field='event.code').",
       "input_schema": {
         "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
           "case_id": {
             "default": "",
             "description": "Case id. If empty, resolves to the active portal case (SIFT_CASE_DIR). Yields 'case-{id}-*'.",

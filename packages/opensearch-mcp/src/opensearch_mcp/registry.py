@@ -93,6 +93,15 @@ class CaseScopedQueryBase(BaseModel):
             "Yields 'case-{id}-*'."
         ),
     )
+    # B-MVP-036/029: every case-scoped query tool must ADVERTISE case_dir so the
+    # Gateway's schema-gated injection (sift_gateway.server) can pass the
+    # DB-authoritative active case directory through FastMCP's proxy transform.
+    # Without the field on the served *In model, the proxy _forward rejects the
+    # injected kwarg — count/aggregate/timeline/field_values previously failed
+    # live; only search worked because it redeclared the field. Declared on the
+    # base so every CaseScopedQueryBase tool inherits it (all are manifest-listed
+    # with case_dir in safe_case_argument_names).
+    case_dir: str = _case_dir_field()
 
     @field_validator("index")
     @classmethod
@@ -150,13 +159,6 @@ class SearchIn(CaseScopedQueryBase):
             "for full docs (prefer opensearch_get_event for one doc)."
         ),
     )
-    # B-MVP-029: search now spills large result sets to <case>/agent/searches/.
-    # That write needs the DB-authoritative case directory, which the Gateway
-    # only injects when the tool's input schema advertises a case_dir field
-    # (sift_gateway.server schema-gated injection). Exposing it here also lets
-    # the index scope to the exact active case instead of the case-* fallback.
-    case_dir: str = _case_dir_field()
-
     @field_validator("sort")
     @classmethod
     def _validate_sort(cls, value: str) -> str:

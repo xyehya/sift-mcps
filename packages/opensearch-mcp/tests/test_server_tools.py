@@ -1204,16 +1204,21 @@ class TestSpawnIngestUserBusFallback:
 # B-MVP-036: gateway case_dir kwarg-injection must never raise
 # ---------------------------------------------------------------------------
 
-import inspect as _inspect
 import json as _json
 from pathlib import Path as _Path
 
 # The manifest is the source of truth for which tool calls the Gateway injects
 # arguments into: every tool whose ``safe_case_argument_names`` lists
 # ``case_dir`` receives an extra ``case_dir=<active-case>`` kwarg at call time.
-# If such a tool's Python signature does not accept ``case_dir`` the real call
-# raises ``TypeError: <tool>() got an unexpected keyword argument 'case_dir'``
-# (the original B-MVP-036 failure, observed for opensearch_count).
+# The check must target the SERVED server (``registry.create_server()`` -- what
+# ``server.py:main`` runs over stdio) and the tool's ADVERTISED input schema: the
+# Gateway proxies via FastMCP, whose ``tool_transform._forward`` validates the
+# call against the advertised schema and rejects an injected kwarg the schema
+# does not declare -- BEFORE it reaches the backend function. So a tool can
+# *accept* case_dir in its impl yet still fail live if its served ``*In`` model
+# does not declare it (the real B-MVP-036 cause: ``CountIn`` lacked the field
+# while ``SearchIn`` had it). Checking the function signature is the WRONG layer
+# (it inspected ``server.py``'s separate, unserved @server.tool surface).
 _MANIFEST_PATH = _Path(__file__).resolve().parent.parent / "sift-backend.json"
 
 # Canonical-manifest-name -> registered-registry-name. The host-fix tool is
@@ -1235,6 +1240,21 @@ def _case_dir_injected_tool_names() -> list[str]:
 _CASE_DIR_TOOLS = _case_dir_injected_tool_names()
 
 
+def _served_tool_schemas() -> dict:
+    """Advertised input schemas of the tools the stdio entrypoint actually serves
+    (``registry.create_server`` -- NOT ``server.py``'s separate @server.tool
+    surface, which is not mounted over stdio and previously masked this bug)."""
+    import asyncio as _asyncio
+
+    from opensearch_mcp.registry import create_server
+
+    tools = _asyncio.run(create_server().list_tools())
+    return {t.name: (getattr(t, "parameters", None) or {}) for t in tools}
+
+
+_SERVED_TOOL_SCHEMAS = _served_tool_schemas()
+
+
 class TestCaseDirArgInjectionInvariant:
     """B-MVP-036: every Gateway-injected ``case_dir`` target must accept it.
 
@@ -1250,27 +1270,23 @@ class TestCaseDirArgInjectionInvariant:
         assert "opensearch_search" in _CASE_DIR_TOOLS
 
     @pytest.mark.parametrize("manifest_name", _CASE_DIR_TOOLS)
-    def test_registered_tool_signature_accepts_case_dir(self, manifest_name):
-        registry = srv.server._tool_manager._tools
+    def test_served_tool_advertises_case_dir(self, manifest_name):
+        # The Gateway's FastMCP proxy validates against the ADVERTISED input
+        # schema, so the served *In model must declare case_dir or the injected
+        # kwarg is rejected at tool_transform._forward before reaching the
+        # backend (B-MVP-036). The function-signature check was the wrong layer.
         registry_name = _MANIFEST_TO_REGISTRY.get(manifest_name, manifest_name)
-        assert registry_name in registry, (
+        assert registry_name in _SERVED_TOOL_SCHEMAS, (
             f"manifest tool {manifest_name!r} (registry {registry_name!r}) "
-            "is not registered on the server"
+            "is not registered on the served (create_server) server"
         )
-        fn = registry[registry_name].fn
-        params = _inspect.signature(fn).parameters
-        accepts_case_dir = "case_dir" in params or any(
-            p.kind is _inspect.Parameter.VAR_KEYWORD for p in params.values()
+        props = _SERVED_TOOL_SCHEMAS[registry_name].get("properties", {})
+        assert "case_dir" in props, (
+            f"{registry_name} does not ADVERTISE 'case_dir' in its served input "
+            "schema — the Gateway's FastMCP proxy (_forward) rejects the injected "
+            "case_dir kwarg before it reaches the backend (B-MVP-036). The impl "
+            "function accepting case_dir is NOT sufficient."
         )
-        assert accepts_case_dir, (
-            f"{registry_name}() does not accept the Gateway-injected 'case_dir' "
-            "kwarg — a real call would raise TypeError (B-MVP-036)"
-        )
-        # Binding the injected kwarg must succeed (this is what the Gateway does).
-        try:
-            _inspect.signature(fn).bind_partial(case_dir="/cases/x")
-        except TypeError as exc:  # pragma: no cover - explicit failure message
-            pytest.fail(f"{registry_name}() rejects case_dir kwarg: {exc}")
 
 
 class TestCaseDirKwargNoRaiseLive:
