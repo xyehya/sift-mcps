@@ -34,7 +34,7 @@ class _PortalHTTPSGuard:
             self.tls_configured
             and scope["type"] == "http"
             and scope.get("scheme") == "http"
-            and scope.get("path", "").startswith(("/portal", "/dashboard"))
+            and scope.get("path", "").startswith("/portal")
         ):
             resp = PlainTextResponse(
                 "Portal requires HTTPS. Connect via https://...", status_code=400
@@ -57,7 +57,7 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
         content_type = response.headers.get("content-type", "")
         if "text/html" in content_type:
             path = request.url.path
-            if path.startswith("/portal") or path.startswith("/dashboard"):
+            if path.startswith("/portal"):
                 response.headers["Content-Security-Policy"] = (
                     "default-src 'self'; "
                     "script-src 'self' 'unsafe-inline'; "
@@ -1293,12 +1293,9 @@ class Gateway:
         routes.extend(health_routes())
         routes.extend(rest_routes())
 
-        # Examiner Portal + legacy dashboard (optional — installed separately)
+        # Examiner Portal (optional — installed separately)
         try:
-            from case_dashboard.routes import (
-                create_dashboard_app,
-                create_dashboard_v2_app,
-            )
+            from case_dashboard.routes import create_dashboard_v2_app
 
             portal_cfg = self.config.get("portal", {})
             portal_secret: str = portal_cfg.get("session_secret", "")
@@ -1330,7 +1327,6 @@ class Gateway:
                 investigation_service=self.investigation_service,
                 report_service=self.report_service,
                 job_service=self.job_service,
-                legacy_portal_session_enabled=auth_config.legacy_portal_session_enabled,
                 on_chain_mutation=invalidate_evidence_cache,
                 on_case_activated=None,
                 on_override_get_status=get_override_status,
@@ -1348,7 +1344,6 @@ class Gateway:
             routes.append(Route("/", _redirect_to_portal, methods=["GET"]))
             routes.append(Route("/portal", _redirect_to_portal, methods=["GET"]))
             routes.append(Mount("/portal", app=dashboard_app))
-            routes.append(Mount("/dashboard", app=create_dashboard_app()))
         except ImportError:
             pass
 

@@ -22,17 +22,15 @@ _PUBLIC_PATHS = {
     "/api/v1/health/",
     "/mcp",
     "/api/v1/setup/join",
-    # Examiner Portal + legacy dashboard HTML only — API endpoints require auth
+    # Examiner Portal HTML only — API endpoints require auth
     "/portal",
     "/portal/",
-    "/dashboard",
-    "/dashboard/",
 }
 
 # Paths matched by prefix (all sub-paths are public)
 _PUBLIC_PREFIXES: tuple[str, ...] = ()
 
-# Static asset extensions that bypass auth on portal/dashboard paths
+# Static asset extensions that bypass auth on portal paths
 _STATIC_ASSET_EXTS = frozenset({"png", "jpg", "svg", "ico", "css", "js"})
 
 # Maximum length for bearer tokens (DoS protection against megabyte-sized headers)
@@ -153,7 +151,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # /mcp and /mcp/* are handled by MCPAuthASGIApp (ASGI-level auth).
         # Portal paths (/portal/...) are handled by PortalSessionMiddleware inside the portal app.
         is_portal_static = (
-            path.startswith(("/portal/", "/dashboard/"))
+            path.startswith("/portal/")
             and path.rsplit(".", 1)[-1] in _STATIC_ASSET_EXTS
         )
         if (

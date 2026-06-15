@@ -200,11 +200,6 @@ class SupabaseAuthConfig:
     min_agent_token_ttl_seconds: int = _DEFAULT_MIN_AGENT_TOKEN_TTL
     # legacy flags
     legacy_token_fallback_enabled: bool = True
-    # CL3a (B-MVP-017): the template default is now False (sensitive-action
-    # re-auth verifies against Supabase), but the CODE default stays True so
-    # EXISTING installs that have not re-rendered gateway.yaml are unaffected
-    # until they adopt the new template. Deletion of the plane follows in CL3b.
-    legacy_portal_session_enabled: bool = True
     legacy_anonymous_examiner_enabled: bool = False
 
     @property
@@ -216,7 +211,7 @@ class SupabaseAuthConfig:
         return (
             "SupabaseAuthConfig(enabled=%r, url=%r, anon_key=%s, "
             "service_role_key=%s, validation=%r, ttl=%r, min_agent_ttl=%r, "
-            "legacy_token_fallback=%r, legacy_portal_session=%r, "
+            "legacy_token_fallback=%r, "
             "legacy_anonymous_examiner=%r)"
             % (
                 self.enabled,
@@ -227,7 +222,6 @@ class SupabaseAuthConfig:
                 self.principal_cache_ttl_seconds,
                 self.min_agent_token_ttl_seconds,
                 self.legacy_token_fallback_enabled,
-                self.legacy_portal_session_enabled,
                 self.legacy_anonymous_examiner_enabled,
             )
         )
@@ -294,7 +288,6 @@ def load_supabase_auth_config(config: dict[str, Any]) -> SupabaseAuthConfig:
         principal_cache_ttl_seconds=ttl,
         min_agent_token_ttl_seconds=min_agent_ttl,
         legacy_token_fallback_enabled=_as_bool(legacy.get("token_fallback_enabled"), True),
-        legacy_portal_session_enabled=_as_bool(legacy.get("portal_session_enabled"), True),
         legacy_anonymous_examiner_enabled=_as_bool(
             legacy.get("anonymous_examiner_enabled"), False
         ),

@@ -2,7 +2,7 @@
 
 Verifies:
 - Standard security headers (HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy) on all responses.
-- Content-Security-Policy only on HTML responses served under /portal or /dashboard paths.
+- Content-Security-Policy only on HTML responses served under /portal paths.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ async def _plain_endpoint(request: Request) -> PlainTextResponse:
 def _make_app() -> Starlette:
     routes = [
         Route("/portal/index.html", _html_endpoint, methods=["GET"]),
-        Route("/dashboard/index.html", _html_endpoint, methods=["GET"]),
         Route("/portal/api/data", _json_endpoint, methods=["GET"]),
         Route("/health", _plain_endpoint, methods=["GET"]),
     ]
@@ -69,14 +68,6 @@ def test_csp_only_on_portal_html_responses(client):
     assert resp_portal_html.status_code == 200
     assert "Content-Security-Policy" in resp_portal_html.headers
     assert resp_portal_html.headers["Content-Security-Policy"] == (
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com"
-    )
-
-    # HTML page under /dashboard -> should have CSP
-    resp_dash_html = client.get("/dashboard/index.html")
-    assert resp_dash_html.status_code == 200
-    assert "Content-Security-Policy" in resp_dash_html.headers
-    assert resp_dash_html.headers["Content-Security-Policy"] == (
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com"
     )
 
