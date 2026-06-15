@@ -15,6 +15,8 @@ Start from Linear for active work:
 - The assigned Linear issue: goal, scope, hard constraints, acceptance, latest
   comments, blockers, linked decisions, and branches.
 - `README.md`: stable product and architecture overview for this repo.
+- `docs/new-docs/DEVELOPER_ENTRYPOINT.md`: package, flow, and code-routing map
+  when a task needs developer onboarding context.
 
 Repo `docs/migration/` is historical proof and migration context, not the active
 queue. Use it only for targeted background when an issue needs a prior proof,

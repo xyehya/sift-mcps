@@ -5,6 +5,8 @@ how the major authority planes fit together. Active task state, forks, decisions
 needed, and session handoffs live in Linear, not in this file.
 
 For the public-facing product overview, start with [`README.md`](../../README.md).
+For a developer-oriented package and flow map, use
+[`DEVELOPER_ENTRYPOINT.md`](DEVELOPER_ENTRYPOINT.md).
 
 ## Purpose
 
@@ -99,7 +101,8 @@ Linear is the active operating pipeline for this project:
   coordination.
 
 Repo docs should stay compact. Use this file and `README.md` for stable
-overview and Linear for active work.
+overview, `DEVELOPER_ENTRYPOINT.md` for developer onboarding, and Linear for
+active work.
 
 ## Safety Invariants
 

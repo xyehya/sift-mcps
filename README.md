@@ -82,6 +82,8 @@ milestones group larger lanes; documents hold durable policies and decisions.
 Repo documentation is intentionally narrower:
 
 - This `README.md` is the stable product and architecture overview.
+- `docs/new-docs/DEVELOPER_ENTRYPOINT.md` is the developer-oriented package,
+  flow, and code-routing map.
 - `docs/migration/` is historical proof and migration context, not the active
   queue.
 - Heavy temporary plans, research notes, and one-off specs should stay outside
