@@ -13,6 +13,29 @@ Last updated: 2026-06-15.
 
 ## Current Change Log
 
+### 2026-06-15 - Pushed to origin + SIFT VM wiped to a fresh slate (for live-test reinstall)
+
+Status: DONE. `main` pushed `495037d..82d82c5` (origin now current — was 14 behind). SIFT VM
+(192.168.122.81) torn down to bare for a clean fresh-install live test next session.
+
+Teardown (irreversible, operator-authorized): `install.sh --uninstall --purge-data -y` from the VM clone
+(services, docker-compose stack + volumes, AppArmor/auditd/sudoers, venv, SIFT_HOME, `/var/lib/sift`,
+`/cases`) + manual removal of what the uninstaller does NOT cover: the CLI-managed Supabase stack (4
+`supabase_*` containers + `supabase_db` volume), `sift-opensearch` container + `opensearch-data` volume,
+`docker system prune -af --volumes` (1.95 GB reclaimed), `/opt/sift-mcps`, the clone
+`/home/sansforensics/sift-mcps`, `~/.sift`, the `sift-opensearch-worker@` template unit, leftover
+`sift-ingest-mount` + `sift-run-command-systemd-scope` sudoers, and the `sift-service`/`agent_runtime`
+system users.
+
+Verified bare: 0 sift units, 0 docker containers/volumes/images, all dirs gone
+(`/opt/sift-mcps`, clone, `/var/lib/sift`, `/cases`, `~/.sift`), no sift users/sudoers/AppArmor, port 4508
+down. The VM now exercises a true first-run install path next session.
+
+Pending live proof (LV1, next session — see `.remember/remember.md` handoff): fresh
+`git clone && setup-supabase.sh && ./install.sh`, then prove B-MVP-012/SB1 (emitted `ANON_KEY` != demo
+constant + `service_role` smoke), B-MVP-019 (add-on staged-path register), windows-triage add-on register
+via `setup-addon.sh`, and the end-to-end Rocba MCP path.
+
 ### 2026-06-15 - B-MVP-023: legacy v1 /dashboard + legacy_portal_session_enabled plane REMOVED
 
 Status: DONE (landed on local `main` via `44b120d`, merge `620dceb`; not pushed). Auth-plane change —
