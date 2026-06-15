@@ -26,6 +26,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from windows_triage_mcp.config import get_config
+
 REPO = "AppliedIR/sift-mcp"
 ASSETS = ("known_good.db.zst", "context.db.zst", "checksums.sha256")
 MAX_ATTEMPTS = 3
@@ -285,7 +287,11 @@ def main() -> None:
     parser.add_argument(
         "--dest",
         default=None,
-        help="Destination directory (default: data/ relative to package)",
+        help=(
+            "Destination directory. When omitted, defers to the add-on's "
+            "runtime config: $SIFT_WINDOWS_TRIAGE_DB_DIR, then $WT_DATA_DIR, "
+            "then /var/lib/sift/windows-triage."
+        ),
     )
     parser.add_argument(
         "--tag",
@@ -294,12 +300,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Single source of truth for the baseline dir: an explicit --dest wins,
+    # otherwise defer to the add-on's own runtime resolution
+    # (config.get_config: SIFT_WINDOWS_TRIAGE_DB_DIR -> WT_DATA_DIR ->
+    # /var/lib/sift/windows-triage). This guarantees the download lands exactly
+    # where the runtime later reads the databases from, rather than diverging
+    # into the package source tree. reload=True so this one-shot CLI honors the
+    # current process environment.
     if args.dest:
         dest = Path(args.dest)
     else:
-        # Default: data/ directory relative to the windows-triage package
-        pkg_root = Path(__file__).resolve().parent.parent.parent.parent
-        dest = pkg_root / "data"
+        dest = get_config(reload=True).data_dir
 
     if download_databases(dest, args.tag):
         sys.exit(0)
