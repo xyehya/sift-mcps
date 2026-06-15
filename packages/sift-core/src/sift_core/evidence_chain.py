@@ -844,10 +844,17 @@ def harden_sealed_evidence(
         abs_path = _resolve_sealed_target(case_dir, rel_path)
 
         if not _set_immutable(abs_path, True):
+            owner = _file_owner_name(abs_path)
             raise EvidenceHardeningError(
-                f"Could not set the immutable flag on sealed evidence {rel_path!r}. "
-                "The interpreter must carry CAP_LINUX_IMMUTABLE (install.sh "
-                "configure_immutable_capability). The seal was NOT hardened on disk."
+                f"Could not set the immutable flag on sealed evidence {rel_path!r} "
+                f"(current owner: {owner or 'unknown'}). The seal was NOT hardened on "
+                "disk. Setting +i in-process needs BOTH (a) the file owned by the "
+                f"gateway service user '{DEFAULT_SERVICE_USER}' — operator-copied "
+                "evidence is often root-owned, so chown it to the service user at "
+                "intake (e.g. `sudo chown "
+                f"{DEFAULT_SERVICE_USER}:{DEFAULT_SERVICE_USER} <evidence-file>`) — "
+                "AND (b) the interpreter carrying CAP_LINUX_IMMUTABLE (install.sh "
+                "configure_immutable_capability)."
             )
 
         immutable = get_immutable_flag(abs_path)

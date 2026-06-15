@@ -3040,14 +3040,20 @@ print_summary() {
     printf '       password: (see %s -> supabase_operator_temp_password)\n' "$MATERIALS_FILE"
     printf '     You will be FORCED to reset this password on first login.\n'
     printf '  2. After reset, create a case and activate it with your new password.\n'
-    printf '  3. Mount or copy evidence into the active case evidence directory.\n'
+    printf '  3. Mount or copy evidence into the active case evidence directory, then\n'
+    printf '     chown it to the gateway service user (operator copies are often root-\n'
+    printf '     owned; the seal makes bytes immutable in-process, which needs service\n'
+    printf '     ownership):  sudo chown -R %s:%s <case-dir>/evidence/\n' "${SIFT_GATEWAY_SERVICE_USER:-sift-service}" "${SIFT_GATEWAY_SERVICE_USER:-sift-service}"
     printf '  4. Generate an AI agent credential from Portal -> Agents.\n'
   elif [[ "${SUPABASE_OPERATOR_MAPPED:-0}" -eq 1 ]]; then
     printf '  1. Sign into the portal with your existing Supabase operator account:\n'
     printf '       email:    %s\n' "${SUPABASE_OPERATOR_EMAIL:-${SIFT_EXAMINER}@operators.sift.local}"
     printf '       password: existing Supabase password\n'
     printf '  2. Create a case and activate it with password re-auth.\n'
-    printf '  3. Mount or copy evidence into the active case evidence directory.\n'
+    printf '  3. Mount or copy evidence into the active case evidence directory, then\n'
+    printf '     chown it to the gateway service user (operator copies are often root-\n'
+    printf '     owned; the seal makes bytes immutable in-process, which needs service\n'
+    printf '     ownership):  sudo chown -R %s:%s <case-dir>/evidence/\n' "${SIFT_GATEWAY_SERVICE_USER:-sift-service}" "${SIFT_GATEWAY_SERVICE_USER:-sift-service}"
     printf '  4. Generate an AI agent credential from Portal -> Agents.\n'
   else
     printf '  1. Supabase operator bootstrap did not complete, so portal login is not ready.\n'
