@@ -184,6 +184,49 @@ async def test_check_artifact_routes_file_hash_lolbin_and_dll(server):
 
 
 @pytest.mark.asyncio
+async def test_lolbin_bare_name_gets_format_hint(server):
+    # XYE-29 item 6: a bare name (no extension) can never match the LOLBAS
+    # catalog; the UNKNOWN result must carry a non-breaking 'name.exe' hint.
+    bare = await server._check_lolbin("certutil")
+    assert bare["is_lolbin"] is False
+    assert bare["queried"] == "certutil"
+    assert "certutil.exe" in bare["hint"]
+
+    # A proper filename that is simply absent stays a miss with NO format hint.
+    absent = await server._check_lolbin("notathing.exe")
+    assert absent["is_lolbin"] is False
+    assert "hint" not in absent
+
+    # A real catalog hit never carries the hint.
+    hit = await server._check_lolbin("mshta.exe")
+    assert hit["is_lolbin"] is True
+    assert "hint" not in hit
+
+
+def test_artifact_out_promotes_lolbin_hint_to_reasons():
+    # XYE-29 item 6: the served FastMCP surface promotes the bare-name hint into
+    # the UNKNOWN result's reasons so it is visible without digging into subtype_data.
+    from windows_triage_mcp.registry import ArtifactType, _artifact_out
+
+    out = _artifact_out(
+        ArtifactType.lolbin,
+        {"is_lolbin": False, "queried": "certutil", "hint": "try 'certutil.exe'"},
+    )
+    assert out.verdict.value == "UNKNOWN"
+    assert out.is_lolbin is False
+    assert any("certutil.exe" in reason for reason in out.reasons)
+    assert out.subtype_data.get("hint") == "try 'certutil.exe'"
+
+    # No hint on a real hit; reasons stay clean.
+    hit = _artifact_out(
+        ArtifactType.lolbin,
+        {"is_lolbin": True, "name": "mshta", "functions": ["hta"]},
+    )
+    assert hit.verdict.value == "EXPECTED_LOLBIN"
+    assert all("name.exe" not in reason for reason in hit.reasons)
+
+
+@pytest.mark.asyncio
 async def test_check_system_routes_service_task_and_autorun(server):
     service_result = await _call_tool(
         server,
@@ -290,6 +333,20 @@ async def test_check_scheduled_task_autorun_and_registry(server):
         "Win10_21H2_Pro",
     )
     assert result_registry["verdict"] == "EXPECTED"
+
+
+@pytest.mark.asyncio
+async def test_check_registry_absent_db_warns(server):
+    # XYE-27: when the optional ~12GB registry DB is not installed, the result
+    # must carry a clear, non-breaking warning (mirrors db_stats available:false).
+    server.registry_db = None
+    raw = await server._check_registry(r"HKLM\SOFTWARE\Foo", None, None, None)
+    assert raw["error"] == "Registry database not available"
+    assert raw["registry_db_available"] is False
+    assert raw["lookup_performed"] is False
+    assert "not installed" in raw["note"].lower()
+    # Steer the caller to the no-DB alternative.
+    assert "wintriage_check_system" in raw["note"]
 
 
 @pytest.mark.asyncio

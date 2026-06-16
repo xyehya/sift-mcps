@@ -497,11 +497,25 @@ setup_wintriage() {
   local wt_config_default="/var/lib/sift/windows-triage"
   SIFT_WINDOWS_TRIAGE_DB_DIR="$(ask 'Triage baseline DB dir' "${SIFT_WINDOWS_TRIAGE_DB_DIR:-$wt_config_default}")"
   if ask_yes "Provision prerequisites (download baseline databases via the add-on's own downloader)?"; then
+    # XYE-27: the optional full registry baseline (known_good_registry.db) is
+    # ~12 GB on disk and is fetched ONLY on explicit opt-in. The downloader
+    # additionally enforces a disk-space check (~15 GB free) before pulling it.
+    local wt_registry_flags=()
+    if ask_yes "Also download the OPTIONAL full registry baseline (~12 GB on disk; needs ~15 GB free)?"; then
+      wt_registry_flags=(--with-registry --yes)
+    fi
     SIFT_WINDOWS_TRIAGE_DB_DIR="$SIFT_WINDOWS_TRIAGE_DB_DIR" \
       "$UV_BIN" run --project "$SIFT_MCPS_ROOT" --extra windows-triage \
-      python -m windows_triage_mcp.scripts.download_databases \
+      python -m windows_triage_mcp.scripts.download_databases "${wt_registry_flags[@]}" \
       || warn "Baseline DB download incomplete — backend may start degraded (UNKNOWN-only)."
   fi
+  # XYE-27: offline/air-gapped staging. The runtime reads its DBs from the dir
+  # resolved above; to pre-stage by hand, place the decompressed files there:
+  #   $SIFT_WINDOWS_TRIAGE_DB_DIR/known_good.db, context.db, and (optional, ~12GB)
+  #   known_good_registry.db  — see packages/windows-triage-mcp/README.md.
+  log "Offline staging: place decompressed known_good.db / context.db (and the"
+  log "optional ~12GB known_good_registry.db) in $SIFT_WINDOWS_TRIAGE_DB_DIR"
+  log "(see packages/windows-triage-mcp/README.md for SHA-256 verification)."
   # B-MVP-034: the native installer does NOT sync the windows-triage extra, so
   # this stages it into the runtime venv and registers the sift-service-
   # executable console script (.venv/bin/windows-triage-mcp) — the launch shape

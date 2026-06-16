@@ -96,7 +96,7 @@
         "readOnlyHint": true,
         "title": "Check Windows Artifact"
       },
-      "description": "Validate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
+      "description": "Validate one Windows artifact against local offline baselines. Use `type='file'` for a Windows path with optional hash, `type='hash'` for a LOLDrivers vulnerable-driver lookup, `type='filename'` for deception heuristics, `type='lolbin'` for LOLBin context, or `type='dll'` for DLL hijackability. For `type='lolbin'` pass the executable filename WITH its extension, e.g. `value='certutil.exe'` (a bare 'certutil' will not match the LOLBAS catalog and returns UNKNOWN). UNKNOWN is neutral: it means not present in the local DB, not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. Example: `wintriage_check_artifact(type='file', value='C:\\\\Windows\\\\System32\\\\svchost.exe', os_version='Win10_21H2_Pro')`.",
       "input_schema": {
         "properties": {
           "hash": {
@@ -140,7 +140,7 @@
             "type": "string"
           },
           "value": {
-            "description": "file=Windows path; hash=MD5/SHA1/SHA256; filename/lolbin=filename; dll=DLL name. No null bytes; length-capped per type.",
+            "description": "file=Windows path; hash=MD5/SHA1/SHA256; filename=filename; lolbin=executable filename WITH extension (e.g. 'certutil.exe'); dll=DLL name. No null bytes; length-capped per type.",
             "maxLength": 4096,
             "minLength": 1,
             "title": "Value",

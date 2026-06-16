@@ -96,7 +96,8 @@ class CheckArtifactIn(BaseModel):
         min_length=1,
         max_length=4096,
         description=(
-            "file=Windows path; hash=MD5/SHA1/SHA256; filename/lolbin=filename; "
+            "file=Windows path; hash=MD5/SHA1/SHA256; filename=filename; "
+            "lolbin=executable filename WITH extension (e.g. 'certutil.exe'); "
             "dll=DLL name. No null bytes; length-capped per type."
         ),
     )
@@ -698,14 +699,20 @@ def _artifact_out(artifact_type: ArtifactType, raw: dict[str, Any]) -> CheckArti
     if artifact_type is ArtifactType.lolbin:
         functions = list(raw.get("functions", []) or [])
         is_lolbin = bool(raw.get("is_lolbin"))
+        reasons = [
+            "Filename is a known LOLBin with abuse potential"
+            if is_lolbin
+            else "Filename is not in the local LOLBin catalog"
+        ]
+        # Promote any format hint (bare name with no extension) into reasons so a
+        # neutral UNKNOWN is not mistaken for a real signal.
+        hint = raw.get("hint")
+        if hint and not is_lolbin:
+            reasons.append(str(hint))
         return CheckArtifactOut(
             artifact_type=artifact_type,
             verdict=Verdict.EXPECTED_LOLBIN if is_lolbin else Verdict.UNKNOWN,
-            reasons=[
-                "Filename is a known LOLBin with abuse potential"
-                if is_lolbin
-                else "Filename is not in the local LOLBin catalog"
-            ],
+            reasons=reasons,
             confidence="high" if is_lolbin else "low",
             is_lolbin=is_lolbin,
             lolbin_functions=functions,
@@ -1038,8 +1045,9 @@ async def wintriage_check_registry(
                 else ErrorCode.invalid_input
             )
             remediation = (
-                "Install the optional known_good_registry.db per SETUP.md, "
-                "or use wintriage_check_system(type='autorun') for persistence checks."
+                "Install the optional known_good_registry.db (see the "
+                "windows-triage-mcp README; ~12GB, opt-in), or use "
+                "wintriage_check_system(type='autorun') for persistence checks."
                 if code is ErrorCode.upstream_degraded
                 else str(raw.get("next_step") or "Correct the request and retry.")
             )
@@ -1392,10 +1400,12 @@ REGISTRY.append(
             "`type='file'` for a Windows path with optional hash, `type='hash'` "
             "for a LOLDrivers vulnerable-driver lookup, `type='filename'` for "
             "deception heuristics, `type='lolbin'` for LOLBin context, or "
-            "`type='dll'` for DLL hijackability. UNKNOWN is neutral: it means "
-            "not present in the local DB, not evidence of malice. For hash/IOC "
-            "reputation use `cti_lookup_ioc`. Example: "
-            "`wintriage_check_artifact(type='file', "
+            "`type='dll'` for DLL hijackability. For `type='lolbin'` pass the "
+            "executable filename WITH its extension, e.g. `value='certutil.exe'` "
+            "(a bare 'certutil' will not match the LOLBAS catalog and returns "
+            "UNKNOWN). UNKNOWN is neutral: it means not present in the local DB, "
+            "not evidence of malice. For hash/IOC reputation use `cti_lookup_ioc`. "
+            "Example: `wintriage_check_artifact(type='file', "
             "value='C:\\\\Windows\\\\System32\\\\svchost.exe', "
             "os_version='Win10_21H2_Pro')`."
         ),

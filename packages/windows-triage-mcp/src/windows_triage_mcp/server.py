@@ -1347,7 +1347,18 @@ class WindowsTriageServer:
         if self.registry_db is None or not self.registry_db.is_available():
             return {
                 "error": "Registry database not available",
-                "message": "The optional known_good_registry.db is not installed. See SETUP.md for installation instructions.",
+                "message": (
+                    "The optional known_good_registry.db is not installed. "
+                    "See the windows-triage-mcp README for installation/offline "
+                    "staging instructions."
+                ),
+                "note": (
+                    "Optional 12GB registry baseline not installed; full registry "
+                    "lookups are unavailable. For autorun/persistence checks use "
+                    "wintriage_check_system(type='autorun'), which does not need "
+                    "this database."
+                ),
+                "registry_db_available": False,
                 "verdict": None,
                 "lookup_performed": False,
             }
@@ -1493,7 +1504,17 @@ class WindowsTriageServer:
                 "detection": lolbin_info.get("detection"),
             }
 
-        return {"is_lolbin": False}
+        result: dict[str, Any] = {"is_lolbin": False, "queried": filename}
+        # The LOLBAS catalog is keyed by executable filename (e.g. 'certutil.exe').
+        # A bare name with no extension can never match; surface a format hint so
+        # the caller can retry with 'name.exe' rather than treating UNKNOWN as a
+        # signal. Non-breaking: this only adds a hint field on a miss.
+        if "." not in filename:
+            result["hint"] = (
+                f"lolbin lookup expects an executable filename like 'name.exe' — "
+                f"try '{filename}.exe' (e.g. 'certutil.exe')."
+            )
+        return result
 
     async def _check_hijackable_dll(self, dll_name: str) -> dict[str, Any]:
         """Check if a DLL is vulnerable to hijacking attacks."""

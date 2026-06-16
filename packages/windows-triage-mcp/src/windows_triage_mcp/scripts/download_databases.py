@@ -5,6 +5,12 @@ Python implementation that works inside the Valhuntir venv.
 
 Usage:
     python -m windows_triage_mcp.scripts.download_databases [--dest DIR] [--tag TAG]
+        [--with-registry] [--yes]
+
+    The default install fetches known_good.db + context.db. The optional full
+    registry baseline (known_good_registry.db, ~12 GB decompressed) is fetched
+    only with --with-registry, gated on a disk-space check and operator
+    confirmation (--yes assumes yes for non-interactive installs).
 
 Authentication:
     For private repos, set GITHUB_TOKEN or have ``gh`` CLI authenticated.
@@ -30,6 +36,13 @@ from windows_triage_mcp.config import get_config
 
 REPO = "AppliedIR/sift-mcp"
 ASSETS = ("known_good.db.zst", "context.db.zst", "checksums.sha256")
+# Optional full registry baseline. ~500 MB compressed, ~12 GB decompressed.
+# Downloaded only on explicit opt-in (--with-registry) because of its size; the
+# default ASSETS install never fetches it.
+REGISTRY_ASSET = "known_good_registry.db.zst"
+REGISTRY_DB_NAME = "known_good_registry.db"
+# Decompressed registry DB is ~12 GB; require headroom for the .zst plus the DB.
+REGISTRY_MIN_FREE_BYTES = 15 * 1024 * 1024 * 1024  # ~15 GB
 MAX_ATTEMPTS = 3
 CHUNK_SIZE = 1024 * 1024  # 1 MB
 
@@ -153,6 +166,35 @@ def _verify_checksums(temp_dir: Path) -> bool:
     return ok
 
 
+def _free_bytes(path: Path) -> int:
+    """Free bytes available at the nearest existing ancestor of path."""
+    probe = path
+    while not probe.exists():
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+    return shutil.disk_usage(probe).free
+
+
+def _check_registry_disk_space(dest: Path) -> bool:
+    """Verify enough free space at dest for the ~12 GB registry DB.
+
+    Returns True when at least REGISTRY_MIN_FREE_BYTES is available.
+    """
+    free = _free_bytes(dest)
+    free_gb = free / (1024 * 1024 * 1024)
+    need_gb = REGISTRY_MIN_FREE_BYTES / (1024 * 1024 * 1024)
+    if free < REGISTRY_MIN_FREE_BYTES:
+        print(
+            f"  Insufficient disk space at {dest}: "
+            f"{free_gb:.1f} GB free, need ~{need_gb:.0f} GB for the "
+            f"registry baseline (~12 GB decompressed)."
+        )
+        return False
+    print(f"  Disk space OK: {free_gb:.1f} GB free at {dest}.")
+    return True
+
+
 def _decompress_zst(src: Path, dest: Path) -> None:
     """Decompress a .zst file using the zstandard library."""
     import zstandard as zstd
@@ -182,12 +224,18 @@ def _verify_database(db_path: Path, table: str, min_rows: int, label: str) -> bo
         return False
 
 
-def download_databases(dest_dir: str | Path, tag: str = "latest") -> bool:
+def download_databases(
+    dest_dir: str | Path, tag: str = "latest", with_registry: bool = False
+) -> bool:
     """Download and verify triage databases.
 
     Args:
         dest_dir: Directory to place the decompressed .db files.
         tag: GitHub release tag (default: "latest").
+        with_registry: When True, also download the optional ~12 GB full
+            registry baseline (known_good_registry.db). Off by default because
+            of its size; the caller is responsible for the disk-space check and
+            operator confirmation before opting in.
 
     Returns:
         True on success, False on failure.
@@ -205,13 +253,29 @@ def download_databases(dest_dir: str | Path, tag: str = "latest") -> bool:
     tag_name = release.get("tag_name", tag)
     print(f"Release: {tag_name}")
 
+    # Compose the per-run download set: the default baseline assets plus the
+    # optional registry asset when explicitly requested.
+    assets = list(ASSETS)
+    if with_registry:
+        if _get_asset_url(release, REGISTRY_ASSET) is None:
+            print(
+                f"  Optional registry asset {REGISTRY_ASSET} is not present in "
+                f"release {tag_name}; cannot fulfill --with-registry."
+            )
+            return False
+        assets.append(REGISTRY_ASSET)
+        print(
+            f"  Registry baseline requested: will also download {REGISTRY_ASSET} "
+            f"(~12 GB decompressed)."
+        )
+
     for attempt in range(1, MAX_ATTEMPTS + 1):
         temp_dir = Path(tempfile.mkdtemp(prefix="triage-db-"))
         try:
             # Download assets
             print(f"\nDownloading (attempt {attempt}/{MAX_ATTEMPTS})...")
             download_ok = True
-            for asset_name in ASSETS:
+            for asset_name in assets:
                 url = _get_asset_url(release, asset_name)
                 if not url:
                     print(f"  Asset not found in release: {asset_name}")
@@ -245,7 +309,10 @@ def download_databases(dest_dir: str | Path, tag: str = "latest") -> bool:
 
             # Decompress
             print("\nDecompressing...")
-            for zst_name in ("known_good.db.zst", "context.db.zst"):
+            decompress_set = ["known_good.db.zst", "context.db.zst"]
+            if with_registry:
+                decompress_set.append(REGISTRY_ASSET)
+            for zst_name in decompress_set:
                 zst_path = temp_dir / zst_name
                 db_name = zst_name.removesuffix(".zst")
                 db_path = dest / db_name
@@ -266,6 +333,13 @@ def download_databases(dest_dir: str | Path, tag: str = "latest") -> bool:
             ok &= _verify_database(
                 dest / "context.db", "vulnerable_drivers", 100, "context.db (drivers)"
             )
+            if with_registry:
+                ok &= _verify_database(
+                    dest / REGISTRY_DB_NAME,
+                    "baseline_registry",
+                    1_000_000,
+                    "known_good_registry.db",
+                )
 
             if ok:
                 print("\nDatabases installed successfully.")
@@ -298,6 +372,23 @@ def main() -> None:
         default="latest",
         help="Release tag to download (default: latest)",
     )
+    parser.add_argument(
+        "--with-registry",
+        action="store_true",
+        help=(
+            "Also download the OPTIONAL full registry baseline "
+            "(known_good_registry.db, ~12 GB decompressed). Requires ~15 GB free "
+            "at the destination. Skipped by default."
+        ),
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help=(
+            "Assume yes to the registry-baseline confirmation prompt "
+            "(for non-interactive installs)."
+        ),
+    )
     args = parser.parse_args()
 
     # Single source of truth for the baseline dir: an explicit --dest wins,
@@ -312,7 +403,31 @@ def main() -> None:
     else:
         dest = get_config(reload=True).data_dir
 
-    if download_databases(dest, args.tag):
+    # Gate the optional ~12 GB registry baseline on (a) a disk-space check and
+    # (b) explicit operator confirmation, so it is never pulled silently.
+    with_registry = args.with_registry
+    if with_registry:
+        print(
+            "\nThe optional full registry baseline (known_good_registry.db) is "
+            "~500 MB compressed and ~12 GB on disk."
+        )
+        if not _check_registry_disk_space(dest):
+            print("Aborting: not enough free disk space for the registry baseline.")
+            sys.exit(1)
+        if not args.yes:
+            confirm = ""
+            try:
+                confirm = input(
+                    f"Download and install the ~12 GB registry baseline to "
+                    f"{dest}? [y/N]: "
+                ).strip()
+            except EOFError:
+                confirm = ""
+            if confirm.lower() not in ("y", "yes"):
+                print("Skipping registry baseline (not confirmed).")
+                with_registry = False
+
+    if download_databases(dest, args.tag, with_registry=with_registry):
         sys.exit(0)
     else:
         sys.exit(1)

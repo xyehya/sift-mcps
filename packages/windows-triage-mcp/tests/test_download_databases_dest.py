@@ -22,8 +22,9 @@ def _run_main(monkeypatch, argv, env):
     """Invoke main() with patched argv/env, capturing the resolved dest dir."""
     captured: dict[str, Path] = {}
 
-    def _fake_download(dest_dir, tag="latest"):
+    def _fake_download(dest_dir, tag="latest", with_registry=False):
         captured["dest"] = Path(dest_dir)
+        captured["with_registry"] = with_registry
         return True
 
     monkeypatch.setattr(dd, "download_databases", _fake_download)
@@ -70,3 +71,55 @@ def test_runtime_default_when_unset(monkeypatch):
     # Defers to the add-on's runtime default — the same dir config.get_config
     # uses when nothing is set, so the download and runtime agree by default.
     assert dest == Path("/var/lib/sift/windows-triage")
+
+
+def _run_main_capture(monkeypatch, argv):
+    """main() with patched argv/env, capturing the with_registry flag (XYE-27)."""
+    captured: dict[str, object] = {}
+
+    def _fake_download(dest_dir, tag="latest", with_registry=False):
+        captured["dest"] = Path(dest_dir)
+        captured["with_registry"] = with_registry
+        return True
+
+    monkeypatch.setattr(dd, "download_databases", _fake_download)
+    monkeypatch.setattr(dd.sys, "argv", ["download_databases", *argv])
+    for key in ("SIFT_WINDOWS_TRIAGE_DB_DIR", "WT_DATA_DIR"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WT_DATA_DIR", "/env/wt")
+    reset_config()
+    with pytest.raises(SystemExit) as exc:
+        dd.main()
+    assert exc.value.code == 0
+    return captured
+
+
+def test_registry_off_by_default(monkeypatch):
+    # XYE-27: the optional ~12GB registry baseline must never be pulled unless
+    # explicitly requested.
+    captured = _run_main_capture(monkeypatch, [])
+    assert captured["with_registry"] is False
+
+
+def test_registry_opt_in_with_yes_and_space(monkeypatch):
+    # XYE-27: --with-registry opts in; --yes bypasses the confirm prompt; the
+    # disk-space gate still runs (stubbed True here).
+    monkeypatch.setattr(dd, "_check_registry_disk_space", lambda dest: True)
+    captured = _run_main_capture(monkeypatch, ["--with-registry", "--yes"])
+    assert captured["with_registry"] is True
+
+
+def test_registry_opt_in_aborts_when_no_space(monkeypatch):
+    # XYE-27: insufficient disk space aborts before any download (exit 1).
+    monkeypatch.setattr(dd, "_check_registry_disk_space", lambda dest: False)
+    monkeypatch.setattr(
+        dd, "download_databases", lambda *a, **k: pytest.fail("must not download")
+    )
+    monkeypatch.setattr(
+        dd.sys, "argv", ["download_databases", "--with-registry", "--yes"]
+    )
+    monkeypatch.setenv("WT_DATA_DIR", "/env/wt")
+    reset_config()
+    with pytest.raises(SystemExit) as exc:
+        dd.main()
+    assert exc.value.code == 1
