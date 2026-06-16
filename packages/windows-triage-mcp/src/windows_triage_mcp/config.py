@@ -24,6 +24,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sift_common.env import parse_int_env as _parse_int_env
+
 from .exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
@@ -101,28 +103,6 @@ class Config:
             raise ConfigurationError("max_hash_length must be between 32 and 256")
         if self.cache_size < 0 or self.cache_size > 1_000_000:
             raise ConfigurationError("cache_size must be between 0 and 1,000,000")
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    """Parse integer from environment variable with error handling.
-
-    Args:
-        name: Environment variable name
-        default: Default value if not set
-
-    Returns:
-        Parsed integer value
-
-    Raises:
-        ConfigurationError: If value is not a valid integer
-    """
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        raise ConfigurationError(f"Invalid integer for {name}: {value!r}") from None
 
 
 def _load_config_from_env() -> Config:
