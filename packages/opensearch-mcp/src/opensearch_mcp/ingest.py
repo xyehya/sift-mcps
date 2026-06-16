@@ -370,6 +370,19 @@ def run_hayabusa_batch(
 
     hayabusa = shutil.which("hayabusa")
     if not hayabusa:
+        # Surface the skip instead of silently returning. The detection phase is
+        # being skipped because the binary is absent; emit a progress event so
+        # opensearch_ingest_status / the CLI report it rather than no-op quietly.
+        if callable(on_progress):
+            on_progress(
+                "hayabusa_skipped",
+                reason="binary not installed",
+                hint=(
+                    "Stage the hayabusa binary at $SIFT_HOME/bin/hayabusa (symlinked "
+                    "to /usr/local/bin/hayabusa) and rules under $SIFT_HOME/hayabusa-rules, "
+                    "or re-run ./install.sh online, then re-ingest to run Sigma detection."
+                ),
+            )
         return {"skipped": "hayabusa not installed"}
 
     output_dir = sift_dir() / "hayabusa-output"

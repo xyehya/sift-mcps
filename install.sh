@@ -985,6 +985,24 @@ install_hayabusa_system_links() {
   sudo_if_needed ln -sf "$binary" /usr/local/bin/hayabusa 2>/dev/null || true
 }
 
+report_hayabusa_status() {
+  # XYE-26: emit a clear post-install STATUS line for Hayabusa so the operator
+  # knows whether Sigma detection will run, without changing any download logic.
+  local binary="$SIFT_HOME/bin/hayabusa"
+  local rules_dir="$SIFT_HOME/hayabusa-rules"
+  if sudo_if_needed test -x "$binary"; then
+    local rules_count=0
+    if sudo_if_needed test -d "$rules_dir"; then
+      rules_count="$(sudo_if_needed find "$rules_dir" -name '*.yml' 2>/dev/null | wc -l | tr -d ' ')"
+    fi
+    log "STATUS hayabusa: installed at $binary (rules: ${rules_count} *.yml under $rules_dir). Sigma detection will run during evtx ingest."
+  else
+    warn "STATUS hayabusa: NOT installed. evtx ingest will index logs but SKIP Sigma detection."
+    warn "  Stage offline: place the binary at $binary (and rules at $rules_dir), then re-run ./install.sh;"
+    warn "  or re-run ./install.sh online to download the pinned release."
+  fi
+}
+
 install_zimmerman_symlinks() {
   # Zimmerman EZ Tools are installed at /opt/zimmermantools by SIFT.
   # Symlink each tool into /usr/local/bin so they are on PATH for run_command.
@@ -3444,6 +3462,7 @@ main() {
     fi
 
     install_hayabusa_system_links
+    report_hayabusa_status
     install_zimmerman_symlinks
     fix_volatility_permissions
   else

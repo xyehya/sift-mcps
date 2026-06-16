@@ -334,12 +334,30 @@ class IndexInfo(BaseModel):
     status: str = Field(..., description="Index status reported by cat indices.")
 
 
+class HayabusaHealth(BaseModel):
+    binary: str | None = Field(
+        None,
+        description="Resolved hayabusa binary path, or null when NOT installed (Sigma detection will be skipped).",
+    )
+    rules_dir: str | None = Field(
+        None, description="Resolved hayabusa rules directory, or null when not found."
+    )
+    rules_count: int = Field(0, description="Count of *.yml rule files under rules_dir.")
+
+
 class StatusOut(BaseModel):
     cluster_status: str = Field(
         ..., description="Cluster health status; single-node yellow may be annotated normal."
     )
     indices: list[IndexInfo] = Field(..., description="All case-* indices, sorted by name.")
     total_indices: int = Field(..., description="Number of case-* indices returned.")
+    hayabusa: HayabusaHealth | None = Field(
+        None,
+        description=(
+            "Hayabusa detection-engine health (binary/rules_dir/rules_count). "
+            "binary=null ⇒ engine not installed; evtx ingest will skip Sigma detection."
+        ),
+    )
 
 
 class ShardStatusIn(BaseModel):
@@ -1004,10 +1022,12 @@ async def run_opensearch_status(_params: StatusIn) -> ToolResult:
     if "error" in raw:
         return _impl_error(raw, default_code=ErrorCode.upstream_unavailable)
     meta = _meta_from_raw(raw)
+    _hb = raw.get("hayabusa")
     out = StatusOut(
         cluster_status=str(raw.get("cluster_status", "unknown")),
         indices=[IndexInfo.model_validate(item) for item in raw.get("indices", [])],
         total_indices=int(raw.get("total_indices", 0)),
+        hayabusa=HayabusaHealth.model_validate(_hb) if isinstance(_hb, dict) else None,
     )
     return _success_tool_result(out, meta)
 
@@ -1994,8 +2014,10 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
         "category": "ingest",
         "recommended_for_phase": "INGEST",
         "when_to_use": (
-            "Backend health/readiness check: cluster reachability plus per-case-index "
-            "document counts. Confirms which cases have data."
+            "Backend health/readiness check: cluster reachability, per-case-index "
+            "document counts, and Hayabusa detection-engine health (preflight before "
+            "evtx ingest — confirms Sigma detection will run). Confirms which cases "
+            "have data."
         ),
         "avoid_when": (
             "DEPRECATED tool form — prefer the resource opensearch://cluster/status. "
@@ -2003,8 +2025,10 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
         ),
         "output_shape": (
             "StatusOut: cluster_status (single-node yellow may be annotated normal), "
-            "indices[] of {index, docs, size, status}, total_indices. Health/status "
-            "only — not case evidence."
+            "indices[] of {index, docs, size, status}, total_indices, "
+            "hayabusa{binary, rules_dir, rules_count} (binary=null ⇒ engine not "
+            "installed; evtx ingest skips Sigma detection). Health/status only — not "
+            "case evidence."
         ),
         "response_shaping": (
             "Compact cluster + index roll-up; also exposed as a read-only resource to "

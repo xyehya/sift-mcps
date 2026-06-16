@@ -1512,13 +1512,43 @@ def opensearch_field_values(
     return resp
 
 
+def _hayabusa_health() -> dict:
+    """Report Hayabusa detection-engine availability for preflight.
+
+    Returns ``{binary, rules_dir, rules_count}`` where ``binary`` is the resolved
+    PATH location (or None when absent), ``rules_dir`` is the resolved rules
+    directory (or None), and ``rules_count`` is the number of ``*.yml`` rule files
+    under it. Lets an agent confirm BEFORE evtx ingest whether Sigma/Hayabusa
+    detection will actually run (XYE-26: it was previously skipped silently).
+    """
+    import shutil
+
+    from opensearch_mcp.ingest import _resolve_hayabusa_rules_dir
+
+    binary = shutil.which("hayabusa")
+    rules_dir = _resolve_hayabusa_rules_dir()
+    rules_count = 0
+    if rules_dir is not None:
+        try:
+            rules_count = sum(1 for _ in rules_dir.rglob("*.yml"))
+        except OSError:  # pragma: no cover - defensive
+            rules_count = 0
+    return {
+        "binary": binary,
+        "rules_dir": str(rules_dir) if rules_dir is not None else None,
+        "rules_count": rules_count,
+    }
+
+
 def opensearch_status() -> dict:
-    """Show OpenSearch cluster health and all case index doc counts.
+    """Show OpenSearch cluster health, case index doc counts, and Hayabusa health.
 
     Use to verify the cluster is reachable and see what cases have indexed data.
     Use opensearch_case_summary for per-case artifact breakdown and coverage state.
 
-    Returns: {cluster_status, indices: [{index, docs, size, status}], total_indices}
+    Returns: {cluster_status, indices: [{index, docs, size, status}], total_indices,
+      hayabusa: {binary, rules_dir, rules_count}}. hayabusa.binary is null when the
+      detection engine is NOT installed — evtx ingest will skip Sigma detection.
     """
     client = _get_os()
 
@@ -1546,6 +1576,7 @@ def opensearch_status() -> dict:
         "cluster_status": cluster_status,
         "indices": case_indices,
         "total_indices": len(case_indices),
+        "hayabusa": _hayabusa_health(),
     }
     aid = audit.log(
         tool="opensearch_status",
@@ -4176,6 +4207,22 @@ def _get_active_case() -> str | None:
     return None
 
 
+def _hayabusa_absent_hint() -> str:
+    """Honest degraded-detection text when Hayabusa is NOT installed (XYE-26).
+
+    Returns staging instructions instead of the misleading "runs during evtx
+    ingest if installed" framing, which read as if detection had already run.
+    """
+    return (
+        "Hayabusa detection engine is NOT installed, so no Sigma/Hayabusa alerts "
+        "exist for this case. Stage the binary at $SIFT_HOME/bin/hayabusa "
+        "(symlinked to /usr/local/bin/hayabusa) and rules under "
+        "$SIFT_HOME/hayabusa-rules, or re-run ./install.sh online, then re-ingest "
+        "the evtx data to populate detections. Confirm with "
+        "opensearch_status (hayabusa.binary)."
+    )
+
+
 def opensearch_list_detections(
     severity: str = "",
     detector_type: str = "",
@@ -4216,6 +4263,8 @@ def opensearch_list_detections(
         if "security_analytics" in str(e).lower() or "400" in str(e) or "404" in str(e):
             resp = {"error": "Security Analytics plugin not available", "findings": []}
             # Still suggest Hayabusa when SA is unavailable
+            import shutil as _shutil
+
             try:
                 hb_count = client.count(index="case-*-hayabusa-*")["count"]
                 if hb_count:
@@ -4224,10 +4273,16 @@ def opensearch_list_detections(
                         "Query: opensearch_search(query='Level:critical OR Level:high', "
                         "index='case-*-hayabusa-*')"
                     )
+                elif not _shutil.which("hayabusa"):
+                    # No Sigma AND no Hayabusa binary — be explicit, don't imply it ran.
+                    resp["suggestion"] = (
+                        "Sigma detectors unavailable on OpenSearch 3.5. " + _hayabusa_absent_hint()
+                    )
                 else:
                     resp["suggestion"] = (
-                        "Sigma detectors unavailable on OpenSearch 3.5. "
-                        "Hayabusa runs during evtx ingest if installed."
+                        "Sigma detectors unavailable on OpenSearch 3.5. Hayabusa is "
+                        "installed but no alerts are indexed yet — run evtx ingest to "
+                        "populate detections."
                     )
             except Exception:
                 resp["suggestion"] = (
@@ -4270,6 +4325,8 @@ def opensearch_list_detections(
     # Suggest Hayabusa when Sigma returns empty
     hayabusa_hint = ""
     if not findings:
+        import shutil as _shutil
+
         try:
             hb_count = client.count(index="case-*-hayabusa-*")["count"]
             if hb_count:
@@ -4278,10 +4335,18 @@ def opensearch_list_detections(
                     "Query: opensearch_search(query='Level:critical OR Level:high', "
                     "index='case-*-hayabusa-*')"
                 )
-            else:
+            elif not _shutil.which("hayabusa"):
+                # No Sigma findings AND no Hayabusa binary: state it plainly with
+                # staging instructions instead of implying detection ran.
                 hayabusa_hint = (
                     "No Sigma detections (disabled on OpenSearch 3.5). "
-                    "Hayabusa runs during evtx ingest if installed."
+                    + _hayabusa_absent_hint()
+                )
+            else:
+                hayabusa_hint = (
+                    "No Sigma detections (disabled on OpenSearch 3.5). Hayabusa is "
+                    "installed but no alerts are indexed for this case yet — run evtx "
+                    "ingest to populate detections."
                 )
         except Exception:
             hayabusa_hint = "No Sigma detections."

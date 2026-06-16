@@ -2925,7 +2925,7 @@
         "defer_loading": true,
         "defer_loading_rationale": "Deprecated tool form mirrored by a resource; Tool-Search `defer_loading` candidate pending removal at/after D27b.",
         "deprecated": true,
-        "output_shape": "StatusOut: cluster_status (single-node yellow may be annotated normal), indices[] of {index, docs, size, status}, total_indices. Health/status only \u2014 not case evidence.",
+        "output_shape": "StatusOut: cluster_status (single-node yellow may be annotated normal), indices[] of {index, docs, size, status}, total_indices, hayabusa{binary, rules_dir, rules_count} (binary=null \u21d2 engine not installed; evtx ingest skips Sigma detection). Health/status only \u2014 not case evidence.",
         "recommended_for_phase": "INGEST",
         "removal_horizon": "at/after D27b",
         "resource_uri": "opensearch://cluster/status",
@@ -2936,7 +2936,7 @@
             "description": "Cluster + per-case index health"
           }
         ],
-        "when_to_use": "Backend health/readiness check: cluster reachability plus per-case-index document counts. Confirms which cases have data."
+        "when_to_use": "Backend health/readiness check: cluster reachability, per-case-index document counts, and Hayabusa detection-engine health (preflight before evtx ingest \u2014 confirms Sigma detection will run). Confirms which cases have data."
       },
       "name": "opensearch_status",
       "output_schema": {
@@ -2947,6 +2947,53 @@
                 "description": "Cluster health status; single-node yellow may be annotated normal.",
                 "title": "Cluster Status",
                 "type": "string"
+              },
+              "hayabusa": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "binary": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Resolved hayabusa binary path, or null when NOT installed (Sigma detection will be skipped).",
+                        "title": "Binary"
+                      },
+                      "rules_count": {
+                        "default": 0,
+                        "description": "Count of *.yml rule files under rules_dir.",
+                        "title": "Rules Count",
+                        "type": "integer"
+                      },
+                      "rules_dir": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Resolved hayabusa rules directory, or null when not found.",
+                        "title": "Rules Dir"
+                      }
+                    },
+                    "title": "HayabusaHealth",
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Hayabusa detection-engine health (binary/rules_dir/rules_count). binary=null \u21d2 engine not installed; evtx ingest will skip Sigma detection."
               },
               "indices": {
                 "description": "All case-* indices, sorted by name.",

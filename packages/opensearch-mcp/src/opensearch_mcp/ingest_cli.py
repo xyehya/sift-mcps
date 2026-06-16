@@ -1239,6 +1239,65 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     hayabusa_started,
                     elapsed_seconds=result.elapsed_seconds,
                 )
+            elif not shutil.which("hayabusa") and any(h.evtx_dir for h in hosts):
+                # XYE-26: the detection phase is skipped because the hayabusa
+                # binary is absent. Previously this was a SILENT skip (the guard
+                # above was simply False). Surface it: print for the CLI and write
+                # a bulk_failed_reason-style note into the run status so
+                # opensearch_ingest_status reports the skipped detection phase
+                # instead of an agent assuming Sigma/Hayabusa ran.
+                msg = (
+                    "Hayabusa detection SKIPPED: binary not installed. "
+                    "evtx data was indexed, but no Sigma detection ran. "
+                    "Stage the binary at $SIFT_HOME/bin/hayabusa (and rules under "
+                    "$SIFT_HOME/hayabusa-rules) or re-run ./install.sh online, then "
+                    "re-ingest to run detection."
+                )
+                print(f"\n{msg}")
+                if audit is not None:
+                    audit.log(
+                        tool="ingest_hayabusa",
+                        params={"case_id": case_id},
+                        result_summary="SKIPPED: hayabusa binary not installed",
+                    )
+                # Re-stamp the terminal complete status with a visible warning so
+                # the skip survives into opensearch_ingest_status (legacy mode).
+                _final_hosts = [
+                    {
+                        "hostname": h.hostname,
+                        "artifacts": [
+                            {
+                                "name": a.artifact,
+                                "status": "failed" if a.error else "complete",
+                                "indexed": a.indexed,
+                            }
+                            for a in h.artifacts
+                        ],
+                    }
+                    for h in result.hosts
+                ]
+                write_status(
+                    case_id,
+                    os.getpid(),
+                    run_id,
+                    "complete",
+                    _final_hosts,
+                    {
+                        "indexed": result.total_indexed,
+                        "artifacts_total": sum(len(h["artifacts"]) for h in _final_hosts),
+                        "artifacts_complete": sum(
+                            1
+                            for h in _final_hosts
+                            for a in h["artifacts"]
+                            if a["status"] == "complete"
+                        ),
+                        "hosts_total": len(_final_hosts),
+                        "hosts_complete": len(_final_hosts),
+                    },
+                    datetime.now(timezone.utc).isoformat(),
+                    bulk_failed_reason=msg,
+                    elapsed_seconds=result.elapsed_seconds,
+                )
 
     finally:
         mount_ctx.cleanup()
