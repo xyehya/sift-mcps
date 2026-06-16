@@ -70,60 +70,76 @@ def build_case_brief(meta: dict) -> dict:
     return brief
 
 
-def _db_investigation_snapshot(case_dir: Path) -> tuple[list, list, list] | None:
-    """Return (findings, timeline, todos) from DB authority, or None in file mode.
+def _db_investigation_snapshot(case_dir: Path) -> tuple[list, list, list]:
+    """Return (findings, timeline, todos) from DB authority for ``case_dir``.
 
-    AUT2-B6: ``case_info`` counters must agree with the DB-backed list tools
-    (``list_existing_findings`` etc.), so in DB-active mode the status counters
-    are sourced from ``app.investigation_*`` instead of the file mirror. Only
-    used when the authority context targets this exact case dir; any failure
-    falls back to the file mirror (orientation read, not a mutating path).
+    BU1: in DB-active mode the orientation/status counters are Postgres
+    authority (``app.investigation_*``), agreeing with the DB-backed list tools
+    (``list_existing_findings`` etc.). This is a *fail-closed* read: any missing
+    context/store or DB error raises so the caller never silently serves the
+    file mirror in DB mode.
     """
-    try:
-        from sift_core.active_case_context import current_active_case
-        from sift_core.investigation_store import resolve_investigation_store
+    from sift_core.active_case_context import current_active_case
+    from sift_core.investigation_store import (
+        InvestigationStoreError,
+        resolve_investigation_store,
+    )
 
-        ctx = current_active_case()
-        if ctx is None or not ctx.db_active or not ctx.case_id:
-            return None
-        if ctx.case_dir is not None:
-            try:
-                if Path(case_dir).resolve() != ctx.case_dir.resolve():
-                    return None
-            except OSError:
-                return None
-        store = resolve_investigation_store()
-        if store is None:
-            return None
-        return (
-            store.list_findings(ctx.case_id),
-            store.list_timeline(ctx.case_id),
-            store.list_todos(ctx.case_id),
+    ctx = current_active_case()
+    if ctx is None or not ctx.case_id:
+        raise InvestigationStoreError(
+            "DB authority is active but no case is bound to the request context"
         )
-    except Exception as exc:  # pragma: no cover - defensive read path
-        logger.warning("DB investigation snapshot unavailable, using files: %s", exc)
-        return None
+    if ctx.case_dir is not None:
+        try:
+            if Path(case_dir).resolve() != ctx.case_dir.resolve():
+                raise InvestigationStoreError(
+                    "active-case context does not match the requested case dir"
+                )
+        except OSError as exc:
+            raise InvestigationStoreError(
+                f"cannot resolve active-case dir: {exc}"
+            ) from exc
+    store = resolve_investigation_store()
+    if store is None:
+        raise InvestigationStoreError(
+            "DB authority is active but the investigation store is unavailable"
+        )
+    return (
+        store.list_findings(ctx.case_id),
+        store.list_timeline(ctx.case_id),
+        store.list_todos(ctx.case_id),
+    )
 
 
 def case_status_data(case_dir) -> dict:
-    """Return case status as structured data."""
+    """Return case status as structured data.
+
+    BU1: in DB-active mode the case metadata and the finding/timeline/todo
+    counters come from Postgres authority and CASE.yaml is never read; a DB
+    failure fails closed (raises) instead of falling back to the file mirror, so
+    a tampered or stale CASE.yaml cannot change orientation. In legacy/file mode
+    the behaviour is unchanged.
+    """
+    from sift_core.investigation_store import resolve_case_metadata
+
     case_dir = Path(case_dir)
-    meta_file = case_dir / "CASE.yaml"
-    if not meta_file.exists():
-        raise ValueError(f"Not a SIFT case directory: {case_dir}")
 
-    with open(meta_file) as f:
-        meta = yaml.safe_load(f) or {}
-
-    counters_authority = "file"
-    db_snapshot = _db_investigation_snapshot(case_dir)
-    if db_snapshot is not None:
-        findings, timeline, todos = db_snapshot
+    db_meta = resolve_case_metadata()
+    if db_meta is not None:
+        meta = db_meta
+        findings, timeline, todos = _db_investigation_snapshot(case_dir)
         counters_authority = "db"
     else:
+        meta_file = case_dir / "CASE.yaml"
+        if not meta_file.exists():
+            raise ValueError(f"Not a SIFT case directory: {case_dir}")
+        with open(meta_file) as f:
+            meta = yaml.safe_load(f) or {}
         findings = load_findings(case_dir)
         timeline = load_timeline(case_dir)
         todos = load_todos(case_dir)
+        counters_authority = "file"
 
     draft_f = sum(1 for f in findings if f.get("status") == "DRAFT")
     approved_f = sum(1 for f in findings if f.get("status") == "APPROVED")
@@ -162,7 +178,21 @@ _case_status_data = case_status_data
 
 
 def case_list_data(cases_dir=None) -> dict:
-    """Return list of cases as structured data."""
+    """Return list of cases as structured data.
+
+    BU1: this is the file-mode case lister. In DB-active deployments the
+    authoritative, per-principal case list is the gateway ``ActiveCaseService``;
+    serving a file-scan listing there would be a tamper/staleness vector, so this
+    fails closed rather than returning file-derived case rows in DB mode.
+    """
+    from sift_core.active_case_context import db_authority_active
+    from sift_core.investigation_store import InvestigationStoreError
+
+    if db_authority_active():
+        raise InvestigationStoreError(
+            "case_list_data is file-mode only; use the DB active-case authority"
+        )
+
     if cases_dir is None:
         cases_dir = cases_root()
     else:

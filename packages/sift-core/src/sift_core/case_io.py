@@ -225,7 +225,18 @@ def get_examiner(case_dir: Path | None = None) -> str:
     if env_analyst:
         _validate_examiner(env_analyst)
         return env_analyst
-    if case_dir:
+    # BU1: in DB-active mode the examiner identity is read from the case row, not
+    # from the tamperable CASE.yaml mirror. A DB failure fails closed (raises).
+    from sift_core.active_case_context import db_authority_active
+    from sift_core.investigation_store import resolve_case_metadata
+
+    db_meta = resolve_case_metadata() if db_authority_active() else None
+    if db_meta is not None:
+        exam = str(db_meta.get("examiner", "")).strip().lower()
+        if exam:
+            _validate_examiner(exam)
+            return exam
+    elif case_dir:
         meta = load_case_meta(case_dir)
         exam = meta.get("examiner", "").strip().lower()
         if exam:

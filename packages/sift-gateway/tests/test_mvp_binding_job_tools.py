@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
 from sift_core.evidence_chain import ChainStatus
@@ -344,7 +345,7 @@ def test_overlay_case_info_reflects_db_sealed_gate(tmp_path):
         "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
     ):
         out = json.loads(
-            mcp_server._overlay_db_evidence_gate(gateway, "case_info", _FILE_BACKED_CASE_INFO)
+            mcp_server._db_orientation_authority(gateway, "case_info", _FILE_BACKED_CASE_INFO)
         )
 
     chain = out["evidence_chain"]
@@ -366,7 +367,7 @@ def test_overlay_evidence_info_reflects_db_sealed_gate(tmp_path):
         "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
     ):
         out = json.loads(
-            mcp_server._overlay_db_evidence_gate(
+            mcp_server._db_orientation_authority(
                 gateway, "evidence_info", _FILE_BACKED_EVIDENCE_INFO
             )
         )
@@ -389,7 +390,7 @@ def test_overlay_evidence_info_lists_db_evidence_without_paths(tmp_path):
         "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
     ):
         out = json.loads(
-            mcp_server._overlay_db_evidence_gate(
+            mcp_server._db_orientation_authority(
                 gateway, "evidence_info", _FILE_BACKED_EVIDENCE_INFO
             )
         )
@@ -455,7 +456,7 @@ def test_overlay_blocks_when_db_gate_violated(tmp_path):
         "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=violated
     ):
         out = json.loads(
-            mcp_server._overlay_db_evidence_gate(gateway, "case_info", _FILE_BACKED_CASE_INFO)
+            mcp_server._db_orientation_authority(gateway, "case_info", _FILE_BACKED_CASE_INFO)
         )
 
     assert out["evidence_chain"]["status"] == "ledger_error"
@@ -468,41 +469,20 @@ def test_overlay_noop_in_legacy_file_mode(tmp_path):
 
     gateway = _Gateway(tmp_path / "case")
     gateway.control_plane_dsn = None
-    out = mcp_server._overlay_db_evidence_gate(gateway, "case_info", _FILE_BACKED_CASE_INFO)
+    out = mcp_server._db_orientation_authority(gateway, "case_info", _FILE_BACKED_CASE_INFO)
     assert out == _FILE_BACKED_CASE_INFO
 
 
-# --- AUT2-B6: DB-authority findings counters overlay on case_info ---
-
-_FILE_BACKED_CASE_INFO_WITH_FINDINGS = json.dumps(
-    {
-        "case_id": "case-one",
-        "evidence_chain": {
-            "status": "unsealed",
-            "ok": False,
-            "issues": [],
-            "manifest_version": 0,
-        },
-        "findings": {"total": 0, "draft": 0, "approved": 0},
-    }
-)
+# --- BU1: DB-authority orientation fails closed on a DB error ---
+#
+# Finding counters are no longer overlaid at the gateway: core's
+# case_status_data is DB-authoritative for them (see test_case_ops). The gateway
+# layer owns only the evidence gate + listing, and must fail closed (raise) on a
+# DB error instead of serving the file-derived orientation values.
 
 
-class _FakeInvestigationStore:
-    def __init__(self, dsn):
-        self.dsn = dsn
-
-    def list_findings(self, case_id):
-        return [
-            {"id": "F-a-001", "status": "DRAFT"},
-            {"id": "F-a-002", "status": "APPROVED"},
-            {"id": "F-a-003", "status": "APPROVED"},
-        ]
-
-
-def test_overlay_case_info_findings_counters_match_db(tmp_path):
-    """case_info findings counters must mirror app.investigation_findings, the
-    same source list_existing_findings reads, and carry authority: db."""
+def test_db_orientation_fails_closed_on_gate_error(tmp_path):
+    """A DB gate failure must raise, never return the file-backed orientation."""
     from sift_gateway import mcp_server
 
     gateway = _Gateway(tmp_path / "case")
@@ -511,75 +491,32 @@ def test_overlay_case_info_findings_counters_match_db(tmp_path):
         "sift_gateway.policy_middleware._current_gateway_active_case",
         return_value=_case(tmp_path / "case"),
     ), patch(
-        "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
-    ), patch(
-        "sift_core.investigation_store.PostgresInvestigationStore",
-        _FakeInvestigationStore,
+        "sift_gateway.evidence_gate.check_evidence_gate_db",
+        side_effect=RuntimeError("connection refused"),
     ):
-        out = json.loads(
-            mcp_server._overlay_db_evidence_gate(
-                gateway, "case_info", _FILE_BACKED_CASE_INFO_WITH_FINDINGS
-            )
-        )
-
-    assert out["findings"] == {
-        "total": 3,
-        "draft": 1,
-        "approved": 2,
-        "authority": "db",
-    }
-
-
-def test_overlay_findings_counters_added_when_missing(tmp_path):
-    """Counters block is created even if the file-backed payload lacked it."""
-    from sift_gateway import mcp_server
-
-    gateway = _Gateway(tmp_path / "case")
-    gateway.control_plane_dsn = "postgresql://x"
-    with patch(
-        "sift_gateway.policy_middleware._current_gateway_active_case",
-        return_value=_case(tmp_path / "case"),
-    ), patch(
-        "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
-    ), patch(
-        "sift_core.investigation_store.PostgresInvestigationStore",
-        _FakeInvestigationStore,
-    ):
-        out = json.loads(
-            mcp_server._overlay_db_evidence_gate(
+        with pytest.raises(mcp_server._OrientationAuthorityError):
+            mcp_server._db_orientation_authority(
                 gateway, "case_info", _FILE_BACKED_CASE_INFO
             )
-        )
-
-    assert out["findings"]["authority"] == "db"
-    assert out["findings"]["total"] == 3
 
 
-def test_overlay_findings_counters_keep_file_values_on_db_error(tmp_path):
-    """DB hiccup → counters stay file-backed (no authority marker, no crash)."""
+def test_db_orientation_evidence_listing_fails_closed_without_service(tmp_path):
+    """An unavailable DB evidence service must fail closed for evidence_info."""
     from sift_gateway import mcp_server
-
-    class _Boom:
-        def __init__(self, dsn):
-            raise RuntimeError("db down")
 
     gateway = _Gateway(tmp_path / "case")
     gateway.control_plane_dsn = "postgresql://x"
+    gateway.evidence_service = None
     with patch(
         "sift_gateway.policy_middleware._current_gateway_active_case",
         return_value=_case(tmp_path / "case"),
     ), patch(
         "sift_gateway.evidence_gate.check_evidence_gate_db", return_value=_SEALED_GATE
-    ), patch(
-        "sift_core.investigation_store.PostgresInvestigationStore", _Boom
     ):
-        out = json.loads(
-            mcp_server._overlay_db_evidence_gate(
-                gateway, "case_info", _FILE_BACKED_CASE_INFO_WITH_FINDINGS
+        with pytest.raises(mcp_server._OrientationAuthorityError):
+            mcp_server._db_orientation_authority(
+                gateway, "evidence_info", _FILE_BACKED_EVIDENCE_INFO
             )
-        )
-
-    assert out["findings"] == {"total": 0, "draft": 0, "approved": 0}
 
 
 # ---------------------------------------------------------------------------

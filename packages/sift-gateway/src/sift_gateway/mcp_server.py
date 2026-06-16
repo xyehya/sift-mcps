@@ -73,19 +73,26 @@ _INTERNAL_RESOLVED_EVIDENCE_REFS = "_resolved_evidence_refs"
 _INTERNAL_EVIDENCE_REF_ERROR = "_evidence_ref_error"
 
 
-def _overlay_db_evidence_gate(gateway: Any, tool_name: str, text: str) -> str:
-    """AUT1-B1: overlay DB-authority evidence-gate status onto the file-backed
-    orientation returned by ``case_info``/``evidence_info``.
+class _OrientationAuthorityError(RuntimeError):
+    """Raised when DB-authoritative orientation cannot be built (fail closed)."""
 
-    In DB-active deployments the evidence gate that actually governs execution is
-    ``app.evidence_gate_status`` (resolved by the gateway/policy path), but the
-    core orientation tools still describe the legacy file manifest. When the file
-    manifest is absent/stale these two disagree (e.g. orientation says
-    ``unsealed/ok=false`` while the DB gate is ``sealed`` and tools run), which is
-    a stall trap for an autonomous agent following the documented "ok=false → hand
-    back to operator" loop. This overlay makes orientation reflect the same DB gate
-    the agent's mutating calls hit. It is a no-op in legacy/file mode (no
-    control-plane DSN) so core tools stay file-based there.
+
+def _db_orientation_authority(gateway: Any, tool_name: str, text: str) -> str:
+    """BU1: serve the evidence-authority fields of ``case_info``/``evidence_info``
+    from Postgres, never from the file manifest, and **fail closed** on a DB error.
+
+    In a DB-active deployment (a control-plane DSN is configured) the evidence
+    gate that actually governs execution is ``app.evidence_gate_status`` and the
+    evidence listing is the DB evidence service — not the legacy file manifest the
+    core orientation tools render. This rebuilds those fields from DB authority so
+    a tampered/stale CASE.yaml or evidence manifest cannot change orientation.
+    Case metadata and finding counters are already DB-authoritative in core
+    (``case_status_data``), so this only owns the evidence gate + listing.
+
+    A DB failure raises ``_OrientationAuthorityError`` rather than returning the
+    file-derived values, so the tool fails closed (the agent is blocked, never
+    handed stale/forged evidence state). In legacy/file mode (no DSN) it is a
+    no-op and core stays file-authoritative.
     """
     dsn = getattr(gateway, "control_plane_dsn", None)
     if not dsn:
@@ -94,96 +101,67 @@ def _overlay_db_evidence_gate(gateway: Any, tool_name: str, text: str) -> str:
 
     case = _current_gateway_active_case()
     if case is None:
+        # No DB active case to gate against; core orientation already reflects
+        # DB-authoritative metadata, so leave its (no-evidence) shape as-is.
         return text
+
+    # From here DB authority is required: any failure fails closed.
     try:
         from sift_gateway.evidence_gate import check_evidence_gate_db
 
         gate = check_evidence_gate_db(case.case_id, dsn)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("evidence-gate overlay failed for %s: %s", tool_name, exc)
-        return text
-    try:
         obj = json.loads(text)
-    except (TypeError, ValueError):
-        return text
-    if not isinstance(obj, dict):
-        return text
-
-    # gate["status"] is a ChainStatus(str, Enum); use its plain value ("ok",
-    # "unsealed", ...) so orientation matches the rest of the API surface rather
-    # than serialising the enum repr ("ChainStatus.OK").
-    status = getattr(gate["status"], "value", gate["status"])
-    blocked = bool(gate["blocked"])
-    issues = gate["issues"]
-    manifest_version = gate["manifest_version"]
-    if tool_name == "case_info":
-        chain = obj.get("evidence_chain")
-        if isinstance(chain, dict):
+        if not isinstance(obj, dict):
+            raise _OrientationAuthorityError(
+                f"{tool_name} produced a non-object orientation payload"
+            )
+        # gate["status"] is a ChainStatus(str, Enum); use its plain value ("ok",
+        # "unsealed", ...) so orientation matches the rest of the API surface
+        # rather than serialising the enum repr ("ChainStatus.OK").
+        status = getattr(gate["status"], "value", gate["status"])
+        blocked = bool(gate["blocked"])
+        issues = gate["issues"]
+        manifest_version = gate["manifest_version"]
+        if tool_name == "case_info":
+            chain = obj.get("evidence_chain")
+            if not isinstance(chain, dict):
+                chain = {}
+                obj["evidence_chain"] = chain
             chain["status"] = status
             chain["ok"] = not blocked
             chain["issues"] = issues
             chain["manifest_version"] = manifest_version
             chain["authority"] = "db"
-        _overlay_db_findings_counters(gateway, obj, case.case_id)
-    elif tool_name == "evidence_info":
-        obj["chain_status"] = status
-        obj["issues"] = issues
-        obj["manifest_version"] = manifest_version
-        obj["requires_examiner_action"] = blocked
-        obj["authority"] = "db"
-        _overlay_db_evidence_listing(gateway, obj, case.case_id)
-    return json.dumps(obj, indent=2, default=str)
+        elif tool_name == "evidence_info":
+            obj["chain_status"] = status
+            obj["issues"] = issues
+            obj["manifest_version"] = manifest_version
+            obj["requires_examiner_action"] = blocked
+            obj["authority"] = "db"
+            _apply_db_evidence_listing(gateway, obj, case.case_id)
+        return json.dumps(obj, indent=2, default=str)
+    except _OrientationAuthorityError:
+        raise
+    except Exception as exc:
+        logger.warning("DB orientation authority failed for %s: %s", tool_name, exc)
+        raise _OrientationAuthorityError(
+            f"DB-authoritative orientation unavailable for {tool_name}"
+        ) from exc
 
 
-def _overlay_db_findings_counters(gateway: Any, obj: dict[str, Any], case_id: str) -> None:
-    """AUT2-B6: make case_info findings counters DB-authoritative.
+def _apply_db_evidence_listing(gateway: Any, obj: dict[str, Any], case_id: str) -> None:
+    """Replace the file-manifest evidence listing with DB evidence objects.
 
-    ``list_existing_findings`` reads ``app.investigation_findings`` in DB-active
-    deployments, while the file-backed orientation counters can lag (the case
-    JSON is only a mirror). Replace the counters with the same DB rows the list
-    tool reports and mark them ``authority: db``. Best-effort: any failure keeps
-    the file-backed counters so orientation never breaks on a DB hiccup.
-    """
-    dsn = getattr(gateway, "control_plane_dsn", None)
-    if not dsn:
-        return
-    try:
-        from sift_core.investigation_store import PostgresInvestigationStore
-
-        rows = PostgresInvestigationStore(dsn).list_findings(case_id)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("DB findings counter overlay failed: %s", exc)
-        return
-    statuses = [
-        str(row.get("status") or "") for row in rows or [] if isinstance(row, dict)
-    ]
-    counters = obj.get("findings")
-    if not isinstance(counters, dict):
-        counters = {}
-        obj["findings"] = counters
-    counters["total"] = len(statuses)
-    counters["draft"] = sum(1 for s in statuses if s == "DRAFT")
-    counters["approved"] = sum(1 for s in statuses if s == "APPROVED")
-    counters["authority"] = "db"
-
-
-def _overlay_db_evidence_listing(gateway: Any, obj: dict[str, Any], case_id: str) -> None:
-    """Replace legacy file-manifest evidence listing with DB evidence objects.
-
-    The DB service returns only portal-safe fields plus an internal path on the
-    resolver path. ``list_evidence`` has no path field, but this helper still
-    copies fields explicitly so agent-facing orientation never grows a new local
-    path by accident.
+    The DB service returns only portal-safe fields. ``list_evidence`` has no path
+    field, but this still copies fields explicitly so agent-facing orientation
+    never grows a new local path by accident. Fails closed: an unavailable
+    service or a DB error propagates (the caller turns it into a blocked tool).
     """
     service = getattr(gateway, "evidence_service", None)
     lister = getattr(service, "list_evidence", None)
     if not callable(lister):
-        return
-    try:
-        rows = lister(case_id)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("DB evidence listing overlay failed: %s", exc)
-        return
+        raise _OrientationAuthorityError("DB evidence service is unavailable")
+    rows = lister(case_id)
     sealed: list[dict[str, Any]] = []
     unregistered: list[str] = []
     for row in rows or []:
@@ -299,7 +277,7 @@ class GatewayLocalTool(Tool):
             )
             if self.name in _DB_ORIENTED_TOOLS and isinstance(value, str):
                 value = await asyncio.to_thread(
-                    _overlay_db_evidence_gate, self._gateway, self.name, value
+                    _db_orientation_authority, self._gateway, self.name, value
                 )
         if isinstance(value, ToolResult):
             return value

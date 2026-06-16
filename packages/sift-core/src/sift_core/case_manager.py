@@ -619,19 +619,27 @@ class CaseManager:
 
     def _require_active_case(self) -> Path:
         db_active = False
+        db_case_dir: Path | None = None
         try:
             from sift_core.active_case_context import current_active_case, db_authority_active
 
             ctx = current_active_case()
-            if ctx and ctx.case_dir is not None:
-                case_dir = ctx.case_dir
-                if case_dir.is_dir():
-                    self._active_case_id = ctx.case_key or case_dir.name
-                    self._active_case_path = case_dir
-                    return case_dir
+            if ctx and ctx.case_dir is not None and ctx.case_dir.is_dir():
+                db_case_dir = ctx.case_dir
+                self._active_case_id = ctx.case_key or db_case_dir.name
+                self._active_case_path = db_case_dir
             db_active = db_authority_active()
         except Exception:
             pass
+
+        # BU1: when the authority context resolved a DB case dir, enforce the
+        # closed-case safety belt from DB authority (not CASE.yaml) and return it.
+        # This is deliberately OUTSIDE the broad ``except`` above: a closed case
+        # or a DB error must fail closed (raise), never be swallowed into the
+        # tamperable file fallbacks below.
+        if db_case_dir is not None:
+            self._refuse_closed_case_db()
+            return db_case_dir
 
         # K1: in DB-active mode the active case comes only from the authority
         # context. Never fall back to SIFT_CASE_DIR / ~/.sift/active_case, which
@@ -724,6 +732,25 @@ class CaseManager:
         if ctx is None or not ctx.db_active:
             return None
         return ctx.case_id or None
+
+    def _refuse_closed_case_db(self) -> None:
+        """Raise if the DB-authoritative case status is closed (BU1).
+
+        Replaces the file CASE.yaml ``status: closed`` safety belt in DB-active
+        mode. ``resolve_case_metadata`` returns ``None`` in file mode (so this is
+        a no-op there) and raises on a DB failure, so an unverifiable status
+        fails closed rather than silently allowing work on a possibly-closed case.
+        """
+        from sift_core.investigation_store import resolve_case_metadata
+
+        meta = resolve_case_metadata()
+        if meta is None:
+            return
+        if str(meta.get("status", "")).strip().lower() == "closed":
+            raise ValueError(
+                f"Case {self._active_case_id} is closed. "
+                "Select an active case in the Examiner Portal to work on a different case."
+            )
 
     def _investigation_store(self):
         """Return the DB investigation authority store, or None in file mode."""
@@ -869,14 +896,37 @@ class CaseManager:
             return False
 
     def get_case_status(self, case_id: str | None = None) -> dict:
-        """Get investigation summary."""
+        """Get investigation summary.
+
+        BU1: in DB-active mode the case metadata and the finding/timeline/todo
+        counters are Postgres authority; CASE.yaml is not read and a DB failure
+        fails closed (raises) rather than serving the file mirror.
+        """
+        from sift_core.investigation_store import resolve_case_metadata
+
         case_dir = self._resolve_case_dir(case_id)
-        meta = self._load_case_meta(case_dir)
-        findings = self._load_findings(case_dir)
-        timeline = self._load_timeline(case_dir)
         manifest = load_manifest(case_dir) or {}
         active_evidence = [f for f in manifest.get("files", []) if f.get("status") != "IGNORED"]
-        todos = self._load_todos(case_dir)
+
+        db_meta = resolve_case_metadata()
+        if db_meta is not None:
+            meta = db_meta
+            store = self._investigation_store()
+            db_case_id = self._db_case_id()
+            if store is None or not db_case_id:
+                from sift_core.investigation_store import InvestigationStoreError
+
+                raise InvestigationStoreError(
+                    "DB authority is active but the investigation store is unavailable"
+                )
+            findings = store.list_findings(db_case_id)
+            timeline = store.list_timeline(db_case_id)
+            todos = store.list_todos(db_case_id)
+        else:
+            meta = self._load_case_meta(case_dir)
+            findings = self._load_findings(case_dir)
+            timeline = self._load_timeline(case_dir)
+            todos = self._load_todos(case_dir)
 
         resp = {
             "case_id": meta["case_id"],

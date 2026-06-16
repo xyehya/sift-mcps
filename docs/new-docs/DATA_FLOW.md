@@ -422,36 +422,40 @@ Tool call received
 
 ---
 
-## 9. DB Evidence Overlay Flow (case_info / evidence_info)
+## 9. DB-Native Orientation Flow (case_info / evidence_info) — BU1
 
-In DB-active mode, the orientation tools return DB-authoritative data:
+In DB-active mode (a control-plane DSN is configured) orientation is
+DB-authoritative and **fails closed**: there is no file base layer and a DB error
+returns blocked/error rather than file-derived values. The pre-BU1 file-overlay
+(`_overlay_db_*`) is gone.
 
 ```
 case_info or evidence_info called
     │
     ▼
 GatewayLocalTool.run() → call_core_tool("case_info", ...)
-    → _case_info() → reads case YAML + chain_status() from FILES
-    → Returns JSON string (file-backed data)
+    → _case_info() → case_status_data()
+        → DB mode: resolve_case_metadata() (app.cases) + investigation store
+          counters; CASE.yaml NOT read; raises (fail closed) on DB error
+        → file mode: CASE.yaml + *.json mirror (unchanged)
     │
-    ▼ (still in GatewayLocalTool.run())
+    ▼ (still in GatewayLocalTool.run(), DB mode only)
 if tool_name in _DB_ORIENTED_TOOLS and gateway.control_plane_dsn:
-    _overlay_db_evidence_gate(gateway, tool_name, text)
-        │
+    _db_orientation_authority(gateway, tool_name, text)   # evidence authority only
+        │  (raises _OrientationAuthorityError on any DB failure → tool blocked)
         ├── check_evidence_gate_db(case.case_id, dsn)
-        │       → {status, blocked, issues, manifest_version, authority: "db"}
-        │
-        ├── For case_info:
-        │       → Override evidence_chain.{status, ok, issues, manifest_version, authority}
-        │       → _overlay_db_findings_counters() → DB findings count
-        │       → Override findings.{total, draft, approved, authority}
-        │
-        └── For evidence_info:
-                → _overlay_db_evidence_listing() → DB evidence objects
-                → Override evidence_files[], total_evidence_files, unregistered_files
+        │       → {status, blocked, issues, manifest_version}, authority: "db"
+        ├── case_info:     set evidence_chain.{status, ok, issues, manifest_version}
+        └── evidence_info: set chain_status/issues/requires_examiner_action +
+                           _apply_db_evidence_listing() → DB evidence objects
 ```
 
-[VERIFY: packages/sift-gateway/src/sift_gateway/mcp_server.py:76-218]
+Finding counters are now DB-authoritative in core (`case_status_data`), not at the
+gateway. The gateway layer owns only the evidence gate + listing.
+
+[VERIFY: packages/sift-gateway/src/sift_gateway/mcp_server.py (_db_orientation_authority);
+packages/sift-core/src/sift_core/case_ops.py (case_status_data);
+packages/sift-core/src/sift_core/investigation_store.py (resolve_case_metadata)]
 
 ---
 

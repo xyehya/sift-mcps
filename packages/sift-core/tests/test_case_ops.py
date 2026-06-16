@@ -394,16 +394,27 @@ class TestCaseStatusPaths:
 
 
 class TestCaseStatusDbCounters:
-    """AUT2-B6: case_info counters source from DB authority in DB-active mode."""
+    """BU1: in DB-active mode case_status_data is DB-authoritative and fails closed.
+
+    Metadata and counters come from Postgres authority; CASE.yaml is never read,
+    so a tampered/stale mirror cannot change orientation, and a DB error fails
+    closed rather than falling back to the file mirror.
+    """
 
     @staticmethod
-    def _make_case(tmp_path):
+    def _make_case(tmp_path, *, tamper=False):
         case_dir = tmp_path / "INC-DB-COUNTERS"
         case_dir.mkdir()
+        # CASE.yaml is intentionally stale/forged: DB mode must ignore it.
+        yaml_meta = (
+            {"case_id": "TAMPERED", "name": "TAMPERED", "status": "closed",
+             "examiner": "evil", "incident_type": "phishing"}
+            if tamper
+            else {"case_id": "INC-DB-COUNTERS", "name": "File Name",
+                  "status": "open", "examiner": "t"}
+        )
         with open(case_dir / "CASE.yaml", "w") as f:
-            yaml.dump(
-                {"case_id": "INC-DB-COUNTERS", "status": "open", "examiner": "t"}, f
-            )
+            yaml.dump(yaml_meta, f)
         # Stale file mirror: one draft finding only.
         (case_dir / "findings.json").write_text(
             '[{"id": "F-old-001", "status": "DRAFT"}]'
@@ -411,6 +422,15 @@ class TestCaseStatusDbCounters:
         (case_dir / "timeline.json").write_text("[]")
         (case_dir / "todos.json").write_text("[]")
         return case_dir
+
+    # DB-authoritative metadata (CASE.yaml-shaped) the reader resolves from app.cases.
+    _DB_META = {
+        "case_id": "INC-DB-COUNTERS",
+        "name": "DB Name",
+        "status": "open",
+        "examiner": "dbexam",
+        "incident_type": "ransomware",
+    }
 
     class _Store:
         def list_findings(self, case_id):
@@ -436,18 +456,32 @@ class TestCaseStatusDbCounters:
             db_active=True,
         )
 
-    def test_db_active_counters_come_from_store(self, tmp_path, monkeypatch):
+    def _patch_db(self, monkeypatch, meta=None):
         from sift_core import investigation_store
-        from sift_core.active_case_context import use_active_case_context
 
-        case_dir = self._make_case(tmp_path)
+        monkeypatch.setattr(
+            investigation_store,
+            "resolve_case_metadata",
+            lambda: (self._DB_META if meta is None else meta),
+        )
         monkeypatch.setattr(
             investigation_store, "resolve_investigation_store", lambda: self._Store()
         )
+
+    def test_db_active_metadata_and_counters_from_db(self, tmp_path, monkeypatch):
+        from sift_core.active_case_context import use_active_case_context
+
+        case_dir = self._make_case(tmp_path)
+        self._patch_db(monkeypatch)
         with use_active_case_context(self._ctx(case_dir)):
             result = case_status_data(case_dir)
 
         assert result["counters_authority"] == "db"
+        # Metadata from DB authority, not CASE.yaml.
+        assert result["name"] == "DB Name"
+        assert result["examiner"] == "dbexam"
+        assert result["case_brief"].get("incident_type") == "ransomware"
+        # Counters from the DB store, not the stale file mirror.
         assert result["finding_count"] == 3
         assert result["finding_draft"] == 2
         assert result["finding_approved"] == 1
@@ -456,18 +490,48 @@ class TestCaseStatusDbCounters:
         assert result["todo_open"] == 1
         assert result["todo_total"] == 1
 
+    def test_tampered_case_yaml_ignored_in_db_mode(self, tmp_path, monkeypatch):
+        """A forged CASE.yaml must not change DB-mode orientation output."""
+        from sift_core.active_case_context import use_active_case_context
+
+        case_dir = self._make_case(tmp_path, tamper=True)
+        self._patch_db(monkeypatch)
+        with use_active_case_context(self._ctx(case_dir)):
+            result = case_status_data(case_dir)
+
+        assert result["name"] == "DB Name"
+        assert result["status"] == "open"
+        assert result["examiner"] == "dbexam"
+        assert result["case_id"] == "INC-DB-COUNTERS"
+
+    def test_db_outage_fails_closed(self, tmp_path, monkeypatch):
+        """A DB failure must fail closed, not fall back to CASE.yaml values."""
+        from sift_core import investigation_store
+        from sift_core.active_case_context import use_active_case_context
+
+        case_dir = self._make_case(tmp_path)
+
+        def _boom():
+            raise investigation_store.InvestigationStoreError("connection refused")
+
+        monkeypatch.setattr(
+            investigation_store, "resolve_case_metadata", _boom
+        )
+        with use_active_case_context(self._ctx(case_dir)):
+            with pytest.raises(investigation_store.InvestigationStoreError):
+                case_status_data(case_dir)
+
     def test_file_mode_counters_unchanged(self, tmp_path, monkeypatch):
         monkeypatch.delenv("SIFT_DB_ACTIVE", raising=False)
         case_dir = self._make_case(tmp_path)
         result = case_status_data(case_dir)
         assert result["counters_authority"] == "file"
+        assert result["name"] == "File Name"
         assert result["finding_count"] == 1
         assert result["finding_draft"] == 1
 
-    def test_db_context_for_other_case_falls_back_to_files(
-        self, tmp_path, monkeypatch
-    ):
-        """A DB context bound to a different case dir must not leak its counters."""
+    def test_db_context_mismatch_fails_closed(self, tmp_path, monkeypatch):
+        """A DB context bound to a different case dir must fail closed, not leak."""
         from sift_core import investigation_store
         from sift_core.active_case_context import (
             AuthorityContext,
@@ -477,9 +541,7 @@ class TestCaseStatusDbCounters:
         case_dir = self._make_case(tmp_path)
         other_dir = tmp_path / "OTHER-CASE"
         other_dir.mkdir()
-        monkeypatch.setattr(
-            investigation_store, "resolve_investigation_store", lambda: self._Store()
-        )
+        self._patch_db(monkeypatch)
         ctx = AuthorityContext(
             case_id="44444444-4444-4444-4444-444444444444",
             case_key="OTHER-CASE",
@@ -487,6 +549,5 @@ class TestCaseStatusDbCounters:
             db_active=True,
         )
         with use_active_case_context(ctx):
-            result = case_status_data(case_dir)
-        assert result["counters_authority"] == "file"
-        assert result["finding_count"] == 1
+            with pytest.raises(investigation_store.InvestigationStoreError):
+                case_status_data(case_dir)

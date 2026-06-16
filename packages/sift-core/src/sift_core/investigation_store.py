@@ -675,3 +675,111 @@ def resolve_investigation_store() -> InvestigationAuthorityStore | None:
     if not dsn:
         return None
     return PostgresInvestigationStore(dsn)
+
+
+# BU1: inverse of the gateway's CASE.yaml->DB status map. DB-authoritative case
+# rows store the lifecycle status as ``active``/``draft``/``paused``/...; the
+# file world (and every CASE.yaml reader) speaks ``open``/``closed``/... so the
+# DB-native readers project the DB status back to that vocabulary.
+_DB_STATUS_TO_CASE_YAML = {
+    "active": "open",
+    "draft": "draft",
+    "paused": "paused",
+    "closed": "closed",
+    "archived": "archived",
+}
+
+# app.cases columns the metadata reader projects, in select order.
+_CASE_ROW_COLUMNS = (
+    "id::text",
+    "case_key",
+    "title",
+    "description",
+    "status",
+    "legacy_case_dir",
+    "metadata",
+)
+
+
+def _case_meta_from_row(row: Any) -> dict[str, Any]:
+    """Project an ``app.cases`` row into a CASE.yaml-shaped metadata dict.
+
+    The JSONB ``metadata`` column already carries the examiner identity and the
+    case-brief intake fields (see the gateway ``ActiveCaseService`` writer); the
+    dedicated columns (``case_key``/``title``/``description``/``status``) are the
+    authority for those four and override anything stale in the JSONB blob.
+    """
+    case_id, case_key, title, description, status, _legacy_dir, metadata = row
+    meta: dict[str, Any] = dict(metadata or {})
+    meta["case_id"] = str(case_key)
+    meta["name"] = str(title) if title is not None else ""
+    if description is not None:
+        meta["description"] = str(description)
+    meta["status"] = _DB_STATUS_TO_CASE_YAML.get(str(status), str(status))
+    return meta
+
+
+class PostgresCaseStore:
+    """Read-only DB authority for ``app.cases`` metadata (BU1).
+
+    Mirrors the gateway ``ActiveCaseService`` query so in-process core readers
+    (orientation, status, reporting) can resolve case metadata from Postgres
+    instead of the tamperable CASE.yaml mirror, without depending on the gateway
+    package. Writes remain portal/gateway-owned (BU2).
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+
+    def _connect(self):
+        try:
+            import psycopg
+        except ImportError as exc:  # pragma: no cover - deployment env
+            raise InvestigationStoreError("psycopg is required for the DB store") from exc
+        return psycopg.connect(self._dsn)
+
+    def get_case_metadata(self, case_id: str) -> dict[str, Any] | None:
+        """Return CASE.yaml-shaped metadata for ``case_id`` (UUID or case_key)."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"select {', '.join(_CASE_ROW_COLUMNS)} from app.cases "
+                    "where id = %s or case_key = %s",
+                    (case_id, case_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return _case_meta_from_row(row)
+
+
+def resolve_case_metadata() -> dict[str, Any] | None:
+    """Return DB-authoritative, CASE.yaml-shaped case metadata, or ``None``.
+
+    BU1: in DB-active mode this is the *only* source of case metadata for the
+    orientation/status/report readers; they must not read CASE.yaml. Returns
+    ``None`` in legacy/file mode so those readers keep their file path. When DB
+    authority is active and a control-plane DSN is configured, any DB failure (or
+    a missing case row, or a missing active-case context) raises so callers fail
+    closed instead of serving stale/tampered file values.
+
+    The no-DSN-but-DB-active case still returns ``None`` here (file fallback);
+    refusing that misconfiguration outright is BU3's job.
+    """
+    from sift_core.active_case_context import current_active_case, db_authority_active
+
+    if not db_authority_active():
+        return None
+    dsn = control_plane_dsn()
+    if not dsn:
+        return None
+    ctx = current_active_case()
+    case_id = ctx.case_id if ctx is not None else None
+    if not case_id:
+        raise InvestigationStoreError(
+            "DB authority is active but no case is bound to the request context"
+        )
+    meta = PostgresCaseStore(dsn).get_case_metadata(case_id)
+    if meta is None:
+        raise InvestigationStoreError(f"case {case_id} not found in app.cases")
+    return meta

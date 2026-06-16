@@ -418,7 +418,12 @@ def generate_report_data(
 
     # Load all data. In DB-active mode the approved findings/timeline come from
     # the DB authority inputs, not the (mirror/export) case JSON.
-    metadata = load_case_meta(case_dir)
+    # BU1: case metadata is also DB-authoritative in DB mode (fails closed on a
+    # DB error); CASE.yaml is only consulted in legacy/file mode.
+    from sift_core.investigation_store import resolve_case_metadata
+
+    db_metadata = resolve_case_metadata()
+    metadata = db_metadata if db_metadata is not None else load_case_meta(case_dir)
     if investigation_inputs is not None:
         all_findings = list(investigation_inputs.get("findings") or [])
         all_timeline = list(investigation_inputs.get("timeline") or [])

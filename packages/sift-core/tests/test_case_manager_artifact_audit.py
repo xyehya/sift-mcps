@@ -189,6 +189,13 @@ def db_active_manager(tmp_path, monkeypatch):
 
     store = _InMemoryStore()
     monkeypatch.setattr(cm.CaseManager, "_investigation_store", lambda self: store)
+    # BU1: _require_active_case now resolves the closed-case safety belt from DB
+    # authority. Provide a non-closed DB case row so the gate passes without a
+    # real Postgres connection (the dummy DSN above is never dialed).
+    monkeypatch.setattr(
+        "sift_core.investigation_store.resolve_case_metadata",
+        lambda: {"case_id": "case-aut2-db", "status": "open"},
+    )
 
     ctx = AuthorityContext(
         case_id=CASE_UUID,
