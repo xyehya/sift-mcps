@@ -31,6 +31,12 @@ from sift_core.execute.security import (
 
 logger = logging.getLogger(__name__)
 
+# A non-final pipeline stage that dies of SIGPIPE because a downstream consumer
+# (e.g. `head`) closed the pipe early is a normal pipeline event, not a failure.
+# Match the agent-facing wrapper's exemption (agent_tools._run_command) so the
+# two layers never disagree about which stages count as "failed".
+_SIGPIPE_EXIT_CODES = (141, -13)
+
 
 def _is_in_directory(path_str: str, parent: Path) -> bool:
     try:
@@ -84,6 +90,40 @@ def run_command(
     The command is parsed into argv stages and launched directly with
     shell=False — there is no shell or bash wrapper. Pipes, sequencing
     (&&/||/;), and redirects are interpreted by this function, not a shell.
+
+    Exit codes and partial output (multi-path / pipeline semantics)
+    ---------------------------------------------------------------
+    Behaviour is POSIX-faithful, so a tool that touches several inputs and
+    only some are inaccessible still returns the output it *could* produce:
+
+    * Single command (``find /a /blocked /c -name x``): a tool that fails on
+      one path (e.g. ``find`` exits 1 when ``/blocked`` is unreadable) still
+      writes the matches it found for ``/a`` and ``/c`` to stdout. The
+      returned ``exit_code`` is the tool's own nonzero exit and that partial
+      stdout is preserved — output is never dropped on a nonzero exit.
+    * Pipeline (``find /a /blocked /c ... | grep foo``): each stage's stdout
+      is piped to the next regardless of the upstream exit code, so partial
+      ``find`` output still reaches ``grep``. The returned top-level
+      ``exit_code`` is the *last* stage's exit (POSIX); an upstream stage that
+      exited nonzero is therefore not visible in ``exit_code`` alone — it is
+      reported per stage in ``stages`` (``exit_code`` + ``stderr_tail``).
+    * Sequencing (``find /a /blocked /c ... && cat results``): ``&&``/``||``
+      gate on the previous segment's exit code, so a nonzero ``find`` skips
+      the following ``&&`` segment (again POSIX). The partial ``find`` stdout
+      and its nonzero ``exit_code`` are still returned.
+
+    To make "some inputs were inaccessible" visible rather than silent, the
+    result surfaces a first-class summary in addition to ``stages``:
+
+    * ``partial_failure`` (bool, present only when True): at least one
+      executed stage exited nonzero. A non-final pipeline stage that died of
+      SIGPIPE (rc 141 / -13) because a downstream consumer closed early is a
+      normal pipeline event and does NOT set this flag.
+    * ``partial_failure_note`` (str, present only when the top-level
+      ``exit_code`` is 0 but an upstream stage failed): a short message
+      pointing at ``stages`` so a masked upstream failure (e.g. a failed
+      ``find`` whose partial output a succeeding ``grep`` consumed) is not
+      mistaken for a clean, complete result.
 
     Args:
         command: Command string or argv list to execute.
@@ -317,6 +357,40 @@ def run_command(
             exec_result["privilege_escalation"] = escalation_info
         if privilege_events:
             exec_result["privilege_events"] = privilege_events
+
+        # Visibility, not POSIX change: surface when an executed stage exited
+        # nonzero even though stdout (possibly partial) was still produced and
+        # propagated. The per-stage detail already lives in `stages`; this is a
+        # first-class summary so a direct caller of run_command (and the agent
+        # response built on top of it) sees "some inputs were inaccessible"
+        # instead of trusting a top-level exit code that, in a pipeline, only
+        # reflects the LAST stage. A non-final stage killed by SIGPIPE because a
+        # downstream consumer closed early is a normal pipeline event, not a
+        # failure, so it is exempt.
+        n_stages = len(executed_stages_info)
+        partial_failure = False
+        for idx, s_info in enumerate(executed_stages_info):
+            rc = s_info.get("exit_code")
+            if rc in (0, None):
+                continue
+            if rc in _SIGPIPE_EXIT_CODES and idx < n_stages - 1:
+                continue
+            partial_failure = True
+            break
+        if partial_failure:
+            exec_result["partial_failure"] = True
+            # When the top-level exit code is 0 the failure is *masked* (a later
+            # stage, e.g. `grep`, exited 0 after consuming a failed upstream
+            # stage's partial output). Spell that out so it is not read as a
+            # clean, complete result. When the top-level exit code is already
+            # nonzero the failure is self-evident, so no extra note is added.
+            if exec_result.get("exit_code") == 0:
+                exec_result["partial_failure_note"] = (
+                    "An upstream stage exited nonzero (e.g. a path was "
+                    "inaccessible) but a later stage exited 0; output may be "
+                    "incomplete. See per-stage exit codes and stderr_tail in "
+                    "'stages'."
+                )
 
     # Parse output based on catalog format when output exceeds byte budget
     cfg = get_config()

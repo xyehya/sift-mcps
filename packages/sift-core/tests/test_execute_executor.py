@@ -1441,3 +1441,144 @@ def test_resource_preexec_sets_group_readable_umask():
         assert current == 0o027, oct(current)
     finally:
         _os.umask(saved)
+
+
+# --- XYE-29 item 5: multi-path/exit-code visibility (partial output) ----------
+# Friction: `find /a /blocked /c -name x` returns exit 1 when one path is
+# inaccessible and "downstream stages silently receive no output". Root cause is
+# a VISIBILITY gap, not dropped output: POSIX-faithful execution preserves the
+# partial stdout, but a masked upstream failure (nonzero stage feeding a stage
+# that exits 0) was only reconstructable from `stages`. run_command now surfaces
+# a first-class `partial_failure` summary. These tests exercise the REAL isolated
+# worker (no execute() mock) so they prove the actual per-stage exit-code path.
+
+import shutil as _shutil
+
+_HAVE_FIND = _shutil.which("find") is not None
+_HAVE_GREP = _shutil.which("grep") is not None
+
+
+def _exec_case_dir(tmp_path, monkeypatch):
+    """A minimal active case with writable agent/ + a known evidence file."""
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "agent").mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: EXEC-XYE29\n", encoding="utf-8")
+    for name in ("alpha.log", "beta.log"):
+        (case_dir / "evidence" / name).write_text("data\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    return case_dir
+
+
+@pytest.mark.skipif(not _HAVE_FIND, reason="find not available")
+def test_run_command_single_find_partial_path_keeps_output_and_flags_failure(
+    tmp_path, monkeypatch
+):
+    """A single multi-path command (find over a good + an inaccessible path)
+    keeps the partial stdout it produced AND reports the nonzero exit. Output is
+    never dropped on a nonzero exit; partial_failure makes it visible."""
+    case_dir = _exec_case_dir(tmp_path, monkeypatch)
+    _set_policy(monkeypatch, {"denied_binaries": ["env"]})
+    good = str(case_dir / "evidence")
+    blocked = str(tmp_path / "does-not-exist-blocked")  # stand-in for a blocked path
+
+    res = generic.run_command(
+        f"find {good} {blocked} -name *.log",
+        purpose="multi-path find with one inaccessible path",
+    )
+
+    # find exits 1 because of the inaccessible path...
+    assert res["exit_code"] == 1
+    # ...but the matches from the readable path are NOT dropped.
+    assert "alpha.log" in res["stdout"]
+    assert "beta.log" in res["stdout"]
+    # The failure is surfaced as a first-class summary, plus per-stage detail.
+    assert res["partial_failure"] is True
+    assert len(res["stages"]) == 1
+    assert res["stages"][0]["exit_code"] == 1
+    assert "No such file or directory" in res["stages"][0]["stderr_tail"]
+    # exit_code already nonzero ⇒ self-evident, no masked-failure note.
+    assert "partial_failure_note" not in res
+
+
+@pytest.mark.skipif(
+    not (_HAVE_FIND and _HAVE_GREP), reason="find/grep not available"
+)
+def test_run_command_pipeline_masked_upstream_failure_is_surfaced(
+    tmp_path, monkeypatch
+):
+    """`find <good> <blocked> ... | grep` — find exits 1 but grep exits 0, so the
+    top-level exit code (POSIX = last stage) is 0 and would otherwise look clean.
+    The masked upstream failure must be flagged, and partial output must reach
+    grep (not be silently dropped)."""
+    case_dir = _exec_case_dir(tmp_path, monkeypatch)
+    _set_policy(monkeypatch, {"denied_binaries": ["env"]})
+    good = str(case_dir / "evidence")
+    blocked = str(tmp_path / "does-not-exist-blocked")
+
+    res = generic.run_command(
+        f"find {good} {blocked} -name *.log | grep alpha",
+        purpose="pipeline masking an upstream find failure",
+    )
+
+    # Last stage (grep) exited 0 -> top-level exit is 0 (POSIX).
+    assert res["exit_code"] == 0
+    # find's partial output flowed downstream into grep -> output NOT dropped.
+    assert "alpha.log" in res["stdout"]
+    # The masked upstream failure is made explicit rather than silent.
+    assert res["partial_failure"] is True
+    assert "partial_failure_note" in res
+    assert "incomplete" in res["partial_failure_note"]
+    # Per-stage detail pinpoints which stage failed.
+    stages = {s["binary"]: s for s in res["stages"]}
+    assert stages["find"]["exit_code"] == 1
+    assert "No such file or directory" in stages["find"]["stderr_tail"]
+    assert stages["grep"]["exit_code"] == 0
+
+
+@pytest.mark.skipif(not _HAVE_FIND, reason="find not available")
+def test_run_command_and_chain_skips_after_nonzero_find_keeps_partial_output(
+    tmp_path, monkeypatch
+):
+    """`find <good> <blocked> ... && echo SECOND` — a nonzero find skips the
+    `&&` segment (POSIX), yet still returns its partial stdout and nonzero exit,
+    flagged as a partial failure."""
+    case_dir = _exec_case_dir(tmp_path, monkeypatch)
+    _set_policy(monkeypatch, {"denied_binaries": ["env"]})
+    good = str(case_dir / "evidence")
+    blocked = str(tmp_path / "does-not-exist-blocked")
+
+    res = generic.run_command(
+        f"find {good} {blocked} -name *.log && echo SECOND_RAN",
+        purpose="&&-chain after a failing find",
+    )
+
+    assert res["exit_code"] == 1
+    # Partial find output is preserved; the && segment did not run.
+    assert "alpha.log" in res["stdout"]
+    assert "SECOND_RAN" not in res["stdout"]
+    assert res["partial_failure"] is True
+    # Only the find stage executed (the skipped echo is not recorded).
+    assert [s["binary"] for s in res["stages"]] == ["find"]
+
+
+@pytest.mark.skipif(
+    not (_shutil.which("yes") and _shutil.which("head")),
+    reason="yes/head not available",
+)
+def test_run_command_sigpipe_on_nonfinal_stage_is_not_a_partial_failure(
+    tmp_path, monkeypatch
+):
+    """`yes | head -1` — yes dies of SIGPIPE (rc 141 / -13) when head closes the
+    pipe early. That is a normal pipeline event, not an inaccessible-input
+    failure, so partial_failure must NOT be set (no false alarms)."""
+    case_dir = _exec_case_dir(tmp_path, monkeypatch)
+    _set_policy(monkeypatch, {"denied_binaries": ["env"]})
+
+    res = generic.run_command("yes | head -1", purpose="sigpipe exemption")
+
+    assert res["exit_code"] == 0
+    yes_stage = next(s for s in res["stages"] if s["binary"] == "yes")
+    assert yes_stage["exit_code"] in (141, -13)
+    assert "partial_failure" not in res
+    assert "partial_failure_note" not in res
