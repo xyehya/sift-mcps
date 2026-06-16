@@ -150,15 +150,15 @@ def parse_w3c_log(
                 else:
                     row["host.id"] = hostname
             if source_file:
-                row["vhir.source_file"] = source_file
+                row["sift.source_file"] = source_file
             if ingest_audit_id:
-                row["vhir.ingest_audit_id"] = ingest_audit_id
+                row["sift.ingest_audit_id"] = ingest_audit_id
             if pipeline_version:
                 row["pipeline_version"] = pipeline_version
             if parse_method:
-                row["vhir.parse_method"] = parse_method
+                row["sift.parse_method"] = parse_method
             if vss_id:
-                row["vhir.vss_id"] = vss_id
+                row["sift.vss_id"] = vss_id
 
             actions.append({"_index": index_name, "_id": doc_hash, "_source": row})
 

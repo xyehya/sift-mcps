@@ -114,12 +114,12 @@ def parse_and_index(
         # Provenance fields — injected after ID computation
         doc["pipeline_version"] = _PIPELINE_VERSION
         if source_file:
-            doc["vhir.source_file"] = source_file
+            doc["sift.source_file"] = source_file
         if ingest_audit_id:
-            doc["vhir.ingest_audit_id"] = ingest_audit_id
+            doc["sift.ingest_audit_id"] = ingest_audit_id
         if vss_id:
-            doc["vhir.vss_id"] = vss_id
-        doc["vhir.parse_method"] = "pyevtx-rs"
+            doc["sift.vss_id"] = vss_id
+        doc["sift.parse_method"] = "pyevtx-rs"
 
         actions.append({"_index": index_name, "_id": doc_hash, "_source": doc})
 

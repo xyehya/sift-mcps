@@ -191,8 +191,8 @@ class TestParseAndIndex:
         assert count == 1
         actions = mock_helpers.bulk.call_args[0][1]
         doc = actions[0]["_source"]
-        assert doc["vhir.source_file"] == "/evidence/Security.evtx"
-        assert doc["vhir.ingest_audit_id"] == "opensearch-steve-20260329-001"
+        assert doc["sift.source_file"] == "/evidence/Security.evtx"
+        assert doc["sift.ingest_audit_id"] == "opensearch-steve-20260329-001"
         assert "pipeline_version" in doc
         assert doc["pipeline_version"].startswith("opensearch-mcp-")
 
@@ -216,5 +216,5 @@ class TestParseAndIndex:
         actions = mock_helpers.bulk.call_args[0][1]
         doc = actions[0]["_source"]
         assert "pipeline_version" in doc
-        assert "vhir.source_file" not in doc
-        assert "vhir.ingest_audit_id" not in doc
+        assert "sift.source_file" not in doc
+        assert "sift.ingest_audit_id" not in doc

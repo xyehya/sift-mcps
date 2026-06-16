@@ -99,14 +99,14 @@ def parse_wer_dir(
                 doc["host.id"] = _resolved if _resolved else hostname
             else:
                 doc["host.id"] = hostname
-        doc["vhir.source_file"] = rel
+        doc["sift.source_file"] = rel
         if ingest_audit_id:
-            doc["vhir.ingest_audit_id"] = ingest_audit_id
+            doc["sift.ingest_audit_id"] = ingest_audit_id
         if pipeline_version:
             doc["pipeline_version"] = pipeline_version
-        doc["vhir.parse_method"] = "wer-parser"
+        doc["sift.parse_method"] = "wer-parser"
         if vss_id:
-            doc["vhir.vss_id"] = vss_id
+            doc["sift.vss_id"] = vss_id
         id_input = f"{index_name}:{rel}"
         doc_hash = hashlib.sha256(id_input.encode()).hexdigest()[:20]
         actions.append({"_index": index_name, "_id": doc_hash, "_source": doc})

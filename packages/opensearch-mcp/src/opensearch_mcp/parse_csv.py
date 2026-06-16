@@ -33,7 +33,7 @@ def _detect_encoding(path: Path) -> str:
 
 # Fields containing per-run volatile data (temp dir paths) or VSS metadata.
 # Excluded from content hash to ensure dedup stability across re-ingests.
-_VOLATILE_KEYS = {"PluginDetailFile", "SourceFile", "HivePath", "vhir.vss_id"}
+_VOLATILE_KEYS = {"PluginDetailFile", "SourceFile", "HivePath", "sift.vss_id"}
 
 
 def _doc_id(
@@ -49,7 +49,7 @@ def _doc_id(
     volatile_keys are excluded from content hash (temp dir paths, etc.).
 
     ORDERING: natural key check MUST precede volatile key stripping
-    (VSS MFT dedup depends on this — vhir.vss_id is in _VOLATILE_KEYS
+    (VSS MFT dedup depends on this — sift.vss_id is in _VOLATILE_KEYS
     but used as 5th natural key component for MFT when VSS is active).
     """
     if natural_key:
@@ -166,13 +166,13 @@ def ingest_csv(
                 else:
                     row["host.id"] = raw_host
             if table_name:
-                row["vhir.table"] = table_name
+                row["sift.table"] = table_name
 
             # VSS: for natural key tools (MFT), inject vss_id BEFORE _doc_id
             # so it becomes part of the natural key. For content-hash tools,
-            # vhir.vss_id is in _VOLATILE_KEYS and stripped from the hash.
+            # sift.vss_id is in _VOLATILE_KEYS and stripped from the hash.
             if vss_id:
-                row["vhir.vss_id"] = vss_id
+                row["sift.vss_id"] = vss_id
 
             # Compute dedup ID BEFORE adding provenance fields.
             # Provenance differs across re-ingests (different source_file),
@@ -182,13 +182,13 @@ def ingest_csv(
 
             # Provenance fields (added after ID computation)
             if source_file:
-                row["vhir.source_file"] = source_file
+                row["sift.source_file"] = source_file
             if ingest_audit_id:
-                row["vhir.ingest_audit_id"] = ingest_audit_id
+                row["sift.ingest_audit_id"] = ingest_audit_id
             if pipeline_version:
                 row["pipeline_version"] = pipeline_version
             if parse_method:
-                row["vhir.parse_method"] = parse_method
+                row["sift.parse_method"] = parse_method
 
             actions.append({"_index": index_name, "_id": _id, "_source": row})
 

@@ -70,13 +70,13 @@
         "host.id": {
           "type": "keyword"
         },
-        "vhir.source_file": {
+        "sift.source_file": {
           "type": "keyword"
         },
-        "vhir.ingest_audit_id": {
+        "sift.ingest_audit_id": {
           "type": "keyword"
         },
-        "vhir.parse_method": {
+        "sift.parse_method": {
           "type": "keyword"
         },
         "pipeline_version": {

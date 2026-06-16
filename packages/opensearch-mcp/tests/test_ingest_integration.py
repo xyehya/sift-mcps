@@ -191,8 +191,8 @@ class TestEvtxIntegration:
                 "_source": {
                     "event.code": 4624,
                     "host.name": "testhost",
-                    "vhir.source_file": "/evidence/Security.evtx",
-                    "vhir.ingest_audit_id": "audit-001",
+                    "sift.source_file": "/evidence/Security.evtx",
+                    "sift.ingest_audit_id": "audit-001",
                     "pipeline_version": "opensearch-mcp-0.1.0",
                 },
             }
@@ -203,11 +203,11 @@ class TestEvtxIntegration:
         doc = os_client.get(index=test_index, id="prov-1")
         src = doc["_source"]
         assert src["pipeline_version"] == "opensearch-mcp-0.1.0"
-        assert src["vhir.source_file"] == "/evidence/Security.evtx"
-        assert src["vhir.ingest_audit_id"] == "audit-001"
+        assert src["sift.source_file"] == "/evidence/Security.evtx"
+        assert src["sift.ingest_audit_id"] == "audit-001"
 
     def test_sift_source_file_searchable(self, os_client, test_index):
-        """vhir.source_file is searchable via term query."""
+        """sift.source_file is searchable via term query."""
         from opensearch_mcp.bulk import flush_bulk
 
         actions = [
@@ -216,17 +216,17 @@ class TestEvtxIntegration:
                 "_id": "sf-1",
                 "_source": {
                     "event.code": 4624,
-                    "vhir.source_file": "/evidence/Security.evtx",
+                    "sift.source_file": "/evidence/Security.evtx",
                 },
             }
         ]
         flush_bulk(os_client, actions)
         _wait_for_count(os_client, test_index, 1)
 
-        # vhir.source_file is keyword type — use term (exact) or wildcard
+        # sift.source_file is keyword type — use term (exact) or wildcard
         result = os_client.search(
             index=test_index,
-            body={"query": {"term": {"vhir.source_file": "/evidence/Security.evtx"}}},
+            body={"query": {"term": {"sift.source_file": "/evidence/Security.evtx"}}},
         )
         assert result["hits"]["total"]["value"] >= 1
 

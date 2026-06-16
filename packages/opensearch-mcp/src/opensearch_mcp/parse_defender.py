@@ -268,16 +268,16 @@ def parse_mplog(
                 doc["defender.raw_line"] = line_body
                 from opensearch_mcp.paths import relative_evidence_path
 
-                doc["vhir.source_file"] = (
+                doc["sift.source_file"] = (
                     relative_evidence_path(log_file, volume_root) if volume_root else str(log_file)
                 )
                 if ingest_audit_id:
-                    doc["vhir.ingest_audit_id"] = ingest_audit_id
+                    doc["sift.ingest_audit_id"] = ingest_audit_id
                 if pipeline_version:
                     doc["pipeline_version"] = pipeline_version
-                doc["vhir.parse_method"] = "defender-mplog"
+                doc["sift.parse_method"] = "defender-mplog"
                 if vss_id:
-                    doc["vhir.vss_id"] = vss_id
+                    doc["sift.vss_id"] = vss_id
 
                 line_hash = hashlib.md5(line_body.encode()).hexdigest()
                 id_input = f"{index_name}:{rel_file}:{current_ts or ''}:{line_hash}"

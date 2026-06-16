@@ -245,9 +245,9 @@ class TestECSFieldsPreserved:
 
     def test_provenance_fields(self, properties):
         assert properties["pipeline_version"]["type"] == "keyword"
-        assert properties["vhir.source_file"]["type"] == "keyword"
-        assert properties["vhir.ingest_audit_id"]["type"] == "keyword"
-        assert properties["vhir.vss_id"]["type"] == "keyword"
+        assert properties["sift.source_file"]["type"] == "keyword"
+        assert properties["sift.ingest_audit_id"]["type"] == "keyword"
+        assert properties["sift.vss_id"]["type"] == "keyword"
 
 
 # ---------------------------------------------------------------------------

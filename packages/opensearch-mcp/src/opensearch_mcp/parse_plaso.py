@@ -19,7 +19,7 @@ _PLASO_VOLATILE_KEYS = {
     "__type__",
     "pathspec",
     "sha256_hash",  # Plaso storage hash, not evidence hash
-    "vhir.vss_id",
+    "sift.vss_id",
 }
 
 
@@ -115,14 +115,14 @@ def _ingest_jsonl(
             # Provenance fields (added AFTER ID computation — same pattern as
             # parse_csv.py and parse_evtx.py)
             source = record.get("filename") or record.get("display_name") or source_dir
-            record["vhir.source_file"] = source
+            record["sift.source_file"] = source
             if ingest_audit_id:
-                record["vhir.ingest_audit_id"] = ingest_audit_id
+                record["sift.ingest_audit_id"] = ingest_audit_id
             if pipeline_version:
                 record["pipeline_version"] = pipeline_version
             if vss_id:
-                record["vhir.vss_id"] = vss_id
-            record["vhir.parse_method"] = "plaso"
+                record["sift.vss_id"] = vss_id
+            record["sift.parse_method"] = "plaso"
             actions.append({"_index": index_name, "_id": _id, "_source": record})
 
             if len(actions) >= 1000:

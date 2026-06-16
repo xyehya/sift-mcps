@@ -278,7 +278,7 @@
               },
               "common_fields": {
                 "additionalProperties": true,
-                "description": "Fields identical across every hit, hoisted out of the per-hit docs (e.g. vhir.case_id, vhir.provenance_id). Apply to every hit in results.",
+                "description": "Fields identical across every hit, hoisted out of the per-hit docs (e.g. sift.case_id, sift.provenance_id). Apply to every hit in results.",
                 "title": "Common Fields",
                 "type": "object"
               },

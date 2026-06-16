@@ -185,7 +185,7 @@ class SearchOut(BaseModel):
         default_factory=dict,
         description=(
             "Fields identical across every hit, hoisted out of the per-hit docs "
-            "(e.g. vhir.case_id, vhir.provenance_id). Apply to every hit in results."
+            "(e.g. sift.case_id, sift.provenance_id). Apply to every hit in results."
         ),
     )
     full_path: str | None = Field(

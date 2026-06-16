@@ -11,7 +11,7 @@ non-job, direct ingest):
   - ``app.register_opensearch_index``           (one row per case-scoped index)
   - ``app.record_opensearch_ingest_provenance`` (one receipt per run)
 
-The per-doc ``vhir.provenance_id`` stamp is applied by the caller via
+The per-doc ``sift.provenance_id`` stamp is applied by the caller via
 ``opensearch_mcp.bulk.set_ingest_provenance`` around the ``ingest()`` call, so
 every indexed document carries the same opaque ``provenance_id`` recorded here.
 

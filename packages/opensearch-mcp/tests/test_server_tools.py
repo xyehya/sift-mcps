@@ -416,40 +416,40 @@ class TestIdxSearch:
 class TestHoistConstantFields:
     def test_hoists_field_constant_across_all_hits(self):
         docs = [
-            {"_id": "1", "_index": "i", "vhir.case_id": "C1", "event.code": 4624},
-            {"_id": "2", "_index": "i", "vhir.case_id": "C1", "event.code": 4625},
+            {"_id": "1", "_index": "i", "sift.case_id": "C1", "event.code": 4624},
+            {"_id": "2", "_index": "i", "sift.case_id": "C1", "event.code": 4625},
         ]
         common, slim = srv._hoist_constant_fields(docs)
-        assert common == {"vhir.case_id": "C1"}
-        assert all("vhir.case_id" not in d for d in slim)
+        assert common == {"sift.case_id": "C1"}
+        assert all("sift.case_id" not in d for d in slim)
         assert slim[0]["event.code"] == 4624
 
     def test_mixed_values_are_not_hoisted(self):
         docs = [
-            {"_id": "1", "vhir.case_id": "C1"},
-            {"_id": "2", "vhir.case_id": "C2"},
+            {"_id": "1", "sift.case_id": "C1"},
+            {"_id": "2", "sift.case_id": "C2"},
         ]
         common, slim = srv._hoist_constant_fields(docs)
         assert common == {}
-        assert slim[0]["vhir.case_id"] == "C1"
+        assert slim[0]["sift.case_id"] == "C1"
 
     def test_field_absent_from_some_hits_is_not_hoisted(self):
         docs = [
-            {"_id": "1", "vhir.provenance_id": "P"},
+            {"_id": "1", "sift.provenance_id": "P"},
             {"_id": "2"},  # missing the candidate field
         ]
         common, _ = srv._hoist_constant_fields(docs)
-        assert "vhir.provenance_id" not in common
+        assert "sift.provenance_id" not in common
 
     def test_search_response_hoists_common_fields(self, mock_client):
         hits = [
-            {"_id": "1", "_index": "i", "_source": {"vhir.case_id": "C1", "x": 1}},
-            {"_id": "2", "_index": "i", "_source": {"vhir.case_id": "C1", "x": 2}},
+            {"_id": "1", "_index": "i", "_source": {"sift.case_id": "C1", "x": 1}},
+            {"_id": "2", "_index": "i", "_source": {"sift.case_id": "C1", "x": 2}},
         ]
         mock_client.search.return_value = {"hits": {"total": {"value": 2}, "hits": hits}}
         resp = opensearch_search(query="*")
-        assert resp["common_fields"] == {"vhir.case_id": "C1"}
-        assert all("vhir.case_id" not in r for r in resp["results"])
+        assert resp["common_fields"] == {"sift.case_id": "C1"}
+        assert all("sift.case_id" not in r for r in resp["results"])
 
 
 # ---------------------------------------------------------------------------

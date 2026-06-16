@@ -600,7 +600,7 @@ _SEARCH_EXCLUDE_FIELDS = frozenset(
         "task.xml",  # Scheduled tasks: full XML
         "wer.full_text",  # WER: full crash report text
         # EvtxECmd duplicate/metadata
-        "SourceFile",  # duplicates vhir.source_file
+        "SourceFile",  # duplicates sift.source_file
         "Computer",  # duplicated to host.name by parse_delimited
         # Metadata (available via opensearch_get_event, zero triage value)
         "ExtraDataOffset",
@@ -608,9 +608,9 @@ _SEARCH_EXCLUDE_FIELDS = frozenset(
         "Keywords",
         "ChunkNumber",
         "pipeline_version",
-        "vhir.source_file",
-        "vhir.ingest_audit_id",
-        "vhir.parse_method",
+        "sift.source_file",
+        "sift.ingest_audit_id",
+        "sift.parse_method",
         # MFT structural fields (low triage value, high field count)
         "UpdateSequenceNumber",
         "LogfileSequenceNumber",
@@ -680,8 +680,8 @@ _UUID_RE = _re.compile(
 # instead of repeated on every hit. This is a candidate list; the hoist still
 # verifies per-call that the value is actually identical across all hits.
 _HOISTABLE_CONSTANT_FIELDS: tuple[str, ...] = (
-    "vhir.case_id",
-    "vhir.provenance_id",
+    "sift.case_id",
+    "sift.provenance_id",
 )
 
 # Marker the hoister stores per-hit-key so a hit that genuinely lacks a field is
@@ -989,7 +989,7 @@ def opensearch_search(
       common_fields, full_path}
     Output cap: limit max 200; compact=True strips bloat fields and truncates values
       to 500 chars. Use opensearch_get_event(event_id, index) to fetch a full document.
-    Constant fields shared by every hit (e.g. vhir.case_id, vhir.provenance_id) are
+    Constant fields shared by every hit (e.g. sift.case_id, sift.provenance_id) are
       hoisted once into common_fields instead of repeated per hit.
     Large results: when more than 20 hits are returned OR the hit set exceeds a
       ~64 KiB inline byte cap (a few very large docs still trip this), the FULL set
@@ -1069,7 +1069,7 @@ def opensearch_search(
         docs = _strip_hits(result["hits"]["hits"], exclude_fields=frozenset(), max_chars=999999)
 
     # Hoist fields that are identical across every hit into one response header
-    # (vhir.case_id / vhir.provenance_id etc.) instead of repeating them per hit.
+    # (sift.case_id / sift.provenance_id etc.) instead of repeating them per hit.
     common_fields, docs = _hoist_constant_fields(docs)
 
     # Large-result autosave: when the hit set exceeds the COUNT threshold OR the

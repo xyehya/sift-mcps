@@ -109,11 +109,11 @@ def ingest_accesslog(
                     doc["host.id"] = resolved if resolved else hostname
                 else:
                     doc["host.id"] = hostname
-            doc["vhir.parse_method"] = "accesslog"
+            doc["sift.parse_method"] = "accesslog"
             if source_file:
-                doc["vhir.source_file"] = source_file
+                doc["sift.source_file"] = source_file
             if ingest_audit_id:
-                doc["vhir.ingest_audit_id"] = ingest_audit_id
+                doc["sift.ingest_audit_id"] = ingest_audit_id
             if pipeline_version:
                 doc["pipeline_version"] = pipeline_version
 

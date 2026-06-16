@@ -400,7 +400,7 @@ def _vol3_doc_id(index_name: str, plugin: str, record: dict, source_file: str) -
     stable = {
         k: v
         for k, v in record.items()
-        if not k.startswith("vhir.")
+        if not k.startswith("sift.")
         and k != "host.name"
         and k != "pipeline_version"
         and k != "@timestamp"
@@ -444,10 +444,10 @@ def _index_vol3_records(
                 record["host.id"] = _resolved if _resolved else hostname
             else:
                 record["host.id"] = hostname
-        record["vhir.source_file"] = source_file
-        record["vhir.parse_method"] = f"vol3-{plugin}"
+        record["sift.source_file"] = source_file
+        record["sift.parse_method"] = f"vol3-{plugin}"
         if ingest_audit_id:
-            record["vhir.ingest_audit_id"] = ingest_audit_id
+            record["sift.ingest_audit_id"] = ingest_audit_id
         if pipeline_version:
             record["pipeline_version"] = pipeline_version
 

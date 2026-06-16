@@ -160,10 +160,10 @@ class TestJsonIngest:
             )
         doc = collected[0]["_source"]
         assert doc["host.name"] == "host1"
-        assert doc["vhir.source_file"] == "/evidence/test.jsonl"
-        assert doc["vhir.ingest_audit_id"] == "aud-1"
+        assert doc["sift.source_file"] == "/evidence/test.jsonl"
+        assert doc["sift.ingest_audit_id"] == "aud-1"
         assert doc["pipeline_version"] == "v1"
-        assert doc["vhir.parse_method"] == "json-ingest"
+        assert doc["sift.parse_method"] == "json-ingest"
 
     def test_unknown_format_raises(self, tmp_path):
         from opensearch_mcp.parse_json import ingest_json
@@ -220,7 +220,7 @@ class TestDelimitedIngest:
         assert cnt == 3
         doc = collected[0]["_source"]
         assert doc["host.name"] == "host1"
-        assert doc["vhir.parse_method"] == "delimited-csv"
+        assert doc["sift.parse_method"] == "delimited-csv"
 
     def test_zeek_null_handling(self):
         from opensearch_mcp.parse_delimited import ingest_delimited
@@ -860,7 +860,7 @@ class TestCrossParserConsistency:
                 )
 
     def test_all_parsers_set_parse_method(self):
-        """Every parser sets vhir.parse_method."""
+        """Every parser sets sift.parse_method."""
         from opensearch_mcp.parse_accesslog import ingest_accesslog
         from opensearch_mcp.parse_defender import parse_mplog
         from opensearch_mcp.parse_delimited import ingest_delimited
@@ -924,7 +924,7 @@ class TestCrossParserConsistency:
             with p:
                 fn(collected)
             for action in collected:
-                assert "vhir.parse_method" in action["_source"], (
+                assert "sift.parse_method" in action["_source"], (
                     f"{module_path}: missing parse_method"
                 )
 

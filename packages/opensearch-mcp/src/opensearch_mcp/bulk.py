@@ -20,7 +20,7 @@ from opensearchpy.exceptions import ConnectionTimeout, TransportError
 # than thread a provenance dict through all 14 parser modules, the ingest caller
 # sets this context var (wave8/ingest-tools: the add-on `ingest_cli scan` direct
 # path) and every action funnelled through flush_bulk is stamped centrally. The
-# fields use the existing `vhir.*` provenance namespace already present on
+# fields use the existing `sift.*` provenance namespace already present on
 # indexed docs (source_file, ingest_audit_id, ...). Stamping is opaque-ID-only:
 # no OS/mount/case paths.
 #
@@ -36,10 +36,10 @@ _provenance_ctx: contextvars.ContextVar[dict[str, str] | None] = contextvars.Con
 # indexed doc through the provenance channel.
 _ALLOWED_PROVENANCE_KEYS = frozenset(
     {
-        "vhir.case_id",
-        "vhir.evidence_id",
-        "vhir.provenance_id",
-        "vhir.job_id",
+        "sift.case_id",
+        "sift.evidence_id",
+        "sift.provenance_id",
+        "sift.job_id",
     }
 )
 

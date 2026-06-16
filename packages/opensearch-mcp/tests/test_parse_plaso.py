@@ -18,7 +18,7 @@ class TestPlasoVolatileKeys:
         assert "__type__" in _PLASO_VOLATILE_KEYS
         assert "pathspec" in _PLASO_VOLATILE_KEYS
         assert "sha256_hash" in _PLASO_VOLATILE_KEYS
-        assert "vhir.vss_id" in _PLASO_VOLATILE_KEYS
+        assert "sift.vss_id" in _PLASO_VOLATILE_KEYS
 
 
 class TestIngestJsonl:
@@ -75,9 +75,9 @@ class TestIngestJsonl:
         actions = mock_flush.call_args[0][1]
         doc = actions[0]["_source"]
         assert doc["host.name"] == "HOST1"
-        assert doc["vhir.ingest_audit_id"] == "audit-001"
+        assert doc["sift.ingest_audit_id"] == "audit-001"
         assert doc["pipeline_version"] == "v0.1.0"
-        assert doc["vhir.vss_id"] == "vss1"
+        assert doc["sift.vss_id"] == "vss1"
 
     @patch("opensearch_mcp.parse_plaso.flush_bulk")
     def test_empty_jsonl(self, mock_flush, tmp_path):

@@ -1043,7 +1043,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
         # Postgres receipt. job_id is NULL — this is a direct, non-job ingest.
         provenance_id = str(uuid.uuid4())
         _prov_token = set_ingest_provenance(
-            {"vhir.case_id": case_id, "vhir.provenance_id": provenance_id}
+            {"sift.case_id": case_id, "sift.provenance_id": provenance_id}
         )
         try:
             result = ingest(

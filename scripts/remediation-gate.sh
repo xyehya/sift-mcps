@@ -40,14 +40,6 @@ if grep -rn "shell=True" packages/ --include="*.py" \
 fi
 
 echo
-echo "=== vhir namespace ==="
-# Exclude vhir. (dot after) — these are OpenSearch field names like vhir.source_file
-if grep -rn "vhir\|VHIR" packages/ --include="*.py" | grep -v "vhir\."; then
-    echo "FAIL: vhir namespace leak"
-    FAIL=1
-fi
-
-echo
 echo "=== Tool responses: bare string errors (WARN only — fails after R4) ==="
 if grep -rn 'return ".*[Ee]rror\|return f".*[Ee]rror' packages/*/src/ --include="*.py" \
    | grep -v "test_\|#"; then

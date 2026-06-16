@@ -310,14 +310,14 @@ def ingest_transcripts(
                 doc["host.id"] = _resolved if _resolved else hostname
             else:
                 doc["host.id"] = hostname
-        doc["vhir.source_file"] = rel
+        doc["sift.source_file"] = rel
         if ingest_audit_id:
-            doc["vhir.ingest_audit_id"] = ingest_audit_id
+            doc["sift.ingest_audit_id"] = ingest_audit_id
         if pipeline_version:
             doc["pipeline_version"] = pipeline_version
         if vss_id:
-            doc["vhir.vss_id"] = vss_id
-        doc["vhir.parse_method"] = "transcript-parser"
+            doc["sift.vss_id"] = vss_id
+        doc["sift.parse_method"] = "transcript-parser"
         id_data = {"source_file": rel}
         if vss_id:
             id_data["vss_id"] = vss_id

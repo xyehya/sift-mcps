@@ -753,7 +753,7 @@ def _ingest_hosts(
             # MFT natural key: add vss_id as 5th component when VSS is active
             natural_key = cfg.natural_key
             if tool_name == "mft" and host.vss_id and natural_key:
-                natural_key = natural_key + ":vhir.vss_id"
+                natural_key = natural_key + ":sift.vss_id"
 
             ar = ArtifactResult(
                 artifact=tool_name,

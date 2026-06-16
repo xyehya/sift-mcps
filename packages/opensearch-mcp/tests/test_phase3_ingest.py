@@ -133,7 +133,7 @@ class TestIngestWithVssId:
     @patch("opensearch_mcp.ingest.run_and_ingest")
     @patch("opensearch_mcp.ingest.sha256_file", return_value="abc123")
     def test_mft_natural_key_extended_for_vss(self, mock_sha, mock_rai):
-        """MFT natural key gets vhir.vss_id appended when VSS is active."""
+        """MFT natural key gets sift.vss_id appended when VSS is active."""
         mock_rai.return_value = (100, 0, 0)
         client = MagicMock()
         client.count.side_effect = Exception("no index")
@@ -153,7 +153,7 @@ class TestIngestWithVssId:
 
         call_kwargs = mock_rai.call_args[1]
         nk = call_kwargs["natural_key_override"]
-        assert nk.endswith(":vhir.vss_id")
+        assert nk.endswith(":sift.vss_id")
 
     @patch("opensearch_mcp.ingest.run_and_ingest")
     @patch("opensearch_mcp.ingest.sha256_file", return_value="abc123")
@@ -179,7 +179,7 @@ class TestIngestWithVssId:
         call_kwargs = mock_rai.call_args[1]
         nk = call_kwargs["natural_key_override"]
         assert nk is not None
-        assert "vhir.vss_id" not in nk
+        assert "sift.vss_id" not in nk
 
 
 class TestIngestPlasoArtifacts:

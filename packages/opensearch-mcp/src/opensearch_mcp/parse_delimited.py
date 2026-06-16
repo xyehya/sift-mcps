@@ -19,9 +19,9 @@ _DELIM_VOLATILE = {
     "host.name",
     "pipeline_version",
     "@timestamp",
-    "vhir.source_file",
-    "vhir.ingest_audit_id",
-    "vhir.parse_method",
+    "sift.source_file",
+    "sift.ingest_audit_id",
+    "sift.parse_method",
 }
 
 _BODYFILE_COLUMNS = [
@@ -254,11 +254,11 @@ def ingest_delimited(
                 record["host.id"] = _resolved if _resolved else _raw_host
             else:
                 record["host.id"] = _raw_host
-        record["vhir.parse_method"] = f"delimited-{format_name}"
+        record["sift.parse_method"] = f"delimited-{format_name}"
         if source_file:
-            record["vhir.source_file"] = source_file
+            record["sift.source_file"] = source_file
         if ingest_audit_id:
-            record["vhir.ingest_audit_id"] = ingest_audit_id
+            record["sift.ingest_audit_id"] = ingest_audit_id
         if pipeline_version:
             record["pipeline_version"] = pipeline_version
 

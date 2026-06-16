@@ -17,9 +17,9 @@ _JSON_VOLATILE = {
     "host.name",
     "pipeline_version",
     "@timestamp",
-    "vhir.source_file",
-    "vhir.ingest_audit_id",
-    "vhir.parse_method",
+    "sift.source_file",
+    "sift.ingest_audit_id",
+    "sift.parse_method",
 }
 
 
@@ -221,11 +221,11 @@ def ingest_json(
                 record["host.id"] = resolved if resolved else raw_host
             else:
                 record["host.id"] = raw_host
-        record["vhir.parse_method"] = "json-ingest"
+        record["sift.parse_method"] = "json-ingest"
         if source_file:
-            record["vhir.source_file"] = source_file
+            record["sift.source_file"] = source_file
         if ingest_audit_id:
-            record["vhir.ingest_audit_id"] = ingest_audit_id
+            record["sift.ingest_audit_id"] = ingest_audit_id
         if pipeline_version:
             record["pipeline_version"] = pipeline_version
 

@@ -79,9 +79,9 @@ def test_opensearch_index_name_and_provenance_contract(tmp_path):
     assert source["@timestamp"] == "2026-06-07T09:30:00Z"
     assert source["host.name"] == "Admin 01.Example"
     assert source["host.id"] == "Admin 01.Example"
-    assert source["vhir.parse_method"] == "json-ingest"
-    assert source["vhir.source_file"] == str(json_path)
-    assert source["vhir.ingest_audit_id"] == "audit-001"
+    assert source["sift.parse_method"] == "json-ingest"
+    assert source["sift.source_file"] == str(json_path)
+    assert source["sift.ingest_audit_id"] == "audit-001"
     assert source["pipeline_version"] == "job0-baseline"
 
 

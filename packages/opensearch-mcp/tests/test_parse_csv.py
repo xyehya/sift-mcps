@@ -131,10 +131,10 @@ class TestIngestCsv:
         actions = mock_flush.call_args[0][1]
         doc = actions[0]["_source"]
         assert doc["host.name"] == "HOST1"
-        assert doc["vhir.source_file"] == "/evidence/test.csv"
-        assert doc["vhir.ingest_audit_id"] == "opensearch-steve-001"
+        assert doc["sift.source_file"] == "/evidence/test.csv"
+        assert doc["sift.ingest_audit_id"] == "opensearch-steve-001"
         assert doc["pipeline_version"] == "opensearch-mcp-0.1.0"
-        assert doc["vhir.table"] == "AssociatedFileEntries"
+        assert doc["sift.table"] == "AssociatedFileEntries"
 
     @patch("opensearch_mcp.parse_csv.flush_bulk")
     def test_dedup_id_in_action(self, mock_flush, tmp_path):
@@ -212,7 +212,7 @@ class TestVolatileKeysIngest:
 
     @patch("opensearch_mcp.parse_csv.flush_bulk")
     def test_ingest_csv_with_table_name(self, mock_flush, tmp_path):
-        """ingest_csv with table_name sets vhir.table on every row."""
+        """ingest_csv with table_name sets sift.table on every row."""
         mock_flush.return_value = (2, 0)
         csv_file = tmp_path / "test.csv"
         self._write_csv(
@@ -233,7 +233,7 @@ class TestVolatileKeysIngest:
         )
         actions = mock_flush.call_args[0][1]
         for action in actions:
-            assert action["_source"]["vhir.table"] == "AssociatedFileEntries"
+            assert action["_source"]["sift.table"] == "AssociatedFileEntries"
 
     @patch("opensearch_mcp.parse_csv.flush_bulk")
     def test_replacement_char_warning_on_binary_data(self, mock_flush, tmp_path):

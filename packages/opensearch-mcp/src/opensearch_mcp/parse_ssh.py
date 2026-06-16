@@ -67,7 +67,7 @@ def parse_ssh_log(
 
                 doc: dict = {
                     "host.name": hostname,
-                    "vhir.source_file": rel,
+                    "sift.source_file": rel,
                 }
                 if hostname:
                     if host_dict is not None:
@@ -125,12 +125,12 @@ def parse_ssh_log(
 
                 doc["ssh.raw_line"] = message
                 if ingest_audit_id:
-                    doc["vhir.ingest_audit_id"] = ingest_audit_id
+                    doc["sift.ingest_audit_id"] = ingest_audit_id
                 if pipeline_version:
                     doc["pipeline_version"] = pipeline_version
-                doc["vhir.parse_method"] = "ssh-parser"
+                doc["sift.parse_method"] = "ssh-parser"
                 if vss_id:
-                    doc["vhir.vss_id"] = vss_id
+                    doc["sift.vss_id"] = vss_id
 
                 from opensearch_mcp.paths import relative_evidence_path
 
