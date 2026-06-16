@@ -9,26 +9,14 @@ from pathlib import Path
 def resolve_case_dir() -> str:
     """Resolve the active case directory.
 
-    Resolution order: SIFT_CASE_DIR env var → legacy pointer file → "".
+    Resolution order: SIFT_CASE_DIR env var → "".
     SIFT_CASE_DIR must be a directory containing CASE.yaml to be valid.
-    If set but invalid, falls through to the legacy fallback.
     """
     case_dir = os.environ.get("SIFT_CASE_DIR", "").strip()
     if case_dir:
         p = Path(case_dir)
         if p.is_dir() and (p / "CASE.yaml").exists():
             return case_dir
-        # Set but invalid — fall through to legacy fallback
-    active_case_file = Path.home() / ".sift" / "active_case"  # Legacy CLI fallback
-    if active_case_file.is_file():
-        try:
-            content = active_case_file.read_text().strip()
-        except OSError:
-            return ""
-        if content:
-            p = Path(content)
-            if p.is_dir() and (p / "CASE.yaml").exists():
-                return content
     return ""
 
 

@@ -796,6 +796,18 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             if not public_evidence_refs:
                 public_evidence_refs = [str(ref) for ref in evidence_refs]
         else:
+            if _db_authority_active():
+                return build_response(
+                    tool_name="run_command",
+                    success=False,
+                    data=None,
+                    audit_id=audit_id,
+                    error=(
+                        "evidence_refs require gateway-resolved DB evidence refs "
+                        "in DB-authority mode"
+                    ),
+                    examiner=examiner,
+                )
             public_evidence_refs = [str(ref) for ref in evidence_refs]
             for ref in evidence_refs:
                 try:

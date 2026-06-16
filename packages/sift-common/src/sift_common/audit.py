@@ -39,6 +39,18 @@ def _db_authority_env_active() -> bool:
     }
 
 
+def _authority_context_case_id() -> str:
+    """Return the request DB case id when sift-core has bound one."""
+    try:
+        from sift_core.active_case_context import current_active_case
+    except ImportError:
+        return ""
+    ctx = current_active_case()
+    if ctx is None or not getattr(ctx, "db_active", False):
+        return ""
+    return str(getattr(ctx, "case_id", "") or "")
+
+
 def _state_root_for_case(case_dir: Path) -> Path:
     configured = os.environ.get("SIFT_STATE_DIR", "").strip()
     if configured:
@@ -134,25 +146,9 @@ class AuditWriter:
                 if path.is_dir() and (path / "CASE.yaml").exists():
                     audit_dir = _case_audit_dir(path)
                 else:
-                    case_dir = ""  # set-but-wrong, try legacy fallback
+                    case_dir = ""
             if not case_dir:
-                # Legacy CLI fallback — reads active_case_file pointer
-                try:
-                    case_dir = (
-                        (Path.home() / ".sift" / "active_case").read_text().strip()  # Legacy CLI fallback
-                    )
-                except OSError:
-                    return None
-                if not case_dir:
-                    return None
-                path = Path(case_dir)
-                if not path.is_dir() or not (path / "CASE.yaml").exists():
-                    logger.warning(
-                        "SIFT_CASE_DIR=%s is not a case directory, skipping audit",
-                        case_dir,
-                    )
-                    return None
-                audit_dir = _case_audit_dir(path)
+                return None
         try:
             audit_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -246,20 +242,6 @@ class AuditWriter:
         except OSError:
             pass
 
-    def _read_active_case_id(self) -> str:
-        """Read case_id from the legacy pointer file.
-
-        Re-reads on every call to handle mid-session case switches.
-        The file is ~50 bytes and OS page-cached, so effectively free.
-        """
-        try:
-            raw = (Path.home() / ".sift" / "active_case").read_text().strip()  # Legacy CLI fallback
-            if raw:
-                return Path(raw).name
-        except OSError:
-            pass
-        return ""
-
     def log(
         self,
         tool: str,
@@ -301,9 +283,7 @@ class AuditWriter:
             "tool": tool,
             "audit_id": audit_id,
             "examiner": actual_examiner,
-            "case_id": case_id
-            or os.environ.get("SIFT_ACTIVE_CASE", "")
-            or self._read_active_case_id(),
+            "case_id": case_id or _authority_context_case_id(),
             "source": source,
             "params": params,
             "result_summary": _summarize(result_summary),

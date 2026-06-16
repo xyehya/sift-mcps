@@ -135,7 +135,9 @@ _run_command(args, examiner, audit)
     ├── Evidence refs resolution (BATCH-I1):
     │       ├── If args["_resolved_evidence_refs"] present (Gateway-injected DB path):
     │       │       → _trusted_internal_evidence_refs() → absolute paths
-    │       └── Else → resolve_evidence_ref(ref, case_dir) → local sealed manifest lookup
+    │       ├── Else if DB authority is active → fail closed
+    │       └── Else (legacy file mode) → resolve_evidence_ref(ref, case_dir)
+    │           → local sealed manifest lookup
     │
     ├── Output ref resolution:
     │       └── resolve_output_ref(output_ref, case_dir) → absolute save_dir

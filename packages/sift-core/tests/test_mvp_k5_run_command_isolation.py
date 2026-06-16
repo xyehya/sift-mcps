@@ -301,8 +301,27 @@ def db():
 def _enqueue_run_command(db, case_dir, *, command, purpose, evidence_refs=None,
                          output_ref=None, save_output=False):
     spec_public = {"command": command, "purpose": purpose}
+    spec_internal = {"case_dir": str(case_dir), "case_key": "K5-001", "examiner": "analyst"}
     if evidence_refs is not None:
-        spec_public["evidence_refs"] = evidence_refs
+        resolved_refs = []
+        public_refs = []
+        for ref in evidence_refs:
+            display_path = str(ref)
+            candidate = case_dir / display_path
+            if not candidate.is_file() and "/" not in display_path:
+                display_path = f"evidence/{display_path}"
+                candidate = case_dir / display_path
+            resolved_refs.append(
+                {
+                    "ref": str(ref),
+                    "evidence_id": "",
+                    "display_path": display_path,
+                    "path": str(candidate),
+                }
+            )
+            public_refs.append(display_path)
+        spec_public["evidence_refs"] = public_refs
+        spec_internal["resolved_evidence_refs"] = resolved_refs
     if output_ref is not None:
         spec_public["output_ref"] = output_ref
     if save_output:
@@ -313,7 +332,7 @@ def _enqueue_run_command(db, case_dir, *, command, purpose, evidence_refs=None,
             case_id="K5-001",
             max_attempts=1,
             spec_public=spec_public,
-            spec_internal={"case_dir": str(case_dir), "case_key": "K5-001", "examiner": "analyst"},
+            spec_internal=spec_internal,
         )
     )
 
@@ -336,7 +355,7 @@ def test_allowed_run_command_persists_receipt_and_no_paths(db, sealed_case):
     # Hash-linked, path-free receipt fields.
     assert receipt["job_id"] == job.id
     assert receipt["command_plan_sha256"]  # sha256 of the command plan
-    assert receipt["evidence_refs"] == ["disk.txt"]
+    assert receipt["evidence_refs"] == ["evidence/disk.txt"]
     assert len(receipt["input_sha256s"]) == 1
     assert receipt["audit_id"]
     assert receipt["success"] is True

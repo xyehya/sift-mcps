@@ -179,8 +179,11 @@ if "_resolved_evidence_refs" in args:
     resolved_paths, public_refs = _trusted_internal_evidence_refs(
         args["_resolved_evidence_refs"], case_root=case_root
     )
+elif db_authority_active():
+    # DB-active path must not silently downgrade to the file manifest.
+    return build_response(error="evidence_refs require gateway-resolved DB evidence refs")
 else:
-    # File-mode path: resolve from sealed manifest
+    # Legacy file-mode path: resolve from sealed manifest
     for ref in evidence_refs:
         resolved_paths.append(resolve_evidence_ref(ref, case_dir=case_root))
 ```
@@ -348,7 +351,7 @@ entry = {
     "tool": tool,
     "audit_id": audit_id,
     "examiner": examiner_override or self.examiner,
-    "case_id": case_id or env["SIFT_ACTIVE_CASE"] or pointer_file.read(),
+    "case_id": case_id or authority_context_case_id(),
     "source": source,
     "params": params,
     "result_summary": _summarize(result_summary),

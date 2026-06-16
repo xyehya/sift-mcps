@@ -231,8 +231,8 @@ Reachable via two triggers — **(a)** no control-plane DSN → "core-only mode"
 |---|---------|-------|-----------|
 | 1 | Evidence gate (file path) | `policy_middleware.py:474-479`; docstring `evidence_gate.py:21` | `else: gate = check_evidence_gate(case_dir_str)` when `dsn` is falsy; `case_dir_str` falls back to `$SIFT_CASE_DIR`. Comment: *"remains for the legacy/bridge file flow."* |
 | 2 | Core orientation tools | `mcp_server.py:76-88` | `case_info`/`evidence_info` **always** read the file manifest; gateway *overlays* DB gate + evidence listing on top. *"no-op in legacy/file mode … so core tools stay file-based there."* |
-| 3 | Active-case pointer `~/.sift/active_case` | `audit.py:142,256`; `sift_common/__init__.py:22` | Still read as *"Legacy CLI fallback"* for audit `case_id` resolution. |
-| 4 | Evidence-ref resolution | `agent_tools.py:803` | File-manifest `resolve_evidence_ref(...)` is the else-branch when the gateway hasn't DB-injected `_resolved_evidence_refs`. |
+| 3 | Active-case pointer `~/.sift/active_case` | `audit.py`; `sift_common/__init__.py` | BU4 removed the audit and shared resolver pointer-file read; DB audit `case_id` comes from the authority context or explicit caller input. |
+| 4 | Evidence-ref resolution | `agent_tools.py` | BU4 makes DB-authority `evidence_refs` fail closed unless the Gateway injects `_resolved_evidence_refs`; legacy file mode still uses `resolve_evidence_ref(...)`. |
 | 5 | Findings / timeline / todos | `case_ops.py:74`; `investigation_store.py:666` | DB store returns `None` *"in legacy/file mode so callers keep their file-backed path"* — `CaseManager` file store is the fallback. |
 | 6 | Audit JSONL | `audit.py` write path | Always present; merely labeled "export mirror" when DB-authority is active. |
 
@@ -252,9 +252,9 @@ In DB-mode the DB path does **not replace** the file path — it **overlays** it
 - [ ] `policy_middleware.py:474-479` — remove the file `check_evidence_gate` branch; require DB gate (or explicit dev flag).
 - [ ] `evidence_gate.py` — delete `check_evidence_gate` (file) + its 30s cache once (1) lands; keep `check_evidence_gate_db`.
 - [ ] `mcp_server.py:76-218` — replace the three `_overlay_db_*` functions with DB-native orientation tools.
-- [ ] `agent_tools.py:800-813` — drop the file `resolve_evidence_ref` else-branch in DB-mode; keep `_trusted_internal_evidence_refs`.
+- [x] `agent_tools.py:800-813` — drop the file `resolve_evidence_ref` else-branch in DB-mode; keep `_trusted_internal_evidence_refs`.
 - [ ] `case_ops.py:74`, `investigation_store.py:666` — remove the "None → file fallback" contract; DB store is authoritative.
-- [ ] `audit.py:142,256`, `sift_common/__init__.py:22` — remove the `~/.sift/active_case` legacy-CLI fallback.
+- [x] `audit.py:142,256`, `sift_common/__init__.py:22` — remove the `~/.sift/active_case` legacy-CLI fallback.
 - [ ] `server.py:180` — convert "no DSN → file authority" into "no DSN → refuse to start in production / dev-only mode."
 - [ ] Add a regression test asserting that, with a DSN configured, **no** file-authority code path is reachable for a tool call.
 
