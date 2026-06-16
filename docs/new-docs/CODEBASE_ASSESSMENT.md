@@ -3,7 +3,7 @@
 ## sift-mcps — Independent Engineering Review
 
 **Assessment date**: 2026-06-15
-**Reviewer basis**: direct reading of ~88K LOC source across 9 workspace packages + ~48K LOC of tests (2,334 test functions), plus the installer, packaging, Supabase migrations, and the React portal. Every grade is an opinion; every factual claim is grounded with a `file:line` reference.
+**Reviewer basis**: direct reading of ~88K LOC source across 9 workspace packages + ~50K LOC of tests (2,581 `def test_` functions as of 2026-06-16), plus the installer, packaging, Supabase migrations, and the React portal. Every grade is an opinion; every factual claim is grounded with a `file:line` reference.
 **Scope of this document**: design, architecture, modularity, extensibility, security, chain of custody, coding standards, tech-stack choices, and antipatterns/misalignments. This is an assessment of the **product/codebase**, distinct from `docs/ASSESSMENT.md` (which audits the generated documentation).
 
 ---
@@ -24,9 +24,9 @@ This is a genuinely well-architected DFIR platform built by someone fluent in bo
 
 What keeps it from an A is not the architecture — it is the scaffolding a codebase needs as it moves from "one expert author" to "maintained product":
 
-- **No CI** enforcing the 2,334 tests or the configured linter.
+- **No CI** enforcing the 2,581 tests or the configured linter.
 - **No static type checking**, compounded by pervasive `gateway: Any` duck-typing on the most security-critical layer.
-- A handful of **god files / a god object**, **uneven test coverage** across add-ons, a **3,437-line Bash installer**, and **design history (ticket codes) baked into the source**.
+- A handful of **god files / a god object**, **uneven test coverage** across add-ons, a **3,507-line Bash installer**, and **design history (ticket codes) baked into the source**.
 - An **incomplete file→DB authority migration** that currently runs *both* paths and reconciles them via overlays (§9).
 
 None of these are fatal; all are the unglamorous, fixable kind.
@@ -52,33 +52,33 @@ None of these are fatal; all are the unglamorous, fixable kind.
 
 | Package | src LOC | test LOC | test:src | Read |
 |---------|--------:|---------:|:--------:|------|
-| `opensearch-mcp` | 20,558 | 17,648 | 0.86 | Heavily tested |
-| `sift-gateway` | 15,042 | 11,865 | 0.79 | Heavily tested |
-| `sift-core` | 14,953 | 9,250 | 0.62 | Well tested |
-| `windows-triage-mcp` | 12,735 | 596 | **0.05** | **Under-tested** |
-| `opencti-mcp` | 9,820 | 326 | **0.03** | **Under-tested** |
-| `case-dashboard` | 6,865 | 7,166 | 1.04 | Well tested |
+| `opensearch-mcp` | 20,695 | 18,240 | 0.88 | Heavily tested |
+| `sift-gateway` | 15,243 | 12,355 | 0.81 | Heavily tested |
+| `sift-core` | 15,122 | 9,413 | 0.62 | Well tested |
+| `windows-triage-mcp` | 12,392 | 630 | **0.05** | **Under-tested** |
+| `opencti-mcp` | 9,807 | 326 | **0.03** | **Under-tested** |
+| `case-dashboard` | 6,781 | 7,178 | 1.06 | Well tested |
 | `forensic-rag-mcp` | 6,573 | 1,562 | 0.24 | Lightly tested |
-| `sift-common` | 1,015 | **0** | **0.00** | **No own-package tests** |
+| `sift-common` | 1,128 | 72 | **0.06** | **1 schema test; no `AuditWriter` tests** |
 | `forensic-knowledge` | 369 | 325 | 0.88 | Fine |
 
-Totals: ~88K src, ~48K test, **166 test files, 2,334 test functions**. The aggregate is excellent; the *distribution* is the story — the security-critical core (gateway/core/opensearch) is rigorously tested, while two large add-ons and the shared audit library are nearly bare (§7.3).
+Totals: ~88K src, ~50K test, **170 test files, 2,581 `def test_` functions** (as of 2026-06-16). The aggregate is excellent; the *distribution* is the story — the security-critical core (gateway/core/opensearch) is rigorously tested, while two large add-ons and the shared audit library are nearly bare (§7.3).
 
 ### 2.2 Largest source files (single-responsibility pressure)
 
 ```
-6,203  case-dashboard/.../routes.py            ← god file
-4,477  opensearch-mcp/.../server.py
+6,226  case-dashboard/.../routes.py            ← god file
+4,503  opensearch-mcp/.../server.py
 3,188  opencti-mcp/.../client.py
 2,612  opensearch-mcp/.../ingest_cli.py
 2,595  forensic-rag-mcp/.../sources.py
-2,546  opensearch-mcp/.../registry.py
+2,507  opensearch-mcp/.../registry.py
 2,321  sift-core/.../case_manager.py
-1,913  windows-triage-mcp/.../registry.py
-1,780  sift-gateway/.../supabase_auth.py
+1,835  sift-gateway/.../portal_services.py
+1,773  sift-gateway/.../supabase_auth.py
 1,700  windows-triage-mcp/.../server.py
-1,694  sift-gateway/.../portal_services.py
-1,408  sift-gateway/.../server.py
+1,560  windows-triage-mcp/.../registry.py
+1,446  sift-gateway/.../server.py
 1,355  sift-core/.../execute/security.py
 1,348  sift-core/.../agent_tools.py
 ```
@@ -126,7 +126,7 @@ Sensible and mostly clean: `sift-common` (shared), `sift-core` (in-process tools
 
 ### 4.2 The `Gateway` god-object
 
-`Gateway` carries ~20 responsibilities/fields (`server.py:134-167`): config, backends, tool map/cache, audit, active-case service, control-plane DSN, evidence/investigation/report/job services, db-audit sink, FastMCP server reference, and more. Every policy middleware takes `gateway: Any` and reaches into these attributes as a **service locator** — **21 `gateway: Any` annotations in `policy_middleware.py` alone**.
+`Gateway` carries ~20 responsibilities/fields (`server.py:134-167`): config, backends, tool map/cache, audit, active-case service, control-plane DSN, evidence/investigation/report/job services, db-audit sink, FastMCP server reference, and more. Every policy middleware takes `gateway: Any` and reaches into these attributes as a **service locator** — **14 `gateway: Any` annotations in `policy_middleware.py` alone**.
 
 This is the central modularity weakness: the most security-sensitive layer in the system depends on an untyped god object. A wrong attribute name or a missing service is a *runtime* discovery (often a security-relevant one), not a compile-time error — and there is no type checker to catch it (§7.2). A `GatewayProtocol`/interface would cost little and convert a whole class of latent bugs into static ones.
 
@@ -160,7 +160,7 @@ The strongest dimension, and it isn't close. Forensic-tool execution is wrapped 
 - **systemd transient scope** per execution: `MemoryMax`/`MemoryHigh`, `CPUQuota`, `TasksMax`, `RuntimeMaxSec`, `OOMPolicy=kill`, and **`IPAddressDeny=any`** (no network from a forensic tool) — `executor.py:90-177`.
 - **Landlock + seccomp + runtime-user drop** inside an isolated worker subprocess (`worker.py`), with the worker re-applying restrictions before exec'ing the tool binary.
 - **Environment scrubbing** with a tiny allowlist *and* a secret deny-floor that wins even over the allowlist, and that also strips code-injection vectors (`LD_*`, `PYTHON*`, `node_options`, `gconv_path`, `IFS`) — `runtime_acl.py:40-205`. This is paranoid in exactly the right way.
-- **Output egress control**: a `ResponseGuard` with named secret signatures + path redaction (`response_guard.py:60-90`), deep path sanitization so the agent never sees absolute paths (`sanitize_paths_deep`, `security.py:1256-1354`), a **case write-jail**, and an **authority-path write block** that refuses to let `run_command` clobber proof artifacts.
+- **Output egress control**: a `ResponseGuard` with named secret signatures (`response_guard.py:60-88`) + path redaction in `guard_tool_result` (`response_guard.py:741`), deep path sanitization so the agent never sees absolute paths (`sanitize_paths_deep`, `security.py:1346`), a **case write-jail**, and an **authority-path write block** that refuses to let `run_command` clobber proof artifacts.
 
 No hardcoded secrets were found in source. The gateway-as-sole-policy-boundary with a scrubbed worker environment is a coherent, layered model.
 
@@ -181,7 +181,7 @@ For a DFIR product this is the make-or-break dimension, and it is taken seriousl
 
 ### 7.2 Where I'd push for "forensic-grade"
 
-- **`sift-common` — the `AuditWriter` — has no own-package tests.** It is exercised transitively from gateway/core suites, but the component whose correctness underwrites court-defensibility deserves a dedicated *adversarial* suite: sequence resume across a simulated crash, corrupted sidecar, fsync semantics, clock rollover, concurrent writers. This is the most important single test gap in the repo.
+- **`sift-common` — the `AuditWriter` — has no dedicated tests.** The package's only own test (`test_mcp_schema.py`) covers schema helpers, not the audit writer; `AuditWriter` is exercised only transitively from gateway/core suites. The component whose correctness underwrites court-defensibility deserves a dedicated *adversarial* suite: sequence resume across a simulated crash, corrupted sidecar, fsync semantics, clock rollover, concurrent writers. This is the most important single test gap in the repo.
 - **Don't oversell JSONL tamper-evidence.** The JSONL mirror's integrity is sequence + fsync, not cryptographic; the Postgres WAL is the real authority. The code is honest about this; just make sure any external claims are too.
 
 ---
@@ -190,11 +190,11 @@ For a DFIR product this is the make-or-break dimension, and it is taken seriousl
 
 ### 8.1 Good
 
-`from __future__ import annotations` throughout, modern union syntax, frozen dataclasses for contracts, ruff configured (`E,F,I,UP,B,SIM` with sensible per-file test ignores, `pyproject.toml:72-94`), substantial docstrings, branch coverage configured, and — above all — a **serious test culture** (2,334 tests).
+`from __future__ import annotations` throughout, modern union syntax, frozen dataclasses for contracts, ruff configured (`E,F,I,UP,B,SIM` with sensible per-file test ignores, `pyproject.toml:72-94`), substantial docstrings, branch coverage configured, and — above all — a **serious test culture** (2,581 tests).
 
 ### 8.2 Process gaps (the real weight)
 
-- **No CI.** There is no `.github/workflows`. 2,334 tests and a configured linter that nothing runs on change is the single highest-ROI gap; tests that don't run on every PR rot.
+- **No CI.** There is no `.github/workflows`. 2,581 tests and a configured linter that nothing runs on change is the single highest-ROI gap; tests that don't run on every PR rot.
 - **No static type checking.** No repo-wide `mypy`/`pyright` config (only `opencti-mcp`'s `pyproject` even mentions it). Combined with `gateway: Any`, the type system does little work in a codebase where a wrong attribute is a security bug.
 - **Coverage gate absent.** `pytest-cov` and `[tool.coverage]` are configured but there is no `--cov-fail-under`, so the under-tested packages (§7.3 below) can regress silently.
 
@@ -202,8 +202,8 @@ For a DFIR product this is the make-or-break dimension, and it is taken seriousl
 
 - **God files** (§2.2): `routes.py` (6,203), `opensearch/server.py` (4,477), `opencti/client.py` (3,188), `case_manager.py` (2,321), `supabase_auth.py` (1,780). These resist review and change.
 - **DRY violation on a security regex**: the principal/examiner slug pattern `^[a-z0-9][a-z0-9-]{0,19}$` is copy-pasted across **6 files** (`audit.py`, `identity.py`, `case_manager.py`, `case_io.py`, `approval_auth.py`, `routes.py`). Principal validation must never diverge — this belongs in `sift-common` as a single export.
-- **458 broad `except Exception`** repo-wide. Many are legitimate fail-closed guards (the forensic posture genuinely wants "on any error, block/deny"), but at that volume some certainly mask bugs; they need a sweep to confirm each logs and none silently swallows.
-- **Design history baked into source**: hundreds of opaque ticket codes — `B-MVP-017` (×31), `BATCH-NW4` (×26), `PR03A` (×24), `D27b`, `OSX1`, `K5`, `H1` — live in comments *and* some agent-facing strings. Great traceability for the original author; write-only knowledge for everyone else, and it ages poorly. Move the *rationale* into prose/ADRs; keep the codes in git history.
+- **442 broad `except Exception`** repo-wide. Many are legitimate fail-closed guards (the forensic posture genuinely wants "on any error, block/deny"), but at that volume some certainly mask bugs; they need a sweep to confirm each logs and none silently swallows.
+- **Design history baked into source**: hundreds of opaque ticket codes — `B-MVP-017` (×30), `BATCH-NW4` (×26), `PR03A` (×24), `D27b`, `OSX1`, `K5`, `H1` — live in comments *and* some agent-facing strings. Great traceability for the original author; write-only knowledge for everyone else, and it ages poorly. Move the *rationale* into prose/ADRs; keep the codes in git history.
 - **"Atomic swap" overstated**: `_build_tool_map` claims an atomic three-dict swap, but only `_tool_map` is the explicit reference swap; `_tool_cache`/`_tool_manifest_meta` are reassigned afterward (`server.py:540+`). A concurrent reader can momentarily see a new map with stale metadata. Low severity; wrap the three in a single snapshot object.
 - `E501` disabled while `line-length = 88` is set — minor lint-config drift.
 
@@ -275,17 +275,17 @@ Current and appropriate across the board:
 
 | Issue | Severity | Evidence |
 |-------|----------|----------|
-| No CI enforcing 2,334 tests + ruff | **High** | `.github/workflows` absent |
-| No static typing + `gateway: Any` on the security layer | **High** | 21× in `policy_middleware.py`; no mypy/pyright config |
+| No CI enforcing 2,581 tests + ruff | **High** | `.github/workflows` absent |
+| No static typing + `gateway: Any` on the security layer | **High** | 14× in `policy_middleware.py`; no mypy/pyright config |
 | File→DB authority migration incomplete; DB *overlays* file | **High** | §9 (`mcp_server.py:76-218`, `policy_middleware.py:474-479`) |
-| 3,437-line untested Bash installer | **Med-High** | `install.sh` |
+| 3,507-line untested Bash installer | **Med-High** | `install.sh` |
 | God object `Gateway` (service locator, ~20 fields, untyped) | **Med** | `server.py:134-167` |
 | God files (routes 6.2k, opensearch server 4.5k, …) | **Med** | §2.2 |
 | Under-tested add-ons (opencti 0.03, wintriage 0.05 test:src) | **Med** | §2.1 |
 | `_EXAMINER_RE` duplicated ×6 (security regex) | **Med** | §8.3 |
-| Ticket codes baked into source & runtime strings | **Med** | `B-MVP-017`×31, `BATCH-NW4`×26, `PR03A`×24, … |
-| `sift-common` audit writer: no own-package tests | **Med** (forensic context) | §7.2 |
-| 458 broad `except Exception` (some justified, audit needed) | **Low-Med** | grep |
+| Ticket codes baked into source & runtime strings | **Med** | `B-MVP-017`×30, `BATCH-NW4`×26, `PR03A`×24, … |
+| `sift-common` `AuditWriter`: no dedicated tests (only a schema test) | **Med** (forensic context) | §7.2 |
+| 442 broad `except Exception` (some justified, audit needed) | **Low-Med** | grep |
 | "Atomic swap of 3 dicts" not actually atomic | **Low** | `server.py:540+` |
 | `E501` disabled while line-length is set | **Low** | `pyproject.toml:79` |
 
@@ -311,3 +311,7 @@ The *engineering judgement* on display here is strong: the security model, the c
 ---
 
 *This assessment was produced by reading the cited source directly; every `file:line` reference was confirmed during the review on 2026-06-15.*
+
+---
+
+**Validation addendum (2026-06-16).** An independent pass re-verified the cited code. The deep architecture/security/custody/migration claims (§3, §6, §7, §9) all held against current source. Corrections applied in this revision: `gateway: Any` count 21 → **14** (`policy_middleware.py`); installer 3,437 → **3,507** lines; test functions 2,334 → **2,581** and broad-except 458 → **442** (counts drift; now timestamped); `sift-common` now has one schema test (`test_mcp_schema.py`) but still **no `AuditWriter` test** (§7.2 gap stands); `ResponseGuard`/`sanitize_paths_deep` line refs repointed (`response_guard.py:741`, `security.py:1346`); §2.1/§2.2 LOC tables refreshed. `worker.py` Landlock/seccomp is accurate but partly implemented via `dfir_exec_launcher`. Risk *ratings* were left unchanged pending review (the security-vs-maintainability axis split is an open discussion item).
