@@ -394,8 +394,8 @@ async def list_backends(request: Request) -> JSONResponse:
                     health = {"status": "error"}
                 try:
                     registry.update_health(name, health.get("status", "unknown"), health.get("detail"))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to persist health status for backend %s: %s", name, e)
 
         item = record.public_dict(
             started=started,
@@ -606,7 +606,7 @@ async def create_join_code(request: Request) -> JSONResponse:
             data = json.loads(body)
             expires_hours = data.get("expires_hours", 2)
         except json.JSONDecodeError:
-            pass
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
     if (
         not isinstance(expires_hours, (int, float))
@@ -832,7 +832,8 @@ def _add_api_key_to_config(gateway, token: str, examiner: str) -> None:
             try:
                 with open(config_path) as f:
                     config = yaml.safe_load(f) or {}
-            except (yaml.YAMLError, OSError):
+            except (yaml.YAMLError, OSError) as e:
+                logger.warning("Failed to read gateway config %s: %s", config_path, e)
                 config = {}
         else:
             config = {}
@@ -889,7 +890,8 @@ def _load_samba_config() -> dict | None:
         return None
     try:
         return yaml.safe_load(path.read_text())
-    except Exception:
+    except (yaml.YAMLError, OSError) as e:
+        logger.warning("Failed to read samba config %s: %s", path, e)
         return None
 
 
@@ -906,8 +908,8 @@ def _get_sift_ip() -> str | None:
             ip = doc.get("static_ip")
             if ip:
                 return ip
-        except Exception:
-            pass
+        except (yaml.YAMLError, OSError) as e:
+            logger.warning("Failed to read network config %s: %s", path, e)
     # Fall back to primary interface IP (same as hostname -I)
     import socket
 

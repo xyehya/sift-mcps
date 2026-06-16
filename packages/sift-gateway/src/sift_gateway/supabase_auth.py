@@ -1463,8 +1463,11 @@ class AgentServiceIssuance:
             # Roll back the orphaned Supabase user on app-row failure.
             try:
                 await self._client.admin_revoke_user(auth_user_id, delete=True)
-            except SupabaseAuthError:
-                pass
+            except SupabaseAuthError as rollback_exc:
+                logger.error(
+                    "Failed to roll back orphaned Supabase user %s after principal insert failure: %s",
+                    auth_user_id, rollback_exc,
+                )
             raise
 
         session = await self._client.password_grant(email, temp_password)

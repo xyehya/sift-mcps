@@ -109,7 +109,9 @@ class _BasePortalDbService:
         path = case_dir / filename
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as e:
+            if path.exists():
+                logger.warning("Failed to read %s for case %s: %s", filename, case_id, e)
             return []
         if isinstance(data, list):
             return [row for row in data if isinstance(row, dict)]

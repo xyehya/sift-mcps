@@ -1098,8 +1098,10 @@ class Gateway:
                         elapsed_ms=round(elapsed_ms, 1),
                         extra={"backend": backend_name, "examiner": examiner},
                     )
-                except Exception:
-                    pass
+                except Exception as audit_exc:
+                    logger.warning(
+                        "Gateway audit failed for %s (timeout path): %s", name, audit_exc
+                    )
             raise RuntimeError(f"Tool call {name} timed out after 300s") from exc
 
         # Centralized audit for HTTP backends (stdio backends audit themselves)
@@ -1387,8 +1389,8 @@ class Gateway:
             routes.append(Route("/", _redirect_to_portal, methods=["GET"]))
             routes.append(Route("/portal", _redirect_to_portal, methods=["GET"]))
             routes.append(Mount("/portal", app=dashboard_app))
-        except ImportError:
-            pass
+        except ImportError as exc:
+            logger.info("Portal dashboard not available (optional dependency): %s", exc)
 
         routes.append(Mount("/mcp", app=mcp_asgi_app))
 

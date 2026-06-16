@@ -916,8 +916,8 @@ def cleanup_orphaned_mounts() -> None:
         active = read_active_ingests()
         if any(ing.get("status") == "running" for ing in active):
             return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to read active ingests during cleanup check: %s", exc)
 
     for i in range(8):
         size_path = Path(f"/sys/block/nbd{i}/size")
