@@ -43,7 +43,12 @@ jobs:
             packages/*/pyproject.toml
 
       - name: Install dependencies
-        run: uv sync --locked --extra full --extra dev
+        run: |
+          uv sync --locked \
+            --extra full \
+            --extra opencti \
+            --extra windows-triage \
+            --extra dev
 
       - name: Ruff undefined-name guard
         run: |
@@ -65,10 +70,9 @@ jobs:
       - name: Test
         run: |
           uv run --locked --extra full --extra dev pytest tests
-          uv run --locked --extra full --extra dev pytest packages/forensic-knowledge/tests
-          uv run --locked --extra full --extra dev pytest packages/sift-common/tests
-          uv run --locked --extra full --extra dev pytest packages/sift-core/tests
-          uv run --locked --extra full --extra dev pytest packages/sift-gateway/tests
-          uv run --locked --extra full --extra dev pytest -m "not integration" packages/opensearch-mcp/tests
-          uv run --locked --extra full --extra dev pytest packages/case-dashboard/tests
-          uv run --locked --extra full --extra dev pytest packages/forensic-rag-mcp/tests
+          uv run --locked \
+            --extra full \
+            --extra opencti \
+            --extra windows-triage \
+            --extra dev \
+            python scripts/check_package_coverage.py

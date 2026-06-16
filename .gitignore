@@ -11,6 +11,9 @@ uv.lock
 dist/
 build/
 coverage/
+.coverage
+.coverage-reports/
+.coverage-*.json
 *.log
 .env
 .env.*
