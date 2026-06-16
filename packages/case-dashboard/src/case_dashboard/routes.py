@@ -3882,8 +3882,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; "
-            "script-src 'unsafe-inline'; "
-            "style-src 'unsafe-inline' https://fonts.googleapis.com; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src https://fonts.gstatic.com; "
             "img-src 'self'; "
             "connect-src 'self'"

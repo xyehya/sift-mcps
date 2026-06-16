@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import ssl
 import time
 import urllib.error
 import urllib.request
 
 from opensearch_mcp.paths import sift_dir
+
+_logger = logging.getLogger(__name__)
 
 _cached_config: dict | None = None
 _config_loaded: bool = False
@@ -72,6 +75,7 @@ def call_tool(tool_name: str, arguments: dict, timeout: int = 60) -> dict:
         verify_certs = config.get("verify_certs", True)
         ca_cert = config.get("ca_cert_path")
         if not verify_certs:
+            _logger.warning("TLS certificate verification disabled via gateway config")
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
         elif ca_cert:
@@ -118,6 +122,7 @@ def wait_for_gateway(timeout: int = 60) -> bool:
             if config.get("tls"):
                 ctx = ssl.create_default_context()
                 if not config.get("verify_certs", True):
+                    _logger.warning("TLS certificate verification disabled via gateway config")
                     ctx.check_hostname = False
                     ctx.verify_mode = ssl.CERT_NONE
                 elif config.get("ca_cert_path"):

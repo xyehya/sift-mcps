@@ -60,7 +60,7 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
             if path.startswith("/portal"):
                 response.headers["Content-Security-Policy"] = (
                     "default-src 'self'; "
-                    "script-src 'self' 'unsafe-inline'; "
+                    "script-src 'self'; "
                     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                     "font-src 'self' https://fonts.gstatic.com"
                 )
@@ -1419,11 +1419,15 @@ class Gateway:
             auth_config=auth_config,
         )
 
-        # CORS — restrict origins to the gateway's own URL
+        # CORS — restrict origins to the gateway's own URL.
+        # Never use 0.0.0.0 as an allowed origin (browsers reject it and it
+        # signals an overly-permissive intent); normalise to 127.0.0.1.
         gw_cfg = self.config.get("gateway", {})
         tls_configured = bool(gw_cfg.get("tls", {}).get("certfile"))
         scheme = "https" if tls_configured else "http"
         gw_host = gw_cfg.get("host", "0.0.0.0")
+        if gw_host == "0.0.0.0":
+            gw_host = "127.0.0.1"
         gw_port = gw_cfg.get("port", 4508)
         gateway_origin = f"{scheme}://{gw_host}:{gw_port}"
         app.add_middleware(
