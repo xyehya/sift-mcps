@@ -1,5 +1,9 @@
 # Axis B — Build Plan: complete the DFIR data plane move to DB authority
 
+> Covers: packages/sift-gateway/src/sift_gateway/active_case.py, packages/sift-gateway/src/sift_gateway/mcp_server.py, packages/sift-gateway/src/sift_gateway/evidence_gate.py, packages/sift-gateway/src/sift_gateway/policy_middleware.py, packages/case-dashboard/src/case_dashboard/routes.py, packages/sift-core/src/sift_core/case_*.py, packages/sift-core/src/sift_core/reporting.py, packages/sift-core/src/sift_core/investigation_store.py, packages/sift-core/src/sift_core/agent_tools.py, packages/sift-common/src/sift_common/audit.py, supabase/migrations/**, scripts/**
+> Class: living-plan
+> Last validated: dd54eb4 (2026-06-16)
+
 **Status**: build-ready unit breakdown. Decisions locked in `OPTIMIZATION_TRACK.md` §B
 (B-1…B-4, 2026-06-16). This doc turns them into coding-session briefs.
 **Security**: integrity-critical. Every unit that touches authority/orientation gets

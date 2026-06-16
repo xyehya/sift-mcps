@@ -17,6 +17,9 @@ Start from Linear for active work:
 - `README.md`: stable product and architecture overview for this repo.
 - `docs/new-docs/DEVELOPER_ENTRYPOINT.md`: package, flow, and code-routing map
   when a task needs developer onboarding context.
+- `docs/new-docs/OPTIMIZATION_TRACK.md` and `docs/new-docs/AXIS_*_BUILD_PLAN.md`:
+  optimization reference packs only when linked from Linear. They are not the
+  active queue.
 
 Repo `docs/migration/` is historical proof and migration context, not the active
 queue. Use it only for targeted background when an issue needs a prior proof,
@@ -25,6 +28,11 @@ backlog ID, or migration-era decision.
 Heavy temporary plans and research specs are intentionally outside the default
 repo context. If a Linear issue links a local archived plan or spec, read only
 the targeted sections needed for that issue.
+
+When the codebase-memory MCP graph is available, use it to reduce context before
+broad file reads: confirm index freshness, then prefer `search_graph`,
+`trace_path`, and `get_code_snippet` for targeted routing. Verify graph findings
+against current source and tests before editing.
 
 Do not create extra migration runbooks. Working notes, blockers, branch names,
 forks, decisions-needed, and handoffs belong in Linear issue comments.

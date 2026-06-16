@@ -2,7 +2,7 @@
 
 > Covers: .github/workflows/, pyproject.toml, packages/sift-gateway/src/sift_gateway/policy_middleware.py, packages/sift-gateway/src/sift_gateway/server.py, scripts/check_newdocs_refs.py, docs/new-docs/
 > Class: living-plan
-> Last validated: (pending first build) (2026-06-16)
+> Last validated: dd54eb4 (2026-06-16)
 
 **Status**: build-ready. Defaults locked in `OPTIMIZATION_TRACK.md` §A (A2–A6, 2026-06-16).
 **Why first**: CI + typing catch regressions during the Axis B authority rewrite. No runtime

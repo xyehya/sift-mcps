@@ -1,7 +1,11 @@
 # Optimization Track — Plan Outlines (DRAFT)
 
-**Status**: DRAFT plan outlines for Q&A expansion. Outlines + reference packs + proposed
-approaches only — not yet scoped into executable build units.
+> Covers: docs/new-docs/OPTIMIZATION_TRACK.md, docs/new-docs/AXIS_*_BUILD_PLAN.md, docs/new-docs/CODEBASE_ASSESSMENT.md, docs/new-docs/DOCS_MAINTENANCE.md
+> Class: living-plan
+> Last validated: dd54eb4 (2026-06-16)
+
+**Status**: axis menu and decision record. Axes A and B are build-ready through their
+build plans; C/D/F are outlines with reference packs; E is deferred pending measured need.
 **Basis**: validated findings in `CODEBASE_ASSESSMENT.md` (2026-06-16 pass) + the DFIR
 data-plane authority map (grounded in `supabase/migrations/**`, see §B).
 **Mode (locked by operator)**: each axis gets a plan outline carrying its own *reference
@@ -16,7 +20,7 @@ candidate approach.
 
 | Field | Value |
 |-------|-------|
-| Chosen axis/axes | **B locked** (B-1…B-4 decided, below); A/C/D/F outlined; E deferred |
+| Chosen axis/axes | **A and B locked/build-ready**; C/D/F outlined; E deferred |
 | Recommended sequence | A → B → C, D opportunistic, **F after a discovery pass**, E deferred |
 | Out of scope | _TBD_ |
 | Track definition of done | _TBD_ |
@@ -256,7 +260,7 @@ no DSN ⇒ refuse to serve DFIR tools. No `SIFT_FILE_MODE` flag.)***
 - B-1 decision recorded; CASE.yaml either DB-authoritative-with-export or documented
   mitigated exception.
 - B-2: orientation tools DB-native with a DSN; `_overlay_db_*` deleted; behavior proven on VM.
-- B-3: explicit file-mode flag; regression test green proving no file path with a DSN.
+- B-3: no-DSN deployment refuses DFIR tools; regression test green proving no file path with a DSN.
 - B-4: legacy `~/.sift/active_case` + file `resolve_evidence_ref` removed from DB-mode.
 - Live-VM proof recorded (separate manual gate per A1).
 

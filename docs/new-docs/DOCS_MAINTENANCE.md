@@ -1,5 +1,9 @@
 # new-docs Maintenance Policy
 
+> Covers: docs/new-docs/**
+> Class: living-plan
+> Last validated: dd54eb4 (2026-06-16)
+
 **Purpose**: keep `docs/new-docs/` a *live* reference so changes don't drift into a stale map,
 and nobody has to re-derive the codebase from scratch in a future session. Efficiency rule:
 **tie doc updates to changes, at the commit/PR gate — not per keystroke, not "someday."**
@@ -70,8 +74,8 @@ warning surfaced on the PR.
 
 ## 6. Bootstrapping (do once, in Axis A)
 
-- Add the §2 header to each live-reference + living-plan doc (`OPTIMIZATION_TRACK.md` and
-  `AXIS_B_BUILD_PLAN.md` already carry decision dates; add explicit `Covers:` lines).
+- Add the §2 header to each live-reference doc and any new living-plan doc. Existing
+  optimization living-plan docs already carry headers; keep them current as units land.
 - Build `scripts/check_newdocs_refs.py` and wire it into the CI workflow.
 - One-time pass: skim the 6 live-reference docs for the same drift classes already fixed in
   `CODEBASE_ASSESSMENT.md` (counts, retired-subsystem mentions, moved symbols) and stamp
