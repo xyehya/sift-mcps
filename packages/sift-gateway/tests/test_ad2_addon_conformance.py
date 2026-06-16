@@ -138,6 +138,8 @@ class _FakeBackend:
 
 def _gateway_with_backends(*manifests: dict) -> Gateway:
     gateway = Gateway({"backends": {}, **_execute_security()})
+    # BU3 (XYE-21): tool-serving gateways always carry a control-plane DSN.
+    gateway.control_plane_dsn = "postgresql://service@localhost/sift"
     for manifest in manifests:
         gateway.backends[manifest["name"]] = _FakeBackend(manifest)
     asyncio.run(gateway._build_tool_map())
@@ -146,6 +148,7 @@ def _gateway_with_backends(*manifests: dict) -> Gateway:
 
 async def _async_gateway_with_backends(*manifests: dict) -> Gateway:
     gateway = Gateway({"backends": {}, **_execute_security()})
+    gateway.control_plane_dsn = "postgresql://service@localhost/sift"
     for manifest in manifests:
         gateway.backends[manifest["name"]] = _FakeBackend(manifest)
     await gateway._build_tool_map()
@@ -210,7 +213,7 @@ async def test_prohibited_operation_via_tool_name_denied_before_dispatch():
     with patch(
         "sift_gateway.policy_middleware.current_mcp_identity", return_value=identity
     ), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate", return_value=_OPEN_GATE
+        "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=_OPEN_GATE
     ):
         result = await mcp.call_tool("cti_seal_evidence", {})
 
@@ -245,7 +248,7 @@ async def test_partial_scope_grant_reports_only_missing_scope():
     with patch(
         "sift_gateway.policy_middleware.current_mcp_identity", return_value=identity
     ), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate", return_value=_OPEN_GATE
+        "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=_OPEN_GATE
     ):
         result = await mcp.call_tool("cti_search", {})
 

@@ -673,7 +673,13 @@ def resolve_investigation_store() -> InvestigationAuthorityStore | None:
         return None
     dsn = control_plane_dsn()
     if not dsn:
-        return None
+        # BU3 (XYE-21): DB authority is active but no control-plane DSN is
+        # configured. This is a misconfiguration, not a file-mode deployment;
+        # fail closed rather than silently downgrading to the tamperable file
+        # mirror. (The gateway also refuses to start in this state.)
+        raise InvestigationStoreError(
+            "DB authority is active but no control-plane DSN is configured"
+        )
     return PostgresInvestigationStore(dsn)
 
 
@@ -759,12 +765,13 @@ def resolve_case_metadata() -> dict[str, Any] | None:
     BU1: in DB-active mode this is the *only* source of case metadata for the
     orientation/status/report readers; they must not read CASE.yaml. Returns
     ``None`` in legacy/file mode so those readers keep their file path. When DB
-    authority is active and a control-plane DSN is configured, any DB failure (or
-    a missing case row, or a missing active-case context) raises so callers fail
-    closed instead of serving stale/tampered file values.
+    authority is active, any DB failure (or a missing case row, or a missing
+    active-case context) raises so callers fail closed instead of serving
+    stale/tampered file values.
 
-    The no-DSN-but-DB-active case still returns ``None`` here (file fallback);
-    refusing that misconfiguration outright is BU3's job.
+    BU3 (XYE-21): a DB-active call with no control-plane DSN is a
+    misconfiguration and fails closed here too — there is no implicit file-mode
+    fallback. (The gateway also refuses to start without a DSN.)
     """
     from sift_core.active_case_context import current_active_case, db_authority_active
 
@@ -772,7 +779,9 @@ def resolve_case_metadata() -> dict[str, Any] | None:
         return None
     dsn = control_plane_dsn()
     if not dsn:
-        return None
+        raise InvestigationStoreError(
+            "DB authority is active but no control-plane DSN is configured"
+        )
     ctx = current_active_case()
     case_id = ctx.case_id if ctx is not None else None
     if not case_id:

@@ -71,12 +71,14 @@ class TestResolveCaseMetadata:
         monkeypatch.delenv("SIFT_DB_ACTIVE", raising=False)
         assert resolve_case_metadata() is None
 
-    def test_db_active_without_dsn_returns_none(self, monkeypatch):
-        # No control-plane DSN configured: refusing this misconfiguration is BU3.
+    def test_db_active_without_dsn_fails_closed(self, monkeypatch):
+        # BU3 (XYE-21): DB-active with no control-plane DSN is a misconfiguration
+        # and fails closed — it no longer silently downgrades to the file mirror.
         monkeypatch.setattr(investigation_store, "control_plane_dsn", lambda: None)
         ctx = AuthorityContext(case_id="uuid", case_key="k", db_active=True)
         with use_active_case_context(ctx):
-            assert resolve_case_metadata() is None
+            with pytest.raises(InvestigationStoreError):
+                resolve_case_metadata()
 
     def test_db_active_without_case_in_context_fails_closed(self, monkeypatch):
         monkeypatch.setattr(

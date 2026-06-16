@@ -107,6 +107,9 @@ class _EvidenceService:
 class _Gateway:
     def __init__(self, case_dir: Path):
         self.active_case_service = _ActiveCaseService(_case(case_dir))
+        # BU3 (XYE-21): tool-serving gateways always carry a control-plane DSN
+        # (the ControlPlaneRequiredMiddleware backstop refuses calls without one).
+        self.control_plane_dsn = "postgresql://service@localhost/sift"
         self.job_service = _JobService()
         self.evidence_service = _EvidenceService(case_dir)
         self._audit = None
@@ -237,7 +240,7 @@ def test_job_status_internal_error_is_not_leaked(tmp_path):
 async def test_gateway_mcp_registers_local_binding_tools(tmp_path):
     gateway = _Gateway(tmp_path / "case")
     with patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
         mcp = create_gateway_mcp_server(gateway, api_keys={})
@@ -258,7 +261,7 @@ async def test_gateway_mcp_run_command_job_invokes_gateway_bound_handler(tmp_pat
     case_dir.mkdir()
     gateway = _Gateway(case_dir)
     with patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
         mcp = create_gateway_mcp_server(gateway, api_keys={})
@@ -534,7 +537,7 @@ async def test_opensearch_ingest_is_not_a_gateway_local_tool(tmp_path):
     case_dir.mkdir()
     gateway = _Gateway(case_dir)
     with patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
         mcp = create_gateway_mcp_server(gateway, api_keys={})

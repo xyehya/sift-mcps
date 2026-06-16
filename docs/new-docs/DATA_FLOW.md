@@ -74,8 +74,10 @@ Policy Middleware Stack (executed in declaration order)
     │       └── Reject if client supplied mismatching case value
     │
     ├── [6] EvidenceGateMiddleware
-    │       ├── check_evidence_gate_db(case.case_id, dsn)  [DB mode]
-    │       │   OR check_evidence_gate(case_dir)            [file mode]
+    │       ├── check_evidence_gate_db(case.case_id, dsn)  [DB authority only]
+    │       │   (BU3/XYE-21: file-backed gate removed; no-DSN gateway refuses
+    │       │    to serve DFIR tools, so this is the only gate path)
+    │       │   No active case bound → pass (no-case denial is CaseContext's job)
     │       └── If gate["blocked"]: return block_response, audit, stop
     │
     ├── [7] ResponseGuardMiddleware
@@ -320,13 +322,12 @@ EvidenceGateMiddleware intercepts every tool call
     │           → maps seal_status {sealed→OK, unsealed→UNSEALED, violated→LEDGER_ERROR}
     │           → Returns {blocked: status != OK, status, issues, manifest_version}
     │
-    └── File mode (no dsn):
-            check_evidence_gate(case_dir)
-                → chain_status(case_dir)
-                    → load_manifest()  (NO file rehashing — stat-check only)
-                    → verify manifest_hash + ledger hash-chain (structural)
-                    → diff_manifest(): missing / modified (byte size) / unregistered
-                    → Return {status: ChainStatus, issues, manifest_version, ok_count}
+    └── No DSN:
+            BU3/XYE-21: there is no file-backed evidence gate. A gateway with no
+            control-plane DSN refuses to serve DFIR tools (serve-entry refusal +
+            ControlPlaneRequiredMiddleware backstop), so check_evidence_gate_db is
+            the only gate path. The legacy file gate (check_evidence_gate /
+            chain_status) was removed.
     │
     ├── gate["blocked"] == False (status == OK) → proceed
     └── gate["blocked"] == True (status != OK):
@@ -436,8 +437,12 @@ case_info or evidence_info called
 GatewayLocalTool.run() → call_core_tool("case_info", ...)
     → _case_info() → case_status_data()
         → DB mode: resolve_case_metadata() (app.cases) + investigation store
-          counters; CASE.yaml NOT read; raises (fail closed) on DB error
-        → file mode: CASE.yaml + *.json mirror (unchanged)
+          counters; CASE.yaml NOT read; raises (fail closed) on DB error.
+          BU3/XYE-21: a DB-active call with no DSN now fails closed too (no
+          file downgrade), so for gateway DFIR calls (DSN always present) the
+          file branch below is unreachable.
+        → file branch (CASE.yaml + *.json mirror): legacy CLI only; not reached
+          by gateway DFIR tool calls.
     │
     ▼ (still in GatewayLocalTool.run(), DB mode only)
 if tool_name in _DB_ORIENTED_TOOLS and gateway.control_plane_dsn:

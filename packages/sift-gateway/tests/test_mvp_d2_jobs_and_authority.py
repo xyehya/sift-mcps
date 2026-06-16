@@ -341,6 +341,8 @@ class _FakeBackend:
 
 def _gateway_with_addon(manifest):
     gateway = Gateway({"backends": {}, **_execute_security()})
+    # BU3 (XYE-21): tool-serving gateways always carry a control-plane DSN.
+    gateway.control_plane_dsn = "postgresql://service@localhost/sift"
     gateway.backends[manifest["name"]] = _FakeBackend(manifest)
     asyncio.run(gateway._build_tool_map())
     return gateway
@@ -348,6 +350,7 @@ def _gateway_with_addon(manifest):
 
 async def _async_gateway_with_addon(manifest):
     gateway = Gateway({"backends": {}, **_execute_security()})
+    gateway.control_plane_dsn = "postgresql://service@localhost/sift"
     gateway.backends[manifest["name"]] = _FakeBackend(manifest)
     await gateway._build_tool_map()
     return gateway
@@ -395,7 +398,7 @@ async def test_missing_required_scope_denied_before_dispatch():
     identity = _identity_with_scopes("namespace:cti")  # grants tool, lacks cti:read
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=identity), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 1},
     ):
         result = await mcp.call_tool("cti_search", {})
@@ -416,7 +419,7 @@ async def test_required_scope_present_allows_dispatch():
     identity = _identity_with_scopes("namespace:cti", "cti:read")
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=identity), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 1},
     ):
         result = await mcp.call_tool("cti_search", {})
@@ -431,7 +434,7 @@ async def test_mcp_star_scope_satisfies_required_scope():
     identity = _identity_with_scopes("mcp:*")
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=identity), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 1},
     ):
         result = await mcp.call_tool("cti_search", {})
@@ -448,7 +451,7 @@ async def test_prohibited_operation_argument_denied_before_dispatch():
     identity = _identity_with_scopes("mcp:*")
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=identity), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 1},
     ):
         result = await mcp.call_tool("cti_search", {"operation": "seal_evidence"})

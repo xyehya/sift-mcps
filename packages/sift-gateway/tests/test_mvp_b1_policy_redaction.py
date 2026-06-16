@@ -268,6 +268,31 @@ def _fake_gateway():
     return gateway
 
 
+# BU3 (XYE-21): the evidence gate governs a *bound* active case via DB authority.
+# A real (non-mock) service is required so CaseContextMiddleware binds the case.
+class _BoundCaseService:
+    def __init__(self, case):
+        self._case = case
+
+    def require_active_case_for_principal(self, principal):
+        return self._case
+
+
+def _bound_case(tmp_path):
+    from sift_gateway.active_case import ActiveCase
+
+    return ActiveCase(
+        case_id="11111111-1111-1111-1111-111111111111",
+        case_key="db-case",
+        title="DB Case",
+        description=None,
+        status="active",
+        artifact_path=str(tmp_path),
+        metadata={},
+        membership_role="agent",
+    )
+
+
 async def test_mcp_path_redacts_absolute_case_path(monkeypatch, tmp_path):
     case = str(tmp_path)
     monkeypatch.setenv("SIFT_CASE_DIR", case)
@@ -285,7 +310,7 @@ async def test_mcp_path_redacts_absolute_case_path(monkeypatch, tmp_path):
         )
 
     with patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value=_gate(ChainStatus.OK),
     ), patch(
         "sift_gateway.policy_middleware.current_mcp_identity",
@@ -306,9 +331,17 @@ async def test_mcp_path_redacts_absolute_case_path(monkeypatch, tmp_path):
 
 
 async def test_mcp_evidence_gate_fail_closed_and_audited(monkeypatch, tmp_path):
-    """No active case (empty case dir) => fail-closed block, tool never runs, audited."""
+    """Bound active case whose chain is UNSEALED => fail-closed block, tool never
+    runs, audited.
+
+    BU3 (XYE-21): the evidence gate is DB-authority only and governs a bound
+    case; "no active case" denial is CaseContextMiddleware's job. Here a case is
+    bound and the DB gate reports UNSEALED, so the gate must fail closed.
+    """
     monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
     gateway = _fake_gateway()
+    gateway.control_plane_dsn = "postgresql://service@localhost/sift"
+    gateway.active_case_service = _BoundCaseService(_bound_case(tmp_path))
     ran = False
     mcp = FastMCP("parent", middleware=gateway_policy_middlewares(gateway))
 
@@ -318,8 +351,10 @@ async def test_mcp_evidence_gate_fail_closed_and_audited(monkeypatch, tmp_path):
         ran = True
         return "ran"
 
-    # Real check_evidence_gate with no case dir must block (fail-closed).
     with patch(
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
+        return_value=_gate(ChainStatus.UNSEALED),
+    ), patch(
         "sift_gateway.policy_middleware.current_mcp_identity",
         return_value=None,
     ):
@@ -342,7 +377,7 @@ async def test_mcp_path_still_redacts_secrets(monkeypatch, tmp_path):
         return ToolResult(structured_content={"token": secret})
 
     with patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value=_gate(ChainStatus.OK),
     ), patch(
         "sift_gateway.policy_middleware.current_mcp_identity",

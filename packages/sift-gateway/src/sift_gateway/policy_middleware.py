@@ -34,7 +34,6 @@ from sift_gateway.audit_helpers import (
 )
 from sift_gateway.evidence_gate import (
     build_block_response,
-    check_evidence_gate,
     check_evidence_gate_db,
 )
 from sift_gateway.mcp_endpoint import (
@@ -494,6 +493,56 @@ class AddonAuthorityMiddleware(Middleware):
         )
 
 
+class ControlPlaneRequiredMiddleware(Middleware):
+    """Refuse every tool call when no control-plane DSN is configured (BU3).
+
+    BU3 (XYE-21) removed the implicit "no DSN ⇒ file authority" downgrade. A
+    gateway with no control-plane DSN must not serve DFIR tools at all. The serve
+    entrypoint (``__main__``) already refuses to start in that state; this is the
+    in-process backstop that guarantees an embedded or test-built app (which can
+    construct a gateway without going through ``__main__``) can never reach the
+    file-authority readers via a tool call. ``tools/list`` is intentionally left
+    untouched so the surface stays observable.
+    """
+
+    def __init__(self, gateway: GatewayProtocol) -> None:
+        self.gateway = gateway
+
+    async def on_call_tool(self, context, call_next):
+        if getattr(self.gateway, "control_plane_dsn", None):
+            return await call_next(context)
+        name = _tool_name(context)
+        payload = {
+            "blocked": True,
+            "reason": "control_plane_unavailable",
+            "tool": name,
+            "detail": (
+                "This gateway has no control-plane (Postgres) authority configured, "
+                "so DFIR tools are disabled. The control plane is required and there "
+                "is no file-mode fallback."
+            ),
+            "remediation": (
+                "Configure the control-plane DSN (SIFT_CONTROL_PLANE_DSN / "
+                "control-plane.env) and restart the gateway."
+            ),
+        }
+        try:
+            await asyncio.to_thread(
+                self.gateway._audit.log,
+                tool=name,
+                params={},
+                result_summary="blocked: control_plane_unavailable",
+                source="gateway_control_plane_required",
+            )
+        except Exception as exc:
+            logger.warning("control_plane_required: audit write failed: %s", exc)
+        return ToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload, indent=2))],
+            structured_content=payload,
+            is_error=True,
+        )
+
+
 class EvidenceGateMiddleware(Middleware):
     """Block all MCP tool calls when the active evidence chain is not OK."""
 
@@ -503,14 +552,18 @@ class EvidenceGateMiddleware(Middleware):
     async def on_call_tool(self, context, call_next):
         name = _tool_name(context)
         case = _current_gateway_active_case()
-        if case is None and _active_case_service(self.gateway) is not None:
+        # BU3 (XYE-21): the evidence gate is DB-authority only. There is no
+        # file-backed gate: a gateway with no control-plane DSN refuses to serve
+        # DFIR tools (serve-entry refusal + ControlPlaneRequiredMiddleware
+        # backstop), so by the time a tool reaches this gate the control plane is
+        # present. With no active case bound, case-lifecycle / no-case tools pass
+        # through (there is nothing to seal yet); a bound case is gated against
+        # app.evidence_gate_status.
+        if case is None:
             return await call_next(context)
-        case_dir_str = case.artifact_path if case is not None else os.environ.get("SIFT_CASE_DIR", "")
-        dsn = getattr(self.gateway, "control_plane_dsn", None)
-        if case is not None and dsn:
-            gate = check_evidence_gate_db(case.case_id, dsn)
-        else:
-            gate = check_evidence_gate(case_dir_str)
+        gate = check_evidence_gate_db(
+            case.case_id, getattr(self.gateway, "control_plane_dsn", None)
+        )
         if not gate["blocked"]:
             return await call_next(context)
 
@@ -550,11 +603,8 @@ class EvidenceGateMiddleware(Middleware):
                 type="text",
                 text=json.dumps(build_block_response(name, gate), indent=2),
             ),
+            _case_text(case, name),
         ]
-        if case is not None:
-            contents.append(_case_text(case, name))
-        else:
-            contents = _append_case_context(contents, case_dir_str or "", name)
         return ToolResult(
             content=contents,
             structured_content=build_block_response(name, gate),
@@ -1199,7 +1249,10 @@ def gateway_policy_middlewares(
 ) -> list[Middleware]:
     """Return middleware in FastMCP execution order.
 
-    ToolAuthorizationMiddleware (B-10) runs first so denied tools are rejected
+    ControlPlaneRequiredMiddleware (BU3/XYE-21) runs outermost so a no-DSN
+    gateway refuses every DFIR tool call before any other middleware or the
+    file-authority readers can run.
+    ToolAuthorizationMiddleware (B-10) runs next so denied tools are rejected
     before the evidence gate, audit envelope, and tool dispatch, and filtered
     out of list_tools. ``auth_enabled`` makes it fail closed when a configured
     verifier yields no SIFT identity (B6). AddonAuthorityMiddleware (H1/BATCH-D2)
@@ -1207,6 +1260,10 @@ def gateway_policy_middlewares(
     operations are denied before the evidence gate, audit envelope, and dispatch.
     """
     return [
+        # BU3 (XYE-21): outermost backstop — refuse every tool call when no
+        # control-plane DSN is configured, so no DFIR tool can reach the
+        # file-authority readers in a no-DSN (mis)configuration.
+        ControlPlaneRequiredMiddleware(gateway),
         ToolAuthorizationMiddleware(gateway, auth_enabled=auth_enabled),
         AddonAuthorityMiddleware(gateway, auth_enabled=auth_enabled),
         CaseContextMiddleware(gateway),

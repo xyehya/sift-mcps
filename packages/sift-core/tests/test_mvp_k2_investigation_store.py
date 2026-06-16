@@ -440,6 +440,21 @@ def db_active_manager(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cm.CaseManager, "_investigation_store", lambda self: store
     )
+    # BU3 (XYE-21): DB-active mode now requires a control-plane DSN; the
+    # DB-authoritative case-metadata reader (``_refuse_closed_case_db``) fails
+    # closed without one. Provide a fake DSN + metadata store so this fixture is
+    # a coherent DB-active setup rather than the removed db-active/no-DSN hybrid.
+    import types as _types
+    import sift_core.investigation_store as _inv
+
+    monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://fake")
+    monkeypatch.setattr(
+        _inv,
+        "PostgresCaseStore",
+        lambda dsn: _types.SimpleNamespace(
+            get_case_metadata=lambda case_id: {"status": "open"}
+        ),
+    )
 
     ctx = AuthorityContext(
         case_id=CASE,

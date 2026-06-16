@@ -186,10 +186,8 @@ async def test_mcp_evidence_gate_prefers_db_for_active_case(monkeypatch, tmp_pat
         }
 
     monkeypatch.setattr("sift_gateway.policy_middleware.check_evidence_gate_db", fake_db_gate)
-    monkeypatch.setattr(
-        "sift_gateway.policy_middleware.check_evidence_gate",
-        lambda _case_dir: pytest.fail("file evidence gate should not be used"),
-    )
+    # BU3 (XYE-21): the file-backed evidence gate was removed entirely; the gate
+    # is DB-authority only. There is no file gate left to assert against.
 
     class _Gateway:
         control_plane_dsn = _DSN

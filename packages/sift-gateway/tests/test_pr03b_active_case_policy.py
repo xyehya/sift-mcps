@@ -55,6 +55,10 @@ class _Service:
 class _Gateway:
     def __init__(self, case, safe_args, *, local_tools=None):
         self.active_case_service = _Service(case)
+        # BU3 (XYE-21): a tool-serving gateway always has a control-plane DSN
+        # (the serve entrypoint refuses to start without one), so the
+        # ControlPlaneRequiredMiddleware backstop is transparent here.
+        self.control_plane_dsn = "postgresql://service@localhost/sift"
         self._audit = MagicMock()
         self._audit.log = MagicMock(return_value="aid-1")
         self._tool_map = {"addon_needs_case": "addon", "addon_implicit": "addon",
@@ -89,7 +93,7 @@ async def test_proxied_case_tool_receives_db_case_id(tmp_path):
     parent.mount(create_proxy(child), namespace="addon")
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=_identity()), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
         result = await parent.call_tool("addon_needs_case", {})
@@ -138,7 +142,7 @@ async def test_gateway_local_case_tool_without_safe_case_arg_is_not_proxy_denied
         return {"status": "ok"}
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=_identity()), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
         result = await parent.call_tool("local_case_tool", {})
@@ -214,7 +218,7 @@ async def test_os2_db_case_id_injected_for_manifest_declared_opensearch_tool(tmp
     parent.mount(create_proxy(child), namespace="addon")
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=_identity()), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
         result = await parent.call_tool("addon_search", {"query": "event.code:4624"})
@@ -269,7 +273,7 @@ async def test_os2_manifest_empty_safe_args_passes_through_without_denial(tmp_pa
     parent.mount(create_proxy(child), namespace="addon")
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=_identity()), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
         result = await parent.call_tool("addon_status", {})
@@ -320,7 +324,7 @@ async def test_os2_matching_case_id_not_double_denied(tmp_path):
     parent.mount(create_proxy(child), namespace="addon")
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=_identity()), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
         # Supply the CORRECT case_id — should be accepted.
@@ -360,7 +364,7 @@ async def test_db_case_dir_injected_for_filesystem_tool(tmp_path):
     parent.mount(create_proxy(child), namespace="addon")
 
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=_identity()), patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 1},
     ):
         result = await parent.call_tool("addon_ingest", {"path": "evidence/x.e01"})

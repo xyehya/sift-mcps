@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from sift_gateway.identity import resolve_identity, Identity
 from sift_gateway.backends import load_and_validate_manifest, create_backend
 from sift_gateway.server import Gateway
-from sift_gateway.evidence_gate import check_evidence_gate, build_block_response
+from sift_gateway.evidence_gate import build_block_response
 from sift_gateway.mcp_endpoint import log_rate_limit_violation, _LAST_429_AUDIT
 from sift_core.case_manager import set_reference_backend_provider
 
@@ -557,6 +557,32 @@ def _gate(status):
     }
 
 
+# BU3 (XYE-21): the evidence gate is DB-authority only and governs a *bound*
+# active case (no-case denial is CaseContextMiddleware's job). A real (non-mock)
+# active-case service is required so the gate path engages for these tests.
+class _BoundCaseService:
+    def __init__(self, case):
+        self._case = case
+
+    def require_active_case_for_principal(self, principal):
+        return self._case
+
+
+def _bound_case():
+    from sift_gateway.active_case import ActiveCase
+
+    return ActiveCase(
+        case_id="11111111-1111-1111-1111-111111111111",
+        case_key="db-case",
+        title="DB Case",
+        description=None,
+        status="active",
+        artifact_path="/tmp/sift-phase4-case",
+        metadata={},
+        membership_role="agent",
+    )
+
+
 def _gate_test_gateway():
     gw = MagicMock()
     gw._tool_map = {"record_finding": "sift-core"}
@@ -565,6 +591,9 @@ def _gate_test_gateway():
     gw.get_tools_list = AsyncMock(return_value=[])
     gw._audit = MagicMock()
     gw._audit.log = MagicMock(return_value="aid-1")
+    # BU3: tool-serving gateway carries a control-plane DSN and binds a case.
+    gw.control_plane_dsn = "postgresql://service@localhost/sift"
+    gw.active_case_service = _BoundCaseService(_bound_case())
     return gw
 
 
@@ -579,7 +608,7 @@ async def _drive_call_tool(gateway, tool_name, gate_status):
         return ToolResult(content=result)
 
     with (
-        patch("sift_gateway.policy_middleware.check_evidence_gate", return_value=_gate(gate_status)),
+        patch("sift_gateway.policy_middleware.check_evidence_gate_db", return_value=_gate(gate_status)),
         patch("sift_gateway.policy_middleware.is_override_active", return_value=False),
     ):
         result = await mcp.call_tool(tool_name, {})

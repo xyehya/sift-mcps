@@ -101,6 +101,30 @@ def main():
         )
         sys.exit(1)
 
+    # BU3 (XYE-21): the gateway is the only policy boundary for DFIR tools and
+    # Postgres is the authoritative control plane. There is no implicit file-mode
+    # fallback: a gateway with no control-plane DSN must refuse to serve DFIR
+    # tools rather than silently degrade to tamperable file authority. Refuse to
+    # start so the misconfiguration is operator-visible (systemd unit fails) instead
+    # of coming up "healthy" while serving core-only file mode.
+    from sift_gateway.token_registry import registry_config
+
+    dsn, _ = registry_config(config)
+    if not dsn:
+        logger.error(
+            "No control-plane DSN configured; refusing to serve DFIR tools "
+            "(set %s / control-plane.env)",
+            "SIFT_CONTROL_PLANE_DSN",
+        )
+        print(
+            "ERROR: No control-plane DSN configured. The gateway requires Postgres "
+            "control-plane authority to serve DFIR tools and has no file-mode "
+            "fallback. Configure SIFT_CONTROL_PLANE_DSN (control-plane.env) and "
+            "restart. Refusing to start.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     gateway = Gateway(config)
     app = gateway.create_app()
     uvicorn.run(

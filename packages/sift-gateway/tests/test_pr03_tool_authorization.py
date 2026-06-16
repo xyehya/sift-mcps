@@ -176,7 +176,7 @@ async def test_allowed_call_proceeds_through_full_policy_stack(monkeypatch, tmp_
 
     ident = _identity({"mcp:*"})
     with patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=ident), \
-         patch("sift_gateway.policy_middleware.check_evidence_gate",
+         patch("sift_gateway.policy_middleware.check_evidence_gate_db",
                return_value={"blocked": False, "status": ChainStatus.OK, "issues": [],
                              "manifest_version": 1}):
         result = await mcp.call_tool("record_finding", {})

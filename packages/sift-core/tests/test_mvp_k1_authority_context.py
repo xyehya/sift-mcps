@@ -78,6 +78,20 @@ def test_db_active_context_wins_over_pointer_tampering(monkeypatch, tmp_path):
     pointer = tmp_path / "active_case"
     pointer.write_text(str(tampered.resolve()))
     monkeypatch.setattr(case_manager_mod, "_ACTIVE_CASE_FILE", pointer)
+    # BU3 (XYE-21): DB-active mode requires a control-plane DSN; the DB-authority
+    # case-metadata reader fails closed without one. Supply a fake DSN + store so
+    # this stays a coherent DB-active setup.
+    import types as _types
+    import sift_core.investigation_store as _inv
+
+    monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://fake")
+    monkeypatch.setattr(
+        _inv,
+        "PostgresCaseStore",
+        lambda dsn: _types.SimpleNamespace(
+            get_case_metadata=lambda case_id: {"status": "open"}
+        ),
+    )
 
     ctx = AuthorityContext(
         case_id="11111111-1111-1111-1111-111111111111",

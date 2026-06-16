@@ -48,6 +48,39 @@ def _fake_gateway():
     return gateway
 
 
+# BU3 (XYE-21): the evidence gate is DB-authority only and governs a *bound*
+# active case (no-case denial is CaseContextMiddleware's job, which runs first).
+# A real (non-mock) active-case service is needed so the gate path engages.
+class _BoundCaseService:
+    def __init__(self, case):
+        self._case = case
+
+    def require_active_case_for_principal(self, principal):
+        return self._case
+
+
+def _bound_case(tmp_path):
+    from sift_gateway.active_case import ActiveCase
+
+    return ActiveCase(
+        case_id="11111111-1111-1111-1111-111111111111",
+        case_key="db-case",
+        title="DB Case",
+        description=None,
+        status="active",
+        artifact_path=str(tmp_path),
+        metadata={},
+        membership_role="agent",
+    )
+
+
+def _case_bound_gateway(tmp_path):
+    gateway = _fake_gateway()
+    gateway.control_plane_dsn = "postgresql://service@localhost/sift"
+    gateway.active_case_service = _BoundCaseService(_bound_case(tmp_path))
+    return gateway
+
+
 async def test_f6_parent_policy_wraps_proxied_structured_result(monkeypatch, tmp_path):
     monkeypatch.setenv("SIFT_CASE_DIR", str(tmp_path))
     secret = "AKIAIOSFODNN7EXAMPLE"
@@ -68,7 +101,7 @@ async def test_f6_parent_policy_wraps_proxied_structured_result(monkeypatch, tmp
     parent.mount(create_proxy(child), namespace="addon")
 
     with patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value=_gate(ChainStatus.OK),
     ):
         result = await parent.call_tool("addon_leak", {})
@@ -90,8 +123,7 @@ async def test_f6_parent_policy_wraps_proxied_structured_result(monkeypatch, tmp
 
 
 async def test_gate_block_skips_tool_and_records_envelope(monkeypatch, tmp_path):
-    monkeypatch.setenv("SIFT_CASE_DIR", str(tmp_path))
-    gateway = _fake_gateway()
+    gateway = _case_bound_gateway(tmp_path)
     ran = False
     mcp = FastMCP("parent", middleware=gateway_policy_middlewares(gateway))
 
@@ -102,7 +134,7 @@ async def test_gate_block_skips_tool_and_records_envelope(monkeypatch, tmp_path)
         return "ran"
 
     with patch(
-        "sift_gateway.policy_middleware.check_evidence_gate",
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value=_gate(ChainStatus.UNSEALED),
     ):
         result = await mcp.call_tool("record_finding", {})

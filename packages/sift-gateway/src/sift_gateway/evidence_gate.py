@@ -1,24 +1,20 @@
 """Evidence chain gate for the MCP endpoint.
 
-check_evidence_gate(case_dir_str) → {blocked, status, issues, manifest_version}
 check_evidence_gate_db(case_id, dsn) → {blocked, status, issues, manifest_version}
-invalidate_evidence_cache(case_dir_str) → None
-
-Performance model (per spec):
-  - 30s TTL cache (stat-check only, no rehash, no key needed)
-  - Manifest mtime change detected via os.stat() → immediate cache invalidation
-  - mtime is used as a cache invalidation hint only, never as an integrity assertion
+invalidate_evidence_cache(case_dir_str) → None (retained no-op, see below)
 
 Gate behaviour:
   - UNSEALED or any violation → blocked=True, structured response for Hermes
   - OK → blocked=False, proceed to backend
 
-DB-authority resolution path (BATCH-C1):
+DB-authority resolution path (BATCH-C1; sole path as of BU3/XYE-21):
   - check_evidence_gate_db() resolves seal status from Postgres
     (app.evidence_gate_status) by case_id, NOT from files. Postgres is the
-    authority; file manifests/proofs are exports. This is the path the Gateway
-    should prefer once cases carry DB evidence state. The file-backed
-    check_evidence_gate() above remains for the legacy/bridge file flow.
+    authority; file manifests/proofs are exports.
+  - BU3 removed the file-backed ``check_evidence_gate()`` entirely: the gateway
+    is the only policy boundary and has no file-mode fallback (no control-plane
+    DSN ⇒ the gateway refuses to serve DFIR tools), so the only evidence-gate
+    path that can govern a DFIR tool call is this DB-authority one.
   - Fail-closed: any DB/resolution error → blocked=True (UNSEALED).
   - The agent never receives a local path; case_id is opaque and resolves to a
     mount path only inside broker/worker code.
@@ -27,16 +23,10 @@ DB-authority resolution path (BATCH-C1):
 from __future__ import annotations
 
 import logging
-import os
-import time
-from pathlib import Path
 
-from sift_core.evidence_chain import ChainStatus, chain_status, manifest_path as _manifest_path
+from sift_core.evidence_chain import ChainStatus
 
 logger = logging.getLogger(__name__)
-
-_CACHE: dict[str, dict] = {}
-_TTL = 30.0  # seconds
 
 PORTAL_REMEDIATION = (
     "Open the Examiner Portal and use the Evidence tab to review and seal "
@@ -44,82 +34,17 @@ PORTAL_REMEDIATION = (
 )
 
 
-def check_evidence_gate(case_dir_str: str | None) -> dict:
-    """Return gate result for the given case directory.
-
-    Returns {blocked, status, issues, manifest_version}.
-    Never raises — on unexpected error returns a blocked result.
-    """
-    if not case_dir_str:
-        return {
-            "blocked": True,
-            "status": ChainStatus.UNSEALED,
-            "issues": ["No active case — create a case in the portal first"],
-            "manifest_version": 0,
-        }
-
-    case_dir = Path(case_dir_str)
-    manifest_path = _manifest_path(case_dir)
-    now = time.monotonic()
-    cached = _CACHE.get(case_dir_str)
-
-    if cached and now < cached["expire_at"]:
-        # Fast path: check whether manifest file has changed since we cached
-        try:
-            current_mtime = manifest_path.stat().st_mtime_ns
-            if current_mtime == cached["manifest_mtime"]:
-                return _result(cached)
-        except OSError:
-            pass
-        # mtime changed or stat failed — fall through to fresh check
-
-    return _refresh(case_dir_str, case_dir, manifest_path, now)
-
-
 def invalidate_evidence_cache(case_dir_str: str) -> None:
-    """Immediately drop the cached status for this case directory.
+    """Retained no-op (BU3/XYE-21).
 
-    Called by the portal after sealing a new manifest version.
+    The file-backed gate kept a 30s TTL cache that the portal invalidated after
+    sealing. The DB-authority gate (:func:`check_evidence_gate_db`) reads
+    Postgres on every call and holds no cache, so there is nothing to drop. The
+    function is kept so the gateway's evidence-watcher wiring and the portal's
+    seal callback (case-dashboard) keep their stable call signature without an
+    out-of-scope edit.
     """
-    _CACHE.pop(case_dir_str, None)
-
-
-def _refresh(case_dir_str: str, case_dir: Path, manifest_path: Path, now: float) -> dict:
-    try:
-        manifest_mtime = manifest_path.stat().st_mtime_ns if manifest_path.exists() else 0
-    except OSError:
-        manifest_mtime = 0
-
-    try:
-        status_dict = chain_status(case_dir)
-    except Exception as exc:
-        logger.error("evidence_gate: chain_status error for %s: %s", case_dir_str, exc)
-        status_dict = {
-            "status": ChainStatus.LEDGER_ERROR,
-            "issues": [f"Internal error checking evidence chain: {exc}"],
-            "manifest_version": 0,
-            "ok_count": 0,
-        }
-
-    _CACHE[case_dir_str] = {
-        "expire_at": now + _TTL,
-        "manifest_mtime": manifest_mtime,
-        "status": status_dict["status"],
-        "issues": status_dict.get("issues", []),
-        "manifest_version": status_dict.get("manifest_version", 0),
-        "ok_count": status_dict.get("ok_count", 0),
-    }
-    return _result(_CACHE[case_dir_str])
-
-
-def _result(cached: dict) -> dict:
-    status = cached["status"]
-    return {
-        "blocked": status != ChainStatus.OK,
-        "status": status,
-        "issues": cached["issues"],
-        "manifest_version": cached["manifest_version"],
-    }
+    del case_dir_str
 
 
 # ---------------------------------------------------------------------------
