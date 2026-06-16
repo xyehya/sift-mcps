@@ -37,7 +37,7 @@ candidate approach.
 - **Mode**: plan outlines with reference packs + proposed approaches (above).
 
 **Axis-independent ground rules (proposed, confirm):**
-- Grounded only in source/tests/configs/migrations/installer — not tracker notes.
+- Grounded only in source, tests, configs, migrations, and installer behavior — not tracker notes.
 - No silent behavioral change; security-touching diffs get `/security-review`.
 - Each axis lands as its own unit with a scope fence; reference pack travels with the unit.
 

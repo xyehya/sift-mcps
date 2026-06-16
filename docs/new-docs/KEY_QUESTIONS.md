@@ -1,5 +1,9 @@
 # Key Questions (关键问题解答)
 
+> Covers: packages/**/src/, scripts/, supabase/migrations/, portal/
+> Class: live-reference
+> Last validated: a7ddaaa (2026-06-16)
+
 ## sift-mcps: Design Decisions Explained
 
 All answers verified from actual source code with [VERIFY:] citations.

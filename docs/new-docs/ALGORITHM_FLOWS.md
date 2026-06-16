@@ -1,5 +1,9 @@
 # Algorithm Flows (算法流程详解)
 
+> Covers: packages/**/src/, scripts/
+> Class: live-reference
+> Last validated: a7ddaaa (2026-06-16)
+
 ## sift-mcps: Core Algorithm Analysis
 
 All algorithms verified from actual source code with [VERIFY:] citations.

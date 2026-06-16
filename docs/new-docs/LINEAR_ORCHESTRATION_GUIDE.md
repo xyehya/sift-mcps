@@ -236,7 +236,7 @@ Description:
 [What needs to be learned.]
 
 ## Search Surface
-[Repo paths, Linear docs/issues, VM checks, or MCP graph queries allowed.]
+[Repo paths, Linear documents/issues, VM checks, or MCP graph queries allowed.]
 
 ## Output
 [Expected decision, implementation issue, or no-action closeout.]

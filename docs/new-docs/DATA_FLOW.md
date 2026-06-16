@@ -1,5 +1,9 @@
 # Data Flow Analysis (数据流分析)
 
+> Covers: packages/sift-gateway/src/, packages/sift-core/src/, packages/case-dashboard/src/, packages/forensic-rag-mcp/src/, packages/opensearch-mcp/src/, supabase/migrations/
+> Class: live-reference
+> Last validated: a7ddaaa (2026-06-16)
+
 ## sift-mcps: Data Flow Through the Platform
 
 All flows verified from actual source code with [VERIFY:] citations.

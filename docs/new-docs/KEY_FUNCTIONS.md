@@ -1,5 +1,9 @@
 # Key Functions Analysis (关键函数分析)
 
+> Covers: packages/**/src/
+> Class: live-reference
+> Last validated: a7ddaaa (2026-06-16)
+
 ## sift-mcps: Deep Dive into Critical Functions
 
 All functions verified from actual source code with [VERIFY:] citations.

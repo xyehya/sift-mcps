@@ -67,6 +67,9 @@ jobs:
       - name: Pyright sift-gateway policy layer
         run: uv run --locked --extra full --extra dev pyright -p pyrightconfig.json
 
+      - name: Docs freshness
+        run: uv run --locked --extra full --extra dev python scripts/check_newdocs_refs.py
+
       - name: Test
         run: |
           uv run --locked --extra full --extra dev pytest tests

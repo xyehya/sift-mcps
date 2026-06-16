@@ -1,10 +1,14 @@
 # Codebase Assessment (代码库评估)
 
+> Covers: packages/**, tests/**, scripts/**, install.sh, pyproject.toml, supabase/migrations/**, portal/**
+> Class: point-in-time
+> Last validated: a7ddaaa (2026-06-16)
+
 ## sift-mcps — Independent Engineering Review
 
 **Assessment date**: 2026-06-15
 **Reviewer basis**: direct reading of ~88K LOC source across 9 workspace packages + ~50K LOC of tests (2,581 `def test_` functions as of 2026-06-16), plus the installer, packaging, Supabase migrations, and the React portal. Every grade is an opinion; every factual claim is grounded with a `file:line` reference.
-**Scope of this document**: design, architecture, modularity, extensibility, security, chain of custody, coding standards, tech-stack choices, and antipatterns/misalignments. This is an assessment of the **product/codebase**, distinct from `docs/ASSESSMENT.md` (which audits the generated documentation).
+**Scope of this document**: design, architecture, modularity, extensibility, security, chain of custody, coding standards, tech-stack choices, and antipatterns/misalignments. This is an assessment of the **product/codebase**, distinct from generated-documentation audits.
 
 ---
 

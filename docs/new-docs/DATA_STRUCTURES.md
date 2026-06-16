@@ -1,5 +1,9 @@
 # Data Structures (数据结构详解)
 
+> Covers: packages/**/src/, supabase/migrations/
+> Class: live-reference
+> Last validated: a7ddaaa (2026-06-16)
+
 ## sift-mcps Key Data Structures
 
 All structures verified from actual source code with [VERIFY:] citations.

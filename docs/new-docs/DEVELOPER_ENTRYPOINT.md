@@ -1,5 +1,9 @@
 # Protocol SIFT Gateway Developer Entrypoint
 
+> Covers: pyproject.toml, packages/**, portal/**, scripts/**, .github/workflows/
+> Class: live-reference
+> Last validated: a7ddaaa (2026-06-16)
+
 Status: stable developer onboarding map. This file explains how the repo fits
 together for engineers and agents. It is not the active task queue; use Linear
 for current status, session notes, forks, blockers, and decisions.
@@ -282,7 +286,7 @@ Developer rules:
 - Reference-plane backends must not claim case authority.
 - Secrets should be provided through environment references or runtime config,
   not pasted into manifests or Linear.
-- After manifest changes, update tests/goldens and re-register or refresh the
+- After manifest changes, update golden fixtures when present and re-register or refresh the
   backend row as required by the issue.
 
 ## 9. Common Change Routing

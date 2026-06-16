@@ -1,5 +1,9 @@
 # Protocol SIFT Gateway System Overview
 
+> Covers: README.md, packages/**, portal/**, scripts/**, install.sh, pyproject.toml, supabase/migrations/
+> Class: live-reference
+> Last validated: a7ddaaa (2026-06-16)
+
 This overview is intentionally stable. It describes what the repository is and
 how the major authority planes fit together. Active task state, forks, decisions
 needed, and session handoffs live in Linear, not in this file.
