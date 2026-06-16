@@ -15,6 +15,7 @@ coverage/
 .env
 .env.*
 !.env.example
+.mcp.json
 
 # Evidence files — never commit real forensic evidence
 *.E01
