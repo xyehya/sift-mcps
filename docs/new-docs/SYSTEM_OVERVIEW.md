@@ -2,7 +2,7 @@
 
 > Covers: README.md, packages/**, portal/**, scripts/**, install.sh, pyproject.toml, supabase/migrations/
 > Class: live-reference
-> Last validated: a7ddaaa (2026-06-16)
+> Last validated: 35e0d33 (2026-06-16)
 
 This overview is intentionally stable. It describes what the repository is and
 how the major authority planes fit together. Active task state, forks, decisions
@@ -62,6 +62,10 @@ Supabase/Postgres is authoritative for cases, active-case state, evidence
 objects, custody events, findings, reports, audit events, backend registry data,
 and durable jobs. Filesystem and derived indexes are important, but they do not
 replace control-plane authority.
+
+During the case-metadata authority transition, CASE.yaml remains the reader
+source while Gateway mirrors consumed metadata into `app.cases` columns or
+`metadata` JSONB without overwriting conflicting DB values.
 
 ### Evidence And Custody Plane
 

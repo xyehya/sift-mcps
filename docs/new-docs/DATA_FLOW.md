@@ -2,11 +2,24 @@
 
 > Covers: packages/sift-gateway/src/, packages/sift-core/src/, packages/case-dashboard/src/, packages/forensic-rag-mcp/src/, packages/opensearch-mcp/src/, supabase/migrations/
 > Class: live-reference
-> Last validated: a7ddaaa (2026-06-16)
+> Last validated: 35e0d33 (2026-06-16)
 
 ## sift-mcps: Data Flow Through the Platform
 
 All flows verified from actual source code with [VERIFY:] citations.
+
+---
+
+## 0. Active Case Metadata Parity
+
+During the Axis B transition, CASE.yaml remains the reader authority for case
+metadata. Gateway still mirrors every currently consumed CASE.yaml field into
+`app.cases` before DB-native readers are enabled: `case_id`/`name`/`title`/
+`description`/lifecycle status map to `app.cases` columns when compatible, and
+examiner, created/closed dates, close summary, lead examiner, incident details,
+TLP/severity, timestamps, affected systems/accounts, tags, and related cases
+are preserved in `app.cases.metadata`. Backfill fills missing DB values only;
+conflicting DB values are left untouched and logged for operator review.
 
 ---
 

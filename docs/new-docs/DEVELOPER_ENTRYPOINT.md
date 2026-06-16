@@ -2,7 +2,7 @@
 
 > Covers: pyproject.toml, packages/**, portal/**, scripts/**, .github/workflows/
 > Class: live-reference
-> Last validated: a7ddaaa (2026-06-16)
+> Last validated: 35e0d33 (2026-06-16)
 
 Status: stable developer onboarding map. This file explains how the repo fits
 together for engineers and agents. It is not the active task queue; use Linear
@@ -70,7 +70,7 @@ Important modules:
 | `mcp_endpoint.py` | ASGI-level MCP auth wrapper and request guard. |
 | `policy_middleware.py` | Tool authorization, add-on authority, active-case context, audit, evidence gate, response guard, proxy case injection. |
 | `auth.py`, `supabase_auth.py`, `identity.py` | REST/session/JWT/API-key auth and principal resolution. |
-| `active_case.py` | Active-case lookup and DB authority helpers. |
+| `active_case.py` | Active-case lookup, DB authority helpers, and CASE.yaml metadata parity/backfill planning for `app.cases`. |
 | `evidence_gate.py` | Fail-closed evidence gate checks. |
 | `response_guard.py` | Secret/path scanning, redaction, output capping. |
 | `mcp_backends_registry.py`, `backends/` | Add-on manifest/config loading and stdio/http backend construction. |

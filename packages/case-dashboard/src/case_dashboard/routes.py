@@ -4864,6 +4864,8 @@ async def post_case_create(request: Request) -> JSONResponse:
                         "case_key": case_id,
                         "title": title,
                         "description": description,
+                        "status": case_meta["status"],
+                        "metadata": case_meta,
                         "artifact_path": str(real_requested),
                         "activate": bool(body.get("activate", True)),
                     },

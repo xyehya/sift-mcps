@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from sift_gateway.identity import Identity
 
@@ -13,6 +13,135 @@ from sift_gateway.identity import Identity
 _CASE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
 _WRITE_ROLES = frozenset({"operator", "lead", "owner", "admin"})
 _SYSTEM_BYPASS_ROLES = frozenset({"owner", "admin"})
+_DB_CASE_STATUSES = frozenset({"draft", "active", "paused", "closed", "archived"})
+_CASE_YAML_STATUS_TO_DB = {
+    "open": "active",
+    "active": "active",
+    "draft": "draft",
+    "paused": "paused",
+    "closed": "closed",
+    "archived": "archived",
+}
+
+CASE_BRIEF_METADATA_FIELDS = (
+    "description",
+    "incident_type",
+    "severity",
+    "tlp",
+    "client",
+    "point_of_contact",
+    "impact_summary",
+    "detected_at",
+    "occurred_at",
+    "reported_at",
+    "contained_at",
+    "eradicated_at",
+    "recovered_at",
+    "affected_systems",
+    "affected_accounts",
+    "tags",
+    "related_cases",
+)
+
+# Every CASE.yaml field currently consumed by readers in sift-core/case-dashboard.
+# BU0 keeps readers file-authoritative, but guarantees the DB row can already
+# preserve the same values before BU1 flips read authority.
+CONSUMED_CASE_YAML_FIELDS = (
+    "case_id",
+    "name",
+    "title",
+    "description",
+    "status",
+    "examiner",
+    "created",
+    "created_at",
+    "closed",
+    "close_summary",
+    "lead_examiner",
+    *tuple(f for f in CASE_BRIEF_METADATA_FIELDS if f != "description"),
+)
+
+CASE_METADATA_JSON_FIELDS = tuple(
+    f
+    for f in CONSUMED_CASE_YAML_FIELDS
+    if f not in {"case_id", "name", "title", "description"}
+)
+
+
+def _empty_case_value(value: Any) -> bool:
+    return value in (None, "", [], {})
+
+
+def _db_status_from_case_yaml(value: Any, *, default: str | None = None) -> str | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return default
+    return _CASE_YAML_STATUS_TO_DB.get(raw)
+
+
+def _coerce_case_metadata(payload: Mapping[str, Any], *, db_status: str) -> dict[str, Any]:
+    metadata = dict(payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {})
+    source = {**metadata, **dict(payload)}
+    for field in CASE_METADATA_JSON_FIELDS:
+        if field not in source:
+            continue
+        value = source[field]
+        if _empty_case_value(value):
+            continue
+        if field == "status" and str(value).strip().lower() == db_status:
+            continue
+        metadata[field] = value
+    return metadata
+
+
+def plan_case_yaml_backfill(
+    case_row: Mapping[str, Any], case_meta: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Plan a non-overwriting CASE.yaml -> app.cases backfill update."""
+    metadata = dict(case_row.get("metadata") or {})
+    updates: dict[str, Any] = {}
+    divergences: list[dict[str, Any]] = []
+
+    def fill_column(field: str, column: str, desired: Any) -> None:
+        if _empty_case_value(desired):
+            return
+        current = case_row.get(column)
+        if _empty_case_value(current):
+            updates[column] = desired
+            return
+        if str(current) != str(desired):
+            divergences.append({"field": field, "db": current, "case_yaml": desired})
+
+    yaml_case_id = case_meta.get("case_id")
+    fill_column("case_id", "case_key", yaml_case_id)
+    fill_column("name", "title", case_meta.get("name") or case_meta.get("title"))
+    fill_column("description", "description", case_meta.get("description"))
+    yaml_status = case_meta.get("status")
+    db_status = _db_status_from_case_yaml(yaml_status)
+    if db_status is not None:
+        fill_column("status", "status", db_status)
+
+    for field in CASE_METADATA_JSON_FIELDS:
+        if field not in case_meta:
+            continue
+        desired = case_meta[field]
+        if _empty_case_value(desired):
+            continue
+        current = metadata.get(field)
+        if _empty_case_value(current):
+            metadata[field] = desired
+            continue
+        if current != desired:
+            divergences.append({"field": field, "db": current, "case_yaml": desired})
+
+    metadata_changed = metadata != dict(case_row.get("metadata") or {})
+    return {
+        "updates": updates,
+        "metadata": metadata,
+        "metadata_changed": metadata_changed,
+        "changed": bool(updates) or metadata_changed,
+        "divergences": divergences,
+    }
 
 
 class ActiveCaseError(Exception):
@@ -247,16 +376,19 @@ class ActiveCaseService:
             case_key = self._case_key_from_name(str(payload.get("casename") or "case"))
         if not _CASE_KEY_RE.fullmatch(case_key):
             raise ActiveCaseError("invalid_case_key", http_status=400)
-        title = str(payload.get("title") or case_key).strip()
+        title = str(payload.get("title") or payload.get("name") or case_key).strip()
         if not title:
             raise ActiveCaseError("title_required", http_status=400)
         description = payload.get("description")
         if description is not None:
             description = str(description).strip() or None
+        status = _db_status_from_case_yaml(payload.get("status"), default="active")
+        if status not in _DB_CASE_STATUSES:
+            raise ActiveCaseError("invalid_case_status", http_status=400)
         artifact_path = payload.get("artifact_path") or payload.get("case_dir")
         artifact_path = str(artifact_path).strip() if artifact_path else None
 
-        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        metadata = _coerce_case_metadata(payload, db_status=status)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -266,7 +398,7 @@ class ActiveCaseService:
                        created_by_user_id, opened_at, legacy_case_dir,
                        legacy_case_yaml_path, metadata, compat_export_status)
                     values
-                      (%s, %s, %s, %s, 'active', %s, now(), %s, %s, %s, 'stale')
+                      (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, 'stale')
                     returning id::text, case_key, title, description, status,
                               legacy_case_dir, metadata
                     """,
@@ -275,6 +407,7 @@ class ActiveCaseService:
                         case_key,
                         title,
                         description,
+                        status,
                         pid,
                         artifact_path,
                         str(Path(artifact_path) / "CASE.yaml") if artifact_path else None,
@@ -347,8 +480,8 @@ class ActiveCaseService:
             value = patch.get("description")
             updates["description"] = str(value).strip() if value is not None else None
         if "status" in patch:
-            status = str(patch.get("status") or "").strip()
-            if status not in {"draft", "active", "paused", "closed", "archived"}:
+            status = _db_status_from_case_yaml(patch.get("status"))
+            if status not in _DB_CASE_STATUSES:
                 raise ActiveCaseError("invalid_case_status", http_status=400)
             updates["status"] = status
         if "field" in patch:
@@ -364,7 +497,31 @@ class ActiveCaseService:
         if "metadata" in patch:
             if not isinstance(patch["metadata"], dict):
                 raise ActiveCaseError("metadata_must_be_object", http_status=400)
-            metadata.update(patch["metadata"])
+            incoming = dict(patch["metadata"])
+            if "title" in incoming or "name" in incoming:
+                updates["title"] = str(
+                    incoming.get("title") or incoming.get("name") or ""
+                ).strip()
+            if "description" in incoming:
+                value = incoming.get("description")
+                updates["description"] = str(value).strip() if value is not None else None
+            if "status" in incoming:
+                status = _db_status_from_case_yaml(incoming.get("status"))
+                if status not in _DB_CASE_STATUSES:
+                    metadata["status"] = incoming["status"]
+                else:
+                    updates["status"] = status
+                    if str(incoming["status"]).strip().lower() != status:
+                        metadata["status"] = incoming["status"]
+            metadata.update(
+                {
+                    key: value
+                    for key, value in incoming.items()
+                    if key in CASE_METADATA_JSON_FIELDS
+                    and key != "status"
+                    and not _empty_case_value(value)
+                }
+            )
         if not updates and metadata == (current.metadata or {}):
             return current
         with self._connect() as conn:
