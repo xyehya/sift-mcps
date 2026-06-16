@@ -1,0 +1,115 @@
+name: AU1 Live VM Manual Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      operator:
+        description: "Operator name or handle recording the proof."
+        required: true
+        type: string
+      linear_issue:
+        description: "Linear issue identifier for this proof run."
+        required: true
+        default: "XYE-13"
+        type: string
+      health_verified:
+        description: "I manually verified the live VM /health endpoint."
+        required: true
+        default: false
+        type: boolean
+      portal_verified:
+        description: "I manually verified the portal behavior required by the issue."
+        required: true
+        default: false
+        type: boolean
+      mcp_verified:
+        description: "I manually verified MCP behavior using a portal-issued agent/service credential."
+        required: true
+        default: false
+        type: boolean
+      tamper_test_verified:
+        description: "I manually verified the required tamper/refusal behavior."
+        required: true
+        default: false
+        type: boolean
+      no_dsn_refusal_verified:
+        description: "I manually verified that agent-facing paths refuse raw DSN use."
+        required: true
+        default: false
+        type: boolean
+      proof_summary:
+        description: "Sanitized proof summary. Do not include credentials, tokens, DSNs, or sensitive paths."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  manual-proof:
+    name: Record manual live VM proof checklist
+    runs-on: ubuntu-latest
+    steps:
+      - name: Display proof checklist
+        env:
+          OPERATOR: ${{ inputs.operator }}
+          LINEAR_ISSUE: ${{ inputs.linear_issue }}
+          HEALTH_VERIFIED: ${{ inputs.health_verified }}
+          PORTAL_VERIFIED: ${{ inputs.portal_verified }}
+          MCP_VERIFIED: ${{ inputs.mcp_verified }}
+          TAMPER_TEST_VERIFIED: ${{ inputs.tamper_test_verified }}
+          NO_DSN_REFUSAL_VERIFIED: ${{ inputs.no_dsn_refusal_verified }}
+          PROOF_SUMMARY: ${{ inputs.proof_summary }}
+        run: |
+          cat <<'CHECKLIST'
+          AU1 manual proof checklist:
+          1. Confirm the target is the intended SIFT VM and no credentials are recorded in this run.
+          2. Verify the live gateway health endpoint manually.
+          3. Verify portal create/edit behavior manually.
+          4. Verify MCP orientation manually with a portal-issued agent/service credential.
+          5. Verify the required tamper/refusal behavior manually.
+          6. Verify agent-facing paths refuse raw DSN use.
+          7. Record sanitized proof in Linear before moving the issue forward.
+          CHECKLIST
+
+          printf 'Operator: %s\n' "$OPERATOR"
+          printf 'Linear issue: %s\n' "$LINEAR_ISSUE"
+          printf 'Health verified: %s\n' "$HEALTH_VERIFIED"
+          printf 'Portal verified: %s\n' "$PORTAL_VERIFIED"
+          printf 'MCP verified: %s\n' "$MCP_VERIFIED"
+          printf 'Tamper test verified: %s\n' "$TAMPER_TEST_VERIFIED"
+          printf 'No-DSN refusal verified: %s\n' "$NO_DSN_REFUSAL_VERIFIED"
+          printf 'Sanitized proof summary: %s\n' "$PROOF_SUMMARY"
+
+      - name: Require all manual confirmations
+        env:
+          HEALTH_VERIFIED: ${{ inputs.health_verified }}
+          PORTAL_VERIFIED: ${{ inputs.portal_verified }}
+          MCP_VERIFIED: ${{ inputs.mcp_verified }}
+          TAMPER_TEST_VERIFIED: ${{ inputs.tamper_test_verified }}
+          NO_DSN_REFUSAL_VERIFIED: ${{ inputs.no_dsn_refusal_verified }}
+        run: |
+          if [ "$HEALTH_VERIFIED" != "true" ]; then
+            echo "health_verified must be true after manual proof."
+            exit 1
+          fi
+
+          if [ "$PORTAL_VERIFIED" != "true" ]; then
+            echo "portal_verified must be true after manual proof."
+            exit 1
+          fi
+
+          if [ "$MCP_VERIFIED" != "true" ]; then
+            echo "mcp_verified must be true after manual proof."
+            exit 1
+          fi
+
+          if [ "$TAMPER_TEST_VERIFIED" != "true" ]; then
+            echo "tamper_test_verified must be true after manual proof."
+            exit 1
+          fi
+
+          if [ "$NO_DSN_REFUSAL_VERIFIED" != "true" ]; then
+            echo "no_dsn_refusal_verified must be true after manual proof."
+            exit 1
+          fi

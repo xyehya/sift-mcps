@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_NO_PROGRESS: "1"
+
+jobs:
+  python:
+    name: Ruff and pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            packages/*/pyproject.toml
+
+      - name: Install dependencies
+        run: uv sync --locked --extra full --extra dev
+
+      - name: Ruff undefined-name guard
+        run: |
+          uv run --locked --extra full --extra dev ruff check \
+            --target-version py311 \
+            --select F821,F822,F823 \
+            .
+
+      - name: Ruff clean source packages
+        run: |
+          uv run --locked --extra full --extra dev ruff check \
+            packages/case-dashboard/src \
+            packages/forensic-knowledge/src \
+            packages/sift-common/src
+
+      - name: Test
+        run: |
+          uv run --locked --extra full --extra dev pytest tests
+          uv run --locked --extra full --extra dev pytest packages/forensic-knowledge/tests
+          uv run --locked --extra full --extra dev pytest packages/sift-common/tests
+          uv run --locked --extra full --extra dev pytest packages/sift-core/tests
+          uv run --locked --extra full --extra dev pytest packages/sift-gateway/tests
+          uv run --locked --extra full --extra dev pytest -m "not integration" packages/opensearch-mcp/tests
+          uv run --locked --extra full --extra dev pytest packages/case-dashboard/tests
+          uv run --locked --extra full --extra dev pytest packages/forensic-rag-mcp/tests
