@@ -15,6 +15,7 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote
 
 import yaml
@@ -2653,12 +2654,73 @@ async def get_case(request: Request) -> JSONResponse:
     return JSONResponse(meta)
 
 
+async def _metadata_reauth(
+    request: Request, examiner: str, action: str, body: dict
+) -> tuple[JSONResponse | None, str | None]:
+    """BU2: fail-closed operator re-auth for a case-metadata edit.
+
+    Metadata edits become a sensitive human action (AGENTS.md re-auth invariant),
+    gated by the same fail-closed Supabase password re-verify as evidence
+    seal/ignore/retire and report inclusion/export, recording a re-auth audit
+    event. Enforced only when DB evidence authority is wired — the same condition
+    under which those actions require re-auth — so file-backed deployments are
+    unaffected. Returns (error_response | None, reauth_audit_event_id | None).
+    """
+    if _EVIDENCE_DB is None:
+        return None, None
+
+    if not isinstance(body.get("password"), str) or not body.get("password"):
+        return (
+            JSONResponse(
+                {"error": "Re-auth required: editing case metadata needs password confirmation."},
+                status_code=403,
+            ),
+            None,
+        )
+    reauth_err = await _supabase_reverify(request, body)
+    if reauth_err is not None:
+        return reauth_err, None
+
+    reauth_id = _record_reauth_event(request, examiner, action)
+    if not reauth_id:
+        return (
+            JSONResponse(
+                {"error": "Re-auth audit event required for case metadata edit."},
+                status_code=403,
+            ),
+            None,
+        )
+    return None, reauth_id
+
+
+def _export_case_yaml_safe(active_case: Any) -> None:
+    """BU2: refresh the non-authoritative CASE.yaml export from DB authority.
+
+    Best-effort: the DB row is authority and BU1 readers never trust CASE.yaml, so
+    a failed export only leaves a stale (clearly non-authoritative) compat file and
+    must not fail the DB mutation it follows.
+    """
+    artifact_path = getattr(active_case, "artifact_path", None)
+    if not artifact_path:
+        return
+    try:
+        from sift_core.case_metadata import export_case_yaml_from_db
+
+        export_case_yaml_from_db(Path(artifact_path), active_case.as_dict())
+    except Exception as exc:  # noqa: BLE001 - compat export is non-authoritative
+        logger.warning("CASE.yaml compat export failed for %s: %s", artifact_path, exc)
+
+
 async def post_case_metadata(request: Request) -> JSONResponse:
     """Set a single case metadata field.
 
     Examiner-triggered, portal-owned (F-E): metadata setting and report
     generation are not on the agent MCP surface. Validation/persistence live
     in sift_core.case_metadata; this route is the operator-facing trigger.
+
+    BU2: in DB-authority mode the edit writes ``app.cases`` only (the sole
+    authority), is gated by a fail-closed re-auth ceremony, and refreshes the
+    non-authoritative CASE.yaml compat export from the DB row afterwards.
     """
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -2678,14 +2740,20 @@ async def post_case_metadata(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
 
     if _ACTIVE_CASES is not None:
+        reauth_err, _reauth_id = await _metadata_reauth(
+            request, examiner, "case.metadata.update", body
+        )
+        if reauth_err is not None:
+            return reauth_err
         try:
             active = _ACTIVE_CASES.get_active_case(_request_principal(request))
             updated = _ACTIVE_CASES.update_case_metadata(
                 active.case_id, _request_principal(request), body
             )
-            return JSONResponse(updated.as_dict())
         except Exception as exc:
             return _active_case_error_response(exc)
+        _export_case_yaml_safe(updated)
+        return JSONResponse(updated.as_dict())
 
     case_dir = _resolve_case_dir()
     if not case_dir:
@@ -4875,6 +4943,10 @@ async def post_case_create(request: Request) -> JSONResponse:
                 return _active_case_error_response(exc)
 
         if db_case is not None:
+            # BU2: app.cases is now the metadata authority. Replace the CASE.yaml
+            # written above with a non-authoritative DB->file compat export so the
+            # on-disk file can never be mistaken for (or diverge as) authority.
+            _export_case_yaml_safe(db_case)
             return JSONResponse({"ok": True, **db_case.as_dict()})
         return JSONResponse({"ok": True, "case_id": case_id, "case_dir": str(real_requested)})
 

@@ -7,8 +7,9 @@ the pure validation + persistence logic the portal route calls into.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Mapping
 
 import yaml
 
@@ -16,6 +17,14 @@ from sift_core.case_io import _atomic_write, load_case_meta
 
 _MAX_FIELD = 500
 _MAX_VALUE = 10_000
+
+# BU2: banner stamped at the top of every DB->file CASE.yaml export so a human
+# (or a tool) reading the file on disk cannot mistake it for authority.
+_COMPAT_EXPORT_HEADER = (
+    "# NON-AUTHORITATIVE COMPATIBILITY EXPORT — generated from the Postgres\n"
+    "# control plane (app.cases). The database is the source of truth; edits to\n"
+    "# this file are ignored by the gateway and overwritten on the next export.\n"
+)
 
 # -- Metadata validation tables --
 
@@ -106,8 +115,51 @@ def get_case_metadata(case_dir: Path, field: str = "") -> dict:
     return {"field": field, "value": meta.get(field)}
 
 
+def export_case_yaml_from_db(case_dir: Path, db_case: Mapping[str, Any]) -> dict:
+    """BU2: write CASE.yaml as a NON-AUTHORITATIVE DB->file compatibility export.
+
+    ``db_case`` is the gateway ``ActiveCase.as_dict()`` (DB authority): ``case_key``
+    / ``title`` / ``description`` / ``status`` columns plus a ``metadata`` JSONB blob
+    carrying the examiner identity and case-brief intake fields. This projects that
+    row back into the legacy CASE.yaml shape, stamps a non-authoritative banner +
+    ``compat_export`` marker, and writes it atomically. It never reads or merges the
+    existing file (the DB row is the sole source), so a tampered CASE.yaml cannot
+    survive an export. Returns the metadata dict that was written.
+    """
+    from sift_core.investigation_store import _DB_STATUS_TO_CASE_YAML
+
+    meta: dict[str, Any] = dict(db_case.get("metadata") or {})
+    case_key = db_case.get("case_key") or db_case.get("case_id")
+    if case_key:
+        meta["case_id"] = str(case_key)
+    title = db_case.get("title") or db_case.get("name")
+    if title is not None:
+        meta["name"] = str(title)
+    description = db_case.get("description")
+    if description is not None:
+        meta["description"] = str(description)
+    raw_status = db_case.get("status")
+    if raw_status is not None:
+        meta["status"] = _DB_STATUS_TO_CASE_YAML.get(str(raw_status), str(raw_status))
+    # Strip any stale authority/marker keys the JSONB might carry, then stamp ours.
+    meta.pop("compat_export", None)
+    meta["compat_export"] = {
+        "authoritative": False,
+        "source": "postgres",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    body = yaml.dump(meta, default_flow_style=False, sort_keys=True)
+    _atomic_write(case_dir / "CASE.yaml", _COMPAT_EXPORT_HEADER + body)
+    return meta
+
+
 def set_case_metadata(case_dir: Path, field: str, value: str | list = "") -> dict:
     """Set a single metadata field in CASE.yaml.
+
+    File-mode only (legacy / no control-plane DSN). In DB-authority deployments
+    the portal writes ``app.cases`` and CASE.yaml is produced by
+    :func:`export_case_yaml_from_db`; this setter is not the authority path.
 
     Validated fields: incident_type, severity, tlp (enums); detected_at,
     occurred_at, etc. (ISO 8601 dates); affected_systems, tags, etc. (lists).
