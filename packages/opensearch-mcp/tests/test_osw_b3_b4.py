@@ -483,39 +483,3 @@ class TestB4MemoryIngestJobParity:
         assert rp["indexed_docs"] == 180892
         assert rp["artifacts_complete"] == 11
         assert rp["hosts_complete"] == 1
-
-    def test_memory_ingest_without_run_id_falls_through_as_sync(self, db, monkeypatch):
-        """Regression guard: if run_id is absent from the memory response
-        (old behavior before B4 fix) the handler falls through to a
-        sync result — exposing the bug and confirming the fix is needed."""
-        _enqueue_memory_ingest(db, case_dir="/cases/case-rocba")
-
-        def old_memory_ingest_without_run_id(**kwargs):
-            # Simulate the PRE-B4 behavior: no run_id in response.
-            return {"status": "started", "pid": 8888, "tier": 1}
-
-        monkeypatch.setattr(
-            "opensearch_mcp.server.opensearch_ingest",
-            old_memory_ingest_without_run_id,
-            raising=False,
-        )
-        monkeypatch.setattr(
-            "opensearch_mcp.ingest_status.read_active_ingests",
-            lambda: [],
-            raising=False,
-        )
-        monkeypatch.setattr(ingest_job, "_POLL_SECONDS", 0)
-
-        w = _worker(db, {"ingest": ingest_job.opensearch_ingest_job_handler})
-        job = db.jobs[0]
-        w.run_once(job_types=["ingest"])
-
-        # Without run_id, _run_ids() returns empty set → handler treats it as
-        # a sync result and "succeeds" immediately without blocking poll.
-        # This test documents the regression — after the fix,
-        # test_memory_ingest_job_tracks_run_id_and_reaches_terminal covers
-        # the correct behaviour.
-        assert job.status == "succeeded"
-        # The result carries the raw launch payload (status=started), not
-        # the terminal ingest counts.
-        assert job.result_public.get("status") == "started"

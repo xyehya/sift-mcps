@@ -113,8 +113,8 @@ def test_enqueue_returns_only_job_id_and_uses_d1_rpc():
         return None
 
     svc, conn = _job_service_with(responder)
-    # wave8/ingest-tools: "ingest" was retired as a job_type; this test exercises
-    # the generic enqueue plumbing, so it uses the still-valid "run_command" type.
+    # wave8/ingest-tools: the Gateway-local ingest_job MCP tool was retired.
+    # This generic enqueue test uses the Gateway-owned run_command job lane.
     result = svc.enqueue_job(
         job_type="run_command",
         case_id="case-1",
