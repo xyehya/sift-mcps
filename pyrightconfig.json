@@ -1,0 +1,23 @@
+{
+  "include": [
+    "packages/sift-gateway/src/sift_gateway/policy_middleware.py"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/.pytest_cache"
+  ],
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": false,
+  "executionEnvironments": [
+    {
+      "root": "packages/sift-gateway/src",
+      "extraPaths": [
+        "packages/sift-core/src",
+        "packages/sift-common/src"
+      ]
+    }
+  ]
+}

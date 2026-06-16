@@ -8,9 +8,10 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, Protocol, cast
 
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools import ToolResult
@@ -26,8 +27,10 @@ from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.audit_helpers import (
     _extract_audit_id,
     _extract_run_command_detail,
-    _summarize_result as _summarize_audit_result,
     redact_for_audit,
+)
+from sift_gateway.audit_helpers import (
+    _summarize_result as _summarize_audit_result,
 )
 from sift_gateway.evidence_gate import (
     build_block_response,
@@ -55,6 +58,34 @@ _CURRENT_ACTIVE_CASE: ContextVar[ActiveCase | None] = ContextVar(
     "sift_gateway_active_case",
     default=None,
 )
+
+
+class AuditWriterProtocol(Protocol):
+    def log(self, **kwargs: Any) -> None: ...
+
+
+class DbAuditWriterProtocol(Protocol):
+    def record(self, **kwargs: Any) -> str | None: ...
+
+
+class JobServiceProtocol(Protocol):
+    def enqueue_job(self, **kwargs: Any) -> Any: ...
+
+
+class GatewayProtocol(Protocol):
+    _audit: AuditWriterProtocol
+    _gateway_local_tools: set[str]
+    _tool_cache: Mapping[str, Any]
+    _tool_manifest_meta: Mapping[str, Mapping[str, Any]]
+    _tool_map: Mapping[str, str]
+    active_case_service: Any | None
+    control_plane_dsn: str | None
+    db_audit: DbAuditWriterProtocol | None
+    job_service: JobServiceProtocol | None
+
+    def addon_authority_for_tool(self, tool_name: str) -> Mapping[str, Any] | None: ...
+    def is_case_scoped_tool(self, tool_name: str) -> bool: ...
+    def safe_case_argument_names(self, tool_name: str) -> Iterable[str] | None: ...
 
 
 @contextmanager
@@ -98,7 +129,7 @@ def _request_context() -> dict:
     }
 
 
-def _active_case_service(gateway: Any):
+def _active_case_service(gateway: GatewayProtocol) -> Any | None:
     service = getattr(gateway, "active_case_service", None)
     if service is not None and service.__class__.__module__.startswith("unittest.mock"):
         return None
@@ -150,7 +181,7 @@ _READ_ONLY_NONCORE_TOOLS = frozenset({"capability_guide", "get_tool_help", "runn
 _CASE_CONTEXT_RESPONSE_TOOLS = frozenset({"case_info", "evidence_info", "capability_guide"})
 
 
-def _tool_read_only(gateway: Any, name: str) -> bool:
+def _tool_read_only(gateway: GatewayProtocol, name: str) -> bool:
     """Return True only when the tool is positively known to be read-only.
 
     Used by the DB-first audit envelope to decide which tools must fail closed
@@ -175,16 +206,13 @@ def _tool_read_only(gateway: Any, name: str) -> bool:
     return False
 
 
-def _is_case_scoped_tool(gateway: Any, name: str) -> bool:
+def _is_case_scoped_tool(gateway: GatewayProtocol, name: str) -> bool:
     if name in core_tool_names():
         return name not in {"get_tool_help", "capability_guide"}
-    fn = getattr(gateway, "is_case_scoped_tool", None)
-    if callable(fn):
-        return bool(fn(name))
-    return False
+    return gateway.is_case_scoped_tool(name)
 
 
-def _safe_case_args(gateway: Any, name: str) -> set[str] | None:
+def _safe_case_args(gateway: GatewayProtocol, name: str) -> set[str] | None:
     """Return safe case argument names for injection, or None if unknown.
 
     OS2: Gateway.safe_case_argument_names() now returns:
@@ -196,17 +224,24 @@ def _safe_case_args(gateway: Any, name: str) -> set[str] | None:
     When the gateway method does not exist or returns None, this returns None
     so the middleware continues to fail closed for undeclared proxy tools.
     """
-    fn = getattr(gateway, "safe_case_argument_names", None)
-    if callable(fn):
-        result = fn(name)
-        if result is None:
-            return None
-        return set(result)
-    return None
+    result = gateway.safe_case_argument_names(name)
+    if result is None:
+        return None
+    return set(result)
 
 
-def _is_gateway_local_tool(gateway: Any, name: str) -> bool:
+def _is_gateway_local_tool(gateway: GatewayProtocol, name: str) -> bool:
     return name in (getattr(gateway, "_gateway_local_tools", None) or set())
+
+
+def _addon_authority_for_tool(
+    gateway: GatewayProtocol, name: str
+) -> Mapping[str, Any] | None:
+    fn = getattr(gateway, "addon_authority_for_tool", None)
+    if not callable(fn):
+        return None
+    profile = fn(name)
+    return profile if isinstance(profile, Mapping) else None
 
 
 class ToolAuthorizationMiddleware(Middleware):
@@ -226,7 +261,7 @@ class ToolAuthorizationMiddleware(Middleware):
     mode (no verifier/keys/registry) leaves the catalog open.
     """
 
-    def __init__(self, gateway: Any, *, auth_enabled: bool = False) -> None:
+    def __init__(self, gateway: GatewayProtocol, *, auth_enabled: bool = False) -> None:
         self.gateway = gateway
         self.auth_enabled = auth_enabled
 
@@ -347,14 +382,13 @@ class AddonAuthorityMiddleware(Middleware):
     closed. The Gateway — not the add-on — remains the authority boundary.
     """
 
-    def __init__(self, gateway: Any, *, auth_enabled: bool = False) -> None:
+    def __init__(self, gateway: GatewayProtocol, *, auth_enabled: bool = False) -> None:
         self.gateway = gateway
         self.auth_enabled = auth_enabled
 
     async def on_call_tool(self, context, call_next):
         name = _tool_name(context)
-        fn = getattr(self.gateway, "addon_authority_for_tool", None)
-        profile = fn(name) if callable(fn) else None
+        profile = _addon_authority_for_tool(self.gateway, name)
         # Core tools and unknown/unmapped tools carry no add-on contract.
         if not profile:
             return await call_next(context)
@@ -463,7 +497,7 @@ class AddonAuthorityMiddleware(Middleware):
 class EvidenceGateMiddleware(Middleware):
     """Block all MCP tool calls when the active evidence chain is not OK."""
 
-    def __init__(self, gateway: Any) -> None:
+    def __init__(self, gateway: GatewayProtocol) -> None:
         self.gateway = gateway
 
     async def on_call_tool(self, context, call_next):
@@ -520,7 +554,7 @@ class EvidenceGateMiddleware(Middleware):
         if case is not None:
             contents.append(_case_text(case, name))
         else:
-            contents = _append_case_context(contents, case_dir_str, name)
+            contents = _append_case_context(contents, case_dir_str or "", name)
         return ToolResult(
             content=contents,
             structured_content=build_block_response(name, gate),
@@ -531,7 +565,7 @@ class EvidenceGateMiddleware(Middleware):
 class ResponseGuardMiddleware(Middleware):
     """Redact and cap final ToolResult content and structured_content."""
 
-    def __init__(self, gateway: Any) -> None:
+    def __init__(self, gateway: GatewayProtocol) -> None:
         self.gateway = gateway
 
     async def on_call_tool(self, context, call_next):
@@ -638,7 +672,7 @@ class ResponseGuardMiddleware(Middleware):
 class CaseContextMiddleware(Middleware):
     """Resolve and append DB active-case context to selected gateway responses."""
 
-    def __init__(self, gateway: Any) -> None:
+    def __init__(self, gateway: GatewayProtocol) -> None:
         self.gateway = gateway
 
     async def on_call_tool(self, context, call_next):
@@ -679,11 +713,13 @@ class CaseContextMiddleware(Middleware):
         with _use_gateway_active_case(case), use_active_case_context(core_context):
             result = await call_next(context)
         if case is not None and name in _CASE_CONTEXT_RESPONSE_TOOLS:
-            result.content = list(result.content or [])
-            result.content.append(_case_text(case, name))
+            result_any = cast(Any, result)
+            result_any.content = list(result.content or [])
+            result_any.content.append(_case_text(case, name))
         elif service is None and name in _CASE_CONTEXT_RESPONSE_TOOLS:
-            result.content = _append_case_context(
-                list(result.content or []),
+            result_any = cast(Any, result)
+            result_any.content = _append_case_context(
+                cast(Any, list(result.content or [])),
                 os.environ.get("SIFT_CASE_DIR", ""),
                 name,
             )
@@ -719,7 +755,7 @@ class CaseContextMiddleware(Middleware):
 class ProxyActiveCaseMiddleware(Middleware):
     """B-11: inject DB case args for safe proxied tools or deny implicit-env tools."""
 
-    def __init__(self, gateway: Any) -> None:
+    def __init__(self, gateway: GatewayProtocol) -> None:
         self.gateway = gateway
 
     async def on_call_tool(self, context, call_next):
@@ -818,7 +854,7 @@ class AuditEnvelopeMiddleware(Middleware):
     best-effort legacy/export mirror, never the authority.
     """
 
-    def __init__(self, gateway: Any) -> None:
+    def __init__(self, gateway: GatewayProtocol) -> None:
         self.gateway = gateway
 
     async def on_call_tool(self, context, call_next):
@@ -1056,7 +1092,7 @@ class OpenSearchJobDispatchMiddleware(Middleware):
     it only enqueues opaque ids + a path-free spec; the worker does the work.
     """
 
-    def __init__(self, gateway: Any) -> None:
+    def __init__(self, gateway: GatewayProtocol) -> None:
         self.gateway = gateway
 
     async def on_call_tool(self, context, call_next):
@@ -1096,7 +1132,10 @@ class OpenSearchJobDispatchMiddleware(Middleware):
             "examiner": getattr(identity, "principal", None) or "agent",
             "tool": name,
         }
-        job = self.gateway.job_service.enqueue_job(
+        job_service = self.gateway.job_service
+        if job_service is None:  # pragma: no cover - guarded by on_call_tool
+            raise RuntimeError("job service unavailable")
+        job = job_service.enqueue_job(
             job_type=job_type,
             case_id=case.case_id,
             spec_public=spec_public,
@@ -1156,7 +1195,7 @@ class OpenSearchJobDispatchMiddleware(Middleware):
 
 
 def gateway_policy_middlewares(
-    gateway: Any, *, auth_enabled: bool = False
+    gateway: GatewayProtocol, *, auth_enabled: bool = False
 ) -> list[Middleware]:
     """Return middleware in FastMCP execution order.
 
