@@ -185,6 +185,67 @@ def validate_manifest_contract(manifest: dict, manifest_path: Path | None = None
             f"found {len(health_tools)}."
         )
 
+    # XYE-24: case-scope contradiction lint. A NON-reference backend may opt OUT
+    # of active-case scope (top-level ``default_case_scoped: false`` or a per-tool
+    # ``case_scoped: false``) only when it carries no evidence/data-plane signal.
+    # Declaring evidence behaviour AND opting out is internally contradictory:
+    # ``server.is_case_scoped_tool`` would return false for an evidence-touching
+    # tool, so ``CaseContextMiddleware`` skips the active-case denial and
+    # ``ProxyActiveCaseMiddleware`` skips DB case_id/case_key/case_dir injection —
+    # the tool then runs against a caller-supplied/backend-default case instead of
+    # the DB active case. Reject fail-closed at load so an honest author cannot
+    # silently disable case protection (e.g. by copy-pasting a reference manifest).
+    #
+    # The reference plane (capabilities.provides includes "reference") is exempt:
+    # B-MVP-053 deliberately lets it declare default_case_scoped=false, and a
+    # reference/threat-intel backend may legitimately expose a mutating tool that
+    # writes to its OWN external store (e.g. a CTI platform), not case evidence.
+    #
+    # This is a manifest-honesty correctness gate, not a boundary against a
+    # malicious backend — behavioural verification of a registered backend is
+    # tracked separately (XYE-25, register-time MCP scan).
+    _evidence_planes = {"search", "ingest", "enrichment"}
+    _provides_set = {str(p).lower() for p in _provides}
+    _is_reference = "reference" in _provides_set
+    _data_plane = manifest.get("data_plane") or {}
+    _writes = bool(_data_plane.get("writes"))
+    _plane_evidence = bool(_provides_set & _evidence_planes)
+
+    if not _is_reference:
+        _mutating = [
+            name
+            for name, tool in declared_tools.items()
+            if tool.get("evidence_class") in {"analysis", "mutating"}
+        ]
+        if manifest.get("default_case_scoped") is False and (
+            _writes or _plane_evidence or _mutating
+        ):
+            raise ValueError(
+                "Manifest declares evidence/data-plane behaviour "
+                f"(data_plane.writes={_writes}, evidence provides="
+                f"{sorted(_provides_set & _evidence_planes)}, mutating/analysis "
+                f"tools={_mutating}) but sets default_case_scoped=false. An "
+                "evidence-touching backend must remain case-scoped so the gateway "
+                "enforces the active case and injects the DB case context; remove "
+                "default_case_scoped=false (or set it true), or drop the "
+                "evidence/data-plane declaration."
+            )
+
+        for tool_name, tool in declared_tools.items():
+            if tool.get("case_scoped") is False and (
+                tool.get("evidence_class") in {"analysis", "mutating"}
+                or _writes
+                or _plane_evidence
+            ):
+                raise ValueError(
+                    f"Tool '{tool_name}' sets case_scoped=false but the tool "
+                    f"(evidence_class={tool.get('evidence_class')!r}) or its backend "
+                    "(data-plane writes / search-ingest-enrichment plane) touches "
+                    "case evidence. An evidence-touching tool must stay case-scoped "
+                    "so the gateway enforces the active case and injects the DB case "
+                    "context."
+                )
+
 
 def load_and_validate_manifest(name: str, config: dict) -> dict | None:
     backend_type = config.get("type", "stdio")

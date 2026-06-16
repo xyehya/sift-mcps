@@ -567,6 +567,85 @@ def test_non_reference_plane_without_default_case_scoped_is_allowed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 8b. XYE-24 — case-scope contradiction lint. An evidence/data-plane backend
+# must not opt out of case scope (default_case_scoped:false or per-tool
+# case_scoped:false on evidence-touching tools). Honest-author footgun guard;
+# behavioural verification is XYE-25.
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_plane_with_default_case_scoped_false_is_rejected(tmp_path):
+    """A search/ingest/enrichment backend declaring default_case_scoped=false is
+    internally contradictory: its tools would skip active-case denial + DB case
+    injection while touching case evidence."""
+    manifest = _addon_manifest(name="ex", namespace="ex")
+    manifest["capabilities"]["provides"] = ["search", "ingest", "enrichment"]
+    manifest["default_case_scoped"] = False
+    with pytest.raises(ValueError, match="default_case_scoped"):
+        load_and_validate_manifest("ex", _write_manifest(tmp_path, manifest))
+
+
+def test_data_plane_writes_with_default_case_scoped_false_is_rejected(tmp_path):
+    """data_plane.writes=true is a data-plane signal; opting out of case scope is
+    rejected even when capabilities.provides carries no evidence plane token."""
+    manifest = _addon_manifest(name="ex", namespace="ex")
+    manifest["capabilities"]["provides"] = ["baseline"]
+    manifest["data_plane"] = {"writes": True}
+    manifest["default_case_scoped"] = False
+    with pytest.raises(ValueError, match="default_case_scoped"):
+        load_and_validate_manifest("ex", _write_manifest(tmp_path, manifest))
+
+
+def test_mutating_tool_with_default_case_scoped_false_is_rejected(tmp_path):
+    """A mutating (evidence_class) tool combined with default_case_scoped=false is
+    contradictory regardless of the declared plane."""
+    manifest = _addon_manifest(name="ex", namespace="ex")
+    manifest["capabilities"]["provides"] = ["baseline"]
+    manifest["tools"] = [
+        _tool("ex_ingest", read_only=False, category="ingest"),
+        _tool("ex_health", health=True),
+    ]
+    manifest["health"] = "ex_health"
+    manifest["default_case_scoped"] = False
+    with pytest.raises(ValueError, match="default_case_scoped"):
+        load_and_validate_manifest("ex", _write_manifest(tmp_path, manifest))
+
+
+def test_evidence_tool_with_per_tool_case_scoped_false_is_rejected(tmp_path):
+    """Per-tool opt-out: an evidence-touching tool that sets case_scoped=false is
+    rejected even when the backend default is case-scoped."""
+    manifest = _addon_manifest(name="ex", namespace="ex")
+    manifest["capabilities"]["provides"] = ["baseline"]
+    manifest["default_case_scoped"] = True
+    ingest = _tool("ex_ingest", read_only=False, category="ingest")
+    ingest["case_scoped"] = False
+    manifest["tools"] = [ingest, _tool("ex_health", health=True)]
+    manifest["health"] = "ex_health"
+    with pytest.raises(ValueError, match="case_scoped"):
+        load_and_validate_manifest("ex", _write_manifest(tmp_path, manifest))
+
+
+def test_reference_plane_default_case_scoped_false_still_allowed(tmp_path):
+    """Negative control: a true reference plane (no evidence/data-plane signal)
+    keeps opting out of case scope — the lint targets only the contradiction."""
+    manifest = _addon_manifest(name="ex", namespace="ex")  # read-only reference tools
+    manifest["default_case_scoped"] = False
+    loaded = load_and_validate_manifest("ex", _write_manifest(tmp_path, manifest))
+    assert loaded is not None
+
+
+def test_shipped_opensearch_manifest_passes_contradiction_lint(tmp_path):
+    """Ground truth: the shipped evidence-plane opensearch-mcp manifest declares
+    default_case_scoped=true, so the contradiction lint must not reject it."""
+    src = _repo_root() / "packages" / "opensearch-mcp" / "sift-backend.json"
+    loaded = load_and_validate_manifest(
+        "opensearch-mcp",
+        {"type": "stdio", "command": "true", "manifest_path": str(src)},
+    )
+    assert loaded is not None
+
+
+# ---------------------------------------------------------------------------
 # 9. B-MVP-016 — scope_enforcement is a LIVE accepted field, not dead schema.
 # ---------------------------------------------------------------------------
 
