@@ -1317,9 +1317,9 @@
         "category": "ingest",
         "defer_loading": true,
         "defer_loading_rationale": "Used only while an ingest/enrich run is in flight; Tool-Search `defer_loading` candidate.",
-        "output_shape": "IngestStatusOut: ingests[] of IngestRun{case_id, status, pid, elapsed, total_indexed, bulk_failed, hosts_complete/total, artifacts_complete/total, log_file, checklist[], message, halt_reason, errors[], next_steps[], warnings[], details{}}, message. case_id='*' shows all cases; default is the active case.",
+        "output_shape": "IngestStatusOut: ingests[] of IngestRun{case_id, status, pid, elapsed, total_indexed, bulk_failed, hosts_complete/total, artifacts_complete/total, log_file, checklist[], message, halt_reason, errors[], next_steps[], warnings[], details{}}, message, authority, last_completed (OpenSearch-derived last-finished-run summary in DB-active mode). case_id='*' shows all cases; default is the active case.",
         "recommended_for_phase": "INGEST",
-        "response_shaping": "Returns a structured progress summary plus a log_file reference, not the raw run log.",
+        "response_shaping": "Returns a structured progress summary plus a log_file reference, not the raw run log. In DB-active mode ingests[] is empty (authority is postgres-durable-jobs); use last_completed to confirm a run landed.",
         "usage_examples": [
           {
             "arguments": {},
@@ -1339,6 +1339,19 @@
         "anyOf": [
           {
             "properties": {
+              "authority": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Status authority plane ('postgres-durable-jobs' in DB-active mode).",
+                "title": "Authority"
+              },
               "ingests": {
                 "description": "Running or recent ingest/enrich runs.",
                 "items": {
@@ -1532,6 +1545,33 @@
                 "title": "Ingests",
                 "type": "array"
               },
+              "job_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Echoed durable job_id when one was supplied for polling.",
+                "title": "Job Id"
+              },
+              "last_completed": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "OpenSearch-derived summary of the last finished ingest for the case (most-recent index, its creation time, index/doc totals). Lets you confirm a run landed without polling opensearch_count. Not the Postgres durable-job record.",
+                "title": "Last Completed"
+              },
               "message": {
                 "anyOf": [
                   {
@@ -1544,6 +1584,19 @@
                 "default": null,
                 "description": "Summary message when no runs are present.",
                 "title": "Message"
+              },
+              "next_step": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Suggested next polling step, when applicable.",
+                "title": "Next Step"
               }
             },
             "required": [
@@ -2673,7 +2726,7 @@
             "type": "string"
           },
           "field": {
-            "description": "Field to group by. CSV/registry text fields need '.keyword' (e.g. 'Path.keyword'); evtx fields like event.code are already keyword.",
+            "description": "Field to group by (terms aggregation). CSV/registry text fields need '.keyword' (e.g. 'Path.keyword'); evtx fields like event.code are already keyword. There is no agg_type parameter \u2014 aggregation is always group-by.",
             "minLength": 1,
             "title": "Field",
             "type": "string"
@@ -2686,7 +2739,7 @@
           },
           "limit": {
             "default": 50,
-            "description": "Max buckets. Hard cap 500.",
+            "description": "Max buckets. Hard cap 500. This is the bucket cap; there is no 'size' arg.",
             "maximum": 500,
             "minimum": 1,
             "title": "Limit",
@@ -2694,7 +2747,7 @@
           },
           "query": {
             "default": "*",
-            "description": "query_string filter applied before aggregation.",
+            "description": "query_string filter applied before aggregation (not an agg_type).",
             "title": "Query",
             "type": "string"
           }
@@ -2710,9 +2763,9 @@
         "category": "search-analysis",
         "defer_loading": false,
         "defer_loading_rationale": "Frequent pivot tool; keep always-loaded alongside search/timeline.",
-        "output_shape": "AggregateOut: field, total_docs (matched before bucketing), buckets[] of {key, count}, truncated (true \u21d2 more buckets than limit exist).",
+        "output_shape": "AggregateOut: field, total_docs (matched before bucketing), buckets[] of {key, count}, truncated (true \u21d2 more buckets than limit exist), full_path (set when a large/byte-heavy bucket set was autosaved to agent/aggregations/ and only the top-N are inline).",
         "recommended_for_phase": "ANALYZE",
-        "response_shaping": "Returns only the requested buckets, never raw docs \u2014 the canonical summary-over-bytes shape. CSV/registry text fields need '.keyword'; evtx fields like event.code are already keyword.",
+        "response_shaping": "Returns only the requested buckets, never raw docs \u2014 the canonical summary-over-bytes shape. Accepted args are field/query/index/case_id/limit only; there is no agg_type or size. CSV/registry text fields need '.keyword'; evtx fields like event.code are already keyword.",
         "usage_examples": [
           {
             "arguments": {
@@ -2764,6 +2817,19 @@
                 "description": "Field grouped by this aggregation.",
                 "title": "Field",
                 "type": "string"
+              },
+              "full_path": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Case-relative path (e.g. agent/aggregations/aggregation_<uuid>.json) holding the FULL bucket set when it exceeded the inline count/byte cap; only the top-N are in buckets. Read/grep this file instead of re-aggregating.",
+                "title": "Full Path"
               },
               "total_docs": {
                 "description": "Docs matching query before bucketing.",

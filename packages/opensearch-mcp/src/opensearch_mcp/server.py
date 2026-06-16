@@ -724,15 +724,18 @@ def _hoist_constant_fields(
     return common, slim_docs
 
 
-def _save_full_search_results(docs: list[dict]) -> str | None:
-    """Persist the full search hit set under ``<case>/agent/searches/`` and
-    return a case-relative ref (e.g. ``agent/searches/search_<uuid>.json``).
+def _save_full_results(kind: str, payload) -> str | None:
+    """Persist a full result payload under ``<case>/agent/<kind>/`` and return a
+    case-relative ref (e.g. ``agent/searches/search_<uuid>.json``).
 
     Mirrors the run_command / output-cap disk-spill pattern so a large result
-    set can be saved once and grepped/transformed on disk by the agent instead
-    of being dumped inline (PTC "query -> save -> grep" loop). Returns ``None``
-    if there is no active case dir or the write fails (the caller then degrades
-    to returning the inline top-N without a path).
+    set (search hits, aggregate buckets, ...) can be saved once and
+    grepped/transformed on disk by the agent instead of being dumped inline
+    (PTC "query -> save -> grep" loop). ``kind`` selects both the subdirectory
+    and the filename prefix (``searches`` -> ``search_*.json``;
+    ``aggregations`` -> ``aggregation_*.json``). Returns ``None`` if there is no
+    active case dir or the write fails (the caller then degrades to returning
+    the inline preview without a path).
     """
     import json as _json
     import uuid as _uuid
@@ -740,27 +743,63 @@ def _save_full_search_results(docs: list[dict]) -> str | None:
     case_dir = active_case_dir()
     if not case_dir:
         return None
+    # filename prefix per kind: searches -> "search", aggregations -> "aggregation"
+    prefix = {"searches": "search", "aggregations": "aggregation"}.get(
+        kind, kind.rstrip("s") or kind
+    )
     try:
         case_resolved = Path(case_dir).resolve()
-        out_dir = case_resolved / "agent" / "searches"
+        out_dir = case_resolved / "agent" / kind
         # Safety: stay under <case>/agent (parallels run_command + output cap).
         if not out_dir.is_relative_to(case_resolved / "agent"):
             return None
         out_dir.mkdir(parents=True, exist_ok=True)
-        fname = f"search_{_uuid.uuid4().hex}.json"
+        fname = f"{prefix}_{_uuid.uuid4().hex}.json"
         target = out_dir / fname
         with open(target, "w", encoding="utf-8") as fh:
-            _json.dump(docs, fh, ensure_ascii=False, default=str)
-        return f"agent/searches/{fname}"
+            _json.dump(payload, fh, ensure_ascii=False, default=str)
+        return f"agent/{kind}/{fname}"
     except OSError as exc:  # pragma: no cover - defensive
-        logger.warning("opensearch_search: failed to persist full results: %s", exc)
+        logger.warning("opensearch %s: failed to persist full results: %s", kind, exc)
         return None
 
 
-# Above this many returned hits, opensearch_search autosaves the full set to
-# disk and returns only the top-N inline (run_command-style disk spill).
+def _save_full_search_results(docs: list[dict]) -> str | None:
+    """Persist the full search hit set under ``<case>/agent/searches/``.
+
+    Thin back-compat wrapper around :func:`_save_full_results`; existing call
+    sites and tests reference this name.
+    """
+    return _save_full_results("searches", docs)
+
+
+def _payload_bytes(payload) -> int:
+    """Approximate the serialized JSON byte size of a result payload.
+
+    Used by the byte-size autosave cap so a small *count* of very large
+    documents (e.g. 20 fat SRUM rows) still spills to disk instead of flooding
+    context. Best-effort: any serialization failure returns 0 so the byte cap
+    simply does not trigger (the count threshold still applies).
+    """
+    import json as _json
+
+    try:
+        return len(_json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"))
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return 0
+
+
+# Autosave caps (mirror run_command output-cap disk spill). A result set
+# exceeding EITHER the hit/bucket count threshold OR the serialized byte cap is
+# written in full to <case>/agent/<kind>/ and only a small inline preview is
+# returned. The byte cap catches the "few but huge docs" case the count
+# threshold misses (e.g. 20 large SRUM rows that still flood context).
 _SEARCH_AUTOSAVE_THRESHOLD = 20
 _SEARCH_INLINE_TOP_N = 20
+_SEARCH_AUTOSAVE_MAX_BYTES = 64 * 1024  # 64 KiB inline ceiling for search hits
+_AGG_AUTOSAVE_THRESHOLD = 100
+_AGG_INLINE_TOP_N = 50
+_AGG_AUTOSAVE_MAX_BYTES = 32 * 1024  # 32 KiB inline ceiling for aggregate buckets
 
 
 def _resolve_index(index: str, case_id: str) -> str:
@@ -952,9 +991,11 @@ def opensearch_search(
       to 500 chars. Use opensearch_get_event(event_id, index) to fetch a full document.
     Constant fields shared by every hit (e.g. vhir.case_id, vhir.provenance_id) are
       hoisted once into common_fields instead of repeated per hit.
-    Large results: when more than 20 hits are returned, the FULL set is saved to
-      agent/searches/search_<uuid>.json (returned as the case-relative full_path) and
-      only the top 20 are inline — read/grep that file instead of re-querying.
+    Large results: when more than 20 hits are returned OR the hit set exceeds a
+      ~64 KiB inline byte cap (a few very large docs still trip this), the FULL set
+      is autosaved to agent/searches/search_<uuid>.json (returned as the case-relative
+      full_path) and only a small inline preview is returned — read/grep that file
+      instead of re-querying.
 
     Example:
       opensearch_search(query='event.code:4688 AND process.name:*powershell*',
@@ -1031,15 +1072,25 @@ def opensearch_search(
     # (vhir.case_id / vhir.provenance_id etc.) instead of repeating them per hit.
     common_fields, docs = _hoist_constant_fields(docs)
 
-    # Large-result autosave: when the hit set exceeds the threshold, persist the
-    # FULL set to <case>/agent/searches/search_<uuid>.json and return only the
-    # inline top-N plus a case-relative `full_path`. Keeps a 200-hit full-doc
-    # response from flooding context (mirrors run_command save-output).
+    # Large-result autosave: when the hit set exceeds the COUNT threshold OR the
+    # serialized BYTE cap (a small count of very large docs — e.g. fat SRUM
+    # rows — still floods context), persist the FULL set to
+    # <case>/agent/searches/search_<uuid>.json and return only the inline top-N
+    # plus a case-relative `full_path`. Mirrors run_command save-output.
     full_path: str | None = None
-    if len(docs) > _SEARCH_AUTOSAVE_THRESHOLD:
-        full_path = _save_full_search_results(docs)
+    _too_many = len(docs) > _SEARCH_AUTOSAVE_THRESHOLD
+    _too_big = _payload_bytes(docs) > _SEARCH_AUTOSAVE_MAX_BYTES
+    if _too_many or _too_big:
+        full_path = _save_full_results("searches", docs)
         if full_path:
             inline_docs = docs[:_SEARCH_INLINE_TOP_N]
+            # Byte-driven spill of fat docs: even the inline top-N may be large,
+            # so cap the inline preview by bytes too (shrink N until it fits).
+            while (
+                len(inline_docs) > 1
+                and _payload_bytes(inline_docs) > _SEARCH_AUTOSAVE_MAX_BYTES
+            ):
+                inline_docs = inline_docs[: max(1, len(inline_docs) // 2)]
         else:
             inline_docs = docs
     else:
@@ -1152,8 +1203,17 @@ def opensearch_aggregate(
     Prefer over opensearch_search when you need a distribution, not individual documents.
     Use opensearch_field_values when you only need the value set without frequency ranking.
 
-    Returns: {field, total_docs, buckets: [{key, count}], truncated, audit_id}
-    Output cap: limit max 500 buckets; truncated=true when capped.
+    Accepted args are exactly: field (required), query, index, case_id, limit.
+    There is NO agg_type or size parameter — the aggregation is always a terms
+    (group-by) bucketing of `field`; use `limit` (not `size`) to cap buckets.
+
+    Returns: {field, total_docs, buckets: [{key, count}], truncated, audit_id, full_path?}
+    Output cap: limit max 500 buckets; truncated=true when the bucket count is capped.
+    Large results: when more than 100 buckets are returned OR the bucket set exceeds a
+      ~32 KiB inline byte cap, the FULL bucket set is autosaved to
+      agent/aggregations/aggregation_<uuid>.json (returned as the case-relative full_path)
+      and only a small inline preview is returned — read/grep that file instead of
+      re-aggregating.
 
     Example:
       opensearch_aggregate(field='event.code', case_id='rocba-drive-20260526-1417')
@@ -1167,12 +1227,13 @@ def opensearch_aggregate(
         process.name to see only SYSTEM-context processes.
 
     Args:
-        field: Field to aggregate on (e.g., 'host.name', 'event.code').
-        query: OpenSearch query_string filter (default: all).
+        field: Field to aggregate on (e.g., 'host.name', 'event.code'). Required.
+        query: OpenSearch query_string filter (default: all). Not agg_type.
         index: Index pattern. Overrides case_id if provided.
         case_id: Case ID from case_info. If omitted, defaults to the active
             portal case from SIFT_CASE_DIR.
-        limit: Max buckets (default 50, max 500).
+        limit: Max buckets (default 50, max 500). This is the bucket cap; there
+            is no separate 'size' parameter.
         case_dir: Gateway-injected authoritative case directory. Do not set;
             the Gateway populates it from the DB active case.
     """
@@ -1205,6 +1266,27 @@ def opensearch_aggregate(
         "buckets": buckets,
         "truncated": len(buckets) >= limit,
     }
+
+    # Large-result autosave (mirrors opensearch_search): a big bucket set, or a
+    # smaller set of large keys exceeding the byte cap, is saved in full to
+    # <case>/agent/aggregations/aggregation_<uuid>.json and only a small inline
+    # preview is returned. Keeps a 500-bucket distribution from flooding context.
+    _too_many = len(buckets) > _AGG_AUTOSAVE_THRESHOLD
+    _too_big = _payload_bytes(buckets) > _AGG_AUTOSAVE_MAX_BYTES
+    if _too_many or _too_big:
+        full_path = _save_full_results("aggregations", buckets)
+        if full_path:
+            inline = buckets[:_AGG_INLINE_TOP_N]
+            while len(inline) > 1 and _payload_bytes(inline) > _AGG_AUTOSAVE_MAX_BYTES:
+                inline = inline[: max(1, len(inline) // 2)]
+            resp["buckets"] = inline
+            resp["full_path"] = full_path
+            resp["full_results_note"] = (
+                f"Full bucket set ({len(buckets)} buckets) saved to {full_path}; "
+                f"only the top {len(inline)} are inline. Read or grep the saved "
+                "file for the rest instead of re-aggregating."
+            )
+
     aid = audit.log(
         tool="opensearch_aggregate",
         params={"field": field, "query": query, "index": index},
@@ -2557,6 +2639,55 @@ def opensearch_ingest(
             result_summary=f"discovery: {len(hosts)} hosts",
         )
         resp = {"status": "preview", "hosts": summary, "case_id": case_id}
+
+        # Plan clarity (XYE-29): make the dry_run "plan" explicit about what a
+        # real run would do, especially with force=True against already-indexed
+        # data. Previously dry_run=True,force=True listed per-index `existing`
+        # counts but never explained the (no-op-looking) result, so the plan read
+        # as empty. State the existing total and what force will re-ingest.
+        _existing_total = sum(
+            count
+            for h in summary
+            for count in (h.get("existing") or {}).values()
+        )
+        if _existing_total > 0:
+            if force:
+                resp["plan"] = {
+                    "action": "re-ingest",
+                    "already_indexed_docs": _existing_total,
+                    "force": True,
+                    "explanation": (
+                        f"This case already has {_existing_total:,} docs in the "
+                        "indices listed under each host's 'existing'. With force=True a "
+                        "real run (dry_run=False) WOULD re-ingest the discovered "
+                        "artifacts; ingest dedup means already-indexed events are not "
+                        "duplicated, so the net new-doc count may be ~0 if nothing "
+                        "changed on disk. Set dry_run=False, force=True to proceed."
+                    ),
+                }
+            else:
+                resp["plan"] = {
+                    "action": "blocked-without-force",
+                    "already_indexed_docs": _existing_total,
+                    "force": False,
+                    "explanation": (
+                        f"This case already has {_existing_total:,} docs. A real run "
+                        "(dry_run=False) would be BLOCKED to prevent accidental "
+                        "duplication unless you pass force=True. Review "
+                        "opensearch_case_summary first; ingest only new evidence paths, "
+                        "or set force=True to deliberately re-ingest."
+                    ),
+                }
+        else:
+            resp["plan"] = {
+                "action": "ingest",
+                "already_indexed_docs": 0,
+                "force": force,
+                "explanation": (
+                    "No existing docs for the discovered artifacts. A real run "
+                    "(dry_run=False) would index them; force is not required."
+                ),
+            }
         if aid:
             resp["audit_id"] = aid
         return resp
@@ -2667,14 +2798,71 @@ def opensearch_ingest(
     )
 
 
+def _last_completed_from_opensearch(filter_case: str) -> dict | None:
+    """Derive a last-COMPLETED ingest summary from OpenSearch for ``filter_case``.
+
+    DB-active mode (BATCH-K4) keeps the durable-job authority in Postgres, and
+    the agent backend has no DB credentials by design — so it cannot read the
+    durable job row. It CAN, however, read OpenSearch (it already does for every
+    other tool). The most-recently-created case index plus the case doc total is
+    an authoritative, tamper-resistant signal that a run finished, letting an
+    agent confirm completion WITHOUT polling opensearch_count in a loop.
+
+    Returns a summary dict (most-recent index, its OpenSearch creation time, the
+    case index count, and the total doc count) or ``None`` when there are no case
+    indices yet or OpenSearch is unreachable. This is OpenSearch-derived, not the
+    Postgres durable-job record, and is labelled as such by the caller.
+    """
+    if not filter_case or filter_case == "*":
+        return None
+    try:
+        from opensearch_mcp.paths import sanitize_index_component
+
+        pattern = f"case-{sanitize_index_component(filter_case)}-*"
+        client = _get_os()
+        rows = (
+            _os_call(
+                client.cat.indices,
+                index=pattern,
+                format="json",
+                h="index,docs.count,creation.date.string",
+            )
+            or []
+        )
+    except Exception:
+        # Index-missing / cluster issues degrade to "no last-completed signal".
+        return None
+    if not rows:
+        return None
+    total_docs = sum(int(r.get("docs.count") or 0) for r in rows)
+    # Most recent index by OpenSearch creation date (lexicographically sortable
+    # ISO string from cat indices).
+    latest = max(rows, key=lambda r: r.get("creation.date.string") or "")
+    return {
+        "source": "opensearch-derived",
+        "case_id": filter_case,
+        "index_count": len(rows),
+        "total_docs": total_docs,
+        "most_recent_index": latest.get("index"),
+        "most_recent_index_created": latest.get("creation.date.string"),
+        "note": (
+            "Derived from OpenSearch case indices (NOT the Postgres durable-job "
+            "record). Confirms a prior ingest landed; for authoritative per-job "
+            "status of a worker-dispatched ingest, poll job_status(job_id)."
+        ),
+    }
+
+
 def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str = "") -> dict:
     """Check status of running or recent ingest operations.
 
     Defaults to active case. Pass case_id="*" to see all cases.
     In DB-active mode (BATCH-K4), local mirror files are not read. The tool
-    returns ingests=[] + authority="postgres-durable-jobs". Only a worker-
-    dispatched ingest (opensearch_ingest status="queued") yields a durable
-    job_id you can poll with job_status(job_id); a non-dispatched ingest
+    returns ingests=[] + authority="postgres-durable-jobs". It also includes a
+    last_completed summary DERIVED FROM OPENSEARCH (most-recent case index +
+    doc total) so you can confirm a finished run without polling opensearch_count.
+    Only a worker-dispatched ingest (opensearch_ingest status="queued") yields a
+    durable job_id you can poll with job_status(job_id); a non-dispatched ingest
     returns only run_id/audit_id and has NO pollable job_id — confirm it landed
     with opensearch_count / opensearch_case_summary instead.
 
@@ -2732,6 +2920,11 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
         if job_id:
             resp["job_id"] = job_id
             resp["next_step"] = f"Call job_status(job_id='{job_id}') for durable status."
+        # Last-completed signal derived from OpenSearch (the backend has no DB
+        # creds; this confirms a finished run without polling opensearch_count).
+        last_completed = _last_completed_from_opensearch(filter_case)
+        if last_completed:
+            resp["last_completed"] = last_completed
         return resp
 
     ingests = read_active_ingests()

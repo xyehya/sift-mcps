@@ -217,12 +217,21 @@ class AggregateIn(CaseScopedQueryBase):
         ...,
         min_length=1,
         description=(
-            "Field to group by. CSV/registry text fields need '.keyword' "
-            "(e.g. 'Path.keyword'); evtx fields like event.code are already keyword."
+            "Field to group by (terms aggregation). CSV/registry text fields need "
+            "'.keyword' (e.g. 'Path.keyword'); evtx fields like event.code are already "
+            "keyword. There is no agg_type parameter — aggregation is always group-by."
         ),
     )
-    query: str = Field("*", description="query_string filter applied before aggregation.")
-    limit: int = Field(50, ge=1, le=500, description="Max buckets. Hard cap 500.")
+    query: str = Field(
+        "*",
+        description="query_string filter applied before aggregation (not an agg_type).",
+    )
+    limit: int = Field(
+        50,
+        ge=1,
+        le=500,
+        description="Max buckets. Hard cap 500. This is the bucket cap; there is no 'size' arg.",
+    )
 
 
 class Bucket(BaseModel):
@@ -235,6 +244,14 @@ class AggregateOut(BaseModel):
     total_docs: int = Field(..., description="Docs matching query before bucketing.")
     buckets: list[Bucket] = Field(..., description="Top-N buckets for the requested field.")
     truncated: bool = Field(..., description="True when bucket count hit the limit.")
+    full_path: str | None = Field(
+        None,
+        description=(
+            "Case-relative path (e.g. agent/aggregations/aggregation_<uuid>.json) holding "
+            "the FULL bucket set when it exceeded the inline count/byte cap; only the "
+            "top-N are in buckets. Read/grep this file instead of re-aggregating."
+        ),
+    )
 
 
 class GetEventIn(BaseModel):
@@ -592,6 +609,23 @@ class IngestRun(BaseModel):
 class IngestStatusOut(BaseModel):
     ingests: list[IngestRun] = Field(..., description="Running or recent ingest/enrich runs.")
     message: str | None = Field(None, description="Summary message when no runs are present.")
+    authority: str | None = Field(
+        None,
+        description="Status authority plane ('postgres-durable-jobs' in DB-active mode).",
+    )
+    last_completed: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "OpenSearch-derived summary of the last finished ingest for the case "
+            "(most-recent index, its creation time, index/doc totals). Lets you "
+            "confirm a run landed without polling opensearch_count. Not the Postgres "
+            "durable-job record."
+        ),
+    )
+    job_id: str | None = Field(
+        None, description="Echoed durable job_id when one was supplied for polling."
+    )
+    next_step: str | None = Field(None, description="Suggested next polling step, when applicable.")
 
 
 class EnrichIntelIn(BaseModel):
@@ -882,6 +916,7 @@ async def run_opensearch_aggregate(params: AggregateIn) -> ToolResult:
         total_docs=int(raw.get("total_docs", 0)),
         buckets=[Bucket.model_validate(bucket) for bucket in raw.get("buckets", [])],
         truncated=bool(raw.get("truncated", False)),
+        full_path=raw.get("full_path"),
     )
     return _success_tool_result(out, meta)
 
@@ -1199,7 +1234,14 @@ async def run_opensearch_ingest_status(params: IngestStatusIn) -> ToolResult:
             )
         )
     return _success_tool_result(
-        IngestStatusOut(ingests=runs, message=raw.get("message")),
+        IngestStatusOut(
+            ingests=runs,
+            message=raw.get("message"),
+            authority=raw.get("authority"),
+            last_completed=raw.get("last_completed"),
+            job_id=raw.get("job_id"),
+            next_step=raw.get("next_step"),
+        ),
         meta,
     )
 
@@ -1568,12 +1610,15 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
         ),
         "output_shape": (
             "AggregateOut: field, total_docs (matched before bucketing), buckets[] of "
-            "{key, count}, truncated (true ⇒ more buckets than limit exist)."
+            "{key, count}, truncated (true ⇒ more buckets than limit exist), full_path "
+            "(set when a large/byte-heavy bucket set was autosaved to "
+            "agent/aggregations/ and only the top-N are inline)."
         ),
         "response_shaping": (
             "Returns only the requested buckets, never raw docs — the canonical "
-            "summary-over-bytes shape. CSV/registry text fields need '.keyword'; evtx "
-            "fields like event.code are already keyword."
+            "summary-over-bytes shape. Accepted args are field/query/index/case_id/limit "
+            "only; there is no agg_type or size. CSV/registry text fields need "
+            "'.keyword'; evtx fields like event.code are already keyword."
         ),
         "usage_examples": [
             _example("Top event codes in the active case", field="event.code"),
@@ -1823,12 +1868,14 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "IngestStatusOut: ingests[] of IngestRun{case_id, status, pid, elapsed, "
             "total_indexed, bulk_failed, hosts_complete/total, "
             "artifacts_complete/total, log_file, checklist[], message, halt_reason, "
-            "errors[], next_steps[], warnings[], details{}}, message. case_id='*' "
-            "shows all cases; default is the active case."
+            "errors[], next_steps[], warnings[], details{}}, message, authority, "
+            "last_completed (OpenSearch-derived last-finished-run summary in DB-active "
+            "mode). case_id='*' shows all cases; default is the active case."
         ),
         "response_shaping": (
             "Returns a structured progress summary plus a log_file reference, not the "
-            "raw run log."
+            "raw run log. In DB-active mode ingests[] is empty (authority is "
+            "postgres-durable-jobs); use last_completed to confirm a run landed."
         ),
         "usage_examples": [
             _example("Poll the active case's runs", ),
