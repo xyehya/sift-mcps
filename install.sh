@@ -577,6 +577,57 @@ PY
 # Phase 3 — state directories
 # =============================================================================
 
+# Edge-case (XYE-42): a prior install was torn down — e.g. via scripts/uninstall.sh,
+# which PRESERVES /cases by design — leaving orphaned evidence and/or state behind.
+# A fresh install seeds an EMPTY control-plane DB, so those leftover case dirs would
+# no longer match any registered case. Rather than abort or silently clobber them,
+# move the orphaned data to a timestamped backup and proceed with clean directories,
+# warning the operator where it went.
+#
+# Triggers ONLY on a fresh install (no prior gateway config at $SIFT_HOME). An
+# idempotent re-run / in-place upgrade keeps $SIFT_HOME, so a live case is never moved.
+# Override the backup location with SIFT_PREINSTALL_BACKUP_DIR (default /var/backups/sift).
+backup_preexisting_data_if_fresh() {
+  # Prior config present => idempotent re-run/upgrade. Never move data.
+  if sudo_if_needed test -e "$SIFT_HOME"; then
+    return 0
+  fi
+
+  # Collect data roots that exist AND are non-empty (orphaned by a prior teardown).
+  local to_backup=() root
+  for root in "$SIFT_CASE_ROOT" "$SIFT_STATE_DIR"; do
+    if sudo_if_needed test -d "$root" && \
+       [[ -n "$(sudo_if_needed find "$root" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+      to_backup+=("$root")
+    fi
+  done
+  [[ ${#to_backup[@]} -eq 0 ]] && return 0
+
+  local stamp backup_root
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  backup_root="${SIFT_PREINSTALL_BACKUP_DIR:-/var/backups/sift}/preinstall-$stamp"
+  warn "Fresh install, but pre-existing SIFT data was found (no prior config at $SIFT_HOME)."
+  warn "  This is normal after scripts/uninstall.sh (which preserves /cases). To avoid losing"
+  warn "  it or colliding with the new empty control-plane, it is being moved aside:"
+  sudo_if_needed install -d -m 700 "$backup_root"
+
+  local src base dst
+  for src in "${to_backup[@]}"; do
+    base="$(basename "$src")"
+    dst="$backup_root/$base"
+    warn "    $src  ->  $dst"
+    # Same-filesystem mv is a fast rename and works even with chattr +i evidence
+    # inside. Across filesystems, fall back to copy-then-purge (_purge_tree clears
+    # immutable/append-only flags first).
+    if ! sudo_if_needed mv "$src" "$dst" 2>/dev/null; then
+      sudo_if_needed cp -a "$src" "$dst" && _purge_tree "$src"
+    fi
+  done
+  warn "  Pre-install backup complete: $backup_root"
+  warn "  It may contain write-protected (chattr +i) evidence; clear with 'sudo chattr -R -i' before removing."
+  warn "  Proceeding with a clean install."
+}
+
 install_state_dirs() {
   # Runtime state is owned by sift-service so the SERVICE can read/write it. The
   # installer runs as the operator, so every mkdir/chown crosses the boundary via
@@ -3406,6 +3457,9 @@ main() {
   # The service user + shared `sift` group must exist before install_state_dirs
   # chowns the state/secret tree to sift-service.
   ensure_gateway_service_user
+  # XYE-42: on a fresh install, move any orphaned /cases + state aside (backup +
+  # warn) so a prior teardown's leftover evidence never collides or is clobbered.
+  backup_preexisting_data_if_fresh
   install_state_dirs
   configure_agent_runtime
   # agent_runtime is created by configure_agent_runtime (setup-agent-runtime.sh);
