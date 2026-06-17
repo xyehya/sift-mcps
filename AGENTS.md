@@ -191,9 +191,7 @@ Next: <exact next action>.
 - Host repo path: `/home/yk/AI/SIFTHACK/sift-mcps`.
 - Intended repo rename target: `ProtocolSiftGateway`; do not assume it has
   landed until the Linear rename issue is complete.
-- SIFT VM: `sansforensics@192.168.122.81`.
-- VM credentials are operator-held. Do not write passwords into Linear, commits,
-  or docs. Ask.
+- SIFT VM: `sansforensics@192.168.122.81` - ssh key-based login - no passwsord needed
 - SIFT VM target Python: `/usr/bin/python3.12`.
 - Do not install/download managed Python on the VM.
 - Use `UV_NO_MANAGED_PYTHON=1` and `UV_PYTHON_DOWNLOADS=never` on the VM.
