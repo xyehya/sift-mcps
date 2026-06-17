@@ -32,6 +32,7 @@ from sift_gateway.backends import (
     load_and_validate_manifest,
     validate_manifest_contract,
 )
+from sift_gateway.health import _operator_backend_health
 
 logger = logging.getLogger(__name__)
 
@@ -369,11 +370,13 @@ async def list_backends(request: Request) -> JSONResponse:
         return JSONResponse({"error": "mcp backend registry unavailable"}, status_code=503)
 
     backends = []
+    proxy_mounted_set = getattr(gateway, "_mounted_proxy_backends", None) or set()
     for record in records:
         name = record.name
         enabled = record.enabled
         backend = gateway.backends.get(name)
         started = backend.started if backend else False
+        proxy_mounted = name in proxy_mounted_set
         manifest = getattr(backend, "manifest", None) if backend else record.manifest
         requires, unmet_requires = _requirement_status(gateway, manifest)
 
@@ -382,7 +385,16 @@ async def list_backends(request: Request) -> JSONResponse:
             if unmet_requires:
                 health = {"status": "gated", "detail": f"Unmet requirements: {', '.join(unmet_requires)}"}
             elif not started:
-                health = {"status": "stopped"}
+                # A proxy-mounted add-on (OSX1) runs no persistent subprocess: it
+                # lazy-starts per call. Mirror /health's operator translation so it
+                # reads "ok — starts on demand" instead of a misleading "stopped".
+                # A non-mounted, not-started backend stays "stopped" unchanged.
+                health = _operator_backend_health(gateway, name, {"status": "stopped"})
+                if proxy_mounted:
+                    try:
+                        registry.update_health(name, health.get("status", "unknown"), health.get("detail"))
+                    except Exception as e:
+                        logger.warning("Failed to persist health status for backend %s: %s", name, e)
             else:
                 try:
                     health = await backend.health_check()
@@ -407,6 +419,7 @@ async def list_backends(request: Request) -> JSONResponse:
                 "health": health,
                 "requires": requires,
                 "unmet_requires": unmet_requires,
+                "on_demand": proxy_mounted,
             }
         )
         backends.append(item)

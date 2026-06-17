@@ -19,6 +19,7 @@ These tests prove:
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from fastmcp import FastMCP
@@ -243,3 +244,90 @@ def test_non_proxy_backend_is_still_eagerly_started():
 
     asyncio.run(_one_pass())
     assert backend.start_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# XYE-44: GET /api/v1/backends must not report a proxy-mounted, on-demand
+# add-on as "stopped". It should mirror /health's operator translation
+# (ok + mounted_proxy) and flag on_demand=True, so the DB-registry table agrees
+# with the System Health panel instead of looking broken.
+# ---------------------------------------------------------------------------
+
+
+class _FakeRecord:
+    """Minimal app.mcp_backends record stand-in for list_backends()."""
+
+    def __init__(self, name: str, manifest: dict, *, enabled: bool = True):
+        self.name = name
+        self.manifest = manifest
+        self.enabled = enabled
+        self.updated_at = None  # with a non-None catalog load time -> not pending
+
+    def public_dict(self, *, started: bool, available: bool, pending_apply: bool) -> dict:
+        return {
+            "name": self.name,
+            "type": self.manifest.get("transport", "stdio"),
+            "enabled": self.enabled,
+            "started": started,
+            "available": available,
+            "pending_apply": pending_apply,
+        }
+
+
+class _ListRegistry:
+    def __init__(self, records: list):
+        self._records = records
+        self.health_updates: list[tuple] = []
+
+    def list_backends(self):
+        return self._records
+
+    def update_health(self, name, status, detail=None):
+        self.health_updates.append((name, status, detail))
+
+
+class _FakeRequest:
+    def __init__(self, gateway):
+        app = type("App", (), {})()
+        app.state = type("State", (), {"gateway": gateway})()
+        self.app = app
+
+
+def _list_backends_item(gateway, record) -> dict:
+    from sift_gateway.rest import list_backends
+
+    gateway.mcp_backend_registry = _ListRegistry([record])
+    # Non-None catalog-load time so _backend_pending_apply keys off updated_at
+    # (None -> not pending) rather than defaulting to enabled=True.
+    gateway._mcp_catalog_loaded_at = 1
+    resp = asyncio.run(list_backends(_FakeRequest(gateway)))
+    payload = json.loads(resp.body)
+    assert payload["count"] == 1
+    return payload["backends"][0]
+
+
+def test_list_backends_reports_proxy_mounted_addon_as_on_demand_not_stopped():
+    gateway = _make_gateway()
+    # Proxy-mounted but NOT started: the OSX1 on-demand resting state.
+    gateway.backends["opensearch-mcp"] = _FakeBackend(_MANIFEST, started=False)
+    gateway._mounted_proxy_backends = {"opensearch-mcp"}
+
+    item = _list_backends_item(gateway, _FakeRecord("opensearch-mcp", _MANIFEST))
+
+    assert item["on_demand"] is True
+    assert item["started"] is False
+    assert item["pending_apply"] is False
+    # No longer "stopped" — mirrors /health's operator translation.
+    assert item["health"]["status"] == "ok"
+    assert item["health"].get("mounted_proxy") is True
+
+
+def test_list_backends_non_mounted_not_started_stays_stopped():
+    gateway = _make_gateway()
+    gateway.backends["other-mcp"] = _FakeBackend(_MANIFEST, started=False)
+    gateway._mounted_proxy_backends = set()
+
+    item = _list_backends_item(gateway, _FakeRecord("other-mcp", _MANIFEST))
+
+    assert item["on_demand"] is False
+    assert item["health"]["status"] == "stopped"

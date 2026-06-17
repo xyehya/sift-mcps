@@ -113,4 +113,28 @@ describe('Backends tab payload and logic validation', () => {
       canRestart: false,
     })
   })
+
+  it('hides start/stop/restart for on-demand (proxy-mounted) backends', () => {
+    // XYE-44: a proxy-mounted add-on lazy-starts per call, so manual lifecycle
+    // controls are meaningless (Start would spawn a redundant subprocess). The
+    // row renders the buttons only when the backend is NOT on-demand.
+    const showsLifecycleButtons = (backend) => !backend.on_demand
+
+    expect(showsLifecycleButtons({ on_demand: true, enabled: true, started: false })).toBe(false)
+    expect(showsLifecycleButtons({ on_demand: false, enabled: true, started: false })).toBe(true)
+  })
+
+  it('treats a proxy-mounted backend as healthy on-demand, not stopped', () => {
+    // The API now reports on_demand + health.status "ok" for proxy-mounts. The
+    // STATUS sub-text should read "Ready · on-demand", never "Stopped".
+    const statusLabel = (b) =>
+      b.pending_apply ? 'Pending restart'
+        : b.on_demand ? 'Ready · on-demand'
+        : b.started ? 'Started'
+        : 'Stopped'
+
+    expect(statusLabel({ on_demand: true, started: false, pending_apply: false })).toBe('Ready · on-demand')
+    expect(statusLabel({ on_demand: false, started: false, pending_apply: false })).toBe('Stopped')
+    expect(statusLabel({ on_demand: true, started: false, pending_apply: true })).toBe('Pending restart')
+  })
 })
