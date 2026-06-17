@@ -88,6 +88,9 @@ SUPABASE_PROJECT_DIR="${SIFT_SUPABASE_PROJECT_DIR:-$HOME/.sift/supabase-project}
 SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
 GATEWAY_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-gateway.service"
 JOB_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-job-worker.service"
+# feat/opensearch-workers: dedicated OpenSearch ingest/enrich worker template unit
+# (install.sh: OPENSEARCH_WORKER_SERVICE_FILE). Instances are sift-opensearch-worker@N.
+OPENSEARCH_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-opensearch-worker@.service"
 
 # Repo root for docker-compose files.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -422,6 +425,29 @@ teardown_opensearch() {
     run_if_live docker compose -f "$compose_file" down -v --remove-orphans 2>/dev/null || true
   fi
 
+  # Explicit fallback: ensure the named OpenSearch data volume is gone regardless of
+  # the compose project name in effect. `docker compose down -v` removes
+  # <project>_opensearch-data, where <project> is the REPO_DIR basename (e.g.
+  # "sift-mcps"); sweep up any leftover SIFT-owned opensearch-data volume.
+  if command -v docker >/dev/null 2>&1; then
+    local _os_project
+    _os_project="$(basename "$REPO_DIR")"
+    local _os_vols=()
+    local _v
+    for _v in $(docker volume ls --quiet 2>/dev/null | grep -E "_opensearch-data$" || true); do
+      # Only target SIFT/compose-owned opensearch volumes, never unrelated ones.
+      case "$_v" in
+        "${_os_project}_opensearch-data"|sift-mcps_opensearch-data) _os_vols+=("$_v") ;;
+      esac
+    done
+    local _vol
+    for _vol in "${_os_vols[@]}"; do
+      action "docker volume rm" "$_vol (OpenSearch data — leftover after compose down)"
+      run_if_live docker volume rm "$_vol" 2>/dev/null || \
+        warn "docker volume rm $_vol failed (in use?) — remove manually if needed."
+    done
+  fi
+
   # Remove the pinned-digest OpenSearch image.
   action "docker image rm (if unused)" "opensearchproject/opensearch (pinned digest)"
   if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -494,6 +520,31 @@ teardown_supabase() {
     warn "Supabase CLI not found on PATH or in $SIFT_BIN_DIR — skipping supabase stop."
   fi
 
+  # Greenfield: remove the Supabase control-plane data volume so the next install
+  # applies migrations against a fresh database. `supabase stop` removes containers
+  # but PRESERVES the named DB volume; for a true teardown it must go too.
+  # Discover the volume(s) dynamically (project name = REPO_DIR basename, e.g.
+  # "sift-mcps") rather than only hardcoding, keeping the canonical name as fallback.
+  if command -v docker >/dev/null 2>&1; then
+    local _supa_project
+    _supa_project="$(basename "$REPO_DIR")"
+    local _supa_vols=()
+    local _v
+    for _v in $(docker volume ls --quiet 2>/dev/null | grep -E "^supabase_.*_${_supa_project}$" || true); do
+      _supa_vols+=("$_v")
+    done
+    # Fallback: the canonical Supabase DB volume for this project, if not matched above.
+    if [[ ${#_supa_vols[@]} -eq 0 ]] && docker volume inspect "supabase_db_${_supa_project}" >/dev/null 2>&1; then
+      _supa_vols+=("supabase_db_${_supa_project}")
+    fi
+    local _vol
+    for _vol in "${_supa_vols[@]}"; do
+      action "docker volume rm" "$_vol (Supabase control-plane data — greenfield reset)"
+      run_if_live docker volume rm "$_vol" 2>/dev/null || \
+        warn "docker volume rm $_vol failed (in use?) — remove manually if needed."
+    done
+  fi
+
   # Remove the env output file (write_output_env in setup-supabase.sh):
   #   $HOME/.sift/supabase-project/sift-supabase.env
   if [[ -f "$SUPABASE_PROJECT_DIR/sift-supabase.env" ]]; then
@@ -513,18 +564,62 @@ teardown_supabase() {
 #           Also reverses: configure_agent_runtime -> setup-agent-runtime.sh (agent_runtime user)
 #                          configure_ingest_mount_sudoers -> /etc/sudoers.d/sift-ingest-mount
 teardown_systemd() {
-  # Stop and disable both services (mirrors uninstall_systemd in install.sh).
+  # feat/opensearch-workers: discover and tear down every OpenSearch ingest/enrich
+  # worker instance (sift-opensearch-worker@N.service). Instances are template-
+  # instantiated, so enumerate them dynamically (running units + enabled symlinks)
+  # rather than hardcoding @1/@2.
+  local _os_workers=()
+  if command -v systemctl >/dev/null 2>&1; then
+    local _u
+    for _u in $(systemctl list-units --all --plain --no-legend 'sift-opensearch-worker@*.service' 2>/dev/null | awk '{print $1}'); do
+      _os_workers+=("$_u")
+    done
+  fi
+  # Also pick up enabled-but-inactive instances via their WantedBy symlinks
+  # (configs/systemd/sift-opensearch-worker@.service: WantedBy=multi-user.target).
+  local _wlink
+  for _wlink in "$SYSTEMD_SYSTEM_DIR"/multi-user.target.wants/sift-opensearch-worker@*.service; do
+    [[ -e "$_wlink" ]] || continue
+    _os_workers+=("$(basename "$_wlink")")
+  done
+  # De-duplicate the discovered instance list.
+  if [[ ${#_os_workers[@]} -gt 0 ]]; then
+    local _dedup=() _w _s _dup
+    for _w in "${_os_workers[@]}"; do
+      _dup=0
+      for _s in "${_dedup[@]}"; do [[ "$_s" == "$_w" ]] && _dup=1 && break; done
+      [[ "$_dup" -eq 0 ]] && _dedup+=("$_w")
+    done
+    _os_workers=("${_dedup[@]}")
+  fi
+
+  # Stop and disable both core services + any OpenSearch worker instances.
   if command -v systemctl >/dev/null 2>&1; then
     action "systemctl stop + disable" "sift-gateway.service sift-job-worker.service"
     if [[ "$DRY_RUN" -eq 0 ]]; then
       sudo_if_needed systemctl stop sift-gateway.service sift-job-worker.service 2>/dev/null || true
       sudo_if_needed systemctl disable sift-gateway.service sift-job-worker.service 2>/dev/null || true
     fi
+    if [[ ${#_os_workers[@]} -gt 0 ]]; then
+      action "systemctl stop + disable" "OpenSearch workers: ${_os_workers[*]}"
+      if [[ "$DRY_RUN" -eq 0 ]]; then
+        sudo_if_needed systemctl stop "${_os_workers[@]}" 2>/dev/null || true
+        sudo_if_needed systemctl disable "${_os_workers[@]}" 2>/dev/null || true
+      fi
+    else
+      log "No OpenSearch worker instances found — nothing to stop."
+    fi
+    # Best-effort: collapse the auto-generated parent slice for the worker template
+    # (system-sift\x2dopensearch\x2dworker.slice). It has no on-disk fragment and is
+    # garbage-collected by systemd once empty; stopping it forces immediate cleanup.
+    action "systemctl stop (best-effort)" "system-sift\\x2dopensearch\\x2dworker.slice (worker parent slice)"
+    run_if_live sudo_if_needed systemctl stop "system-sift\\x2dopensearch\\x2dworker.slice" 2>/dev/null || true
   fi
 
   # Remove unit files (install_systemd_service: _render_file to /etc/systemd/system/).
+  # Includes the OpenSearch worker template unit (OPENSEARCH_WORKER_SERVICE_FILE).
   local f
-  for f in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE"; do
+  for f in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE" "$OPENSEARCH_WORKER_SERVICE_FILE"; do
     if sudo_if_needed test -f "$f" 2>/dev/null; then
       action "remove" "$f (systemd unit file)"
       run_if_live sudo_if_needed rm -f "$f"
@@ -534,6 +629,8 @@ teardown_systemd() {
   if command -v systemctl >/dev/null 2>&1; then
     action "systemctl daemon-reload" "(after unit file removal)"
     run_if_live sudo_if_needed systemctl daemon-reload 2>/dev/null || true
+    action "systemctl reset-failed (best-effort)" "(clear any lingering sift unit state)"
+    run_if_live sudo_if_needed systemctl reset-failed 'sift-*' 2>/dev/null || true
   fi
 
   # Remove the sudoers drop-ins written by setup-agent-runtime.sh,
@@ -673,6 +770,28 @@ teardown_state() {
     fi
   done
 
+  # Sweep any OTHER residual state under $SIFT_STATE_DIR not covered by the explicit
+  # list above. The gateway/workers create per-case audit/ledger sidecars
+  # ($SIFT_STATE_DIR/<case_key>/{evidence-ledger.jsonl,evidence-manifest.json,audit/}),
+  # the service user accrues XDG dirs (.local/share/fastmcp), and add-ons drop baseline
+  # assets here (e.g. windows-triage/*.db). These are control-plane STATE — NOT evidence
+  # bytes, which live under $SIFT_CASES_ROOT and are NEVER under $SIFT_STATE_DIR by
+  # default. Guard: never remove the evidence/cases root (or an ancestor of it), even if
+  # an operator nested --cases-root under --state-dir.
+  if sudo_if_needed test -d "$SIFT_STATE_DIR" 2>/dev/null; then
+    local _cases_real _entry _entry_real
+    _cases_real="$(cd "$SIFT_CASES_ROOT" 2>/dev/null && pwd -P || echo "$SIFT_CASES_ROOT")"
+    while IFS= read -r -d '' _entry; do
+      _entry_real="$(cd "$_entry" 2>/dev/null && pwd -P || echo "$_entry")"
+      if [[ "$_entry_real" == "$_cases_real" || "$_cases_real" == "$_entry_real"/* ]]; then
+        log "Preserved $_entry (evidence/cases root or ancestor — never removed)."
+        continue
+      fi
+      action "rm -rf" "$_entry (residual SIFT state under $SIFT_STATE_DIR)"
+      run_if_live sudo_if_needed rm -rf "$_entry"
+    done < <(sudo_if_needed find "$SIFT_STATE_DIR" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  fi
+
   # Remove the /var/lib/sift root if it is now empty (best-effort).
   if [[ "$DRY_RUN" -eq 0 ]] && sudo_if_needed test -d "$SIFT_STATE_DIR" 2>/dev/null; then
     # Only remove the root when it's completely empty; fail silently if not.
@@ -708,7 +827,9 @@ teardown_cache() {
 #           Creates: /etc/audit/rules.d/99-sift-evidence.rules
 teardown_auditd() {
   local rules_dst="/etc/audit/rules.d/99-sift-evidence.rules"
-  if [[ -f "$rules_dst" ]]; then
+  # /etc/audit/rules.d is root-only (mode 750); an unprivileged [[ -f ]] test would
+  # wrongly report the file absent when the script runs via sudo as a normal user.
+  if sudo_if_needed test -f "$rules_dst" 2>/dev/null; then
     action "remove" "$rules_dst (SIFT auditd evidence rules)"
     if [[ "$DRY_RUN" -eq 0 ]]; then
       sudo_if_needed rm -f "$rules_dst"
