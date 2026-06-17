@@ -651,6 +651,18 @@ and includes:
 It is **dry-run by default** — run it without `--yes` to see exactly what would
 be deleted before committing.
 
+### `scripts/uninstall.sh` is the single canonical teardown path
+
+`scripts/uninstall.sh` is the one supported uninstall/reset script. (The older
+`scripts/reset-vm-test.sh` was a stale duplicate and has been **removed**.) For
+convenience, `install.sh` also ships a lighter built-in teardown —
+`./install.sh --uninstall` (software only) and
+`./install.sh --uninstall --purge-data` (also wipes `/var/lib/sift` state and
+`/cases`) — but `scripts/uninstall.sh` is the **recommended, comprehensive**
+path: it is component-selectable, dry-run by default, gated, and tears down the
+OpenSearch ingest/enrich workers, the Supabase data volume, and residual
+per-case state that the built-in path does not.
+
 ### Evidence is NEVER removed by default
 
 `/cases` (the forensic evidence root) has the highest blast radius. It is **never
@@ -683,11 +695,11 @@ An interactive "DELETE EVIDENCE" prompt is shown even then.
 | Token | What it removes | Core/Add-on |
 | --- | --- | --- |
 | `opencti` | OpenCTI Docker stack, named volumes, images (~4.4 GB), OpenCTI secret files under `/var/lib/sift/.sift/` | add-on |
-| `opensearch` | OpenSearch Docker stack (`docker-compose.yml`), named volume `opensearch-data`, OpenSearch config files | add-on |
-| `supabase` | Supabase CLI local stack (`supabase stop`), CLI binaries, `~/.sift/supabase-project/sift-supabase.env` | core |
-| `systemd` | `sift-gateway.service` + `sift-job-worker.service` units, service user `sift-service`, groups, `agent_runtime` user, sudoers drop-ins, hayabusa symlink | core |
+| `opensearch` | OpenSearch Docker stack (`docker-compose.yml`) torn down with `down -v`, **plus an explicit `docker volume rm` fallback for the `<project>_opensearch-data` data volume**, the pinned image, the `sift-net` network, and OpenSearch config files | add-on |
+| `supabase` | Supabase CLI local stack (`supabase stop`), CLI binaries, `~/.sift/supabase-project/sift-supabase.env`, **+ the project-scoped Supabase data volume** (`supabase_db_<project>` — greenfield reset, so a reinstall migrates against a fresh DB; `supabase stop` alone preserves it) | core |
+| `systemd` | `sift-gateway.service` + `sift-job-worker.service` units, **plus every dynamically-discovered `sift-opensearch-worker@N.service` instance and the `sift-opensearch-worker@.service` template unit** (also stops the auto parent slice and runs `systemctl reset-failed 'sift-*'`), service user `sift-service`, groups, `agent_runtime` user, sudoers drop-ins, hayabusa symlink | core |
 | `runtime` | `/opt/sift-mcps` staged tree, `.venv`, `/var/lib/sift/.sift/` (config, TLS, secrets, hayabusa, logs), enrichment symlinks | core |
-| `state` | `/var/lib/sift/{verification,tokens,snapshots,enrichment,.cache}` | core |
+| `state` | `/var/lib/sift/{verification,tokens,snapshots,enrichment,.cache}`, **plus a sweep of all other residual top-level entries under `/var/lib/sift`** — per-case audit/ledger sidecars (`<case_key>/evidence-ledger.jsonl`, `evidence-manifest.json`, `audit/`), the service user's `.local/share/fastmcp`, and add-on baseline DB trees (e.g. windows-triage `*.db`, up to ~17 GB incl. the registry baseline). A canonical-path guard **never** removes `/cases` (the evidence root) or an ancestor of it | core |
 | `cache` | `/var/cache/sift/` (Volatility3 symbols), Hugging Face model cache | core |
 | `auditd` | `/etc/audit/rules.d/99-sift-evidence.rules`; reload auditd | core |
 | `apparmor` | `/etc/apparmor.d/sift-gateway`; unload profile | core |
@@ -747,12 +759,18 @@ After a full teardown, reinstall with:
 
 ### 14.6 What is NOT removed
 
-Even with `--all --yes --i-understand`:
+Even with `--all --yes --i-understand`, two things survive:
 
-- `/cases` — evidence root (forensic data; requires separate flags, see above).
+- `/cases` — the evidence root (forensic data; removing it requires the three
+  evidence flags **plus** the typed `DELETE EVIDENCE` prompt, see above).
 - The source repo clone itself (the checkout you ran the script from).
-- Supabase Docker volumes (volumes contain the Postgres data; `supabase stop`
-  leaves them intact so re-running `supabase start` recovers the DB).
+
+> **Changed (XYE-41):** `--all` now **does** remove the project-scoped Supabase
+> data volume (`supabase_db_<project>`) so a reinstall migrates against a fresh
+> database. The earlier guidance — that the Supabase Docker volume is preserved
+> by `supabase stop` and recovered by `supabase start` — no longer holds for a
+> full teardown. If you need the control-plane DB, take a `pg_dump` (§4.2)
+> **before** running `--all` or the `supabase` component.
 
 ### 14.7 Override paths
 
@@ -766,3 +784,27 @@ If the install used non-default paths, override with:
                        --execute-as my-runtime-user \
                        --all --yes --i-understand
 ```
+
+### 14.8 Orphaned-data backup on a fresh install (XYE-42)
+
+`scripts/uninstall.sh` preserves `/cases` (and can leave other state) by design,
+so a later **fresh** install may find orphaned data that no longer matches the
+new, empty control plane. To avoid both data loss and silent collisions,
+`install.sh` moves that data aside before it provisions clean directories.
+
+- **When it triggers:** only on a **fresh** install — detected by the *absence*
+  of prior gateway config at `$SIFT_HOME` (`/var/lib/sift/.sift`). An idempotent
+  re-run / in-place upgrade keeps `$SIFT_HOME`, so a **live/active case is never
+  moved**.
+- **What it moves:** `/cases` and/or `/var/lib/sift`, when present and non-empty
+  (typically orphaned by a prior `scripts/uninstall.sh` run).
+- **Where it goes:** a timestamped backup at
+  `/var/backups/sift/preinstall-<timestamp>/`. Override the location with the
+  `SIFT_PREINSTALL_BACKUP_DIR` environment variable. The installer prints a
+  `WARNING` naming exactly where the data went, then proceeds with clean
+  directories.
+- **How:** a fast same-filesystem `mv` (a rename — works even on `chattr +i`
+  sealed evidence), with a copy-then-purge fallback across filesystems.
+- **Cleanup note:** the backup may contain write-protected (`chattr +i`)
+  evidence — clear the immutable flag with `sudo chattr -R -i <backup>` before
+  removing it.

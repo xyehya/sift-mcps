@@ -259,6 +259,24 @@ curl -sk https://127.0.0.1:4508/health
 Use a portal-issued agent/service credential for MCP smoke. Operator Supabase
 login tokens are not expected for `/mcp`.
 
+## Install / Uninstall / Reset
+
+- Install: from a clone, `./install.sh` (idempotent, re-run safe). Useful flags:
+  `--core-only`, `--apparmor-enforce`, `--offline`, `--no-rag`. Add-ons
+  (windows-triage, OpenCTI) are external: provision/register via
+  `scripts/setup-addon.sh`, then enable in Portal -> Backends. Windows-triage
+  DBs: `python -m windows_triage_mcp.scripts.download_databases [--dest DIR]
+  [--with-registry --yes]` (registry baseline ~12 GB, opt-in).
+- Uninstall/reset: `scripts/uninstall.sh` is the SINGLE canonical teardown
+  (dry-run by default; `--all --yes --i-understand` = full teardown minus
+  `/cases`; evidence removal additionally needs `--remove-evidence
+  --i-understand-evidence-loss --yes` + typed "DELETE EVIDENCE"). Preserves
+  `/cases` + the source clone. (`reset-vm-test.sh` was removed; `install.sh
+  --uninstall`/`--purge-data` is a lighter built-in.)
+- Fresh-install backup: on a fresh install, `install.sh` moves orphaned `/cases`
+  + state to `/var/backups/sift/preinstall-<ts>` and warns; live cases
+  (upgrades) are untouched.
+
 ## Live VM Discipline
 
 For live-impacting fixes:
