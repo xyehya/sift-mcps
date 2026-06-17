@@ -300,7 +300,7 @@ class ActiveCaseService:
                     select id::text, case_key, title, description, status,
                            legacy_case_dir, metadata
                     from app.cases
-                    where id = %s or case_key = %s
+                    where id::text = %s or case_key = %s
                     """,
                     (case_id, case_id),
                 )
@@ -450,7 +450,7 @@ class ActiveCaseService:
                     select id::text, case_key, title, description, status,
                            legacy_case_dir, metadata
                     from app.cases
-                    where id = %s or case_key = %s
+                    where id::text = %s or case_key = %s
                     """,
                     (case_id, case_id),
                 )

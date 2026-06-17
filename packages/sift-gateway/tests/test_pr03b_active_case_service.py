@@ -37,7 +37,9 @@ class _Cursor:
         normalized = " ".join(sql.lower().split())
         if "from app.active_case_state" in normalized:
             self._row = self.conn.active_row
-        elif "from app.cases" in normalized and "where id =" in normalized:
+        elif "from app.cases" in normalized and (
+            "where id::text =" in normalized or "where id =" in normalized
+        ):
             self._row = self.conn.case_row
         elif "from app.case_members" in normalized:
             self._row = self.conn.membership_row
@@ -116,6 +118,30 @@ def test_set_active_case_updates_deployment_row_and_audit(monkeypatch):
     joined_sql = "\n".join(sql.lower() for sql, _ in conn.statements)
     assert "insert into app.active_case_state" in joined_sql
     assert "insert into app.audit_events" in joined_sql
+
+
+def test_set_active_case_resolves_case_key_without_uuid_cast(monkeypatch):
+    """Regression (portal activate 500): activating by case_key (a non-UUID
+    string) must cast id to text in the cases lookup. A raw ``where id = %s``
+    makes Postgres cast the case_key to uuid and raise InvalidTextRepresentation,
+    surfacing as an untyped 500 ("Activation failed. Verify password").
+    """
+    conn = _Connection(case_row=_CASE_ROW, membership_row=("owner",))
+    monkeypatch.setattr("sift_gateway.active_case._connect", lambda dsn: conn)
+
+    service = ActiveCaseService("postgres://example")
+    service.set_active_case("case-rocba-round-2-06151840", _operator())
+
+    cases_lookups = [
+        " ".join(sql.lower().split())
+        for sql, _ in conn.statements
+        if "from app.cases" in " ".join(sql.lower().split())
+        and "case_key = %s" in " ".join(sql.lower().split())
+    ]
+    assert cases_lookups, "expected a cases lookup by id-or-case_key"
+    assert all("id::text = %s" in s for s in cases_lookups), (
+        "cases lookup must compare id::text (not a raw uuid) to tolerate a case_key"
+    )
 
 
 def test_set_active_case_denies_without_membership(monkeypatch):

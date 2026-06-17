@@ -750,7 +750,7 @@ class PostgresCaseStore:
             with conn.cursor() as cur:
                 cur.execute(
                     f"select {', '.join(_CASE_ROW_COLUMNS)} from app.cases "
-                    "where id = %s or case_key = %s",
+                    "where id::text = %s or case_key = %s",
                     (case_id, case_id),
                 )
                 row = cur.fetchone()
