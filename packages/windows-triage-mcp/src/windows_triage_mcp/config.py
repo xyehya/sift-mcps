@@ -24,11 +24,31 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sift_common.env import parse_int_env as _parse_int_env
-
 from .exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    """Parse integer from environment variable with error handling.
+
+    Args:
+        name: Environment variable name
+        default: Default value if not set
+
+    Returns:
+        Parsed integer value
+
+    Raises:
+        ConfigurationError: If value is not a valid integer
+    """
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        raise ConfigurationError(f"Invalid integer for {name}: {value!r}") from None
 
 
 @dataclass

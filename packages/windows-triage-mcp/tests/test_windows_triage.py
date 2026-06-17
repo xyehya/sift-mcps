@@ -344,3 +344,37 @@ async def test_missing_db_is_degraded_and_not_trusted(tmp_path):
     assert result["verdict"] == "UNKNOWN"
 
     srv.close_databases()
+
+
+# --- Config env parsing (XYE-33 regression guard) -------------------------
+# PR #5 routed integer env parsing through a tolerant shared helper that
+# silently fell back to the default on invalid input. The original main
+# behavior raises ConfigurationError. These tests lock the strict behavior.
+
+from windows_triage_mcp.config import _load_config_from_env, _parse_int_env
+from windows_triage_mcp.exceptions import ConfigurationError
+
+
+def test_cache_size_invalid_int_raises_configuration_error(monkeypatch):
+    monkeypatch.setenv("WT_CACHE_SIZE", "not_an_int")
+    with pytest.raises(ConfigurationError):
+        _load_config_from_env()
+
+
+def test_max_path_length_invalid_int_raises_configuration_error(monkeypatch):
+    monkeypatch.setenv("WT_MAX_PATH_LENGTH", "abc")
+    with pytest.raises(ConfigurationError):
+        _load_config_from_env()
+
+
+def test_parse_int_env_valid_and_default(monkeypatch):
+    monkeypatch.delenv("WT_CACHE_SIZE", raising=False)
+    assert _parse_int_env("WT_CACHE_SIZE", 10000) == 10000
+    monkeypatch.setenv("WT_CACHE_SIZE", "42")
+    assert _parse_int_env("WT_CACHE_SIZE", 10000) == 42
+
+
+def test_parse_int_env_invalid_raises(monkeypatch):
+    monkeypatch.setenv("WT_CACHE_SIZE", "not_an_int")
+    with pytest.raises(ConfigurationError):
+        _parse_int_env("WT_CACHE_SIZE", 10000)
