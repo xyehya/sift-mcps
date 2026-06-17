@@ -764,15 +764,6 @@ def _save_full_results(kind: str, payload) -> str | None:
         return None
 
 
-def _save_full_search_results(docs: list[dict]) -> str | None:
-    """Persist the full search hit set under ``<case>/agent/searches/``.
-
-    Thin back-compat wrapper around :func:`_save_full_results`; existing call
-    sites and tests reference this name.
-    """
-    return _save_full_results("searches", docs)
-
-
 def _payload_bytes(payload) -> int:
     """Approximate the serialized JSON byte size of a result payload.
 
@@ -800,6 +791,60 @@ _SEARCH_AUTOSAVE_MAX_BYTES = 64 * 1024  # 64 KiB inline ceiling for search hits
 _AGG_AUTOSAVE_THRESHOLD = 100
 _AGG_INLINE_TOP_N = 50
 _AGG_AUTOSAVE_MAX_BYTES = 32 * 1024  # 32 KiB inline ceiling for aggregate buckets
+
+
+def _autosave_or_inline(
+    kind: str,
+    items: list,
+    *,
+    count_threshold: int,
+    byte_cap: int,
+    inline_n: int,
+    note_builder,
+) -> tuple[list, str | None, str | None]:
+    """Decide between returning a result set inline and spilling it to disk.
+
+    Shared by :func:`opensearch_search` and :func:`opensearch_aggregate` so the
+    byte/count autosave policy lives in ONE place. Triggers when ``items``
+    exceeds EITHER ``count_threshold`` OR the serialized ``byte_cap`` (a small
+    count of very large items still floods context). Returns
+    ``(inline_items, full_path, note)``:
+
+    - Not triggered: ``(items, None, None)`` — the whole set stays inline.
+    - Triggered + save SUCCESS: full set written under ``<case>/agent/<kind>/``;
+      returns ``(preview, full_path, note_builder(full_path, len(preview),
+      len(items)))`` where ``preview`` is the top-N shrunk by bytes until it
+      fits ``byte_cap`` (exact prior success behavior).
+    - Triggered + save FAILURE (no active case dir / write error): STILL caps the
+      preview to the byte-shrunk top-N and returns ``(preview, None, failure_note)``
+      so an oversized set never floods context uncapped. This closes the gap where
+      a save failure previously returned the full oversized set inline.
+
+    ``note_builder(full_path, inline_count, total_count)`` builds the success-path
+    note; the failure note is generated here.
+    """
+    total = len(items)
+    if not (total > count_threshold or _payload_bytes(items) > byte_cap):
+        return items, None, None
+
+    def _shrink(seq: list) -> list:
+        preview = seq[:inline_n]
+        # Byte-driven spill of fat items: even the inline top-N may be large, so
+        # halve the preview until it fits the byte cap (or one item remains).
+        while len(preview) > 1 and _payload_bytes(preview) > byte_cap:
+            preview = preview[: max(1, len(preview) // 2)]
+        return preview
+
+    full_path = _save_full_results(kind, items)
+    preview = _shrink(items)
+    if full_path:
+        return preview, full_path, note_builder(full_path, len(preview), total)
+    # No case dir to spill to / write failed: degrade but still cap the inline.
+    note = (
+        f"Could not persist full set; inline truncated to {len(preview)} of "
+        f"{total}. Narrow the query or set an active case to capture the rest."
+    )
+    return preview, None, note
 
 
 def _resolve_index(index: str, case_id: str) -> str:
@@ -1077,24 +1122,18 @@ def opensearch_search(
     # rows — still floods context), persist the FULL set to
     # <case>/agent/searches/search_<uuid>.json and return only the inline top-N
     # plus a case-relative `full_path`. Mirrors run_command save-output.
-    full_path: str | None = None
-    _too_many = len(docs) > _SEARCH_AUTOSAVE_THRESHOLD
-    _too_big = _payload_bytes(docs) > _SEARCH_AUTOSAVE_MAX_BYTES
-    if _too_many or _too_big:
-        full_path = _save_full_results("searches", docs)
-        if full_path:
-            inline_docs = docs[:_SEARCH_INLINE_TOP_N]
-            # Byte-driven spill of fat docs: even the inline top-N may be large,
-            # so cap the inline preview by bytes too (shrink N until it fits).
-            while (
-                len(inline_docs) > 1
-                and _payload_bytes(inline_docs) > _SEARCH_AUTOSAVE_MAX_BYTES
-            ):
-                inline_docs = inline_docs[: max(1, len(inline_docs) // 2)]
-        else:
-            inline_docs = docs
-    else:
-        inline_docs = docs
+    inline_docs, full_path, full_note = _autosave_or_inline(
+        "searches",
+        docs,
+        count_threshold=_SEARCH_AUTOSAVE_THRESHOLD,
+        byte_cap=_SEARCH_AUTOSAVE_MAX_BYTES,
+        inline_n=_SEARCH_INLINE_TOP_N,
+        note_builder=lambda fp, n, total_hits: (
+            f"Full result set ({total_hits} hits) saved to {fp}; only the "
+            f"top {n} are inline. Read or grep the saved file for "
+            "the rest instead of re-querying."
+        ),
+    )
 
     resp: dict = {
         "total": total,
@@ -1106,11 +1145,8 @@ def opensearch_search(
         resp["common_fields"] = common_fields
     if full_path:
         resp["full_path"] = full_path
-        resp["full_results_note"] = (
-            f"Full result set ({len(docs)} hits) saved to {full_path}; only the "
-            f"top {len(inline_docs)} are inline. Read or grep the saved file for "
-            "the rest instead of re-querying."
-        )
+    if full_note:
+        resp["full_results_note"] = full_note
     if total_capped:
         resp["total_capped"] = True
         resp["total_note"] = f"At least {total} results. Use opensearch_count for exact total."
@@ -1260,32 +1296,33 @@ def opensearch_aggregate(
         for b in result["aggregations"]["agg"]["buckets"]
     ]
 
-    resp = {
-        "field": field,
-        "total_docs": result["hits"]["total"]["value"],
-        "buckets": buckets,
-        "truncated": len(buckets) >= limit,
-    }
-
     # Large-result autosave (mirrors opensearch_search): a big bucket set, or a
     # smaller set of large keys exceeding the byte cap, is saved in full to
     # <case>/agent/aggregations/aggregation_<uuid>.json and only a small inline
     # preview is returned. Keeps a 500-bucket distribution from flooding context.
-    _too_many = len(buckets) > _AGG_AUTOSAVE_THRESHOLD
-    _too_big = _payload_bytes(buckets) > _AGG_AUTOSAVE_MAX_BYTES
-    if _too_many or _too_big:
-        full_path = _save_full_results("aggregations", buckets)
-        if full_path:
-            inline = buckets[:_AGG_INLINE_TOP_N]
-            while len(inline) > 1 and _payload_bytes(inline) > _AGG_AUTOSAVE_MAX_BYTES:
-                inline = inline[: max(1, len(inline) // 2)]
-            resp["buckets"] = inline
-            resp["full_path"] = full_path
-            resp["full_results_note"] = (
-                f"Full bucket set ({len(buckets)} buckets) saved to {full_path}; "
-                f"only the top {len(inline)} are inline. Read or grep the saved "
-                "file for the rest instead of re-aggregating."
-            )
+    inline_buckets, full_path, full_note = _autosave_or_inline(
+        "aggregations",
+        buckets,
+        count_threshold=_AGG_AUTOSAVE_THRESHOLD,
+        byte_cap=_AGG_AUTOSAVE_MAX_BYTES,
+        inline_n=_AGG_INLINE_TOP_N,
+        note_builder=lambda fp, n, total_buckets: (
+            f"Full bucket set ({total_buckets} buckets) saved to {fp}; "
+            f"only the top {n} are inline. Read or grep the saved "
+            "file for the rest instead of re-aggregating."
+        ),
+    )
+
+    resp = {
+        "field": field,
+        "total_docs": result["hits"]["total"]["value"],
+        "buckets": inline_buckets,
+        "truncated": len(buckets) >= limit,
+    }
+    if full_path:
+        resp["full_path"] = full_path
+    if full_note:
+        resp["full_results_note"] = full_note
 
     aid = audit.log(
         tool="opensearch_aggregate",
@@ -2867,20 +2904,38 @@ def _last_completed_from_opensearch(filter_case: str) -> dict | None:
         return None
     total_docs = sum(int(r.get("docs.count") or 0) for r in rows)
     # Most recent index by OpenSearch creation date (lexicographically sortable
-    # ISO string from cat indices).
-    latest = max(rows, key=lambda r: r.get("creation.date.string") or "")
+    # ISO string from cat indices). B3: cat may omit/blank
+    # creation.date.string; if NO row carries a usable creation time, max() over
+    # all-empty keys would pick an ARBITRARY row and falsely assert it as the
+    # newest. Detect that and fall back to a deterministic name-ordered choice,
+    # leaving the creation time null and flagging that the "most_recent_index"
+    # claim is name-ordered, not time-ordered.
+    _have_ctime = any((r.get("creation.date.string") or "").strip() for r in rows)
+    if _have_ctime:
+        latest = max(rows, key=lambda r: r.get("creation.date.string") or "")
+        most_recent_created = latest.get("creation.date.string")
+        ctime_note = ""
+    else:
+        # Deterministic fallback: last by index name (stable across calls).
+        latest = max(rows, key=lambda r: r.get("index") or "")
+        most_recent_created = None
+        ctime_note = (
+            " OpenSearch did not report index creation times, so "
+            "'most_recent_index' is the last by index NAME, not by creation time."
+        )
     return {
         "source": "opensearch-derived",
         "case_id": filter_case,
         "index_count": len(rows),
         "total_docs": total_docs,
         "most_recent_index": latest.get("index"),
-        "most_recent_index_created": latest.get("creation.date.string"),
+        "most_recent_index_created": most_recent_created,
         "note": (
             "Derived from OpenSearch case indices (NOT the Postgres durable-job "
             "record). Confirms a prior ingest landed; for authoritative per-job "
             "status of a worker-dispatched ingest, poll job_status(job_id)."
-        ),
+        )
+        + ctime_note,
     }
 
 
@@ -4223,6 +4278,46 @@ def _hayabusa_absent_hint() -> str:
     )
 
 
+def _hayabusa_suggestion(client) -> str:
+    """Build the Hayabusa fallback suggestion when no Sigma detections are shown.
+
+    Shared by :func:`opensearch_list_detections`' two no-Sigma branches (Security
+    Analytics plugin unavailable on OpenSearch 3.5, and Sigma returning zero
+    findings); both want the same agent-facing guidance — there is nothing from
+    Sigma, so point at Hayabusa and report its state. Returns one of:
+
+    - alerts present:  ``"No Sigma detections. {N} Hayabusa alerts available. Query: ..."``
+    - binary absent:   the disabled lead + :func:`_hayabusa_absent_hint` staging text
+    - installed-empty: ``"...Hayabusa is installed but no alerts are indexed for this case yet..."``
+    - count error:     the disabled lead + a generic "check Hayabusa" pointer
+    """
+    import shutil as _shutil
+
+    disabled = "No Sigma detections (disabled on OpenSearch 3.5). "
+    try:
+        hb_count = client.count(index="case-*-hayabusa-*")["count"]
+        if hb_count:
+            return (
+                f"No Sigma detections. {hb_count:,} Hayabusa alerts available. "
+                "Query: opensearch_search(query='Level:critical OR Level:high', "
+                "index='case-*-hayabusa-*')"
+            )
+        if not _shutil.which("hayabusa"):
+            # No Sigma AND no Hayabusa binary — be explicit, don't imply it ran.
+            return disabled + _hayabusa_absent_hint()
+        return (
+            disabled + "Hayabusa is installed but no alerts are indexed for this "
+            "case yet — run evtx ingest to populate detections."
+        )
+    except Exception:
+        # Count failed (or no usable count) — degrade to a generic pointer,
+        # matching the prior per-branch behavior.
+        return (
+            disabled + "Check Hayabusa: "
+            "opensearch_search(query='Level:*', index='case-*-hayabusa-*')"
+        )
+
+
 def opensearch_list_detections(
     severity: str = "",
     detector_type: str = "",
@@ -4262,33 +4357,8 @@ def opensearch_list_detections(
     except (RuntimeError, ValueError, Exception) as e:
         if "security_analytics" in str(e).lower() or "400" in str(e) or "404" in str(e):
             resp = {"error": "Security Analytics plugin not available", "findings": []}
-            # Still suggest Hayabusa when SA is unavailable
-            import shutil as _shutil
-
-            try:
-                hb_count = client.count(index="case-*-hayabusa-*")["count"]
-                if hb_count:
-                    resp["suggestion"] = (
-                        f"Sigma detectors unavailable. {hb_count:,} Hayabusa alerts available. "
-                        "Query: opensearch_search(query='Level:critical OR Level:high', "
-                        "index='case-*-hayabusa-*')"
-                    )
-                elif not _shutil.which("hayabusa"):
-                    # No Sigma AND no Hayabusa binary — be explicit, don't imply it ran.
-                    resp["suggestion"] = (
-                        "Sigma detectors unavailable on OpenSearch 3.5. " + _hayabusa_absent_hint()
-                    )
-                else:
-                    resp["suggestion"] = (
-                        "Sigma detectors unavailable on OpenSearch 3.5. Hayabusa is "
-                        "installed but no alerts are indexed yet — run evtx ingest to "
-                        "populate detections."
-                    )
-            except Exception:
-                resp["suggestion"] = (
-                    "Sigma detectors unavailable. Check Hayabusa: "
-                    "opensearch_search(query='Level:*', index='case-*-hayabusa-*')"
-                )
+            # Still suggest Hayabusa when SA is unavailable (shared 3-way logic).
+            resp["suggestion"] = _hayabusa_suggestion(client)
             return resp
         raise
 
@@ -4322,34 +4392,8 @@ def opensearch_list_detections(
         if len(findings) >= limit:
             break
 
-    # Suggest Hayabusa when Sigma returns empty
-    hayabusa_hint = ""
-    if not findings:
-        import shutil as _shutil
-
-        try:
-            hb_count = client.count(index="case-*-hayabusa-*")["count"]
-            if hb_count:
-                hayabusa_hint = (
-                    f"No Sigma detections. {hb_count:,} Hayabusa alerts available. "
-                    "Query: opensearch_search(query='Level:critical OR Level:high', "
-                    "index='case-*-hayabusa-*')"
-                )
-            elif not _shutil.which("hayabusa"):
-                # No Sigma findings AND no Hayabusa binary: state it plainly with
-                # staging instructions instead of implying detection ran.
-                hayabusa_hint = (
-                    "No Sigma detections (disabled on OpenSearch 3.5). "
-                    + _hayabusa_absent_hint()
-                )
-            else:
-                hayabusa_hint = (
-                    "No Sigma detections (disabled on OpenSearch 3.5). Hayabusa is "
-                    "installed but no alerts are indexed for this case yet — run evtx "
-                    "ingest to populate detections."
-                )
-        except Exception:
-            hayabusa_hint = "No Sigma detections."
+    # Suggest Hayabusa when Sigma returns empty (shared 3-way logic).
+    hayabusa_hint = _hayabusa_suggestion(client) if not findings else ""
 
     resp = {
         "findings": findings,

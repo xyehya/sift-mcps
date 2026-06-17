@@ -1276,6 +1276,21 @@ def cmd_scan(args: argparse.Namespace) -> None:
                     }
                     for h in result.hosts
                 ]
+                # A5: a real artifact/bulk failure must NOT be masked by the
+                # hayabusa-skip note. If any artifact actually errored, COMBINE
+                # the real-failure summary with the skip note in
+                # bulk_failed_reason rather than replacing it, so
+                # opensearch_ingest_status still surfaces the genuine failure.
+                _artifact_errors = [
+                    f"{h.hostname}/{a.artifact}: {a.error}"
+                    for h in result.hosts
+                    for a in h.artifacts
+                    if a.error
+                ]
+                if _artifact_errors:
+                    _bulk_reason = "; ".join(_artifact_errors) + f" | {msg}"
+                else:
+                    _bulk_reason = msg
                 write_status(
                     case_id,
                     os.getpid(),
@@ -1295,7 +1310,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                         "hosts_complete": len(_final_hosts),
                     },
                     datetime.now(timezone.utc).isoformat(),
-                    bulk_failed_reason=msg,
+                    bulk_failed_reason=_bulk_reason,
                     elapsed_seconds=result.elapsed_seconds,
                 )
 

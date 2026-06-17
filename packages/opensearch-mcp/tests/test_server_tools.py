@@ -399,7 +399,12 @@ class TestIdxSearch:
             full = _json.load(fh)
         assert len(full) == 50  # FULL set persisted, not just the inline top-N
 
-    def test_no_active_case_falls_back_to_inline_without_path(self, mock_client, monkeypatch):
+    def test_no_active_case_caps_inline_and_notes_save_failure(self, mock_client, monkeypatch):
+        # A3/D2: when autosave TRIGGERS (here 40 hits > the count threshold) but
+        # there is no case dir to spill to, the oversized set must STILL be
+        # capped inline (not returned in full) and a note must flag that the
+        # full set could not be persisted — otherwise a save failure floods
+        # context with the entire oversized set uncapped.
         monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
         monkeypatch.setattr(srv, "active_case_dir", lambda: "")
         hits = [
@@ -409,8 +414,12 @@ class TestIdxSearch:
         mock_client.search.return_value = {"hits": {"total": {"value": 40}, "hits": hits}}
         resp = opensearch_search(query="*")
         assert "full_path" not in resp
-        # Without a case dir to spill to, the full set stays inline (degraded).
-        assert len(resp["results"]) == 40
+        # Inline preview is capped to the top-N even though the save failed.
+        assert len(resp["results"]) == srv._SEARCH_INLINE_TOP_N
+        assert resp["returned"] == 40  # full count still reported
+        # A degraded-save note is present and references the full count.
+        assert "full_results_note" in resp
+        assert "40" in resp["full_results_note"]
 
 
 class TestHoistConstantFields:
@@ -502,6 +511,66 @@ class TestIdxAggregate:
         opensearch_aggregate(field="host.name", limit=9999)
         call_body = mock_client.search.call_args[1]["body"]
         assert call_body["aggs"]["agg"]["terms"]["size"] == 500
+
+    def test_save_failure_caps_inline_and_notes(self, mock_client, monkeypatch):
+        # A3/D2: a large bucket set that TRIGGERS autosave (150 > the count
+        # threshold) but FAILS to persist (no case dir / disk full) must still
+        # be capped inline + carry a degraded-save note, never returned in full.
+        # Simulate the save failure directly via _save_full_results -> None.
+        buckets = [{"key": f"h{i}", "doc_count": 1} for i in range(150)]
+        mock_client.search.return_value = {
+            "hits": {"total": {"value": 150}},
+            "aggregations": {"agg": {"buckets": buckets}},
+        }
+        monkeypatch.setattr(srv, "_save_full_results", lambda *a, **k: None)
+        resp = opensearch_aggregate(field="host.name", limit=500)
+        assert "full_path" not in resp
+        # Inline preview capped to the top-N even though the save failed.
+        assert len(resp["buckets"]) == srv._AGG_INLINE_TOP_N
+        assert "full_results_note" in resp
+        assert "150" in resp["full_results_note"]
+
+
+# ---------------------------------------------------------------------------
+# _last_completed_from_opensearch (B3)
+# ---------------------------------------------------------------------------
+
+
+class TestLastCompletedFromOpensearch:
+    def test_missing_creation_time_falls_back_by_name_not_arbitrary(self, mock_client):
+        # B3: when cat indices omit creation.date.string for ALL rows, max()
+        # over empty keys would pick an arbitrary row and falsely assert it as
+        # newest. The guard falls back to a deterministic name-ordered choice
+        # and leaves the creation time null while flagging it in the note.
+        mock_client.cat.indices.return_value = [
+            {"index": "case-c-evtx-a", "docs.count": "10"},
+            {"index": "case-c-evtx-z", "docs.count": "5"},
+            {"index": "case-c-evtx-m", "docs.count": "7"},
+        ]
+        out = srv._last_completed_from_opensearch("c")
+        assert out is not None
+        assert out["total_docs"] == 22
+        # Deterministic: last by index NAME, creation time left null.
+        assert out["most_recent_index"] == "case-c-evtx-z"
+        assert out["most_recent_index_created"] is None
+        assert "name" in out["note"].lower()
+
+    def test_creation_time_present_picks_latest_by_time(self, mock_client):
+        mock_client.cat.indices.return_value = [
+            {
+                "index": "case-c-evtx-a",
+                "docs.count": "1",
+                "creation.date.string": "2026-06-10T00:00:00.000Z",
+            },
+            {
+                "index": "case-c-evtx-b",
+                "docs.count": "1",
+                "creation.date.string": "2026-06-15T00:00:00.000Z",
+            },
+        ]
+        out = srv._last_completed_from_opensearch("c")
+        assert out["most_recent_index"] == "case-c-evtx-b"
+        assert out["most_recent_index_created"] == "2026-06-15T00:00:00.000Z"
 
 
 # ---------------------------------------------------------------------------
