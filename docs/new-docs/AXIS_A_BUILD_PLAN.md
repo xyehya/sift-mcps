@@ -2,12 +2,25 @@
 
 > Covers: .github/workflows/, pyproject.toml, packages/sift-gateway/src/sift_gateway/policy_middleware.py, packages/sift-gateway/src/sift_gateway/server.py, scripts/check_newdocs_refs.py, docs/new-docs/
 > Class: living-plan
-> Last validated: dd54eb4 (2026-06-16)
+> Last validated: dd4c656 (2026-06-18)
 
-**Status**: build-ready. Defaults locked in `OPTIMIZATION_TRACK.md` §A (A2–A6, 2026-06-16).
-**Why first**: CI + typing catch regressions during the Axis B authority rewrite. No runtime
-behavior change in this axis.
-**Grounding caveat**: confirm file:line at build time.
+**Status**: complete. This file is retained as the historical build plan for OT1
+and should not keep absorbing new quality work. New assessment-compliance work
+belongs in Axis C/D/F/G/H/I plans.
+**Why it came first**: CI + typing caught regressions during the Axis B authority
+rewrite. No runtime behavior change was intended in this axis.
+**Completion map**: `XYE-13` AU1, `XYE-14` AU2, `XYE-15` AU3, `XYE-16` AU4,
+`XYE-17` AU5.
+
+## Completion addendum (2026-06-18)
+- `.github/workflows/ci.yml` runs locked uv installs, ruff, pyright, docs
+  freshness, pytest, and package coverage checks.
+- `.github/workflows/live-vm.yml` exists as a manual proof gate.
+- `pyrightconfig.json` and `GatewayProtocol` removed the original
+  `gateway: Any` policy-layer gap.
+- `scripts/check_newdocs_refs.py` is in CI.
+- Further coverage and quality work is tracked under Axis C/D rather than
+  reopening Axis A.
 
 ## Locked defaults (from the menu)
 - **A2** per-package coverage floors (strict core, lenient add-ons, ratchet).

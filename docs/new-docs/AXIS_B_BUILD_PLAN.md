@@ -2,15 +2,27 @@
 
 > Covers: packages/sift-gateway/src/sift_gateway/active_case.py, packages/sift-gateway/src/sift_gateway/mcp_server.py, packages/sift-gateway/src/sift_gateway/evidence_gate.py, packages/sift-gateway/src/sift_gateway/policy_middleware.py, packages/case-dashboard/src/case_dashboard/routes.py, packages/sift-core/src/sift_core/case_*.py, packages/sift-core/src/sift_core/reporting.py, packages/sift-core/src/sift_core/investigation_store.py, packages/sift-core/src/sift_core/agent_tools.py, packages/sift-common/src/sift_common/audit.py, supabase/migrations/**, scripts/**
 > Class: living-plan
-> Last validated: dd54eb4 (2026-06-16)
+> Last validated: dd4c656 (2026-06-18)
 
-**Status**: build-ready unit breakdown. Decisions locked in `OPTIMIZATION_TRACK.md` §B
-(B-1…B-4, 2026-06-16). This doc turns them into coding-session briefs.
-**Security**: integrity-critical. Every unit that touches authority/orientation gets
-`/security-review`; the track ends on a **live-VM proof gate** (separate manual gate per A1 —
-GitHub Actions cannot reach the VM/Supabase).
-**Grounding caveat**: file:line refs come from exploration passes; **confirm at build time**
-(the codebase drifts). Do not edit from these numbers blind.
+**Status**: complete. This file is retained as the historical build plan for OT1
+DB-authority completion.
+**Security**: integrity-critical. BU1/BU2/BU3 carried security-review gates and
+BU5 carried live-VM proof because GitHub Actions cannot reach the VM/Supabase.
+**Completion map**: `XYE-18` BU0, `XYE-19` BU1, `XYE-20` BU2, `XYE-21` BU3,
+`XYE-22` BU4, `XYE-23` BU5.
+
+## Completion addendum (2026-06-18)
+- Case metadata is DB-authoritative in DB mode; CASE.yaml is compatibility
+  export, not source of truth.
+- Orientation overlays were deleted; DB-mode orientation now fails closed on DB
+  errors instead of serving file-derived values.
+- The gateway refuses to serve without a control-plane DSN; no implicit file mode
+  remains for production DFIR tools.
+- Residual active-case pointer and DB-mode evidence-ref file fallbacks were
+  retired.
+- Current source pins the result in
+  `packages/sift-gateway/tests/test_bu3_no_file_mode.py` and
+  `packages/sift-core/tests/test_bu3_file_readers_unreachable.py`.
 
 ## Operating constraints
 - Units **share files** (`case_ops.py`, `case_manager.py`, `case_io.py`, `mcp_server.py`,

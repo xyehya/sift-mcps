@@ -319,3 +319,29 @@ The *engineering judgement* on display here is strong: the security model, the c
 ---
 
 **Validation addendum (2026-06-16).** An independent pass re-verified the cited code. The deep architecture/security/custody/migration claims (§3, §6, §7, §9) all held against current source. Corrections applied in this revision: `gateway: Any` count 21 → **14** (`policy_middleware.py`); installer 3,437 → **3,507** lines; test functions 2,334 → **2,581** and broad-except 458 → **442** (counts drift; now timestamped); `sift-common` now has one schema test (`test_mcp_schema.py`) but still **no `AuditWriter` test** (§7.2 gap stands); `ResponseGuard`/`sanitize_paths_deep` line refs repointed (`response_guard.py:741`, `security.py:1346`); §2.1/§2.2 LOC tables refreshed. `worker.py` Landlock/seccomp is accurate but partly implemented via `dfir_exec_launcher`. Risk *ratings* were left unchanged pending review (the security-vs-maintainability axis split is an open discussion item).
+
+**Compliance planning addendum (2026-06-18).** Wave 1 of the optimization track
+closed the highest-priority process and authority findings from this assessment:
+CI, per-package coverage gates, pyright/GatewayProtocol, retired-test audit,
+docs freshness, DB-authoritative case metadata, DB-native orientation,
+DB-only portal writes, removal of implicit file-mode, residual fallback
+retirement, and live-VM proof are tracked in Linear as `XYE-13` through
+`XYE-23`. Later follow-ups also added baseline `AuditWriter` tests (`XYE-31`),
+exception logging improvements (`XYE-32`), OpenSearch worker-route invariants
+(`XYE-36`), installer/uninstall hardening (`XYE-37`, `XYE-41`, `XYE-42`), and
+portal add-on lifecycle fixes (`XYE-44`).
+
+The remaining assessment-compliance work is now mapped in
+`OPTIMIZATION_TRACK.md` and `AXIS_C_BUILD_PLAN.md` through
+`AXIS_I_BUILD_PLAN.md`:
+
+- Axis C: adversarial custody and add-on risk-path test backfill.
+- Axis D: maintainability/reviewability closure, including the duplicated
+  examiner regex, broad-exception audit, ticket-code cleanup, god-file
+  extraction, atomic tool-surface snapshot, and lint-config decision.
+- Axis E/G: DB metadata read pooling and OpenSearch compatibility cleanup.
+- Axis F/H/I: supply-chain/data-package trust, add-on behavioral admission
+  controls, and installer verification/replacement path.
+
+This addendum updates planning state only; the original point-in-time critique
+above is intentionally preserved for traceability.
