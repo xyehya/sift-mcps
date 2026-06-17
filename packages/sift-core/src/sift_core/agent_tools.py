@@ -939,9 +939,19 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         output_format = exec_result.get("_output_format", "text")
         raw_stages = exec_result.get("stages") or []
         stdout_total_bytes = exec_result.get("stdout_total_bytes")
+        # generic.run_command stamps partial_failure / partial_failure_note onto
+        # the exec_result ROOT (a stage exited nonzero but still produced output).
+        # Capture them BEFORE the _internal pop so they are surfaced on the
+        # response root below — identically on the parsed and unparsed paths.
+        # Without this they were dropped when output was catalog-parsed (resp_data
+        # = _parsed) yet leaked into the inline data block when it was not
+        # (resp_data = exec_result) — an inconsistent, branch-dependent signal.
+        partial_failure = exec_result.get("partial_failure")
+        partial_failure_note = exec_result.get("partial_failure_note")
         for _internal in ("stages", "_output_format", "executor", "runtime_user",
                           "output_file", "output_sha256",
-                          "stderr_file", "stderr_sha256"):
+                          "stderr_file", "stderr_sha256",
+                          "partial_failure", "partial_failure_note"):
             exec_result.pop(_internal, None)
         # Context efficiency: for a single-stage command the structured
         # command echo pure-duplicates the response-level command string —
@@ -1028,6 +1038,15 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                     "An upstream pipeline stage failed; downstream output may "
                     "be incomplete. See failed_stages."
                 )
+        # Surface the engine's partial_failure summary on the response root the
+        # same way failed_stages/error are surfaced above. It was popped from
+        # exec_result with the other _internal keys, so it never lands in the
+        # inline data block on either path — the agent sees it here whether or
+        # not the output was catalog-parsed.
+        if partial_failure:
+            response["partial_failure"] = True
+            if partial_failure_note:
+                response["partial_failure_note"] = partial_failure_note
         if output_file_ref:
             # full_output_ref is the canonical output path key (case-relative,
             # never absolute). full_output_path was an alias — dropped to avoid

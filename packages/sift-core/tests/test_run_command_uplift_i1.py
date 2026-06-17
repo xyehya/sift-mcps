@@ -367,3 +367,73 @@ def test_run_command_stdout_paths_sanitized(sealed_case):
     blob = json.dumps(out)
     assert str(sealed_case) not in blob
     assert "evidence/disk.txt" in blob
+
+
+def test_run_command_partial_failure_surfaces_on_parsed_output(sealed_case, monkeypatch):
+    """C1 regression: partial_failure must reach the agent whether or not the
+    output was catalog-parsed.
+
+    generic.run_command stamps ``partial_failure`` / ``partial_failure_note`` on
+    the exec_result ROOT when a pipeline stage exits nonzero but still produces
+    output. The agent wrapper used to keep those signals only on the un-parsed
+    path (``resp_data = exec_result``) and silently drop them on the large-output
+    parsed path (``resp_data = exec_result["_parsed"]``). This exercises the
+    parsed path and proves the signal now surfaces on the response root.
+    """
+    parsed_block = {
+        "format": "text",
+        "truncated": True,
+        "preview": ["line one", "line two"],
+        "total_lines": 9001,
+    }
+
+    def _fake_execute(*_args, **_kwargs):
+        # Mirrors generic.run_command's large-output pipeline result with a
+        # masked upstream failure: top-level exit 0 (the final stage succeeded),
+        # an upstream stage exited nonzero, and stdout exceeded the byte budget
+        # so it was catalog-parsed into ``_parsed`` (raw stdout dropped to None).
+        return {
+            "exit_code": 0,
+            "stdout": None,
+            "stderr": "",
+            "stdout_total_bytes": 250_000,
+            "stages": [
+                {
+                    "binary": "mmls",
+                    "exit_code": 1,
+                    "argv": ["mmls", "evidence/disk.txt"],
+                    "stderr_tail": "Cannot determine partition type",
+                },
+                {"binary": "sort", "exit_code": 0, "argv": ["sort"]},
+            ],
+            "_parsed": parsed_block,
+            "_output_format": "parsed_text",
+            "partial_failure": True,
+            "partial_failure_note": (
+                "An upstream stage exited nonzero (e.g. a path was "
+                "inaccessible) but a later stage exited 0; output may be "
+                "incomplete. See per-stage exit codes and stderr_tail in "
+                "'stages'."
+            ),
+        }
+
+    monkeypatch.setattr(agent_tools, "_execute_command", _fake_execute)
+    audit = AuditWriter(mcp_name="sift-core")
+    out = _run_command(
+        {
+            "command": "mmls evidence/disk.txt | sort",
+            "purpose": "trigger a parsed-output partial failure",
+        },
+        examiner="analyst",
+        audit=audit,
+    )
+
+    # The output WAS catalog-parsed: the inline data block is the parsed view…
+    assert out["data"] == parsed_block
+    # …and the partial-failure signal does NOT hide inside that data block.
+    assert "partial_failure" not in out["data"]
+    assert "partial_failure_note" not in out["data"]
+    # The fix: it is surfaced on the response root regardless of parsing.
+    assert out["partial_failure"] is True
+    assert "partial_failure_note" in out
+    assert "incomplete" in out["partial_failure_note"]
