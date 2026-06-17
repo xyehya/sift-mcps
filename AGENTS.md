@@ -248,3 +248,17 @@ uv run --extra dev --extra full pytest <targeted test paths>
 
 Use the repo `uv` environment; avoid system Python imports when workspace
 packages are required.
+
+Test-invocation gotchas (root `.venv`, run from repo root):
+
+- `opensearch-mcp` tests need the tests dir on `PYTHONPATH` — its `conftest.py`
+  does `from _helpers import ...`, so collection from the repo root fails with
+  `ModuleNotFoundError: No module named '_helpers'`. Run:
+  `PYTHONPATH=packages/opensearch-mcp/tests uv run --extra dev --extra full pytest packages/opensearch-mcp/tests`.
+- `windows-triage-mcp` is NOT in the `full` extra — add `--extra windows-triage`
+  (otherwise collection fails with a ModuleNotFoundError).
+- Fresh git worktrees build their own `uv` env that may omit optional deps;
+  validate via
+  `uv run --directory <worktree> --extra dev --extra full [--extra windows-triage] pytest ...`.
+- Regenerate the golden MCP-surface snapshot with
+  `UPDATE_MCP_GOLDENS=1 pytest <surface test>`.
