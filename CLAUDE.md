@@ -30,6 +30,51 @@ belong in Linear issue comments.
 Use `linear-cli` for Linear work. Prefer JSON output, compact fields, and
 explicit filters so agents do not flood context.
 
+### Fast helpers (verified)
+
+Known IDs — do not re-query:
+
+- Team `XYE`. Project `ProtocolSIFTGateway`
+  (id `c0396776-2026-47ad-8ef1-4580315f9adf`).
+
+JSON shapes (for `jq`; `jq` 1.8 is installed): `i get` is a FLAT object —
+`.identifier`, `.state.name`, `.project.name`, `.priority`,
+`.labels.nodes[].name`, `.parent.identifier`, `.title`, `.url`. `cm list` is
+`{identifier, title, comments:{nodes:[{body, createdAt, user:{name}, id}]}}`.
+
+Slim reads (keep context small):
+
+```bash
+# one issue, key fields only
+linear-cli i get XYE-26 --no-cache -o json \
+  | jq -c '{id:.identifier, state:.state.name, prio:.priority, labels:[.labels.nodes[].name]}'
+
+# last 3 comments, one truncated line each (newest last)
+linear-cli cm list XYE-26 -o json \
+  | jq -r '.comments.nodes[-3:][] | "[\(.createdAt[0:16])] \(.user.name): \(.body|gsub("\n";" ")|.[0:120])"'
+
+# project issue list, compact, only the fields you need
+linear-cli i list --project ProtocolSIFTGateway --output json --compact \
+  --fields identifier,title,state.name,priority
+```
+
+Add a comment / set state:
+
+```bash
+linear-cli cm create XYE-26 -b "Result: ... Validation: ... Next: ..."
+linear-cli i update XYE-26 -s "In Review"   # Backlog|Todo|In Progress|In Review|Done
+```
+
+Create an issue in the project — note `i create` has NO `--project` flag; set it
+afterward with `i update`:
+
+```bash
+ID=$(linear-cli i create "Title" -t XYE -d "markdown body" --id-only -q | tail -1)
+linear-cli i update "$ID" --project ProtocolSIFTGateway -p 3   # -p = priority 0-4
+```
+
+Use `--no-cache` when reading state right after a write.
+
 First checks:
 
 ```bash
