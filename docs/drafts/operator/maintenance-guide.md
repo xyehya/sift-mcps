@@ -412,39 +412,174 @@ are the DB authority. To rebuild, re-run ingest against sealed evidence.
 
 ---
 
-## 8. Add-on registration
+## 8. Backends & add-ons (install model, integration, status)
 
-Core backends (OpenSearch, RAG, forensic-knowledge, Hayabusa) install with the
-core installer. **External add-ons (OpenCTI, future Windows-triage) are not part
-of the core installer** and must register separately through the add-on
-contract.
+A backend becomes usable in **two independent steps** that operators routinely
+conflate:
 
-### 8.1 Register an add-on
+1. **Python package on disk** — installed by a uv *extra* (`full` = core +
+   opensearch + rag; `windows-triage` and `opencti` are *separate* extras, NOT in
+   `full`). Installing an extra registers nothing.
+2. **Registered in the control plane** — a row in `app.mcp_backends`. Only
+   registered **and** enabled backends are aggregated by the gateway and exposed
+   on `/mcp`.
+
+A **default `./install.sh`** registers exactly two backends: `opensearch-mcp`
+(when the cluster comes up healthy) and `forensic-rag-mcp`. `windows-triage-mcp`
+and `opencti-mcp` are **never** registered by the installer — they are add-ons
+you integrate yourself (§8.2).
+
+### 8.1 Installer flags (`./install.sh`)
+
+Run from a clone; the installer stages itself into `/opt/sift-mcps` and is
+re-run-safe (idempotent). No flags are required for a normal install.
+
+| Flag | Effect | Env equivalent |
+|---|---|---|
+| (none) | Full native stack: gateway + portal + core tools + OpenSearch + RAG + Supabase + Hayabusa. Registers `opensearch-mcp` + `forensic-rag-mcp`. | — |
+| `--core-only` | Gateway + portal + in-process core tools only. Skips OpenSearch, RAG, Docker, and forensic-tool downloads. Registers **no** add-on backends. | `SIFT_CORE_ONLY=1` |
+| `--no-rag` | Do not register `forensic-rag-mcp`. | `SIFT_RAG_ENABLED=false` |
+| `--no-opencti` | Accepted for compatibility only; OpenCTI is never installed by `install.sh`. Use `setup-addon.sh`. | `SIFT_OPENCTI_ENABLED` (ignored) |
+| `--external-supabase` | Skip Supabase auto-provisioning. Requires `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SIFT_CONTROL_PLANE_DSN` already exported. | `SIFT_EXTERNAL_SUPABASE=1` |
+| `--offline` | Air-gapped: attempt **no** network downloads; each download step fails loudly pointing at the staged-artifact path it expects (uv, hayabusa, HF model cache, Supabase CLI). | `SIFT_OFFLINE=1` |
+| `--enable-geoip` | Enable the OpenSearch ip2geo datasource (off by default; it fetches from a live endpoint). | `SIFT_GEOIP_ENABLED=1` |
+| `--apparmor-enforce` | Load the SIFT AppArmor profiles in **enforce** mode (default is complain). Same posture as `./harden.sh`. | `SIFT_APPARMOR_ENFORCE=1` |
+| `--uninstall` / `--remove` | Reverse the install (service, venv, `~/.sift`, auditd/AppArmor, hayabusa symlink, containers). **Preserves** `/var/lib/sift`, `/cases`, docker volumes. The fuller teardown is `scripts/uninstall.sh` (§14). | — |
+| `--purge-data` | With `--uninstall`, ALSO delete `/var/lib/sift` + `/cases` (EVIDENCE) + docker volumes. Irreversible; prompts unless `-y`. | — |
+| `-y`, `--yes` | Assume yes to destructive prompts (non-interactive purge). | — |
+
+> OpenSearch has no dedicated install flag: it is on by default and registered
+> only if the cluster comes up healthy. Disable it with
+> `SIFT_OPENSEARCH_ENABLED=false` or `--core-only`. `--apparmor-enforce` is also
+> available post-install via `./harden.sh` (and `./harden.sh --complain` reverts).
+
+### 8.2 Integrating an add-on end-to-end (VM → Portal)
+
+Every add-on — `windows-triage-mcp`, `opencti-mcp`, or a third-party backend —
+uses the **same single door**: prepare on the VM, Register in the portal, then
+restart. Worked example: **windows-triage-mcp**.
+
+**Step 1 — Prepare on the VM (`scripts/setup-addon.sh`).** Interactive helper; it
+provisions prerequisites and writes a ready-to-submit register payload, but
+**registers nothing itself**.
 
 ```bash
-# Validates the add-on manifest (sift-backend.json) and writes a register
-# payload, then records it into app.mcp_backends. Run from the repo checkout.
-scripts/setup-addon.sh <addon-path-or-name>
-# Apply: the gateway picks up the registered backend on restart.
+# On the VM, from the repo checkout. Interactive menu (no positional args).
+./scripts/setup-addon.sh
+#   1) opensearch-mcp   2) opencti-mcp   3) forensic-rag-mcp
+#   4) windows-triage-mcp   5) custom/community   a) all reference (1-4)
+# Select e.g. "4". It stages the windows-triage extra into /opt/sift-mcps/.venv,
+# offers to download the baseline DBs, and writes the payload to
+#   ~/.sift/addon-register/windows-triage-mcp.json
+```
+
+**Step 2 — (windows-triage only) baseline databases.** The known-good/known-bad
+DBs download separately; the optional registry baseline is ~12 GB (opt-in):
+
+```bash
+# Default dest is /var/lib/sift/windows-triage (the add-on's default DB dir).
+python -m windows_triage_mcp.scripts.download_databases             # known-good + context only
+python -m windows_triage_mcp.scripts.download_databases \
+  --with-registry --yes                                             # ALSO the ~12 GB registry baseline
+```
+
+**Step 3 — Register in the Portal.** `Portal -> Backends -> Register New Backend`.
+Submit the payload `setup-addon.sh` wrote, or fill the form:
+
+- **Transport** `stdio`, **Name** `windows-triage-mcp`
+- **Manifest path** `packages/windows-triage-mcp/sift-backend.json` (a
+  `manifest_path` is **required** — inline manifests are validate-only)
+- **Command** `/opt/sift-mcps/.venv/bin/windows-triage-mcp` (the staged console
+  script the `sift-service` user can exec)
+- **Env var references** only if the DB dir differs from the default; never raw
+  secrets — only `CHILD_ENV = GATEWAY_ENV` name pairs.
+
+Click **Validate** (checks manifest schema + contract; shows provided tools and
+requirements), then **Register** (re-auth: examiner password). This persists the
+`app.mcp_backends` row and returns `restart_required`.
+
+**Step 4 — Apply (restart-to-apply, D34).** Registering does not hot-load into the
+running gateway:
+
+```bash
 sudo systemctl restart sift-gateway.service
 ```
 
-The manifest is validated against
-`packages/sift-gateway/.../sift-backend.schema.json`, hashed
-(`manifest_sha256`), and stored in `app.mcp_backends`. Raw secrets in a manifest
-are rejected by a DB CHECK and validators. Add-on register payloads land
-transiently under `$SIFT_HOME/addon-register/*.json`; authority is the DB row.
-
-### 8.2 List / disable backends (read-only + DB edit)
+**Step 5 — Verify.** On `Portal -> Backends` the row should read
+**ENABLED · Ready · on-demand · OK** (§8.5). Or from the VM:
 
 ```bash
-# List registered backends (names/namespace/enabled only).
+curl -sk https://127.0.0.1:4508/health | python3 -m json.tool | grep -A3 windows-triage
+```
+
+### 8.3 `scripts/setup-addon.sh` reference
+
+Interactive only (`./scripts/setup-addon.sh`, or `--help`). Per backend you
+select it (1) optionally provisions prerequisites (downloads / Docker stacks /
+index bootstrap), (2) prompts for and echoes every config + env var, then (3)
+writes `~/.sift/addon-register/<name>.json`. It **never** registers a backend and
+**never** edits `gateway.yaml` — you drive Validate → Register → restart yourself
+(Steps 3-4). Menu: `1` opensearch-mcp, `2` opencti-mcp, `3` forensic-rag-mcp,
+`4` windows-triage-mcp, `5` custom/community, `a` all reference backends (1-4).
+
+### 8.4 windows-triage databases (`download_databases`)
+
+| Flag | Meaning |
+|---|---|
+| `--dest DIR` | Target dir. Default `/var/lib/sift/windows-triage` (the add-on's default DB dir; no env-ref needed when used). |
+| `--tag TAG` | Release tag to pull (defaults to the pinned baseline release). |
+| `--with-registry` | ALSO download the ~12 GB `known_good_registry.db` baseline (opt-in; gated on a disk-space check). |
+| `--yes` | Assume yes to the registry confirmation (non-interactive installs). |
+
+### 8.5 Reading backend status on the Portal Backends page
+
+The Backends tab shows two views that answer different questions — read the right
+one:
+
+- **System Health panel** (`/portal/api/health`, auto-refreshing): is the backend
+  *mounted and reachable* right now? Proxy-mounted stdio backends show `ok` even
+  while idle. This is the trustworthy liveness signal (§3.1).
+- **DB Registry table** (`/api/backends`): the registry view — `enabled`,
+  requirements, and lifecycle status.
+
+DB Registry **STATUS** column:
+
+| Shown | Meaning |
+|---|---|
+| `ENABLED` / `DISABLED` | The `app.mcp_backends.enabled` flag (registry row on/off). |
+| `Ready · on-demand` | Proxy-mounted add-on, healthy; the subprocess spawns per call (no persistent process). Normal resting state — **not** an error. |
+| `Started` | A persistently-started backend process is running. |
+| `Stopped` | Registered + enabled but neither mounted nor started (e.g. a non-proxy backend that failed to mount). |
+| `Pending restart` | The row was registered/changed but is not yet loaded — restart to apply. |
+
+**HEALTH** column: `OK` (healthy / mounted on-demand), `Gated` (unmet
+requirements — see REQUIREMENTS), `Disabled`, or `Invalid Manifest`.
+
+Notes:
+
+- On-demand rows show an **`on-demand`** tag instead of Start/Stop/Restart. Do
+  **not** try to "Start" them — for a proxy-mounted backend that spawns a
+  redundant subprocess nothing consumes. Use Disable/Unregister to manage them.
+- When any row is pending, a **restart-to-apply banner** prompts you to run
+  `sudo systemctl restart sift-gateway`.
+- A fresh install with no add-ons shows opensearch + rag only; the empty-state
+  reminds you that add-ons come via `setup-addon.sh → Register → restart`.
+
+### 8.6 List / disable / unregister backends
+
+```bash
+# List registered backends (names/namespace/enabled/health only).
 docker exec supabase_db_sift-mcps psql -U postgres -d postgres -tA -c \
   "select name, namespace, transport, enabled, health_status from app.mcp_backends order by name;"
 ```
 
-To disable an add-on: set its `app.mcp_backends.enabled=false` (or remove the
-row) and restart the gateway. Core backend rows should not be removed casually.
+To disable an add-on: `Portal -> Backends -> Disable` (re-auth), or set
+`app.mcp_backends.enabled=false`, then restart. To remove it entirely:
+`Unregister` in the portal (re-auth), or delete the row. Core backend rows should
+not be removed casually. The manifest is validated against the backend JSON
+schema, hashed (`manifest_sha256`), and stored in `app.mcp_backends`; raw secrets
+are rejected by a DB CHECK + validators. Register payloads land transiently under
+`$SIFT_HOME/addon-register/*.json` — authority is the DB row.
 
 > **Add-on image lifecycle note (B-OR1-a):** OpenCTI + redis/rabbitmq/minio
 > Docker images (~4.4 GB) can linger on a core VM with no OpenCTI containers
