@@ -28,6 +28,28 @@ from sift_gateway.policy_middleware import (
 from sift_gateway.server import Gateway
 
 
+def test_opensearch_job_dispatch_set_is_the_worker_route_invariant():
+    """Guard the worker-vs-direct execution-route invariant (XYE-36).
+
+    The split documented in DEVELOPER_ENTRYPOINT.md §`opensearch-mcp` is enforced
+    by this one frozenset: ONLY the long-running ingestion/enrichment pipeline
+    (which FUSE-mounts evidence and so cannot run in the gateway's private mount
+    namespace) is redirected to a durable worker job. A new long-running / FUSE /
+    privileged opensearch tool must be added here AND given a worker handler in
+    `job_worker_cli.py` in the same change; a query/read/idempotent-admin tool
+    must NOT. `opensearch_fix_host_mapping` is the documented exception (an
+    idempotent, async-continuing reindex) and stays direct. If this assertion
+    fails, update the doc + worker handlers to match — do not just edit the test.
+    """
+    from sift_gateway.policy_middleware import _OPENSEARCH_JOB_DISPATCH_TOOLS
+
+    assert _OPENSEARCH_JOB_DISPATCH_TOOLS == frozenset(
+        {"opensearch_ingest", "opensearch_enrich_intel"}
+    )
+    # The long-running reindex stays DIRECT by design (documented exception).
+    assert "opensearch_fix_host_mapping" not in _OPENSEARCH_JOB_DISPATCH_TOOLS
+
+
 _ACTIVE = ActiveCase(
     case_id="uuid-rocba",
     case_key="case-rocba-case-06132304",

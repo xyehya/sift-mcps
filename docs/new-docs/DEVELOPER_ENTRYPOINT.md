@@ -135,6 +135,41 @@ Important modules:
 Start here for: ingest, case index naming, search/timeline behavior, parsed
 artifact fields, host derivation, and OpenSearch backend manifest changes.
 
+#### Execution routes: worker vs direct
+
+opensearch-mcp tools split into two execution routes. The split is one invariant —
+`_OPENSEARCH_JOB_DISPATCH_TOOLS` in
+`packages/sift-gateway/src/sift_gateway/policy_middleware.py`
+(`OpenSearchJobDispatchMiddleware`, the innermost gateway middleware):
+
+- **Worker / durable-job route** — long-running, non-blocking. The gateway
+  ENQUEUES a durable job (kinds `ingest` / `enrich`; handlers in
+  `opensearch_mcp/ingest_job.py`, registered in
+  `sift_core/execute/job_worker_cli.py`, claimed by `sift-opensearch-worker@`)
+  and returns an opaque `job_id` immediately; poll `running_commands_status`.
+  Required because the pipeline FUSE-mounts evidence, which the gateway's private
+  mount namespace forbids.
+  - `opensearch_ingest` (only when `dry_run=False`)
+  - `opensearch_enrich_intel`
+- **Direct route** — fast, synchronous, proxied straight to the backend (no
+  worker): every query (`search`, `count`, `aggregate`, `get_event`, `timeline`,
+  `field_values`, `case_summary`, `list_detections`), every read/status
+  (`status`, `shard_status`, `ingest_status`, `inspect_container`), and the
+  `opensearch_ingest(dry_run=True)` preview.
+
+**Invariant:** ingestion + enrichment go to the worker route; queries, reads, and
+idempotent admin stay direct. A new long-running / FUSE / privileged opensearch
+tool MUST be added to `_OPENSEARCH_JOB_DISPATCH_TOOLS` **and** given a worker
+handler in the same change; a query/read tool must not. A guard test in
+`packages/sift-gateway/tests/test_opensearch_dispatch_middleware.py` pins the set
+so a new long-running tool cannot silently ship as direct.
+
+**Exception:** `opensearch_fix_host_mapping` is a long-running `update_by_query`
+reindex but runs DIRECT by design — it is idempotent and continues server-side
+after a client timeout (re-call resumes), and it does not FUSE-mount, so it does
+not need the worker. In DB-active mode it records an authoritative Postgres
+host-identity receipt.
+
 ### `forensic-rag-mcp` and `forensic-knowledge`
 
 Role: shared reference knowledge plane.
