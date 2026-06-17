@@ -5,8 +5,11 @@ Reads ~/.sift/gateway.yaml. Always uses 127.0.0.1 for local access.
 
 from __future__ import annotations
 
+import logging
 import ssl
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 
 def _read_gateway_config() -> dict:
@@ -55,6 +58,7 @@ def get_local_ssl_context() -> ssl.SSLContext | None:
             return ctx
         except (ssl.SSLError, OSError):
             pass
+    _logger.warning("No CA cert found — TLS verification disabled for local gateway connection")
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     return ctx

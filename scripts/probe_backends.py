@@ -121,10 +121,15 @@ def validate_manifest_contract(manifest, manifest_path):
 # SSL context helper
 def get_ssl_context():
     ca_cert = Path.home() / ".sift/tls/ca-cert.pem"
-    ctx = ssl.create_default_context(cafile=str(ca_cert) if ca_cert.exists() else None)
-    if not ca_cert.exists():
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+    if ca_cert.exists():
+        return ssl.create_default_context(cafile=str(ca_cert))
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "No CA cert at %s — TLS verification disabled (local VM only)", ca_cert
+    )
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
 def _load_gateway_yaml() -> dict:

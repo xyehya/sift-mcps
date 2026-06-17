@@ -279,7 +279,7 @@ def parse_mplog(
                 if vss_id:
                     doc["sift.vss_id"] = vss_id
 
-                line_hash = hashlib.md5(line_body.encode()).hexdigest()
+                line_hash = hashlib.sha256(line_body.encode()).hexdigest()
                 id_input = f"{index_name}:{rel_file}:{current_ts or ''}:{line_hash}"
                 doc_hash = hashlib.sha256(id_input.encode()).hexdigest()[:20]
                 actions.append({"_index": index_name, "_id": doc_hash, "_source": doc})

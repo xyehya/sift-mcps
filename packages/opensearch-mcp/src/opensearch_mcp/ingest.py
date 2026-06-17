@@ -75,7 +75,7 @@ def _write_ingest_manifest(
         safe_host = hostname.replace("/", "_").replace("\\", "_")
         safe_type = artifact_type.replace("/", "_").replace("\\", "_")
         safe_file = Path(file_path).stem.replace("/", "_").replace("\\", "_")[:50]
-        path_sig = _hashlib.sha1(file_path.encode("utf-8", "replace")).hexdigest()[:8]
+        path_sig = _hashlib.sha256(file_path.encode("utf-8", "replace")).hexdigest()[:8]
         manifest_name = f"{safe_host}-{safe_type}-{safe_file}-{path_sig}.manifest.json"
 
         manifest = {
