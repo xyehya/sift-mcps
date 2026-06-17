@@ -17,11 +17,18 @@ from mcp.types import ToolAnnotations
 from pydantic import (
     BaseModel,
     Field,
-    ValidationError as PydanticValidationError,
     ValidationInfo,
     field_validator,
 )
+from pydantic import (
+    ValidationError as PydanticValidationError,
+)
 from sift_common.instructions import OPENCTI as _INSTRUCTIONS
+from sift_common.registry_helpers import (
+    PromptDef,
+    ResourceDef,
+    tool_output_schema,
+)
 
 from .audit import AuditWriter, resolve_examiner
 from .client import OpenCTIClient
@@ -34,8 +41,10 @@ from .errors import (
     OpenCTIMCPError,
     QueryError,
     RateLimitError,
-    ValidationError as OpenCTIValidationError,
     VersionMismatchError,
+)
+from .errors import (
+    ValidationError as OpenCTIValidationError,
 )
 from .tool_metadata import DEFAULT_METADATA, TOOL_METADATA
 from .validation import (
@@ -49,7 +58,6 @@ from .validation import (
     validate_relationship_types,
     validate_uuid,
 )
-
 
 _ENTITY_TYPE_METHODS = {
     "threat_actor": "search_threat_actors",
@@ -106,22 +114,6 @@ _SEARCH_ENTITY_META_KEYS = {
     "grouping": "search_grouping",
     "note": "search_note",
 }
-
-
-class PromptDef(BaseModel, arbitrary_types_allowed=True):
-    name: str
-    fn: Callable
-    title: str
-    description: str
-
-
-class ResourceDef(BaseModel, arbitrary_types_allowed=True):
-    uri: str
-    fn: Callable
-    name: str
-    title: str
-    description: str
-    mime_type: str = Field("application/json", description="MCP resource MIME type.")
 
 
 @dataclass
@@ -1331,9 +1323,5 @@ def _fault_from_exception(exc: Exception) -> ToolFault:
 
 
 def _output_schema(out_model: type[BaseModel]) -> dict[str, Any]:
-    return {
-        "anyOf": [
-            out_model.model_json_schema(),
-            ToolError.model_json_schema(),
-        ]
-    }
+    """Advertised output schema — delegates to ``sift_common.registry_helpers``."""
+    return tool_output_schema(out_model)

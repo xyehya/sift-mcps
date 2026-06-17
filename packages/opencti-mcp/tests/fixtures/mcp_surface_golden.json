@@ -98,8 +98,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -113,18 +120,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -151,7 +146,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "OpenCTI Health"
     },
@@ -263,119 +259,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "CtiEntity": {
-                "properties": {
-                  "confidence": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI confidence score when available.",
-                    "title": "Confidence"
-                  },
-                  "created": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Created timestamp when available.",
-                    "title": "Created"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Short description, truncated by the client.",
-                    "title": "Description"
-                  },
-                  "entity_type": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI/STIX entity type.",
-                    "title": "Entity Type"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific fields preserved from the OpenCTI client.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI entity id when returned by the platform.",
-                    "title": "Id"
-                  },
-                  "labels": {
-                    "description": "OpenCTI labels attached to the entity.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Labels",
-                    "type": "array"
-                  },
-                  "modified": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Modified timestamp when available.",
-                    "title": "Modified"
-                  },
-                  "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Primary display name or observable value.",
-                    "title": "Name"
-                  }
-                },
-                "title": "CtiEntity",
-                "type": "object"
-              }
-            },
             "properties": {
               "offset": {
                 "default": 0,
@@ -391,7 +274,115 @@
               "results_by_type": {
                 "additionalProperties": {
                   "items": {
-                    "$ref": "#/$defs/CtiEntity"
+                    "properties": {
+                      "confidence": {
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "OpenCTI confidence score when available.",
+                        "title": "Confidence"
+                      },
+                      "created": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Created timestamp when available.",
+                        "title": "Created"
+                      },
+                      "description": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Short description, truncated by the client.",
+                        "title": "Description"
+                      },
+                      "entity_type": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "OpenCTI/STIX entity type.",
+                        "title": "Entity Type"
+                      },
+                      "extra": {
+                        "additionalProperties": true,
+                        "description": "Type-specific fields preserved from the OpenCTI client.",
+                        "title": "Extra",
+                        "type": "object"
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "OpenCTI entity id when returned by the platform.",
+                        "title": "Id"
+                      },
+                      "labels": {
+                        "description": "OpenCTI labels attached to the entity.",
+                        "items": {
+                          "type": "string"
+                        },
+                        "title": "Labels",
+                        "type": "array"
+                      },
+                      "modified": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Modified timestamp when available.",
+                        "title": "Modified"
+                      },
+                      "name": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Primary display name or observable value.",
+                        "title": "Name"
+                      }
+                    },
+                    "title": "CtiEntity",
+                    "type": "object"
                   },
                   "type": "array"
                 },
@@ -414,8 +405,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -429,18 +427,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -467,7 +453,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Search All Threat Intel"
     },
@@ -619,119 +606,136 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "CtiEntity": {
-                "properties": {
-                  "confidence": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI confidence score when available.",
-                    "title": "Confidence"
-                  },
-                  "created": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Created timestamp when available.",
-                    "title": "Created"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Short description, truncated by the client.",
-                    "title": "Description"
-                  },
-                  "entity_type": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI/STIX entity type.",
-                    "title": "Entity Type"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific fields preserved from the OpenCTI client.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI entity id when returned by the platform.",
-                    "title": "Id"
-                  },
-                  "labels": {
-                    "description": "OpenCTI labels attached to the entity.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Labels",
-                    "type": "array"
-                  },
-                  "modified": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Modified timestamp when available.",
-                    "title": "Modified"
-                  },
-                  "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Primary display name or observable value.",
-                    "title": "Name"
-                  }
-                },
-                "title": "CtiEntity",
-                "type": "object"
+            "properties": {
+              "offset": {
+                "default": 0,
+                "description": "Echoed pagination offset.",
+                "title": "Offset",
+                "type": "integer"
               },
-              "CtiEntityType": {
+              "results": {
+                "description": "Projected matching OpenCTI entities.",
+                "items": {
+                  "properties": {
+                    "confidence": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI confidence score when available.",
+                      "title": "Confidence"
+                    },
+                    "created": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Created timestamp when available.",
+                      "title": "Created"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Short description, truncated by the client.",
+                      "title": "Description"
+                    },
+                    "entity_type": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI/STIX entity type.",
+                      "title": "Entity Type"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific fields preserved from the OpenCTI client.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI entity id when returned by the platform.",
+                      "title": "Id"
+                    },
+                    "labels": {
+                      "description": "OpenCTI labels attached to the entity.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Labels",
+                      "type": "array"
+                    },
+                    "modified": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Modified timestamp when available.",
+                      "title": "Modified"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Primary display name or observable value.",
+                      "title": "Name"
+                    }
+                  },
+                  "title": "CtiEntity",
+                  "type": "object"
+                },
+                "title": "Results",
+                "type": "array"
+              },
+              "total": {
+                "description": "Number of returned entities.",
+                "title": "Total",
+                "type": "integer"
+              },
+              "type": {
+                "description": "Entity type searched.",
                 "enum": [
                   "threat_actor",
                   "malware",
@@ -754,31 +758,6 @@
                 "type": "string"
               }
             },
-            "properties": {
-              "offset": {
-                "default": 0,
-                "description": "Echoed pagination offset.",
-                "title": "Offset",
-                "type": "integer"
-              },
-              "results": {
-                "description": "Projected matching OpenCTI entities.",
-                "items": {
-                  "$ref": "#/$defs/CtiEntity"
-                },
-                "title": "Results",
-                "type": "array"
-              },
-              "total": {
-                "description": "Number of returned entities.",
-                "title": "Total",
-                "type": "integer"
-              },
-              "type": {
-                "$ref": "#/$defs/CtiEntityType",
-                "description": "Entity type searched."
-              }
-            },
             "required": [
               "type",
               "results",
@@ -788,8 +767,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -803,18 +789,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -841,7 +815,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Search Entities by Type"
     },
@@ -880,119 +855,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "CtiEntity": {
-                "properties": {
-                  "confidence": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI confidence score when available.",
-                    "title": "Confidence"
-                  },
-                  "created": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Created timestamp when available.",
-                    "title": "Created"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Short description, truncated by the client.",
-                    "title": "Description"
-                  },
-                  "entity_type": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI/STIX entity type.",
-                    "title": "Entity Type"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific fields preserved from the OpenCTI client.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI entity id when returned by the platform.",
-                    "title": "Id"
-                  },
-                  "labels": {
-                    "description": "OpenCTI labels attached to the entity.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Labels",
-                    "type": "array"
-                  },
-                  "modified": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Modified timestamp when available.",
-                    "title": "Modified"
-                  },
-                  "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Primary display name or observable value.",
-                    "title": "Name"
-                  }
-                },
-                "title": "CtiEntity",
-                "type": "object"
-              }
-            },
             "properties": {
               "found": {
                 "description": "True when OpenCTI returned indicator or observable context.",
@@ -1002,7 +864,115 @@
               "indicator": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/CtiEntity"
+                    "properties": {
+                      "confidence": {
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "OpenCTI confidence score when available.",
+                        "title": "Confidence"
+                      },
+                      "created": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Created timestamp when available.",
+                        "title": "Created"
+                      },
+                      "description": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Short description, truncated by the client.",
+                        "title": "Description"
+                      },
+                      "entity_type": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "OpenCTI/STIX entity type.",
+                        "title": "Entity Type"
+                      },
+                      "extra": {
+                        "additionalProperties": true,
+                        "description": "Type-specific fields preserved from the OpenCTI client.",
+                        "title": "Extra",
+                        "type": "object"
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "OpenCTI entity id when returned by the platform.",
+                        "title": "Id"
+                      },
+                      "labels": {
+                        "description": "OpenCTI labels attached to the entity.",
+                        "items": {
+                          "type": "string"
+                        },
+                        "title": "Labels",
+                        "type": "array"
+                      },
+                      "modified": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Modified timestamp when available.",
+                        "title": "Modified"
+                      },
+                      "name": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Primary display name or observable value.",
+                        "title": "Name"
+                      }
+                    },
+                    "title": "CtiEntity",
+                    "type": "object"
                   },
                   {
                     "type": "null"
@@ -1032,7 +1002,115 @@
               "related_campaigns": {
                 "description": "Related campaigns when returned by the platform.",
                 "items": {
-                  "$ref": "#/$defs/CtiEntity"
+                  "properties": {
+                    "confidence": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI confidence score when available.",
+                      "title": "Confidence"
+                    },
+                    "created": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Created timestamp when available.",
+                      "title": "Created"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Short description, truncated by the client.",
+                      "title": "Description"
+                    },
+                    "entity_type": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI/STIX entity type.",
+                      "title": "Entity Type"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific fields preserved from the OpenCTI client.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI entity id when returned by the platform.",
+                      "title": "Id"
+                    },
+                    "labels": {
+                      "description": "OpenCTI labels attached to the entity.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Labels",
+                      "type": "array"
+                    },
+                    "modified": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Modified timestamp when available.",
+                      "title": "Modified"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Primary display name or observable value.",
+                      "title": "Name"
+                    }
+                  },
+                  "title": "CtiEntity",
+                  "type": "object"
                 },
                 "title": "Related Campaigns",
                 "type": "array"
@@ -1040,7 +1118,115 @@
               "related_malware": {
                 "description": "Related malware from OpenCTI relationships.",
                 "items": {
-                  "$ref": "#/$defs/CtiEntity"
+                  "properties": {
+                    "confidence": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI confidence score when available.",
+                      "title": "Confidence"
+                    },
+                    "created": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Created timestamp when available.",
+                      "title": "Created"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Short description, truncated by the client.",
+                      "title": "Description"
+                    },
+                    "entity_type": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI/STIX entity type.",
+                      "title": "Entity Type"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific fields preserved from the OpenCTI client.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI entity id when returned by the platform.",
+                      "title": "Id"
+                    },
+                    "labels": {
+                      "description": "OpenCTI labels attached to the entity.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Labels",
+                      "type": "array"
+                    },
+                    "modified": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Modified timestamp when available.",
+                      "title": "Modified"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Primary display name or observable value.",
+                      "title": "Name"
+                    }
+                  },
+                  "title": "CtiEntity",
+                  "type": "object"
                 },
                 "title": "Related Malware",
                 "type": "array"
@@ -1048,7 +1234,115 @@
               "related_techniques": {
                 "description": "Related MITRE techniques or attack patterns.",
                 "items": {
-                  "$ref": "#/$defs/CtiEntity"
+                  "properties": {
+                    "confidence": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI confidence score when available.",
+                      "title": "Confidence"
+                    },
+                    "created": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Created timestamp when available.",
+                      "title": "Created"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Short description, truncated by the client.",
+                      "title": "Description"
+                    },
+                    "entity_type": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI/STIX entity type.",
+                      "title": "Entity Type"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific fields preserved from the OpenCTI client.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI entity id when returned by the platform.",
+                      "title": "Id"
+                    },
+                    "labels": {
+                      "description": "OpenCTI labels attached to the entity.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Labels",
+                      "type": "array"
+                    },
+                    "modified": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Modified timestamp when available.",
+                      "title": "Modified"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Primary display name or observable value.",
+                      "title": "Name"
+                    }
+                  },
+                  "title": "CtiEntity",
+                  "type": "object"
                 },
                 "title": "Related Techniques",
                 "type": "array"
@@ -1056,7 +1350,115 @@
               "related_threat_actors": {
                 "description": "Related actors from OpenCTI relationships.",
                 "items": {
-                  "$ref": "#/$defs/CtiEntity"
+                  "properties": {
+                    "confidence": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI confidence score when available.",
+                      "title": "Confidence"
+                    },
+                    "created": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Created timestamp when available.",
+                      "title": "Created"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Short description, truncated by the client.",
+                      "title": "Description"
+                    },
+                    "entity_type": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI/STIX entity type.",
+                      "title": "Entity Type"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific fields preserved from the OpenCTI client.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI entity id when returned by the platform.",
+                      "title": "Id"
+                    },
+                    "labels": {
+                      "description": "OpenCTI labels attached to the entity.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Labels",
+                      "type": "array"
+                    },
+                    "modified": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Modified timestamp when available.",
+                      "title": "Modified"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Primary display name or observable value.",
+                      "title": "Name"
+                    }
+                  },
+                  "title": "CtiEntity",
+                  "type": "object"
                 },
                 "title": "Related Threat Actors",
                 "type": "array"
@@ -1070,8 +1472,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -1085,18 +1494,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -1123,7 +1520,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Look Up IOC Context"
     },
@@ -1168,119 +1566,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "CtiEntity": {
-                "properties": {
-                  "confidence": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI confidence score when available.",
-                    "title": "Confidence"
-                  },
-                  "created": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Created timestamp when available.",
-                    "title": "Created"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Short description, truncated by the client.",
-                    "title": "Description"
-                  },
-                  "entity_type": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI/STIX entity type.",
-                    "title": "Entity Type"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific fields preserved from the OpenCTI client.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI entity id when returned by the platform.",
-                    "title": "Id"
-                  },
-                  "labels": {
-                    "description": "OpenCTI labels attached to the entity.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Labels",
-                    "type": "array"
-                  },
-                  "modified": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Modified timestamp when available.",
-                    "title": "Modified"
-                  },
-                  "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Primary display name or observable value.",
-                    "title": "Name"
-                  }
-                },
-                "title": "CtiEntity",
-                "type": "object"
-              }
-            },
             "properties": {
               "days": {
                 "description": "Echoed look-back window in days.",
@@ -1290,7 +1575,115 @@
               "results": {
                 "description": "Recently created OpenCTI indicators.",
                 "items": {
-                  "$ref": "#/$defs/CtiEntity"
+                  "properties": {
+                    "confidence": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI confidence score when available.",
+                      "title": "Confidence"
+                    },
+                    "created": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Created timestamp when available.",
+                      "title": "Created"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Short description, truncated by the client.",
+                      "title": "Description"
+                    },
+                    "entity_type": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI/STIX entity type.",
+                      "title": "Entity Type"
+                    },
+                    "extra": {
+                      "additionalProperties": true,
+                      "description": "Type-specific fields preserved from the OpenCTI client.",
+                      "title": "Extra",
+                      "type": "object"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI entity id when returned by the platform.",
+                      "title": "Id"
+                    },
+                    "labels": {
+                      "description": "OpenCTI labels attached to the entity.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Labels",
+                      "type": "array"
+                    },
+                    "modified": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Modified timestamp when available.",
+                      "title": "Modified"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Primary display name or observable value.",
+                      "title": "Name"
+                    }
+                  },
+                  "title": "CtiEntity",
+                  "type": "object"
                 },
                 "title": "Results",
                 "type": "array"
@@ -1310,8 +1703,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -1325,18 +1725,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -1363,7 +1751,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Recent Indicators"
     },
@@ -1400,124 +1789,119 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "CtiEntity": {
-                "properties": {
-                  "confidence": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI confidence score when available.",
-                    "title": "Confidence"
-                  },
-                  "created": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Created timestamp when available.",
-                    "title": "Created"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Short description, truncated by the client.",
-                    "title": "Description"
-                  },
-                  "entity_type": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI/STIX entity type.",
-                    "title": "Entity Type"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific fields preserved from the OpenCTI client.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI entity id when returned by the platform.",
-                    "title": "Id"
-                  },
-                  "labels": {
-                    "description": "OpenCTI labels attached to the entity.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Labels",
-                    "type": "array"
-                  },
-                  "modified": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Modified timestamp when available.",
-                    "title": "Modified"
-                  },
-                  "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Primary display name or observable value.",
-                    "title": "Name"
-                  }
-                },
-                "title": "CtiEntity",
-                "type": "object"
-              }
-            },
             "properties": {
               "entity": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/CtiEntity"
+                    "properties": {
+                      "confidence": {
+                        "anyOf": [
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "OpenCTI confidence score when available.",
+                        "title": "Confidence"
+                      },
+                      "created": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Created timestamp when available.",
+                        "title": "Created"
+                      },
+                      "description": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Short description, truncated by the client.",
+                        "title": "Description"
+                      },
+                      "entity_type": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "OpenCTI/STIX entity type.",
+                        "title": "Entity Type"
+                      },
+                      "extra": {
+                        "additionalProperties": true,
+                        "description": "Type-specific fields preserved from the OpenCTI client.",
+                        "title": "Extra",
+                        "type": "object"
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "OpenCTI entity id when returned by the platform.",
+                        "title": "Id"
+                      },
+                      "labels": {
+                        "description": "OpenCTI labels attached to the entity.",
+                        "items": {
+                          "type": "string"
+                        },
+                        "title": "Labels",
+                        "type": "array"
+                      },
+                      "modified": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Modified timestamp when available.",
+                        "title": "Modified"
+                      },
+                      "name": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "default": null,
+                        "description": "Primary display name or observable value.",
+                        "title": "Name"
+                      }
+                    },
+                    "title": "CtiEntity",
+                    "type": "object"
                   },
                   {
                     "type": "null"
@@ -1545,8 +1929,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -1560,18 +1951,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -1598,7 +1977,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Get Entity by ID"
     },
@@ -1670,188 +2050,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "CtiEntity": {
-                "properties": {
-                  "confidence": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI confidence score when available.",
-                    "title": "Confidence"
-                  },
-                  "created": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Created timestamp when available.",
-                    "title": "Created"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Short description, truncated by the client.",
-                    "title": "Description"
-                  },
-                  "entity_type": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI/STIX entity type.",
-                    "title": "Entity Type"
-                  },
-                  "extra": {
-                    "additionalProperties": true,
-                    "description": "Type-specific fields preserved from the OpenCTI client.",
-                    "title": "Extra",
-                    "type": "object"
-                  },
-                  "id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI entity id when returned by the platform.",
-                    "title": "Id"
-                  },
-                  "labels": {
-                    "description": "OpenCTI labels attached to the entity.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Labels",
-                    "type": "array"
-                  },
-                  "modified": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Modified timestamp when available.",
-                    "title": "Modified"
-                  },
-                  "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Primary display name or observable value.",
-                    "title": "Name"
-                  }
-                },
-                "title": "CtiEntity",
-                "type": "object"
-              },
-              "CtiRelationship": {
-                "properties": {
-                  "direction": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Direction relative to the requested entity when inferable.",
-                    "title": "Direction"
-                  },
-                  "id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI relationship id.",
-                    "title": "Id"
-                  },
-                  "relationship_type": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI relationship type such as indicates, uses, or targets.",
-                    "title": "Relationship Type"
-                  },
-                  "source": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/$defs/CtiEntity"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Source entity for the relationship."
-                  },
-                  "target": {
-                    "anyOf": [
-                      {
-                        "$ref": "#/$defs/CtiEntity"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Target entity for the relationship."
-                  }
-                },
-                "title": "CtiRelationship",
-                "type": "object"
-              }
-            },
             "properties": {
               "entity_id": {
                 "description": "Echoed entity UUID.",
@@ -1861,7 +2059,289 @@
               "relationships": {
                 "description": "Projected relationships for the entity.",
                 "items": {
-                  "$ref": "#/$defs/CtiRelationship"
+                  "properties": {
+                    "direction": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Direction relative to the requested entity when inferable.",
+                      "title": "Direction"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI relationship id.",
+                      "title": "Id"
+                    },
+                    "relationship_type": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI relationship type such as indicates, uses, or targets.",
+                      "title": "Relationship Type"
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "confidence": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "OpenCTI confidence score when available.",
+                              "title": "Confidence"
+                            },
+                            "created": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "Created timestamp when available.",
+                              "title": "Created"
+                            },
+                            "description": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "Short description, truncated by the client.",
+                              "title": "Description"
+                            },
+                            "entity_type": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "OpenCTI/STIX entity type.",
+                              "title": "Entity Type"
+                            },
+                            "extra": {
+                              "additionalProperties": true,
+                              "description": "Type-specific fields preserved from the OpenCTI client.",
+                              "title": "Extra",
+                              "type": "object"
+                            },
+                            "id": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "OpenCTI entity id when returned by the platform.",
+                              "title": "Id"
+                            },
+                            "labels": {
+                              "description": "OpenCTI labels attached to the entity.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "title": "Labels",
+                              "type": "array"
+                            },
+                            "modified": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "Modified timestamp when available.",
+                              "title": "Modified"
+                            },
+                            "name": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "Primary display name or observable value.",
+                              "title": "Name"
+                            }
+                          },
+                          "title": "CtiEntity",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Source entity for the relationship."
+                    },
+                    "target": {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "confidence": {
+                              "anyOf": [
+                                {
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "OpenCTI confidence score when available.",
+                              "title": "Confidence"
+                            },
+                            "created": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "Created timestamp when available.",
+                              "title": "Created"
+                            },
+                            "description": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "Short description, truncated by the client.",
+                              "title": "Description"
+                            },
+                            "entity_type": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "OpenCTI/STIX entity type.",
+                              "title": "Entity Type"
+                            },
+                            "extra": {
+                              "additionalProperties": true,
+                              "description": "Type-specific fields preserved from the OpenCTI client.",
+                              "title": "Extra",
+                              "type": "object"
+                            },
+                            "id": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "OpenCTI entity id when returned by the platform.",
+                              "title": "Id"
+                            },
+                            "labels": {
+                              "description": "OpenCTI labels attached to the entity.",
+                              "items": {
+                                "type": "string"
+                              },
+                              "title": "Labels",
+                              "type": "array"
+                            },
+                            "modified": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "Modified timestamp when available.",
+                              "title": "Modified"
+                            },
+                            "name": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "default": null,
+                              "description": "Primary display name or observable value.",
+                              "title": "Name"
+                            }
+                          },
+                          "title": "CtiEntity",
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Target entity for the relationship."
+                    }
+                  },
+                  "title": "CtiRelationship",
+                  "type": "object"
                 },
                 "title": "Relationships",
                 "type": "array"
@@ -1881,8 +2361,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -1896,18 +2383,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -1934,7 +2409,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Entity Relationships"
     },
@@ -2046,95 +2522,6 @@
       "output_schema": {
         "anyOf": [
           {
-            "$defs": {
-              "CtiReport": {
-                "properties": {
-                  "confidence": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI confidence score when available.",
-                    "title": "Confidence"
-                  },
-                  "description": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Short report description, truncated by the client.",
-                    "title": "Description"
-                  },
-                  "id": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "OpenCTI report id when available.",
-                    "title": "Id"
-                  },
-                  "labels": {
-                    "description": "OpenCTI labels attached to the report.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Labels",
-                    "type": "array"
-                  },
-                  "name": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Report title.",
-                    "title": "Name"
-                  },
-                  "object_refs": {
-                    "description": "Referenced entity ids when returned by the platform.",
-                    "items": {
-                      "type": "string"
-                    },
-                    "title": "Object Refs",
-                    "type": "array"
-                  },
-                  "published": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "Publication timestamp when available.",
-                    "title": "Published"
-                  }
-                },
-                "title": "CtiReport",
-                "type": "object"
-              }
-            },
             "properties": {
               "offset": {
                 "default": 0,
@@ -2145,7 +2532,91 @@
               "results": {
                 "description": "Projected report results.",
                 "items": {
-                  "$ref": "#/$defs/CtiReport"
+                  "properties": {
+                    "confidence": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI confidence score when available.",
+                      "title": "Confidence"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Short report description, truncated by the client.",
+                      "title": "Description"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "OpenCTI report id when available.",
+                      "title": "Id"
+                    },
+                    "labels": {
+                      "description": "OpenCTI labels attached to the report.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Labels",
+                      "type": "array"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Report title.",
+                      "title": "Name"
+                    },
+                    "object_refs": {
+                      "description": "Referenced entity ids when returned by the platform.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "title": "Object Refs",
+                      "type": "array"
+                    },
+                    "published": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Publication timestamp when available.",
+                      "title": "Published"
+                    }
+                  },
+                  "title": "CtiReport",
+                  "type": "object"
                 },
                 "title": "Results",
                 "type": "array"
@@ -2164,8 +2635,15 @@
             "type": "object"
           },
           {
-            "$defs": {
-              "ErrorCode": {
+            "properties": {
+              "details": {
+                "additionalProperties": true,
+                "description": "Optional structured context (e.g. supported_types, halt_reason).",
+                "title": "Details",
+                "type": "object"
+              },
+              "error": {
+                "description": "Machine-readable error category.",
                 "enum": [
                   "invalid_input",
                   "not_found",
@@ -2179,18 +2657,6 @@
                 ],
                 "title": "ErrorCode",
                 "type": "string"
-              }
-            },
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "$ref": "#/$defs/ErrorCode",
-                "description": "Machine-readable error category."
               },
               "message": {
                 "description": "Human-readable, secret-free explanation.",
@@ -2217,7 +2683,8 @@
             "title": "ToolError",
             "type": "object"
           }
-        ]
+        ],
+        "type": "object"
       },
       "title": "Search Reports"
     }
