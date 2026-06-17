@@ -2261,6 +2261,9 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
     case_id = _resolve_case_id(getattr(args, "case", None))
     _ensure_case_active(case_id)
     hostname = args.hostname
+    # XYE-11: when the server pre-derived the hostname it forwards the true
+    # source so the per-run metadata isn't mislabeled "operator".
+    hostname_source = getattr(args, "hostname_source", None)
     tier = getattr(args, "tier", 1)
     plugins_str = getattr(args, "plugins", None)
     plugins = [p.strip() for p in plugins_str.split(",")] if plugins_str else None
@@ -2386,6 +2389,7 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
             client=client,
             case_id=case_id,
             hostname=hostname,
+            hostname_source=hostname_source,
             tier=tier,
             plugins=plugins,
             timeout=timeout,
@@ -2550,6 +2554,10 @@ def main() -> None:
     p_mem = sub.add_parser("memory", help="Parse memory image with Volatility 3")
     p_mem.add_argument("path", help="Path to memory image")
     p_mem.add_argument("--hostname", required=True, help="Source hostname")
+    # XYE-11: internal passthrough. The server pre-derives the hostname before
+    # spawning this worker (the CLI --hostname is required), so it forwards the
+    # real source ("registry"/"envars"/"operator") here for accurate metadata.
+    p_mem.add_argument("--hostname-source", default=None, help=argparse.SUPPRESS)
     p_mem.add_argument("--case", help="Case ID")
     p_mem.add_argument("--tier", type=int, default=1, choices=[1, 2, 3], help="Analysis depth")
     p_mem.add_argument("--plugins", help="Specific plugins (comma-separated)")

@@ -410,3 +410,45 @@ class TestIngestMemoryHostnameWiring:
 
         meta = result.get("_meta", {})
         assert meta.get("hostname_source") == "operator"
+
+    def test_caller_provided_source_is_preserved(self, monkeypatch, tmp_path):
+        """XYE-11: when the caller pre-derived the hostname and passes the real
+        source, _meta reports that source instead of mislabeling it 'operator'.
+
+        Mirrors the server-side opensearch_ingest wrapper, which derives the
+        hostname before spawning the worker (so the worker always receives a
+        non-empty --hostname) and forwards --hostname-source.
+        """
+        image = tmp_path / "test.raw"
+        image.write_bytes(b"x")
+
+        derive_called = {"n": 0}
+
+        def _spy_derive(path, timeout=60):
+            derive_called["n"] += 1
+            return ("SHOULD-NOT-BE-USED", "registry")
+
+        monkeypatch.setattr(_pm, "_derive_hostname_from_image", _spy_derive)
+        monkeypatch.setattr(_pm, "_find_vol3", lambda: "/bin/true")
+        import subprocess as _sp
+        monkeypatch.setattr(
+            _sp,
+            "run",
+            lambda *a, **kw: MagicMock(returncode=0, stdout="", stderr=""),
+        )
+
+        result = _pm.ingest_memory(
+            image_path=image,
+            client=self._make_client(),
+            case_id="test-case",
+            hostname="SRL-FORGE",
+            hostname_source="registry",
+            plugins=["windows.pslist"],
+        )
+
+        # Caller already derived; the worker must not re-derive...
+        assert derive_called["n"] == 0
+        meta = result.get("_meta", {})
+        # ...and must report the forwarded source, not "operator".
+        assert meta.get("hostname") == "SRL-FORGE"
+        assert meta.get("hostname_source") == "registry"

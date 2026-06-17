@@ -488,6 +488,7 @@ def ingest_memory(
     client: OpenSearch,
     case_id: str,
     hostname: str,
+    hostname_source: str | None = None,
     tier: int = 1,
     plugins: list[str] | None = None,
     timeout: int = 3600,
@@ -518,27 +519,35 @@ def ingest_memory(
     else:
         plugin_list = TIER_1
 
-    # --- B-MVP-042: auto-derive hostname when operator did not supply one ---
-    hostname_source: str
-    if not hostname:
-        derived, hostname_source = _derive_hostname_from_image(image_path, timeout=min(timeout, 120))
-        if not derived:
-            return {
-                "error": "hostname is required for format='memory'.",
-                "detail": (
-                    "Auto-derivation was attempted (windows.registry.printkey + "
-                    "windows.envars) but both probes returned nothing. "
-                    "Supply hostname= explicitly."
-                ),
-                "next_step": (
-                    "Call opensearch_ingest(..., format='memory', "
-                    "hostname='<source-host>', dry_run=True)."
-                ),
-            }
-        hostname = derived
-    else:
-        hostname_source = "operator"
-    # --- end B-MVP-042 ---
+    # --- B-MVP-042 / XYE-11: determine the hostname source label ---
+    # When a caller already derived the hostname it passes the real source
+    # through (hostname_source != None). The server-side opensearch_ingest
+    # wrapper does exactly this: it derives the hostname *before* spawning this
+    # worker so the CLI's required --hostname is always populated, which would
+    # otherwise make this branch mislabel a derived hostname as "operator".
+    # Only derive / default to "operator" here when no source was provided.
+    if hostname_source is None:
+        if not hostname:
+            derived, hostname_source = _derive_hostname_from_image(
+                image_path, timeout=min(timeout, 120)
+            )
+            if not derived:
+                return {
+                    "error": "hostname is required for format='memory'.",
+                    "detail": (
+                        "Auto-derivation was attempted (windows.registry.printkey + "
+                        "windows.envars) but both probes returned nothing. "
+                        "Supply hostname= explicitly."
+                    ),
+                    "next_step": (
+                        "Call opensearch_ingest(..., format='memory', "
+                        "hostname='<source-host>', dry_run=True)."
+                    ),
+                }
+            hostname = derived
+        else:
+            hostname_source = "operator"
+    # --- end B-MVP-042 / XYE-11 ---
 
     source_file = str(image_path)
     results: dict = {}
