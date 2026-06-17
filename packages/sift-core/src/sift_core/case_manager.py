@@ -620,17 +620,31 @@ class CaseManager:
     def _require_active_case(self) -> Path:
         db_active = False
         db_case_dir: Path | None = None
+        # Catch ONLY ImportError here: the authority-context module being
+        # genuinely absent is the single condition under which the legacy file
+        # fallback below is permitted. A runtime failure of the authority calls
+        # must NOT be swallowed — that would leave db_active=False and fall
+        # through to the tamperable SIFT_CASE_DIR / ~/.sift/active_case paths
+        # (a fail-OPEN downgrade that violates the DB-authority invariant).
         try:
-            from sift_core.active_case_context import current_active_case, db_authority_active
+            from sift_core.active_case_context import (
+                current_active_case,
+                db_authority_active,
+            )
+        except ImportError:
+            current_active_case = None  # type: ignore[assignment]
+            db_authority_active = None  # type: ignore[assignment]
 
+        if current_active_case is not None and db_authority_active is not None:
+            # Runtime authority resolution is deliberately OUTSIDE the import
+            # guard: any error here propagates so the caller fails CLOSED rather
+            # than silently degrading to file-mode active-case authority.
             ctx = current_active_case()
             if ctx and ctx.case_dir is not None and ctx.case_dir.is_dir():
                 db_case_dir = ctx.case_dir
                 self._active_case_id = ctx.case_key or db_case_dir.name
                 self._active_case_path = db_case_dir
             db_active = db_authority_active()
-        except Exception:
-            pass
 
         # BU1: when the authority context resolved a DB case dir, enforce the
         # closed-case safety belt from DB authority (not CASE.yaml) and return it.
