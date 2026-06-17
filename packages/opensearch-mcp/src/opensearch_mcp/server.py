@@ -4153,6 +4153,10 @@ def idx_ingest_memory(
         resolved_path,
         "--hostname",
         hostname,
+        # XYE-11: forward the real source ("operator"/"registry"/"envars") so the
+        # worker's metadata isn't mislabeled "operator" when we pre-derived it.
+        "--hostname-source",
+        hostname_source,
         "--case",
         active_case_id,
         "--tier",
