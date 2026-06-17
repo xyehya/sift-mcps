@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 from sift_gateway.identity import Identity
+
+logger = logging.getLogger(__name__)
 
 
 _CASE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{2,63}$")
@@ -685,8 +688,8 @@ class ActiveCaseService:
                 extra={"case_id": case.case_id, "case_key": case.case_key},
                 examiner_override=principal,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Audit log failed for %s on case %s: %s", event_type, case.case_id, exc)
 
     def _case_from_row(self, row: Any) -> ActiveCase:
         case_id, case_key, title, description, status, artifact_path, metadata = row

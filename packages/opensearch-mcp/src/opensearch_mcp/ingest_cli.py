@@ -24,6 +24,8 @@ from opensearch_mcp.parse_csv import ingest_csv
 from opensearch_mcp.paths import sift_dir, sanitize_index_component
 from opensearch_mcp.tools import TOOLS
 
+logger = logging.getLogger(__name__)
+
 _ACTIVE_CASE_FILE = sift_dir() / "active_case"
 
 
@@ -514,8 +516,8 @@ def _ensure_case_active(case_id: str) -> None:
 
         call_tool("case_activate", {"case_id": case_id})
         return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Gateway case_activate failed, using fallback: %s", exc)
 
     # Fallback: set active_case_file + try inline SMB repoint
     case_path = sift_dir() / "cases" / case_id

@@ -27,10 +27,13 @@ Security invariants (enforced by the caller/handlers, asserted by tests):
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
+
+logger = logging.getLogger(__name__)
 
 # Terminal statuses a job can reach.
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "expired"})
@@ -398,9 +401,9 @@ class JobWorker:
                         (self.worker_id, status, current_job_id, _jsonb({})),
                     )
                 conn.commit()
-        except Exception:
+        except Exception as exc:
             # Heartbeat is best-effort liveness; never let it fail the loop.
-            pass
+            logger.debug("Worker heartbeat failed (best-effort): %s", exc)
 
     # -- low-level call helpers --------------------------------------------
 

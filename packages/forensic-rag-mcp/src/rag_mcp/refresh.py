@@ -398,9 +398,9 @@ def _refresh_single_source(
         if existing["ids"]:
             collection.delete(ids=existing["ids"])
             result.records_removed += len(existing["ids"])
-    except Exception:
-        # Source might not exist yet
-        pass
+    except Exception as exc:
+        # Source might not exist yet in the collection
+        logger.debug("Could not remove old records for source %s: %s", name, exc)
 
     # Add new records
     if records:

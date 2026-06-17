@@ -194,8 +194,8 @@ def _tool_read_only(gateway: GatewayProtocol, name: str) -> bool:
         for spec in core_tool_specs():
             if spec.name == name:
                 return bool(getattr(spec, "read_only", False))
-    except Exception:  # pragma: no cover - defensive
-        pass
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("core_tool_specs lookup failed for %s: %s", name, exc)
     if name in _READ_ONLY_NONCORE_TOOLS:
         return True
     meta = getattr(gateway, "_tool_manifest_meta", None) or {}

@@ -399,5 +399,5 @@ class JobService:
                 extra={"job_id": job_id},
                 examiner_override=principal,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Audit log failed for %s (job %s): %s", event_type, job_id, exc)

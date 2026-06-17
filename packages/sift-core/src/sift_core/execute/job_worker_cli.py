@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 from sift_core.execute.job_worker import JobWorker, psycopg_connection_factory
 from sift_core.execute.run_command_job import run_command_job_handler
@@ -62,8 +65,8 @@ def build_handlers(dsn: str, *, job_types: list[str] | None = None):
             from opensearch_mcp import server as _os_server
 
             _os_server.set_host_identity_recorder(host_identity_recorder)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to wire host_identity_recorder to opensearch server: %s", exc)
     except ImportError:
         pass
     return handlers

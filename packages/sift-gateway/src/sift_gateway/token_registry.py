@@ -8,11 +8,14 @@ module.
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import os
 from typing import Any, Protocol
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 from sift_gateway.token_gen import token_fingerprint, token_hash
 
@@ -177,7 +180,8 @@ class PostgresTokenRegistry:
 
         try:
             metadata = json.loads(metadata_raw) if isinstance(metadata_raw, str) else {}
-        except ValueError:
+        except ValueError as exc:
+            logger.warning("Corrupt token metadata (token_id %s): %s", token_id, exc)
             metadata = {}
         role = str(metadata.get("role") or ("service" if service_uuid else "agent"))
         legacy_agent_id = metadata.get("legacy_agent_id")
@@ -467,7 +471,8 @@ def _public_token_row(row: tuple[Any, ...]) -> dict[str, Any]:
     ) = row
     try:
         metadata = json.loads(metadata_raw) if isinstance(metadata_raw, str) else {}
-    except ValueError:
+    except ValueError as exc:
+        logger.warning("Corrupt token metadata in public row (token_id %s): %s", token_id, exc)
         metadata = {}
     return {
         "token_id": str(token_id),
