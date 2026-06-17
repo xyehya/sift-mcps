@@ -300,6 +300,15 @@ export function BackendsTab() {
             DB REGISTRY BACKENDS
           </p>
 
+          {backends.some((b) => b.pending_apply) && (
+            <div className="mb-3 px-3 py-2 rounded border text-xs leading-relaxed"
+                 style={{ background: 'var(--amber-dim)', borderColor: 'var(--amber)', color: 'var(--text-bright)' }}>
+              <span className="font-semibold" style={{ color: 'var(--amber)' }}>Restart required to apply.</span>{' '}
+              {backends.filter((b) => b.pending_apply).length} backend(s) were registered or changed but are not yet loaded into the running gateway.
+              Run <code className="font-mono px-1 rounded" style={{ background: 'var(--bg-raised)' }}>sudo systemctl restart sift-gateway</code> on the SIFT VM, then Refresh.
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
@@ -319,7 +328,14 @@ export function BackendsTab() {
                   </tr>
                 ) : backends.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="py-8 text-center text-text-muted font-mono">No DB-registered backends found.</td>
+                    <td colSpan="6" className="py-6 text-center text-text-muted">
+                      <div className="font-mono mb-2">No DB-registered backends found.</div>
+                      <div className="text-[11px] leading-relaxed max-w-xl mx-auto">
+                        A default install registers only <span className="font-mono">opensearch-mcp</span> and <span className="font-mono">forensic-rag-mcp</span>.
+                        Add-ons (<span className="font-mono">windows-triage-mcp</span>, <span className="font-mono">opencti-mcp</span>) are provisioned with{' '}
+                        <span className="font-mono">scripts/setup-addon.sh</span>, then Registered here, then applied with a gateway restart.
+                      </div>
+                    </td>
                   </tr>
                 ) : (
                   backends.map((b) => {
@@ -350,6 +366,8 @@ export function BackendsTab() {
                           <span className="ml-2 font-sans text-xs">
                             {b.pending_apply ? (
                               <span style={{ color: 'var(--amber)' }}>Pending restart</span>
+                            ) : b.on_demand ? (
+                              <span style={{ color: 'var(--jade)' }} title="FastMCP proxy mounted; the subprocess spawns on demand per call.">Ready &middot; on-demand</span>
                             ) : b.started ? (
                               <span style={{ color: 'var(--jade)' }}>Started</span>
                             ) : (
@@ -398,30 +416,39 @@ export function BackendsTab() {
                           >
                             {b.enabled ? 'Disable' : 'Enable'}
                           </button>
-                          <button
-                            onClick={() => handleStart(b.name)}
-                            disabled={!canStart}
-                            className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
-                            style={canStart ? { background: 'var(--jade-dim)', color: 'var(--jade)', borderColor: 'var(--jade)' } : {}}
-                          >
-                            Start
-                          </button>
-                          <button
-                            onClick={() => handleStop(b.name)}
-                            disabled={!canStop}
-                            className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
-                            style={canStop ? { background: 'var(--crimson-dim)', color: 'var(--crimson)', borderColor: 'var(--crimson)' } : {}}
-                          >
-                            Stop
-                          </button>
-                          <button
-                            onClick={() => handleRestart(b.name)}
-                            disabled={!canRestart}
-                            className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
-                            style={canRestart ? { background: 'var(--amber-dim)', color: 'var(--amber)', borderColor: 'var(--amber)' } : {}}
-                          >
-                            Restart
-                          </button>
+                          {b.on_demand ? (
+                            <span className="text-[10px] font-sans italic mr-1" style={{ color: 'var(--text-muted)' }}
+                                  title="On-demand (proxy-mounted): the subprocess spawns per call. Manual start/stop/restart do not apply.">
+                              on-demand
+                            </span>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => handleStart(b.name)}
+                                disabled={!canStart}
+                                className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+                                style={canStart ? { background: 'var(--jade-dim)', color: 'var(--jade)', borderColor: 'var(--jade)' } : {}}
+                              >
+                                Start
+                              </button>
+                              <button
+                                onClick={() => handleStop(b.name)}
+                                disabled={!canStop}
+                                className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+                                style={canStop ? { background: 'var(--crimson-dim)', color: 'var(--crimson)', borderColor: 'var(--crimson)' } : {}}
+                              >
+                                Stop
+                              </button>
+                              <button
+                                onClick={() => handleRestart(b.name)}
+                                disabled={!canRestart}
+                                className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+                                style={canRestart ? { background: 'var(--amber-dim)', color: 'var(--amber)', borderColor: 'var(--amber)' } : {}}
+                              >
+                                Restart
+                              </button>
+                            </>
+                          )}
                           <button
                             onClick={() => handleUnregister(b.name)}
                             className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 transition-opacity"
