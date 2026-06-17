@@ -270,7 +270,14 @@ def download_databases(
         )
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        temp_dir = Path(tempfile.mkdtemp(prefix="triage-db-"))
+        # Co-locate the per-attempt temp dir under dest (created above) so it
+        # lives on the same filesystem as the final .db files. The compressed
+        # .zst download (~500 MB for the registry asset) lands here before being
+        # decompressed (~12 GB) into dest, so keeping both on one filesystem lets
+        # the single disk-space check at dest correctly cover the whole pipeline
+        # instead of silently passing when a small/separate system /tmp would
+        # fill mid-download.
+        temp_dir = Path(tempfile.mkdtemp(prefix="triage-db-", dir=dest))
         try:
             # Download assets
             print(f"\nDownloading (attempt {attempt}/{MAX_ATTEMPTS})...")

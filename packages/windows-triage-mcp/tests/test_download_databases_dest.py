@@ -123,3 +123,51 @@ def test_registry_opt_in_aborts_when_no_space(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         dd.main()
     assert exc.value.code == 1
+
+
+def test_temp_dir_colocated_with_dest(monkeypatch, tmp_path):
+    """The per-attempt temp dir must be created under dest, not system /tmp.
+
+    The compressed .zst (up to ~500 MB for the registry asset) is downloaded
+    into the temp dir before being decompressed (~12 GB) into dest. Keeping the
+    temp dir on the same filesystem as dest means the single disk-space check at
+    dest correctly covers the whole pipeline; otherwise a small/separate system
+    /tmp (often a tmpfs) could fill mid-download even though dest has room, and
+    the disk check would give a false "OK".
+    """
+    dest = tmp_path / "baseline"
+
+    release = {
+        "tag_name": "triage-db-test",
+        "assets": [
+            {"name": "known_good.db.zst", "url": "http://x/kg"},
+            {"name": "context.db.zst", "url": "http://x/ctx"},
+            {"name": "checksums.sha256", "url": "http://x/sums"},
+        ],
+    }
+    monkeypatch.setattr(dd, "_fetch_release", lambda tag="latest": release)
+
+    captured: dict[str, object] = {}
+    real_mkdtemp = dd.tempfile.mkdtemp
+
+    def _spy_mkdtemp(*args, **kwargs):
+        path = real_mkdtemp(*args, **kwargs)
+        captured["dir_kwarg"] = kwargs.get("dir")
+        captured["temp_dir"] = Path(path)
+        return path
+
+    monkeypatch.setattr(dd.tempfile, "mkdtemp", _spy_mkdtemp)
+
+    # Stub the network + decompress so only the temp-dir placement is exercised.
+    monkeypatch.setattr(dd, "_download_asset", lambda url, p: p.write_bytes(b""))
+    monkeypatch.setattr(dd, "_verify_checksums", lambda temp_dir: True)
+    monkeypatch.setattr(dd, "_decompress_zst", lambda src, p: p.write_bytes(b""))
+    monkeypatch.setattr(dd, "_verify_database", lambda *a, **k: True)
+
+    assert dd.download_databases(dest) is True
+
+    # The temp dir is created with dir=dest and therefore lives under dest, so a
+    # single free-space check at dest covers both the .zst and the decompressed
+    # DB on one filesystem.
+    assert captured["dir_kwarg"] == dest
+    assert captured["temp_dir"].parent == dest
