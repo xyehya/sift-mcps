@@ -324,14 +324,38 @@ and must be **registered and sealed before analysis.** The DB
 1. **Activate a case** (re-auth gated). In the portal: create/select a case and
    activate it. Activation requires password re-auth and is recorded in
    `app.audit_events`.
-2. **Place evidence bytes.** Copy or mount the disk/memory image into the active
-   case's evidence directory under `/cases/<case>/...`. This is a manual VM-side
-   file operation by the operator; agents never place bytes.
-3. **Register** the evidence object (portal evidence flow ->
-   `app.evidence_register`). This records the object and computes its hash.
+2. **Place evidence bytes — service-owned.** Copy or mount the disk/memory image
+   into the active case's evidence directory `/cases/<case>/evidence/`. This is a
+   manual VM-side operation by the operator; agents never place bytes. The portal
+   does **not** upload bytes — it detects files placed here in-place. The evidence
+   directory is owned by the gateway service user (`sift-service`, `0755`), and
+   **seal requires each evidence file to be owned by `sift-service`** (it sets the
+   immutable flag in-process and deliberately never chowns for you). A plain
+   `sudo cp` lands the file `root`-owned and the seal then fails closed with
+   `evidence_immutability_failed`. Stage the bytes so they land service-owned:
+
+   ```bash
+   # Helper: resolves the active case, copies the bytes in, sets sift-service
+   # ownership + 0644 (run on the VM as a sudo-capable operator):
+   scripts/stage-evidence.sh /mnt/source/IMAGE.e01            # active case
+   scripts/stage-evidence.sh /mnt/source/IMAGE.e01 --case case-<key>
+
+   # …or by hand:
+   sudo install -o sift-service -g sift-service -m 0644 \
+     /mnt/source/IMAGE.e01 /cases/<case>/evidence/
+   # already copied root-owned? just fix ownership:
+   sudo chown sift-service:sift-service /cases/<case>/evidence/IMAGE.e01
+   ```
+3. **Register** the evidence object (portal evidence flow). The placed file
+   surfaces as `unregistered` in the evidence chain (use **Rescan** if it does
+   not appear); registering records the object and computes its hash.
 4. **Seal** the evidence (re-auth gated -> `app.evidence_seal`). Sealing is the
-   gate: analysis tools treat sealed evidence as read-only. On seal the byte
-   files are set read-only (`chmod 0444`) and the custody chain head advances.
+   gate: analysis tools treat sealed evidence as read-only. On seal each byte file
+   is set read-only (`chmod 0444`) **and immutable (`chattr +i`)** and the custody
+   chain head advances. Seal **fails closed** (`evidence_immutability_failed`) if a
+   file is not `sift-service`-owned or the interpreter lacks `CAP_LINUX_IMMUTABLE`
+   (granted to the venv interpreter by `install.sh`) — fix ownership per step 2 and
+   retry.
 
 Re-auth is required for **case activation, evidence seal/ignore/retire, finding
 approval, report inclusion/export, and agent credential issuance.** These are
