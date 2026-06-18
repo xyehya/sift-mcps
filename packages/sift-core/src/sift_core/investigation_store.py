@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -725,38 +726,226 @@ def _case_meta_from_row(row: Any) -> dict[str, Any]:
     return meta
 
 
+# --------------------------------------------------------------------------- #
+# E1 (XYE-34): per-process connection reuse for the case-metadata authority read.
+#
+# Opening a fresh psycopg connection on every case-metadata read (the BU1 shape)
+# is a TCP+TLS+auth round-trip per fail-closed authority check. E1 reuses ONE
+# connection per (pid, dsn) and re-queries the live row each call. We cache the
+# *socket*, never the *result*: the closed-case refusal / examiner-identity /
+# report-inclusion decisions must always read the current DB row.
+#
+# Design constraints (see docs/drafts/e1-connection-reuse-spec.md §4):
+#   * autocommit=True            — fresh MVCC snapshot per statement; no
+#                                  idle-in-transaction; never a frozen snapshot
+#                                  that could serve a stale "open" for a closed
+#                                  case.
+#   * prepare_threshold=None     — disable client-side prepared statements so the
+#                                  design stays safe if the DSN is ever repointed
+#                                  at a transaction pooler (PgBouncer et al.).
+#   * connect_timeout=5          — a DB outage fails closed FAST instead of
+#                                  hanging the hot path.
+#   * statement_timeout=5000ms / idle_in_transaction_session_timeout=10000ms
+#                                  — server-side backstops on the same posture.
+#   * default_transaction_read_only=on
+#                                  — this path never writes; deny it write rights
+#                                    at the session level. (A dedicated read-only
+#                                    DB ROLE is the stronger posture and is a
+#                                    deploy follow-up; the SET is the in-code
+#                                    floor until that role is provisioned.)
+#
+# READ COMMITTED + autocommit is the ONLY isolation posture allowed here. Raising
+# the isolation level would hold a transaction open and freeze the snapshot,
+# which could serve a stale authority read — forbidden (see the guard test).
+# --------------------------------------------------------------------------- #
+
+# Cache of live connections keyed by (os.getpid(), dsn). pid-keying ensures a
+# forked child never *uses* a connection it inherited from the parent.
+_CONN_CACHE: dict[tuple[int, str], Any] = {}
+
+# Guards the cache dict ONLY (create / evict / fork-clear). It is NEVER held
+# across cur.execute(): psycopg3 Connection is internally thread-safe, and a lock
+# around execute would serialize every case-metadata read in the process behind
+# one connection. The off-event-loop threadpool (gateway _run_core) means
+# concurrent reads can share the cached connection — that is safe by design.
+_CACHE_LOCK = threading.Lock()
+
+# psycopg application_name for this path — visible in pg_stat_activity so a leak
+# or unbounded backend growth is diagnosable. Carries no secret.
+_CASE_STORE_APPLICATION_NAME = "sift-case-store"
+
+
+def _psycopg():
+    try:
+        import psycopg
+    except ImportError as exc:  # pragma: no cover - deployment env
+        raise InvestigationStoreError("psycopg is required for the DB store") from exc
+    return psycopg
+
+
+def _connection_for(dsn: str):
+    """Create one hardened, read-only, autocommit connection for ``dsn``.
+
+    This is the single connection-creation point and the default provider for
+    :class:`PostgresCaseStore`. Tests inject a fake provider to prove reuse
+    without a live database.
+    """
+    psycopg = _psycopg()
+    conn = psycopg.connect(
+        dsn,
+        autocommit=True,
+        prepare_threshold=None,
+        connect_timeout=5,
+        application_name=_CASE_STORE_APPLICATION_NAME,
+        options="-c statement_timeout=5000 -c idle_in_transaction_session_timeout=10000",
+    )
+    try:
+        # Read-only posture at the session level (autocommit ⇒ this SET sticks
+        # for the connection). The authority read needs no write rights.
+        conn.execute("SET default_transaction_read_only = on")
+    except BaseException:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - best-effort cleanup
+            pass
+        raise
+    return conn
+
+
+def _borrow_connection(dsn: str, provider):
+    """Return the cached connection for ``(pid, dsn)``, creating it if absent.
+
+    The connection is NOT closed by the caller — it is reused on the next read.
+    Creation happens under the lock so a burst of first-time readers opens at
+    most one connection; execute() runs after the lock is released.
+    """
+    key = (os.getpid(), dsn)
+    with _CACHE_LOCK:
+        conn = _CONN_CACHE.get(key)
+        if conn is None:
+            conn = provider(dsn)
+            _CONN_CACHE[key] = conn
+        return conn
+
+
+def _evict(pid: int, dsn: str) -> None:
+    """Drop the cached connection for ``(pid, dsn)`` and best-effort close it.
+
+    Called when a read hit a connection-level error (the socket is already dead)
+    or any query error (do not leave a possibly-poisoned connection cached).
+    """
+    key = (pid, dsn)
+    with _CACHE_LOCK:
+        conn = _CONN_CACHE.pop(key, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - the socket is typically already gone
+            pass
+
+
+def _clear_cache() -> None:
+    """Fork hook: drop inherited cache entries WITHOUT closing them.
+
+    Registered via ``os.register_at_fork(after_in_child=...)``. After fork the
+    child's connection objects wrap file descriptors duplicated from the parent;
+    letting the child close one would send a libpq Terminate on the shared server
+    connection and corrupt the parent's session. So we drop the references
+    (pid-keying already prevents the child from *using* them) but never call
+    ``close()``. We also reset the lock: a thread may have held it at fork time,
+    leaving it locked with no owner in the single-threaded child.
+    """
+    global _CACHE_LOCK
+    _CONN_CACHE.clear()
+    _CACHE_LOCK = threading.Lock()
+
+
+# Register the fork hook once at import. Best-effort: not all platforms expose
+# os.register_at_fork (the SIFT VM is Linux, where it is present).
+try:
+    os.register_at_fork(after_in_child=_clear_cache)
+except (AttributeError, ValueError):  # pragma: no cover - non-fork platforms
+    pass
+
+
 class PostgresCaseStore:
-    """Read-only DB authority for ``app.cases`` metadata (BU1).
+    """Read-only DB authority for ``app.cases`` metadata (BU1; E1 conn reuse).
 
     Mirrors the gateway ``ActiveCaseService`` query so in-process core readers
     (orientation, status, reporting) can resolve case metadata from Postgres
     instead of the tamperable CASE.yaml mirror, without depending on the gateway
     package. Writes remain portal/gateway-owned (BU2).
+
+    E1 (XYE-34): reuses one cached connection per process via the module-level
+    provider/cache above. The connection is reused; the row is always re-read.
+    A ``connection_provider`` may be injected for tests; it defaults to the
+    module pooled provider :func:`_connection_for`.
     """
 
-    def __init__(self, dsn: str) -> None:
+    def __init__(self, dsn: str, *, connection_provider=None) -> None:
         self._dsn = dsn
+        # Injectable creation point; default = the module per-process provider.
+        self._provider = (
+            connection_provider if connection_provider is not None else _connection_for
+        )
 
-    def _connect(self):
-        try:
-            import psycopg
-        except ImportError as exc:  # pragma: no cover - deployment env
-            raise InvestigationStoreError("psycopg is required for the DB store") from exc
-        return psycopg.connect(self._dsn)
+    def _borrow(self):
+        return _borrow_connection(self._dsn, self._provider)
 
-    def get_case_metadata(self, case_id: str) -> dict[str, Any] | None:
-        """Return CASE.yaml-shaped metadata for ``case_id`` (UUID or case_key)."""
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"select {', '.join(_CASE_ROW_COLUMNS)} from app.cases "
-                    "where id::text = %s or case_key = %s",
-                    (case_id, case_id),
-                )
-                row = cur.fetchone()
+    def _query(self, conn, case_id: str) -> dict[str, Any] | None:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"select {', '.join(_CASE_ROW_COLUMNS)} from app.cases "
+                "where id::text = %s or case_key = %s",
+                (case_id, case_id),
+            )
+            row = cur.fetchone()
         if not row:
             return None
         return _case_meta_from_row(row)
+
+    def get_case_metadata(self, case_id: str) -> dict[str, Any] | None:
+        """Return CASE.yaml-shaped metadata for ``case_id`` (UUID or case_key).
+
+        Reuses the cached per-process connection. Error posture (spec §4.3):
+
+        * Connection-level error (``OperationalError`` / ``InterfaceError`` — a
+          dead socket after a server idle-timeout): evict the dead connection,
+          reconnect once, retry the SELECT once (the read is idempotent). If the
+          retry also fails, fail closed with :class:`InvestigationStoreError`.
+        * Any other error (programming / data error): evict and fail closed
+          immediately — no retry loop.
+        * Never fall back to a file, never return stale/empty on error.
+        """
+        psycopg = _psycopg()
+        conn_errors = (psycopg.OperationalError, psycopg.InterfaceError)
+        try:
+            conn = self._borrow()
+            return self._query(conn, case_id)
+        except conn_errors:
+            # Connection-level: evict and fall through to the single retry.
+            _evict(os.getpid(), self._dsn)
+        except InvestigationStoreError:
+            _evict(os.getpid(), self._dsn)
+            raise
+        except Exception as exc:
+            # Query/programming/data error: the statement is the problem, not the
+            # socket. Evict (don't leave a poisoned connection cached) and fail
+            # closed at once — NO retry.
+            _evict(os.getpid(), self._dsn)
+            raise InvestigationStoreError(
+                f"case-metadata read failed for {case_id}"
+            ) from exc
+
+        # Reconnect-and-retry exactly once (connection-level error path only).
+        try:
+            conn = self._borrow()
+            return self._query(conn, case_id)
+        except Exception as exc:
+            _evict(os.getpid(), self._dsn)
+            raise InvestigationStoreError(
+                f"case-metadata read failed for {case_id} after one reconnect"
+            ) from exc
 
 
 def resolve_case_metadata() -> dict[str, Any] | None:
