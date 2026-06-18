@@ -38,15 +38,6 @@ tools:
     description: "Multi-format archive extraction (7z, zip, gzip, bzip2, xz, tar, rar)"
     fk_tool_name: 7z
 
-  - name: dc3dd
-    binary: dc3dd
-    input_style: flag
-    output_format: text
-    timeout_seconds: 7200
-    interactive: false
-    description: "Forensic disk imaging with inline hashing"
-    fk_tool_name: dc3dd
-
   - name: ewfacquire
     binary: ewfacquire
     input_style: positional

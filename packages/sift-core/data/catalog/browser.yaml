@@ -1,0 +1,19 @@
+category: browser
+
+tools:
+  - name: hindsight
+    binary: hindsight.py
+    input_style: flag
+    input_flag: "-i"
+    output_format: text
+    timeout_seconds: 600
+    interactive: false
+    description: "Parse Chrome/Chromium/Edge profiles: history, downloads, cookies, autofill, and more"
+    fk_tool_name: hindsight
+    common_flags:
+      - flag: "-i"
+        description: "Input: path to the browser profile directory"
+        required: true
+      - flag: "-f"
+        description: "Output format (sqlite, jsonl, xlsx)"
+        required: false

@@ -1,0 +1,12 @@
+category: recovery
+
+tools:
+  - name: sqlite-carver
+    binary: sqlite-carver
+    input_style: flag
+    input_flag: "-f"
+    output_format: text
+    timeout_seconds: 900
+    interactive: false
+    description: "Carve deleted records from SQLite databases (browsers, chat apps, mobile stores)"
+    fk_tool_name: sqlite-carver

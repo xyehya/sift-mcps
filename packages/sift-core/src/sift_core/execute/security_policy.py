@@ -192,6 +192,26 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
         "scalpel",
         "binwalk",
         "yara",
+        # Tool-availability track: cataloged Bucket-D forensic CLIs (read-only /
+        # analysis-oriented). DENY_FLOOR still applies on top; none of these
+        # match the interpreter globs. Matching is case-insensitive via fnmatch,
+        # but the exact catalog `binary` names are listed to be safe.
+        "hindsight.py",
+        "pdfid.py",
+        "pdf-parser.py",
+        "analyzemft",
+        "usnparser",
+        "sqlite-carver",
+        "page-brute",
+        "packerid.py",
+        "densityscout",
+        "pescan",
+        "mvt-ios",
+        "mvt-android",
+        "mac_apt.py",
+        "INDXParse.py",
+        # evtx_dump real wrapper name (complements the existing "evtx_dump").
+        "evtx_dump.py",
         # Hashing / inspection
         "sha256sum",
         "sha1sum",

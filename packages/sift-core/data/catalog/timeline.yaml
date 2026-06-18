@@ -19,6 +19,15 @@ tools:
         description: "Minimum alert level (informational, low, medium, high, critical)"
         required: false
 
+  - name: evtx_dump
+    binary: evtx_dump.py
+    input_style: positional
+    output_format: text
+    timeout_seconds: 600
+    interactive: false
+    description: "Dump Windows Event Log (.evtx) records to XML (overlaps EvtxECmd + opensearch ingest)"
+    fk_tool_name: evtx_dump
+
   - name: log2timeline
     binary: log2timeline.py
     input_style: positional
