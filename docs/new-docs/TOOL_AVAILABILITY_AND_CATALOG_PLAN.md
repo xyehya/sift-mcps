@@ -158,3 +158,98 @@ Ran the new tools through the live gateway `run_command` (deployed gateway still
 - `recmd`/`EvtxECmd` (dotnet) fail at `/usr/bin/dotnet` even though `/usr` is listed — the .NET host additionally trips the write/seccomp floor on startup; this is **pre-existing** (existing EZ dotnet tools already cannot run under `run_command`; they run only in the ingest pipeline, outside the sandbox).
 
 **Consequence / follow-up (separate, security-sensitive — NOT this PR):** to let the agent execute the python-venv bucket-D tools via `run_command`, add their `/opt/<tool>` roots to the `rx_paths` list in `dfir_exec_launcher.py` — exactly as `/opt/volatility3` already is (clear precedent). dotnet EZ tools additionally need the .NET runtime reconciled with the write/seccomp floor (harder; may stay ingest/operator-side). Both warrant security review since they widen the sandboxed agent's exec surface. Until then, interpreter-backed tools are cataloged/resolvable but operator/ingest-side only; native-ELF additions (`pescan`, `densityscout`) work today.
+
+## 8. python-venv exec RESOLVED — RUN-3 rx allow-list extension (XYE-81, 2026-06-18)
+
+The python-venv bucket-D tools now execute under the agent `run_command`
+sandbox. `dfir_exec_launcher.py` defines a code-defined named constant
+`FORENSIC_TOOL_RX_ROOTS` and extends the existing FS_RX allow-list with the
+specific operator-installed `/opt/<tool>` roots (read+execute only), exactly as
+`/opt/volatility3` was already granted. Roots were confirmed by reading each
+wrapper shebang on the live SIFT VM (read-only SSH), not guessed.
+
+**Roots added (read+execute only, FS_RX):**
+
+| /opt root | wrapper(s) | shebang interpreter |
+|---|---|---|
+| `/opt/pyhindsight` | hindsight.py | `#!/opt/pyhindsight/bin/python3` |
+| `/opt/analyzemft` | analyzemft | `#!/opt/analyzemft/bin/python3` |
+| `/opt/usnparser` | usnparser | `#!/opt/usnparser/bin/python3` |
+| `/opt/indxparse` | INDXParse.py | `#!/opt/indxparse/bin/python3` |
+| `/opt/sqlite-carver` | sqlite-carver | `#!/opt/sqlite-carver/bin/python3` |
+| `/opt/page-brute` | page-brute | `#!/opt/page-brute/bin/python3` |
+| `/opt/packerid` | packerid.py | `#!/opt/packerid/bin/python3` |
+| `/opt/mvt` | mvt-ios, mvt-android | `#!/opt/mvt/bin/python3` |
+| `/opt/mac-apt` | mac_apt.py | `#!/opt/mac-apt/bin/python3` |
+| `/opt/python-evtx` | evtx_dump.py | `#!/opt/python-evtx/bin/python3` |
+| `/opt/pdf-tools` | pdfid.py, pdf-parser.py | `#!/usr/bin/env python3` (system); **but** the `/usr/local/bin` wrappers are **symlinks** into `/opt/pdf-tools/bin`, so the kernel must read+execute the real script file there — hence the root grant (not for a venv interpreter). |
+
+**Not added (deliberately):** `pescan`, `densityscout` are native ELF already
+under allow-listed roots (`/usr/bin`, `/usr/local/bin`) — no change. No `/opt`
+wildcard, no glob over `/opt`; only the eleven specific roots above. The list is
+CODE-defined and is NOT built from the runtime tool catalog/DB (a data-driven
+sandbox allow-list would be a security regression). `_existing_paths` still
+filters to roots that exist, so greenfield SIFT lacking a tool is unaffected.
+
+**Floors UNCHANGED (preserved invariants — verified):**
+
+- **Write floor unchanged.** The new roots get `FS_RX & handled_fs` only
+  (read + execute). No `LANDLOCK_ACCESS_FS_WRITE_FILE`/`MAKE_*`/`REMOVE_*`/
+  `TRUNCATE`. The agent can run these tools but cannot write into their /opt
+  roots. The only writable area remains the case `agent/extractions/tmp` dirs.
+- **DENY_FLOOR unchanged → direct interpreter still denied.** The policy layer
+  gates `argv[0]` by basename. `python`, `python3`, `python*`, `pypy*` are on
+  DENY_FLOOR, so even with rx on `/opt/<tool>`, the agent CANNOT invoke
+  `/opt/<tool>/bin/python3` directly — it is rejected at the policy layer before
+  Landlock is consulted. The agent can only name the allowlisted *wrapper*
+  basenames (`hindsight.py`, `analyzemft`, …), each of which execs its own
+  pinned tool code. (Red-team test:
+  `test_run3_direct_interpreter_invocation_stays_denied`.)
+- **seccomp filter, no-new-privs, uid drop, net floor — all unchanged.** This
+  PR touches only the rx path list.
+- **Basename-evasion guard intact.** A case-dir-resident file named after an
+  allowed wrapper is still blocked (P2.3); rx on `/opt/<tool>` does not weaken
+  that path-shadow check.
+
+**dotnet EZ tools — investigated, NOT fixed in this pass (recommended deferral).**
+The Zimmerman EZ tools (`recmd`, `EvtxECmd`, `sqlecmd`, …) are `#!/bin/bash`
+wrappers that run `dotnet /opt/zimmermantools/<Tool>.dll`. Findings:
+
+- The exec *path* is not the blocker: `/usr/bin/dotnet` → `/usr/lib/dotnet/dotnet`
+  is under `/usr` (rx-allowed); the framework-dependent runtime in
+  `/usr/lib/dotnet/shared` is likewise under `/usr`.
+- The live `Permission denied` (126) at `/usr/bin/dotnet` is a .NET host startup
+  failure, not a Landlock exec-path denial. Two deliberate floors stand in the
+  way and **each would have to be weakened**, which is exactly what this PR must
+  not do:
+  1. **env scrubber.** `runtime_acl._SECRET_ENV_PATTERNS` denies any env name
+     containing `dotnet_` / `coreclr_` / `ld_` as code-injection vectors. The
+     .NET host wants `DOTNET_CLI_HOME` / `DOTNET_BUNDLE_EXTRACT_BASE_DIR` /
+     `DOTNET_CLI_TELEMETRY_OPTOUT`; all are stripped by design. Pointing
+     `DOTNET_CLI_HOME` at the case `tmp` dir would require a carve-out in that
+     code-injection deny floor.
+  2. **write floor.** The .NET host writes startup state under `$HOME` /
+     `$DOTNET_CLI_HOME` and may extract+exec to a temp dir; the case `tmp` dir
+     is writable but NOT executable (rx and write floors are disjoint), so a
+     W+X dotnet temp would need an executable-writable grant — a meaningful
+     widening.
+  - The bash wrapper itself also means a direct un-wrapped path would need a
+    `dotnet`-launching wrapper (today `dotnet` is unlisted → `contained` tier,
+    not denied; bash-as-shebang is followed by the kernel, not gated by the
+    argv[0] basename check).
+- **Recommendation: leave dotnet EZ tools ingest/operator-side (status quo).**
+  Do not loosen the env scrubber or write floor to make them run under the agent
+  sandbox without a dedicated, separately-reviewed decision. The dotnet honesty
+  is pinned by `test_run3_dotnet_is_not_silently_executable_via_allowlist`.
+
+**Security invariant (operator / installer) — these rx roots MUST stay
+non-`agent_runtime`-writable.** The safety of granting read+execute on the
+`/opt/<tool>` roots rests on them being `root:root` and not group/world-writable
+(verified on the live VM: all eleven are `root:root drwxr-xr-x`; `agent_runtime`
+is uid 995, not owner/root-group → r-x only). The writable set (case
+`agent/extractions/tmp`) and the executable set (`/opt` roots) are deliberately
+**disjoint**, which is what prevents a plant-and-exec escape. If a future
+installer change ever made an `/opt/<tool>` root `agent_runtime`-writable, rx
+there would become a write+execute primitive — do not do this. Per the XYE-81
+security review (PASS), this is a defense-in-depth invariant to preserve, not a
+defect in the current change.

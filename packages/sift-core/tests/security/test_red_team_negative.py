@@ -324,6 +324,41 @@ def test_run3_deny_floor_contains_privileged_and_mutating_backstops() -> None:
 
 
 @pytest.mark.parametrize(
+    "interpreter",
+    ["python", "python3", "python3.12", "pypy3"],
+)
+def test_run3_direct_interpreter_invocation_stays_denied(interpreter: str) -> None:
+    """XYE-81 invariant: adding rx for /opt/<tool> venv roots must NOT let the
+    agent run an interpreter directly.
+
+    The Landlock rx grant only lets the kernel exec an interpreter that an
+    allowlisted *wrapper* shebang points at. The policy layer still gates
+    argv[0] by basename: ``python``/``python3``/``python*``/``pypy*`` are on
+    DENY_FLOOR, so ``/opt/<tool>/bin/python3`` named directly is rejected
+    before Landlock is ever consulted. Pin that here.
+    """
+    assert security.is_denied(interpreter), f"{interpreter} must be on DENY_FLOOR"
+
+
+def test_run3_dotnet_is_not_silently_executable_via_allowlist() -> None:
+    """XYE-81 dotnet honesty check.
+
+    Unlike the python interpreters, ``dotnet`` is NOT on DENY_FLOOR. This test
+    documents the real state so the security posture is explicit: ``dotnet`` is
+    an *unlisted* binary and therefore runs at the ``contained`` tier, not the
+    ``standard`` tier. It is not on the @mvp_forensic allowlist, and this PR
+    does not change that — making the dotnet EZ tools runnable under run_command
+    is a deferred follow-up (it would require write/seccomp/env-scrubber
+    changes; see TOOL_AVAILABILITY_AND_CATALOG_PLAN.md §7).
+    """
+    policy = build_security_policy()
+    assert "dotnet" not in set(policy.get("allowed_binaries", []))
+    # dotnet is not denied today; it classifies as the deterministic
+    # contained tier (default unlisted_policy=contained), never standard.
+    assert security.classify_binary_risk("dotnet") == "contained"
+
+
+@pytest.mark.parametrize(
     ("tool", "flags"),
     [
         ("sed", {"-e", "--expression", "-f", "--file"}),

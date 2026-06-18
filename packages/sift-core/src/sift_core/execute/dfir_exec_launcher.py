@@ -303,6 +303,50 @@ def _existing_paths(paths: list[str]) -> list[str]:
     return out
 
 
+# RUN-3 rx allow-list extension for operator-installed forensic tools (XYE-81).
+#
+# The agent's run_command launches an allowlisted WRAPPER basename (e.g.
+# ``hindsight.py``); the kernel then follows that wrapper's shebang to a
+# python venv interpreter that lives under ``/opt/<tool>``. Landlock checks
+# read+execute on the *resolved* interpreter (and, for symlinked wrappers,
+# on the real script file), so an /opt root that is not on the rx floor makes
+# the kernel deny the exec with EACCES. This mirrors the existing
+# ``/opt/volatility3`` grant (added so ``vol``'s
+# ``#!/opt/volatility3/bin/python3`` interpreter can run).
+#
+# These are READ+EXECUTE only (FS_RX). They grant NO write/make/remove access
+# and do NOT loosen the write floor, the net floor, seccomp, no-new-privs, the
+# uid drop, or DENY_FLOOR. DENY_FLOOR still blocks ``python``/``python3`` etc.
+# as argv[0] basenames, so allow-listing these interpreter roots does NOT let
+# the agent invoke ``/opt/<tool>/bin/python3`` directly — only the specific
+# allowlisted wrapper basenames, which exec their own pinned tool code.
+#
+# Roots are enumerated explicitly (NO ``/opt`` wildcard, NO glob): each is a
+# specific operator-installed venv/tool root confirmed by reading the wrapper
+# shebang on the live SIFT VM (2026-06-18). The list is intentionally
+# CODE-defined, not built from the runtime tool catalog/DB — a data-driven
+# sandbox allow-list would be a security regression. ``_existing_paths`` skips
+# any root absent on a given install, so greenfield SIFT that lacks a tool is
+# unaffected.
+FORENSIC_TOOL_RX_ROOTS: tuple[str, ...] = (
+    "/opt/pyhindsight",   # hindsight.py        — #!/opt/pyhindsight/bin/python3
+    "/opt/analyzemft",    # analyzemft          — #!/opt/analyzemft/bin/python3
+    "/opt/usnparser",     # usnparser           — #!/opt/usnparser/bin/python3
+    "/opt/indxparse",     # INDXParse.py        — #!/opt/indxparse/bin/python3
+    "/opt/sqlite-carver", # sqlite-carver       — #!/opt/sqlite-carver/bin/python3
+    "/opt/page-brute",    # page-brute          — #!/opt/page-brute/bin/python3
+    "/opt/packerid",      # packerid.py         — #!/opt/packerid/bin/python3
+    "/opt/mvt",           # mvt-ios, mvt-android — #!/opt/mvt/bin/python3
+    "/opt/mac-apt",       # mac_apt.py          — #!/opt/mac-apt/bin/python3
+    "/opt/python-evtx",   # evtx_dump.py        — #!/opt/python-evtx/bin/python3
+    # pdfid.py / pdf-parser.py use the system interpreter
+    # (#!/usr/bin/env python3, already covered by /usr), but the wrappers in
+    # /usr/local/bin are SYMLINKS into /opt/pdf-tools/bin and the kernel must
+    # read+execute the real script file there to honor the shebang.
+    "/opt/pdf-tools",     # pdfid.py, pdf-parser.py (symlinked scripts live here)
+)
+
+
 def _install_landlock(policy: dict[str, Any]) -> int:
     require_landlock = bool(policy.get("require_landlock"))
     abi = _landlock_abi()
@@ -337,6 +381,10 @@ def _install_landlock(policy: dict[str, Any]) -> int:
                 "/opt/zimmermantools",
                 "/opt/volatility3",
                 "/opt/hayabusa",
+                # Operator-installed forensic-tool venv/script roots (XYE-81).
+                # Read+execute only; see FORENSIC_TOOL_RX_ROOTS for the
+                # per-root justification and the preserved-floor analysis.
+                *FORENSIC_TOOL_RX_ROOTS,
                 "/proc/self",
                 "/etc/ld.so.cache",
                 "/etc/ld.so.conf",
