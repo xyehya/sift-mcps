@@ -1,8 +1,8 @@
 # Tool Availability & Catalog Plan
 
-> Covers: install.sh (`install_host_prereqs`, `install_zimmerman_symlinks`), packages/sift-core/src/sift_core/execute/{environment.py, security_policy.py, catalog.py, tools/discovery.py}, packages/sift-core/data/catalog/**
+> Covers: install.sh (`install_host_prereqs`, `install_zimmerman_symlinks`), packages/sift-core/src/sift_core/execute/{environment.py, security_policy.py, catalog.py, dfir_exec_launcher.py, tools/discovery.py}, packages/sift-core/data/catalog/**, configs/apparmor/dfir-exec.template
 > Class: living-plan
-> Last validated: cb2993d (2026-06-18)
+> Last validated: 15a8126 (2026-06-18)
 > Sources: live SSH inventory (sansforensics@192.168.122.81), live gateway `capability_guide`/`get_tool_help('inventory')`, code-audit of the run_command catalog/allowlist/resolution path.
 
 **Premise:** default SANS SIFT already works for our tests. This track is **complementary** — it (a) repairs resolution defects, (b) installs genuinely-absent cataloged tools *fail-safe / non-blocking*, and (c) adds valuable SIFT tools that are present but not yet exposed. No change may make a working install fail.
@@ -191,6 +191,24 @@ CODE-defined and is NOT built from the runtime tool catalog/DB (a data-driven
 sandbox allow-list would be a security regression). `_existing_paths` still
 filters to roots that exist, so greenfield SIFT lacking a tool is unaffected.
 
+**Second exec gate — the `dfir-exec` AppArmor profile (caught by live proof,
+2026-06-18).** Landlock is necessary but NOT sufficient: under the proven
+enforce posture the launcher (`/opt/sift-mcps/.venv/bin/dfir-exec-launcher`)
+runs confined by the `dfir-exec` AppArmor profile, which is an **independent
+execute gate**. On first live deploy of the Landlock-only change every venv
+wrapper still failed with `EACCES` at `execve` while `vol` worked — because the
+profile granted `rix` to `/opt/volatility3`, `/opt/zimmermantools`,
+`/opt/hayabusa` but had **no rule for the new `/opt` roots**. AppArmor evaluates
+the *resolved* path, so the `/usr/local/bin/** rix` grant does not cover a
+symlink whose target is `/opt/<tool>/bin/...`. Fix: `configs/apparmor/dfir-exec.template`
+now grants `r,` + `** rix,` on the same eleven roots, mirroring the
+`volatility3` grant. **Both gates must list a root** or the kernel denies the
+exec. The template carries an in-file note that these MUST stay in sync with
+`FORENSIC_TOOL_RX_ROOTS`. (The earlier `_install_landlock` standalone probe
+passed because it ran under the operator's unconfined login profile — only the
+full `run_command` path crosses the `dfir-exec` profile, which is why a live
+`/mcp` proof, not a unit/probe test, was required to surface this.)
+
 **Floors UNCHANGED (preserved invariants — verified):**
 
 - **Write floor unchanged.** The new roots get `FS_RX & handled_fs` only
@@ -253,3 +271,23 @@ installer change ever made an `/opt/<tool>` root `agent_runtime`-writable, rx
 there would become a write+execute primitive — do not do this. Per the XYE-81
 security review (PASS), this is a defense-in-depth invariant to preserve, not a
 defect in the current change.
+
+**Live `/mcp` proof (2026-06-18, case `case-rocba-3`, gateway+worker restarted,
+AppArmor `dfir-exec` reloaded in ENFORCE).** Deployed both gates (Landlock rx in
+`dfir_exec_launcher.py` + AppArmor template) to `/opt/sift-mcps` and exercised
+the live agent surface:
+
+| `run_command` invocation | resolved root | result |
+|---|---|---|
+| `hindsight.py --version` | `/opt/pyhindsight` | runs (banner + usage; exits on missing `-i`) |
+| `INDXParse.py -h` | `/opt/indxparse` | exit 0 — "Parse NTFS INDX files." |
+| `analyzemft -h` | `/opt/analyzemft` | exit 0 — usage |
+| `pdfid.py --version` | `/opt/pdf-tools` (symlinked script) | exit 0 — `pdfid.py 0.2.9` |
+| `vol --help` (control) | `/opt/volatility3` | exit 0 — unchanged grant, no regression |
+| `densityscout` (control, native ELF) | `/usr/local/bin` | exit 0 |
+| `python3 -c …` (negative control) | — | **blocked**: "Binary 'python3' is blocked by security policy" |
+
+Before the AppArmor template fix all four venv rows returned
+`dfir-exec-launcher: [Errno 13] Permission denied`; after the profile reload they
+execute. Negative control (DENY_FLOOR) and write/evidence floors (unchanged
+profile sections) hold.
