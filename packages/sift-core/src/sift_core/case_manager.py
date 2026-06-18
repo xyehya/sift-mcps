@@ -1392,10 +1392,21 @@ class CaseManager:
                             )
                             if source_ev:
                                 art["source_evidence"] = source_ev
-                                # Extract artifact type from index name
+                                # Extract artifact type from index name.
+                                # The `case-` prefix is applied exactly once: the
+                                # case key (dir basename) already starts with
+                                # `case-`, so strip the redundant leading prefix
+                                # before matching the single-prefix index name
+                                # (mirrors opensearch_mcp index naming, XYE-10).
+                                # Inlined to avoid a sift-core -> opensearch-mcp dep.
                                 _art_type = ""
                                 if search_index and active_cid:
-                                    _pfx = f"case-{active_cid}-".lower()
+                                    _key = (
+                                        active_cid[len("case-") :]
+                                        if active_cid.lower().startswith("case-")
+                                        else active_cid
+                                    )
+                                    _pfx = f"case-{_key}-".lower()
                                     _idx = search_index.lower()
                                     if _idx.startswith(_pfx):
                                         _rem = _idx[len(_pfx) :]
