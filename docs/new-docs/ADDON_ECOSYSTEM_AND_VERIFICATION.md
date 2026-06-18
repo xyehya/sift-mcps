@@ -1,5 +1,9 @@
 # Add-on Ecosystem & Verification — Research + Design Brainstorm
 
+> Covers: packages/sift-gateway/src/sift_gateway/backends/**, scripts/probe_backends.py, packages/sift-gateway/src/sift_gateway/sift-backend.schema.json
+> Class: point-in-time
+> Last validated: cb2993d (2026-06-18)
+
 **Status:** architecture brainstorm / design input (not normative). Feeds the
 Axis H work (Linear parent `XYE-45`: `XYE-25`, `XYE-56`–`XYE-59`).
 **Grounded against:** working tree at `main` (commit `69a6b02`), 2026-06-18.

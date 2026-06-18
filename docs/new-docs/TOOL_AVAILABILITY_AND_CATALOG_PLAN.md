@@ -2,7 +2,7 @@
 
 > Covers: install.sh (`install_host_prereqs`, `install_zimmerman_symlinks`), packages/sift-core/src/sift_core/execute/{environment.py, security_policy.py, catalog.py, tools/discovery.py}, packages/sift-core/data/catalog/**
 > Class: living-plan
-> Last validated: 2026-06-18 (live VM case-rocba-3 + code audit)
+> Last validated: cb2993d (2026-06-18)
 > Sources: live SSH inventory (sansforensics@192.168.122.81), live gateway `capability_guide`/`get_tool_help('inventory')`, code-audit of the run_command catalog/allowlist/resolution path.
 
 **Premise:** default SANS SIFT already works for our tests. This track is **complementary** — it (a) repairs resolution defects, (b) installs genuinely-absent cataloged tools *fail-safe / non-blocking*, and (c) adds valuable SIFT tools that are present but not yet exposed. No change may make a working install fail.
@@ -13,7 +13,7 @@
 
 A tool is usable by the agent only when THREE conditions align:
 
-1. **Cataloged** — entry in `packages/sift-core/data/catalog/<category>.yaml` (enriched help + correct `binary`). Lookup key = `name`; real argv[0] = `binary` (defaults to name). `catalog.py:53-72,108-147`.
+1. **Cataloged** — entry in a `packages/sift-core/data/catalog/*.yaml` file (enriched help + correct `binary`). Lookup key = `name`; real argv[0] = `binary` (defaults to name). `catalog.py:53-72,108-147`.
 2. **Admitted by policy** — argv[0] **basename** is not matched by a `DENY_FLOOR` glob, then either allowlisted (`MVP_FORENSIC_ALLOWLIST`, `security_policy.py:136-247`) or run under the default `unlisted_policy: contained` (security_policy.py:252 — unlisted ⇒ *contained*, NOT rejected). Basename-only check; **no `.py`/script/shebang rejection** (`security.py:905,912,917-921`).
 3. **Resolvable** — `find_binary(binary)` returns a path, else run_command dies `ValueError: not found` (`security.py:924-926`). Same resolver feeds the availability flag (`discovery.py:163,194,279`), so the flag is honest (no false positives) but **fails closed** (false negatives for subdir/`/opt/*/bin` installs).
 
