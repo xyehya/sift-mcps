@@ -456,7 +456,7 @@ def _next_audit_id(examiner: str) -> str:
 
 **Format**: `{prefix}-{examiner}-{YYYYMMDD}-{seq:03d}`
 - `prefix`: `mcp_name.replace("-mcp", "").replace("-", "")` — strip `-mcp` first, then remove remaining dashes. So `sift-gateway → siftgateway`, `opensearch-mcp → opensearch`, and **`windows-triage-mcp → windowstriage`** (not `windowstriagemcp`).
-- The prefix derives from the **`mcp_name`**, never the tool name. (CLAUDE.md's `run_command-analyst-...` example is misleading: `run_command` is the *tool* and lives in the separate `tool` field; the prefix would be `siftgateway`/`siftcore`/etc.)
+- The prefix derives from the **`mcp_name`**, never the tool name. (Do not be misled by IDs that look like `run_command-analyst-...`: `run_command` is the *tool* and lives in the separate `tool` field; the prefix would be `siftgateway`/`siftcore`/etc.)
 - `examiner`: validated slug `^[a-z0-9][a-z0-9-]{0,19}$` (`_EXAMINER_RE`, `audit.py:21`)
 - Sequence: zero-padded 3 digits (resets daily)
 
