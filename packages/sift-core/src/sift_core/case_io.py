@@ -215,7 +215,9 @@ def resolve_case_path(
 def get_examiner(case_dir: Path | None = None) -> str:
     """Get the current examiner identity.
 
-    Resolution: SIFT_EXAMINER > SIFT_ANALYST (deprecated) > CASE.yaml > OS user.
+    Resolution: SIFT_EXAMINER > SIFT_ANALYST (deprecated) > DB case row
+    (DB-authority mode, fails closed on DB error) > CASE.yaml (file/CLI mode
+    only) > OS user.
     """
     env_exam = os.environ.get("SIFT_EXAMINER", "").strip().lower()
     if env_exam:
