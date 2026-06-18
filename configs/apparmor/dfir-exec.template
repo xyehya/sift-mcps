@@ -57,6 +57,35 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   /opt/hayabusa/                           r,
   /opt/hayabusa/**                         rix,
 
+  # Operator-installed forensic-tool venv/script roots (XYE-81). These MUST stay
+  # in sync with FORENSIC_TOOL_RX_ROOTS in
+  # packages/sift-core/src/sift_core/execute/dfir_exec_launcher.py: Landlock and
+  # AppArmor are independent exec gates and BOTH must allow the wrapper's resolved
+  # interpreter/script path or the kernel denies execve with EACCES. Read+execute
+  # only (rix), mirroring the volatility3 grant above; no write/mmap-write.
+  /opt/pyhindsight/                        r,
+  /opt/pyhindsight/**                      rix,
+  /opt/analyzemft/                         r,
+  /opt/analyzemft/**                       rix,
+  /opt/usnparser/                          r,
+  /opt/usnparser/**                        rix,
+  /opt/indxparse/                          r,
+  /opt/indxparse/**                        rix,
+  /opt/sqlite-carver/                      r,
+  /opt/sqlite-carver/**                    rix,
+  /opt/page-brute/                         r,
+  /opt/page-brute/**                       rix,
+  /opt/packerid/                           r,
+  /opt/packerid/**                         rix,
+  /opt/mvt/                                r,
+  /opt/mvt/**                              rix,
+  /opt/mac-apt/                            r,
+  /opt/mac-apt/**                          rix,
+  /opt/python-evtx/                        r,
+  /opt/python-evtx/**                      rix,
+  /opt/pdf-tools/                          r,
+  /opt/pdf-tools/**                        rix,
+
   # Device/proc reads needed by normal runtimes. Do not grant broad /proc or /dev.
   /dev/null                                rw,
   /dev/zero                                r,
