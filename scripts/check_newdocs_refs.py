@@ -23,6 +23,10 @@ FILE_LINE_RE = re.compile(
 BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 PATH_PREFIXES = (".github/", "docs/", "packages/", "portal/", "scripts/", "supabase/", "tests/")
 PATH_NAMES = {"README.md", "AGENTS.md", "CLAUDE.md", "install.sh", "pyproject.toml", "uv.lock"}
+# Host-local agent instruction files are untracked per workstation (see .gitignore)
+# and are intentionally absent from a fresh checkout. Docs may still name them, so
+# their references must not be treated as dangling.
+HOST_LOCAL_UNTRACKED = {"CLAUDE.md", "AGENTS.md"}
 
 
 @dataclass
@@ -133,6 +137,8 @@ def check_references(repo_root: Path, doc_path: Path, text: str, errors: list[st
     refs = sorted(iter_reference_paths(text), key=lambda item: (item[0], item[1] or 0))
     for raw_path, line_no in refs:
         if "*" in raw_path or "{" in raw_path or "}" in raw_path:
+            continue
+        if raw_path in HOST_LOCAL_UNTRACKED:
             continue
         target = repo_root / raw_path
         if not target.exists():
