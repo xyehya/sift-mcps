@@ -1070,8 +1070,19 @@ install_zimmerman_symlinks() {
     JLECmd LECmd SBECmd RBCmd SrumECmd SQLECmd WxTCmd bstrings
   )
   for tool in "${tools[@]}"; do
-    if sudo_if_needed test -x "$zimmerman_dir/$tool"; then
-      sudo_if_needed ln -sf "$zimmerman_dir/$tool" "/usr/local/bin/$tool" 2>/dev/null || true
+    # Link the real executable, not a directory. `test -x` is true for
+    # directories, so the old check symlinked subdir-layout tools (RECmd,
+    # SQLECmd live at /opt/zimmermantools/<Tool>/<Tool>) to the DIRECTORY,
+    # producing a broken link. Prefer a regular file at the top level; else
+    # fall back to the per-tool subdir layout; else skip. Idempotent.
+    local target=""
+    if sudo_if_needed test -f "$zimmerman_dir/$tool"; then
+      target="$zimmerman_dir/$tool"
+    elif sudo_if_needed test -f "$zimmerman_dir/$tool/$tool"; then
+      target="$zimmerman_dir/$tool/$tool"
+    fi
+    if [[ -n "$target" ]]; then
+      sudo_if_needed ln -sf "$target" "/usr/local/bin/$tool" 2>/dev/null || true
       linked=$((linked + 1))
     fi
   done
@@ -1080,6 +1091,45 @@ install_zimmerman_symlinks() {
   else
     log "Zimmerman tools dir exists but no known EZ Tool binaries found inside — skipping."
   fi
+
+  # Best-effort: repair a dangling /usr/local/bin/hayabusa symlink left by a
+  # prior layout. If /opt/hayabusa/hayabusa exists and the system link is
+  # broken (points nowhere), repoint it at the real binary. Never fails.
+  if [[ -x /opt/hayabusa/hayabusa ]]; then
+    if [[ -L /usr/local/bin/hayabusa && ! -e /usr/local/bin/hayabusa ]]; then
+      sudo_if_needed ln -sf /opt/hayabusa/hayabusa /usr/local/bin/hayabusa 2>/dev/null || true
+      log "Repointed dangling /usr/local/bin/hayabusa symlink at /opt/hayabusa/hayabusa."
+    fi
+  fi
+}
+
+# Best-effort install of complementary forensic CLIs that the default SANS SIFT
+# image ships only as libraries (no CLI). Each add is independently guarded:
+# a failure only warns and continues. The default install MUST still succeed if
+# every one of these fails — never `die` here.
+install_complementary_tools() {
+  if ! command -v apt-get >/dev/null 2>&1; then
+    warn "Complementary forensic tools: apt-get unavailable — skipping (yara, tshark, binwalk)."
+    return 0
+  fi
+  log "Installing complementary forensic CLIs (best-effort): yara, tshark, binwalk."
+  local pkg
+  for pkg in yara tshark binwalk; do
+    if command -v "$pkg" >/dev/null 2>&1; then
+      log "  $pkg already present — skipping."
+      continue
+    fi
+    if apt_install_packages "$pkg"; then
+      log "  installed $pkg."
+    else
+      warn "  could not install $pkg (best-effort) — the agent will run without it; install later with: sudo apt-get install -y $pkg"
+    fi
+  done
+  # zeek has no apt candidate on the stock SIFT image — warn-only, never fail.
+  if ! command -v zeek >/dev/null 2>&1; then
+    warn "  zeek not present and has no default apt candidate — skipping (install from the Zeek repo if needed)."
+  fi
+  return 0
 }
 
 fix_volatility_permissions() {
@@ -3518,6 +3568,7 @@ main() {
     install_hayabusa_system_links
     report_hayabusa_status
     install_zimmerman_symlinks
+    install_complementary_tools
     fix_volatility_permissions
   else
     log "CORE-ONLY: skipped add-on backends, OpenSearch/Docker, and forensic-tool downloads."

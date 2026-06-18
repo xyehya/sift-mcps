@@ -1,0 +1,20 @@
+category: mobile
+
+tools:
+  - name: mvt-ios
+    binary: mvt-ios
+    input_style: positional
+    output_format: json
+    timeout_seconds: 1800
+    interactive: false
+    description: "Mobile Verification Toolkit (iOS): offline compromise checks against a backup/filesystem. Offline checks only; do NOT run download-iocs (network)."
+    fk_tool_name: mvt-ios
+
+  - name: mvt-android
+    binary: mvt-android
+    input_style: positional
+    output_format: json
+    timeout_seconds: 1800
+    interactive: false
+    description: "Mobile Verification Toolkit (Android): offline compromise checks against a backup/APK set. Offline checks only; do NOT run download-iocs (network)."
+    fk_tool_name: mvt-android

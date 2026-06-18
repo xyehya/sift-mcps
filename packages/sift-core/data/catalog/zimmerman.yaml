@@ -45,7 +45,11 @@ tools:
         required: true
 
   - name: RECmd
-    binary: RECmd
+    # B1a: invoke via the lowercase dotnet wrapper `recmd` (on PATH, resolves
+    # via shutil.which). The uppercase EZ binary lives at
+    # /opt/zimmermantools/RECmd/RECmd (subdir layout); using `recmd` makes this
+    # resolve today regardless of the installer symlink fix.
+    binary: recmd
     input_style: flag
     input_flag: "-f"
     output_format: csv
@@ -163,7 +167,11 @@ tools:
         required: true
 
   - name: SQLECmd
-    binary: SQLECmd
+    # B1a: invoke via the lowercase dotnet wrapper `sqlecmd` (on PATH). The
+    # uppercase EZ binary lives at /opt/zimmermantools/SQLECmd/SQLECmd (subdir
+    # layout); using `sqlecmd` makes this resolve today regardless of the
+    # installer symlink fix.
+    binary: sqlecmd
     input_style: flag
     input_flag: "-f"
     output_format: csv

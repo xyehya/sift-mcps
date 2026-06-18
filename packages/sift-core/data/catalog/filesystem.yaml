@@ -1,0 +1,32 @@
+category: filesystem
+
+tools:
+  - name: indxparse
+    binary: INDXParse.py
+    input_style: positional
+    output_format: text
+    timeout_seconds: 600
+    interactive: false
+    description: "Parse NTFS $I30 INDX records, including slack, to recover deleted directory entries"
+    fk_tool_name: INDXParse
+
+  - name: analyzemft
+    binary: analyzemft
+    input_style: flag
+    input_flag: "-f"
+    output_format: csv
+    timeout_seconds: 1200
+    interactive: false
+    description: "Parse the NTFS $MFT into a CSV timeline (Linux-native; cross-check vs MFTECmd)"
+    fk_tool_name: analyzeMFT
+
+  - name: usnparser
+    # binary MUST be the on-PATH wrapper `usnparser`; `usn.py` is NOT on PATH
+    # and would not resolve (verified on VM 2026-06-18, plan doc §3).
+    binary: usnparser
+    input_style: positional
+    output_format: text
+    timeout_seconds: 600
+    interactive: false
+    description: "Parse the NTFS $UsnJrnl change journal into a file-activity timeline"
+    fk_tool_name: usnparser

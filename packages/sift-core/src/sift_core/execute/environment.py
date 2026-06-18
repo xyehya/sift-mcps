@@ -44,23 +44,38 @@ def get_sift_version() -> str | None:
 
 
 def find_binary(name: str, extra_paths: list[str] | None = None) -> str | None:
-    """Find a binary on PATH or in common forensic tool locations."""
+    """Find a binary on PATH or in common forensic tool locations.
+
+    Resolution order (fail-closed — returns None if nothing resolves):
+      1. ``shutil.which(name)`` (PATH).
+      2. Fallback dirs: ``extra_paths`` if given, else the built-in forensic
+         locations plus every ``/opt/*/bin`` directory. For each fallback dir
+         ``d`` both ``d/name`` (flat layout) and ``d/name/name`` (per-tool
+         subdir layout, e.g. ``/opt/zimmermantools/RECmd/RECmd``) are probed.
+    """
     # shutil.which checks PATH
     found = shutil.which(name)
     if found:
         return found
 
     # Check extra paths
-    search_paths = extra_paths or [
-        "/usr/local/bin",
-        "/opt/zimmermantools",
-        "/opt/volatility3",
-        "/opt/hayabusa",
-    ]
+    if extra_paths is not None:
+        search_paths = list(extra_paths)
+    else:
+        search_paths = [
+            "/usr/local/bin",
+            "/opt/zimmermantools",
+            "/opt/volatility3",
+            "/opt/hayabusa",
+        ]
+        # /opt/*/bin — per-tool venv/wrapper bin dirs (bucket-D layout).
+        search_paths.extend(str(p) for p in sorted(Path("/opt").glob("*/bin")))
+
     for d in search_paths:
-        candidate = Path(d) / name
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
+        base = Path(d)
+        for candidate in (base / name, base / name / name):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
 
     return None
 
