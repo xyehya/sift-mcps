@@ -38,3 +38,10 @@ coverage/
 # Machine-local skills lockfile (linear-cli skills) — not shared
 skills-lock.json
 .claude/settings.json
+
+# codebase-memory-mcp local agent wiring — hardcodes a per-machine binary
+# path (~/.local/bin/codebase-memory-mcp); not shared. (.mcp.json above also
+# carries its MCP server registration.)
+.claude/hooks/cbm-code-discovery-gate
+.claude/hooks/cbm-session-reminder
+.claude/skills/codebase-memory/
