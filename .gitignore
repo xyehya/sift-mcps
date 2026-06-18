@@ -45,3 +45,4 @@ skills-lock.json
 .claude/hooks/cbm-code-discovery-gate
 .claude/hooks/cbm-session-reminder
 .claude/skills/codebase-memory/
+.claude/skills/linear-cli/
