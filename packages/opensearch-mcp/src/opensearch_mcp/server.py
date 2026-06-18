@@ -34,6 +34,7 @@ from sift_common.audit import AuditWriter
 
 from opensearch_mcp.client import get_client
 from opensearch_mcp.host_dictionary import detect_host_id_mapping_type
+from opensearch_mcp.paths import build_index_pattern, normalize_case_key
 
 logger = logging.getLogger(__name__)
 
@@ -860,15 +861,13 @@ def _resolve_index(index: str, case_id: str) -> str:
     """
     if index:
         return index
-    from opensearch_mcp.paths import sanitize_index_component
-
     cid = ""
     if case_id and not _UUID_RE.match(case_id.strip()):
         cid = case_id.strip()
     if not cid:
         cid = _get_active_case() or ""
     if cid:
-        return f"case-{sanitize_index_component(cid)}-*"
+        return build_index_pattern(cid)
     return "case-*"
 
 
@@ -1746,8 +1745,6 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False, cas
         include_fields: Include field mappings per artifact type (large output).
             Default False to keep response compact.
     """
-    from opensearch_mcp.paths import sanitize_index_component
-
     _INJECTED_CASE_DIR.set((case_dir or "").strip())
     # B1: index names use the case *key* (dir basename). A caller/Gateway
     # supplied case_id that is the opaque DB UUID would build a
@@ -1766,8 +1763,8 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False, cas
         }
 
     client = _get_os()
-    safe = sanitize_index_component(cid)
-    pattern = f"case-{safe}-*"
+    safe = normalize_case_key(cid)
+    pattern = build_index_pattern(cid)
     resp: dict = {}
 
     # Get all indices for this case
@@ -2442,7 +2439,7 @@ def opensearch_ingest(
                 if _cli is not None:
                     _existing = (
                         _cli.cat.indices(
-                            index=f"case-{case_id}-*",
+                            index=build_index_pattern(case_id),
                             format="json",
                             h="index,docs.count",
                         )
@@ -2550,7 +2547,7 @@ def opensearch_ingest(
                     if _cli is not None:
                         _existing = (
                             _cli.cat.indices(
-                                index=f"case-{case_id}-*",
+                                index=build_index_pattern(case_id),
                                 format="json",
                                 h="index,docs.count",
                             )
@@ -2775,7 +2772,7 @@ def opensearch_ingest(
             if _cli is not None:
                 _existing = (
                     _cli.cat.indices(
-                        index=f"case-{case_id}-*",
+                        index=build_index_pattern(case_id),
                         format="json",
                         h="index,docs.count",
                     )
@@ -2884,9 +2881,7 @@ def _last_completed_from_opensearch(filter_case: str) -> dict | None:
     if not filter_case or filter_case == "*":
         return None
     try:
-        from opensearch_mcp.paths import sanitize_index_component
-
-        pattern = f"case-{sanitize_index_component(filter_case)}-*"
+        pattern = build_index_pattern(filter_case)
         client = _get_os()
         rows = (
             _os_call(
@@ -3456,7 +3451,6 @@ def opensearch_enrich_intel(
     Poll: opensearch_ingest_status(case_id=<case_id>) — look for
     checklist entry with artifact=="intel".
     """
-    from opensearch_mcp.paths import sanitize_index_component
     from opensearch_mcp.threat_intel import extract_unique_iocs
 
     _INJECTED_CASE_DIR.set((case_dir or "").strip())
@@ -3491,8 +3485,7 @@ def opensearch_enrich_intel(
 
     if dry_run:
         client = _get_os()
-        safe_case = sanitize_index_component(cid)
-        iocs = extract_unique_iocs(client, f"case-{safe_case}-*", force=force)
+        iocs = extract_unique_iocs(client, build_index_pattern(cid), force=force)
         resp = {
             "status": "preview",
             "case_id": cid,
@@ -4612,7 +4605,7 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
     # values may contain Lucene metacharacters; term filter treats them
     # as exact-value).
     client = _get_os()
-    index_pattern = f"case-{case_id.lower()}-*"
+    index_pattern = build_index_pattern(case_id)
 
     # H1 defensive: refuse to write through indices where host.id is
     # non-keyword (pre-v1 upgrade path). Uses the shared detector

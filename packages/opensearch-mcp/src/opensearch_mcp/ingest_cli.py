@@ -21,7 +21,7 @@ from opensearch_mcp.ingest import discover, ingest
 from opensearch_mcp.ingest_status import write_status
 from opensearch_mcp.manifest import sha256_file
 from opensearch_mcp.parse_csv import ingest_csv
-from opensearch_mcp.paths import sift_dir, sanitize_index_component
+from opensearch_mcp.paths import build_index_pattern, sift_dir, sanitize_index_component
 from opensearch_mcp.tools import TOOLS
 
 logger = logging.getLogger(__name__)
@@ -109,7 +109,7 @@ def _ensure_host_id_keyword_mapping(case_id: str) -> dict:
     except Exception as e:
         return {"status": "skipped", "reason": f"client unavailable: {type(e).__name__}"}
 
-    index_pattern = f"case-{case_id.lower()}-*"
+    index_pattern = build_index_pattern(case_id)
     try:
         mappings = client.indices.get_mapping(index=index_pattern, allow_no_indices=True)
     except Exception as e:
@@ -664,9 +664,8 @@ def cmd_scan(args: argparse.Namespace) -> None:
     hostname = getattr(args, "hostname", None)
 
     if getattr(args, "clean", False) and hostname:
-        safe_case = sanitize_index_component(case_id)
         safe_host = sanitize_index_component(hostname)
-        pattern = f"case-{safe_case}-*-{safe_host}"
+        pattern = build_index_pattern(case_id, f"*-{safe_host}")
         try:
             client = get_client()
             existing = client.cat.indices(index=pattern, format="json", h="index") or []
@@ -2103,14 +2102,12 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
     case_id = _resolve_case_id(getattr(args, "case", None))
     force = getattr(args, "force", False)
 
-    from opensearch_mcp.paths import sanitize_index_component
     from opensearch_mcp.threat_intel import enrich_case, extract_unique_iocs
 
     client = get_client()
 
     if getattr(args, "dry_run", False):
-        safe_case = sanitize_index_component(case_id)
-        iocs = extract_unique_iocs(client, f"case-{safe_case}-*", force=force)
+        iocs = extract_unique_iocs(client, build_index_pattern(case_id), force=force)
         print(f"Case: {case_id}")
         print(f"  External IPs: {len(iocs['ip'])}")
         print(f"  Hashes: {len(iocs['hash'])}")

@@ -198,13 +198,42 @@ def sanitize_index_component(value: str) -> str:
     return re.sub(r"[^a-z0-9._-]", "-", value.lower())
 
 
+def normalize_case_key(case_id: str) -> str:
+    """Normalize a case key for OpenSearch index naming.
+
+    Case directory basenames already start with ``case-`` (e.g.
+    ``case-rocba-3-06171852``). The canonical index format below prepends
+    ``case-`` again, which produced the doubled ``case-case-`` prefix (XYE-10).
+    Strip a single redundant leading ``case-`` so the prefix is applied exactly
+    once. Idempotent: a key that does not start with ``case-`` is returned
+    unchanged, so synthetic/test case ids keep their existing single prefix.
+    """
+    key = sanitize_index_component(case_id)
+    prefix = "case-"
+    return key[len(prefix):] if key.startswith(prefix) else key
+
+
 def build_index_name(case_id: str, artifact_type: str, hostname: str) -> str:
-    """Canonical index name: case-{case}-{type}-{host}. Always sanitized."""
+    """Canonical index name: case-{case}-{type}-{host}. Always sanitized.
+
+    The case segment is normalized so the ``case-`` prefix appears exactly once
+    (see :func:`normalize_case_key`).
+    """
     return (
-        f"case-{sanitize_index_component(case_id)}"
+        f"case-{normalize_case_key(case_id)}"
         f"-{sanitize_index_component(artifact_type)}"
         f"-{sanitize_index_component(hostname)}"
     )
+
+
+def build_index_pattern(case_id: str, tail: str = "*") -> str:
+    """Single-prefix query pattern for a case: ``case-{key}-{tail}``.
+
+    Mirrors :func:`build_index_name`'s prefix normalization so readers query the
+    same names the indexer writes. Use this instead of hand-building
+    ``f"case-{...}-*"`` so the prefix stays single across write and read paths.
+    """
+    return f"case-{normalize_case_key(case_id)}-{tail}"
 
 
 def validate_index_name(index_name: str) -> str | None:

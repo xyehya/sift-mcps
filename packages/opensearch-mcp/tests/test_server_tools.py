@@ -45,27 +45,30 @@ def mock_client():
 
 
 class TestResolveIndexB1:
-    """B1: default index-pattern resolution must agree with index naming.
+    """B1 + XYE-10: default index-pattern resolution must agree with index naming.
 
     Indices are named ``case-<case_key>-<type>-<host>`` where ``case_key`` is
     the case directory basename — which itself already starts with ``case-``
-    (e.g. ``case-rocba-case-06132304``), so real indices carry a doubled
-    ``case-case-`` prefix. The default query pattern MUST reproduce that exact
-    prefix, and must NOT be built from the opaque DB UUID the Gateway injects.
+    (e.g. ``case-rocba-case-06132304``). The indexer normalizes that key so the
+    ``case-`` prefix is applied exactly ONCE (XYE-10): the canonical name is
+    ``case-rocba-case-06132304-<type>-<host>``, NOT a doubled ``case-case-``
+    form. The default query pattern MUST reproduce that single-prefix name, and
+    must NOT be built from the opaque DB UUID the Gateway injects.
     """
 
-    def test_case_key_starting_with_case_prefix_keeps_doubled_prefix(self, monkeypatch):
+    def test_case_key_starting_with_case_prefix_is_not_doubled(self, monkeypatch):
         # Active case dir basename already starts with 'case-' (real-world key).
         monkeypatch.setattr(srv, "_get_active_case", lambda: "case-rocba-case-06132304")
         # No explicit index, no explicit case_id -> derive from active case.
         pattern = srv._resolve_index("", "")
-        # Must match the actually-created indices, e.g.
-        # case-case-rocba-case-06132304-evtx-srl-forge
-        assert pattern == "case-case-rocba-case-06132304-*"
+        # Single-prefix: the redundant leading 'case-' is stripped from the key
+        # before the canonical prefix is applied (XYE-10).
+        assert pattern == "case-rocba-case-06132304-*"
+        assert "case-case-" not in pattern
 
     def test_explicit_case_id_with_case_prefix_resolves_correctly(self):
         pattern = srv._resolve_index("", "case-rocba-case-06132304")
-        assert pattern == "case-case-rocba-case-06132304-*"
+        assert pattern == "case-rocba-case-06132304-*"
 
     def test_uuid_case_id_is_ignored_in_favour_of_active_case(self, monkeypatch):
         # The Gateway injects the opaque DB UUID into case_id; building
@@ -73,13 +76,14 @@ class TestResolveIndexB1:
         monkeypatch.setattr(srv, "_get_active_case", lambda: "case-rocba-case-06132304")
         uuid = "674425ae-78ea-4c9c-9a14-3c9d0b6f900c"
         pattern = srv._resolve_index("", uuid)
-        assert pattern == "case-case-rocba-case-06132304-*"
+        assert pattern == "case-rocba-case-06132304-*"
         assert uuid not in pattern
 
     def test_explicit_index_always_wins(self):
+        # Explicit caller-supplied index is returned verbatim, untouched.
         assert (
-            srv._resolve_index("case-case-x-evtx-*", "case-y")
-            == "case-case-x-evtx-*"
+            srv._resolve_index("case-x-evtx-*", "case-y")
+            == "case-x-evtx-*"
         )
 
     def test_no_case_falls_back_to_wildcard(self, monkeypatch):
@@ -89,7 +93,7 @@ class TestResolveIndexB1:
     def test_count_uses_injected_case_dir_basename_as_key(self, mock_client, tmp_path):
         # Simulate the Gateway injecting the authoritative case_dir (whose
         # basename is the case_key) while also injecting the opaque UUID into
-        # case_id. The query must target the doubled-prefix indices.
+        # case_id. The query must target the single-prefix indices.
         case_dir = tmp_path / "case-rocba-case-06132304"
         case_dir.mkdir()
         mock_client.count.return_value = {"count": 7}
@@ -100,7 +104,44 @@ class TestResolveIndexB1:
         )
         # Inspect the index the client was actually asked to count.
         _, kwargs = mock_client.count.call_args
-        assert kwargs["index"] == "case-case-rocba-case-06132304-*"
+        assert kwargs["index"] == "case-rocba-case-06132304-*"
+        assert "case-case-" not in kwargs["index"]
+
+
+class TestIndexPrefixNormalizationXYE10:
+    """XYE-10: the ``case-`` index prefix is applied exactly once.
+
+    Write path (``build_index_name``) and read path (``build_index_pattern``)
+    must produce matching single-prefix names so a fresh ingest is queryable by
+    the default resolver.
+    """
+
+    def test_normalize_case_key_strips_one_leading_case_prefix(self):
+        from opensearch_mcp.paths import normalize_case_key
+
+        # Real-world key (dir basename) -> redundant leading 'case-' removed.
+        assert normalize_case_key("case-rocba-3-06171852") == "rocba-3-06171852"
+        # Only ONE leading prefix is stripped; inner 'case' tokens are kept.
+        assert normalize_case_key("case-rocba-case-06132304") == "rocba-case-06132304"
+        # Idempotent: a key without the prefix is unchanged.
+        assert normalize_case_key("rocba-3-06171852") == "rocba-3-06171852"
+
+    def test_build_index_name_single_prefix_for_case_prefixed_key(self):
+        from opensearch_mcp.paths import build_index_name
+
+        name = build_index_name("case-rocba-3-06171852", "amcache", "SRL-FORGE")
+        assert name == "case-rocba-3-06171852-amcache-srl-forge"
+        assert "case-case-" not in name
+
+    def test_build_index_name_and_pattern_agree(self):
+        from opensearch_mcp.paths import build_index_name, build_index_pattern
+
+        # The pattern the reader derives must match the name the writer creates.
+        name = build_index_name("case-rocba-3-06171852", "evtx", "host1")
+        pattern = build_index_pattern("case-rocba-3-06171852")
+        prefix = pattern[: -len("*")]  # strip trailing wildcard
+        assert name.startswith(prefix)
+        assert "case-case-" not in pattern
 
 
 def _served_tools() -> dict:
