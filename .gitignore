@@ -34,3 +34,6 @@ coverage/
 # Playwright MCP render scratch (excalidraw export)
 .playwright-mcp/
 .agents/
+
+# Machine-local skills lockfile (linear-cli skills) — not shared
+skills-lock.json
