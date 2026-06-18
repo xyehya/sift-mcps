@@ -33,3 +33,4 @@ coverage/
 
 # Playwright MCP render scratch (excalidraw export)
 .playwright-mcp/
+.agents/
