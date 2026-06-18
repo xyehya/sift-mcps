@@ -4865,6 +4865,9 @@ async def post_case_create(request: Request) -> JSONResponse:
     if not acquired:
         return JSONResponse({"error": "Another case creation is in progress"}, status_code=409)
 
+    # B2-2 (XYE-61): track whether THIS request created the dir, so a failure on
+    # the file→DB ordering can deterministically roll it back (see cleanup below).
+    dir_created = False
     try:
         # Re-check under lock (race between _make_case_name and mkdir)
         if real_requested.exists():
@@ -4872,6 +4875,7 @@ async def post_case_create(request: Request) -> JSONResponse:
 
         # Create directories
         real_requested.mkdir(parents=True)
+        dir_created = True
         for subdir in ("audit", "evidence", "extractions", "reports", "agent"):
             (real_requested / subdir).mkdir()
 
@@ -4940,6 +4944,14 @@ async def post_case_create(request: Request) -> JSONResponse:
                     _request_principal(request),
                 )
             except Exception as exc:
+                # B2-2 (XYE-61): the case dir + an authority-looking CASE.yaml were
+                # scaffolded BEFORE the DB row exists. A failed DB create leaves no
+                # app.cases authority, so the on-disk dir is an orphan whose CASE.yaml
+                # would still look authoritative. It was mkdir'd fresh under the lock
+                # this request (a pre-existing dir 409s above), so it holds no operator
+                # evidence — remove it deterministically.
+                if dir_created:
+                    shutil.rmtree(real_requested, ignore_errors=True)
                 return _active_case_error_response(exc)
 
         if db_case is not None:
@@ -4952,6 +4964,10 @@ async def post_case_create(request: Request) -> JSONResponse:
 
     except Exception as e:
         logger.error("Failed to create case: %s", e)
+        # B2-2 (XYE-61): deterministic cleanup of the freshly-scaffolded orphan dir
+        # so a mid-create failure cannot leave an authority-looking CASE.yaml on disk.
+        if dir_created:
+            shutil.rmtree(real_requested, ignore_errors=True)
         return JSONResponse({"error": "Internal server error during case creation"}, status_code=500)
     finally:
         _case_create_lock.release()

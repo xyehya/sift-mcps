@@ -192,6 +192,49 @@ def test_case_id_format_validation_regex():
     assert not routes_mod._valid_case_id("case/escape-20260525-1412")
 
 
+def test_case_create_db_failure_cleans_up_orphan_dir(
+    passwords_dir, case_env, tmp_path, monkeypatch
+):
+    """B2-2 (XYE-61): a failed DB create must not leave an authority-looking orphan.
+
+    post_case_create scaffolds the case dir + an authority-shaped CASE.yaml BEFORE
+    the app.cases row exists. If create_case raises, the route must deterministically
+    remove the freshly created dir so no orphan CASE.yaml (which still looks
+    authoritative on disk) survives the failure.
+    """
+    monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+    case_root, cfg_path = case_env
+
+    class RaisingActiveCases:
+        def create_case(self, payload, principal):
+            raise RuntimeError("simulated control-plane failure")
+
+    app = create_dashboard_v2_app(
+        session_secret=_SECRET,
+        session_max_age=28800,
+        gateway_config_path=str(cfg_path),
+        supabase_auth=ReauthFakeSupabaseAuth(principal=operator_principal()),
+        active_case_service=RaisingActiveCases(),
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+    set_operator_session(client, _SECRET)
+
+    # No case dirs before the (doomed) create.
+    assert list(case_root.glob("case-*")) == []
+
+    resp = client.post(
+        "/api/case/create",
+        json={"casename": "orphancheck", "title": "Orphan Check"},
+    )
+
+    # The create failed (DB authority could not be established) ...
+    assert resp.status_code >= 400
+    # ... and no orphan case dir / authority-looking CASE.yaml was left behind.
+    assert list(case_root.glob("case-*")) == [], (
+        "DB-create failure left an orphan case dir on disk"
+    )
+
+
 def test_portal_case_create_rejects_path_traversal(client, passwords_dir, monkeypatch):
     _setup_cookie(client, examiner="alice", role="examiner", passwords_dir=passwords_dir)
 
