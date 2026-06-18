@@ -37,3 +37,4 @@ coverage/
 
 # Machine-local skills lockfile (linear-cli skills) — not shared
 skills-lock.json
+.claude/settings.json
