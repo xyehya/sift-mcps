@@ -234,7 +234,7 @@ on_call_tool(context, call_next):
             ])
 ```
 
-**Build block response** (`evidence_gate.py:211-232`) — actual keys:
+**Build block response** (`evidence_gate.py:136-157`) — actual keys:
 ```json
 {
     "blocked": true,
@@ -251,7 +251,7 @@ on_call_tool(context, call_next):
 > The earlier draft invented `error: "evidence_gate_blocked"`, `chain_status: "broken"`, `blocked_tool`, and `required_action`; none of these keys exist, and `ChainStatus` has no `broken` member.
 
 [VERIFY: packages/sift-gateway/src/sift_gateway/policy_middleware.py:463-528]  
-[VERIFY: packages/sift-gateway/src/sift_gateway/evidence_gate.py:211-232]
+[VERIFY: packages/sift-gateway/src/sift_gateway/evidence_gate.py:136-157]
 
 ### 1.8 `ResponseGuardMiddleware`
 
