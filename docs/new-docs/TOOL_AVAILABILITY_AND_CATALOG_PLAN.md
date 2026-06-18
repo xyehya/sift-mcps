@@ -136,4 +136,20 @@ All installer tool work MUST be **best-effort / non-blocking** (warn-and-continu
 | F-6 add tools | ✅ | 15 cataloged + allowlisted, all resolve on VM: hindsight, pdfid, pdf-parser, **pescan**, **densityscout**, packerid, page-brute (needs yara), analyzemft, indxparse, list_mft→folded, usnparser, sqlite-carver, mvt-ios, mvt-android, mac-apt, evtx_dump. `pe-scanner` dropped for the stronger `pescan`+`densityscout`. |
 | F-7 preflight honesty | ⏭️ deferred | future Axis-F follow-up (XYE-48/49) |
 
-New catalog files: `browser.yaml`, `filesystem.yaml`, `recovery.yaml`, `mobile.yaml`, `macos.yaml`. Validation: 49 targeted tests pass · `bash -n install.sh` OK · `validate_docs` OK · `git diff --check` clean. DENY_FLOOR untouched. Live gateway `/mcp` proof pending tunnel (`ssh -R 10808`).
+New catalog files: `browser.yaml`, `filesystem.yaml`, `recovery.yaml`, `mobile.yaml`, `macos.yaml`. Validation: 49 targeted tests pass · `bash -n install.sh` OK · `validate_docs` OK · `git diff --check` clean. DENY_FLOOR untouched. Landed in PR #7.
+
+## 7. Live `/mcp` proof + the 4th availability state (2026-06-18, gateway up, code NOT yet deployed)
+
+Ran the new tools through the live gateway `run_command` (deployed gateway still runs old code; this tests execution under the agent RUN-3 sandbox):
+
+| Tool | Kind | Result |
+|---|---|---|
+| `pescan` | native ELF (/usr/bin) | ✅ runs (exit 0) |
+| `densityscout` | native ELF (/usr/local/bin) | ✅ runs (exit 0) |
+| `recmd` | dotnet wrapper | ❌ `/usr/bin/dotnet: Permission denied` (126) |
+| `EvtxECmd` (existing) | dotnet wrapper | ❌ `/usr/bin/dotnet: Permission denied` (126) — **pre-existing, not from this PR** |
+| `hindsight.py` | python-venv wrapper | ❌ `Permission denied` on the script (126) |
+
+**Finding — a 4th state beyond (allowlisted / cataloged / installed): executable-permitted by the RUN-3 sandbox.** The agent `run_command` sandbox (Landlock/seccomp as `agent_runtime`) permits native ELF binaries but blocks the `dotnet` runtime and the `/opt/*/bin/python3` venv interpreters that the EZ (dotnet) and bucket-D (python-venv) wrappers exec. So among the 15 added tools, only the native-ELF ones (`pescan`, `densityscout`) actually execute via the agent today; the interpreter-backed ones resolve + are cataloged but fail at exec — **the same status as the existing EZ dotnet tools**, which also cannot run under `run_command` (they run only in the ingest pipeline, outside the sandbox).
+
+**Consequence / follow-up (separate, security-sensitive — NOT this PR):** for the agent to execute dotnet/python-venv forensic tools via `run_command`, the `agent_runtime` RUN-3 exec policy must be extended to permit `/usr/bin/dotnet` and the relevant `/opt/*/bin/python3` interpreters — with security review, since it widens the sandboxed agent's exec surface. Until then, these tools are operator/ingest-side. The catalog/allowlist entries remain correct (consistent with the existing EZ tools) and become fully usable once the sandbox policy is extended.
