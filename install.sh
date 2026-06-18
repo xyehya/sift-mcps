@@ -1082,7 +1082,13 @@ install_zimmerman_symlinks() {
       target="$zimmerman_dir/$tool/$tool"
     fi
     if [[ -n "$target" ]]; then
-      sudo_if_needed ln -sf "$target" "/usr/local/bin/$tool" 2>/dev/null || true
+      # -n (--no-dereference): if /usr/local/bin/$tool is already a symlink to a
+      # directory (the exact broken state the old `test -x` bug left behind),
+      # plain `ln -sf` would follow it and create a NESTED link inside the target
+      # dir instead of repointing — and could clobber the real binary. -sfn
+      # repoints the link atomically, keeping the upgrade-over-broken-state path
+      # idempotent.
+      sudo_if_needed ln -sfn "$target" "/usr/local/bin/$tool" 2>/dev/null || true
       linked=$((linked + 1))
     fi
   done
@@ -1097,7 +1103,7 @@ install_zimmerman_symlinks() {
   # broken (points nowhere), repoint it at the real binary. Never fails.
   if [[ -x /opt/hayabusa/hayabusa ]]; then
     if [[ -L /usr/local/bin/hayabusa && ! -e /usr/local/bin/hayabusa ]]; then
-      sudo_if_needed ln -sf /opt/hayabusa/hayabusa /usr/local/bin/hayabusa 2>/dev/null || true
+      sudo_if_needed ln -sfn /opt/hayabusa/hayabusa /usr/local/bin/hayabusa 2>/dev/null || true
       log "Repointed dangling /usr/local/bin/hayabusa symlink at /opt/hayabusa/hayabusa."
     fi
   fi
@@ -1114,17 +1120,38 @@ install_complementary_tools() {
   fi
   log "Installing complementary forensic CLIs (best-effort): yara, tshark, binwalk."
   local pkg
+  local to_install=()
   for pkg in yara tshark binwalk; do
     if command -v "$pkg" >/dev/null 2>&1; then
       log "  $pkg already present — skipping."
       continue
     fi
-    if apt_install_packages "$pkg"; then
-      log "  installed $pkg."
-    else
-      warn "  could not install $pkg (best-effort) — the agent will run without it; install later with: sudo apt-get install -y $pkg"
+    # tshark pulls in wireshark-common, whose postinst opens an interactive
+    # debconf prompt ("allow non-superusers to capture?") that hangs a
+    # non-interactive install. Pre-seed the answer (false = no setuid dumpcap;
+    # the forensic agent reads PCAPs, it does not live-capture). Best-effort.
+    if [[ "$pkg" == "tshark" ]]; then
+      echo "wireshark-common wireshark-common/install-setuid boolean false" \
+        | sudo_if_needed debconf-set-selections 2>/dev/null || true
     fi
+    to_install+=("$pkg")
   done
+  if [[ "${#to_install[@]}" -gt 0 ]]; then
+    # Refresh indexes ONCE (not once per package), best-effort: a failing
+    # third-party apt source must not abort the run; fall back to existing
+    # indexes. Then install per-package so one unavailable package does not
+    # block the others (`apt-get install -y a b c` is all-or-nothing).
+    if ! sudo_if_needed apt-get update; then
+      warn "  apt-get update failed (likely an unrelated third-party source) — continuing with existing indexes."
+    fi
+    for pkg in "${to_install[@]}"; do
+      if sudo_if_needed env DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg"; then
+        log "  installed $pkg."
+      else
+        warn "  could not install $pkg (best-effort) — the agent will run without it; install later with: sudo apt-get install -y $pkg"
+      fi
+    done
+  fi
   # zeek has no apt candidate on the stock SIFT image — warn-only, never fail.
   if ! command -v zeek >/dev/null 2>&1; then
     warn "  zeek not present and has no default apt candidate — skipping (install from the Zeek repo if needed)."
