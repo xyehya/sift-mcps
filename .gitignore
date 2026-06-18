@@ -46,3 +46,4 @@ skills-lock.json
 .claude/hooks/cbm-session-reminder
 .claude/skills/codebase-memory/
 .claude/skills/linear-cli/
+.claude/skills/supabase-postgres-best-practices/
