@@ -4474,8 +4474,11 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
                 },
                 result_summary=(f"dict saved at {dict_path}; reindex failed ({type(e).__name__})"),
             )
-        except Exception:
-            pass
+        except Exception as audit_exc:
+            logger.debug(
+                "opensearch_host_fix audit mirror write failed: %s",
+                type(audit_exc).__name__,
+            )
         return err_resp
     from opensearch_mcp.ingest_status import db_status_active
 
@@ -4511,8 +4514,11 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
         )
         if audit_id:
             resp["audit_id"] = audit_id
-    except Exception:
-        pass
+    except Exception as audit_exc:
+        logger.debug(
+            "opensearch_host_fix audit mirror write failed: %s",
+            type(audit_exc).__name__,
+        )
 
     # BATCH-K4: persist a host-identity correction receipt. The affected derived
     # indices are the case-scoped index pattern this reindex touched (sanitized

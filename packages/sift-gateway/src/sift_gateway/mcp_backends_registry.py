@@ -677,8 +677,10 @@ class McpBackendRegistry:
                 extra={"backend": backend},
                 examiner_override=principal,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            # Audit mirror is best-effort (Postgres is the authority); surface
+            # the failure at debug without leaking params/principal.
+            logger.debug("backend audit mirror write failed: %s", type(exc).__name__)
 
 
 def _safe_detail(detail: str | None) -> str | None:
