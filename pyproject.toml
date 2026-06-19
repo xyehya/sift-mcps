@@ -77,6 +77,11 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = [
+    # E501 (line length) is advisory only (XYE-76 / D8 decision). line-length=88
+    # below is the target for new code and drives import sorting, but E501 is not
+    # enforced: there are ~1600 legacy long lines and no auto-formatter
+    # (ruff format / black) is adopted, so enforcing it now would be mass churn
+    # for little value. Revisit if/when `ruff format` is adopted.
     "E501",
     "E402",
     "SIM102",
