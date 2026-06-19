@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import unquote
 
 import yaml
+from sift_common.identifiers import is_valid_examiner_slug
 from sift_core.case_io import (
     _protected_write,
     case_approvals_path,
@@ -350,15 +351,12 @@ def _verify_items(case_dir: Path, items: list[dict]) -> list[dict]:
 # --- Commit helpers ---
 
 
-_EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
-
-
 def _resolve_examiner(request: Request) -> str | None:
     """Get examiner from auth middleware state. R9: always use getattr, never direct access."""
     examiner = getattr(request.state, "examiner", None)
     if not examiner or examiner == "anonymous":
         return None
-    if not _EXAMINER_RE.match(examiner):
+    if not is_valid_examiner_slug(examiner):
         return None
     return examiner
 

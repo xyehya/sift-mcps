@@ -19,13 +19,14 @@ from typing import Any
 
 import yaml
 from sift_common.audit import resolve_examiner
+from sift_common.identifiers import is_valid_examiner_slug
 
 from sift_core.case_io import case_audit_dir, cases_root, state_root
-from sift_core.investigation_store import compute_content_hash as _compute_content_hash
 from sift_core.case_ops import build_case_brief
 from sift_core.evidence_chain import load_manifest
 from sift_core.evidence_ops import list_manifest_evidence_data
 from sift_core.finding_validation import validate as validate_finding_data
+from sift_core.investigation_store import compute_content_hash as _compute_content_hash
 
 logger = logging.getLogger(__name__)
 ReferenceBackendProvider = Any
@@ -491,7 +492,7 @@ def _validate_examiner(examiner: str) -> None:
     """Validate examiner slug: lowercase alphanumeric + hyphens, max 20 chars."""
     if not examiner:
         raise ValueError("Examiner identity cannot be empty")
-    if not re.match(r"^[a-z0-9][a-z0-9-]{0,19}$", examiner):
+    if not is_valid_examiner_slug(examiner):
         raise ValueError(
             f"Invalid examiner '{examiner}': must be lowercase alphanumeric + hyphens, max 20 chars"
         )

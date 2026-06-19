@@ -13,8 +13,6 @@ from pathlib import Path
 
 import yaml
 
-_EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
-
 
 def _sanitize_slug(raw: str) -> str:
     slug = re.sub(r"[^a-z0-9-]", "-", raw.lower()).strip("-")[:20]

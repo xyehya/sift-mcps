@@ -11,7 +11,6 @@ import hashlib
 import hmac
 import json
 import os
-import re
 import secrets
 import sys
 import tempfile
@@ -27,6 +26,7 @@ except ImportError:
 from pathlib import Path
 
 import yaml
+from sift_common.identifiers import is_valid_examiner_slug
 
 PBKDF2_ITERATIONS = 600_000
 _MAX_PASSWORD_ATTEMPTS = 3
@@ -48,8 +48,6 @@ class AuthError(Exception):
 class LockoutError(AuthError):
     """Account is locked due to too many failed attempts."""
 
-_EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
-
 
 def derive_auth_key(stored_hash_hex: str) -> bytes:
     """Sub-key for login HMAC verification. Domain-separated from ledger signing."""
@@ -62,7 +60,7 @@ def derive_ledger_key(stored_hash_hex: str) -> bytes:
 
 
 def _validate_examiner_name(analyst: str) -> None:
-    if not _EXAMINER_RE.match(analyst):
+    if not is_valid_examiner_slug(analyst):
         raise ValueError(f"Invalid examiner name: {analyst!r}")
 
 

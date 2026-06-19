@@ -18,7 +18,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
 _DEFAULT_STATE_DIR = "/var/lib/sift"
 
 
@@ -100,7 +99,8 @@ def _sanitize_slug(raw: str) -> str:
 def resolve_examiner() -> str:
     """Resolve examiner identity: SIFT_EXAMINER > SIFT_ANALYST > OS username.
 
-    The result is validated against the slug pattern ^[a-z0-9][a-z0-9-]{0,19}$.
+    The result is coerced to a valid slug via ``_sanitize_slug``; the canonical
+    slug contract lives in ``sift_common.identifiers``.
     """
     examiner = os.environ.get("SIFT_EXAMINER") or os.environ.get("SIFT_ANALYST")
     if not examiner:
