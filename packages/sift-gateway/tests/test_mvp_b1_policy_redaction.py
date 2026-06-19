@@ -55,8 +55,12 @@ _API_KEYS = {
 
 
 def _rest_app():
+    from sift_gateway.server import ToolSurfaceSnapshot
     gateway = Gateway({"backends": {}, "execute": {"security": {"denied_binaries": ["env"]}}})
-    gateway._tool_map = {"addon_echo": "addon"}
+    # D7: inject test state via the atomic snapshot rather than direct attribute.
+    gateway._tool_surface = ToolSurfaceSnapshot(
+        tool_map={"addon_echo": "addon"}, tool_cache={}, manifest_meta={}
+    )
 
     async def call_tool(name, arguments, examiner=None, identity=None):
         return [TextContent(type="text", text=f"ran {name} for {examiner}")]

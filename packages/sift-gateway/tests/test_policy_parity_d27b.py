@@ -175,9 +175,13 @@ def test_guard_tool_result_redacts_and_caps_structured_content(tmp_path):
 
 
 def test_rest_tool_path_keeps_unredacted_examiner_output():
+    from sift_gateway.server import ToolSurfaceSnapshot
     gateway = Gateway({"backends": {}, **_execute_security()})
     secret = "AKIAIOSFODNN7EXAMPLE"
-    gateway._tool_map = {"addon_leak": "addon"}
+    # D7: inject test state via the atomic snapshot rather than direct attribute.
+    gateway._tool_surface = ToolSurfaceSnapshot(
+        tool_map={"addon_leak": "addon"}, tool_cache={}, manifest_meta={}
+    )
 
     async def call_tool(name, arguments, examiner=None):
         return [TextContent(type="text", text=f"examiner sees {secret}")]
