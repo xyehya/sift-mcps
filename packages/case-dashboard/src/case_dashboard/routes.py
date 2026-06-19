@@ -43,6 +43,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
+from case_dashboard.file_io import _load_json, _load_jsonl, _load_yaml
 from case_dashboard.session_jwt import (
     SESSION_ENVELOPE_COOKIE_NAME,
     SESSION_ENVELOPE_COOKIE_PATH,
@@ -256,51 +257,9 @@ def _no_case_response() -> JSONResponse:
     )
 
 
-def _load_json(path: Path) -> list | dict | None:
-    """Load a JSON file, return None on missing/corrupt."""
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        logger.warning("Corrupt JSON file: %s", path)
-        return None
-    except OSError as e:
-        logger.warning("Failed to read %s: %s", path, e)
-        return None
-
-
-def _load_yaml(path: Path) -> dict | None:
-    """Load a YAML file. Returns None if missing. Raises ValueError on corrupt/unreadable."""
-    if not path.exists():
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except yaml.YAMLError as e:
-        raise ValueError(f"Corrupt YAML: {path}: {e}") from e
-    except OSError as e:
-        raise ValueError(f"Cannot read YAML: {path}: {e}") from e
-
-
-def _load_jsonl(path: Path) -> list[dict]:
-    """Load a JSONL file, skipping corrupt lines."""
-    if not path.exists():
-        return []
-    entries = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    except OSError:
-        pass
-    return entries
+# _load_json, _load_yaml, _load_jsonl are imported from case_dashboard.file_io
+# (D4 / XYE-72 extraction).  The names remain available here via the module-level
+# import above so all intra-module call sites keep working without changes.
 
 
 def _verify_items(case_dir: Path, items: list[dict]) -> list[dict]:
