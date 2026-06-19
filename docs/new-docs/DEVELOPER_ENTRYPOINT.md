@@ -374,6 +374,44 @@ bash -n install.sh scripts/setup-addon.sh scripts/setup-supabase.sh
 uv run --extra dev --extra full pytest <targeted test paths>
 ```
 
+### Supported pytest invocation forms (XYE-68 / C4)
+
+Run tests from the **repo root**; never `cd` into a package directory. There are
+three supported entry points:
+
+```bash
+# 1. Cross-cutting root suite (CI parity)
+uv run --locked --extra full --extra dev pytest tests
+
+# 2. Full per-package suites + coverage floors (CI parity)
+uv run --locked --extra full --extra opencti --extra windows-triage --extra dev \
+  python scripts/check_package_coverage.py
+
+# 3. One package at a time (fast local loop)
+uv run --extra dev --extra full pytest packages/<pkg>/tests
+```
+
+Per-package extras / env that some suites require:
+
+| Package | Extra requirement |
+|---|---|
+| `windows-triage-mcp` | `--extra windows-triage` |
+| `opencti-mcp` | `--extra opencti` |
+| `opensearch-mcp` | `-m "not integration"` for the unit subset; some local runs also need `PYTHONPATH=packages/opensearch-mcp/tests` so `_helpers` resolves |
+
+Regenerate MCP surface goldens with `UPDATE_MCP_GOLDENS=1` on the targeted run.
+
+**Do not** run `pytest packages` (all packages at once). Every package's
+`tests/` directory is an importable package (each contains an `__init__.py`), so
+they all import under the same top-level module name `tests`; collecting them
+together makes `tests.conftest` and `tests.<module>` resolve ambiguously across
+packages and fails with `ImportPathMismatchError` / `ModuleNotFoundError` (and
+`--import-mode=importlib` only narrows it to the duplicate-`conftest` clash).
+`check_package_coverage.py` avoids this by running each package as its own pytest
+subprocess. A real fix (give each package's test package a unique name, or drop
+those `__init__.py` files) is a deliberate layout change deferred as an optional
+follow-up; the invocation forms above are the supported contract today.
+
 For live-impacting fixes, follow the Linear issue acceptance: host change,
 targeted validation, VM sync, service restart, health/tool proof, sanitized
 Linear comment.

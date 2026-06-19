@@ -116,7 +116,12 @@ def parse_header(path: Path, text: str, errors: list[str]) -> DocInfo | None:
 
 def iter_reference_paths(text: str) -> set[tuple[str, int | None]]:
     refs: set[tuple[str, int | None]] = set()
-    for match in FILE_LINE_RE.finditer(text):
+    # Strip URLs first so a path-like fragment inside a link (e.g. the
+    # "docs/triage" in "https://linear.app/docs/triage") is not mistaken for a
+    # local file reference. Backtick scanning below still uses the original text;
+    # a backticked URL is filtered by the "://" guard in normalize_path.
+    text_no_urls = re.sub(r"https?://\S+", " ", text)
+    for match in FILE_LINE_RE.finditer(text_no_urls):
         raw_path = normalize_path(match.group("path"))
         if raw_path:
             refs.add((raw_path, int(match.group("line")) if match.group("line") else None))
