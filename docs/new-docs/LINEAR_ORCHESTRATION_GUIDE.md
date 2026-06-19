@@ -72,6 +72,11 @@ OT1:
   should guide many future issues.
 - Do not paste secrets, raw JWTs, service-role keys, DSNs, passwords, private
   keys, operator credentials, or sensitive full evidence paths into Linear.
+- When running parallel coding agents, the orchestrator must create one git
+  worktree per agent manually and point each agent's working directory at it; do
+  not rely on the harness `isolation: worktree` flag (it falls back to the shared
+  main tree here and races the git index). See the Parallel Agent Worktrees
+  section of `LINEAR_OPERATING_MODEL.md`.
 
 ## Status Discipline
 

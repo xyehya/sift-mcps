@@ -70,6 +70,30 @@ Use `duplicate` for duplicate work, `related` for context, and `blocked by` only
 for real sequencing dependencies. Do not leave open issues blocked by canceled
 issues.
 
+## Agent Worktrees
+
+The harness `isolation: worktree` flag does NOT create isolated working
+directories in this environment: spawned agents fall back to the shared main
+working tree and race on the git index (a single tree can only hold one
+checked-out branch, so concurrent writer agents serialize onto or clobber each
+other's branch and intermingle uncommitted changes). Do not rely on it for
+writer agents.
+
+When dispatching parallel coding agents (an agent team), the orchestrator sets
+up isolation MANUALLY:
+
+1. Create one worktree per agent off the current integrated `HEAD` (never a
+   stale `origin/main` — that base bug drops already-merged work):
+   `git worktree add ../wt/<issue-slug> -b <branch> HEAD`
+2. In each agent's prompt, set its working directory to that worktree's absolute
+   path and instruct it to `cd` there first, run every edit / `uv` / pytest /
+   git command from that directory, and COMMIT its work to its branch in that
+   worktree. It must never touch the main checkout.
+3. After an agent finishes, the orchestrator merges its branch into main,
+   re-validates, then removes the worktree (`git worktree remove`).
+
+Never run two writer agents in the same working tree.
+
 ## GitHub
 
 Linear is the issue source of truth. GitHub is for code review and merge proof.

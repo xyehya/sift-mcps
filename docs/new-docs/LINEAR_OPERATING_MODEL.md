@@ -144,6 +144,29 @@ The operator accepts, rejects, merges, or converts proposed work. Accepted work
 gets a parent, labels, tests, and acceptance criteria before any coding session
 starts.
 
+## Parallel Agent Worktrees
+
+When an orchestrator dispatches more than one coding agent at a time, each agent
+needs a real isolated working directory. The harness `isolation: worktree` flag
+must NOT be relied on here: in this environment spawned agents fall back to the
+shared main working tree and race on the git index. Because a working tree can
+hold only one checked-out branch, concurrent writer agents serialize onto or
+clobber a single branch and leave intermingled uncommitted changes. The
+orchestrator therefore creates the isolation manually:
+
+1. Create one worktree per agent off the current integrated `HEAD` (never a
+   stale `origin/main`; branching off a stale base silently drops already-merged
+   work): `git worktree add ../wt/<issue-slug> -b <branch> HEAD`.
+2. Give each agent its worktree's absolute path as its working directory and
+   instruct it to `cd` there first, run every edit / `uv` / pytest / git command
+   from that directory, and commit its work to its branch in that worktree. It
+   must never touch the main checkout.
+3. When the agent finishes, merge its branch into main, re-validate on the
+   integrated tree, then remove the worktree (`git worktree remove`).
+
+Never run two writer agents in the same working tree. Read-only discovery agents
+may share a tree because they do not write or commit.
+
 ## Required Issue Shape
 
 Every executable issue must include:
