@@ -33,14 +33,13 @@ PACKAGE_GATES: tuple[PackageCoverageGate, ...] = (
         observed=72,
         floor=70,
     ),
-    # AU2 locks today's very low common baseline; Axis C should ratchet this
-    # after direct AuditWriter/parser tests land.
+    # C1 (XYE-65) adversarial AuditWriter custody tests landed; ratcheted from 4%.
     PackageCoverageGate(
         name="sift-common",
         tests="packages/sift-common/tests",
         source="packages/sift-common/src/sift_common",
-        observed=4,
-        floor=3,
+        observed=67,
+        floor=65,
     ),
     PackageCoverageGate(
         name="sift-core",

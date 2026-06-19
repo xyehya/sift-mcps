@@ -193,7 +193,8 @@ class AuditWriter:
                 data = json.loads(seq_file.read_text())
                 if data.get("date") == date_str:
                     return data.get("seq", 0)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError, ValueError):
+            # Corrupted or unreadable sidecar — fall through to JSONL scan.
             pass
 
         # Fallback: scan JSONL (O(n) — only on first startup or date change).

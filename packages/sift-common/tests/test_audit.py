@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from datetime import timezone
 from pathlib import Path
 from unittest import mock
 
@@ -273,3 +275,619 @@ class TestAuditWriter:
         aid = w.log("tool", {}, "result")
         assert aid is not None
         assert (audit_dir / "test-mcp.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# AuditWriter — adversarial / forensic-durability tests (XYE-65 / C1)
+#
+# CodeGuard (privacy, logging, data-storage) requirements applied:
+#   - No secrets, credentials, or sensitive paths in fixtures.
+#   - Fail-closed assertions: a write failure must return None, never silently
+#     succeed; duplicate IDs must never appear.
+#   - All synthetic examiner names and audit payloads are obviously synthetic.
+# ---------------------------------------------------------------------------
+
+
+def _today_utc() -> str:
+    """Return today's UTC date string in YYYYMMDD format (same as AuditWriter)."""
+    from datetime import datetime
+
+    return datetime.now(timezone.utc).strftime("%Y%m%d")
+
+
+def _mcp_prefix(mcp_name: str) -> str:
+    """Derive the audit-ID prefix from an MCP name (mirrors AuditWriter logic)."""
+    return mcp_name.replace("-mcp", "").replace("-", "")
+
+
+class TestAuditWriterAdversarial:
+    """Forensic-durability tests for AuditWriter's JSONL mirror.
+
+    These tests probe failure modes that could silently corrupt the audit
+    chain: sidecar corruption, JSONL resume, malformed lines, fsync failure,
+    date rollover, and concurrent writers.  All tests must pass without
+    weakening DB-authority behavior.
+    """
+
+    # ------------------------------------------------------------------
+    # Corrupted .seq sidecar
+    # ------------------------------------------------------------------
+
+    def test_corrupted_seq_sidecar_non_utf8_falls_back_to_jsonl_scan(self, tmp_path):
+        """A sidecar with non-UTF-8 bytes (UnicodeDecodeError) must not abort
+        sequencing.
+
+        PRODUCTION BUG EXPOSED AND FIXED: the original code caught only
+        (json.JSONDecodeError, OSError).  A non-UTF-8 sidecar raised
+        UnicodeDecodeError, which propagated uncaught and silently reset the
+        sequence to 0, producing duplicate IDs after restart.  The fix adds
+        UnicodeDecodeError and ValueError to the except tuple.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        today = _today_utc()
+        prefix = _mcp_prefix(mcp)
+
+        # Write an initial entry to establish a known sequence baseline.
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        aid1 = w.log("t1", {}, "ok", examiner_override="analyst")
+        assert aid1 is not None
+        assert aid1 == f"{prefix}-analyst-{today}-001"
+
+        # Corrupt the sidecar with non-UTF-8 bytes (e.g. BOM + garbage).
+        seq_file = audit_dir / f"{mcp}.seq"
+        seq_file.write_bytes(b"\xff\xfeNOT JSON")
+
+        # Create a fresh writer (simulates server restart after crash/corruption).
+        w2 = AuditWriter(mcp, audit_dir=str(audit_dir))
+        aid2 = w2.log("t2", {}, "ok", examiner_override="analyst")
+        assert aid2 is not None
+
+        # JSONL scan must have found seq=1, so next ID must be seq=2.
+        assert aid2 != aid1
+        seq_num_2 = int(aid2.rsplit("-", 1)[-1])
+        assert seq_num_2 >= 2, (
+            f"Expected seq >= 2 from JSONL fallback after corrupt sidecar, got {seq_num_2}"
+        )
+
+    def test_corrupted_seq_sidecar_empty_falls_back_to_jsonl_scan(self, tmp_path):
+        """An empty .seq sidecar (e.g. truncated mid-write) falls back gracefully."""
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        aid1 = w.log("t1", {}, "ok", examiner_override="analyst")
+        assert aid1 is not None
+
+        # Truncate sidecar to zero bytes.
+        (audit_dir / f"{mcp}.seq").write_bytes(b"")
+
+        w2 = AuditWriter(mcp, audit_dir=str(audit_dir))
+        aid2 = w2.log("t2", {}, "ok", examiner_override="analyst")
+        assert aid2 is not None
+        assert aid1 != aid2
+
+    def test_seq_sidecar_stale_date_triggers_jsonl_resume(self, tmp_path):
+        """A .seq sidecar from a previous date must not be reused as-is.
+
+        When the stored date differs from today, _resume_sequence must fall
+        back to scanning the JSONL file for the *current* date.  Since the
+        JSONL has no entries for today, seq resets to 1 on the new day — not
+        jump to the old day's last value.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        # Write a sidecar that claims a long-past date with seq=99.
+        seq_file = audit_dir / f"{mcp}.seq"
+        seq_file.write_text(json.dumps({"date": "20000101", "seq": 99}))
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        aid = w.log("t1", {}, "ok")
+        assert aid is not None
+
+        # Sequence should start at 1 for today, NOT 100 (old sidecar not reused).
+        seq_num = int(aid.rsplit("-", 1)[-1])
+        assert seq_num == 1
+
+    # ------------------------------------------------------------------
+    # Missing sidecar / JSONL resume fallback
+    # ------------------------------------------------------------------
+
+    def test_resume_from_jsonl_when_sidecar_absent(self, tmp_path):
+        """With no .seq sidecar, sequence is inferred from JSONL scan on restart.
+
+        This simulates a crash in the window between writing the JSONL entry
+        and writing the sidecar — a durability gap that exists in the current
+        implementation.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        today = _today_utc()
+        prefix = _mcp_prefix(mcp)
+
+        # Manually write a JSONL entry with a known sequence number.
+        # The audit_id format is "{prefix}-{examiner}-{date}-{seq:03d}".
+        synthetic_entry = {
+            "ts": "2030-01-01T00:00:00+00:00",
+            "mcp": mcp,
+            "tool": "synthetic",
+            "audit_id": f"{prefix}-analyst-{today}-007",
+            "examiner": "analyst",
+            "case_id": "",
+            "source": "mcp_server",
+            "params": {},
+            "result_summary": {"value": "synthetic"},
+        }
+        log_file = audit_dir / f"{mcp}.jsonl"
+        log_file.write_text(json.dumps(synthetic_entry) + "\n")
+        # Ensure NO sidecar file exists (crash before sidecar was written).
+        (audit_dir / f"{mcp}.seq").unlink(missing_ok=True)
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        aid = w.log("t1", {}, "ok", examiner_override="analyst")
+        assert aid is not None
+
+        # JSONL scan must have found seq=7, so next must be 8.
+        seq_num = int(aid.rsplit("-", 1)[-1])
+        assert seq_num >= 8, (
+            f"Expected seq >= 8 from JSONL resume (found seq=7 in log), got {seq_num}"
+        )
+
+    def test_jsonl_resume_skips_entries_from_different_mcp(self, tmp_path):
+        """JSONL resume must skip lines whose audit_id prefix does not match.
+
+        A JSONL file may contain entries written by multiple tools/runs; only
+        the entries belonging to this MCP's prefix should count toward the
+        sequence.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        today = _today_utc()
+        prefix = _mcp_prefix(mcp)  # "probe"
+
+        # Mix of valid entries from a different MCP and one with no audit_id.
+        # "forensic-mcp" has prefix "forensic" — no overlap with "probe".
+        lines = [
+            # Entry for a different MCP — must NOT affect our counter.
+            json.dumps({"audit_id": f"forensic-analyst-{today}-099", "mcp": "forensic-mcp"}),
+            # Entry with no audit_id field.
+            json.dumps({"tool": "something", "mcp": mcp}),
+            # Valid entry for our MCP with seq=5.
+            json.dumps({"audit_id": f"{prefix}-analyst-{today}-005", "mcp": mcp}),
+        ]
+        (audit_dir / f"{mcp}.jsonl").write_text("\n".join(lines) + "\n")
+        (audit_dir / f"{mcp}.seq").unlink(missing_ok=True)
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        aid = w.log("t1", {}, "ok", examiner_override="analyst")
+        assert aid is not None
+        seq_num = int(aid.rsplit("-", 1)[-1])
+        # Must resume from seq=5 (not 99 from the other MCP), next = 6.
+        assert seq_num == 6, (
+            f"Expected seq=6 after JSONL resume (max for our MCP was 5), got {seq_num}"
+        )
+
+    # ------------------------------------------------------------------
+    # Malformed JSONL lines in get_entries
+    # ------------------------------------------------------------------
+
+    def test_get_entries_skips_malformed_lines(self, tmp_path):
+        """get_entries must skip corrupted JSONL lines and return valid ones.
+
+        A forensic reader must never crash on a partially-written or
+        bit-flipped log line; it should log a warning and continue.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        log_file = audit_dir / f"{mcp}.jsonl"
+        good_entry = {
+            "audit_id": "e1",
+            "ts": "2030-01-01T00:00:00+00:00",
+            "tool": "scan",
+            "case_id": "",
+        }
+        log_file.write_text(
+            json.dumps(good_entry) + "\n"
+            + "NOT VALID JSON {{{\n"
+            + "\x00\x01truncated\n"
+            + json.dumps(
+                {"audit_id": "e2", "ts": "2030-01-01T00:01:00+00:00", "tool": "read", "case_id": ""}
+            ) + "\n"
+        )
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        entries = w.get_entries()
+
+        # Must return only the 2 valid entries; corrupt lines silently skipped.
+        assert len(entries) == 2
+        assert entries[0]["audit_id"] == "e1"
+        assert entries[1]["audit_id"] == "e2"
+
+    def test_get_entries_skips_blank_lines(self, tmp_path):
+        """Blank lines in the JSONL file must be silently skipped."""
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        log_file = audit_dir / f"{mcp}.jsonl"
+        log_file.write_text(
+            "\n"
+            + json.dumps(
+                {"audit_id": "e1", "ts": "2030-01-01T00:00:00+00:00", "tool": "t", "case_id": ""}
+            ) + "\n"
+            + "\n\n"
+        )
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        entries = w.get_entries()
+        assert len(entries) == 1
+
+    def test_get_entries_all_malformed_returns_empty(self, tmp_path):
+        """A JSONL file that is entirely corrupt returns an empty list (fail-closed)."""
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        (audit_dir / f"{mcp}.jsonl").write_text("GARBAGE\nMORE GARBAGE\n")
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        # Must not raise; returns empty list rather than crashing.
+        entries = w.get_entries()
+        assert entries == []
+
+    # ------------------------------------------------------------------
+    # fsync / write failure handling (fail-closed)
+    # ------------------------------------------------------------------
+
+    def test_write_failure_returns_none(self, tmp_path):
+        """A write failure (OSError on fsync) must cause log() to return None.
+
+        This is the fail-closed contract: an audit entry that could not be
+        durably fsynced must never be silently counted as recorded.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        with mock.patch("sift_common.audit.os.fsync", side_effect=OSError("disk full")):
+            result = w.log("risky-tool", {}, "result")
+
+        # Fail-closed: the audit_id must NOT be returned.
+        assert result is None
+
+    def test_write_failure_does_not_block_subsequent_writes(self, tmp_path):
+        """After a failed write, subsequent successful writes must proceed.
+
+        A failed write consumes a sequence slot but must not prevent future
+        writes.  The next successful call must return a unique non-None ID.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        # First write succeeds.
+        aid1 = w.log("t1", {}, "ok")
+        assert aid1 is not None
+
+        # Second write fails due to fsync error — must return None (fail-closed).
+        with mock.patch("sift_common.audit.os.fsync", side_effect=OSError("io error")):
+            failed = w.log("t2", {}, "ok")
+        assert failed is None
+
+        # Third write must succeed and have a unique ID.
+        aid3 = w.log("t3", {}, "ok")
+        assert aid3 is not None
+        assert aid3 != aid1
+
+    def test_open_failure_returns_none(self, tmp_path):
+        """If the audit file cannot be opened for append, log() returns None."""
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        with mock.patch("builtins.open", side_effect=OSError("permission denied")):
+            result = w.log("t1", {}, "ok")
+
+        assert result is None
+
+    def test_audit_dir_creation_failure_returns_none(self, tmp_path):
+        """If the audit directory cannot be created, log() returns None (fail-closed).
+
+        Simulates a filesystem permission error or read-only mount.
+        """
+        w = AuditWriter("probe-mcp", audit_dir=str(tmp_path / "nonexistent" / "audit"))
+
+        with mock.patch("pathlib.Path.mkdir", side_effect=OSError("read-only filesystem")):
+            result = w.log("t1", {}, "ok")
+
+        assert result is None
+
+    # ------------------------------------------------------------------
+    # Day/date rollover
+    # ------------------------------------------------------------------
+
+    def test_date_rollover_resets_sequence_to_one(self, tmp_path):
+        """When the date changes, the sequence counter must reset to 1 for
+        the new day and not carry over the previous day's max sequence.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        import datetime as _dt
+
+        # Simulate "yesterday".
+        with mock.patch("sift_common.audit.datetime") as dt_mock:
+            dt_mock.now.return_value.strftime.return_value = "20300101"
+            dt_mock.now.return_value.isoformat.return_value = "2030-01-01T00:00:00+00:00"
+            dt_mock.timezone = _dt.timezone
+            aid_day1_a = w.log("t1", {}, "ok")
+            aid_day1_b = w.log("t2", {}, "ok")
+
+        assert aid_day1_a is not None
+        assert aid_day1_b is not None
+        seq_d1 = int(aid_day1_b.rsplit("-", 1)[-1])
+        assert seq_d1 == 2  # day 1 reached seq=2
+
+        # Now simulate "today" — writer must detect date change and reset.
+        with mock.patch("sift_common.audit.datetime") as dt_mock2:
+            dt_mock2.now.return_value.strftime.return_value = "20300102"
+            dt_mock2.now.return_value.isoformat.return_value = "2030-01-02T00:00:00+00:00"
+            dt_mock2.timezone = _dt.timezone
+            aid_day2 = w.log("t3", {}, "ok")
+
+        assert aid_day2 is not None
+        # Day 2's first entry should have seq=1, not seq=3.
+        seq_d2 = int(aid_day2.rsplit("-", 1)[-1])
+        assert seq_d2 == 1, (
+            f"Expected seq=1 after date rollover, got {seq_d2} in {aid_day2}"
+        )
+        assert "20300102" in aid_day2
+
+    def test_date_rollover_ids_embed_correct_date(self, tmp_path):
+        """Audit IDs must embed the UTC date at generation time, not startup time."""
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        import datetime as _dt
+
+        with mock.patch("sift_common.audit.datetime") as dt_mock:
+            dt_mock.now.return_value.strftime.return_value = "20300615"
+            dt_mock.now.return_value.isoformat.return_value = "2030-06-15T12:00:00+00:00"
+            dt_mock.timezone = _dt.timezone
+            aid = w.log("t1", {}, "ok")
+
+        assert aid is not None
+        assert "20300615" in aid
+
+    # ------------------------------------------------------------------
+    # Concurrent logging (thread safety — single instance)
+    # ------------------------------------------------------------------
+
+    def test_concurrent_writes_produce_unique_audit_ids(self, tmp_path):
+        """A single AuditWriter used from multiple threads must produce unique IDs.
+
+        AuditWriter is documented as thread-safe (sequence counter protected by
+        a threading.Lock).  This test validates the lock under real concurrent
+        load.  Duplicate IDs would be a forensic chain-of-custody failure: two
+        distinct events sharing an ID cannot be unambiguously distinguished.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        # Single shared writer — the documented thread-safe usage pattern.
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        n_threads = 8
+        n_per_thread = 10
+        ids: list[str] = []
+        errors: list[Exception] = []
+        id_lock = threading.Lock()
+
+        def worker(idx: int) -> None:
+            for i in range(n_per_thread):
+                try:
+                    aid = w.log(f"tool-{idx}-{i}", {}, "ok", examiner_override="analyst")
+                    if aid is None:
+                        errors.append(
+                            AssertionError(f"worker {idx} iter {i}: log returned None")
+                        )
+                        return
+                    with id_lock:
+                        ids.append(aid)
+                except Exception as exc:
+                    with id_lock:
+                        errors.append(exc)
+                    return
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert not errors, f"Worker errors: {errors}"
+        expected = n_threads * n_per_thread
+        assert len(ids) == expected, f"Expected {expected} IDs, got {len(ids)}"
+        assert len(ids) == len(set(ids)), (
+            f"Duplicate audit IDs detected among {len(ids)} concurrent writes"
+        )
+
+    def test_concurrent_writes_all_persisted_to_jsonl(self, tmp_path):
+        """Every audit ID returned by log() must appear in the JSONL file.
+
+        Validates the durability contract: if log() returns a non-None ID,
+        the entry must be recoverable from disk.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        # Single shared writer — the documented thread-safe usage pattern.
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        n_threads = 4
+        n_per_thread = 5
+        returned_ids: list[str] = []
+        id_lock = threading.Lock()
+
+        def worker(idx: int) -> None:
+            for _i in range(n_per_thread):
+                aid = w.log(f"tool-{idx}", {}, "ok", examiner_override="analyst")
+                if aid is not None:
+                    with id_lock:
+                        returned_ids.append(aid)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        # Read back from JSONL and verify every returned ID is present.
+        log_file = audit_dir / f"{mcp}.jsonl"
+        persisted_ids: set[str] = set()
+        for line in log_file.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                persisted_ids.add(json.loads(line)["audit_id"])
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        missing = set(returned_ids) - persisted_ids
+        assert not missing, (
+            f"{len(missing)} audit IDs were returned by log() but not found in JSONL: {missing}"
+        )
+
+    def test_single_writer_multiple_examiners_unique_ids(self, tmp_path):
+        """A single writer with different examiner_override values per call must
+        still produce unique IDs because the global sequence counter is shared.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        ids = []
+        for examiner in ["analyst-a", "analyst-b", "analyst-a"]:
+            aid = w.log("tool", {}, "ok", examiner_override=examiner)
+            assert aid is not None
+            ids.append(aid)
+
+        # All three IDs must be distinct despite the repeated "analyst-a".
+        assert len(ids) == len(set(ids)), f"Duplicate IDs: {ids}"
+
+    # ------------------------------------------------------------------
+    # DB-authority mode edge cases
+    # ------------------------------------------------------------------
+
+    def test_db_authority_mode_returns_caller_supplied_audit_id(self):
+        """In DB-authority mode with no local dir, a caller-supplied audit_id
+        is echoed back unchanged (Gateway envelope reuse pattern).
+        """
+        env = os.environ.copy()
+        env.pop("SIFT_AUDIT_DIR", None)
+        env.pop("SIFT_CASE_DIR", None)
+        env["SIFT_DB_ACTIVE"] = "true"
+        with mock.patch.dict(os.environ, env, clear=True):
+            w = AuditWriter("probe-mcp")
+            result = w.log("tool", {}, "ok", audit_id="gateway-supplied-id-001")
+        assert result == "gateway-supplied-id-001"
+
+    def test_db_authority_mode_true_variants(self):
+        """All accepted truthy values for SIFT_DB_ACTIVE must enable DB-authority mode."""
+        for val in ("1", "true", "yes", "on", "True", "YES", "ON"):
+            env = os.environ.copy()
+            env.pop("SIFT_AUDIT_DIR", None)
+            env.pop("SIFT_CASE_DIR", None)
+            env["SIFT_DB_ACTIVE"] = val
+            with mock.patch.dict(os.environ, env, clear=True):
+                w = AuditWriter("probe-mcp")
+                result = w.log("tool", {}, "ok")
+            assert result is not None, (
+                f"SIFT_DB_ACTIVE={val!r} should enable DB-authority mode"
+            )
+
+    def test_db_authority_mode_false_variants_return_none_without_dir(self):
+        """Unrecognised / falsy SIFT_DB_ACTIVE values must NOT enable DB-authority mode."""
+        for val in ("0", "false", "no", "off", "", "2", "maybe"):
+            env = os.environ.copy()
+            env.pop("SIFT_AUDIT_DIR", None)
+            env.pop("SIFT_CASE_DIR", None)
+            env["SIFT_DB_ACTIVE"] = val
+            with mock.patch.dict(os.environ, env, clear=True):
+                w = AuditWriter("probe-mcp")
+                result = w.log("tool", {}, "ok")
+            assert result is None, (
+                f"SIFT_DB_ACTIVE={val!r} should NOT enable DB-authority mode"
+            )
+
+    # ------------------------------------------------------------------
+    # Audit entry shape / field presence
+    # ------------------------------------------------------------------
+
+    def test_entry_always_has_required_fields(self, tmp_path):
+        """Every written entry must contain the mandatory forensic fields.
+
+        This pins the public entry shape so regressions are caught immediately.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        required_fields = {
+            "ts", "mcp", "tool", "audit_id", "examiner",
+            "case_id", "source", "params", "result_summary",
+        }
+
+        w = AuditWriter("probe-mcp", audit_dir=str(audit_dir))
+        w.log("scan", {"path": "/evidence/sample"}, {"count": 1})
+
+        entry = json.loads((audit_dir / "probe-mcp.jsonl").read_text().strip())
+        missing = required_fields - entry.keys()
+        assert not missing, f"Audit entry missing required fields: {missing}"
+
+    def test_result_summary_large_string_truncated_in_entry(self, tmp_path):
+        """_summarize must cap string values at 500 chars to bound log entry size."""
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        w = AuditWriter("probe-mcp", audit_dir=str(audit_dir))
+        w.log("t1", {}, "x" * 2000)
+
+        entry = json.loads((audit_dir / "probe-mcp.jsonl").read_text().strip())
+        # result_summary must be the _summarize output, not the raw 2000-char string.
+        assert entry["result_summary"] == {"value": "x" * 500}
+
+    def test_params_not_leaked_into_audit_id(self, tmp_path):
+        """Audit IDs must be derived only from MCP name, examiner, date, and sequence.
+
+        Parameter values (which may contain PII or sensitive content) must never
+        appear in the audit ID itself.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        w = AuditWriter("probe-mcp", audit_dir=str(audit_dir))
+        synthetic_sensitive = "synthetic-sensitive-value"
+        aid = w.log("t1", {"field": synthetic_sensitive}, "ok")
+        assert aid is not None
+        assert synthetic_sensitive not in aid
