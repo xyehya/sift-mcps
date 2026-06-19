@@ -4,6 +4,11 @@
 > Class: living-plan
 > Last validated: dd54eb4 (2026-06-16)
 
+Canonical current policy lives in
+`docs/new-docs/LINEAR_OPERATING_MODEL.md`. This guide is retained for older
+orchestration prompts and historical context. If the two conflict, the operating
+model wins.
+
 Use this guide after the Linear setup to keep the project systematic. Linear is
 the active queue. Repo docs are reference packs and stable guardrails.
 

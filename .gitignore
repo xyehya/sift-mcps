@@ -20,10 +20,6 @@ coverage/
 !.env.example
 .mcp.json
 
-# Host-local agent instructions. Keep untracked per workstation.
-/AGENTS.md
-/CLAUDE.md
-
 # Evidence files — never commit real forensic evidence
 *.E01
 *.e01
