@@ -85,12 +85,13 @@ PACKAGE_GATES: tuple[PackageCoverageGate, ...] = (
         observed=20,
         floor=18,
     ),
+    # C3 (XYE-67) risk-path tests landed; ratcheted from 48%.
     PackageCoverageGate(
         name="windows-triage-mcp",
         tests="packages/windows-triage-mcp/tests",
         source="packages/windows-triage-mcp/src/windows_triage_mcp",
-        observed=48,
-        floor=46,
+        observed=57,
+        floor=55,
     ),
 )
 
