@@ -1,0 +1,135 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./tokens.css";
+
+/* Dark mode via class strategy — ThemeProvider toggles `.dark` on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Map shadcn / forensic token names to the single CSS-var token source.
+   `inline` => Tailwind emits `var(--token)` into utilities (so they swap with
+   .dark) instead of inlining a fixed value. This is the single-token-source
+   guarantee: there is NO color block in any JS config. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* forensic semantics */
+  --color-sev-high: var(--sev-high);
+  --color-sev-med: var(--sev-med);
+  --color-sev-low: var(--sev-low);
+  --color-sev-spec: var(--sev-spec);
+  --color-status-approved: var(--status-approved);
+  --color-status-pending: var(--status-pending);
+  --color-status-staged: var(--status-staged);
+  --color-status-rejected: var(--status-rejected);
+  --color-grade-full: var(--grade-full);
+  --color-grade-partial: var(--grade-partial);
+  --color-grade-none: var(--grade-none);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* radius scale (shadcn convention) */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* fonts (resolve at runtime against :root --font-*) */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 15px; /* spec §2 base — not 13px */
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Default focus-visible ring for any element that does not opt out
+     (shadcn primitives use outline-none + their own ring in the utilities
+     layer, which overrides this). Guarantees keyboard focus is always visible. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* cursor-pointer on clickable controls (ui-ux-pro-max guideline). */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  /* Tabular figures for numeric / forensic data columns. */
+  .tnum {
+    font-feature-settings: "tnum" 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Monospace data helper — hashes, IDs, timestamps, paths, IPs, registry keys. */
+  .mono {
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* Sonner toaster theming via tokens (replaces shadcn's inline `style` prop
+     so CSP can stay `style-src 'self'`). High specificity to beat sonner's
+     bundled defaults regardless of stylesheet load order. */
+  [data-sonner-toaster].toaster {
+    --normal-bg: var(--popover);
+    --normal-text: var(--popover-foreground);
+    --normal-border: var(--border);
+    --border-radius: var(--radius);
+  }
+
+  /* Thin, token-themed scrollbars. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+  }
+}
