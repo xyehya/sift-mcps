@@ -185,7 +185,8 @@ export function FindingsList({
         ) : list.length === 0 ? (
           <div className="flex flex-col items-center gap-1 p-8 text-center">
             <p className="text-xs text-muted-foreground">No {findingsFilter === 'all' ? '' : findingsFilter} findings.</p>
-            <p className="text-[11px] text-muted-foreground/70">Adjust the filter or search above.</p>
+            {/* text-xs + full-opacity muted-foreground — /70 modifier drops contrast below WCAG 4.5:1 */}
+            <p className="text-xs text-muted-foreground">Adjust the filter or search above.</p>
           </div>
         ) : (
           list.map((f) => (

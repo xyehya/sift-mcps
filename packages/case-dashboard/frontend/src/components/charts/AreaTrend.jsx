@@ -62,7 +62,8 @@ export function AreaTrend({
         <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
           <span aria-hidden className="size-2 rounded-full" style={{ backgroundColor: colorVar }} />
           <span className="capitalize">{seriesName}</span>
-          <span className="tnum text-muted-foreground/70">· {total} total</span>
+          {/* /70 opacity drops contrast below 4.5:1 — use full-opacity muted-foreground */}
+          <span className="tnum text-muted-foreground">· {total} total</span>
         </span>
         <div className="inline-flex overflow-hidden rounded-md border border-border" role="group" aria-label="Chart view">
           <ViewToggle active={view === 'chart'} onClick={() => setView('chart')} icon={BarChart3} label="Chart" />

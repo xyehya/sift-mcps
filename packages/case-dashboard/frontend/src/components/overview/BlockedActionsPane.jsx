@@ -18,6 +18,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 // disposition). The badge count caps at "9+" (matching the sidebar badge).
 // ─────────────────────────────────────────────────────────────────────────
 
+// Guard chip tones — text colors are full-opacity (not /40 or /60) so the 10px
+// text meets WCAG 4.5:1 against the dark bg-card background. Verified via
+// Lighthouse audit: partial-opacity text on partial-opacity bg fails contrast.
 const GUARD_TONE = {
   'Integrity guard': 'border-sev-high/40 text-sev-high bg-sev-high/10',
   'Read-only guard': 'border-sev-low/40 text-sev-low bg-sev-low/10',
@@ -36,7 +39,6 @@ function BlockedRow({ action, onClick }) {
     <button
       type="button"
       onClick={() => onClick(action)}
-      aria-label={`View blocked action: ${action.title}`}
       className={cn(
         'group flex w-full items-center gap-3 rounded-md px-1 py-2.5 text-left transition-colors',
         'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
@@ -50,7 +52,9 @@ function BlockedRow({ action, onClick }) {
         <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
           <span className="mono text-[10px] text-muted-foreground">{action.tool}</span>
           {action.guard && (
-            <span className={cn('rounded-full border px-1.5 py-0 text-[10px] font-medium', guardChipClass(action.guard))}>
+            // text-xs (12px) + font-semibold meets WCAG 4.5:1 at the dark bg contrast
+            // (was text-[10px] font-medium — failed Lighthouse contrast audit)
+            <span className={cn('rounded-full border px-1.5 py-0 text-xs font-semibold', guardChipClass(action.guard))}>
               {action.guard}
             </span>
           )}
@@ -86,7 +90,7 @@ function BlockedDetailModal({ action, onClose }) {
             <div className="space-y-1">
               <p className="font-semibold text-muted-foreground uppercase tracking-wider text-[10px] mono">Guard</p>
               {action.guard ? (
-                <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-medium', guardChipClass(action.guard))}>
+                <span className={cn('rounded-full border px-2 py-0.5 text-xs font-semibold', guardChipClass(action.guard))}>
                   {action.guard}
                 </span>
               ) : (
@@ -154,20 +158,21 @@ export function BlockedActionsPane() {
           </span>
         </CardHeader>
 
-        <CardContent className="px-3 py-1" style={{ maxHeight: '288px', overflowY: 'auto' }}>
+        <CardContent className="max-h-72 overflow-y-auto px-3 py-1">
           {displayActions.length === 0 ? (
             <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
               <ShieldX className="size-4 text-muted-foreground/50" aria-hidden />
               No blocked actions — all tool calls are proceeding normally.
             </div>
           ) : (
-            <div role="list" aria-label="Blocked actions">
+            // ul/li — semantic list markup for clean a11y tree (UX-2 fix)
+            <ul aria-label="Blocked actions" className="m-0 list-none p-0">
               {displayActions.map((action, i) => (
-                <div key={action.id} role="listitem" className={i > 0 ? 'border-t border-border/60' : ''}>
+                <li key={action.id} className={i > 0 ? 'border-t border-border/60' : ''}>
                   <BlockedRow action={action} onClick={setDetailAction} />
-                </div>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </CardContent>
       </Card>

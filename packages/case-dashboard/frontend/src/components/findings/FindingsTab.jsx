@@ -184,8 +184,10 @@ export function FindingsTab() {
     return () => document.removeEventListener('keydown', onKey)
   }, [commandPaletteOpen, canReview, setSelectedFindingId])
 
+  // minmax(240px,…) ensures the list column never crushes below a readable width
+  // at narrow viewports (tablet portrait / narrow browser windows). UX-5 fix.
   return (
-    <div className="grid h-full overflow-hidden bg-background" style={{ gridTemplateColumns: 'minmax(0,5fr) minmax(0,7fr)' }}>
+    <div className="grid h-full overflow-hidden bg-background" style={{ gridTemplateColumns: 'minmax(240px,5fr) minmax(0,7fr)' }}>
       <FindingsList
         list={filtered}
         loading={isLoading}

@@ -38,8 +38,8 @@ export function MitreMatrix({ findings }) {
         <div key={g.tactic} className="flex flex-col gap-1.5">
           <div className="flex items-center gap-1.5">
             <span aria-hidden className={cn('size-1.5 rounded-full', g.meta.dot)} />
-            <span className={cn('mono text-[10px] font-semibold uppercase tracking-[0.12em]', g.meta.text)}>{g.meta.label}</span>
-            <span className="tnum text-[10px] text-muted-foreground">· {g.techniques.length}</span>
+            <span className={cn('mono text-xs font-semibold uppercase tracking-[0.12em]', g.meta.text)}>{g.meta.label}</span>
+            <span className="tnum text-xs text-muted-foreground">· {g.techniques.length}</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {g.techniques.map((t) => (
@@ -49,7 +49,8 @@ export function MitreMatrix({ findings }) {
                 onClick={() => setSelected(t.id)}
                 aria-label={`${g.meta.label}: ${t.id}${t.name ? ` — ${t.name}` : ''}. View technique detail.`}
                 className={cn(
-                  'mono inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  /* text-xs (12px) — meets WCAG 4.5:1 small-text requirement (was text-[11px]) */
+                  'mono inline-flex items-center rounded-full border px-2 py-0.5 text-xs transition-colors hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   g.meta.ring,
                   g.meta.tint,
                   g.meta.text,

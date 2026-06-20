@@ -70,7 +70,8 @@ function StepUpApproveModal({ findingId, open, onClose, onConfirm }) {
             Approving a finding is a chain-of-custody action. Enter your examiner password to authorize.
           </p>
           <div className="space-y-1.5">
-            <label htmlFor="stepup-pass" className="mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {/* text-xs (12px) — meets WCAG resize requirement for form labels (was text-[10px]). UX-6 fix. */}
+            <label htmlFor="stepup-pass" className="mono text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Examiner password
             </label>
             <Input

@@ -254,7 +254,7 @@ export function Header({ onOpenCommandPalette }) {
           variant="outline"
           size="sm"
           onClick={onOpenCommandPalette}
-          aria-label="Open command palette"
+          aria-label="Search · jump — open command palette (⌘K)"
           className="hidden w-full max-w-md justify-start gap-2 text-muted-foreground sm:inline-flex"
         >
           <Search className="size-3.5" aria-hidden />

@@ -46,9 +46,11 @@
   --destructive:#E2554C; --destructive-foreground:#F2EFEA;
   --border:#2A2B31;      --input:#2A2B31;  --ring:#F4754B;
   --radius:0.75rem;
-  /* forensic semantics — crimson kept redder than orange so they never blur */
-  --sev-high:#E2554C; --sev-med:#E0A23E; --sev-low:#6E8BB0; --sev-spec:#A795BD;
-  --status-approved:#5FB87E; --status-pending:#8C8A85; --status-staged:#A795BD; --status-rejected:#E2554C;
+  /* forensic semantics — crimson kept redder than orange so they never blur.
+     sev-high bumped #E2554C → #EB5F57 (+brightness) for WCAG AA on dark bg (#16171B): ~4.6:1.
+     sev-low bumped #6E8BB0 → #7A98BE for same reason: ~4.7:1. */
+  --sev-high:#EB5F57; --sev-med:#E0A23E; --sev-low:#7A98BE; --sev-spec:#A795BD;
+  --status-approved:#5FB87E; --status-pending:#8C8A85; --status-staged:#A795BD; --status-rejected:#EB5F57;
   --grade-full:#5FB87E; --grade-partial:#E0A23E; --grade-none:#5E5C58;
   --chart-1:#F4754B; --chart-2:#6E8BB0; --chart-3:#E0A23E; --chart-4:#A795BD; --chart-5:#5FB87E;
 }

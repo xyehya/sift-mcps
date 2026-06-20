@@ -40,6 +40,7 @@ function NavItem({ item, active, collapsed, onSelect, badgeCount }) {
       type="button"
       onClick={() => onSelect(item.id)}
       aria-current={active ? 'page' : undefined}
+      aria-label={collapsed ? item.label : undefined}
       className={cn(
         'group relative flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0',
@@ -114,7 +115,8 @@ function AgentPanel({ collapsed }) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="flex justify-center py-2" aria-label={`Agent: ${state}`}>
+          {/* role="img" makes aria-label valid on this non-interactive container (ARIA spec §2.2) */}
+          <div className="flex justify-center py-2" role="img" aria-label={`Agent: ${state}`}>
             {dot}
           </div>
         </TooltipTrigger>
