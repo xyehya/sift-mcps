@@ -1,9 +1,12 @@
 # SIFT Examiner Portal v3 — Design System MASTER (FROZEN)
 
 **Status:** Frozen at end of Phase 0 (RUN-1 design system + RUN-2 shell/data +
-RUN-3 Overview/Findings reference tabs). This is the contract every Phase-1
-feature agent (EVID / ENTITY / REPORT) MUST copy. The Overview and Findings tabs
-are the worked examples — when in doubt, read those files, not your memory.
+RUN-3 Overview/Findings reference tabs), **identity relocked in RUN-4a** to the
+"Mission Control" graphite-ink + warm-orange identity (tokens both themes,
+fonts, motion primitives, shell re-skin) — the emerald palette is retired. This
+is the contract every Phase-1 feature agent (EVID / ENTITY / REPORT) MUST copy.
+The Overview and Findings tabs are the worked examples — when in doubt, read
+those files, not your memory.
 
 Authoritative inputs: `docs/new-docs/PORTAL_V3_REBUILD_SPEC.md` (§2 tokens/type/
 motion/UX, §3 architecture, §5 security). This file records the ACTUAL frozen
@@ -60,9 +63,23 @@ export const CONF_CLASS = {
 }
 ```
 
-Type: base 15px; `.mono` (Fira Code) for hashes/IDs/timestamps/paths/IPs; `.tnum`
-for every numeric/data column. Fonts are self-hosted via `@fontsource` in
-`main.jsx` — **never** add a Google Fonts link/@import.
+**Identity values (RUN-4a).** Dark (`.dark`, app default) = neutral graphite ink
+(`--background #0A0A0C`, `--card #16171B`) + warm off-white text (`--foreground
+#F2EFEA`) + ONE warm orange accent (`--primary #F4754B`), with a redder crimson
+(`--destructive #E2554C`, `--sev-high`) kept distinct from the accent. Light
+(`:root`) = a clean COOL-NEUTRAL slate (`--background #F8FAFC`, `--card #FFFFFF`,
+`--border #E2E8F0`) — never warm-cream — with the orange darkened to `--primary
+#C2410C` so it clears WCAG AA (≥4.5:1) as both text and button fill. Forensic
+hues: jade/amber/steel/violet/crimson, mapped per theme.
+
+Type: base 15px. Three self-hosted families (`@fontsource` in `main.jsx`, **never**
+a Google Fonts link/@import):
+- `--font-sans` **Inter** — UI / body (default).
+- `--font-display` **Space Grotesk** — page titles (`<h1>`, applied in base CSS)
+  + big stat numerals (opt in with the `font-display` utility, e.g. `KpiRow`).
+- `--font-mono` **JetBrains Mono** (replaced Fira Code) via `.mono` — every hash,
+  ID, timestamp, path, IP, count, ATT&CK id. Pair with `.tnum` for tabular
+  figures on numeric/data columns.
 
 ---
 
@@ -70,9 +87,10 @@ for every numeric/data column. Fonts are self-hosted via `@fontsource` in
 
 `lib/theme.jsx` `ThemeProvider` (mounted in `main.jsx`) — class strategy: toggles
 `.dark` + `data-theme` + `color-scheme` on `<html>`, system-aware, persisted in
-`localStorage['sift-theme']`. Use `<ThemeToggle />` (header) to flip. Components
-do nothing theme-specific beyond using tokens; both themes "just work" because
-utilities resolve to `var(--token)` which swaps under `.dark`.
+`localStorage['sift-theme']`. The single `<ThemeToggle />` lives in the **SideNav
+operator footer** (RUN-4a moved it out of the header). Components do nothing
+theme-specific beyond using tokens; both themes "just work" because utilities
+resolve to `var(--token)` which swaps under `.dark`.
 
 ---
 
@@ -84,8 +102,16 @@ exit; `SPRING`; `STAGGER`.
 - **Use `useMotionVariants()`** to get the shared variants collapsed to instant
   (no-transform) versions under `prefers-reduced-motion`. Variant names:
   `fadeRise` (page/section entrance), `modal`, `staggerContainer` + `staggerItem`
-  (lists/grids), `cardHover` (hover lift `translateY(-3px)`).
-- Transform/opacity ONLY — never animate width/height/top/left.
+  (lists/grids), `cardHover` (hover lift `translateY(-2px)` + border-brighten).
+- **Mission-Control primitives (RUN-4a)**, also in `useMotionVariants()` and
+  reduced-motion gated — wire them in RUN-4b: `breathingOrb` (agent orb core),
+  `pingRing` (orb rings, render 2 + stagger), `authGlowPulse` (awaiting-auth glow),
+  `severityBarFill` (`scaleX` from `origin-left`), `chartDraw` (`pathLength` on a
+  `motion.path`), `activityTailItem` (streaming-tail slide-in), `statusDotPulse`
+  (MCP/status dots; colour via class). Plus helpers `useCountUp(target,{duration})`
+  (easeOutCubic count-up, snaps to final under reduced motion) and `easeOutCubic`.
+- Transform / opacity / `pathLength` ONLY — never animate width/height/top/left;
+  colour is always a token class, never animated in the variant.
 - For ad-hoc `motion.*` not using the shared variants (e.g. the severity bar
   `scaleX` grow), gate on `useReducedMotion()` yourself: `initial={reduced ?
   false : {scaleX:0}}` and `transition={reduced ? {duration:0} : {...}}`.
@@ -155,6 +181,22 @@ of truth; `location.hash` (`#/<tab>`) is the reflected state + entry channel.
   route.
 - Valid tab ids come from `lib/nav.js` (`VALID_TABS`). Add new destinations
   there, not ad hoc.
+- **IA grouping (RUN-4a).** The 11 destinations are grouped Mission-Control style
+  in `NAV_GROUPS`: **COMMAND** (Overview) · **INVESTIGATION** (Findings, Timeline,
+  Evidence, Hosts, Accounts) · **OPERATIONS** (IOCs, TODOs, Backends, Reports,
+  Settings). Active item = orange (`bg-primary/15 text-primary` + orange rail).
+
+**Shell composition (RUN-4a re-skin, tokens-only).** `AppShell` = `SideNav` +
+(`Header` → `<main>` → `StatusBar`).
+- `SideNav`: brand **"Protocol SIFT Gateway / OPERATIONS PORTAL"** → agent-state
+  panel (`CLAUDE · AGENT` · state · *N gated actions queued*, derived from
+  `delta`/`chainStatus`) → grouped nav → operator footer (name · role · CAN ACT /
+  VIEW ONLY · `ThemeToggle` · sign-out). Collapses to icon-only <1024.
+- `Header`: case-selector chip (mono id + status dot) · centered "Search · jump
+  ⌘K" palette trigger · agent mini-indicator.
+- `StatusBar`: `AGENT · <state>` · `CUSTODY · <seal>` (→ Evidence) · staged-count
+  (→ Commit Drawer) · last-sync · `WCAG AA` · `PORTAL v3`. Live SEALED-X/Y and
+  MCP-online counts are RUN-4b (data not yet in the frozen store).
 
 ---
 

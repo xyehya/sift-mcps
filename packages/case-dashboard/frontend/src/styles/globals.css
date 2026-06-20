@@ -57,6 +57,7 @@
   /* fonts (resolve at runtime against :root --font-*) */
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
 }
 
 @layer base {
@@ -79,6 +80,14 @@
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Display voice (Space Grotesk) — page titles / big numerals. Page <h1>s pick
+     it up automatically; opt big stat numerals in via the `font-display`
+     utility (emitted from the @theme --font-display mapping). */
+  h1 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
   }
 
   /* Default focus-visible ring for any element that does not opt out

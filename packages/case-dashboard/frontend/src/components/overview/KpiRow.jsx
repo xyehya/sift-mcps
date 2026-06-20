@@ -48,7 +48,7 @@ function KpiCard({ icon: Icon, label, value, accent, hint, onClick, children, va
               <Icon className={cn('size-4', accent)} aria-hidden />
             </div>
             <div className="px-5">
-              <span className={cn('tnum mono text-3xl font-bold leading-none', accent)}>{value}</span>
+              <span className={cn('tnum font-display text-3xl font-bold leading-none', accent)}>{value}</span>
             </div>
             {children}
           </Card>

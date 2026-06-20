@@ -1,14 +1,10 @@
 import { useState } from 'react'
-import { Check, ChevronsUpDown, Command as CommandIcon, LogOut, Plus } from 'lucide-react'
+import { Check, ChevronsUpDown, Plus, Search } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { useAuth } from '@/lib/auth-context'
-import { deriveSeal, SEAL_DOT_CLASS, SEAL_TONE_CLASS } from '@/lib/chain-status'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
-import { ThemeToggle } from '@/lib/theme'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   DropdownMenu,
@@ -21,31 +17,13 @@ import {
 import { ActivateCaseDialog, CreateCaseDialog } from '@/components/layout/CaseDialogs'
 
 // ─────────────────────────────────────────────────────────────────────────
-// Header strip (spec §4): case selector (mono id), live chain-status pill,
-// agent status, role badge, theme toggle, and the ⌘K command-palette trigger.
-// RBAC: only examiners see "New case". Case create/activate flows are ported
-// in CaseDialogs (challenge contract preserved).
+// Header strip (spec §4 / DESIGN-SYSTEM.md) — round-2 Mission-Control top bar:
+// case-selector chip (mono id + live status dot) · centered "Search · jump ⌘K"
+// command-palette trigger · agent-state mini-indicator. Operator identity,
+// theme toggle and sign-out now live in the SideNav footer. RBAC: only
+// examiners see "New case"; the activation/create flows are unchanged.
+// (Multi-case dropdown contents are RUN-4b — this keeps the chip + active list.)
 // ─────────────────────────────────────────────────────────────────────────
-
-function ChainPill({ chainStatus }) {
-  const { label, tone } = deriveSeal(chainStatus)
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={cn(
-            'mono inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs',
-            SEAL_TONE_CLASS[tone],
-          )}
-        >
-          <span aria-hidden className={cn('size-1.5 rounded-full', SEAL_DOT_CLASS[tone])} />
-          {label}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>Evidence chain status</TooltipContent>
-    </Tooltip>
-  )
-}
 
 function AgentStatus({ chainStatus, busy }) {
   let label = 'idle'
@@ -57,13 +35,13 @@ function AgentStatus({ chainStatus, busy }) {
     hint = 'Integrity violation or system error.'
   } else if (busy) {
     label = 'processing'
-    dot = 'bg-status-pending animate-pulse'
+    dot = 'bg-primary animate-pulse'
     hint = 'AI analysis tasks are active.'
   }
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span className="mono inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
           <span aria-hidden className={cn('size-1.5 rounded-full', dot)} />
           {label}
         </span>
@@ -75,14 +53,16 @@ function AgentStatus({ chainStatus, busy }) {
 
 function CaseSelector({ activeCase, cases, isExaminer, onActivate, onCreate }) {
   const activeCaseId = activeCase?.case_id || activeCase?.id
+  const status = (activeCase?.status || (activeCaseId ? 'active' : '')).toUpperCase()
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" className="mono gap-2">
           {activeCaseId ? (
             <>
-              <span aria-hidden className="size-1.5 rounded-full bg-primary" />
+              <span aria-hidden className="size-1.5 rounded-full bg-status-approved" />
               <span className="max-w-[180px] truncate font-semibold">{activeCaseId}</span>
+              {status && <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{status}</span>}
             </>
           ) : (
             <span className="text-muted-foreground">No case active</span>
@@ -107,7 +87,7 @@ function CaseSelector({ activeCase, cases, isExaminer, onActivate, onCreate }) {
           >
             <span
               aria-hidden
-              className={cn('size-1.5 shrink-0 rounded-full', c.active ? 'bg-primary' : 'bg-muted-foreground')}
+              className={cn('size-1.5 shrink-0 rounded-full', c.active ? 'bg-status-approved' : 'bg-muted-foreground')}
             />
             <span className="flex-1 truncate">{c.id}</span>
             {c.active && <Check className="size-3.5 text-primary" />}
@@ -128,7 +108,7 @@ function CaseSelector({ activeCase, cases, isExaminer, onActivate, onCreate }) {
 }
 
 export function Header({ onOpenCommandPalette }) {
-  const { user, logout } = useAuth()
+  const { user } = useAuth()
   const { activeCase, cases, delta, chainStatus } = useStoreSlice((s) => ({
     activeCase: s.activeCase,
     cases: s.cases,
@@ -152,46 +132,22 @@ export function Header({ onOpenCommandPalette }) {
         onCreate={() => setCreating(true)}
       />
 
-      <Separator orientation="vertical" className="h-6" />
-      <ChainPill chainStatus={chainStatus} />
-
-      <div className="flex-1" />
+      {/* Centered command-palette trigger — "Search · jump ⌘K" */}
+      <div className="flex flex-1 justify-center">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onOpenCommandPalette}
+          aria-label="Open command palette"
+          className="hidden w-full max-w-md justify-start gap-2 text-muted-foreground sm:inline-flex"
+        >
+          <Search className="size-3.5" aria-hidden />
+          <span className="flex-1 text-left">Search · jump</span>
+          <kbd className="mono rounded bg-secondary px-1.5 py-0.5 text-[10px]">⌘K</kbd>
+        </Button>
+      </div>
 
       <AgentStatus chainStatus={chainStatus} busy={delta.length > 0} />
-
-      {/* ⌘K command palette trigger */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onOpenCommandPalette}
-            className="hidden gap-2 text-muted-foreground sm:inline-flex"
-            aria-label="Open command palette"
-          >
-            <CommandIcon className="size-3.5" />
-            <kbd className="mono text-[10px]">⌘K</kbd>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>Command palette</TooltipContent>
-      </Tooltip>
-
-      {user?.role && (
-        <Badge variant="secondary" className="mono uppercase">
-          {user.role}
-        </Badge>
-      )}
-
-      <ThemeToggle />
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon" onClick={logout} aria-label="Sign out">
-            <LogOut className="size-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>Sign out</TooltipContent>
-      </Tooltip>
 
       <ActivateCaseDialog activatingCase={activatingCase} onClose={() => setActivatingCase(null)} />
       <CreateCaseDialog open={creating} onOpenChange={setCreating} />

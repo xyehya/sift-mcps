@@ -1,17 +1,25 @@
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { NAV_GROUPS } from '@/lib/nav'
 import { navigateToTab } from '@/hooks/useHashRoute'
 import { useStoreSlice } from '@/store/useStore'
+import { useAuth } from '@/lib/auth-context'
+import { useMotionVariants } from '@/lib/motion'
+import { ThemeToggle } from '@/lib/theme'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // ─────────────────────────────────────────────────────────────────────────
-// SideNav (spec §4) — grouped destinations with labels + Lucide icons, active
-// highlight, store-derived badges (pending findings / open todos), and a
-// collapsed (icon-only) mode for <1024 widths or operator preference.
+// SideNav (spec §4 / DESIGN-SYSTEM.md) — the Mission-Control left rail:
+// brand → agent-state panel → grouped destinations (COMMAND / INVESTIGATION /
+// OPERATIONS, all 11 ids) → operator footer. Active = orange; Lucide icons;
+// store-derived badges (pending findings / open todos). Collapses to icon-only
+// below 1024px (or via the brand-strip toggle). Tokens-only; no raw hex.
+// Agent panel + footer are presentational re-skins of round-2 — live agent
+// authorization wiring lands in RUN-4b.
 // ─────────────────────────────────────────────────────────────────────────
 
 /** Resolve the badge count for a nav item from polled store state. */
@@ -39,7 +47,7 @@ function NavItem({ item, active, collapsed, onSelect, badgeCount }) {
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
       )}
     >
-      {/* Active rail indicator */}
+      {/* Active rail indicator (orange) */}
       {active && (
         <span aria-hidden className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-primary" />
       )}
@@ -74,6 +82,112 @@ function NavItem({ item, active, collapsed, onSelect, badgeCount }) {
   return button
 }
 
+/** Agent-state panel — CLAUDE · AGENT identity + current state + queued count.
+   Derived from real store signals (delta = changes awaiting authorization);
+   the live agent-control wiring (orb, auth hero) is RUN-4b. */
+function AgentPanel({ collapsed }) {
+  const variants = useMotionVariants()
+  const { delta, chainStatus } = useStoreSlice((s) => ({ delta: s.delta, chainStatus: s.chainStatus }))
+  const queued = delta.length
+  const violation = chainStatus?.status === 'violation'
+
+  let state = 'Monitoring'
+  if (violation) state = 'Integrity halt'
+  else if (queued > 0) state = 'Awaiting authorization'
+
+  const dot = (
+    <motion.span
+      aria-hidden
+      variants={variants.statusDotPulse}
+      animate="animate"
+      className={cn('size-2 shrink-0 rounded-full', violation ? 'bg-destructive' : 'bg-primary')}
+    />
+  )
+
+  if (collapsed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="flex justify-center py-2" aria-label={`Agent: ${state}`}>
+            {dot}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="right">
+          Claude agent · {state}
+          {queued > 0 ? ` · ${queued} gated` : ''}
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return (
+    <div className="mx-3 mt-3 rounded-lg border border-border bg-primary/[0.06] p-3">
+      <p className="mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Claude · Agent</p>
+      <div className="mt-1.5 flex items-center gap-2">
+        {dot}
+        <span className="truncate text-sm font-medium text-foreground">{state}</span>
+      </div>
+      <p className="mono mt-1 text-[11px] text-muted-foreground">
+        {queued > 0 ? `${queued} gated ${queued === 1 ? 'action' : 'actions'} queued` : 'No actions queued'}
+      </p>
+    </div>
+  )
+}
+
+/** Operator footer — identity + capability + theme toggle + sign-out. */
+function UserFooter({ collapsed }) {
+  const { user, logout } = useAuth()
+  const name = user?.examiner || user?.email || 'Examiner'
+  const role = (user?.role || '').toLowerCase()
+  const isExaminer = role === 'examiner'
+  const capability = isExaminer ? 'CAN ACT' : 'VIEW ONLY'
+  const initials = name
+    .split(/[\s.@_-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase())
+    .join('')
+
+  const avatar = (
+    <span
+      aria-hidden
+      className="mono flex size-8 shrink-0 items-center justify-center rounded-md bg-secondary text-xs font-semibold text-foreground"
+    >
+      {initials || 'EX'}
+    </span>
+  )
+
+  if (collapsed) {
+    return (
+      <div className="flex flex-col items-center gap-2 border-t border-border p-2">
+        {avatar}
+        <ThemeToggle />
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-2 border-t border-border p-3">
+      {avatar}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground">{name}</p>
+        <p className="mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {role || 'examiner'} · <span className={cn(isExaminer ? 'text-status-approved' : 'text-muted-foreground')}>{capability}</span>
+        </p>
+      </div>
+      <ThemeToggle />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon" onClick={logout} aria-label="Sign out">
+            <LogOut className="size-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Sign out</TooltipContent>
+      </Tooltip>
+    </div>
+  )
+}
+
 export function SideNav({ collapsed, onToggleCollapsed }) {
   const { activeTab, setActiveTab } = useStoreSlice((s) => ({
     activeTab: s.activeTab,
@@ -94,14 +208,29 @@ export function SideNav({ collapsed, onToggleCollapsed }) {
       )}
     >
       {/* Brand strip */}
-      <div className={cn('flex h-14 items-center gap-2 border-b border-border px-4', collapsed && 'justify-center px-0')}>
-        <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
+      <div className={cn('flex h-14 items-center gap-2 border-b border-border px-3', collapsed && 'justify-center px-0')}>
+        <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
           <ShieldGlyph />
         </span>
         {!collapsed && (
-          <span className="truncate text-sm font-semibold tracking-tight text-foreground">SIFT Examiner</span>
+          <div className="min-w-0 flex-1 leading-tight">
+            <p className="font-display truncate text-sm font-semibold tracking-tight text-foreground">Protocol SIFT Gateway</p>
+            <p className="mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Operations Portal</p>
+          </div>
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onToggleCollapsed}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className={cn('size-7 shrink-0', collapsed && 'hidden')}
+        >
+          <PanelLeftClose className="size-4" />
+        </Button>
       </div>
+
+      <AgentPanel collapsed={collapsed} />
 
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-4 px-3 py-4">
@@ -127,20 +256,22 @@ export function SideNav({ collapsed, onToggleCollapsed }) {
         </div>
       </ScrollArea>
 
-      {/* Collapse toggle */}
-      <div className={cn('border-t border-border p-2', collapsed ? 'flex justify-center' : '')}>
-        <Button
-          type="button"
-          variant="ghost"
-          size={collapsed ? 'icon' : 'sm'}
-          onClick={onToggleCollapsed}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className={cn(!collapsed && 'w-full justify-start gap-2 text-muted-foreground')}
-        >
-          {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
-          {!collapsed && <span>Collapse</span>}
-        </Button>
-      </div>
+      {/* Expand control (only when collapsed — the collapse control lives in the brand strip) */}
+      {collapsed && (
+        <div className="flex justify-center border-t border-border p-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onToggleCollapsed}
+            aria-label="Expand sidebar"
+          >
+            <PanelLeftOpen className="size-4" />
+          </Button>
+        </div>
+      )}
+
+      <UserFooter collapsed={collapsed} />
     </nav>
   )
 }

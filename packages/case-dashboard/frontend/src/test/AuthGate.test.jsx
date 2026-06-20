@@ -67,7 +67,7 @@ describe('auth gating', () => {
     endpoints.getMe.mockResolvedValue({ examiner: 'alice', role: 'examiner' })
     renderApp()
     // SideNav brand + grouped destinations only exist in the authed shell.
-    expect(await screen.findByText('SIFT Examiner')).toBeInTheDocument()
+    expect(await screen.findByText('Protocol SIFT Gateway')).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: /primary/i })).toBeInTheDocument()
     // The principal is mirrored into the store for RBAC consumers.
     await waitFor(() => expect(useStore.getState().user?.role).toBe('examiner'))
