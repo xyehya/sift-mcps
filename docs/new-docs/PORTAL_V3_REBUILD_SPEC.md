@@ -16,7 +16,10 @@
 |---|---|
 | Visual identity | **Graphite Emerald** — near-black slate, emerald accent, data-forward, modern, smoothly animated |
 | Themes | **Dark + Light**, token-driven, system-aware, persisted |
-| Component foundation | **shadcn/ui** (vendored copy-in, no CDN) on Vite + React 19 + Tailwind |
+| Component foundation | **shadcn/ui** (vendored copy-in, no CDN) on Vite + React 19 + **Tailwind 4** |
+| Tailwind version | **Tailwind 4** (kickoff decision 2026-06-20). Rebuild ⇒ no migration churn; CSS-first `@theme` *is* the single-token-source mandate (fixes defect #1); drops `autoprefixer`/`postcss-import` (smaller supply chain); shadcn defaults to TW4. See §10. |
+| Tab routing | **URL-hash deep-linking** (`#/findings`) — kickoff decision 2026-06-20. Shareable/bookmarkable, back-button works. |
+| P0 checkpoint | **Hard stop after Phase 0** for operator visual sign-off on Overview+Findings (both themes) before parallel fan-out — kickoff decision 2026-06-20. |
 | Scope | **Ground-up rebuild of EVERYTHING** — shell, components, state, api, hooks. Auth/JWT/crypto = careful **port** (see §6), not blind rewrite |
 | Motion | framer-motion, rich but disciplined, `prefers-reduced-motion` honored |
 | Type | **Inter** (UI) + **Fira Code** (forensic data: hashes, IDs, timestamps, paths). **Self-hosted** (`@fontsource`) |
@@ -117,10 +120,11 @@ src/
 ```
 
 - **shadcn primitives to vendor (Phase 0):** button, card, dialog, sheet, dropdown-menu, tooltip, popover, input, label, textarea, select, tabs, table, badge, sonner (toast), command, skeleton, scroll-area, separator, progress, avatar, alert, alert-dialog, switch, tooltip-provider.
-- **Deps added:** `tailwindcss-animate`, `class-variance-authority`, `tailwind-merge`, `clsx` (have), `lucide-react`, `framer-motion`, `@fontsource/inter`, `@fontsource/fira-code`. Keep `recharts`, `cmdk`, `zustand`, `date-fns`. Pin exact versions; commit lockfile.
-- **Theme:** class strategy (`darkMode:'class'` already), provider reads system + localStorage, sets `data-theme`/`class` on `<html>`. Toggle in header.
+- **Deps added:** `tailwindcss@4` + `@tailwindcss/vite` (TW4 Vite plugin — replaces the postcss pipeline; **remove `autoprefixer` + `postcss-import`**, built into TW4), `tw-animate-css` (TW4 successor to `tailwindcss-animate`), `class-variance-authority`, `tailwind-merge`, `clsx` (have), `lucide-react`, `framer-motion`, `@fontsource/inter`, `@fontsource/fira-code`. Keep `recharts`, `cmdk`, `zustand`, `date-fns`. Pin exact versions; commit lockfile.
+- **TW4 config model:** CSS-first. Tokens live in `tokens.css`/`globals.css` via `@theme` (+ `@layer base` `:root`/`.dark` for the two themes); **no `tailwind.config.js` color duplication** — this is the single-token-source guarantee. Dark mode via `@custom-variant dark (&:where(.dark, .dark *))`.
+- **Theme:** class strategy — provider reads system + localStorage, sets `.dark`/`.light` class + `data-theme` on `<html>`. Toggle in header.
 - **Charts:** recharts wrapped via shadcn chart pattern using `--chart-*` tokens. Each chart: legend, tooltip, empty state, skeleton, reduced-motion-safe, AA contrast, table-alt where feasible.
-- **Routing/tabs:** keep store-driven `activeTab` OR adopt URL hash for deep-linking (decide Phase 0; deep-linking preferred per UX `deep-linking`).
+- **Routing/tabs:** **URL-hash deep-linking** (locked) — `activeTab` synced to `location.hash` (`#/findings`), browser back/forward works, links shareable. Store stays the source of truth in-memory; hash is the reflected/entry channel.
 
 ---
 
@@ -242,7 +246,7 @@ Gate before done: vitest green, eslint clean, build green, codeguard clean. Comm
 
 ---
 
-## 10. Open items for operator at kickoff
-- Tailwind 3 stay vs Tailwind 4 upgrade (default: stay TW3 to limit churn; revisit if shadcn requires).
-- Deep-linking via URL hash (recommended) vs keep store-only tab state.
-- Visual sign-off checkpoint after Phase-0 Overview+Findings before parallel fan-out (recommended yes).
+## 10. Kickoff decisions — RESOLVED (2026-06-20, operator + orchestrator)
+- **Tailwind: v4.** Operator delegated conditional on real benefits; orchestrator found them (rebuild ⇒ zero migration churn; CSS-first `@theme` is the single-token-source fix for defect #1; drops autoprefixer/postcss-import → smaller supply chain; shadcn defaults TW4; modern CSS + faster builds; controlled-browser target removes the only risk). See §0 / §3.
+- **Deep-linking: URL hash (`#/<tab>`).** Locked. See §3 routing.
+- **Phase-0 checkpoint: YES.** Hard stop after P0 builds Overview+Findings; operator signs off on screenshots (both themes) before the 3 feature agents fan out. See §9.
