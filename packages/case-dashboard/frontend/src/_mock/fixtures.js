@@ -72,7 +72,7 @@ const FINDINGS = [
     affected_account: 'm.reyes',
     event_timestamp: iso(1 * D),
     modified_at: iso(20 * H),
-    approved_by: 'a.morgan',
+    approved_by: 'e.varga',
     approved_at: iso(18 * H),
     content_hash: 'c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8',
     description: '4,200 files read from the HR confidential share within 11 minutes by a single account.',
@@ -114,7 +114,7 @@ const FINDINGS = [
     host: 'DC-01',
     event_timestamp: iso(2 * D),
     modified_at: iso(1.2 * D),
-    rejected_by: 'a.morgan',
+    rejected_by: 'e.varga',
     rejected_at: iso(1.1 * D),
     rejection_reason: 'Correlated to a sanctioned maintenance window; benign.',
     description: 'Event 1102 indicates the Security log was cleared.',
@@ -130,9 +130,9 @@ const FINDINGS = [
   {
     id: 'F-006',
     type: 'finding',
-    title: 'Speculative: PowerShell encoded command on WS-MKT-12',
+    title: 'PowerShell encoded command on WS-MKT-12',
     status: 'draft',
-    confidence: 'SPECULATIVE',
+    confidence: 'MEDIUM',
     host: 'WS-MKT-12',
     event_timestamp: iso(6 * H),
     modified_at: iso(6 * H),
@@ -257,7 +257,7 @@ const ACTIVE_CASE = {
   name: 'NORTHWIND',
   title: 'NORTHWIND intrusion investigation',
   status: 'active',
-  examiner: 'a.morgan',
+  examiner: 'e.varga',
   created: iso(3 * D),
   incident_type: 'unauthorized_access',
   severity: 'high',
@@ -273,8 +273,8 @@ const ACTIVE_CASE = {
 }
 
 const REPORTS = [
-  { id: 'rpt-7f3a21', profile: 'executive', examiner: 'a.morgan', created_at: iso(12 * H) },
-  { id: 'rpt-9c0b54', profile: 'technical', examiner: 'a.morgan', created_at: iso(30 * H) },
+  { id: 'rpt-7f3a21', profile: 'executive', examiner: 'e.varga', created_at: iso(12 * H) },
+  { id: 'rpt-9c0b54', profile: 'technical', examiner: 'e.varga', created_at: iso(30 * H) },
 ]
 
 const IOCS = [
@@ -282,7 +282,7 @@ const IOCS = [
   { id: 'ioc-2', type: 'account', value: 'svc-backup' },
 ]
 
-const USER = { examiner: 'a.morgan', role: 'examiner' }
+const USER = { examiner: 'E. Varga', role: 'examiner' }
 
 // Multi-case switcher demo: active / inactive / sealed lifecycle badges.
 const CASES = [

@@ -1,4 +1,3 @@
-import { motion } from 'framer-motion'
 import { ChevronsLeft, ChevronsRight, LogOut } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -6,8 +5,7 @@ import { NAV_GROUPS } from '@/lib/nav'
 import { navigateToTab } from '@/hooks/useHashRoute'
 import { useStoreSlice } from '@/store/useStore'
 import { useAuth } from '@/lib/auth-context'
-import { deriveAgentState, blockedActions } from '@/lib/agent-state'
-import { useMotionVariants } from '@/lib/motion'
+import { blockedActions } from '@/lib/agent-state'
 import { ThemeToggle } from '@/lib/theme'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -15,12 +13,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 
 // ─────────────────────────────────────────────────────────────────────────
 // SideNav (spec §4 / DESIGN-SYSTEM.md) — the Mission-Control left rail:
-// brand → agent-state panel → grouped destinations (COMMAND / INVESTIGATION /
+// brand → grouped destinations (COMMAND / INVESTIGATION /
 // OPERATIONS, all 11 ids) → operator footer. Active = orange; Lucide icons;
 // store-derived badges (pending findings / open todos). Collapses to icon-only
 // below 1024px (or via the brand-strip toggle). Tokens-only; no raw hex.
-// Agent panel + footer are presentational re-skins of round-2 — live agent
-// authorization wiring lands in RUN-4b.
+// Agent running state is shown on the Overview hero — not in the sidebar.
 // ─────────────────────────────────────────────────────────────────────────
 
 /** Resolve the badge count for a nav item from polled store state. */
@@ -83,63 +80,6 @@ function NavItem({ item, active, collapsed, onSelect, badgeCount }) {
     )
   }
   return button
-}
-
-/** Agent-state panel — CLAUDE · AGENT identity + current state + blocked count.
-   Derived through the shared deriveAgentState() so the sidebar, the Mission-
-   Control hero and the StatusBar all agree on the agent's state. Blocked count
-   comes from blockedActions() (model-shift: agent runs autonomously, blocked
-   calls are read-only awareness, not authorization gates). */
-function AgentPanel({ collapsed }) {
-  const variants = useMotionVariants()
-  const { portalState, delta, chainStatus } = useStoreSlice((s) => ({
-    portalState: s.portalState,
-    delta: s.delta,
-    chainStatus: s.chainStatus,
-  }))
-  const agent = deriveAgentState(portalState, chainStatus, delta)
-  const state = agent.label
-  const blocked = blockedActions(portalState)
-  const blockedCount = blocked.length
-
-  const dot = (
-    <motion.span
-      aria-hidden
-      variants={variants.statusDotPulse}
-      animate="animate"
-      className={cn('size-2 shrink-0 rounded-full', agent.dot)}
-    />
-  )
-
-  if (collapsed) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          {/* role="img" makes aria-label valid on this non-interactive container (ARIA spec §2.2) */}
-          <div className="flex justify-center py-2" role="img" aria-label={`Agent: ${state}`}>
-            {dot}
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="right">
-          Claude agent · {state}
-          {blockedCount > 0 ? ` · ${blockedCount} blocked` : ''}
-        </TooltipContent>
-      </Tooltip>
-    )
-  }
-
-  return (
-    <div className="mx-3 mt-3 rounded-lg border border-border bg-primary/[0.06] p-3">
-      <p className="mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Claude · Agent</p>
-      <div className="mt-1.5 flex items-center gap-2">
-        {dot}
-        <span className="truncate text-sm font-medium text-foreground">{state}</span>
-      </div>
-      <p className="mono mt-1 text-[11px] text-muted-foreground">
-        {blockedCount > 0 ? `${blockedCount} tool call${blockedCount === 1 ? '' : 's'} blocked` : 'No blocked actions'}
-      </p>
-    </div>
-  )
 }
 
 /** Operator footer — identity + capability + theme toggle + sign-out. */
@@ -249,8 +189,6 @@ export function SideNav({ collapsed, onToggleCollapsed }) {
           </Button>
         )}
       </div>
-
-      <AgentPanel collapsed={collapsed} />
 
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-4 px-3 py-4">

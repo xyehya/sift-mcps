@@ -182,11 +182,11 @@ function FilterBar({ shown, sevFilter, onSevFilter, stateFilter, onStateFilter, 
 
 // ── Status/severity letter badges ──────────────────────────────────────
 
+// P0 model-shift: SPECULATIVE tier removed; only High / Medium / Low are valid.
 const SEV_BADGE = {
-  HIGH:     { letter: 'H', color: 'var(--crimson)', label: 'High' },
-  MEDIUM:   { letter: 'M', color: 'var(--amber)',   label: 'Medium' },
-  LOW:      { letter: 'L', color: 'var(--steel)',   label: 'Low' },
-  SPECULATIVE: { letter: 'S', color: 'var(--steel)', label: 'Speculative' },
+  HIGH:   { letter: 'H', color: 'var(--crimson)', label: 'High' },
+  MEDIUM: { letter: 'M', color: 'var(--amber)',   label: 'Medium' },
+  LOW:    { letter: 'L', color: 'var(--steel)',   label: 'Low' },
 }
 
 const ST_BADGE = {
