@@ -1,173 +1,215 @@
-import { useMemo, useState, useRef } from 'react'
-import { useStoreSlice } from '../../store/useStore'
-import { postCommit, deleteDelta } from '../../api/endpoints'
+import { useMemo, useRef, useState } from 'react'
+import { Check, Lock, Pencil, X } from 'lucide-react'
+
+import { cn } from '@/lib/utils'
+import { useStoreSlice } from '@/store/useStore'
+import { deleteDelta, postCommit } from '@/api/endpoints'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
+
+// ─────────────────────────────────────────────────────────────────────────
+// Commit Drawer (spec §4) — review staged delta, then commit. Security
+// contract preserved (SessionChanges "no password bypass"): commit requires a
+// manually-typed examiner password AND a deliberate 3-second hold; the palette
+// only opens this drawer, it never auto-commits. Password is cleared from
+// state the instant it is submitted to the server (CL3a Supabase re-verify).
+// ─────────────────────────────────────────────────────────────────────────
+
+const HOLD_MS = 3000
+
+const ACTION_META = {
+  approve: { icon: Check, cls: 'text-status-approved border-status-approved/40' },
+  reject: { icon: X, cls: 'text-destructive border-destructive/40' },
+  edit: { icon: Pencil, cls: 'text-status-pending border-status-pending/40' },
+}
 
 export function CommitDrawer() {
-  const { commitDrawerOpen, setCommitDrawerOpen, delta, setDelta, findings, addToast } = useStoreSlice((state) => ({
-    commitDrawerOpen: state.commitDrawerOpen,
-    setCommitDrawerOpen: state.setCommitDrawerOpen,
-    delta: state.delta,
-    setDelta: state.setDelta,
-    findings: state.findings,
-    addToast: state.addToast,
+  const { open, setOpen, delta, setDelta, findings, addToast } = useStoreSlice((s) => ({
+    open: s.commitDrawerOpen,
+    setOpen: s.setCommitDrawerOpen,
+    delta: s.delta,
+    setDelta: s.setDelta,
+    findings: s.findings,
+    addToast: s.addToast,
   }))
+
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
   const [success, setSuccess] = useState(false)
-  const [holding, setHolding] = useState(false)
-  const [holdProgress, setHoldProgress] = useState(0)
+  const [holdPct, setHoldPct] = useState(0)
   const holdTimer = useRef(null)
-  const holdInterval = useRef(null)
+  const holdRAF = useRef(null)
 
-  const findingById = useMemo(() => new Map(findings.map((finding) => [finding.id, finding])), [findings])
+  const findingById = useMemo(() => new Map(findings.map((f) => [f.id, f])), [findings])
+  const canCommit = delta.length > 0 && password.length > 0
 
-  // id here is the finding's id (e.g. F-001) — used for DELETE and for local filter
-  async function removeItem(findingId) {
+  async function removeItem(id) {
     try {
-      await deleteDelta(findingId)
-      setDelta(delta.filter((d) => d.id !== findingId))
+      await deleteDelta(id)
+      setDelta(delta.filter((d) => d.id !== id))
     } catch (ex) {
       addToast(ex.message, 'error')
     }
   }
 
-  function startHold() {
-    setHolding(true)
-    setHoldProgress(0)
-    const start = Date.now()
-    holdInterval.current = setInterval(() => {
-      const pct = Math.min(100, ((Date.now() - start) / 3000) * 100)
-      setHoldProgress(pct)
-    }, 50)
-    holdTimer.current = setTimeout(async () => {
-      clearInterval(holdInterval.current)
-      setHolding(false)
-      setHoldProgress(0)
-      await doCommit()
-    }, 3000)
+  function stopHold() {
+    if (holdTimer.current) clearTimeout(holdTimer.current)
+    if (holdRAF.current) clearInterval(holdRAF.current)
+    holdTimer.current = null
+    holdRAF.current = null
+    setHoldPct(0)
   }
 
-  function cancelHold() {
-    clearTimeout(holdTimer.current)
-    clearInterval(holdInterval.current)
-    setHolding(false)
-    setHoldProgress(0)
+  function startHold() {
+    if (!canCommit) return
+    // Drive progress off the tick count rather than a wall-clock read so the
+    // handler body stays free of impure calls (react-hooks/purity).
+    const TICK_MS = 50
+    let elapsed = 0
+    holdRAF.current = setInterval(() => {
+      elapsed += TICK_MS
+      setHoldPct(Math.min(100, (elapsed / HOLD_MS) * 100))
+    }, TICK_MS)
+    holdTimer.current = setTimeout(() => {
+      stopHold()
+      doCommit()
+    }, HOLD_MS)
   }
 
   async function doCommit() {
     setErr('')
     try {
-      // CL3a (B-MVP-017): the operator password is re-verified against Supabase
-      // server-side (over TLS, same as login); no local HMAC challenge round-trip.
-      const submittedPassword = password
+      // CL3a (B-MVP-017): password re-verified server-side against Supabase
+      // over TLS — no local HMAC round-trip. Clear it from state immediately.
+      const submitted = password
       setPassword('')
-      await postCommit({ password: submittedPassword })
+      await postCommit({ password: submitted })
       setDelta([])
       setSuccess(true)
       addToast('Changes committed successfully', 'success')
-      setTimeout(() => { setSuccess(false); setCommitDrawerOpen(false) }, 2500)
+      setTimeout(() => {
+        setSuccess(false)
+        setOpen(false)
+      }, 2200)
     } catch (ex) {
       console.error('Commit failed:', ex)
       setErr('Commit failed — check your password and try again.')
     }
   }
 
-  if (!commitDrawerOpen) return null
-
-  const DELTA_COLOR = { approve: 'var(--jade)', reject: 'var(--crimson)', edit: 'var(--amber)' }
+  function handleOpenChange(next) {
+    if (!next) {
+      stopHold()
+      setErr('')
+    }
+    setOpen(next)
+  }
 
   return (
-    <>
-      {/* Backdrop */}
-      <div className="fixed inset-0 z-40" style={{ background: 'rgba(7,9,14,0.6)' }}
-        onClick={() => setCommitDrawerOpen(false)} />
-
-      {/* Drawer */}
-      <div className="fixed top-0 right-0 h-full w-[400px] z-50 flex flex-col"
-        style={{ background: 'var(--bg-surface)', borderLeft: '1px solid var(--border-soft)' }}>
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'var(--border-faint)' }}>
-          <h2 className="font-display font-bold text-sm" style={{ color: 'var(--text-bright)' }}>
-            Commit staged changes
-          </h2>
-          <button onClick={() => setCommitDrawerOpen(false)} className="hover:text-text-primary" style={{ color: 'var(--text-muted)' }}>✕</button>
-        </div>
+    <Sheet open={open} onOpenChange={handleOpenChange}>
+      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-md">
+        <SheetHeader className="border-b border-border">
+          <SheetTitle>Commit staged changes</SheetTitle>
+          <SheetDescription>
+            Review the staged review actions, then hold to commit. Cryptographically signed.
+          </SheetDescription>
+        </SheetHeader>
 
         {success ? (
-          <div className="flex-1 flex items-center justify-center flex-col gap-3">
-            <span className="text-5xl">🔐</span>
-            <p className="font-display font-bold text-lg" style={{ color: 'var(--jade)' }}>Committed</p>
-            <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>Evidence chain updated</p>
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+            <span className="flex size-14 items-center justify-center rounded-full bg-status-approved/15 text-status-approved">
+              <Lock className="size-6" />
+            </span>
+            <p className="text-lg font-semibold text-status-approved">Committed</p>
+            <p className="mono text-xs text-muted-foreground">Evidence chain updated</p>
           </div>
         ) : (
           <>
-            {/* Delta list */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            <div className="flex-1 space-y-2 overflow-y-auto p-4">
               {delta.length === 0 ? (
-                <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>No staged changes.</p>
+                <p className="mono text-xs text-muted-foreground">No staged changes.</p>
               ) : (
                 delta.map((d) => {
+                  const meta = ACTION_META[d.action] ?? ACTION_META.edit
+                  const Icon = meta.icon
                   const f = findingById.get(d.id)
-                  const color = DELTA_COLOR[d.action] ?? 'var(--text-muted)'
                   return (
-                    <div key={d.id} className="flex items-center gap-2 p-2 rounded text-xs"
-                      style={{
-                        border: `1px dashed ${color}`,
-                        background: color + '11',
-                      }}>
-                      <span className="font-mono w-4 text-center" style={{ color }}>{d.action === 'approve' ? '✓' : d.action === 'reject' ? '✗' : '✎'}</span>
-                      <span className="font-mono shrink-0" style={{ color: 'var(--text-muted)', width: 44 }}>{d.id}</span>
-                      <span className="flex-1 truncate font-sans" style={{ color: 'var(--text-primary)' }}>
-                        {f?.title ?? d.id}
-                      </span>
-                      <button onClick={() => removeItem(d.id)} className="shrink-0 text-[10px] hover:text-crimson"
-                        style={{ color: 'var(--text-muted)' }}>✕</button>
+                    <div
+                      key={d.id}
+                      className={cn('flex items-center gap-2 rounded-md border border-dashed px-2.5 py-2 text-xs', meta.cls)}
+                    >
+                      <Icon className="size-3.5 shrink-0" aria-hidden />
+                      <span className="mono shrink-0 text-muted-foreground">{d.id}</span>
+                      <span className="flex-1 truncate text-foreground">{f?.title ?? d.id}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeItem(d.id)}
+                        aria-label={`Unstage ${d.id}`}
+                        className="shrink-0 text-muted-foreground transition-colors hover:text-destructive"
+                      >
+                        <X className="size-3.5" />
+                      </button>
                     </div>
                   )
                 })
               )}
             </div>
 
-            {/* Password + hold-to-commit */}
-            <div className="p-4 border-t space-y-3" style={{ borderColor: 'var(--border-faint)' }}>
-              {err && <p className="text-xs" style={{ color: 'var(--crimson)' }}>{err}</p>}
-              <label className="block">
-                <span className="text-[10px] font-sans font-semibold uppercase tracking-wider"
-                  style={{ color: 'var(--text-muted)' }}>Examiner password (HMAC signing)</span>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                  className="mt-1 w-full px-3 py-2 rounded text-sm font-mono focus:outline-none transition-colors"
-                  style={{ background: 'var(--bg-raised)', border: '1px solid var(--border-soft)', color: 'var(--text-bright)' }}
-                  disabled={delta.length === 0} />
-              </label>
-
-              <div className="relative">
-                <button
-                  onMouseDown={startHold}
-                  onMouseUp={cancelHold}
-                  onMouseLeave={cancelHold}
-                  onTouchStart={startHold}
-                  onTouchEnd={cancelHold}
-                  onTouchCancel={cancelHold}
-                  onBlur={cancelHold}
-                  disabled={delta.length === 0 || !password}
-                  className="w-full py-2.5 rounded text-xs font-sans font-semibold select-none relative overflow-hidden disabled:opacity-40"
-                  style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}>
-                  <span className="relative z-10">
-                    {holding ? `Hold to confirm… ${Math.round(holdProgress)}%` : '↑ Hold to commit'}
-                  </span>
-                  {holding && (
-                    <span className="absolute inset-0 z-0 transition-all"
-                      style={{ width: `${holdProgress}%`, background: 'var(--jade)', opacity: 0.2 }} />
-                  )}
-                </button>
+            <div className="space-y-3 border-t border-border p-4">
+              {err && (
+                <p role="alert" aria-live="assertive" className="text-sm text-destructive">
+                  {err}
+                </p>
+              )}
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="commit-password">Examiner password</Label>
+                <Input
+                  id="commit-password"
+                  type="password"
+                  autoComplete="current-password"
+                  className="mono"
+                  value={password}
+                  disabled={delta.length === 0}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
               </div>
-              <p className="text-[10px] font-mono text-center" style={{ color: 'var(--text-muted)' }}>
+
+              <button
+                type="button"
+                disabled={!canCommit}
+                onMouseDown={startHold}
+                onMouseUp={stopHold}
+                onMouseLeave={stopHold}
+                onTouchStart={startHold}
+                onTouchEnd={stopHold}
+                onTouchCancel={stopHold}
+                onBlur={stopHold}
+                className={cn(
+                  'relative w-full select-none overflow-hidden rounded-md border border-primary bg-primary/15 py-2.5 text-sm font-semibold text-primary transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  'disabled:cursor-not-allowed disabled:opacity-40',
+                )}
+              >
+                <span className="relative z-10">
+                  {holdPct > 0 ? `Hold to confirm… ${Math.round(holdPct)}%` : 'Hold to commit'}
+                </span>
+              </button>
+              {holdPct > 0 && <Progress value={holdPct} className="h-1" />}
+              <p className="mono text-center text-[10px] text-muted-foreground">
                 Hold for 3 seconds to confirm. This action is cryptographically signed.
               </p>
             </div>
           </>
         )}
-      </div>
-    </>
+      </SheetContent>
+    </Sheet>
   )
 }

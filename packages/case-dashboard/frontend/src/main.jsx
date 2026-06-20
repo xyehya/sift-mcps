@@ -14,14 +14,14 @@ import './styles/globals.css'
 import { ThemeProvider } from '@/lib/theme'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
-import { Showcase } from '@/_showcase/Showcase'
+import App from '@/App'
 
-// Phase 0 RUN-1 smoke target: design-system showcase (replaced by AppShell in RUN-2).
+// Phase 0 RUN-2: mount the real auth-gated AppShell (replaces the RUN-1 showcase).
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <ThemeProvider>
       <TooltipProvider delayDuration={150}>
-        <Showcase />
+        <App />
         <Toaster />
       </TooltipProvider>
     </ThemeProvider>

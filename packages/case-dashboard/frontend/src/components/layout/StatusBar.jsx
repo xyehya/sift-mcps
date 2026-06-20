@@ -1,102 +1,83 @@
-import { useStoreSlice } from '../../store/useStore'
 import { formatDistanceToNow } from 'date-fns'
-import clsx from 'clsx'
+import { ArrowUpCircle, Lock } from 'lucide-react'
+
+import { cn } from '@/lib/utils'
+import { useStoreSlice } from '@/store/useStore'
+import { navigateToTab } from '@/hooks/useHashRoute'
+import { deriveSeal, SEAL_DOT_CLASS, SEAL_TONE_CLASS } from '@/lib/chain-status'
+import { Button } from '@/components/ui/button'
+
+// ─────────────────────────────────────────────────────────────────────────
+// StatusBar (spec §4) — bottom strip: clickable seal status (→ Evidence),
+// optional write-protected flag, staged-changes count (→ opens Commit Drawer),
+// and last-sync time. Mono + tabular figures for the numeric bits.
+// ─────────────────────────────────────────────────────────────────────────
+
+function Dot() {
+  return <span aria-hidden className="px-2 text-border">·</span>
+}
 
 export function StatusBar() {
-  const { chainStatus, delta, lastSync, setCommitDrawerOpen, setActiveTab } = useStoreSlice((state) => ({
-    chainStatus: state.chainStatus,
-    delta: state.delta,
-    lastSync: state.lastSync,
-    setCommitDrawerOpen: state.setCommitDrawerOpen,
-    setActiveTab: state.setActiveTab,
+  const { chainStatus, delta, lastSync, setActiveTab, setCommitDrawerOpen } = useStoreSlice((s) => ({
+    chainStatus: s.chainStatus,
+    delta: s.delta,
+    lastSync: s.lastSync,
+    setActiveTab: s.setActiveTab,
+    setCommitDrawerOpen: s.setCommitDrawerOpen,
   }))
+
+  const { label, tone } = deriveSeal(chainStatus)
   const stagedCount = delta.length
-
-  const isSealed = chainStatus && chainStatus.status !== 'unsealed' && chainStatus.manifest_version > 0
-  const sealColor = !chainStatus
-    ? 'var(--text-muted)'
-    : isSealed && !chainStatus.hmac_verify_needed
-      ? 'var(--jade)'
-      : isSealed
-        ? 'var(--amber)'
-        : 'var(--crimson)'
-
-  const sealLabel = !chainStatus
-    ? 'LOADING'
-    : isSealed && !chainStatus.hmac_verify_needed
-      ? 'SEALED ✓'
-      : isSealed
-        ? 'SEALED · verify pending'
-        : 'UNSEALED'
-
-  const syncLabel = lastSync
-    ? 'sync ' + formatDistanceToNow(lastSync, { addSuffix: true })
-    : 'syncing…'
+  const syncLabel = lastSync ? `sync ${formatDistanceToNow(lastSync, { addSuffix: true })}` : 'syncing…'
 
   return (
-    <div
-      className="flex items-center h-[32px] px-4 text-xs font-mono shrink-0 select-none z-20"
-      style={{
-        background: 'var(--bg-surface)',
-        borderTop: '1px solid var(--border-faint)',
-        color: 'var(--text-muted)',
-      }}
-    >
-      {/* Seal status */}
+    <div className="mono flex h-8 shrink-0 select-none items-center border-t border-border bg-card px-4 text-xs text-muted-foreground">
+      {/* Seal status → Evidence tab */}
       <button
-        onClick={() => setActiveTab('evidence')}
-        className="flex items-center gap-1.5 mr-3 px-1 py-0.5 rounded cursor-pointer transition-colors"
-        style={{ border: 'none', background: 'none' }}
-        title="Go to Evidence tab"
-        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-raised)'}
-        onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+        type="button"
+        onClick={() => navigateToTab(setActiveTab, 'evidence')}
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-secondary',
+          SEAL_TONE_CLASS[tone],
+        )}
+        title="Go to Evidence"
       >
-        <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: sealColor }} />
-        <span style={{ color: sealColor }}>{sealLabel}</span>
+        <span aria-hidden className={cn('size-1.5 rounded-full', SEAL_DOT_CLASS[tone])} />
+        {label}
       </button>
 
-      <Divider />
-
-      {/* HMAC write-block */}
       {chainStatus?.write_protected && (
         <>
-          <span style={{ color: 'var(--cyan)' }}>write-protected</span>
-          <Divider />
+          <Dot />
+          <span className="inline-flex items-center gap-1 text-status-staged">
+            <Lock className="size-3" aria-hidden />
+            write-protected
+          </span>
         </>
       )}
 
-      {/* Staged count */}
-      <span
-        className={clsx(stagedCount > 0 && 'pulse')}
-        style={{ color: stagedCount > 0 ? 'var(--amber)' : 'var(--text-muted)' }}
-      >
+      <Dot />
+      <span className={cn('tnum', stagedCount > 0 && 'text-status-pending')}>
         {stagedCount > 0 ? `${stagedCount} staged` : 'no staged changes'}
       </span>
 
-      <Divider />
-
-      {/* Sync time */}
-      <span>{syncLabel}</span>
-
-
+      <Dot />
+      <span className="tnum">{syncLabel}</span>
 
       <div className="flex-1" />
 
-      {/* Commit button — only clickable when staged */}
       {stagedCount > 0 && (
-        <button
-          onClick={(e) => { e.stopPropagation(); setCommitDrawerOpen(true) }}
-          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans font-semibold cursor-pointer hover:opacity-80 transition-opacity"
-          style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}
+        <Button
+          type="button"
+          size="xs"
+          onClick={() => setCommitDrawerOpen(true)}
+          className="gap-1.5"
           title="Open commit drawer"
         >
-          ↑ COMMIT
-        </button>
+          <ArrowUpCircle className="size-3" />
+          Commit
+        </Button>
       )}
     </div>
   )
-}
-
-function Divider() {
-  return <span className="mx-2" style={{ color: 'var(--border-hard)' }}>·</span>
 }
