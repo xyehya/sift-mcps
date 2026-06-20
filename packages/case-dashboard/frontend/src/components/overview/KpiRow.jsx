@@ -16,10 +16,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 // Staged card shows review progress and opens the Commit Drawer. Cards lift on
 // hover (transform-only, reduced-motion safe) and carry tooltip hints.
 //
-// Deep-link note: the hash router validates `#/<tab>` ids and strips query
-// strings, so we navigate to `#/findings` AND set the store filter (the store
-// is the in-memory source of truth, per useHashRoute). This is the canonical
-// KPI → filtered-tab pattern Phase-1 agents copy.
+// Deep-link note: STATUS has a store key, so we navigate to `#/findings` AND set
+// the store filter (the store is the in-memory source of truth, per useHashRoute).
+// This is the canonical KPI → status-filtered-tab pattern. (The orthogonal
+// SEVERITY filter has no store key and rides the hash instead — see
+// MissionStats/SeverityDistribution + navigateToFindings, MASTER §6.)
 // ─────────────────────────────────────────────────────────────────────────
 
 function KpiCard({ icon: Icon, label, value, accent, hint, onClick, children, variants }) {

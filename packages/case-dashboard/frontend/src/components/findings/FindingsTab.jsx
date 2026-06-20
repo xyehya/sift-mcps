@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListChecks } from 'lucide-react'
 
 import { useStoreSlice } from '@/store/useStore'
+import { parseHashFilters } from '@/hooks/useHashRoute'
 import { postDelta, deleteDelta } from '@/api/endpoints'
 import {
   buildEditItem,
@@ -58,11 +59,25 @@ export function FindingsTab() {
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState(() => new Set())
 
+  // Confidence/severity filter rides the hash (`#/findings?sev=high`) — it has no
+  // store key (the surface is frozen), so it lives here, seeded from the hash on
+  // mount and kept in sync on back/forward (RUN-4c deep-link plumbing).
+  const [severityFilter, setSeverityFilter] = useState(() => parseHashFilters(window.location.hash).sev ?? null)
+  useEffect(() => {
+    const sync = () => setSeverityFilter(parseHashFilters(window.location.hash).sev ?? null)
+    window.addEventListener('hashchange', sync)
+    return () => window.removeEventListener('hashchange', sync)
+  }, [])
+  const clearSeverity = useCallback(() => {
+    setSeverityFilter(null)
+    window.history.replaceState(null, '', '#/findings')
+  }, [])
+
   const findingById = useMemo(() => new Map(findings.map((f) => [f.id, f])), [findings])
   const deltaById = useMemo(() => new Map((delta ?? []).map((d) => [d.id, d])), [delta])
   const filtered = useMemo(
-    () => filterFindings(findings, { filter: findingsFilter, host: findingsHostFilter, account: findingsAccountFilter, search }),
-    [findings, findingsFilter, findingsHostFilter, findingsAccountFilter, search],
+    () => filterFindings(findings, { filter: findingsFilter, host: findingsHostFilter, account: findingsAccountFilter, confidence: severityFilter, search }),
+    [findings, findingsFilter, findingsHostFilter, findingsAccountFilter, severityFilter, search],
   )
   const counts = useMemo(() => reviewCounts(findings), [findings])
 
@@ -177,6 +192,8 @@ export function FindingsTab() {
         canReview={canReview}
         search={search}
         onSearch={setSearch}
+        severityFilter={severityFilter}
+        onClearSeverity={clearSeverity}
         selectMode={selectMode}
         onToggleSelectMode={() => {
           setSelectMode((v) => !v)

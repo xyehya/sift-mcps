@@ -25,17 +25,41 @@ export function deriveKpis(summary, findings, delta) {
   return { total, approved, pending, staged, reviewPct }
 }
 
-/** Severity (confidence) distribution → ordered rows with token classes + pct. */
-export function severityCounts(findings) {
+/**
+ * Severity (confidence) distribution → ordered rows with token classes + pct.
+ * Each row also carries `awaiting` (count of that severity still in draft/review)
+ * and `recent` (count whose activity timestamp is within the last 24h) so the
+ * widget can show an interactive "N awaiting review" callout + a 24h delta
+ * without a second pass. `total` is the grand total (for the share-of-total pct).
+ */
+export function severityCounts(findings, now = Date.now()) {
   const counts = { HIGH: 0, MEDIUM: 0, LOW: 0, SPECULATIVE: 0 }
+  const awaiting = { HIGH: 0, MEDIUM: 0, LOW: 0, SPECULATIVE: 0 }
+  const recent = { HIGH: 0, MEDIUM: 0, LOW: 0, SPECULATIVE: 0 }
+  const DAY = 24 * 3600 * 1000
   for (const f of findings ?? []) {
     const c = (f.confidence ?? '').toUpperCase()
-    if (c in counts) counts[c] += 1
+    if (!(c in counts)) continue
+    counts[c] += 1
+    if (normStatus(f) === 'draft') awaiting[c] += 1
+    const ts = findingTs(f)
+    if (ts && now - new Date(ts).getTime() < DAY) recent[c] += 1
   }
   const max = Math.max(1, ...Object.values(counts))
+  const total = Object.values(counts).reduce((s, n) => s + n, 0)
   return CONF_ORDER.map((key) => {
     const cls = confClass(key)
-    return { key, label: cls.label, count: counts[key], pct: Math.round((counts[key] / max) * 100), cls }
+    return {
+      key,
+      label: cls.label,
+      count: counts[key],
+      awaiting: awaiting[key],
+      recent: recent[key],
+      pct: Math.round((counts[key] / max) * 100),
+      sharePct: total > 0 ? Math.round((counts[key] / total) * 100) : 0,
+      total,
+      cls,
+    }
   })
 }
 
@@ -44,6 +68,95 @@ export function mitreTechniques(findings) {
   const ids = new Set()
   for (const f of findings ?? []) for (const id of f.mitre_ids ?? []) ids.add(id)
   return [...ids].sort()
+}
+
+// ── MITRE ATT&CK tactic model (RUN-4c) ───────────────────────────────────────
+// Technique → tactic catalog + per-tactic token-class bundle so the panel reads
+// "Lateral Movement › T1021.001" (grouped headers + colour-coded chips), not a
+// flat pill list. Colour is supplementary to the always-present tactic LABEL and
+// mono T-code (colour-not-only). Token classes are STATIC literals (JIT) — never
+// orange (reserved for the agent). Unknown ids fall back to the `other` tactic.
+
+/** Kill-chain order for stable tactic grouping. */
+export const TACTIC_ORDER = [
+  'initial-access', 'execution', 'persistence', 'privilege-escalation',
+  'defense-evasion', 'credential-access', 'discovery', 'lateral-movement',
+  'collection', 'command-and-control', 'exfiltration', 'impact', 'other',
+]
+
+/** tactic → label + static token-class bundle (text / dot / tint / ring). */
+export const TACTIC_CLASS = {
+  'initial-access': { label: 'Initial Access', text: 'text-sev-med', dot: 'bg-sev-med', tint: 'bg-sev-med/10', ring: 'border-sev-med/40' },
+  'execution': { label: 'Execution', text: 'text-sev-low', dot: 'bg-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/40' },
+  'persistence': { label: 'Persistence', text: 'text-sev-spec', dot: 'bg-sev-spec', tint: 'bg-sev-spec/10', ring: 'border-sev-spec/40' },
+  'privilege-escalation': { label: 'Privilege Escalation', text: 'text-sev-high', dot: 'bg-sev-high', tint: 'bg-sev-high/10', ring: 'border-sev-high/40' },
+  'defense-evasion': { label: 'Defense Evasion', text: 'text-status-staged', dot: 'bg-status-staged', tint: 'bg-status-staged/10', ring: 'border-status-staged/40' },
+  'credential-access': { label: 'Credential Access', text: 'text-sev-high', dot: 'bg-sev-high', tint: 'bg-sev-high/10', ring: 'border-sev-high/40' },
+  'discovery': { label: 'Discovery', text: 'text-sev-low', dot: 'bg-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/40' },
+  'lateral-movement': { label: 'Lateral Movement', text: 'text-sev-med', dot: 'bg-sev-med', tint: 'bg-sev-med/10', ring: 'border-sev-med/40' },
+  'collection': { label: 'Collection', text: 'text-status-approved', dot: 'bg-status-approved', tint: 'bg-status-approved/10', ring: 'border-status-approved/40' },
+  'command-and-control': { label: 'Command and Control', text: 'text-sev-high', dot: 'bg-sev-high', tint: 'bg-sev-high/10', ring: 'border-sev-high/40' },
+  'exfiltration': { label: 'Exfiltration', text: 'text-sev-high', dot: 'bg-sev-high', tint: 'bg-sev-high/10', ring: 'border-sev-high/40' },
+  'impact': { label: 'Impact', text: 'text-destructive', dot: 'bg-destructive', tint: 'bg-destructive/10', ring: 'border-destructive/40' },
+  'other': { label: 'Other', text: 'text-muted-foreground', dot: 'bg-muted-foreground', tint: 'bg-secondary', ring: 'border-border' },
+}
+
+export function tacticMeta(tactic) {
+  return TACTIC_CLASS[tactic] ?? TACTIC_CLASS.other
+}
+
+/** Curated technique → { name, tactic } catalog (the mock's technique→tactic data). */
+export const MITRE_CATALOG = {
+  'T1021': { name: 'Remote Services', tactic: 'lateral-movement' },
+  'T1021.001': { name: 'Remote Services: RDP', tactic: 'lateral-movement' },
+  'T1078': { name: 'Valid Accounts', tactic: 'privilege-escalation' },
+  'T1078.002': { name: 'Valid Accounts: Domain Accounts', tactic: 'privilege-escalation' },
+  'T1053': { name: 'Scheduled Task/Job', tactic: 'persistence' },
+  'T1053.005': { name: 'Scheduled Task', tactic: 'persistence' },
+  'T1574': { name: 'Hijack Execution Flow', tactic: 'defense-evasion' },
+  'T1574.002': { name: 'DLL Side-Loading', tactic: 'defense-evasion' },
+  'T1039': { name: 'Data from Network Shared Drive', tactic: 'collection' },
+  'T1530': { name: 'Data from Cloud Storage', tactic: 'collection' },
+  'T1071': { name: 'Application Layer Protocol', tactic: 'command-and-control' },
+  'T1071.001': { name: 'Web Protocols', tactic: 'command-and-control' },
+  'T1070': { name: 'Indicator Removal', tactic: 'defense-evasion' },
+  'T1070.001': { name: 'Clear Windows Event Logs', tactic: 'defense-evasion' },
+  'T1059': { name: 'Command and Scripting Interpreter', tactic: 'execution' },
+  'T1059.001': { name: 'PowerShell', tactic: 'execution' },
+  'T1486': { name: 'Data Encrypted for Impact', tactic: 'impact' },
+  'T1003': { name: 'OS Credential Dumping', tactic: 'credential-access' },
+}
+
+/** Resolve a technique id → { id, name, tactic } (sub-technique falls back to base). */
+export function techniqueMeta(id) {
+  const hit = MITRE_CATALOG[id] ?? MITRE_CATALOG[String(id).split('.')[0]]
+  return { id, name: hit?.name ?? null, tactic: hit?.tactic ?? 'other' }
+}
+
+/**
+ * mitreByTactic — distinct techniques across findings, grouped under their ATT&CK
+ * tactic in kill-chain order. Each technique records the finding ids that cite it
+ * (for the detail side-panel). Returns `[{ tactic, meta, techniques:[{ id, name,
+ * findingIds }] }]`, empty tactics omitted.
+ */
+export function mitreByTactic(findings) {
+  const byId = new Map()
+  for (const f of findings ?? []) {
+    for (const id of f.mitre_ids ?? []) {
+      if (!byId.has(id)) byId.set(id, { ...techniqueMeta(id), findingIds: [] })
+      byId.get(id).findingIds.push(f.id)
+    }
+  }
+  const groups = new Map()
+  for (const t of byId.values()) {
+    if (!groups.has(t.tactic)) groups.set(t.tactic, [])
+    groups.get(t.tactic).push(t)
+  }
+  return TACTIC_ORDER.filter((tac) => groups.has(tac)).map((tactic) => ({
+    tactic,
+    meta: tacticMeta(tactic),
+    techniques: groups.get(tactic).sort((a, b) => a.id.localeCompare(b.id)),
+  }))
 }
 
 /** Velocity ranges (the chart's 7d / 24h / all toggle). */

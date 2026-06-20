@@ -1,10 +1,11 @@
-# Portal v3 — Coverage Map (Phase 0, through RUN-4b)
+# Portal v3 — Coverage Map (Phase 0, through RUN-4c)
 
 Proves: all 11 nav destinations present · spec §8 parity flows still work ·
 RUN-3 reference-tab features preserved · RUN-4b agent Command-and-Control
-features added. "Built" = a real component renders; "Placeholder" = the on-brand
-`TabPlaceholder` until its Phase-1 feature agent builds it (shell + routing are
-wired). Nothing here regresses the frozen store/api/test surfaces.
+features added · RUN-4c operator review polish applied. "Built" = a real
+component renders; "Placeholder" = the on-brand `TabPlaceholder` until its
+Phase-1 feature agent builds it (shell + routing are wired). Nothing here
+regresses the frozen store/api/test surfaces.
 
 ## 1. The 11 destinations (`lib/nav.js` `NAV_GROUPS`)
 
@@ -33,14 +34,14 @@ resolve them. `AppShell.TabContent` renders Overview + Findings; the rest fall t
 | Auth login / me / logout (Supabase) | `api/endpoints` + `lib/auth*` | unchanged port |
 | Case activate (challenge → re-auth) | `layout/CaseDialogs.ActivateCaseDialog` | unchanged; now reachable from the enriched multi-case dropdown |
 | Case create (auto-activate) | `layout/CaseDialogs.CreateCaseDialog` | unchanged; dropdown label "Create case" |
-| Findings list / filter (status·host·account·search) | `findings/FindingsList` + `findings-utils.filterFindings` | unchanged |
+| Findings list / filter (status·host·account·**confidence**·search) | `findings/FindingsList` + `findings-utils.filterFindings` | RUN-4c added the confidence/severity dimension (hash-carried) |
 | Findings review approve / reject / **stage** | `findings/FindingDetail` + `FindingsTab` | approve/reject preserved; **stage** added (delta action) |
 | Inline field edit (delta diff) | `findings/EditableField` | unchanged |
 | Commit staged delta (password + 3s hold) | `layout/CommitDrawer` | unchanged security contract; `stage` action gets violet meta |
 | `/api/delta` POST-replaces-whole-document | `findings-utils` builders | unchanged |
 | Evidence chain seal / **unseal** crypto | `api/endpoints` + `EvidenceUnseal.test` | **byte-identical**, green |
 | Command palette ⌘K | `layout/CommandPalette` + `useHotkey` | unchanged |
-| URL-hash deep-linking `#/<tab>` | `hooks/useHashRoute` (LOCKED) | unchanged |
+| URL-hash deep-linking `#/<tab>` | `hooks/useHashRoute` | store↔tab contract unchanged; RUN-4c adds backward-compatible `?sev=` query support (filtered Findings deep-link) |
 | RBAC examiner vs readonly (actions hidden) | `FindingsTab`/`FindingDetail` + `SideNav` footer | unchanged |
 | Theme dark / light (token swap, AA) | `lib/theme` + `tokens.css` | unchanged; both themes screenshotted |
 | 15s data poll (mock-aware skip) | `hooks/useDataPolling` | unchanged |
@@ -72,6 +73,25 @@ Findings `KpiRow` (4 click-through KPIs) · finding-velocity `VelocityCard`
 | Contract + selectors | `lib/agent-state.js` | pure; degrades w/o portalState |
 | Ambient field (aurora + grid) | `styles/globals.css` `.ambient` | `color-mix(var(--primary))`, reduced-motion gated |
 
+## 4c. RUN-4c operator review polish (added)
+
+| # | Fix | Component / file |
+|---|---|---|
+| 40 | Data-driven case synopsis (`agentSynopsis`) + truncate/Show-more + minimize via the orange dot (collapsed bar keeps the gated count) | `overview/AgentHero` + `lib/agent-state` |
+| 38 | Removed the redundant "awaiting authorization" bordered badge (state now = quiet dot + label) | `overview/AgentHero` |
+| HITL | 3-way gate taxonomy: `policyGates` (2 triggers) · gated actions · `systemBlockers` (distinct dashed-amber, "not a policy gate") | `overview/AuthorizationQueue` + `lib/agent-state` |
+| 41 | PROCESSING → keyboard-reachable Popover listing live background tasks | `layout/Header` |
+| 42 | Severity widget fills height + 24h delta + awaiting callout + click→deep-link | `overview/SeverityDistribution` + `overview-metrics.severityCounts` |
+| 31 | Uniform equal-weight 2×2 KPI tiles, all deep-link (High → Findings filtered HIGH) | `overview/MissionStats` |
+| 32 | MITRE chips grouped by tactic + colour-coded + clickable → Sheet detail | `overview/MitreMatrix` + `overview-metrics.mitreByTactic` |
+| 26 | Sidebar zoom/reflow: in-flow + `min-w-[64rem]` + horizontal scroll (WCAG 1.4.10) | `layout/AppShell` |
+| 45 | Light-theme parity; light severity dots contrast-verified ≥4.5:1 on `--card` (tokens unchanged) | `tokens.css` (no change) |
+
+Deep-link plumbing (carry-forward resolved): the severity filter rides the hash
+(`#/findings?sev=high`), `useHashRoute` preserves the query (additive, backward-
+compatible), `FindingsTab` reads it via `parseHashFilters` + clearable Severity
+pill. Status filter stays in the store. See MASTER §6 + §13.
+
 ## 5. Polish notes (operator) — done
 
 1. Manifest **version number removed** from the Evidence-chain card (`EvidenceChainSummary`).
@@ -83,9 +103,10 @@ Findings `KpiRow` (4 click-through KPIs) · finding-velocity `VelocityCard`
 
 `npm run build` green · dist hygiene clean (no external fonts, no inline
 `<style>`, no mock-fixture leakage) · `npm run lint` authored-clean (legacy
-feature-file debt only) · `npm test` 144 passing (14 files), incl. new
-`agentState` / `confidence` / `MissionControl` suites, with `EvidenceUnseal` +
-`useStore.interface` byte-identical · screenshots in `design/r4b-screens/`.
+feature-file debt only) · `npm test` 163 passing (15 files), incl. new
+`agentState` (HITL taxonomy + synopsis) / `hashFilters` (deep-link) / `confidence`
+filter / `mitreByTactic` suites, with `EvidenceUnseal` + `useStore.interface`
+byte-identical · screenshots in `design/r4c-screens/`.
 
 ## 7. Conscious deferrals
 

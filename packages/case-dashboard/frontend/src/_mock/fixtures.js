@@ -179,8 +179,11 @@ const CHAIN_STATUS = { status: 'ok', manifest_version: 3, hmac_verify_needed: fa
 const PORTAL_STATE = {
   agent: {
     state: 'awaiting-authorization',
+    // Case-driven synopsis (RUN-4c #40): describes the investigation, not the
+    // auth queue (that lives in the Authorization Required panel). Long enough to
+    // exercise the hero's Show-more truncation.
     headline:
-      'Agent has paused the pipeline. 3 gated actions require your authorization before it can proceed — including a one-shot volatile memory capture.',
+      'Reconstructed a hands-on-keyboard intrusion across NORTHWIND: RDP lateral movement from WS-FINANCE-03 into the DC-01 domain controller, a "UpdateSync" persistence task side-loading an unsigned DLL, and bulk staging of HR-confidential records on FS-01. 47 findings proposed from 3 fused evidence sources; the highest-severity chain is corroborated by firewall flow logs.',
     metrics: { records_parsed: 1284402, findings_proposed: 47, sources_fused: 3 },
   },
   gated_actions: [
@@ -189,6 +192,17 @@ const PORTAL_STATE = {
     { id: 'ga-3', title: 'Quarantine payload.dll → isolated vault', tool: 'mcp:fs.quarantine', icon: 'shield', risk: 'elevated' },
   ],
   backends: { up: 7, total: 8, degraded: ['yara'] },
+  // A NAMED system/tool blocker (not a policy gate) — the Authorization Required
+  // panel surfaces this with a distinct treatment (RUN-4c HITL taxonomy).
+  system_blockers: [
+    {
+      id: 'sb-yara',
+      name: 'yara',
+      tool: 'mcp:yara.scan',
+      detail: 'YARA scan backend degraded — rule compilation is failing; signature matching is unavailable until the backend recovers.',
+    },
+  ],
+  // sealed < total ⇒ a derived "evidence custody not fully sealed" policy gate.
   evidence: { sealed: 12, total: 14 },
   iocs: { total: 23, hosts: 9, accounts: 31 },
   severity: { open: 6, awaiting: 3 },

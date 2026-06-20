@@ -69,26 +69,34 @@ export function AppShell() {
   const openPalette = useCallback(() => setCommandPaletteOpen(true), [setCommandPaletteOpen])
   useHotkey({ key: 'k', meta: true, allowInInput: true }, openPalette)
 
+  // Zoom/reflow (WCAG 1.4.10, RUN-4c #26): the shell PARTICIPATES in layout — the
+  // sidebar is an in-flow flex column (not fixed), and the whole frame keeps a
+  // sensible minimum width (`min-w-[64rem]`). When the viewport is narrower than
+  // that (e.g. ~400% browser zoom), the OUTER container scrolls HORIZONTALLY
+  // instead of the sidebar overlapping the body content. The inner panes still
+  // own their own vertical scroll.
   return (
-    <div className="flex h-screen overflow-hidden bg-background text-foreground">
-      <SideNav collapsed={collapsed} onToggleCollapsed={() => setCollapsed((c) => !c)} />
+    <div className="h-screen overflow-x-auto overflow-y-hidden bg-background text-foreground">
+      <div className="flex h-full min-w-[64rem]">
+        <SideNav collapsed={collapsed} onToggleCollapsed={() => setCollapsed((c) => !c)} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Header onOpenCommandPalette={openPalette} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Header onOpenCommandPalette={openPalette} />
 
-        <main
-          ref={mainRef}
-          tabIndex={-1}
-          aria-label={`${tabLabel(activeTab)} content`}
-          className="flex-1 overflow-y-auto outline-none"
-        >
-          <TabContent tabId={activeTab} />
-        </main>
+          <main
+            ref={mainRef}
+            tabIndex={-1}
+            aria-label={`${tabLabel(activeTab)} content`}
+            className="flex-1 overflow-y-auto outline-none"
+          >
+            <TabContent tabId={activeTab} />
+          </main>
 
-        <StatusBar />
+          <StatusBar />
+        </div>
       </div>
 
-      {/* Global overlays */}
+      {/* Global overlays (portal-rendered) */}
       <CommandPalette />
       <CommitDrawer />
     </div>

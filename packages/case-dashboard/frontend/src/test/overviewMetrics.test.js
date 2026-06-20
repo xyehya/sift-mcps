@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   deriveKpis,
+  mitreByTactic,
   mitreTechniques,
   recentActivity,
   severityCounts,
+  techniqueMeta,
   velocitySeries,
 } from '@/components/overview/overview-metrics'
 
@@ -33,17 +35,45 @@ describe('deriveKpis', () => {
 
 describe('severityCounts', () => {
   it('returns ordered rows with counts and a token class bundle', () => {
-    const rows = severityCounts(FINDINGS)
+    const rows = severityCounts(FINDINGS, NOW)
     expect(rows.map((r) => r.key)).toEqual(['HIGH', 'MEDIUM', 'LOW', 'SPECULATIVE'])
     expect(rows.find((r) => r.key === 'HIGH').count).toBe(2)
     expect(rows.find((r) => r.key === 'HIGH').cls.bg).toBe('bg-sev-high')
     expect(rows.find((r) => r.key === 'HIGH').pct).toBe(100)
   })
+
+  it('carries awaiting (draft) + recent (24h) sub-counts + grand total', () => {
+    const rows = severityCounts(FINDINGS, NOW)
+    const high = rows.find((r) => r.key === 'HIGH')
+    expect(high.awaiting).toBe(1) // F-1 draft (F-2 approved)
+    expect(high.recent).toBe(1) // F-1 within 24h (F-2 is 3d old)
+    expect(rows.find((r) => r.key === 'LOW').recent).toBe(1) // F-3 at 5h
+    expect(high.total).toBe(3)
+  })
 })
 
-describe('mitreTechniques', () => {
+describe('mitreTechniques + tactic grouping', () => {
   it('returns distinct sorted technique ids', () => {
     expect(mitreTechniques(FINDINGS)).toEqual(['T1', 'T2'])
+  })
+
+  it('techniqueMeta resolves known ids + sub-techniques, else "other"', () => {
+    expect(techniqueMeta('T1021.001')).toMatchObject({ tactic: 'lateral-movement', name: 'Remote Services: RDP' })
+    expect(techniqueMeta('T1059')).toMatchObject({ tactic: 'execution' })
+    expect(techniqueMeta('T9999').tactic).toBe('other')
+  })
+
+  it('mitreByTactic groups techniques under kill-chain-ordered tactics with finding ids', () => {
+    const groups = mitreByTactic([
+      { id: 'F-a', mitre_ids: ['T1021.001', 'T1059.001'] },
+      { id: 'F-b', mitre_ids: ['T1021.001'] },
+    ])
+    const lat = groups.find((g) => g.tactic === 'lateral-movement')
+    expect(lat.meta.label).toBe('Lateral Movement')
+    expect(lat.techniques[0]).toMatchObject({ id: 'T1021.001' })
+    expect(lat.techniques[0].findingIds).toEqual(['F-a', 'F-b'])
+    // execution sorts after lateral-movement is NOT guaranteed; assert presence
+    expect(groups.some((g) => g.tactic === 'execution')).toBe(true)
   })
 })
 

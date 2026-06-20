@@ -179,13 +179,26 @@ of truth; `location.hash` (`#/<tab>`) is the reflected state + entry channel.
 
 - **Intentional navigation** (nav click, palette, KPI, row click): call
   `navigateToTab(setActiveTab, '<tab>')` — pushes a real history entry.
-- The hash router **validates `#/<tab>` ids and strips query strings**. To deep-
-  link to a *filtered* view, navigate to the tab AND set the store filter:
-  ```js
-  setFindingsFilter('pending'); navigateToTab(setActiveTab, 'findings')
-  ```
-  Reference: `overview/KpiRow.jsx`. Don't put `?status=` in the hash — it won't
-  route.
+- **Deep-link to a filtered view — two channels (RUN-4c):**
+  1. **STATUS** (`findingsFilter`) + host/account ride the STORE (they have store
+     keys). Set the store filter, then navigate:
+     ```js
+     setFindingsFilter('approved'); navigateToTab(setActiveTab, 'findings')
+     ```
+     Reference: `overview/KpiRow.jsx`.
+  2. **CONFIDENCE / SEVERITY** has NO store key (the surface is frozen), so it
+     rides the HASH query and is shareable: `#/findings?sev=high`. Use the helper
+     ```js
+     setFindingsFilter('all'); navigateToFindings(setActiveTab, { sev: 'HIGH' })
+     ```
+     `parseHashTab` tolerates the `?…` query (the tab still routes) and the
+     reflect effect PRESERVES the query while on the same tab — this resolves the
+     prior "filter dropped from the hash" carry-forward. `FindingsTab` reads it
+     via `parseHashFilters`, applies it through `filterFindings({ confidence })`,
+     and renders a clearable Severity pill. References: `overview/MissionStats.jsx`,
+     `overview/SeverityDistribution.jsx`, `hooks/useHashRoute.js`.
+  The `useHashRoute` store↔tab contract is otherwise unchanged (query support is
+  an additive, backward-compatible extension; plain `#/<tab>` behaves identically).
 - Valid tab ids come from `lib/nav.js` (`VALID_TABS`). Add new destinations
   there, not ad hoc.
 - **IA grouping (RUN-4a).** The 11 destinations are grouped Mission-Control style
@@ -336,3 +349,51 @@ hex) + drifting hairline grid (`var(--border)`), low opacity, behind the Overvie
 content. **Both layers' motion is gated by `prefers-reduced-motion`.** Mount it as
 `<div className="ambient" />` inside a `relative isolate` wrapper with the content
 at `z-10`.
+
+---
+
+## 13. Mission-Control review polish (RUN-4c)
+
+Operator design-review fixes layered onto §12; the worked examples win over prose.
+
+- **HITL gate taxonomy** (`overview/AuthorizationQueue.jsx` + selectors in
+  `lib/agent-state.js`). The Authorization-Required panel models THREE distinct,
+  never-conflated concerns: (1) **policy gates** — `policyGates()` derives EXACTLY
+  two triggers (case-not-active · evidence integrity compromised/unsealed); nothing
+  else is a policy gate; (2) **gated actions** — `gatedActions()`, the operator-
+  authorizable MCP actions the agent queued; (3) **system / tool blockers** —
+  `systemBlockers()` (backend failures e.g. degraded `yara`), rendered with a
+  DISTINCT dashed-amber treatment + a "system issue · not a policy gate" tag so an
+  examiner never mistakes a system fault for a policy decision. All derive from the
+  EXISTING `portalState` slice (+ case/chain) and degrade safely.
+- **Agent hero** (`overview/AgentHero.jsx`): the synopsis is DATA-DRIVEN via
+  `agentSynopsis(portalState, activeCase, agent)` (DB headline → composed from case
+  metadata → agent-state fallback; never a hardcoded sentence) and truncates with a
+  Show-more toggle. The hero MINIMIZES — the orange status dot is the clickable
+  re-expand toggle (`aria-expanded`, focus-visible) and the collapsed bar always
+  surfaces the gated-action count. The redundant "awaiting authorization" bordered
+  badge was removed (state now = a quiet dot + label).
+- **PROCESSING indicator** (`layout/Header.jsx`): a keyboard-reachable Popover that
+  names what is running (agent pipeline · evidence hashing · MCP jobs · staged
+  review), each row mapped honestly to polled state. No bare label.
+- **Mission KPI tiles** (`overview/MissionStats.jsx`): uniform 2×2 grid
+  (`auto-rows-fr` + `h-full`), equal weight, every tile deep-links (Evidence/IOCs/
+  Backends → tab; High → Findings filtered HIGH via the hash channel, §6).
+- **Severity distribution** (`overview/SeverityDistribution.jsx`): rows FILL the
+  card height (`flex-1`; no dead-space), add value (24h delta + awaiting sub-count
+  + High-awaiting/total callout), and each tier deep-links to the severity-filtered
+  Findings view.
+- **MITRE ATT&CK** (`overview/MitreMatrix.jsx` + `overview-metrics.js`): chips are
+  GROUPED under tactic headers (kill-chain order, `mitreByTactic()`), colour-coded
+  by tactic (`TACTIC_CLASS` token bundles — colour is supplementary to the always-
+  present tactic label + mono T-code), and each chip opens a shadcn **Sheet** with
+  the technique detail + citing findings (no external nav; CSP stays `'self'`).
+- **Sidebar zoom/reflow** (`layout/AppShell.jsx`, WCAG 1.4.10): the sidebar is an
+  in-flow flex column and the frame keeps `min-w-[64rem]`; below that width (≈400%
+  zoom) the OUTER container scrolls horizontally instead of the sidebar overlapping
+  body content.
+- **Light-theme parity** (#45): every RUN-4c decision mirrors in light via tokens
+  (no theme-specific component code). The light severity dots were contrast-checked
+  against `--card` (#FFFFFF): sev-high 4.83 · sev-med 5.02 · sev-low 6.08 · sev-spec
+  5.71 — all ≥4.5:1 (and ≥3:1 as graphical objects on the `--secondary` hover
+  surface), so the tokens stand unchanged.

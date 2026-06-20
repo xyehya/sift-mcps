@@ -27,14 +27,14 @@ import { MissionStats } from '@/components/overview/MissionStats'
 // ─────────────────────────────────────────────────────────────────────────
 
 /** Card wrapper with a section title (consistent rhythm across the page). */
-function Section({ title, action, children, className }) {
+function Section({ title, action, children, className, contentClassName }) {
   return (
     <Card className={className}>
       <CardHeader className="flex flex-row items-center justify-between gap-2 pb-0">
         <CardTitle className="text-sm font-semibold">{title}</CardTitle>
         {action}
       </CardHeader>
-      <CardContent>{children}</CardContent>
+      <CardContent className={contentClassName}>{children}</CardContent>
     </Card>
   )
 }
@@ -119,7 +119,7 @@ export function OverviewTab() {
               <Section title="Finding velocity" className="lg:col-span-2">
                 <VelocityCard findings={findings} loading={isLoading} />
               </Section>
-              <Section title="Severity distribution">
+              <Section title="Severity distribution" contentClassName="flex-1">
                 <SeverityDistribution findings={findings} loading={isLoading} />
               </Section>
             </div>

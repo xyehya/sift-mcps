@@ -103,6 +103,8 @@ export function FindingsList({
   canReview,
   search,
   onSearch,
+  severityFilter,
+  onClearSeverity,
   selectMode,
   onToggleSelectMode,
   selectedIds,
@@ -161,6 +163,9 @@ export function FindingsList({
         }}
       />
 
+      {severityFilter && (
+        <ActivePill label="Severity" value={confClass(severityFilter)?.label ?? severityFilter} onClear={onClearSeverity} />
+      )}
       {findingsHostFilter && <ActivePill label="Host" value={findingsHostFilter} onClear={() => setFindingsHostFilter(null)} />}
       {findingsAccountFilter !== null && (
         <ActivePill

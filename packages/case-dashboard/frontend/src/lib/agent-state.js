@@ -176,6 +176,113 @@ export function missionTiles(portalState, { chainStatus, findings, iocs } = {}) 
   ]
 }
 
+/**
+ * agentSynopsis — the hero's case-driven synopsis sentence. DATA-DRIVEN (never a
+ * hardcoded string): prefers the DB-authority `portalState.agent.headline`, then
+ * composes from active-case metadata (incident type · severity · scope) joined
+ * with the derived agent state, then finally the agent-state fallback. Always a
+ * plain (escaped) string. `agent` is the output of deriveAgentState().
+ */
+export function agentSynopsis(portalState, activeCase, agent) {
+  const headline = portalState?.agent?.headline
+  if (headline) return headline
+  if (activeCase) {
+    const bits = []
+    if (activeCase.incident_type) bits.push(String(activeCase.incident_type).replace(/_/g, ' '))
+    if (activeCase.severity) bits.push(`${activeCase.severity} severity`)
+    const systems = Array.isArray(activeCase.affected_systems) ? activeCase.affected_systems.length : 0
+    if (systems) bits.push(`${systems} system${systems === 1 ? '' : 's'} in scope`)
+    const lead = activeCase.title || activeCase.name || activeCase.case_id
+    const ctx = bits.length ? ` — ${bits.join(' · ')}` : ''
+    if (lead) return `${lead}${ctx}. ${agent?.headline ?? ''}`.trim()
+  }
+  return agent?.headline ?? ''
+}
+
+// ── HITL gate taxonomy (RUN-4c) ──────────────────────────────────────────────
+// The Authorization-Required panel separates THREE concerns, never conflating
+// them: (1) POLICY GATES — the only two conditions that policy-pause the agent;
+// (2) the gated ACTIONS the agent queued (gatedActions, above); (3) SYSTEM
+// BLOCKERS — backend/tool failures that are NOT policy decisions. Encoded here
+// as derived selectors so the panel + any future surface agree. All degrade
+// safely when inputs are null.
+
+/** A case is "active" only when its lifecycle status says so. */
+function caseIsActive(activeCase) {
+  if (!activeCase) return true // no case loaded yet → don't fabricate a gate
+  const s = (activeCase.status || (activeCase.active ? 'active' : 'inactive')).toLowerCase()
+  return s === 'active'
+}
+
+/**
+ * policyGates — EXACTLY the two policy-gate triggers, derived, max two entries:
+ *   (1) the case is not in an active state, and
+ *   (2) evidence integrity is compromised (chain violation/tampered) OR custody
+ *       is not fully sealed (unsealed items present).
+ * Nothing else is a policy gate. Each entry: { id, kind, title, detail, tab }.
+ */
+export function policyGates(portalState, activeCase, chainStatus) {
+  const gates = []
+  if (activeCase && !caseIsActive(activeCase)) {
+    const s = (activeCase.status || (activeCase.active ? 'active' : 'inactive')).toLowerCase()
+    gates.push({
+      id: 'gate-case',
+      kind: 'case',
+      title: 'Case is not in an active state',
+      detail: `Case status is “${s}”. Re-activate the case before the agent can act.`,
+      tab: 'overview',
+    })
+  }
+  const ev = portalState?.evidence ?? {}
+  const sealStatus = (chainStatus?.seal_status || chainStatus?.status || '').toLowerCase()
+  const violation = sealStatus === 'violation' || sealStatus === 'tampered'
+  const unsealed = ev.sealed != null && ev.total != null ? Math.max(0, ev.total - ev.sealed) : 0
+  if (violation) {
+    gates.push({
+      id: 'gate-evidence',
+      kind: 'evidence',
+      title: 'Evidence integrity compromised',
+      detail: 'Chain-of-custody verification failed. Restore integrity before the agent can proceed.',
+      tab: 'evidence',
+    })
+  } else if (unsealed > 0) {
+    gates.push({
+      id: 'gate-evidence',
+      kind: 'evidence',
+      title: 'Evidence custody not fully sealed',
+      detail: `${unsealed} of ${ev.total} evidence item${unsealed === 1 ? '' : 's'} unsealed — re-seal or authorize custody to proceed.`,
+      tab: 'evidence',
+    })
+  }
+  return gates
+}
+
+/**
+ * systemBlockers — NAMED backend/tool failures (NOT policy gates). Prefers an
+ * explicit `portalState.system_blockers` ([{name, tool, detail}]) and otherwise
+ * derives from `backends.degraded` names. Each entry carries a NAME + a plain
+ * detail string so the panel can render a distinct, clearly-labelled "system
+ * issue" treatment separate from the policy auth-gates.
+ */
+export function systemBlockers(portalState) {
+  const explicit = portalState?.system_blockers
+  if (Array.isArray(explicit) && explicit.length > 0) {
+    return explicit.map((b, i) => ({
+      id: b.id ?? b.name ?? `sysblock-${i}`,
+      name: b.name ?? b.tool ?? 'backend',
+      tool: b.tool ?? '',
+      detail: b.detail ?? 'Backend tool unavailable.',
+    }))
+  }
+  const degraded = portalState?.backends?.degraded ?? []
+  return degraded.map((name) => ({
+    id: `sysblock-${name}`,
+    name,
+    tool: '',
+    detail: `${name} backend degraded or unavailable — tools that depend on it may fail.`,
+  }))
+}
+
 /** Custody + backend counts for the StatusBar tail (SEALED X/Y · MCP X/Y). */
 export function statusCounts(portalState, chainStatus) {
   const ev = portalState?.evidence ?? {}

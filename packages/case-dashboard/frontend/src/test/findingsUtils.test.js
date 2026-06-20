@@ -34,6 +34,14 @@ describe('filterFindings', () => {
     expect(filterFindings(F, { filter: 'all', account: 'b' }).map((f) => f.id)).toEqual(['F-4'])
     expect(filterFindings(F, { filter: 'all', account: '' }).map((f) => f.id)).toEqual(['F-3'])
   })
+
+  it('filters by confidence/severity (the deep-link dimension, case-insensitive)', () => {
+    expect(filterFindings(F, { filter: 'all', confidence: 'HIGH' }).map((f) => f.id)).toEqual(['F-1'])
+    expect(filterFindings(F, { filter: 'all', confidence: 'speculative' }).map((f) => f.id)).toEqual(['F-4'])
+    expect(filterFindings(F, { filter: 'all', confidence: null })).toHaveLength(4)
+    // composes with status: pending ∩ HIGH
+    expect(filterFindings(F, { filter: 'pending', confidence: 'HIGH' }).map((f) => f.id)).toEqual(['F-1'])
+  })
 })
 
 describe('reviewCounts', () => {

@@ -1,11 +1,19 @@
 import { useState } from 'react'
-import { Check, ChevronsUpDown, Lock, Plus, Search } from 'lucide-react'
+import { Activity, Check, ChevronsUpDown, Lock, Plus, Search } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { useAuth } from '@/lib/auth-context'
+import { deriveAgentState } from '@/lib/agent-state'
 import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,29 +33,114 @@ import { ActivateCaseDialog, CreateCaseDialog } from '@/components/layout/CaseDi
 // (Multi-case dropdown contents are RUN-4b — this keeps the chip + active list.)
 // ─────────────────────────────────────────────────────────────────────────
 
-function AgentStatus({ chainStatus, busy }) {
+/**
+ * processingTasks — the running background tasks behind the PROCESSING indicator,
+ * derived honestly from the polled store (agent pipeline · evidence hashing · MCP
+ * jobs · staged review). No fabricated work — each row maps to real state.
+ */
+function processingTasks(portalState, chainStatus, delta, agent) {
+  const tasks = []
+  const m = portalState?.agent?.metrics ?? {}
+  const agentRunning = agent.key === 'working' || agent.key === 'awaiting-authorization'
+  tasks.push({
+    key: 'agent',
+    label: 'Autonomous investigation',
+    status: agentRunning ? (agent.key === 'awaiting-authorization' ? 'paused' : 'running') : 'idle',
+    tone: agentRunning ? 'text-primary' : 'text-muted-foreground',
+    dot: agentRunning ? 'bg-primary' : 'bg-muted-foreground',
+    pulse: agent.key === 'working',
+    detail: `${(m.records_parsed ?? 0).toLocaleString()} records parsed`,
+  })
+  const ev = portalState?.evidence
+  if (ev?.total != null) {
+    const full = ev.sealed === ev.total
+    tasks.push({
+      key: 'evidence',
+      label: 'Evidence custody hashing',
+      status: full ? 'verified' : 'hashing',
+      tone: full ? 'text-status-approved' : 'text-sev-med',
+      dot: full ? 'bg-status-approved' : 'bg-sev-med',
+      pulse: !full,
+      detail: `${ev.sealed ?? 0}/${ev.total} sealed`,
+    })
+  }
+  const be = portalState?.backends
+  if (be?.total != null) {
+    const degraded = (be.degraded ?? []).length
+    tasks.push({
+      key: 'mcp',
+      label: 'MCP backend jobs',
+      status: degraded ? `${degraded} degraded` : 'online',
+      tone: degraded ? 'text-sev-med' : 'text-status-approved',
+      dot: degraded ? 'bg-sev-med' : 'bg-status-approved',
+      pulse: false,
+      detail: `${be.up ?? 0}/${be.total} backends up`,
+    })
+  }
+  if ((delta ?? []).length > 0) {
+    tasks.push({
+      key: 'staged',
+      label: 'Staged review changes',
+      status: 'pending commit',
+      tone: 'text-status-pending',
+      dot: 'bg-status-pending',
+      pulse: false,
+      detail: `${delta.length} change${delta.length === 1 ? '' : 's'} awaiting commit`,
+    })
+  }
+  return tasks
+}
+
+/** PROCESSING indicator — a keyboard-reachable Popover that explains what is
+   running and lists the live background tasks (RUN-4c #41). No bare label. */
+function AgentStatus({ portalState, chainStatus, delta }) {
+  const agent = deriveAgentState(portalState, chainStatus, delta)
   let label = 'idle'
   let dot = 'bg-muted-foreground'
-  let hint = 'No AI analysis tasks running.'
+  let pulse = false
   if (chainStatus?.status === 'violation') {
     label = 'error'
     dot = 'bg-destructive'
-    hint = 'Integrity violation or system error.'
-  } else if (busy) {
+  } else if (agent.key === 'working' || agent.key === 'awaiting-authorization' || (delta ?? []).length > 0) {
     label = 'processing'
-    dot = 'bg-primary animate-pulse'
-    hint = 'AI analysis tasks are active.'
+    dot = 'bg-primary'
+    pulse = agent.key !== 'awaiting-authorization'
   }
+  const tasks = processingTasks(portalState, chainStatus, delta, agent)
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="mono inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-          <span aria-hidden className={cn('size-1.5 rounded-full', dot)} />
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Agent status: ${label}. View running background tasks.`}
+          className="mono inline-flex items-center gap-1.5 rounded px-1.5 py-1 text-[10px] uppercase tracking-wider text-muted-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span aria-hidden className={cn('size-1.5 rounded-full', dot, pulse && 'animate-pulse')} />
           {label}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>Agent status: {label} — {hint}</TooltipContent>
-    </Tooltip>
+          <Activity className="size-3 opacity-60" aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80">
+        <PopoverHeader>
+          <PopoverTitle>Background activity</PopoverTitle>
+          <PopoverDescription>What the portal is processing right now.</PopoverDescription>
+        </PopoverHeader>
+        <ul className="mt-3 flex flex-col gap-3">
+          {tasks.map((t) => (
+            <li key={t.key} className="flex items-start gap-2.5">
+              <span aria-hidden className={cn('mt-1 size-1.5 shrink-0 rounded-full', t.dot, t.pulse && 'animate-pulse')} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-foreground">{t.label}</span>
+                  <span className={cn('mono text-[10px] uppercase tracking-wider', t.tone)}>{t.status}</span>
+                </div>
+                <p className="mono mt-0.5 text-[11px] text-muted-foreground">{t.detail}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -131,11 +224,12 @@ function CaseSelector({ activeCase, cases, isExaminer, onActivate, onCreate }) {
 
 export function Header({ onOpenCommandPalette }) {
   const { user } = useAuth()
-  const { activeCase, cases, delta, chainStatus } = useStoreSlice((s) => ({
+  const { activeCase, cases, delta, chainStatus, portalState } = useStoreSlice((s) => ({
     activeCase: s.activeCase,
     cases: s.cases,
     delta: s.delta,
     chainStatus: s.chainStatus,
+    portalState: s.portalState,
   }))
 
   const [activatingCase, setActivatingCase] = useState(null)
@@ -169,7 +263,7 @@ export function Header({ onOpenCommandPalette }) {
         </Button>
       </div>
 
-      <AgentStatus chainStatus={chainStatus} busy={delta.length > 0} />
+      <AgentStatus portalState={portalState} chainStatus={chainStatus} delta={delta} />
 
       <ActivateCaseDialog activatingCase={activatingCase} onClose={() => setActivatingCase(null)} />
       <CreateCaseDialog open={creating} onOpenChange={setCreating} />

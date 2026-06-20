@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  agentSynopsis,
   deriveAgentState,
   gatedActions,
   missionTiles,
+  policyGates,
   riskMeta,
   statusCounts,
+  systemBlockers,
 } from '../lib/agent-state'
 
 const PORTAL = {
@@ -85,6 +88,59 @@ describe('missionTiles', () => {
     expect(byKey.high.foot).toMatch(/1 awaiting review/)
     expect(byKey.iocs.value).toBe(2)
     expect(byKey.evidence.value).toBe('—')
+  })
+})
+
+describe('policyGates (HITL — exactly two triggers)', () => {
+  const ACTIVE = { status: 'active' }
+  it('flags the case-not-active trigger', () => {
+    const gates = policyGates(PORTAL, { status: 'sealed' }, { status: 'ok' })
+    expect(gates.some((g) => g.kind === 'case')).toBe(true)
+  })
+  it('flags evidence integrity: chain violation OR unsealed custody', () => {
+    expect(policyGates({ evidence: { sealed: 5, total: 5 } }, ACTIVE, { status: 'violation' }).some((g) => g.kind === 'evidence')).toBe(true)
+    const unsealed = policyGates({ evidence: { sealed: 12, total: 14 } }, ACTIVE, { status: 'ok' })
+    expect(unsealed.find((g) => g.kind === 'evidence').title).toMatch(/not fully sealed/i)
+  })
+  it('returns NO gates when the case is active and custody is fully sealed', () => {
+    expect(policyGates({ evidence: { sealed: 14, total: 14 } }, ACTIVE, { status: 'ok' })).toEqual([])
+  })
+  it('never emits more than the two allowed triggers', () => {
+    const gates = policyGates({ evidence: { sealed: 0, total: 9 } }, { status: 'inactive' }, { status: 'violation' })
+    expect(gates.length).toBeLessThanOrEqual(2)
+  })
+  it('degrades safely with null inputs', () => {
+    expect(policyGates(null, null, null)).toEqual([])
+  })
+})
+
+describe('systemBlockers (NOT policy gates)', () => {
+  it('prefers explicit named blockers with detail', () => {
+    const blockers = systemBlockers({ system_blockers: [{ name: 'yara', tool: 'mcp:yara.scan', detail: 'degraded' }] })
+    expect(blockers).toHaveLength(1)
+    expect(blockers[0]).toMatchObject({ name: 'yara', tool: 'mcp:yara.scan', detail: 'degraded' })
+  })
+  it('falls back to backends.degraded names', () => {
+    const blockers = systemBlockers({ backends: { degraded: ['yara', 'vol'] } })
+    expect(blockers.map((b) => b.name)).toEqual(['yara', 'vol'])
+  })
+  it('degrades to an empty list', () => {
+    expect(systemBlockers(null)).toEqual([])
+  })
+})
+
+describe('agentSynopsis (data-driven, never hardcoded)', () => {
+  it('prefers the DB-authority headline', () => {
+    expect(agentSynopsis({ agent: { headline: 'from-db' } }, { name: 'X' }, { headline: 'fallback' })).toBe('from-db')
+  })
+  it('composes from case metadata when no headline', () => {
+    const s = agentSynopsis(null, { title: 'NORTHWIND', incident_type: 'unauthorized_access', severity: 'high', affected_systems: ['a', 'b'] }, { headline: 'Agent idle.' })
+    expect(s).toMatch(/NORTHWIND/)
+    expect(s).toMatch(/unauthorized access/)
+    expect(s).toMatch(/2 systems in scope/)
+  })
+  it('falls back to the agent headline with neither', () => {
+    expect(agentSynopsis(null, null, { headline: 'Agent idle.' })).toBe('Agent idle.')
   })
 })
 

@@ -95,16 +95,22 @@ function accountValues(f) {
 }
 
 /**
- * filterFindings — status + host + account + free-text search, ported verbatim
- * from the old monolith (console.log debug lines removed). `account` of '' means
- * the explicit "no account" filter; null means "no account filter".
+ * filterFindings — status + host + account + confidence + free-text search,
+ * ported verbatim from the old monolith (console.log debug lines removed).
+ * `account` of '' means the explicit "no account" filter; null means "no account
+ * filter". `confidence` (e.g. 'HIGH') is the orthogonal severity filter carried
+ * via the hash (RUN-4c); null means "no confidence filter".
  */
-export function filterFindings(findings, { filter = 'pending', host = null, account = null, search = '' } = {}) {
+export function filterFindings(findings, { filter = 'pending', host = null, account = null, confidence = null, search = '' } = {}) {
   let list = findings ?? []
   if (filter === 'pending') list = list.filter((f) => normStatus(f) === 'draft')
   else if (filter === 'approved') list = list.filter((f) => normStatus(f) === 'approved')
   else if (filter === 'rejected') list = list.filter((f) => normStatus(f) === 'rejected')
 
+  if (confidence) {
+    const want = String(confidence).toUpperCase()
+    list = list.filter((f) => (f.confidence ?? '').toUpperCase() === want)
+  }
   if (host) {
     const h = host.toUpperCase()
     list = list.filter((f) => (f.host ?? '').toUpperCase() === h)
