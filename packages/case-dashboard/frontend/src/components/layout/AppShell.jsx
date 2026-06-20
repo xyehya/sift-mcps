@@ -12,6 +12,8 @@ import { StatusBar } from '@/components/layout/StatusBar'
 import { CommandPalette } from '@/components/layout/CommandPalette'
 import { CommitDrawer } from '@/components/layout/CommitDrawer'
 import { TabPlaceholder } from '@/components/layout/TabPlaceholder'
+import { OverviewTab } from '@/components/overview/OverviewTab'
+import { FindingsTab } from '@/components/findings/FindingsTab'
 
 // ─────────────────────────────────────────────────────────────────────────
 // AppShell (spec §3 layout + §4 IA) — the authenticated frame: collapsible
@@ -19,12 +21,19 @@ import { TabPlaceholder } from '@/components/layout/TabPlaceholder'
 // region, StatusBar, plus the CommandPalette + CommitDrawer hosts. Owns the
 // 15s data poll, hash routing, and the ⌘K hotkey.
 //
-// Tab CONTENT is intentionally a placeholder for every tab this run: Overview +
-// Findings are RUN-3; the other tabs are Phase-1 feature work. Wiring the real
-// feature components in is a later phase — the shell is complete here.
+// Tab CONTENT: Overview + Findings are the RUN-3 reference tabs (wired below);
+// the remaining tabs render the on-brand TabPlaceholder until their Phase-1
+// feature agents build them.
 // ─────────────────────────────────────────────────────────────────────────
 
 const MOBILE_BREAKPOINT = 1024
+
+/** Render the active tab's content (reference tabs built; rest = placeholder). */
+function TabContent({ tabId }) {
+  if (tabId === 'overview') return <OverviewTab />
+  if (tabId === 'findings') return <FindingsTab />
+  return <TabPlaceholder tabId={tabId} />
+}
 
 export function AppShell() {
   useDataPolling()
@@ -73,7 +82,7 @@ export function AppShell() {
           aria-label={`${tabLabel(activeTab)} content`}
           className="flex-1 overflow-y-auto outline-none"
         >
-          <TabPlaceholder tabId={activeTab} />
+          <TabContent tabId={activeTab} />
         </main>
 
         <StatusBar />

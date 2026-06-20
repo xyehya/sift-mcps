@@ -16,14 +16,45 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
 import App from '@/App'
 
-// Phase 0 RUN-2: mount the real auth-gated AppShell (replaces the RUN-1 showcase).
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <ThemeProvider>
-      <TooltipProvider delayDuration={150}>
-        <App />
+// ─────────────────────────────────────────────────────────────────────────
+// Mount the auth-gated AppShell. A DEV-ONLY `?mock` branch seeds demo fixtures
+// and renders the shell behind a mock auth context (no backend needed) so the
+// reference tabs can be reviewed/screenshotted populated. The branch is gated
+// by `import.meta.env.DEV` and loads fixtures via dynamic import(), so the
+// production bundle tree-shakes all mock code out.
+// ─────────────────────────────────────────────────────────────────────────
+
+async function resolveTree() {
+  const params = new URLSearchParams(window.location.search)
+  if (import.meta.env.DEV && params.has('mock')) {
+    const [{ installMockData }, { AuthContext }, { AppShell }] = await Promise.all([
+      import('@/_mock/install'),
+      import('@/lib/auth-context'),
+      import('@/components/layout/AppShell'),
+    ])
+    const user = await installMockData()
+    const mockAuth = { status: 'authed', user, login() {}, logout() {} }
+    return (
+      <AuthContext.Provider value={mockAuth}>
+        <AppShell />
         <Toaster />
-      </TooltipProvider>
-    </ThemeProvider>
-  </StrictMode>,
-)
+      </AuthContext.Provider>
+    )
+  }
+  return (
+    <>
+      <App />
+      <Toaster />
+    </>
+  )
+}
+
+resolveTree().then((tree) => {
+  createRoot(document.getElementById('root')).render(
+    <StrictMode>
+      <ThemeProvider>
+        <TooltipProvider delayDuration={150}>{tree}</TooltipProvider>
+      </ThemeProvider>
+    </StrictMode>,
+  )
+})

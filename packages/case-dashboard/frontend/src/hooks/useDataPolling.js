@@ -30,6 +30,9 @@ export function useDataPolling() {
   }))
 
   usePolling(async () => {
+    // DEV-only: when seeded with mock fixtures (?mock), skip the poll so it
+    // doesn't overwrite them. The flag is never set in prod/tests.
+    if (typeof window !== 'undefined' && window.__SIFT_MOCK__) return
     const [cas, cases, summary, findings, delta, timeline, chain, iocs, todos, reports, portal] = await Promise.allSettled([
       getCase(),
       getCases(),
