@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { Check, Lock, Pencil, X } from 'lucide-react'
+import { Check, Layers, Lock, Pencil, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
@@ -28,6 +28,7 @@ const HOLD_MS = 3000
 const ACTION_META = {
   approve: { icon: Check, cls: 'text-status-approved border-status-approved/40' },
   reject: { icon: X, cls: 'text-destructive border-destructive/40' },
+  stage: { icon: Layers, cls: 'text-status-staged border-status-staged/40' },
   edit: { icon: Pencil, cls: 'text-status-pending border-status-pending/40' },
 }
 

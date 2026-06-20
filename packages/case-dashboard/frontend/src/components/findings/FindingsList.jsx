@@ -79,8 +79,17 @@ function Row({ finding, active, selected, selectMode, staged, onClick }) {
       <span className="mono shrink-0 text-muted-foreground">{finding.id}</span>
       <span className="flex-1 truncate text-foreground">{finding.title}</span>
       {staged && (
-        <span className={cn('shrink-0 text-[10px] font-semibold', staged.action === 'approve' ? 'text-status-approved' : 'text-status-rejected')}>
-          {staged.action === 'approve' ? '✓' : staged.action === 'reject' ? '✗' : '✎'}
+        <span
+          className={cn(
+            'shrink-0 text-[10px] font-semibold',
+            staged.action === 'approve'
+              ? 'text-status-approved'
+              : staged.action === 'reject'
+                ? 'text-status-rejected'
+                : 'text-status-staged',
+          )}
+        >
+          {staged.action === 'approve' ? '✓' : staged.action === 'reject' ? '✗' : staged.action === 'stage' ? '◆' : '✎'}
         </span>
       )}
     </button>

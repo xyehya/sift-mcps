@@ -126,6 +126,74 @@
     --border-radius: var(--radius);
   }
 
+  /* ── Ambient field (RUN-4b) ──────────────────────────────────────────────
+     A faint orange aurora + drifting hairline grid behind the Mission-Control
+     content — the round-1 "live room" treatment, ported to tokens. Colour is
+     derived from --primary at very low alpha (color-mix, no raw hex); the grid
+     uses --border. Both layers' motion is gated by prefers-reduced-motion. The
+     mask keeps the effect to the top of the view so it never touches text
+     contrast lower down. */
+  .ambient {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .ambient::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: -30%;
+    width: 120%;
+    height: 60%;
+    transform: translateX(-50%);
+    background: radial-gradient(
+      ellipse at center,
+      color-mix(in oklab, var(--primary) 16%, transparent),
+      transparent 62%
+    );
+    opacity: 0.5;
+    animation: ambient-breathe 11s ease-in-out infinite;
+  }
+  .ambient::after {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    background-image: linear-gradient(to right, var(--border) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+    background-size: 48px 48px;
+    opacity: 0.25;
+    -webkit-mask-image: radial-gradient(ellipse at 50% 0%, black 30%, transparent 80%);
+    mask-image: radial-gradient(ellipse at 50% 0%, black 30%, transparent 80%);
+    animation: ambient-drift 40s linear infinite;
+  }
+  @keyframes ambient-breathe {
+    0%,
+    100% {
+      opacity: 0.4;
+      transform: translateX(-50%) scale(1);
+    }
+    50% {
+      opacity: 0.65;
+      transform: translateX(-50%) scale(1.08);
+    }
+  }
+  @keyframes ambient-drift {
+    from {
+      background-position: 0 0, 0 0;
+    }
+    to {
+      background-position: 48px 48px, 48px 48px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ambient::before,
+    .ambient::after {
+      animation: none;
+    }
+  }
+
   /* Thin, token-themed scrollbars. */
   ::-webkit-scrollbar {
     width: 8px;

@@ -1,20 +1,21 @@
-import { motion, useReducedMotion } from 'framer-motion'
+import { motion } from 'framer-motion'
 
 import { cn } from '@/lib/utils'
-import { EASE } from '@/lib/motion'
+import { useMotionVariants } from '@/lib/motion'
 import { severityCounts } from '@/components/overview/overview-metrics'
 import { Skeleton } from '@/components/ui/skeleton'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Severity (confidence) distribution — horizontal bars in --sev-* tokens that
-// grow on mount via scaleX (transform-only → reduced-motion collapses to the
-// final state, so the data is readable immediately; spec §2). The numeric
-// count uses tabular figures. Bar widths are data-driven inline styles (the
-// only inline style permitted), never raw hex.
+// grow on mount via the shared `severityBarFill` motion primitive (scaleX from
+// a left origin; transform-only → reduced-motion collapses to the final state
+// through useMotionVariants, so the data is readable immediately; spec §2). The
+// numeric count uses tabular figures. Bar widths are data-driven inline styles
+// (the only inline style permitted), never raw hex.
 // ─────────────────────────────────────────────────────────────────────────
 
 export function SeverityDistribution({ findings, loading }) {
-  const reduced = useReducedMotion()
+  const variants = useMotionVariants()
   const rows = severityCounts(findings)
   const totalFindings = rows.reduce((s, r) => s + r.count, 0)
 
@@ -42,9 +43,9 @@ export function SeverityDistribution({ findings, loading }) {
             <motion.div
               className={cn('h-full rounded-full', r.cls.bg)}
               style={{ width: `${r.pct}%`, transformOrigin: 'left' }}
-              initial={reduced ? false : { scaleX: 0 }}
-              animate={{ scaleX: 1 }}
-              transition={reduced ? { duration: 0 } : { duration: 0.5, ease: EASE }}
+              variants={variants.severityBarFill}
+              initial="hidden"
+              animate="show"
             />
           </div>
         </li>

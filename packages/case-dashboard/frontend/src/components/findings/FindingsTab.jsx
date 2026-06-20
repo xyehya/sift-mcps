@@ -75,10 +75,12 @@ export function FindingsTab() {
       const f = findingById.get(findingId)
       if (!f) return
       const next = upsertDelta(delta, buildStageItem(f, action))
+      const VERB = { approve: 'Approved', reject: 'Rejected', stage: 'Staged' }
+      const TONE = { approve: 'success', reject: 'warn', stage: 'info' }
       try {
         await postDelta({ items: next })
         setDelta(next)
-        addToast(`${action === 'approve' ? 'Approved' : 'Rejected'} ${findingId} — staged`, action === 'approve' ? 'success' : 'warn')
+        addToast(`${VERB[action] ?? 'Staged'} ${findingId} — staged for commit`, TONE[action] ?? 'info')
       } catch (ex) {
         addToast(ex.message, 'error')
       }
@@ -128,7 +130,7 @@ export function FindingsTab() {
     })
   }
 
-  // ---- keyboard review (j/k navigate · a approve · r reject) ----
+  // ---- keyboard review (j/k navigate · a approve · s stage · r reject) ----
   const filteredRef = useRef(filtered)
   const selectedRef = useRef(selectedFindingId)
   const stageRef = useRef(stage)
@@ -154,6 +156,9 @@ export function FindingsTab() {
       } else if (canReview && e.key === 'a' && curId) {
         e.preventDefault()
         stageRef.current(curId, 'approve')
+      } else if (canReview && e.key === 's' && curId) {
+        e.preventDefault()
+        stageRef.current(curId, 'stage')
       } else if (canReview && e.key === 'r' && curId) {
         e.preventDefault()
         stageRef.current(curId, 'reject')
@@ -191,6 +196,7 @@ export function FindingsTab() {
             timeline={timeline}
             canReview={canReview}
             onApprove={() => stage(currentFinding.id, 'approve')}
+            onStage={() => stage(currentFinding.id, 'stage')}
             onReject={() => stage(currentFinding.id, 'reject')}
             onUnstage={stagedItem ? () => unstage(currentFinding.id) : null}
             onEdit={(field, original, modified) => editField(currentFinding, field, original, modified)}

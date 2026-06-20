@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { navigateToTab } from '@/hooks/useHashRoute'
 import { deriveSeal, SEAL_DOT_CLASS, SEAL_TONE_CLASS } from '@/lib/chain-status'
+import { statusCounts } from '@/lib/agent-state'
 import { Button } from '@/components/ui/button'
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -29,8 +30,9 @@ function agentState(chainStatus, stagedCount) {
 }
 
 export function StatusBar() {
-  const { chainStatus, delta, lastSync, setActiveTab, setCommitDrawerOpen } = useStoreSlice((s) => ({
+  const { chainStatus, portalState, delta, lastSync, setActiveTab, setCommitDrawerOpen } = useStoreSlice((s) => ({
     chainStatus: s.chainStatus,
+    portalState: s.portalState,
     delta: s.delta,
     lastSync: s.lastSync,
     setActiveTab: s.setActiveTab,
@@ -41,6 +43,11 @@ export function StatusBar() {
   const stagedCount = delta.length
   const agent = agentState(chainStatus, stagedCount)
   const syncLabel = lastSync ? `sync ${formatDistanceToNow(lastSync, { addSuffix: true })}` : 'syncing…'
+
+  // Live custody coverage + MCP backend health (RUN-4b; from portalState/chain).
+  const counts = statusCounts(portalState, chainStatus)
+  const sealLabel = counts.sealed != null && counts.evidenceTotal != null ? `${counts.sealed}/${counts.evidenceTotal} SEALED` : label
+  const mcpOnline = counts.backendsUp != null && counts.backendsTotal != null
 
   return (
     <div className="mono flex h-8 shrink-0 select-none items-center border-t border-border bg-card px-4 text-xs text-muted-foreground">
@@ -63,8 +70,24 @@ export function StatusBar() {
         title="Go to Evidence"
       >
         <span aria-hidden className={cn('size-1.5 rounded-full', SEAL_DOT_CLASS[tone])} />
-        CUSTODY · {label}
+        CUSTODY · {sealLabel}
       </button>
+
+      {mcpOnline && (
+        <>
+          <Dot />
+          <span
+            className={cn(
+              'tnum inline-flex items-center gap-1.5 uppercase tracking-wider',
+              counts.degraded > 0 ? 'text-sev-med' : 'text-status-approved',
+            )}
+            title={counts.degraded > 0 ? `${counts.degraded} MCP backend(s) degraded` : 'All MCP backends online'}
+          >
+            <span aria-hidden className={cn('size-1.5 rounded-full', counts.degraded > 0 ? 'bg-sev-med' : 'bg-status-approved')} />
+            MCP {counts.backendsUp}/{counts.backendsTotal} ONLINE
+          </span>
+        </>
+      )}
 
       {chainStatus?.write_protected && (
         <>

@@ -1,21 +1,26 @@
 import { useMemo, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { formatDistanceToNow } from 'date-fns'
 
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { navigateToTab } from '@/hooks/useHashRoute'
+import { useMotionVariants } from '@/lib/motion'
 import { ACTIVITY_RANGES, recentActivity } from '@/components/overview/overview-metrics'
 import { confClass, findingTs } from '@/components/findings/findings-utils'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 // ─────────────────────────────────────────────────────────────────────────
-// Recent activity feed — the latest findings within a selectable window. Each
+// Recent activity feed — the latest findings within a selectable window,
+// presented as the agent's streaming activity tail: rows enter with the shared
+// `activityTailItem` slide-in (reduced-motion gated via useMotionVariants) so
+// the list reads as a live feed without fabricating synthetic log lines. Each
 // row deep-links to the finding (selects it + switches to Findings). Confidence
-// is shown as a token-coloured dot (shape + label in the tooltip-free row keeps
-// it scannable). Empty state guides the examiner.
+// is a token-coloured dot. Empty state guides the examiner.
 // ─────────────────────────────────────────────────────────────────────────
 
 export function ActivityFeed({ findings, delta, loading }) {
+  const variants = useMotionVariants()
   const [range, setRange] = useState('24h')
   const { setActiveTab, setSelectedFindingId } = useStoreSlice((s) => ({
     setActiveTab: s.setActiveTab,
@@ -57,11 +62,19 @@ export function ActivityFeed({ findings, delta, loading }) {
         <p className="text-sm text-muted-foreground">No finding activity in this window.</p>
       ) : (
         <ul className="flex flex-col" aria-label="Recent finding activity">
+          <AnimatePresence initial>
           {items.map((f) => {
             const cls = confClass(f.confidence)
             const ts = findingTs(f)
             return (
-              <li key={f.id}>
+              <motion.li
+                key={f.id}
+                layout
+                variants={variants.activityTailItem}
+                initial="hidden"
+                animate="show"
+                exit="exit"
+              >
                 <button
                   type="button"
                   onClick={() => open(f)}
@@ -80,9 +93,10 @@ export function ActivityFeed({ findings, delta, loading }) {
                     </span>
                   )}
                 </button>
-              </li>
+              </motion.li>
             )
           })}
+          </AnimatePresence>
         </ul>
       )}
     </div>

@@ -173,10 +173,31 @@ const TIMELINE = [
 
 const CHAIN_STATUS = { status: 'ok', manifest_version: 3, hmac_verify_needed: false, write_protected: true }
 
+// Agent Command & Control state (DB-authority `portalState` contract — see
+// lib/agent-state.js). Agent is paused awaiting authorization so the Mission
+// Control hero + Authorization Required queue are populated for sign-off.
+const PORTAL_STATE = {
+  agent: {
+    state: 'awaiting-authorization',
+    headline:
+      'Agent has paused the pipeline. 3 gated actions require your authorization before it can proceed — including a one-shot volatile memory capture.',
+    metrics: { records_parsed: 1284402, findings_proposed: 47, sources_fused: 3 },
+  },
+  gated_actions: [
+    { id: 'ga-1', title: 'Acquire volatile memory — WS-FINANCE-03', tool: 'mcp:acquire.memory', icon: 'cpu', risk: 'irreversible' },
+    { id: 'ga-2', title: 'Unseal EV-014 for re-hash', tool: 'mcp:evidence.unseal', icon: 'lock-open', risk: 'reauth' },
+    { id: 'ga-3', title: 'Quarantine payload.dll → isolated vault', tool: 'mcp:fs.quarantine', icon: 'shield', risk: 'elevated' },
+  ],
+  backends: { up: 7, total: 8, degraded: ['yara'] },
+  evidence: { sealed: 12, total: 14 },
+  iocs: { total: 23, hosts: 9, accounts: 31 },
+  severity: { open: 6, awaiting: 3 },
+}
+
 const ACTIVE_CASE = {
-  case_id: 'CASE-2026-0420',
-  name: 'Acme Finance Intrusion',
-  title: 'Acme Finance Intrusion',
+  case_id: 'CASE-2026-0410',
+  name: 'NORTHWIND',
+  title: 'NORTHWIND intrusion investigation',
   status: 'active',
   examiner: 'a.morgan',
   created: iso(3 * D),
@@ -205,15 +226,23 @@ const IOCS = [
 
 const USER = { examiner: 'a.morgan', role: 'examiner' }
 
+// Multi-case switcher demo: active / inactive / sealed lifecycle badges.
+const CASES = [
+  { id: 'CASE-2026-0410', name: 'NORTHWIND', status: 'active', active: true },
+  { id: 'CASE-2026-0388', name: 'REDWING', status: 'inactive', active: false },
+  { id: 'CASE-2026-0351', name: 'BLACKSMITH', status: 'sealed', active: false },
+]
+
 export const mockState = {
   user: USER,
   activeCase: ACTIVE_CASE,
-  cases: [{ id: 'CASE-2026-0420', active: true }],
+  cases: CASES,
   findings: FINDINGS,
   delta: DELTA,
   summary: SUMMARY,
   timeline: TIMELINE,
   chainStatus: CHAIN_STATUS,
+  portalState: PORTAL_STATE,
   reports: REPORTS,
   iocs: IOCS,
   isLoading: false,

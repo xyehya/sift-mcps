@@ -3,10 +3,13 @@
 **Status:** Frozen at end of Phase 0 (RUN-1 design system + RUN-2 shell/data +
 RUN-3 Overview/Findings reference tabs), **identity relocked in RUN-4a** to the
 "Mission Control" graphite-ink + warm-orange identity (tokens both themes,
-fonts, motion primitives, shell re-skin) — the emerald palette is retired. This
-is the contract every Phase-1 feature agent (EVID / ENTITY / REPORT) MUST copy.
-The Overview and Findings tabs are the worked examples — when in doubt, read
-those files, not your memory.
+fonts, motion primitives, shell re-skin), **agent Command & Control built in
+RUN-4b** (§12: Mission-Control Overview hero + Authorization Required queue +
+KPI tiles, Findings MITRE chips + graded confidence ring + a/s/r keyboard,
+multi-case switcher, ambient background, motion-primitive wiring) — the emerald
+palette is retired. This is the contract every Phase-1 feature agent (EVID /
+ENTITY / REPORT) MUST copy. The Overview and Findings tabs are the worked
+examples — when in doubt, read those files, not your memory.
 
 Authoritative inputs: `docs/new-docs/PORTAL_V3_REBUILD_SPEC.md` (§2 tokens/type/
 motion/UX, §3 architecture, §5 security). This file records the ACTUAL frozen
@@ -103,13 +106,17 @@ exit; `SPRING`; `STAGGER`.
   (no-transform) versions under `prefers-reduced-motion`. Variant names:
   `fadeRise` (page/section entrance), `modal`, `staggerContainer` + `staggerItem`
   (lists/grids), `cardHover` (hover lift `translateY(-2px)` + border-brighten).
-- **Mission-Control primitives (RUN-4a)**, also in `useMotionVariants()` and
-  reduced-motion gated — wire them in RUN-4b: `breathingOrb` (agent orb core),
-  `pingRing` (orb rings, render 2 + stagger), `authGlowPulse` (awaiting-auth glow),
-  `severityBarFill` (`scaleX` from `origin-left`), `chartDraw` (`pathLength` on a
-  `motion.path`), `activityTailItem` (streaming-tail slide-in), `statusDotPulse`
-  (MCP/status dots; colour via class). Plus helpers `useCountUp(target,{duration})`
-  (easeOutCubic count-up, snaps to final under reduced motion) and `easeOutCubic`.
+- **Mission-Control primitives (RUN-4a, wired in RUN-4b)**, also in
+  `useMotionVariants()` and reduced-motion gated: `breathingOrb` + `pingRing`
+  (AgentHero orb — render 2 rings + stagger via `transition.delay`),
+  `authGlowPulse` (AgentHero awaiting-auth wash), `severityBarFill`
+  (`overview/SeverityDistribution.jsx`, `scaleX` from `origin-left`), `chartDraw`
+  (`overview/MiniSparkline.jsx` + `findings/ConfidenceRing.jsx`, `pathLength` on a
+  `motion.path`/`motion.circle`), `activityTailItem` (`overview/ActivityFeed.jsx`
+  slide-in via `AnimatePresence`), `statusDotPulse` (AgentHero/MissionStats/SideNav
+  dots; colour via class). Helpers `useCountUp(target,{duration})` (AgentHero +
+  MissionStats numerals; easeOutCubic, snaps to final under reduced motion) and
+  `easeOutCubic`.
 - Transform / opacity / `pathLength` ONLY — never animate width/height/top/left;
   colour is always a token class, never animated in the variant.
 - For ad-hoc `motion.*` not using the shared variants (e.g. the severity bar
@@ -188,15 +195,21 @@ of truth; `location.hash` (`#/<tab>`) is the reflected state + entry channel.
 
 **Shell composition (RUN-4a re-skin, tokens-only).** `AppShell` = `SideNav` +
 (`Header` → `<main>` → `StatusBar`).
-- `SideNav`: brand **"Protocol SIFT Gateway / OPERATIONS PORTAL"** → agent-state
-  panel (`CLAUDE · AGENT` · state · *N gated actions queued*, derived from
-  `delta`/`chainStatus`) → grouped nav → operator footer (name · role · CAN ACT /
-  VIEW ONLY · `ThemeToggle` · sign-out). Collapses to icon-only <1024.
-- `Header`: case-selector chip (mono id + status dot) · centered "Search · jump
-  ⌘K" palette trigger · agent mini-indicator.
-- `StatusBar`: `AGENT · <state>` · `CUSTODY · <seal>` (→ Evidence) · staged-count
-  (→ Commit Drawer) · last-sync · `WCAG AA` · `PORTAL v3`. Live SEALED-X/Y and
-  MCP-online counts are RUN-4b (data not yet in the frozen store).
+- `SideNav`: brand **"Protocol SIFT Gateway / OPERATIONS PORTAL"** (RUN-4b: the
+  brand wraps to two lines, sized up + bright — it must never truncate) →
+  agent-state panel (`CLAUDE · AGENT` · state · *N gated actions queued*, derived
+  via `deriveAgentState()` so it agrees with the hero + StatusBar) → grouped nav →
+  operator footer (name · role · CAN ACT / VIEW ONLY · `ThemeToggle` · sign-out).
+  Collapses to icon-only <1024; the collapse control is the `ChevronsLeft` /
+  `ChevronsRight` console glyph (RUN-4b).
+- `Header`: multi-case selector chip (mono id + name + status dot) with a
+  dropdown of cases (active / inactive / **sealed** lifecycle badges + "Create
+  case") wired to the unchanged activate-challenge / create flows · centered
+  "Search · jump ⌘K" palette trigger · agent mini-indicator.
+- `StatusBar`: `AGENT · <state>` · `CUSTODY · <X/Y SEALED>` (→ Evidence) ·
+  `MCP X/Y ONLINE` (degraded-toned) · staged-count (→ Commit Drawer) · last-sync ·
+  `WCAG AA` · `PORTAL v3`. SEALED-X/Y + MCP-online counts come from
+  `statusCounts(portalState, chainStatus)` (RUN-4b).
 
 ---
 
@@ -279,8 +292,47 @@ components/ui/             # vendored shadcn primitives (do not restyle ad hoc)
 ## 11. DEV-only mock (visual sign-off)
 
 To review a tab populated without a backend: `npm run dev` then open with
-`?mock=1` (toggle theme in the header). Gated strictly by `import.meta.env.DEV &&
-?mock`; fixtures load via dynamic `import()` (`src/_mock/`) and are tree-shaken
-out of production (`npm run build` dist contains none). A runtime flag
-(`window.__SIFT_MOCK__`) makes `useDataPolling` skip so fixtures aren't clobbered.
-Use this for screenshots; never ship mock data paths into feature logic.
+`?mock=1` (toggle theme in the SideNav footer). Gated strictly by
+`import.meta.env.DEV && ?mock`; fixtures load via dynamic `import()`
+(`src/_mock/`) and are tree-shaken out of production (`npm run build` dist
+contains none). A runtime flag (`window.__SIFT_MOCK__`) makes `useDataPolling`
+skip so fixtures aren't clobbered. Use this for screenshots; never ship mock data
+paths into feature logic.
+
+---
+
+## 12. Mission Control & agent Command-and-Control (RUN-4b)
+
+**The store surface stays frozen.** Agent state, gated actions and backend health
+ride on the EXISTING `portalState` slice (DB authority; `setPortalState`) — never
+a new top-level key. The contract + pure selectors live in `lib/agent-state.js`
+(JSDoc documents the `portalState` shape: `agent{state,headline,metrics}`,
+`gated_actions[]`, `backends{up,total,degraded}`, `evidence{sealed,total}`,
+`iocs`, `severity{open,awaiting}`). All selectors degrade gracefully when
+`portalState` is null. The dev mock supplies a matching `portalState`; a backend
+populates the same field later. **No fabricated security claims** — "Review &
+authorize" surfaces a step-up notice, it does not perform a real authorization.
+
+**Overview = Mission Control** (`overview/OverviewTab.jsx`): an agent-supervision
+landing. The hero row is `AgentHero` (living orb + agent state + count-up stat
+strip + `MiniSparkline`) beside `MissionStats` (the 2×2 KPI tiles: Evidence
+sealed/total · High severity · IOCs · MCP backends up/total + degraded), with
+`AuthorizationQueue` — the gated MCP actions the agent CANNOT self-approve — as
+the page hero. The RUN-3 analytics are retained below (findings `KpiRow`,
+finding-velocity, severity distribution, recent activity, evidence-chain, MITRE,
+case brief). Tiles + the agent state read only `portalState` + existing slices.
+
+**Findings agent-C2** (`findings/`): `ConfidenceRing` renders a GRADED ring
+(≥85 jade · ≥65 amber · else crimson — graded, not branded; `confidenceScore()`
+maps the categorical confidence when no numeric `confidence_score` exists; stroke
+is a token CSS var). MITRE ATT&CK technique chips (mono T-codes) sit in the detail
+header. Review keyboard is **`j/k` move · `a` approve · `s` stage · `r` reject**;
+the action bar is Approve / Stage / Reject. `stage` is a delta action (violet),
+committed through the unchanged `CommitDrawer`.
+
+**Ambient field** (`.ambient` in `styles/globals.css`): a faint orange aurora
+(`color-mix(in oklab, var(--primary) …%, transparent)` — token-derived, no raw
+hex) + drifting hairline grid (`var(--border)`), low opacity, behind the Overview
+content. **Both layers' motion is gated by `prefers-reduced-motion`.** Mount it as
+`<div className="ambient" />` inside a `relative isolate` wrapper with the content
+at `z-10`.

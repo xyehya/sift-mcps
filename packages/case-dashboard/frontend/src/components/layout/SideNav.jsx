@@ -1,11 +1,12 @@
 import { motion } from 'framer-motion'
-import { LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, LogOut } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { NAV_GROUPS } from '@/lib/nav'
 import { navigateToTab } from '@/hooks/useHashRoute'
 import { useStoreSlice } from '@/store/useStore'
 import { useAuth } from '@/lib/auth-context'
+import { deriveAgentState } from '@/lib/agent-state'
 import { useMotionVariants } from '@/lib/motion'
 import { ThemeToggle } from '@/lib/theme'
 import { Button } from '@/components/ui/button'
@@ -83,24 +84,27 @@ function NavItem({ item, active, collapsed, onSelect, badgeCount }) {
 }
 
 /** Agent-state panel — CLAUDE · AGENT identity + current state + queued count.
-   Derived from real store signals (delta = changes awaiting authorization);
-   the live agent-control wiring (orb, auth hero) is RUN-4b. */
+   Derived through the shared deriveAgentState() so the sidebar, the Mission-
+   Control hero and the StatusBar all agree on the agent's state and the number
+   of gated actions awaiting authorization (portalState.gated_actions, falling
+   back to staged delta). */
 function AgentPanel({ collapsed }) {
   const variants = useMotionVariants()
-  const { delta, chainStatus } = useStoreSlice((s) => ({ delta: s.delta, chainStatus: s.chainStatus }))
-  const queued = delta.length
-  const violation = chainStatus?.status === 'violation'
-
-  let state = 'Monitoring'
-  if (violation) state = 'Integrity halt'
-  else if (queued > 0) state = 'Awaiting authorization'
+  const { portalState, delta, chainStatus } = useStoreSlice((s) => ({
+    portalState: s.portalState,
+    delta: s.delta,
+    chainStatus: s.chainStatus,
+  }))
+  const agent = deriveAgentState(portalState, chainStatus, delta)
+  const state = agent.label
+  const queued = agent.queued
 
   const dot = (
     <motion.span
       aria-hidden
       variants={variants.statusDotPulse}
       animate="animate"
-      className={cn('size-2 shrink-0 rounded-full', violation ? 'bg-destructive' : 'bg-primary')}
+      className={cn('size-2 shrink-0 rounded-full', agent.dot)}
     />
   )
 
@@ -207,27 +211,39 @@ export function SideNav({ collapsed, onToggleCollapsed }) {
         collapsed ? 'w-16' : 'w-60',
       )}
     >
-      {/* Brand strip */}
-      <div className={cn('flex h-14 items-center gap-2 border-b border-border px-3', collapsed && 'justify-center px-0')}>
-        <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
+      {/* Brand strip — "Protocol SIFT Gateway" is the portal's hero identity, so
+          it is sized up, bright, and allowed to wrap to two lines rather than
+          truncate. The collapse control is top-aligned so a two-line brand is
+          never squeezed. */}
+      <div
+        className={cn(
+          'flex items-start gap-2.5 border-b border-border px-3 py-3',
+          collapsed && 'h-14 items-center justify-center px-0 py-0',
+        )}
+      >
+        <span aria-hidden className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
           <ShieldGlyph />
         </span>
         {!collapsed && (
           <div className="min-w-0 flex-1 leading-tight">
-            <p className="font-display truncate text-sm font-semibold tracking-tight text-foreground">Protocol SIFT Gateway</p>
-            <p className="mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Operations Portal</p>
+            <p className="font-display text-[15px] font-bold leading-snug tracking-tight text-foreground">
+              Protocol SIFT Gateway
+            </p>
+            <p className="mono mt-0.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Operations Portal</p>
           </div>
         )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={onToggleCollapsed}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className={cn('size-7 shrink-0', collapsed && 'hidden')}
-        >
-          <PanelLeftClose className="size-4" />
-        </Button>
+        {!collapsed && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onToggleCollapsed}
+            aria-label="Collapse sidebar"
+            className="mt-0.5 size-7 shrink-0"
+          >
+            <ChevronsLeft className="size-4" />
+          </Button>
+        )}
       </div>
 
       <AgentPanel collapsed={collapsed} />
@@ -266,7 +282,7 @@ export function SideNav({ collapsed, onToggleCollapsed }) {
             onClick={onToggleCollapsed}
             aria-label="Expand sidebar"
           >
-            <PanelLeftOpen className="size-4" />
+            <ChevronsRight className="size-4" />
           </Button>
         </div>
       )}

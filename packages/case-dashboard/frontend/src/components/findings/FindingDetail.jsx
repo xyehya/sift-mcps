@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Check, Pencil, RotateCcw, X } from 'lucide-react'
+import { Check, Layers, Pencil, RotateCcw, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import {
@@ -10,11 +10,13 @@ import {
   normStatus,
   statusMeta,
 } from '@/components/findings/findings-utils'
+import { ConfidenceRing } from '@/components/findings/ConfidenceRing'
 import { EditableField } from '@/components/findings/EditableField'
 import { FindingDetailSidebar } from '@/components/findings/FindingDetailSidebar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Finding detail (review pane). Header + narrative (editable) + confidence +
@@ -40,7 +42,25 @@ function normValue(v) {
   return Array.isArray(v) ? JSON.stringify(v.map(getTagString).sort()) : String(v ?? '')
 }
 
-export function FindingDetail({ finding, stagedItem, timeline, canReview, onApprove, onReject, onUnstage, onEdit, onNavigate }) {
+/** Read-only MITRE ATT&CK technique chips (mono T-codes) for the detail header. */
+function MitreChips({ ids }) {
+  if (!ids?.length) return null
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-1.5" aria-label="MITRE ATT&CK techniques">
+      <span className="mono text-[10px] uppercase tracking-wider text-muted-foreground">ATT&amp;CK</span>
+      {ids.map((id) => (
+        <Tooltip key={id}>
+          <TooltipTrigger asChild>
+            <Badge variant="outline" className="mono cursor-default text-[10px]">{id}</Badge>
+          </TooltipTrigger>
+          <TooltipContent>MITRE ATT&CK technique {id}</TooltipContent>
+        </Tooltip>
+      ))}
+    </div>
+  )
+}
+
+export function FindingDetail({ finding, stagedItem, timeline, canReview, onApprove, onStage, onReject, onUnstage, onEdit, onNavigate }) {
   // FindingDetail is keyed by finding.id in the parent, so it remounts (and the
   // single-editor state resets) whenever the selected finding changes — no
   // reset effect needed.
@@ -95,7 +115,7 @@ export function FindingDetail({ finding, stagedItem, timeline, canReview, onAppr
               <Button size="xs" variant="ghost" onClick={cancel}>Cancel</Button>
             </div>
           ) : (
-            <div className="mt-1.5 flex items-start gap-2">
+            <div className="mt-1.5 flex items-start gap-3">
               <h2 className="flex-1 text-base font-semibold leading-snug text-foreground">{eff.title}</h2>
               {canReview && (
                 <button
@@ -107,6 +127,8 @@ export function FindingDetail({ finding, stagedItem, timeline, canReview, onAppr
                   <Pencil className="size-3.5" />
                 </button>
               )}
+              {/* Graded confidence ring (≥85 jade · ≥65 amber · else crimson). */}
+              <ConfidenceRing finding={eff} />
             </div>
           )}
 
@@ -120,6 +142,8 @@ export function FindingDetail({ finding, stagedItem, timeline, canReview, onAppr
             )}
             {eventTs && <span className="mono text-muted-foreground">{String(eventTs).replace('T', ' ').substring(0, 19)}</span>}
           </div>
+
+          <MitreChips ids={eff.mitre_ids} />
         </header>
 
         {stagedItem && (
@@ -250,6 +274,11 @@ export function FindingDetail({ finding, stagedItem, timeline, canReview, onAppr
                 <Check className="size-3.5" /> Approve
               </Button>
             )}
+            {onStage && (
+              <Button variant="outline" size="sm" onClick={onStage} className="gap-1.5 text-status-staged">
+                <Layers className="size-3.5" /> Stage
+              </Button>
+            )}
             {status !== 'rejected' && (
               <Button variant="destructive" size="sm" onClick={onReject} className="gap-1.5">
                 <X className="size-3.5" /> Reject
@@ -258,7 +287,7 @@ export function FindingDetail({ finding, stagedItem, timeline, canReview, onAppr
           </>
         )}
         <div className="flex-1" />
-        {canReview && <span className="mono hidden text-[11px] text-muted-foreground sm:inline">j/k navigate · a approve · r reject</span>}
+        {canReview && <span className="mono hidden text-[11px] text-muted-foreground sm:inline">j/k navigate · a approve · s stage · r reject</span>}
       </div>
     </div>
   )

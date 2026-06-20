@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, ChevronsUpDown, Plus, Search } from 'lucide-react'
+import { Check, ChevronsUpDown, Lock, Plus, Search } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
@@ -51,8 +51,22 @@ function AgentStatus({ chainStatus, busy }) {
   )
 }
 
+/** Lifecycle badge for a case row (active / inactive / sealed). Tolerant of a
+    backend that only sends {id, active}: status falls back to active→inactive. */
+function caseStatusMeta(c) {
+  const s = (c.status || (c.active ? 'active' : 'inactive')).toLowerCase()
+  if (s === 'sealed' || s === 'archived' || s === 'closed') {
+    return { label: 'sealed', dot: 'bg-sev-med', text: 'text-sev-med', sealed: true }
+  }
+  if (s === 'active' || c.active) {
+    return { label: 'active', dot: 'bg-status-approved', text: 'text-status-approved' }
+  }
+  return { label: 'inactive', dot: 'bg-muted-foreground', text: 'text-muted-foreground' }
+}
+
 function CaseSelector({ activeCase, cases, isExaminer, onActivate, onCreate }) {
   const activeCaseId = activeCase?.case_id || activeCase?.id
+  const activeName = activeCase?.name || activeCase?.title
   const status = (activeCase?.status || (activeCaseId ? 'active' : '')).toUpperCase()
   return (
     <DropdownMenu>
@@ -61,7 +75,8 @@ function CaseSelector({ activeCase, cases, isExaminer, onActivate, onCreate }) {
           {activeCaseId ? (
             <>
               <span aria-hidden className="size-1.5 rounded-full bg-status-approved" />
-              <span className="max-w-[180px] truncate font-semibold">{activeCaseId}</span>
+              {activeName && <span className="max-w-[140px] truncate font-semibold uppercase">{activeName}</span>}
+              <span className="max-w-[160px] truncate text-muted-foreground">{activeCaseId}</span>
               {status && <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{status}</span>}
             </>
           ) : (
@@ -70,7 +85,7 @@ function CaseSelector({ activeCase, cases, isExaminer, onActivate, onCreate }) {
           <ChevronsUpDown className="size-3.5 opacity-60" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-72">
+      <DropdownMenuContent align="start" className="w-80">
         <DropdownMenuLabel>Cases</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {cases.length === 0 && (
@@ -78,27 +93,34 @@ function CaseSelector({ activeCase, cases, isExaminer, onActivate, onCreate }) {
             {isExaminer ? 'No cases yet — create one to begin.' : 'No cases found.'}
           </p>
         )}
-        {cases.map((c) => (
-          <DropdownMenuItem
-            key={c.id}
-            disabled={c.active}
-            onSelect={() => !c.active && onActivate(c)}
-            className="mono gap-2 text-xs"
-          >
-            <span
-              aria-hidden
-              className={cn('size-1.5 shrink-0 rounded-full', c.active ? 'bg-status-approved' : 'bg-muted-foreground')}
-            />
-            <span className="flex-1 truncate">{c.id}</span>
-            {c.active && <Check className="size-3.5 text-primary" />}
-          </DropdownMenuItem>
-        ))}
+        {cases.map((c) => {
+          const meta = caseStatusMeta(c)
+          return (
+            <DropdownMenuItem
+              key={c.id}
+              disabled={c.active}
+              onSelect={() => !c.active && onActivate(c)}
+              className="gap-2 text-xs"
+            >
+              <span aria-hidden className={cn('size-1.5 shrink-0 rounded-full', meta.dot)} />
+              <div className="flex min-w-0 flex-1 flex-col">
+                {c.name && <span className="truncate font-semibold uppercase">{c.name}</span>}
+                <span className="mono truncate text-[11px] text-muted-foreground">{c.id}</span>
+              </div>
+              <span className={cn('inline-flex items-center gap-1 text-[10px] uppercase tracking-wider', meta.text)}>
+                {meta.sealed && <Lock className="size-3" aria-hidden />}
+                {meta.label}
+              </span>
+              {c.active && <Check className="size-3.5 text-primary" />}
+            </DropdownMenuItem>
+          )
+        })}
         {isExaminer && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={onCreate} className="gap-2 text-primary">
               <Plus className="size-3.5" />
-              New case
+              Create case
             </DropdownMenuItem>
           </>
         )}

@@ -60,7 +60,7 @@ export function EvidenceChainSummary({ chainStatus, loading }) {
       <div className="grid grid-cols-2 gap-4">
         <Stat
           label="Manifest"
-          value={chainStatus?.manifest_version > 0 ? `v${chainStatus.manifest_version}` : '—'}
+          value={chainStatus?.manifest_version > 0 ? 'Recorded' : '—'}
         />
         <Stat
           label="Write-protect"

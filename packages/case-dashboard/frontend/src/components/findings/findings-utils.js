@@ -25,6 +25,37 @@ export function confClass(confidence) {
   return CONF_CLASS[(confidence ?? '').toUpperCase()] ?? null
 }
 
+/**
+ * Representative numeric score per categorical confidence, used by the graded
+ * confidence ring when a finding carries no explicit `confidence_score`. The
+ * categorical label stays the source of truth; the score only grades the ring.
+ */
+export const CONF_SCORE = { HIGH: 92, MEDIUM: 74, LOW: 48, SPECULATIVE: 30 }
+
+/** Numeric 0–100 confidence for a finding (explicit score wins, else mapped). */
+export function confidenceScore(finding) {
+  const explicit = finding?.confidence_score ?? finding?.confidenceScore
+  if (Number.isFinite(explicit)) return Math.max(0, Math.min(100, explicit))
+  return CONF_SCORE[(finding?.confidence ?? '').toUpperCase()] ?? null
+}
+
+/**
+ * Graded confidence ring (DESIGN-SYSTEM.md): ≥85 jade · ≥65 amber · else
+ * crimson — graded, NOT branded by category. Returns a static token text class
+ * + the matching CSS-var token for the SVG stroke (data-driven, no raw hex).
+ */
+export const RING_GRADE = {
+  jade: { text: 'text-status-approved', stroke: 'var(--status-approved)' },
+  amber: { text: 'text-sev-med', stroke: 'var(--sev-med)' },
+  crimson: { text: 'text-sev-high', stroke: 'var(--sev-high)' },
+}
+export function confidenceGrade(score) {
+  if (score == null) return null
+  if (score >= 85) return RING_GRADE.jade
+  if (score >= 65) return RING_GRADE.amber
+  return RING_GRADE.crimson
+}
+
 /** Status → static token classes + label. `draft` is surfaced as "Pending". */
 export const STATUS_CLASS = {
   approved: { label: 'Approved', text: 'text-status-approved', dot: 'bg-status-approved', ring: 'border-status-approved/40' },
