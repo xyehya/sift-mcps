@@ -75,7 +75,7 @@ const SEVERITIES = [
   { label: "High", cls: "border-sev-high/30 bg-sev-high/15 text-sev-high" },
   { label: "Medium", cls: "border-sev-med/30 bg-sev-med/15 text-sev-med" },
   { label: "Low", cls: "border-sev-low/30 bg-sev-low/15 text-sev-low" },
-  { label: "Speculative", cls: "border-sev-spec/30 bg-sev-spec/15 text-sev-spec" },
+  { label: "Speculative", cls: "border-sev-low/30 bg-sev-low/15 text-sev-low" }, /* TODO: was sev-spec; remapped to sev-low (steel) — sev-spec removed in token re-port */
 ]
 
 const STATUSES = [

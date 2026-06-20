@@ -92,7 +92,7 @@ export const TACTIC_ORDER = [
 export const TACTIC_CLASS = {
   'initial-access': { label: 'Initial Access', text: 'text-sev-med', dot: 'bg-sev-med', tint: 'bg-sev-med/10', ring: 'border-sev-med/40' },
   'execution': { label: 'Execution', text: 'text-sev-low', dot: 'bg-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/40' },
-  'persistence': { label: 'Persistence', text: 'text-sev-spec', dot: 'bg-sev-spec', tint: 'bg-sev-spec/10', ring: 'border-sev-spec/40' },
+  'persistence': { label: 'Persistence', text: 'text-sev-low', dot: 'bg-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/40' }, /* TODO: was sev-spec; remapped to sev-low (steel) — sev-spec removed in token re-port */
   'privilege-escalation': { label: 'Privilege Escalation', text: 'text-sev-high', dot: 'bg-sev-high', tint: 'bg-sev-high/10', ring: 'border-sev-high/40' },
   'defense-evasion': { label: 'Defense Evasion', text: 'text-status-staged', dot: 'bg-status-staged', tint: 'bg-status-staged/10', ring: 'border-status-staged/40' },
   'credential-access': { label: 'Credential Access', text: 'text-sev-high', dot: 'bg-sev-high', tint: 'bg-sev-high/10', ring: 'border-sev-high/40' },

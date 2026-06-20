@@ -1,56 +1,196 @@
-/* Mission Control — graphite ink + ONE warm orange accent (DESIGN-SYSTEM.md).
-   SINGLE token source. :root = Light theme. .dark = Dark theme (app default;
-   ThemeProvider toggles .dark). No raw hex anywhere else in the codebase —
-   components consume these via the token-mapped Tailwind utilities defined in
-   globals.css (@theme inline).
+/* ── SIFT Examiner Portal — Design Handoff Token Layer ──────────────────────
+   CANONICAL source for all colour decisions. Components consume tokens via
+   shadcn alias names or Tailwind utilities emitted from @theme inline in
+   globals.css. NO raw hex anywhere else.
 
-   Dark = the round-2 target identity: neutral graphite surfaces, warm off-white
-   ink, warm orange reserved for agent / authorize / primary action, redder
-   crimson for severity/destructive so they never blur into the accent.
-   Light = a clean COOL-NEUTRAL slate (not warm-cream) with the orange darkened
-   to #C2410C so it clears WCAG AA (≥4.5:1) as both text and button fill. */
+   :root  = Light theme.
+   .dark  = Dark theme (app default; ThemeProvider toggles .dark on <html>).
 
+   Architecture:
+     1. Handoff primitives  — the ground-truth values from the design handoff.
+     2. shadcn aliases      — derive from handoff primitives via var().
+     3. Forensic semantics  — derive from handoff primitives via var().
+
+   Updating a colour: change the handoff primitive only; aliases propagate. */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FONTS — theme-independent (self-hosted via @fontsource)
+   ═══════════════════════════════════════════════════════════════════════════ */
 :root {
-  /* fonts (theme-independent, self-hosted via @fontsource — no Google Fonts) */
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --font-display: "Space Grotesk", "Inter", system-ui, -apple-system, sans-serif;
-
-  /* ---------- Light — cool graphite-neutral (slate), AA-verified ---------- */
-  --background:#F8FAFC;  --foreground:#0F172A;
-  --card:#FFFFFF;        --card-foreground:#0F172A;
-  --popover:#FFFFFF;     --popover-foreground:#0F172A;
-  --primary:#C2410C;     --primary-foreground:#FFFFFF;   /* orange darkened → AA on light */
-  --secondary:#F1F5F9;   --secondary-foreground:#1E293B;
-  --muted:#F1F5F9;       --muted-foreground:#566173;
-  --accent:#E8ECF1;      --accent-foreground:#0F172A;    /* hover/overlay surface */
-  --destructive:#DC2626; --destructive-foreground:#FFFFFF;
-  --border:#E2E8F0;      --input:#E2E8F0;  --ring:#C2410C;
-  --radius:0.75rem;
-  /* forensic semantics — light-tuned for WCAG AA (≥4.5:1 as text on white) */
-  --sev-high:#DC2626; --sev-med:#B45309; --sev-low:#3F6493; --sev-spec:#7C3AED;
-  --status-approved:#15803D; --status-pending:#566173; --status-staged:#7C3AED; --status-rejected:#DC2626;
-  --grade-full:#15803D; --grade-partial:#B45309; --grade-none:#94A3B8;
-  --chart-1:#C2410C; --chart-2:#3F6493; --chart-3:#B45309; --chart-4:#7C3AED; --chart-5:#15803D;
+  --radius: 0.75rem;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME  (:root)
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* ── Handoff primitives — LIGHT ────────────────────────────────────────── */
+  --bg-void:    #E4E8EE;
+  --bg-base:    #EDF0F5;
+  --bg-surface: #FFFFFF;
+  --bg-raised:  #F4F7FB;
+  --bg-overlay: #FFFFFF;
+
+  --border-faint: #EAEDF2;
+  --border-soft:  #DCE2EA;
+  --border-hard:  #C3CBD6;
+
+  --text-bright:   #0F1318;
+  --text-primary:  #363C45;
+  --text-muted:    #697282;
+  --text-ghost:    #98A1AF;
+
+  --orange:       #DD5A2F;
+  --orange-bright:#F26C3D;
+  --orange-deep:  #B6431D;
+  --orange-dim:   rgba(221, 90, 47, .12);
+  --orange-faint: rgba(221, 90, 47, .05);
+
+  --jade:    #2E8C55;
+  --amber:   #A9750F;
+  --violet:  #6A52A6;
+  --crimson: #CB392C;
+  --steel:   #3C6BA8;
+
+  --track:     #E6EBF1;
+  --on-accent: #ffffff;
+
+  --shadow: rgba(30, 50, 80, .14);
+  --edge:   inset 0 1px 0 rgba(255, 255, 255, .9);
+
+  --glass-hi: rgba(255, 255, 255, .8);
+  --glass-lo: rgba(40, 60, 90, .07);
+
+  --ease-snap:   cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── shadcn aliases — derive from handoff primitives ───────────────────── */
+  --background:          var(--bg-void);
+  --foreground:          var(--text-bright);
+  --card:                var(--bg-surface);
+  --card-foreground:     var(--text-bright);
+  --popover:             var(--bg-raised);
+  --popover-foreground:  var(--text-bright);
+  --primary:             var(--orange);
+  --primary-foreground:  var(--on-accent);
+  --secondary:           var(--bg-raised);
+  --secondary-foreground:var(--text-primary);
+  --muted:               var(--bg-raised);
+  --muted-foreground:    var(--text-muted);
+  --accent:              var(--bg-overlay);
+  --accent-foreground:   var(--text-bright);
+  --destructive:         var(--crimson);
+  --destructive-foreground: var(--text-bright);
+  --border: var(--border-soft);
+  --input:  var(--border-soft);
+  --ring:   var(--orange);
+
+  /* ── Forensic semantics — derive from handoff primitives ───────────────── */
+  --sev-high: var(--crimson);
+  --sev-med:  var(--amber);
+  --sev-low:  var(--steel);
+
+  --status-approved: var(--jade);
+  --status-pending:  var(--amber);
+  --status-staged:   var(--violet);
+  --status-rejected: var(--crimson);
+
+  --grade-full:    var(--jade);
+  --grade-partial: var(--amber);
+  --grade-none:    var(--text-ghost);
+
+  --chart-1: var(--orange);
+  --chart-2: var(--steel);
+  --chart-3: var(--amber);
+  --chart-4: var(--violet);
+  --chart-5: var(--jade);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DARK THEME  (.dark) — app default; ThemeProvider toggles this class
+   ═══════════════════════════════════════════════════════════════════════════ */
 .dark {
-  /* ---------- Dark (default app theme) — graphite ink + warm orange ---------- */
-  --background:#0A0A0C;  --foreground:#F2EFEA;
-  --card:#16171B;        --card-foreground:#F2EFEA;
-  --popover:#1C1D22;     --popover-foreground:#F2EFEA;
-  --primary:#F4754B;     --primary-foreground:#0A0A0C;   /* warm orange — agent / authorize / CTA */
-  --secondary:#1C1D22;   --secondary-foreground:#CFCCC6;
-  --muted:#1C1D22;       --muted-foreground:#8C8A85;
-  --accent:#232429;      --accent-foreground:#F2EFEA;    /* hover / popover / command palette */
-  --destructive:#E2554C; --destructive-foreground:#F2EFEA;
-  --border:#2A2B31;      --input:#2A2B31;  --ring:#F4754B;
-  --radius:0.75rem;
-  /* forensic semantics — crimson kept redder than orange so they never blur.
-     sev-high bumped #E2554C → #EB5F57 (+brightness) for WCAG AA on dark bg (#16171B): ~4.6:1.
-     sev-low bumped #6E8BB0 → #7A98BE for same reason: ~4.7:1. */
-  --sev-high:#EB5F57; --sev-med:#E0A23E; --sev-low:#7A98BE; --sev-spec:#A795BD;
-  --status-approved:#5FB87E; --status-pending:#8C8A85; --status-staged:#A795BD; --status-rejected:#EB5F57;
-  --grade-full:#5FB87E; --grade-partial:#E0A23E; --grade-none:#5E5C58;
-  --chart-1:#F4754B; --chart-2:#6E8BB0; --chart-3:#E0A23E; --chart-4:#A795BD; --chart-5:#5FB87E;
+  /* ── Handoff primitives — DARK ─────────────────────────────────────────── */
+  --bg-void:    #0A0A0C;
+  --bg-base:    #0E0F12;
+  --bg-surface: #16171B;
+  --bg-raised:  #1C1D22;
+  --bg-overlay: #232429;
+
+  --border-faint: #1E1F24;
+  --border-soft:  #2A2B31;
+  --border-hard:  #3A3C44;
+
+  --text-bright:  #F2EFEA;
+  --text-primary: #CFCCC6;
+  --text-muted:   #9D9A94;
+  --text-ghost:   #74716C;
+
+  --orange:       #F4754B;
+  --orange-bright:#FF8A5E;
+  --orange-deep:  #D85A33;
+  --orange-dim:   rgba(244, 117, 75, .12);
+  --orange-faint: rgba(244, 117, 75, .05);
+
+  --jade:    #5FB87E;
+  --amber:   #E0A23E;
+  --violet:  #A795BD;
+  --crimson: #E2554C;
+  --steel:   #6E8BB0;
+
+  --track:     #1C1D22;
+  --on-accent: #1a0d07;
+
+  --shadow: rgba(0, 0, 0, .5);
+  --edge:   inset 0 1px 0 rgba(255, 255, 255, .045);
+
+  --glass-hi: rgba(255, 255, 255, .16);
+  --glass-lo: rgba(0, 0, 0, .22);
+
+  --ease-snap:   cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── shadcn aliases — derive from handoff primitives ───────────────────── */
+  --background:          var(--bg-void);
+  --foreground:          var(--text-bright);
+  --card:                var(--bg-surface);
+  --card-foreground:     var(--text-bright);
+  --popover:             var(--bg-raised);
+  --popover-foreground:  var(--text-bright);
+  --primary:             var(--orange);
+  --primary-foreground:  var(--on-accent);
+  --secondary:           var(--bg-raised);
+  --secondary-foreground:var(--text-primary);
+  --muted:               var(--bg-raised);
+  --muted-foreground:    var(--text-muted);
+  --accent:              var(--bg-overlay);
+  --accent-foreground:   var(--text-bright);
+  --destructive:         var(--crimson);
+  --destructive-foreground: var(--text-bright);
+  --border: var(--border-soft);
+  --input:  var(--border-soft);
+  --ring:   var(--orange);
+
+  /* ── Forensic semantics — derive from handoff primitives ───────────────── */
+  --sev-high: var(--crimson);
+  --sev-med:  var(--amber);
+  --sev-low:  var(--steel);
+
+  --status-approved: var(--jade);
+  --status-pending:  var(--amber);
+  --status-staged:   var(--violet);
+  --status-rejected: var(--crimson);
+
+  --grade-full:    var(--jade);
+  --grade-partial: var(--amber);
+  --grade-none:    var(--text-ghost);
+
+  --chart-1: var(--orange);
+  --chart-2: var(--steel);
+  --chart-3: var(--amber);
+  --chart-4: var(--violet);
+  --chart-5: var(--jade);
 }

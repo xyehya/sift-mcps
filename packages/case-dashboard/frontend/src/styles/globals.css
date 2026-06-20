@@ -30,18 +30,39 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
+  /* handoff primitives — exposed as Tailwind utilities (bg-[--bg-surface] etc.) */
+  --color-bg-void:    var(--bg-void);
+  --color-bg-base:    var(--bg-base);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-raised:  var(--bg-raised);
+  --color-bg-overlay: var(--bg-overlay);
+  --color-border-faint: var(--border-faint);
+  --color-border-soft:  var(--border-soft);
+  --color-border-hard:  var(--border-hard);
+  --color-text-bright:  var(--text-bright);
+  --color-text-primary: var(--text-primary);
+  --color-text-muted:   var(--text-muted);
+  --color-text-ghost:   var(--text-ghost);
+  --color-orange:        var(--orange);
+  --color-orange-bright: var(--orange-bright);
+  --color-orange-deep:   var(--orange-deep);
+  --color-jade:    var(--jade);
+  --color-amber:   var(--amber);
+  --color-violet:  var(--violet);
+  --color-crimson: var(--crimson);
+  --color-steel:   var(--steel);
+
   /* forensic semantics */
   --color-sev-high: var(--sev-high);
-  --color-sev-med: var(--sev-med);
-  --color-sev-low: var(--sev-low);
-  --color-sev-spec: var(--sev-spec);
+  --color-sev-med:  var(--sev-med);
+  --color-sev-low:  var(--sev-low);
   --color-status-approved: var(--status-approved);
-  --color-status-pending: var(--status-pending);
-  --color-status-staged: var(--status-staged);
+  --color-status-pending:  var(--status-pending);
+  --color-status-staged:   var(--status-staged);
   --color-status-rejected: var(--status-rejected);
-  --color-grade-full: var(--grade-full);
+  --color-grade-full:    var(--grade-full);
   --color-grade-partial: var(--grade-partial);
-  --color-grade-none: var(--grade-none);
+  --color-grade-none:    var(--grade-none);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
