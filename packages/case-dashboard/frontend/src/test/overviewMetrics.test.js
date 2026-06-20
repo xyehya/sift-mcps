@@ -34,9 +34,10 @@ describe('deriveKpis', () => {
 })
 
 describe('severityCounts', () => {
-  it('returns ordered rows with counts and a token class bundle', () => {
+  it('returns ordered rows with counts and a token class bundle (High/Med/Low only)', () => {
+    // P0 model-shift: SPECULATIVE tier dropped; only three tiers surfaced.
     const rows = severityCounts(FINDINGS, NOW)
-    expect(rows.map((r) => r.key)).toEqual(['HIGH', 'MEDIUM', 'LOW', 'SPECULATIVE'])
+    expect(rows.map((r) => r.key)).toEqual(['HIGH', 'MEDIUM', 'LOW'])
     expect(rows.find((r) => r.key === 'HIGH').count).toBe(2)
     expect(rows.find((r) => r.key === 'HIGH').cls.bg).toBe('bg-sev-high')
     expect(rows.find((r) => r.key === 'HIGH').pct).toBe(100)

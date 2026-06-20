@@ -24,7 +24,7 @@ export const NAV_GROUPS = [
   {
     label: 'Command',
     items: [
-      { id: 'overview', label: 'Overview', icon: LayoutGrid },
+      { id: 'overview', label: 'Overview', icon: LayoutGrid, badge: 'blockedActions' },
     ],
   },
   {

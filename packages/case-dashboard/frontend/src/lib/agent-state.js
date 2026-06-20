@@ -94,7 +94,7 @@ export function deriveAgentState(portalState, chainStatus, delta) {
   }
 }
 
-/** Normalised gated-action list for the Authorization Required queue. */
+/** Normalised gated-action list — kept for backward compat with AuthorizationQueue. */
 export function gatedActions(portalState) {
   return (portalState?.gated_actions ?? []).map((a) => ({
     id: a.id ?? a.tool,
@@ -103,6 +103,36 @@ export function gatedActions(portalState) {
     icon: a.icon ?? 'key-round',
     risk: a.risk ?? 'elevated',
   }))
+}
+
+/**
+ * blockedActions — the read-only blocked-tool-calls list for the
+ * BlockedActionsPane (model-shift §3: agent runs autonomously; blocked calls
+ * are surfaced for AWARENESS, not approval). Normalises from the
+ * `portalState.blocked_actions` field; also falls back to `gated_actions` for
+ * backwards compat so the mock data can supply either field. Each entry:
+ * { id, title, tool, guard, target, timestamp, detail }.
+ */
+export function blockedActions(portalState) {
+  const src = portalState?.blocked_actions ?? portalState?.gated_actions ?? []
+  return src.map((a, i) => ({
+    id: a.id ?? a.tool ?? `ba-${i}`,
+    title: a.title ?? a.tool ?? 'Blocked tool call',
+    tool: a.tool ?? '',
+    guard: a.guard ?? guardFromRisk(a.risk),
+    target: a.target ?? '',
+    timestamp: a.timestamp ?? '',
+    detail: a.detail ?? '',
+  }))
+}
+
+/** Derive a human-readable guard label from a risk field (compat with old shape). */
+function guardFromRisk(risk) {
+  if (!risk) return ''
+  if (risk === 'irreversible') return 'Integrity guard'
+  if (risk === 'reauth') return 'Custody guard'
+  if (risk === 'elevated') return 'Acquisition guard'
+  return ''
 }
 
 /** Count HIGH-confidence findings (the "high severity" mission tile). */

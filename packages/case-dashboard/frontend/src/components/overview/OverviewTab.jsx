@@ -12,18 +12,16 @@ import { MitreMatrix } from '@/components/overview/MitreMatrix'
 import { EvidenceChainSummary } from '@/components/overview/EvidenceChainSummary'
 import { CaseContextCard } from '@/components/overview/CaseContextCard'
 import { AgentHero } from '@/components/overview/AgentHero'
-import { AuthorizationQueue } from '@/components/overview/AuthorizationQueue'
+import { BlockedActionsPane } from '@/components/overview/BlockedActionsPane'
 import { MissionStats } from '@/components/overview/MissionStats'
 
 // ─────────────────────────────────────────────────────────────────────────
-// Overview → Mission Control (spec §4 / RUN-4b). The agent-supervision landing:
-// the agent hero + the Authorization Required queue (the page hero — gated MCP
-// actions the agent cannot self-approve) + the mission KPI tiles, over the
-// retained RUN-3 analytics (findings KPI row, finding-velocity, severity
-// distribution, recent activity, evidence-chain summary, MITRE, case brief).
-// A faint ambient field (orange aurora + drifting hairline grid, reduced-motion
-// gated) sits behind the content. Reads only EXISTING polled store slices +
-// portalState — the useStore.interface contract stays frozen.
+// Overview → Mission Control (P0 model-shift). The agent-supervision landing.
+// The agent runs AUTONOMOUSLY in the MCP sandbox — the BlockedActionsPane is a
+// READ-ONLY awareness pane ("Blocked actions · POLICY GUARDS · READ-ONLY"), not
+// an authorization queue. No approve/deny buttons. HITL is step-up password on
+// Findings Approve and Commit-to-record. Reads only EXISTING polled store slices
+// + portalState — the useStore.interface contract stays frozen.
 // ─────────────────────────────────────────────────────────────────────────
 
 /** Card wrapper with a section title (consistent rhythm across the page). */
@@ -108,7 +106,7 @@ export function OverviewTab() {
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               <div className="flex flex-col gap-6 lg:col-span-2">
                 <AgentHero />
-                <AuthorizationQueue />
+                <BlockedActionsPane />
               </div>
               <MissionStats />
             </div>

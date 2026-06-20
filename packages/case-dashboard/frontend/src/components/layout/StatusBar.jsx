@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { navigateToTab } from '@/hooks/useHashRoute'
 import { deriveSeal, SEAL_DOT_CLASS, SEAL_TONE_CLASS } from '@/lib/chain-status'
-import { statusCounts } from '@/lib/agent-state'
+import { statusCounts, deriveAgentState } from '@/lib/agent-state'
 import { Button } from '@/components/ui/button'
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -22,11 +22,16 @@ function Dot() {
   return <span aria-hidden className="px-2 text-border">·</span>
 }
 
-/** Agent state derived from the same signals the Header indicator uses. */
-function agentState(chainStatus, stagedCount) {
-  if (chainStatus?.status === 'violation') return { label: 'INTEGRITY HALT', dot: 'bg-destructive', tone: 'text-destructive' }
-  if (stagedCount > 0) return { label: 'AWAITING AUTH', dot: 'bg-primary', tone: 'text-primary' }
-  return { label: 'MONITORING', dot: 'bg-muted-foreground', tone: 'text-muted-foreground' }
+/**
+ * Status-bar agent label derived from the authoritative portalState agent key.
+ * Uses the SAME `deriveAgentState` selector as the hero + sidebar (they always agree).
+ */
+function statusBarAgent(portalState, chainStatus, delta) {
+  const a = deriveAgentState(portalState, chainStatus, delta)
+  if (a.key === 'halt') return { label: 'INTEGRITY HALT', dot: 'bg-destructive', tone: 'text-destructive' }
+  if (a.key === 'awaiting-authorization') return { label: 'AWAITING AUTH', dot: 'bg-primary', tone: 'text-primary' }
+  if (a.key === 'working') return { label: 'ACTIVE · INVESTIGATING', dot: 'bg-status-approved', tone: 'text-status-approved' }
+  return { label: 'IDLE', dot: 'bg-muted-foreground', tone: 'text-muted-foreground' }
 }
 
 export function StatusBar() {
@@ -41,7 +46,7 @@ export function StatusBar() {
 
   const { label, tone } = deriveSeal(chainStatus)
   const stagedCount = delta.length
-  const agent = agentState(chainStatus, stagedCount)
+  const agent = statusBarAgent(portalState, chainStatus, delta)
   const syncLabel = lastSync ? `sync ${formatDistanceToNow(lastSync, { addSuffix: true })}` : 'syncing…'
 
   // Live custody coverage + MCP backend health (RUN-4b; from portalState/chain).

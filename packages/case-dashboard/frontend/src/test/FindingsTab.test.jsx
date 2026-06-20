@@ -58,10 +58,19 @@ describe('FindingsTab', () => {
     expect(screen.queryByText('bulk file access')).not.toBeInTheDocument() // approved, filtered out of pending
   })
 
-  it('examiner can stage an approval (POST /api/delta with whole document)', async () => {
+  it('examiner approve opens step-up modal; confirming the password stages the approval', async () => {
+    // P0 model-shift: Approve is now password-gated (step-up authorization).
+    // Clicking Approve opens the modal; the postDelta call happens after confirm.
     useStore.setState({ selectedFindingId: 'F-1' })
     renderTab()
+    // Open the step-up modal.
     fireEvent.click(screen.getByRole('button', { name: /^Approve$/ }))
+    // The modal should now be visible.
+    expect(await screen.findByText(/Step-up authorization/i)).toBeInTheDocument()
+    // Fill in a password and confirm.
+    const passInput = screen.getByLabelText(/Examiner password/i)
+    fireEvent.change(passInput, { target: { value: 'test-pass' } })
+    fireEvent.click(screen.getByRole('button', { name: /Authorize & approve/i }))
     await waitFor(() => expect(postDelta).toHaveBeenCalledTimes(1))
     const sent = postDelta.mock.calls[0][0]
     expect(sent.items).toEqual([expect.objectContaining({ id: 'F-1', action: 'approve' })])

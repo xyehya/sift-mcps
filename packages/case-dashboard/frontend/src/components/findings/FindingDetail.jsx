@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Check, Layers, Pencil, RotateCcw, X } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { Check, KeyRound, Layers, Pencil, RotateCcw, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import {
@@ -15,6 +15,7 @@ import { EditableField } from '@/components/findings/EditableField'
 import { FindingDetailSidebar } from '@/components/findings/FindingDetailSidebar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -26,7 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 // approve/reject/edit affordances are hidden and a read-only notice is shown.
 // ─────────────────────────────────────────────────────────────────────────
 
-const CONF_OPTIONS = ['SPECULATIVE', 'LOW', 'MEDIUM', 'HIGH']
+const CONF_OPTIONS = ['LOW', 'MEDIUM', 'HIGH']
 const NARRATIVE = [
   ['description', 'Description'],
   ['body', 'Narrative'],
@@ -36,6 +37,74 @@ const NARRATIVE = [
 
 function Label({ children }) {
   return <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{children}</p>
+}
+
+/**
+ * StepUpApproveModal — password-gated approval dialog (handoff model-shift §3).
+ * The "Authorize & approve" button is disabled until a non-empty password is
+ * entered. Production: wire `onConfirm(pass)` to real step-up auth endpoint.
+ * Prototype accepts any non-empty password.
+ */
+function StepUpApproveModal({ findingId, open, onClose, onConfirm }) {
+  const [pass, setPass] = useState('')
+  const inputRef = useRef(null)
+  // Reset password when opened; focus input
+  const handleOpenChange = (next) => {
+    if (!next) { setPass(''); onClose() }
+  }
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent
+        className="max-w-sm"
+        onOpenAutoFocus={(e) => { e.preventDefault(); inputRef.current?.focus() }}
+      >
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-sm font-semibold">
+            <KeyRound className="size-4 text-status-approved" aria-hidden />
+            Step-up authorization · Approve {findingId}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 text-xs">
+          <p className="text-muted-foreground leading-relaxed">
+            Approving a finding is a chain-of-custody action. Enter your examiner password to authorize.
+          </p>
+          <div className="space-y-1.5">
+            <label htmlFor="stepup-pass" className="mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Examiner password
+            </label>
+            <Input
+              ref={inputRef}
+              id="stepup-pass"
+              type="password"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && pass) onConfirm(pass) }}
+              placeholder="Enter password…"
+              autoComplete="current-password"
+              className="h-9 text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="ghost" size="sm" onClick={() => { setPass(''); onClose() }}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={!pass}
+            onClick={() => { onConfirm(pass) }}
+            className="gap-1.5 bg-status-approved text-primary-foreground hover:bg-status-approved/90 disabled:opacity-50"
+          >
+            <Check className="size-3.5" aria-hidden />
+            Authorize &amp; approve
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 function normValue(v) {
@@ -60,10 +129,16 @@ function MitreChips({ ids }) {
   )
 }
 
-export function FindingDetail({ finding, stagedItem, timeline, canReview, onApprove, onStage, onReject, onUnstage, onEdit, onNavigate }) {
+export function FindingDetail({
+  finding, stagedItem, timeline, canReview,
+  addToast,
+  stepUpOpen, onStepUpClose, onStepUpOpen,
+  onApprove, onStage, onReject, onUnstage, onEdit, onNavigate,
+}) {
   // FindingDetail is keyed by finding.id in the parent, so it remounts (and the
   // single-editor state resets) whenever the selected finding changes — no
-  // reset effect needed.
+  // reset effect needed. stepUpOpen/close are lifted to the parent so the
+  // keyboard shortcut 'a' can also trigger the modal from FindingsTab.
   const [editingField, setEditingField] = useState(null)
   const [titleDraft, setTitleDraft] = useState('')
 
@@ -270,7 +345,7 @@ export function FindingDetail({ finding, stagedItem, timeline, canReview, onAppr
         ) : (
           <>
             {status !== 'approved' && (
-              <Button size="sm" onClick={onApprove} className="gap-1.5 bg-status-approved text-primary-foreground hover:bg-status-approved/90">
+              <Button size="sm" onClick={() => onStepUpOpen?.()} className="gap-1.5 bg-status-approved text-primary-foreground hover:bg-status-approved/90">
                 <Check className="size-3.5" /> Approve
               </Button>
             )}
@@ -289,6 +364,20 @@ export function FindingDetail({ finding, stagedItem, timeline, canReview, onAppr
         <div className="flex-1" />
         {canReview && <span className="mono hidden text-[11px] text-muted-foreground sm:inline">j/k navigate · a approve · s stage · r reject</span>}
       </div>
+
+      {/* Step-up authorization modal for Approve (handoff model-shift §3).
+          stepUpOpen is lifted to FindingsTab so keyboard 'a' can also trigger it. */}
+      <StepUpApproveModal
+        findingId={finding.id}
+        open={!!stepUpOpen}
+        onClose={() => onStepUpClose?.()}
+        onConfirm={() => {
+          // Prototype accepts any non-empty password — production wires to real step-up auth.
+          onStepUpClose?.()
+          onApprove()
+          if (addToast) addToast(`Finding approved · step-up verified`, 'success')
+        }}
+      />
     </div>
   )
 }

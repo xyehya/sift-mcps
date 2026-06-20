@@ -174,23 +174,67 @@ const TIMELINE = [
 const CHAIN_STATUS = { status: 'ok', manifest_version: 3, hmac_verify_needed: false, write_protected: true }
 
 // Agent Command & Control state (DB-authority `portalState` contract — see
-// lib/agent-state.js). Agent is paused awaiting authorization so the Mission
-// Control hero + Authorization Required queue are populated for sign-off.
+// lib/agent-state.js). Agent runs autonomously; blocked_actions populates the
+// read-only BlockedActionsPane for awareness. Blocked-actions timestamps:
+const _fmtTs = (msAgo) => {
+  const m = Math.round(msAgo / 60000)
+  if (m < 2) return 'just now'
+  if (m < 60) return `${m}m ago`
+  return `${Math.round(m / 60)}h ago`
+}
+
 const PORTAL_STATE = {
   agent: {
-    state: 'awaiting-authorization',
+    state: 'working',
     // Case-driven synopsis (RUN-4c #40): describes the investigation, not the
-    // auth queue (that lives in the Authorization Required panel). Long enough to
+    // blocked queue (that lives in the BlockedActionsPane). Long enough to
     // exercise the hero's Show-more truncation.
     headline:
       'Reconstructed a hands-on-keyboard intrusion across NORTHWIND: RDP lateral movement from WS-FINANCE-03 into the DC-01 domain controller, a "UpdateSync" persistence task side-loading an unsigned DLL, and bulk staging of HR-confidential records on FS-01. 47 findings proposed from 3 fused evidence sources; the highest-severity chain is corroborated by firewall flow logs.',
     metrics: { records_parsed: 1284402, findings_proposed: 47, sources_fused: 3 },
   },
-  gated_actions: [
-    { id: 'ga-1', title: 'Acquire volatile memory — WS-FINANCE-03', tool: 'mcp:acquire.memory', icon: 'cpu', risk: 'irreversible' },
-    { id: 'ga-2', title: 'Unseal EV-014 for re-hash', tool: 'mcp:evidence.unseal', icon: 'lock-open', risk: 'reauth' },
-    { id: 'ga-3', title: 'Quarantine payload.dll → isolated vault', tool: 'mcp:fs.quarantine', icon: 'shield', risk: 'elevated' },
+  // Blocked tool-calls — the agent ran these autonomously; policy guards
+  // stopped them. Surfaced READ-ONLY in the BlockedActionsPane.
+  blocked_actions: [
+    {
+      id: 'ba-1',
+      title: 'Unseal EV-014 for memory re-hash',
+      tool: 'mcp:evidence.unseal',
+      guard: 'Integrity guard',
+      target: 'EV-014 · WS-FINANCE-03-mem.img',
+      timestamp: _fmtTs(4 * 60000),
+      detail: 'The policy sandbox blocks direct evidence unsealing — integrity guard prevents modification of sealed artifacts.',
+    },
+    {
+      id: 'ba-2',
+      title: 'Acquire volatile memory from WS-FINANCE-03',
+      tool: 'mcp:acquire.memory',
+      guard: 'Acquisition guard',
+      target: 'WS-FINANCE-03',
+      timestamp: _fmtTs(9 * 60000),
+      detail: 'Live acquisition requires an active, non-archived case. Acquisition guard enforces this constraint.',
+    },
+    {
+      id: 'ba-3',
+      title: 'Quarantine payload.dll → isolated vault',
+      tool: 'mcp:fs.quarantine',
+      guard: 'Egress guard',
+      target: 'C:\\ProgramData\\sync.dll',
+      timestamp: _fmtTs(14 * 60000),
+      detail: 'File egress outside the evidence directory is blocked by the egress guard policy.',
+    },
+    {
+      id: 'ba-4',
+      title: 'Read raw network capture — FW-EDGE',
+      tool: 'mcp:pcap.read',
+      guard: 'Read-only guard',
+      target: 'FW-EDGE-capture.pcap',
+      timestamp: _fmtTs(22 * 60000),
+      detail: 'Raw PCAP access requires explicit evidence registration; read-only guard blocked unregistered path.',
+    },
   ],
+  // Keep gated_actions for backward compat with sidebar badge + deriveAgentState queued count
+  gated_actions: [],
   backends: { up: 7, total: 8, degraded: ['yara'] },
   // A NAMED system/tool blocker (not a policy gate) — the Authorization Required
   // panel surfaces this with a distinct treatment (RUN-4c HITL taxonomy).

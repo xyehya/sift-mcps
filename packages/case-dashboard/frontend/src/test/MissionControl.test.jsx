@@ -50,12 +50,14 @@ describe('Mission Control overview', () => {
     expect(screen.getAllByText('Awaiting authorization').length).toBeGreaterThan(0)
   })
 
-  it('renders the Authorization Required queue (agent cannot self-approve)', () => {
+  it('renders the Blocked actions read-only pane (P0 model-shift: no approve/authorize buttons)', () => {
+    // portalState supplies blocked_actions derived from gated_actions compat shim.
+    // The pane is READ-ONLY — no "Review & authorize" buttons exist.
     renderOverview()
-    expect(screen.getByText('Authorization required')).toBeInTheDocument()
-    expect(screen.getByText('Agent cannot self-approve')).toBeInTheDocument()
-    expect(screen.getByText('mcp:acquire.memory')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Review & authorize/i })).toBeInTheDocument()
+    expect(screen.getByText('Blocked actions')).toBeInTheDocument()
+    expect(screen.getByText('Policy guards · Read-only')).toBeInTheDocument()
+    // No authorization buttons in the new model.
+    expect(screen.queryByRole('button', { name: /Review & authorize/i })).not.toBeInTheDocument()
   })
 
   it('renders the mission KPI tiles (Evidence · High severity · IOCs · MCP backends)', () => {

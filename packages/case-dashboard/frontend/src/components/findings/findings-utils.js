@@ -9,15 +9,22 @@
 // Never build a token class by interpolation (`text-${x}`) — it won't generate.
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Confidence == the forensic severity dimension. Order = high → speculative. */
-export const CONF_ORDER = ['HIGH', 'MEDIUM', 'LOW', 'SPECULATIVE']
+/**
+ * Confidence == the forensic severity dimension. Order = high → low.
+ * "Speculative" was dropped in P0 model-shift (handoff §3: High/Med/Low only).
+ * The SPECULATIVE fallback entry is kept in CONF_CLASS for backward compat with
+ * any existing data that carries the label — it renders with the low-steel tone.
+ */
+export const CONF_ORDER = ['HIGH', 'MEDIUM', 'LOW']
 
 /** Static token classes per confidence (→ --sev-* tokens). */
 export const CONF_CLASS = {
   HIGH: { label: 'High', text: 'text-sev-high', bg: 'bg-sev-high', tint: 'bg-sev-high/10', ring: 'border-sev-high/40' },
   MEDIUM: { label: 'Medium', text: 'text-sev-med', bg: 'bg-sev-med', tint: 'bg-sev-med/10', ring: 'border-sev-med/40' },
   LOW: { label: 'Low', text: 'text-sev-low', bg: 'bg-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/40' },
-  SPECULATIVE: { label: 'Speculative', text: 'text-sev-spec', bg: 'bg-sev-spec', tint: 'bg-sev-spec/10', ring: 'border-sev-spec/40' },
+  // Backward-compat fallback — renders as Low/steel so the UI doesn't break on
+  // historical data; the examiner edit select no longer exposes this tier.
+  SPECULATIVE: { label: 'Speculative', text: 'text-sev-low', bg: 'bg-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/40' },
 }
 
 /** Resolve the class bundle for a finding's confidence (null when unknown). */
@@ -29,6 +36,7 @@ export function confClass(confidence) {
  * Representative numeric score per categorical confidence, used by the graded
  * confidence ring when a finding carries no explicit `confidence_score`. The
  * categorical label stays the source of truth; the score only grades the ring.
+ * SPECULATIVE kept for backward compat (maps to the crimson range, score 30).
  */
 export const CONF_SCORE = { HIGH: 92, MEDIUM: 74, LOW: 48, SPECULATIVE: 30 }
 

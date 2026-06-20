@@ -33,12 +33,16 @@ export function deriveKpis(summary, findings, delta) {
  * without a second pass. `total` is the grand total (for the share-of-total pct).
  */
 export function severityCounts(findings, now = Date.now()) {
-  const counts = { HIGH: 0, MEDIUM: 0, LOW: 0, SPECULATIVE: 0 }
-  const awaiting = { HIGH: 0, MEDIUM: 0, LOW: 0, SPECULATIVE: 0 }
-  const recent = { HIGH: 0, MEDIUM: 0, LOW: 0, SPECULATIVE: 0 }
+  // Only the three canonical tiers (P0 model-shift: SPECULATIVE dropped from UI).
+  // Historical SPECULATIVE findings are folded into LOW so their counts aren't lost.
+  const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 }
+  const awaiting = { HIGH: 0, MEDIUM: 0, LOW: 0 }
+  const recent = { HIGH: 0, MEDIUM: 0, LOW: 0 }
   const DAY = 24 * 3600 * 1000
   for (const f of findings ?? []) {
-    const c = (f.confidence ?? '').toUpperCase()
+    const raw = (f.confidence ?? '').toUpperCase()
+    // Map SPECULATIVE → LOW for display (backward compat with existing data).
+    const c = (raw === 'SPECULATIVE' ? 'LOW' : raw)
     if (!(c in counts)) continue
     counts[c] += 1
     if (normStatus(f) === 'draft') awaiting[c] += 1

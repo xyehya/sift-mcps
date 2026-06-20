@@ -58,6 +58,7 @@ export function FindingsTab() {
   const [search, setSearch] = useState('')
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [stepUpOpen, setStepUpOpen] = useState(false)
 
   // Confidence/severity filter rides the hash (`#/findings?sev=high`) — it has no
   // store key (the surface is frozen), so it lives here, seeded from the hash on
@@ -170,7 +171,7 @@ export function FindingsTab() {
         if (idx > 0) setSelectedFindingId(list[idx - 1].id)
       } else if (canReview && e.key === 'a' && curId) {
         e.preventDefault()
-        stageRef.current(curId, 'approve')
+        setStepUpOpen(true) // opens step-up modal (model-shift: 'a' → step-up, not direct approve)
       } else if (canReview && e.key === 's' && curId) {
         e.preventDefault()
         stageRef.current(curId, 'stage')
@@ -184,7 +185,7 @@ export function FindingsTab() {
   }, [commandPaletteOpen, canReview, setSelectedFindingId])
 
   return (
-    <div className="flex h-full overflow-hidden bg-background">
+    <div className="grid h-full overflow-hidden bg-background" style={{ gridTemplateColumns: 'minmax(0,5fr) minmax(0,7fr)' }}>
       <FindingsList
         list={filtered}
         loading={isLoading}
@@ -204,7 +205,7 @@ export function FindingsTab() {
         onBatch={batch}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-col overflow-hidden">
         {currentFinding ? (
           <FindingDetail
             key={currentFinding.id}
@@ -212,6 +213,10 @@ export function FindingsTab() {
             stagedItem={stagedItem}
             timeline={timeline}
             canReview={canReview}
+            addToast={addToast}
+            stepUpOpen={stepUpOpen}
+            onStepUpClose={() => setStepUpOpen(false)}
+            onStepUpOpen={() => setStepUpOpen(true)}
             onApprove={() => stage(currentFinding.id, 'approve')}
             onStage={() => stage(currentFinding.id, 'stage')}
             onReject={() => stage(currentFinding.id, 'reject')}

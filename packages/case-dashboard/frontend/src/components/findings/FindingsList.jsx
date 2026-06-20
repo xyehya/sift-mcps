@@ -141,7 +141,7 @@ export function FindingsList({
   }
 
   return (
-    <div className="flex w-72 shrink-0 flex-col overflow-hidden border-r border-border bg-card">
+    <div className="flex min-w-0 flex-col overflow-hidden border-r border-border bg-card">
       <div className="border-b border-border p-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />

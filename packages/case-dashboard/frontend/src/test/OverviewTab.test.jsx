@@ -51,10 +51,11 @@ describe('OverviewTab', () => {
     expect(window.location.hash).toBe('#/findings')
   })
 
-  it('renders the severity distribution and MITRE techniques', () => {
+  it('renders the severity distribution (High/Med/Low) and MITRE techniques', () => {
+    // P0 model-shift: Speculative tier dropped — only High/Medium/Low shown.
     renderOverview()
     expect(screen.getByText('High')).toBeInTheDocument()
-    expect(screen.getByText('Speculative')).toBeInTheDocument()
+    expect(screen.queryByText('Speculative')).not.toBeInTheDocument()
     expect(screen.getByText('T1059')).toBeInTheDocument()
   })
 

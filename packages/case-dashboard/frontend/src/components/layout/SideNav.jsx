@@ -6,7 +6,7 @@ import { NAV_GROUPS } from '@/lib/nav'
 import { navigateToTab } from '@/hooks/useHashRoute'
 import { useStoreSlice } from '@/store/useStore'
 import { useAuth } from '@/lib/auth-context'
-import { deriveAgentState } from '@/lib/agent-state'
+import { deriveAgentState, blockedActions } from '@/lib/agent-state'
 import { useMotionVariants } from '@/lib/motion'
 import { ThemeToggle } from '@/lib/theme'
 import { Button } from '@/components/ui/button'
@@ -28,6 +28,7 @@ function useBadgeCounts() {
   return useStoreSlice((s) => ({
     pendingFindings: s.findings.filter((f) => f.status === 'draft').length,
     openTodos: s.summary?.todos?.open ?? 0,
+    blockedActions: blockedActions(s.portalState).length,
   }))
 }
 
@@ -83,11 +84,11 @@ function NavItem({ item, active, collapsed, onSelect, badgeCount }) {
   return button
 }
 
-/** Agent-state panel — CLAUDE · AGENT identity + current state + queued count.
+/** Agent-state panel — CLAUDE · AGENT identity + current state + blocked count.
    Derived through the shared deriveAgentState() so the sidebar, the Mission-
-   Control hero and the StatusBar all agree on the agent's state and the number
-   of gated actions awaiting authorization (portalState.gated_actions, falling
-   back to staged delta). */
+   Control hero and the StatusBar all agree on the agent's state. Blocked count
+   comes from blockedActions() (model-shift: agent runs autonomously, blocked
+   calls are read-only awareness, not authorization gates). */
 function AgentPanel({ collapsed }) {
   const variants = useMotionVariants()
   const { portalState, delta, chainStatus } = useStoreSlice((s) => ({
@@ -97,7 +98,8 @@ function AgentPanel({ collapsed }) {
   }))
   const agent = deriveAgentState(portalState, chainStatus, delta)
   const state = agent.label
-  const queued = agent.queued
+  const blocked = blockedActions(portalState)
+  const blockedCount = blocked.length
 
   const dot = (
     <motion.span
@@ -118,7 +120,7 @@ function AgentPanel({ collapsed }) {
         </TooltipTrigger>
         <TooltipContent side="right">
           Claude agent · {state}
-          {queued > 0 ? ` · ${queued} gated` : ''}
+          {blockedCount > 0 ? ` · ${blockedCount} blocked` : ''}
         </TooltipContent>
       </Tooltip>
     )
@@ -132,7 +134,7 @@ function AgentPanel({ collapsed }) {
         <span className="truncate text-sm font-medium text-foreground">{state}</span>
       </div>
       <p className="mono mt-1 text-[11px] text-muted-foreground">
-        {queued > 0 ? `${queued} gated ${queued === 1 ? 'action' : 'actions'} queued` : 'No actions queued'}
+        {blockedCount > 0 ? `${blockedCount} tool call${blockedCount === 1 ? '' : 's'} blocked` : 'No blocked actions'}
       </p>
     </div>
   )

@@ -5,7 +5,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { useMotionVariants, useCountUp } from '@/lib/motion'
-import { deriveAgentState, agentSynopsis } from '@/lib/agent-state'
+import { deriveAgentState, agentSynopsis, blockedActions } from '@/lib/agent-state'
 import { Card } from '@/components/ui/card'
 import { MiniSparkline } from '@/components/overview/MiniSparkline'
 
@@ -84,11 +84,12 @@ export function AgentHero() {
 
   const agent = deriveAgentState(portalState, chainStatus, delta)
   const synopsis = agentSynopsis(portalState, activeCase, agent)
-  const queued = agent.queued
+  const blocked = blockedActions(portalState)
+  const blockedCount = blocked.length
   const gatedLabel =
-    queued > 0
-      ? `${queued} action${queued === 1 ? '' : 's'} awaiting authorization`
-      : 'No actions awaiting authorization'
+    blockedCount > 0
+      ? `${blockedCount} tool call${blockedCount === 1 ? '' : 's'} blocked by policy guards`
+      : 'No blocked actions'
 
   // ── Collapsed: a compact bar that still surfaces state + the gated count. ──
   if (collapsed) {
@@ -107,7 +108,7 @@ export function AgentHero() {
             Autonomous Investigator
           </span>
           <span aria-hidden className="text-border">·</span>
-          <span className={cn('truncate text-xs font-medium', queued > 0 ? 'text-primary' : 'text-muted-foreground')}>
+          <span className={cn('truncate text-xs font-medium', blockedCount > 0 ? 'text-sev-high' : 'text-muted-foreground')}>
             {gatedLabel}
           </span>
           <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground" aria-hidden />
