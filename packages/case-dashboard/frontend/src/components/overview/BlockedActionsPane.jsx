@@ -133,7 +133,7 @@ function BlockedDetailModal({ action, onClose }) {
   )
 }
 
-export function BlockedActionsPane() {
+export function BlockedActionsPane({ fill = false }) {
   const [detailAction, setDetailAction] = useState(null)
   const { portalState } = useStoreSlice((s) => ({ portalState: s.portalState }))
 
@@ -144,7 +144,9 @@ export function BlockedActionsPane() {
 
   return (
     <>
-      <Card className="gap-0 p-0">
+      {/* When fill=true the card grows to consume remaining column height;
+          the CardContent becomes the internal scroll region with no max-height cap. */}
+      <Card className={cn('gap-0 p-0', fill && 'flex flex-1 flex-col')}>
         <CardHeader className="flex flex-row items-center gap-2 border-b border-border p-4">
           <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-md border border-sev-high/30 bg-sev-high/10">
             <ShieldX className="size-[15px] text-sev-high" />
@@ -158,7 +160,7 @@ export function BlockedActionsPane() {
           </span>
         </CardHeader>
 
-        <CardContent className="max-h-72 overflow-y-auto px-3 py-1">
+        <CardContent className={cn('overflow-y-auto px-3 py-1', fill ? 'min-h-0 flex-1' : 'max-h-72')}>
           {displayActions.length === 0 ? (
             <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
               <ShieldX className="size-4 text-muted-foreground/50" aria-hidden />

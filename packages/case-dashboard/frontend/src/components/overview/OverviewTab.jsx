@@ -103,7 +103,7 @@ export function OverviewTab() {
     (activeCase?.incident_type ?? activeCase?.nature ?? '').toUpperCase()
 
   return (
-    <div className="relative isolate">
+    <div className="relative isolate flex min-h-full flex-col">
       {/* Ambient field — orange aurora + drifting hairline grid, reduced-motion gated. */}
       <div aria-hidden className="ambient" />
 
@@ -112,7 +112,7 @@ export function OverviewTab() {
         initial="hidden"
         animate="show"
         aria-label="Mission Control"
-        className="relative z-10 mx-auto flex w-full max-w-7xl flex-col gap-4 p-4 sm:p-6"
+        className="relative z-10 mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 p-4 sm:p-6"
       >
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <header className="flex flex-wrap items-start justify-between gap-3">
@@ -143,13 +143,13 @@ export function OverviewTab() {
         ) : (
           /* ── Body: 8fr / 4fr grid (handoff §Screen 1) ─────────────────── */
           <div
-            className="grid gap-4"
+            className="grid flex-1 gap-4"
             style={{ gridTemplateColumns: 'minmax(0,8fr) minmax(0,4fr)', alignItems: 'stretch' }}
           >
             {/* ═══════════════════════════════════
                 LEFT COLUMN
                 ═══════════════════════════════════ */}
-            <div className="flex flex-col gap-4">
+            <div className="flex min-h-0 flex-col gap-4">
 
               {/* 1 — Hero: Autonomous Investigator */}
               <AgentHero />
@@ -219,25 +219,27 @@ export function OverviewTab() {
                 </Section>
               </div>
 
-              {/* 4 — Blocked actions (read-only pane) */}
-              <BlockedActionsPane />
+              {/* 4 — Blocked actions (read-only pane, flex-fills remaining left-col height) */}
+              <div className="flex min-h-0 flex-1 flex-col">
+                <BlockedActionsPane fill />
+              </div>
             </div>
 
             {/* ═══════════════════════════════════
                 RIGHT COLUMN
                 ═══════════════════════════════════ */}
-            <div className="flex flex-col gap-4">
+            <div className="flex min-h-0 flex-col gap-4">
 
-              {/* 1 — 2×2 stat tiles */}
+              {/* 1 — 2×2 stat tiles (fixed height, no grow) */}
               <MissionStats />
 
-              {/* 2 — Agent activity (live tail, flex-fills) */}
-              <Card className="flex flex-1 flex-col gap-0 p-4">
+              {/* 2 — Agent activity (live tail, flex-fills column) */}
+              <Card className="flex min-h-0 flex-1 flex-col gap-0 p-4">
                 <AgentActivityFeed />
               </Card>
 
-              {/* 3 — Recent findings (flex-fills) */}
-              <Card className="flex flex-1 flex-col gap-0 p-4">
+              {/* 3 — Recent findings (flex-fills column) */}
+              <Card className="flex min-h-0 flex-1 flex-col gap-0 p-4">
                 <RecentFindings />
               </Card>
             </div>
