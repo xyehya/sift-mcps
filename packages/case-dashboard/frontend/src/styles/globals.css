@@ -189,6 +189,11 @@
     mask-image: radial-gradient(ellipse at 50% 0%, black 30%, transparent 80%);
     animation: ambient-drift 40s linear infinite;
   }
+  @keyframes dropin {
+    from { opacity: 0; transform: translateY(-8px) scale(.98); }
+    to   { opacity: 1; transform: translateY(0)   scale(1);    }
+  }
+
   @keyframes ambient-breathe {
     0%,
     100% {
