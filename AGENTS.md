@@ -1,13 +1,37 @@
 # Agent Operating Contract
 
-This repository is managed through Linear project `ProtocolSIFTGateway`.
-Linear is the active queue; repo docs are reference packs; code and tests are
-the implementation truth.
+Top-level contract for the `sift-mcps` monorepo. All agents (Claude, Codex,
+Gemini) read this first. On conflict, this file wins — except inside the portal
+frontend, where the frontend `AGENTS.md` (design-system contract) governs UI.
+
+## Repo map & where to work
+
+- **This folder** (`/home/yk/AI/SIFTHACK/sift-mcps`) is the `main` checkout — the
+  Python MCP gateway + the *current* portal. Launching an agent here puts you on
+  `main`.
+- **Portal v3 rebuild does NOT happen on `main`.** It lives in a linked worktree:
+  - Frontend: `packages/case-dashboard/frontend`
+  - Branch: `portal-v3/p0-foundation`
+  - Worktree: `.claude/worktrees/portal-v3-p0-foundation`
+  - **For portal work, `cd` into that worktree first** (a worktree folder is
+    permanently bound to its branch — entering it = you are on that branch, no
+    checkout needed). The frontend there carries its own `AGENTS.md` /
+    `DESIGN-SYSTEM.md` — read those before touching UI.
+- A worktree folder *is* its branch. One branch can be checked out in only one
+  worktree at a time. Walk between folders to switch branches.
+
+## Active focus
+
+Portal v3 frontend rebuild (design-first). Design source of truth = the SIFT
+Design System project (synced to Claude Design via `DesignSync` / `/design-sync`);
+the codebase is the consumer. Token sync is one-way: when `tokens.css` changes in
+the design project, copy it to `packages/case-dashboard/frontend/src/styles/tokens.css`.
+Severity is **High / Medium / Low only** — the old `--sev-spec`/violet tier is dropped.
 
 ## Code Discovery
 
-This project uses `codebase-memory-mcp` to maintain a knowledge graph. Always
-prefer MCP graph tools over grep/glob/file-search for code discovery:
+This project uses `codebase-memory-mcp` to maintain a knowledge graph. Prefer MCP
+graph tools over grep/glob for code discovery:
 
 1. `search_graph` to find functions, classes, routes, variables.
 2. `trace_path` to inspect callers, callees, and data flow.
@@ -18,58 +42,6 @@ prefer MCP graph tools over grep/glob/file-search for code discovery:
 Fall back to `rg` for string literals, configs, shell scripts, docs, or when the
 graph is insufficient.
 
-## Linear Source Of Truth
-
-Use `docs/new-docs/LINEAR_OPERATING_MODEL.md` as the canonical operating model.
-Use `docs/new-docs/LINEAR_ORCHESTRATION_GUIDE.md` only for older prompt
-examples and context.
-
-Primary views:
-
-- `PSG Command`: small dashboard and drill-down starting point.
-- `PSG Execution`: accepted runnable work.
-- `PSG Parked`: operator-gated and decision-only work.
-- `PSG Review`: issues awaiting review.
-- `PSG All Open Drilldown`: audit view, not daily picking.
-
-## Issue Rules
-
-Before starting work, read the Linear issue, parent issue, relations, latest
-comments, and linked docs. Work one accepted issue at a time unless the
-orchestrator explicitly assigns a combined session.
-
-Agents must not create top-level issues by default.
-
-When new work appears, use this order:
-
-1. Comment on the current issue.
-2. Add checklist items to the current issue.
-3. Propose sub-issues in a comment table.
-4. Create sub-issues only if explicitly allowed.
-5. Create new top-level issues only with operator approval.
-
-Required proposed follow-up format:
-
-```md
-## Proposed Follow-Ups
-
-| Candidate | Why | Parent | Type | Tests | Accept / Reject |
-|---|---|---|---|---|---|
-| <title> | <reason> | <XYE-parent> | sub-issue / discovery / decision | <validation> | pending |
-```
-
-## Labels And Relations
-
-- `queue:command`: visible in the condensed dashboard.
-- `queue:run-alone`: one agent owns it alone.
-- `queue:combine`: plan or execute with its related pair.
-- `gate:operator`: do not start without operator timing approval.
-- `type:decision`: decision-only until the operator chooses.
-
-Use `duplicate` for duplicate work, `related` for context, and `blocked by` only
-for real sequencing dependencies. Do not leave open issues blocked by canceled
-issues.
-
 ## Agent Worktrees
 
 The harness `isolation: worktree` flag does NOT create isolated working
@@ -79,15 +51,17 @@ checked-out branch, so concurrent writer agents serialize onto or clobber each
 other's branch and intermingle uncommitted changes). Do not rely on it for
 writer agents.
 
-When dispatching parallel coding agents (an agent team), the orchestrator sets
-up isolation MANUALLY:
+A single agent needs no extra worktrees — `cd` into the target branch's worktree,
+work there, commit there. Per-agent worktrees are only for **parallel writers**.
+When dispatching parallel coding agents (an agent team), the orchestrator sets up
+isolation MANUALLY:
 
 1. Create one worktree per agent off the current integrated `HEAD` (never a
    stale `origin/main` — that base bug drops already-merged work):
-   `git worktree add ../wt/<issue-slug> -b <branch> HEAD`
+   `git worktree add ../wt/<slug> -b <branch> HEAD`
 2. In each agent's prompt, set its working directory to that worktree's absolute
-   path and instruct it to `cd` there first, run every edit / `uv` / pytest /
-   git command from that directory, and COMMIT its work to its branch in that
+   path and instruct it to `cd` there first, run every edit / npm / pytest / git
+   command from that directory, and COMMIT its work to its branch in that
    worktree. It must never touch the main checkout.
 3. After an agent finishes, the orchestrator merges its branch into main,
    re-validates, then removes the worktree (`git worktree remove`).
@@ -96,16 +70,16 @@ Never run two writer agents in the same working tree.
 
 ## GitHub
 
-Linear is the issue source of truth. GitHub is for code review and merge proof.
+GitHub is for code review and merge proof.
 
-- Use `Refs XYE-123` for partial, exploratory, or review-only PRs.
-- Use `Fixes XYE-123` only when the PR fully satisfies acceptance criteria.
 - Do not auto-open PRs for triage or discovery output unless explicitly asked.
-- Do not enable two-way GitHub issue sync unless the operator requests it.
+- Commit or push only when the operator asks. If on the default branch, branch
+  first.
+- Do not enable two-way issue sync unless the operator requests it.
 
 ## Signoff
 
-Post a Linear closeout comment before ending substantive work:
+Post a closeout before ending substantive work:
 
 ```md
 Result: DONE | IN REVIEW | BLOCKED
@@ -117,4 +91,11 @@ Next action:
 ```
 
 Never paste secrets, raw tokens, DSNs, passwords, private keys, service-role
-keys, or sensitive full evidence paths into Linear, GitHub, or docs.
+keys, or sensitive full evidence paths into GitHub, docs, or any external service.
+
+## Linear (paused)
+
+The Linear `ProtocolSIFTGateway` issue queue is **paused** during the portal v3
+rebuild. The canonical operating model is preserved at
+`docs/new-docs/LINEAR_OPERATING_MODEL.md` (and `LINEAR_ORCHESTRATION_GUIDE.md`)
+for when the track resumes. Until then, do not gate work on Linear issues.
