@@ -139,6 +139,7 @@ export function IocsTab() {
                 {headers.map((h, i) => (
                   <th
                     key={h || `col-${i}`}
+                    scope="col"
                     className="mono whitespace-nowrap px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground"
                   >
                     {h}

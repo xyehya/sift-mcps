@@ -55,8 +55,8 @@ function SummaryTable({ data }) {
     <table className={TABLE}>
       <thead>
         <tr className="border-b border-border-soft bg-bg-raised">
-          <th className={TH}>Metric Key</th>
-          <th className={TH}>Count</th>
+          <th scope="col" className={TH}>Metric Key</th>
+          <th scope="col" className={TH}>Count</th>
         </tr>
       </thead>
       <tbody>
@@ -130,10 +130,10 @@ function TimelineTable({ data }) {
     <table className={TABLE}>
       <thead>
         <tr className="border-b border-border-soft bg-bg-raised">
-          <th className={`${TH} w-1/4`}>Timestamp</th>
-          <th className={`${TH} w-1/6`}>Host</th>
-          <th className={`${TH} w-1/6`}>Type</th>
-          <th className={TH}>Description</th>
+          <th scope="col" className={`${TH} w-1/4`}>Timestamp</th>
+          <th scope="col" className={`${TH} w-1/6`}>Host</th>
+          <th scope="col" className={`${TH} w-1/6`}>Type</th>
+          <th scope="col" className={TH}>Description</th>
         </tr>
       </thead>
       <tbody>
@@ -161,11 +161,11 @@ function IocsTable({ data }) {
     <table className={TABLE}>
       <thead>
         <tr className="border-b border-border-soft bg-bg-raised">
-          <th className={`${TH} w-1/3`}>Value</th>
-          <th className={TH}>Type</th>
-          <th className={TH}>Category</th>
-          <th className={TH}>Host</th>
-          <th className={TH}>Sources</th>
+          <th scope="col" className={`${TH} w-1/3`}>Value</th>
+          <th scope="col" className={TH}>Type</th>
+          <th scope="col" className={TH}>Category</th>
+          <th scope="col" className={TH}>Host</th>
+          <th scope="col" className={TH}>Sources</th>
         </tr>
       </thead>
       <tbody>
@@ -191,9 +191,9 @@ function MitreTable({ data }) {
     <table className={TABLE}>
       <thead>
         <tr className="border-b border-border-soft bg-bg-raised">
-          <th className={`${TH} w-1/4`}>Technique ID</th>
-          <th className={`${TH} w-1/2`}>Name</th>
-          <th className={TH}>Findings</th>
+          <th scope="col" className={`${TH} w-1/4`}>Technique ID</th>
+          <th scope="col" className={`${TH} w-1/2`}>Name</th>
+          <th scope="col" className={TH}>Findings</th>
         </tr>
       </thead>
       <tbody>
@@ -217,10 +217,10 @@ function EvidenceTable({ data }) {
     <table className={TABLE}>
       <thead>
         <tr className="border-b border-border-soft bg-bg-raised">
-          <th className={`${TH} w-1/3`}>Path</th>
-          <th className={TH}>Size</th>
-          <th className={`${TH} w-1/3`}>Hash (SHA-256)</th>
-          <th className={TH}>Status</th>
+          <th scope="col" className={`${TH} w-1/3`}>Path</th>
+          <th scope="col" className={TH}>Size</th>
+          <th scope="col" className={`${TH} w-1/3`}>Hash (SHA-256)</th>
+          <th scope="col" className={TH}>Status</th>
         </tr>
       </thead>
       <tbody>

@@ -108,6 +108,7 @@ export function RegisteredEvidenceTable({
                 {COLUMNS.map(({ key, label }) => (
                   <th
                     key={key}
+                    scope="col"
                     className="mono cursor-pointer select-none px-3 py-2 font-semibold hover:text-foreground"
                     onClick={() => onSort(key)}
                     aria-sort={sortCol === key ? (sortAsc ? 'ascending' : 'descending') : 'none'}
@@ -115,8 +116,8 @@ export function RegisteredEvidenceTable({
                     {label} {sortCol === key ? (sortAsc ? '▲' : '▼') : ''}
                   </th>
                 ))}
-                <th className="mono px-3 py-2 font-semibold">Referenced By</th>
-                <th className="mono px-3 py-2 text-right font-semibold">Action</th>
+                <th scope="col" className="mono px-3 py-2 font-semibold">Referenced By</th>
+                <th scope="col" className="mono px-3 py-2 text-right font-semibold">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-faint">

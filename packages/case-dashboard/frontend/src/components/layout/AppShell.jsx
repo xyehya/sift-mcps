@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 
 import { useStoreSlice } from '@/store/useStore'
 import { useDataPolling } from '@/hooks/useDataPolling'
@@ -12,19 +12,7 @@ import { StatusBar } from '@/components/layout/StatusBar'
 import { CommandPalette } from '@/components/layout/CommandPalette'
 import { CommitDrawer } from '@/components/layout/CommitDrawer'
 import { TabPlaceholder } from '@/components/layout/TabPlaceholder'
-import { OverviewTab } from '@/components/overview/OverviewTab'
-import { FindingsTab } from '@/components/findings/FindingsTab'
-import { EvidenceTab } from '@/components/evidence/EvidenceTab'
-import { BackendsTab } from '@/components/backends/BackendsTab'
-// === ENTITY tabs (Timeline · Hosts · Accounts · IOCs) ===
-import { TimelineTab } from '@/components/timeline/TimelineTab'
-import { HostsTab } from '@/components/hosts/HostsTab'
-import { AccountsTab } from '@/components/accounts/AccountsTab'
-import { IocsTab } from '@/components/iocs/IocsTab'
-// === REPORT tabs (Reports · TODOs · Settings) ===
-import { ReportsTab } from '@/components/reports/ReportsTab'
-import { TodosTab } from '@/components/todos/TodosTab'
-import { SettingsTab } from '@/components/settings/SettingsTab'
+import { SkeletonBlock } from '@/components/common/Skeleton'
 
 // ─────────────────────────────────────────────────────────────────────────
 // AppShell (spec §3 layout + §4 IA) — the authenticated frame: collapsible
@@ -32,29 +20,52 @@ import { SettingsTab } from '@/components/settings/SettingsTab'
 // region, StatusBar, plus the CommandPalette + CommitDrawer hosts. Owns the
 // 15s data poll, hash routing, and the ⌘K hotkey.
 //
-// Tab CONTENT: Overview + Findings are the RUN-3 reference tabs (wired below);
-// the remaining tabs render the on-brand TabPlaceholder until their Phase-1
-// feature agents build them.
+// Tab CONTENT: each tab is React.lazy-loaded behind a <Suspense> boundary so
+// the initial bundle stays small (PERF-1); the tabId→component mapping is a
+// data-driven registry (MOD-2) rather than an if-ladder. Heavy vendors
+// (react/radix/framer-motion/recharts) are split into vendor chunks via the
+// Rollup manualChunks config in vite.config.js.
 // ─────────────────────────────────────────────────────────────────────────
 
 const MOBILE_BREAKPOINT = 1024
 
-/** Render the active tab's content (reference tabs built; rest = placeholder). */
-function TabContent({ tabId }) {
-  if (tabId === 'overview') return <OverviewTab />
-  if (tabId === 'findings') return <FindingsTab />
-  if (tabId === 'evidence') return <EvidenceTab />
-  if (tabId === 'backends') return <BackendsTab />
+// tabId → lazy component registry (data-driven; MOD-2). Each entry is a
+// route-level code-split point (PERF-1). default-export interop: the tab
+// modules are named exports, so re-map to `default` for React.lazy.
+const TAB_COMPONENTS = {
+  overview: lazy(() => import('@/components/overview/OverviewTab').then((m) => ({ default: m.OverviewTab }))),
+  findings: lazy(() => import('@/components/findings/FindingsTab').then((m) => ({ default: m.FindingsTab }))),
+  evidence: lazy(() => import('@/components/evidence/EvidenceTab').then((m) => ({ default: m.EvidenceTab }))),
+  backends: lazy(() => import('@/components/backends/BackendsTab').then((m) => ({ default: m.BackendsTab }))),
   // === ENTITY tabs (Timeline · Hosts · Accounts · IOCs) ===
-  if (tabId === 'timeline') return <TimelineTab />
-  if (tabId === 'hosts') return <HostsTab />
-  if (tabId === 'accounts') return <AccountsTab />
-  if (tabId === 'iocs') return <IocsTab />
+  timeline: lazy(() => import('@/components/timeline/TimelineTab').then((m) => ({ default: m.TimelineTab }))),
+  hosts: lazy(() => import('@/components/hosts/HostsTab').then((m) => ({ default: m.HostsTab }))),
+  accounts: lazy(() => import('@/components/accounts/AccountsTab').then((m) => ({ default: m.AccountsTab }))),
+  iocs: lazy(() => import('@/components/iocs/IocsTab').then((m) => ({ default: m.IocsTab }))),
   // === REPORT tabs (Reports · TODOs · Settings) ===
-  if (tabId === 'reports') return <ReportsTab />
-  if (tabId === 'todos') return <TodosTab />
-  if (tabId === 'settings') return <SettingsTab />
-  return <TabPlaceholder tabId={tabId} />
+  reports: lazy(() => import('@/components/reports/ReportsTab').then((m) => ({ default: m.ReportsTab }))),
+  todos: lazy(() => import('@/components/todos/TodosTab').then((m) => ({ default: m.TodosTab }))),
+  settings: lazy(() => import('@/components/settings/SettingsTab').then((m) => ({ default: m.SettingsTab }))),
+}
+
+/** Token skeleton shown while a lazy tab chunk resolves (Suspense fallback). */
+function TabFallback() {
+  return (
+    <div className="p-6">
+      <SkeletonBlock rows={8} gap={12} />
+    </div>
+  )
+}
+
+/** Render the active tab's content from the lazy registry; unknown → placeholder. */
+function TabContent({ tabId }) {
+  const Tab = TAB_COMPONENTS[tabId]
+  if (!Tab) return <TabPlaceholder tabId={tabId} />
+  return (
+    <Suspense fallback={<TabFallback />}>
+      <Tab />
+    </Suspense>
+  )
 }
 
 export function AppShell() {
@@ -99,6 +110,14 @@ export function AppShell() {
   // own their own vertical scroll.
   return (
     <div className="h-screen overflow-x-auto overflow-y-hidden bg-background text-foreground">
+      {/* Skip-to-content (USE-1): visually hidden until focused, then revealed
+          as the first Tab stop so keyboard/SR users can jump past the nav. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[1000] focus:rounded-md focus:border focus:border-border-hard focus:bg-card focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        Skip to main content
+      </a>
       <div className="flex h-full min-w-[64rem]">
         <SideNav collapsed={collapsed} onToggleCollapsed={() => setCollapsed((c) => !c)} />
 
@@ -107,6 +126,7 @@ export function AppShell() {
 
           <main
             ref={mainRef}
+            id="main-content"
             tabIndex={-1}
             aria-label={`${tabLabel(activeTab)} content`}
             className="flex-1 overflow-y-auto outline-none"
