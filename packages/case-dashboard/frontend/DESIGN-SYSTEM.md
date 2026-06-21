@@ -59,10 +59,10 @@ it does **not** get orange. This is what "trimmed down" means.
 | `--jade` `#5FB87E` | sealed · online · approved · high-confidence |
 | `--amber` `#E0A23E` | warn · medium severity · mid-confidence |
 | `--steel` `#6E8BB0` | low severity · informational (cool, recedes) |
-| `--violet` `#A795BD` | spec severity · staged |
+| `--violet` `#A795BD` | staged (a STATUS, not a severity) |
 | `--crimson` `#E2554C` | high severity · rejected · irreversible (kept redder than orange so they never blur) |
 
-**Severity scale:** HIGH = crimson · MEDIUM = amber · LOW = steel · SPEC = violet.
+**Severity scale:** HIGH = crimson · MEDIUM = amber · LOW = steel. (High/Med/Low only — there is no fourth severity tier; the old `--sev-spec`/violet tier was dropped. Violet is `--status-staged`, a status.)
 **Status scale:** PENDING = ghost-outline · STAGED = violet · APPROVED = jade · REJECTED = crimson.
 **Confidence ring:** ≥85 jade · ≥65 amber · else crimson (graded, not branded).
 
