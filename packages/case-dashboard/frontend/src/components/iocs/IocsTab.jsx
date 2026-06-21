@@ -90,7 +90,9 @@ export function IocsTab() {
     ? [...HEADERS_BASE, ...HEADERS_TAIL]
     : [...HEADERS_BASE, 'Hosts', ...HEADERS_TAIL]
 
-  const title = `Indicators of Compromise${isSingleHost ? ` — Host: ${singleHostName}` : ''}`
+  const subtitle = isSingleHost
+    ? `Host: ${singleHostName}`
+    : 'Extracted from approved findings'
 
   const filterBar = (
     <div className="flex flex-wrap items-center gap-2">
@@ -108,7 +110,7 @@ export function IocsTab() {
 
   if (isLoading) {
     return (
-      <EntityShell title="Indicators of Compromise" ariaLabel="Indicators of compromise">
+      <EntityShell title="Indicators of Compromise" subtitle="Extracted from approved findings" ariaLabel="Indicators of compromise">
         <SkeletonBlock rows={10} gap={12} />
       </EntityShell>
     )
@@ -116,9 +118,10 @@ export function IocsTab() {
 
   return (
     <EntityShell
-      title={title}
-      count={filtered.length}
-      countLabel={`of ${iocs.length}`}
+      title="Indicators of Compromise"
+      subtitle={subtitle}
+      shownCount={filtered.length}
+      totalCount={iocs.length}
       filterBar={filterBar}
       ariaLabel="Indicators of compromise"
     >
@@ -136,7 +139,7 @@ export function IocsTab() {
                 {headers.map((h, i) => (
                   <th
                     key={h || `col-${i}`}
-                    className="mono whitespace-nowrap px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                    className="mono whitespace-nowrap px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground"
                   >
                     {h}
                   </th>

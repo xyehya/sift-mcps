@@ -20,7 +20,7 @@ function SortHeader({ col, sortKey, sortAsc, onSort }) {
     return (
       <th
         className={cn(
-          'mono whitespace-nowrap px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground',
+          'mono whitespace-nowrap px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground',
           col.align === 'right' && 'text-right',
         )}
       >
@@ -37,7 +37,7 @@ function SortHeader({ col, sortKey, sortAsc, onSort }) {
         type="button"
         onClick={() => onSort(col.key)}
         className={cn(
-          'mono inline-flex w-full items-center gap-1 px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+          'mono inline-flex w-full items-center gap-1 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
           col.align === 'right' && 'justify-end',
         )}
       >
@@ -113,7 +113,7 @@ export function EntityTable({
                   <td
                     key={col.key}
                     className={cn(
-                      'px-3 py-3 align-top',
+                      'px-4 py-3 align-middle',
                       col.align === 'right' && 'text-right',
                       col.nowrap && 'whitespace-nowrap',
                     )}

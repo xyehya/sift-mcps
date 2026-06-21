@@ -70,7 +70,7 @@ export function HostsTab() {
 
   if (isLoading) {
     return (
-      <EntityShell title="Hosts in Scope" ariaLabel="Hosts in scope">
+      <EntityShell title="Hosts in Scope" subtitle="Systems attributed in this case" ariaLabel="Hosts in scope">
         <SkeletonBlock rows={8} gap={12} />
       </EntityShell>
     )
@@ -79,7 +79,7 @@ export function HostsTab() {
   function renderCell(row, key) {
     switch (key) {
       case 'host':
-        return <span className="mono font-semibold text-foreground">{displayHost(row.host)}</span>
+        return <span className="mono text-[13px] font-medium text-foreground">{displayHost(row.host)}</span>
       case 'findingsCount':
         return <span className="mono text-foreground">{row.findingsCount}</span>
       case 'accountsCount':
@@ -96,7 +96,13 @@ export function HostsTab() {
   }
 
   return (
-    <EntityShell title="Hosts in Scope" count={hostsData.length} ariaLabel="Hosts in scope">
+    <EntityShell
+      title="Hosts in Scope"
+      subtitle="Systems attributed in this case"
+      shownCount={rows.length}
+      totalCount={hostsData.length}
+      ariaLabel="Hosts in scope"
+    >
       {hostsData.length === 0 ? (
         <EntityEmptyState
           icon={MonitorSmartphone}

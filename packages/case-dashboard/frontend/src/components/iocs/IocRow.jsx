@@ -1,17 +1,23 @@
 import { Fragment } from 'react'
-import { ChevronRight, Copy } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { fmtTs } from '@/components/common/entity-utils'
-import { ConfidenceBadge, EntityBadge } from '@/components/common/EntityBadges'
+import { ConfidenceBadge, EntityBadge, TruncatedValue } from '@/components/common/EntityBadges'
+import { OverflowTags } from '@/components/common/EntityShell'
 import { iocHosts, iocStatusTone } from './iocs-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // IocRow — one IOC table row plus its expandable detail (legacy parity). Main
-// row: expand chevron, value + copy-to-clipboard, type, category, confidence,
-// hosts (hidden when single-host), source-finding cross-links, status. Expanded
-// panel: MITRE techniques (sub-techniques dimmed), tags, and an ID/examiner/
-// created footer. Mission-Control reskin — token classes only, lucide icons.
+// row: expand chevron, value (truncate + tooltip-full + copy, §B6), type,
+// category, confidence, hosts (hidden when single-host), source-finding cross-
+// links, status. Expanded panel: MITRE techniques (sub-techniques dimmed),
+// tags, and an ID/examiner/created footer.
+//
+// Design-Polish §B5 colour semantics: the IOC *type* dimension uses the violet
+// `type` tone, deliberately distinct from the severity/host hues so type never
+// reads as the same encoding as confidence or a host chip. Category is plain
+// muted text; host chips are neutral raised pills — three different encodings.
 // ─────────────────────────────────────────────────────────────────────────
 
 export function IocRow({ ioc, isExpanded, isSingleHost, colSpan, onToggle, onCopy, onFindingClick }) {
@@ -20,7 +26,7 @@ export function IocRow({ ioc, isExpanded, isSingleHost, colSpan, onToggle, onCop
   return (
     <Fragment>
       <tr className="group text-foreground transition-colors hover:bg-secondary/40">
-        <td className="px-3 py-3 align-top">
+        <td className="px-4 py-3 align-middle">
           <button
             type="button"
             onClick={() => onToggle(ioc.id)}
@@ -32,51 +38,37 @@ export function IocRow({ ioc, isExpanded, isSingleHost, colSpan, onToggle, onCop
           </button>
         </td>
 
-        <td className="px-3 py-3 align-top">
-          <div className="flex items-center gap-1.5">
-            <span className="mono max-w-[280px] truncate text-[11px] text-foreground" title={ioc.value}>
-              {ioc.value}
-            </span>
-            <button
-              type="button"
-              onClick={() => onCopy(ioc.value)}
-              aria-label="Copy IOC value to clipboard"
-              className="rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-bg-raised group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <Copy className="size-3" aria-hidden />
-            </button>
-          </div>
+        <td className="px-4 py-3 align-middle">
+          <TruncatedValue value={ioc.value} onCopy={onCopy} copyLabel="Copy IOC value to clipboard" />
         </td>
 
-        <td className="px-3 py-3 align-top">
-          <EntityBadge tone="muted">{ioc.type}</EntityBadge>
+        <td className="px-4 py-3 align-middle">
+          <EntityBadge tone="type">{ioc.type}</EntityBadge>
         </td>
 
-        <td className="px-3 py-3 align-top">
+        <td className="px-4 py-3 align-middle">
           <span className="mono text-[11px] text-muted-foreground">{ioc.category}</span>
         </td>
 
-        <td className="px-3 py-3 align-top">
+        <td className="px-4 py-3 align-middle">
           <ConfidenceBadge confidence={ioc.confidence} />
         </td>
 
         {!isSingleHost && (
-          <td className="px-3 py-3 align-top">
-            {hosts.length === 0 ? (
-              <span className="text-text-ghost">—</span>
-            ) : (
-              <div className="flex max-w-[160px] flex-wrap gap-1">
-                {hosts.map((h) => (
-                  <span key={h} className="mono rounded bg-bg-raised px-1 py-0.5 text-[10px] text-muted-foreground">
-                    {h}
-                  </span>
-                ))}
-              </div>
-            )}
+          <td className="px-4 py-3 align-middle">
+            <OverflowTags
+              items={hosts}
+              max={2}
+              renderChip={(h) => (
+                <span className="mono rounded border border-border-faint bg-bg-raised px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  {h}
+                </span>
+              )}
+            />
           </td>
         )}
 
-        <td className="px-3 py-3 align-top">
+        <td className="px-4 py-3 align-middle">
           <div className="flex flex-wrap gap-1">
             {(ioc.source_findings ?? []).map((fid) => (
               <button
@@ -86,7 +78,7 @@ export function IocRow({ ioc, isExpanded, isSingleHost, colSpan, onToggle, onCop
                   e.stopPropagation()
                   onFindingClick(fid)
                 }}
-                className="mono rounded bg-primary/10 px-1 py-0.5 text-[11px] text-primary transition-colors hover:bg-primary/20 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="mono rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary transition-colors hover:bg-primary/20 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 {fid}
               </button>
@@ -94,7 +86,7 @@ export function IocRow({ ioc, isExpanded, isSingleHost, colSpan, onToggle, onCop
           </div>
         </td>
 
-        <td className="px-3 py-3 align-top">
+        <td className="px-4 py-3 align-middle">
           <EntityBadge tone={iocStatusTone(ioc.status)}>{ioc.status}</EntityBadge>
         </td>
       </tr>

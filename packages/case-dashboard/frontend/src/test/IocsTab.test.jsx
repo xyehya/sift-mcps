@@ -4,6 +4,11 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { useStore } from '@/store/useStore'
 import { iocCategories, filterIocs, iocHosts, iocStatusTone } from '@/components/iocs/iocs-utils'
 import { IocsTab } from '@/components/iocs/IocsTab'
+import { TooltipProvider } from '@/components/ui/tooltip'
+
+// IOC values render through TruncatedValue (truncate + tooltip-full + copy),
+// which uses a Radix Tooltip needing a provider ancestor — mount like the shell.
+const renderTab = () => render(<IocsTab />, { wrapper: TooltipProvider })
 
 // ── Pure logic ───────────────────────────────────────────────────────────
 const IOCS = [
@@ -53,36 +58,39 @@ beforeEach(() => {
 })
 
 describe('IocsTab — render + filters + expand', () => {
-  it('renders the IOC values and the of-total count', () => {
-    render(<IocsTab />)
+  it('renders IOC values with no static count chrome (Design-Polish §B3)', () => {
+    renderTab()
     expect(screen.getByText('185.99.12.44')).toBeInTheDocument()
     expect(screen.getByText('svc-backup')).toBeInTheDocument()
-    expect(screen.getByText('(3 of 3)')).toBeInTheDocument()
+    // The static "(N of N)" title count is gone; unfiltered view shows none.
+    expect(screen.queryByText(/\(3 of 3\)/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/shown/i)).not.toBeInTheDocument()
   })
 
-  it('status filter narrows the table', () => {
-    render(<IocsTab />)
+  it('status filter narrows the table and shows a live "N shown" count', () => {
+    renderTab()
     fireEvent.change(screen.getByLabelText(/filter by status/i), { target: { value: 'APPROVED' } })
-    expect(screen.getByText('(1 of 3)')).toBeInTheDocument()
+    // Live, filter-reactive count — only present while filtering.
+    expect(screen.getByText('1 shown')).toBeInTheDocument()
     expect(screen.getByText('svc-backup')).toBeInTheDocument()
     expect(screen.queryByText('185.99.12.44')).not.toBeInTheDocument()
   })
 
   it('search matches value/id/type', () => {
-    render(<IocsTab />)
+    renderTab()
     fireEvent.change(screen.getByLabelText(/search indicators/i), { target: { value: 'deadbeef' } })
-    expect(screen.getByText('(1 of 3)')).toBeInTheDocument()
+    expect(screen.getByText('1 shown')).toBeInTheDocument()
   })
 
   it('expanding a row reveals MITRE techniques + tags', () => {
-    render(<IocsTab />)
+    renderTab()
     fireEvent.click(screen.getAllByRole('button', { name: /expand ioc detail/i })[0])
     expect(screen.getByText('T1071.001')).toBeInTheDocument()
     expect(screen.getByText('c2')).toBeInTheDocument()
   })
 
   it('source-finding link navigates to Findings', () => {
-    render(<IocsTab />)
+    renderTab()
     fireEvent.click(screen.getByRole('button', { name: 'F-001' }))
     expect(useStore.getState().activeTab).toBe('findings')
     expect(useStore.getState().selectedFindingId).toBe('F-001')
@@ -91,13 +99,13 @@ describe('IocsTab — render + filters + expand', () => {
   it('copy button writes the value to the clipboard', () => {
     const writeText = vi.fn().mockResolvedValue()
     Object.assign(navigator, { clipboard: { writeText } })
-    render(<IocsTab />)
+    renderTab()
     fireEvent.click(screen.getAllByRole('button', { name: /copy ioc value/i })[0])
     expect(writeText).toHaveBeenCalledWith('185.99.12.44')
   })
 
   it('shows an empty state when no IOC matches', () => {
-    render(<IocsTab />)
+    renderTab()
     fireEvent.change(screen.getByLabelText(/search indicators/i), { target: { value: 'zzz' } })
     expect(screen.getByText(/no iocs match the current filters/i)).toBeInTheDocument()
   })

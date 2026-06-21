@@ -7,13 +7,20 @@ import {
   TIMELINE_TYPE_CLASS,
   TIMELINE_TYPE_BG,
 } from '@/components/common/entity-utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // ─────────────────────────────────────────────────────────────────────────
 // TimelineEvent — a single chronological row (legacy parity): optional gap +
-// date separators, a type-coloured dot, UTC time, the [type] tag, the
-// description, finding cross-links (auto-linked-from · related · finding_refs),
-// and an approved check. Mission-Control reskin: token classes only, lucide
-// check, hover row tint. Finding links call onNavigate(fid).
+// date separators, a type-coloured dot, UTC time, a fixed-width [type] tag, the
+// description, finding cross-links, and an approved check.
+//
+// Design-Polish (Timeline §C): the columns sit on a fixed rhythm so the type
+// tag (e.g. "persistence") reads as its own column and is NOT overshadowed by
+// the event description — time and type are fixed-width, the description flexes,
+// links and the check trail at a stable right edge. The finding cross-links use
+// body-weight mono (not exaggerated). The trailing check carries a Radix
+// Tooltip + aria-label ("Approved finding") so the glyph's meaning is explicit
+// (§B9). Type colours come straight from the shared token map (§B5).
 // ─────────────────────────────────────────────────────────────────────────
 
 const GAP_THRESHOLD_MS = 30 * 60 * 1000 // 30 min
@@ -23,7 +30,7 @@ function FindingLink({ fid, onNavigate, label }) {
     <button
       type="button"
       onClick={() => onNavigate(fid)}
-      className="mono rounded text-primary transition-colors hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      className="mono rounded text-[11px] font-medium text-primary transition-colors hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
       [{label ?? fid}]
     </button>
@@ -46,17 +53,17 @@ export function TimelineEvent({ ev, prev, showDateSep, onNavigate }) {
   return (
     <div>
       {showGap && (
-        <div className="my-1 flex items-center gap-2">
+        <div className="my-1.5 flex items-center gap-2">
           <div className="h-px flex-1 bg-border-faint" />
-          <span className="mono shrink-0 rounded-full border border-sev-med bg-sev-med/10 px-1.5 py-px text-[10px] text-sev-med">
-            ▲ {humanizeGap(gap)} gap
+          <span className="mono shrink-0 rounded-full border border-sev-med/40 bg-sev-med/10 px-2 py-0.5 text-[10px] text-sev-med">
+            {humanizeGap(gap)} gap
           </span>
           <div className="h-px flex-1 bg-border-faint" />
         </div>
       )}
       {showDateSep && (
-        <div className="my-3 flex items-center gap-3">
-          <span className="mono whitespace-nowrap text-[10px] text-muted-foreground">
+        <div className="mb-2 mt-4 flex items-center gap-3">
+          <span className="mono whitespace-nowrap text-[10px] uppercase tracking-[.1em] text-muted-foreground">
             {new Date(ev.timestamp).toISOString().substring(0, 10)}
             {ev.host && ` · ${ev.host}`}
           </span>
@@ -64,26 +71,32 @@ export function TimelineEvent({ ev, prev, showDateSep, onNavigate }) {
         </div>
       )}
 
-      <div className="group flex items-start gap-2 rounded px-2 py-1 transition-colors hover:bg-secondary/50">
-        <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', dotClass)} />
-        <span className="mono w-16 shrink-0 text-[11px] text-muted-foreground">
+      <div className="group grid grid-cols-[auto_4.5rem_6rem_minmax(0,1fr)_auto] items-center gap-x-3 rounded-md px-2 py-1.5 transition-colors hover:bg-secondary/50">
+        {/* type-coloured dot */}
+        <span className={cn('size-1.5 shrink-0 rounded-full', dotClass)} aria-hidden />
+
+        {/* time — fixed column */}
+        <span className="mono text-[11px] tabular-nums text-muted-foreground">
           {new Date(ev.timestamp).toISOString().substring(11, 19)}
         </span>
-        <span className={cn('mono w-16 shrink-0 text-[10px] capitalize', typeTextClass)}>
-          {rawType ? `[${rawType}]` : ''}
+
+        {/* type tag — its own fixed column so persistence/lateral/etc read clearly */}
+        <span className={cn('mono truncate text-[10px] font-semibold uppercase tracking-[.08em]', typeTextClass)}>
+          {rawType || ''}
         </span>
 
-        <div className="min-w-0 flex-1">
-          <div className="text-xs text-foreground">{ev.description}</div>
+        {/* description + cross-links — flexes */}
+        <div className="min-w-0">
+          <div className="truncate text-[13px] text-foreground">{ev.description}</div>
           {(hasAutoLink || hasRelated) && (
-            <div className="mono mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-muted-foreground">
+            <div className="mono mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-muted-foreground">
               {hasAutoLink && (
-                <span>
+                <span className="flex items-center gap-1">
                   auto-linked from <FindingLink fid={ev.auto_created_from} onNavigate={onNavigate} />
                 </span>
               )}
               {hasRelated && (
-                <span className="flex flex-wrap gap-x-1">
+                <span className="flex flex-wrap items-center gap-x-1">
                   related:
                   {relatedFindings.map((fid) => (
                     <FindingLink key={fid} fid={fid} onNavigate={onNavigate} />
@@ -94,14 +107,25 @@ export function TimelineEvent({ ev, prev, showDateSep, onNavigate }) {
           )}
         </div>
 
-        {ev.finding_refs?.map((fid) => (
-          <span key={fid} className="shrink-0">
-            <FindingLink fid={fid} onNavigate={onNavigate} />
-          </span>
-        ))}
-        {ev.status === 'approved' && (
-          <Check className="size-3 shrink-0 text-status-approved" aria-label="approved" />
-        )}
+        {/* trailing: finding refs + approved check, stable right edge */}
+        <div className="flex shrink-0 items-center gap-2">
+          {ev.finding_refs?.map((fid) => (
+            <FindingLink key={fid} fid={fid} onNavigate={onNavigate} />
+          ))}
+          {ev.status === 'approved' && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="inline-flex cursor-default text-status-approved"
+                  aria-label="Approved finding"
+                >
+                  <Check className="size-3.5" aria-hidden />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Approved finding</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </div>
     </div>
   )

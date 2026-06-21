@@ -18,11 +18,14 @@ beforeEach(() => {
 })
 
 describe('HostsTab — render + aggregation + navigation', () => {
-  it('renders one row per host with the total count', () => {
+  it('renders one row per host (no static count chrome)', () => {
     render(<HostsTab />)
     expect(screen.getByText('DC-01')).toBeInTheDocument()
     expect(screen.getByText('FS-01')).toBeInTheDocument()
-    expect(screen.getByText('(2 total)')).toBeInTheDocument()
+    // Design-Polish §B3: the static "(N total)" count chrome was removed; the
+    // header carries the H1 + a mono eyebrow subtitle instead.
+    expect(screen.queryByText(/\(2 total\)/)).not.toBeInTheDocument()
+    expect(screen.getByText(/systems attributed in this case/i)).toBeInTheDocument()
   })
 
   it('aggregates findings count + best confidence per host', () => {

@@ -147,6 +147,59 @@ const FINDINGS = [
     verification: 'draft',
     provenance: 'MCP',
   },
+  // === FIX-ENTITY fixtures ===
+  // Three findings on the same account across all three statuses so the
+  // Accounts "Status Summary" cell renders 3 tags (approved · draft · rejected)
+  // and proves the overflow/wrap handling (Design-Polish §B6).
+  {
+    id: 'F-101',
+    type: 'finding',
+    title: 'svc-relay anomalous token request (approved)',
+    status: 'approved',
+    confidence: 'HIGH',
+    host: 'DC-01',
+    affected_account: 'svc-relay',
+    event_timestamp: iso(7 * H),
+    description: 'Approved finding attributing privileged token activity to svc-relay.',
+    mitre_ids: ['T1550.002'],
+    iocs: [],
+    tags: [],
+    verification: 'confirmed',
+    provenance: 'MCP',
+  },
+  {
+    id: 'F-102',
+    type: 'finding',
+    title: 'svc-relay off-hours logon (draft)',
+    status: 'draft',
+    confidence: 'MEDIUM',
+    host: 'WS-FINANCE-03',
+    affected_account: 'svc-relay',
+    event_timestamp: iso(8 * H),
+    description: 'Draft finding attributing an off-hours interactive logon to svc-relay.',
+    mitre_ids: ['T1078.002'],
+    iocs: [],
+    tags: [],
+    verification: 'draft',
+    provenance: 'SHELL',
+  },
+  {
+    id: 'F-103',
+    type: 'finding',
+    title: 'svc-relay false-positive scan (rejected)',
+    status: 'rejected',
+    confidence: 'LOW',
+    host: 'FS-01',
+    affected_account: 'svc-relay',
+    event_timestamp: iso(9 * H),
+    description: 'Rejected finding — benign scanner activity attributed to svc-relay.',
+    mitre_ids: [],
+    iocs: [],
+    tags: [],
+    verification: 'rejected',
+    provenance: 'HOOK',
+  },
+  // === end FIX-ENTITY fixtures ===
 ]
 
 const DELTA = [
@@ -383,6 +436,25 @@ const IOCS = [
     examiner: 'e.varga',
     created_at: iso(2 * H),
   },
+  // === FIX-ENTITY fixtures ===
+  // Overflow proof for the IOCs tab: a full sha256 hash exercises the value
+  // truncate + tooltip(full) + copy affordance (Design-Polish §B6). Multiple
+  // sighting hosts exercise the host-chip +N overflow.
+  {
+    id: 'ioc-7',
+    type: 'hash',
+    value: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    category: 'host',
+    confidence: 'HIGH',
+    status: 'APPROVED',
+    source_findings: ['F-002', 'F-003'],
+    sightings: [{ host: 'DC-01' }, { host: 'WS-FINANCE-03' }, { host: 'FS-01' }, { host: 'WS-HR-02' }],
+    mitre_techniques: ['T1486'],
+    tags: ['ransomware', 'sha256'],
+    examiner: 'e.varga',
+    created_at: iso(1 * H),
+  },
+  // === end FIX-ENTITY fixtures ===
 ]
 
 const USER = { examiner: 'E. Varga', role: 'examiner' }
