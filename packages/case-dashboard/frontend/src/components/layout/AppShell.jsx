@@ -21,6 +21,10 @@ import { TimelineTab } from '@/components/timeline/TimelineTab'
 import { HostsTab } from '@/components/hosts/HostsTab'
 import { AccountsTab } from '@/components/accounts/AccountsTab'
 import { IocsTab } from '@/components/iocs/IocsTab'
+// === REPORT tabs (Reports · TODOs · Settings) ===
+import { ReportsTab } from '@/components/reports/ReportsTab'
+import { TodosTab } from '@/components/todos/TodosTab'
+import { SettingsTab } from '@/components/settings/SettingsTab'
 
 // ─────────────────────────────────────────────────────────────────────────
 // AppShell (spec §3 layout + §4 IA) — the authenticated frame: collapsible
@@ -46,6 +50,10 @@ function TabContent({ tabId }) {
   if (tabId === 'hosts') return <HostsTab />
   if (tabId === 'accounts') return <AccountsTab />
   if (tabId === 'iocs') return <IocsTab />
+  // === REPORT tabs (Reports · TODOs · Settings) ===
+  if (tabId === 'reports') return <ReportsTab />
+  if (tabId === 'todos') return <TodosTab />
+  if (tabId === 'settings') return <SettingsTab />
   return <TabPlaceholder tabId={tabId} />
 }
 
