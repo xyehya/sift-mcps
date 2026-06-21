@@ -625,6 +625,108 @@ export function selectEvidenceRegistry() {
   return EVIDENCE_ITEMS
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Backends registry + system-health fixtures — served at the API-ADAPTER layer
+// (apiFetch → mockRoute) for /api/backends and /api/health in ?mock=1, so the
+// Backends tab renders POPULATED with no gateway. MOCK DATA ONLY — synthetic,
+// no secrets/tokens/DSNs. Rows are varied to exercise every UI state:
+//   • opensearch-mcp  — ok + started (manual lifecycle visible)
+//   • forensic-rag-mcp — on_demand (proxy-mounted; lifecycle hidden)
+//   • windows-triage-mcp — disabled
+//   • opencti-mcp     — gated, unmet requirements
+//   • timesketch-mcp  — pending_apply (drives the restart-required banner)
+//   • yara-mcp        — invalid_manifest
+// ─────────────────────────────────────────────────────────────────────────
+export const BACKENDS_REGISTRY = [
+  {
+    name: 'opensearch-mcp',
+    type: 'stdio',
+    enabled: true,
+    started: true,
+    on_demand: false,
+    pending_apply: false,
+    requires: ['index:opensearch'],
+    unmet_requires: [],
+    health: { status: 'ok', detail: 'aggregated · 18 tools' },
+  },
+  {
+    name: 'forensic-rag-mcp',
+    type: 'stdio',
+    enabled: true,
+    started: false,
+    on_demand: true,
+    pending_apply: false,
+    requires: [],
+    unmet_requires: [],
+    health: { status: 'ok', detail: 'idle (mounted proxy); spawns per call' },
+  },
+  {
+    name: 'windows-triage-mcp',
+    type: 'stdio',
+    enabled: false,
+    started: false,
+    on_demand: false,
+    pending_apply: false,
+    requires: ['tool:EvtxECmd'],
+    unmet_requires: [],
+    health: { status: 'disabled', detail: 'registry row disabled' },
+  },
+  {
+    name: 'opencti-mcp',
+    type: 'http',
+    enabled: true,
+    started: false,
+    on_demand: false,
+    pending_apply: false,
+    requires: ['service:opencti', 'env:OPENCTI_URL'],
+    unmet_requires: ['service:opencti'],
+    health: { status: 'gated', detail: 'OpenCTI service not reachable on this host' },
+  },
+  {
+    name: 'timesketch-mcp',
+    type: 'http',
+    enabled: true,
+    started: false,
+    on_demand: false,
+    pending_apply: true,
+    requires: [],
+    unmet_requires: [],
+    health: { status: 'gated', detail: 'registered; not yet loaded into running gateway' },
+  },
+  {
+    name: 'yara-mcp',
+    type: 'stdio',
+    enabled: true,
+    started: false,
+    on_demand: false,
+    pending_apply: false,
+    requires: ['tool:yara'],
+    unmet_requires: [],
+    health: { status: 'invalid_manifest', detail: 'sift-backend.json: tools[] entry missing "name"' },
+  },
+]
+
+export const HEALTH_PAYLOAD = {
+  status: 'ok',
+  tools_count: 42,
+  supabase: { status: 'ok', detail: 'reachable', url: 'https://auth.local' },
+  evidence_root: {
+    status: 'ok',
+    path: '/cases/NORTHWIND/evidence',
+    writable: false,
+    write_protected: true,
+    case_count: 3,
+  },
+  backends: {
+    'opensearch-mcp': { status: 'ok', detail: 'aggregated · 18 tools' },
+    'forensic-rag-mcp': { status: 'ok', mounted_proxy: true },
+    'windows-triage-mcp': { status: 'disabled' },
+    'opencti-mcp': { status: 'gated', detail: 'OpenCTI service not reachable' },
+    'timesketch-mcp': { status: 'gated', detail: 'pending gateway restart' },
+    'yara-mcp': { status: 'invalid_manifest', error: 'manifest tools[] entry missing "name"' },
+  },
+}
+
 export const mockState = {
   user: USER,
   activeCase: ACTIVE_CASE,
