@@ -1,7 +1,22 @@
+import { MoreHorizontal, Play, Square, RotateCw, Power, Trash2 } from 'lucide-react'
+
 import { cn } from '@/lib/utils'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   getButtonStates,
   hasUnmet,
+  healthDotClass,
   healthLabel,
   healthToneClass,
   showsLifecycleButtons,
@@ -9,17 +24,32 @@ import {
 } from './backends-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
-// BackendServiceRow — one DB-registry row (legacy IA parity §4). Columns:
-// NAME · TYPE · STATUS (enabled/disabled chip + pending/on-demand/started/
-// stopped sub-label) · HEALTH (ok/disabled/gated/invalid_manifest/unknown,
-// detail in tooltip) · REQUIREMENTS (unmet→crimson, else requires/None) ·
-// ACTIONS (enable-toggle · Start/Stop/Restart gated on canStart/Stop/Restart
-// AND hidden when on_demand · Unregister). All colour via literal token classes.
+// BackendServiceRow — one DB-registry row, rebuilt to the reference table bar
+// (Evidence registry). Columns: NAME (Inter body, receding) · TYPE (mono) ·
+// STATUS (enabled/disabled chip + status sub-label) · HEALTH (dot + token-toned
+// label, detail in tooltip) · REQUIREMENTS (unmet→destructive) · ACTIONS.
+//
+// ACTIONS is a SINGLE affordance (B8): one primary control (enable-toggle for
+// on-demand; Start/Stop for lifecycle backends) + a "⋯" overflow menu holding
+// the rest (lifecycle Start/Stop/Restart gated by getButtonStates/showsLifecycle,
+// enable-toggle, Unregister). Every mutating item still routes through the
+// challenge-gated handlers unchanged. All colour via literal token classes.
 // ─────────────────────────────────────────────────────────────────────────
 
-const ACTION_BTN =
-  'mono rounded border px-2 py-0.5 text-[10px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-40 disabled:pointer-events-none'
+/** Enabled / Disabled registry chip — pill matching the bar's badge treatment. */
+function EnabledChip({ enabled }) {
+  return enabled ? (
+    <span className="mono rounded-full border border-status-approved/40 bg-status-approved/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] text-status-approved">
+      Enabled
+    </span>
+  ) : (
+    <span className="mono rounded-full border border-border-soft bg-secondary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground">
+      Disabled
+    </span>
+  )
+}
 
+/** Status sub-label under the enabled chip (pending / on-demand / started). */
 function StatusSubLabel({ backend }) {
   const label = statusLabel(backend)
   const tone =
@@ -30,7 +60,7 @@ function StatusSubLabel({ backend }) {
         : 'text-muted-foreground'
   return (
     <span
-      className={cn('ml-2 text-xs', tone)}
+      className={cn('mono text-[11px]', tone)}
       title={
         backend.on_demand
           ? 'FastMCP proxy mounted; the subprocess spawns on demand per call.'
@@ -42,36 +72,57 @@ function StatusSubLabel({ backend }) {
   )
 }
 
-export function BackendServiceRow({ backend, onToggleEnabled, onStart, onStop, onRestart, onUnregister }) {
+export function BackendServiceRow({
+  backend,
+  onToggleEnabled,
+  onStart,
+  onStop,
+  onRestart,
+  onUnregister,
+}) {
   const status = backend.health?.status || 'unknown'
   const unmet = hasUnmet(backend)
   const { canStart, canStop, canRestart } = getButtonStates(backend)
+  const lifecycle = showsLifecycleButtons(backend)
 
   return (
-    <tr className="border-b border-border-faint text-foreground">
-      <td className="mono py-3 font-semibold">{backend.name}</td>
-      <td className="mono py-3 text-[11px] text-muted-foreground">{backend.type}</td>
-      <td className="py-3">
-        {backend.enabled ? (
-          <span className="mono rounded bg-status-approved/10 px-1.5 py-0.5 text-[9px] font-semibold text-status-approved">
-            ENABLED
-          </span>
-        ) : (
-          <span className="mono rounded bg-bg-raised px-1.5 py-0.5 text-[9px] font-semibold text-muted-foreground">
-            DISABLED
-          </span>
-        )}
-        <StatusSubLabel backend={backend} />
+    <tr className="text-foreground transition-colors hover:bg-secondary/40">
+      {/* NAME — Inter body, receding (NOT mono title-weight) */}
+      <td className="px-3 py-2.5 align-middle text-[13px] font-medium text-foreground">
+        {backend.name}
       </td>
-      <td className="py-3">
+
+      {/* TYPE — mono */}
+      <td className="mono px-3 py-2.5 align-middle text-[11px] text-muted-foreground">
+        {backend.type}
+      </td>
+
+      {/* STATUS */}
+      <td className="px-3 py-2.5 align-middle">
+        <div className="flex flex-col items-start gap-1">
+          <EnabledChip enabled={backend.enabled} />
+          <StatusSubLabel backend={backend} />
+        </div>
+      </td>
+
+      {/* HEALTH — dot + token-toned label */}
+      <td className="px-3 py-2.5 align-middle">
         <span
-          className={cn('mono text-xs font-semibold', healthToneClass(status))}
+          className="inline-flex items-center gap-1.5"
           title={backend.health?.detail || ''}
         >
-          {healthLabel(status)}
+          <span
+            className={cn('inline-block size-2 shrink-0 rounded-full', healthDotClass(status))}
+            aria-hidden
+          />
+          <span className={cn('mono text-[11px] font-semibold', healthToneClass(status))}>
+            {healthLabel(status)}
+          </span>
         </span>
       </td>
-      <td className="max-w-[200px] py-3 text-xs leading-relaxed">
+
+      {/* REQUIREMENTS */}
+      <td className="max-w-[200px] px-3 py-2.5 align-middle text-[11px] leading-relaxed">
         {unmet ? (
           <span className="font-semibold text-destructive">
             Unmet: {backend.unmet_requires.join(', ')}
@@ -82,81 +133,164 @@ export function BackendServiceRow({ backend, onToggleEnabled, onStart, onStop, o
           <span className="italic text-muted-foreground">None</span>
         )}
       </td>
-      <td className="space-x-1.5 py-3 text-right">
-        <button
-          type="button"
-          onClick={() => onToggleEnabled(backend.name, !backend.enabled)}
-          className={cn(
-            ACTION_BTN,
-            backend.enabled
-              ? 'border-border-soft bg-bg-raised text-muted-foreground hover:text-foreground'
-              : 'border-status-approved bg-status-approved/10 text-status-approved hover:bg-status-approved/20',
-          )}
-          title={
-            backend.enabled
-              ? 'Disable this backend (registry row)'
-              : 'Enable this backend (registry row)'
-          }
-        >
-          {backend.enabled ? 'Disable' : 'Enable'}
-        </button>
 
-        {showsLifecycleButtons(backend) ? (
-          <>
-            <button
-              type="button"
-              onClick={() => onStart(backend.name)}
-              disabled={!canStart}
-              className={cn(
-                ACTION_BTN,
-                'border-status-approved bg-status-approved/10 text-status-approved hover:bg-status-approved/20',
-              )}
-            >
-              Start
-            </button>
-            <button
-              type="button"
-              onClick={() => onStop(backend.name)}
-              disabled={!canStop}
-              className={cn(
-                ACTION_BTN,
-                'border-destructive bg-destructive/10 text-destructive hover:bg-destructive/20',
-              )}
-            >
-              Stop
-            </button>
-            <button
-              type="button"
-              onClick={() => onRestart(backend.name)}
-              disabled={!canRestart}
-              className={cn(
-                ACTION_BTN,
-                'border-status-pending bg-status-pending/10 text-status-pending hover:bg-status-pending/20',
-              )}
-            >
-              Restart
-            </button>
-          </>
-        ) : (
-          <span
-            className="mono mr-1 text-[10px] italic text-muted-foreground"
-            title="On-demand (proxy-mounted): the subprocess spawns per call. Manual start/stop/restart do not apply."
-          >
-            on-demand
-          </span>
-        )}
-
-        <button
-          type="button"
-          onClick={() => onUnregister(backend.name)}
-          className={cn(
-            ACTION_BTN,
-            'border-destructive bg-destructive/10 text-destructive hover:bg-destructive/20',
-          )}
-        >
-          Unregister
-        </button>
+      {/* ACTIONS — single affordance: one primary + ⋯ overflow menu */}
+      <td className="px-3 py-2.5 text-right align-middle">
+        <RowActions
+          backend={backend}
+          lifecycle={lifecycle}
+          canStart={canStart}
+          canStop={canStop}
+          canRestart={canRestart}
+          onToggleEnabled={onToggleEnabled}
+          onStart={onStart}
+          onStop={onStop}
+          onRestart={onRestart}
+          onUnregister={onUnregister}
+        />
       </td>
     </tr>
+  )
+}
+
+/**
+ * Single-affordance row actions: a primary button + a "⋯" overflow menu.
+ * Lifecycle backends → primary is Start (when stoppable) / Stop (when running);
+ * on-demand backends have no manual lifecycle, so the primary is the enable
+ * toggle. The overflow menu holds the remaining lifecycle controls (gated by
+ * the same canStart/canStop/canRestart), the enable toggle, and Unregister.
+ */
+function RowActions({
+  backend,
+  lifecycle,
+  canStart,
+  canStop,
+  canRestart,
+  onToggleEnabled,
+  onStart,
+  onStop,
+  onRestart,
+  onUnregister,
+}) {
+  const name = backend.name
+  const toggleEnabled = () => onToggleEnabled(name, !backend.enabled)
+
+  // Primary affordance.
+  let primary
+  if (lifecycle && backend.started) {
+    primary = (
+      <ActionButton
+        label="Stop"
+        icon={Square}
+        disabled={!canStop}
+        tone="destructive"
+        onClick={() => onStop(name)}
+      />
+    )
+  } else if (lifecycle) {
+    primary = (
+      <ActionButton
+        label="Start"
+        icon={Play}
+        disabled={!canStart}
+        tone="approved"
+        onClick={() => onStart(name)}
+      />
+    )
+  } else {
+    primary = (
+      <ActionButton
+        label={backend.enabled ? 'Disable' : 'Enable'}
+        icon={Power}
+        tone={backend.enabled ? 'muted' : 'approved'}
+        onClick={toggleEnabled}
+      />
+    )
+  }
+
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      {primary}
+
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={`More actions for ${name}`}
+                className="mono inline-flex size-7 items-center justify-center rounded border border-border-soft text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <MoreHorizontal className="size-4" aria-hidden />
+              </button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent>More actions</TooltipContent>
+        </Tooltip>
+
+        <DropdownMenuContent align="end" className="min-w-[12rem]">
+          {lifecycle && (
+            <>
+              <DropdownMenuItem disabled={!canStart} onSelect={() => onStart(name)} className="gap-2">
+                <Play className="size-4" aria-hidden />
+                Start service
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!canStop} onSelect={() => onStop(name)} className="gap-2">
+                <Square className="size-4" aria-hidden />
+                Stop service
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!canRestart} onSelect={() => onRestart(name)} className="gap-2">
+                <RotateCw className="size-4" aria-hidden />
+                Restart service
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
+
+          <DropdownMenuItem onSelect={toggleEnabled} className="gap-2">
+            <Power className="size-4" aria-hidden />
+            {backend.enabled ? 'Disable backend' : 'Enable backend'}
+          </DropdownMenuItem>
+
+          <DropdownMenuSeparator />
+
+          <DropdownMenuItem
+            variant="destructive"
+            onSelect={() => onUnregister(name)}
+            className="gap-2"
+          >
+            <Trash2 className="size-4" aria-hidden />
+            Unregister
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+}
+
+const TONE_CLS = {
+  approved:
+    'border-status-approved/40 bg-status-approved/10 text-status-approved hover:bg-status-approved/20',
+  destructive:
+    'border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20',
+  muted: 'border-border-soft bg-secondary text-muted-foreground hover:text-foreground',
+}
+
+/** Small token-toned primary action button (one per row). */
+function ActionButton({ label, icon: Icon, tone, disabled, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      className={cn(
+        'mono inline-flex items-center gap-1 rounded border px-2 py-1 text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40',
+        TONE_CLS[tone],
+      )}
+    >
+      <Icon className="size-3" aria-hidden />
+      {label}
+    </button>
   )
 }

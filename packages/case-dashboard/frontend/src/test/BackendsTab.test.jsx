@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { useStore } from '@/store/useStore'
 import * as endpoints from '@/api/endpoints'
 import {
@@ -151,6 +152,15 @@ beforeEach(() => {
   endpoints.getHealth.mockResolvedValue({ status: 'ok', tools_count: 5, supabase: {}, evidence_root: {}, backends: {} })
 })
 
+/** Render the tab inside the TooltipProvider the app shell normally supplies. */
+function renderTab() {
+  return render(
+    <TooltipProvider>
+      <BackendsTab />
+    </TooltipProvider>,
+  )
+}
+
 /** Fill the challenge modal password and confirm. */
 function confirmChallenge(password = 'pw') {
   const input = screen.getByLabelText(/examiner password/i)
@@ -158,21 +168,34 @@ function confirmChallenge(password = 'pw') {
   fireEvent.click(screen.getByTestId('backend-challenge-confirm'))
 }
 
+/**
+ * Open a backend row's overflow ("⋯") actions menu. Secondary actions
+ * (enable-toggle, Unregister, and non-primary lifecycle controls) live inside
+ * this menu under the single-affordance design (contract B8).
+ */
+function openRowMenu(name) {
+  const trigger = screen.getByRole('button', { name: new RegExp(`more actions for ${name}`, 'i') })
+  // Radix DropdownMenu opens on pointerdown / keyboard; jsdom doesn't dispatch a
+  // real pointer sequence on click, so drive it via the keyboard affordance.
+  trigger.focus()
+  fireEvent.keyDown(trigger, { key: 'Enter', code: 'Enter' })
+}
+
 describe('BackendsTab — interaction (challenge-gated flows)', () => {
   it('renders the registry list + restart banner from loaded data', async () => {
-    render(<BackendsTab />)
+    renderTab()
     await screen.findByText('opensearch-mcp')
     expect(screen.getByText('timesketch-mcp')).toBeInTheDocument()
     // pending_apply on timesketch-mcp drives the restart-required banner.
     expect(screen.getByText(/Restart required to apply/i)).toBeInTheDocument()
   })
 
-  it('Reload (Check Apply Status) is challenge-gated: no call until password entered', async () => {
+  it('Reload (scan backends) is challenge-gated: no call until password entered', async () => {
     endpoints.postReloadBackends.mockResolvedValue({ status: 'current' })
-    render(<BackendsTab />)
+    renderTab()
     await screen.findByText('opensearch-mcp')
 
-    fireEvent.click(screen.getByRole('button', { name: /check apply status/i }))
+    fireEvent.click(screen.getByRole('button', { name: /scan backends/i }))
     // Modal open, but endpoint not yet called.
     expect(endpoints.postReloadBackends).not.toHaveBeenCalled()
     // Confirm with no password submits nothing (button disabled).
@@ -184,7 +207,7 @@ describe('BackendsTab — interaction (challenge-gated flows)', () => {
 
   it('Register parses args/env into the payload after the challenge', async () => {
     endpoints.postRegisterBackend.mockResolvedValue({ restart_required: true })
-    render(<BackendsTab />)
+    renderTab()
     await screen.findByText('opensearch-mcp')
 
     fireEvent.change(screen.getByLabelText(/backend name/i), { target: { value: 'new-mcp' } })
@@ -207,7 +230,7 @@ describe('BackendsTab — interaction (challenge-gated flows)', () => {
 
   it('Validate calls postValidateBackend (no challenge) and shows the result', async () => {
     endpoints.postValidateBackend.mockResolvedValue({ valid: true, namespace: 'ns', provides: [], requires: [], tools: [] })
-    render(<BackendsTab />)
+    renderTab()
     await screen.findByText('opensearch-mcp')
 
     fireEvent.change(screen.getByLabelText(/backend name/i), { target: { value: 'x' } })
@@ -220,7 +243,7 @@ describe('BackendsTab — interaction (challenge-gated flows)', () => {
     // opensearch-mcp is started=true, so it shows Stop/Restart; timesketch-mcp is
     // enabled+stopped+met → Start enabled.
     endpoints.postStartService.mockResolvedValue({})
-    render(<BackendsTab />)
+    renderTab()
     await screen.findByText('timesketch-mcp')
 
     // Two Start buttons render: opensearch-mcp's is disabled (already started);
@@ -235,21 +258,25 @@ describe('BackendsTab — interaction (challenge-gated flows)', () => {
 
   it('Unregister passes the backend name + password to deleteBackend', async () => {
     endpoints.deleteBackend.mockResolvedValue({ restart_required: false })
-    render(<BackendsTab />)
+    renderTab()
     await screen.findByText('opensearch-mcp')
 
-    fireEvent.click(screen.getAllByRole('button', { name: /unregister/i })[0])
+    // Unregister lives in the row's overflow ("⋯") menu (single-affordance B8).
+    openRowMenu('opensearch-mcp')
+    fireEvent.click(await screen.findByRole('menuitem', { name: /unregister/i }))
     confirmChallenge()
     await waitFor(() => expect(endpoints.deleteBackend).toHaveBeenCalledWith('opensearch-mcp', { password: 'pw' }))
   })
 
   it('enable toggle calls postSetBackendEnabled with the next enabled state', async () => {
     endpoints.postSetBackendEnabled.mockResolvedValue({ restart_required: false })
-    render(<BackendsTab />)
+    renderTab()
     await screen.findByText('opensearch-mcp')
 
-    // opensearch-mcp is enabled → its toggle reads "Disable".
-    fireEvent.click(screen.getAllByRole('button', { name: /^disable$/i })[0])
+    // opensearch-mcp is enabled → the enable toggle ("Disable backend") lives in
+    // the row's overflow menu; its primary affordance is Stop (it is running).
+    openRowMenu('opensearch-mcp')
+    fireEvent.click(await screen.findByRole('menuitem', { name: /disable backend/i }))
     confirmChallenge()
     await waitFor(() =>
       expect(endpoints.postSetBackendEnabled).toHaveBeenCalledWith('opensearch-mcp', { enabled: false, password: 'pw' }),
@@ -258,10 +285,10 @@ describe('BackendsTab — interaction (challenge-gated flows)', () => {
 
   it('error path: a rejected challenge action surfaces the error in the modal', async () => {
     endpoints.postReloadBackends.mockRejectedValue(new Error('Password verification failed'))
-    render(<BackendsTab />)
+    renderTab()
     await screen.findByText('opensearch-mcp')
 
-    fireEvent.click(screen.getByRole('button', { name: /check apply status/i }))
+    fireEvent.click(screen.getByRole('button', { name: /scan backends/i }))
     confirmChallenge('bad')
     expect(await screen.findByText(/Password verification failed/i)).toBeInTheDocument()
   })

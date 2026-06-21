@@ -1,30 +1,41 @@
 import { AlertTriangle } from 'lucide-react'
 
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+
 // ─────────────────────────────────────────────────────────────────────────
-// RestartRequiredBanner — surfaced when any registry row has pending_apply
-// (registered/changed but not yet loaded into the running gateway). Legacy IA
-// parity §2: amber banner with the pending count + the exact systemctl
-// guidance. Renders nothing when there is nothing pending.
+// RestartRequiredInline — inline header indicator (contract §C "Backends —
+// header"): when any registry row has pending_apply, a compact amber pill sits
+// on the SAME horizontal level as the Scan button, just before it. The exact
+// systemctl guidance moves into the tooltip so the header stays uncluttered.
+// Renders nothing when there is nothing pending.
 // ─────────────────────────────────────────────────────────────────────────
 
-export function RestartRequiredBanner({ pendingCount }) {
+export function RestartRequiredInline({ pendingCount }) {
   if (!pendingCount) return null
   return (
-    <div
-      role="status"
-      className="flex items-start gap-2.5 rounded-lg border border-status-pending/40 bg-status-pending/10 px-3 py-2.5 text-xs leading-relaxed text-foreground"
-    >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-status-pending" aria-hidden />
-      <div>
-        <span className="font-semibold text-status-pending">Restart required to apply.</span>{' '}
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          role="status"
+          aria-label={`Restart required to apply ${pendingCount} pending backend change${
+            pendingCount === 1 ? '' : 's'
+          }`}
+          className="inline-flex items-center gap-1.5 rounded-full border border-status-pending/40 bg-status-pending/10 px-2.5 py-1 text-[11px] font-semibold text-status-pending"
+        >
+          <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
+          Restart required to apply ({pendingCount})
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs text-balance">
         {pendingCount} backend{pendingCount === 1 ? '' : 's'} {pendingCount === 1 ? 'was' : 'were'}{' '}
-        registered or changed but {pendingCount === 1 ? 'is' : 'are'} not yet loaded into the running
-        gateway. Run{' '}
-        <code className="mono rounded bg-bg-raised px-1 py-0.5 text-[11px]">
-          sudo systemctl restart sift-gateway
-        </code>{' '}
-        on the SIFT VM, then Refresh.
-      </div>
-    </div>
+        registered or changed but {pendingCount === 1 ? 'is' : 'are'} not yet loaded into the
+        running gateway. Run{' '}
+        <span className="mono">sudo systemctl restart sift-gateway</span> on the SIFT VM, then Scan.
+      </TooltipContent>
+    </Tooltip>
   )
 }
