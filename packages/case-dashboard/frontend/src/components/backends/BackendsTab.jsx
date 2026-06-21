@@ -1,11 +1,11 @@
-import { RefreshCw } from 'lucide-react'
+import { RadarIcon } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 import { useStoreSlice } from '@/store/useStore'
 import { useMotionVariants } from '@/lib/motion'
 import { Button } from '@/components/ui/button'
 import { HealthPanel } from './HealthPanel'
-import { RestartRequiredBanner } from './RestartRequiredBanner'
+import { RestartRequiredInline } from './RestartRequiredBanner'
 import { BackendRegistryList } from './BackendRegistryList'
 import { RegisterBackendForm } from './RegisterBackendForm'
 import { BackendChallengeModal } from './BackendChallengeModal'
@@ -15,8 +15,8 @@ import { useBackends } from './useBackends'
 // ─────────────────────────────────────────────────────────────────────────
 // BackendsTab — gateway add-on registry console (Mission-Control reskin of the
 // legacy backends view, full functional parity). ONE primary scroll owner; a
-// flowing page. Top→bottom IA: Header (title + Check-Apply-Status/reload) →
-// restart-required banner → operator health panel → [DB registry list | register
+// flowing page. Top→bottom IA: Header (title + inline restart-required indicator
+// + Scan-Backends/reload) → operator health panel → [DB registry list | register
 // form]. Every mutating admin action is wrapped in the examiner-password
 // challenge (re-verified server-side against Supabase, B-MVP-017).
 //
@@ -45,21 +45,31 @@ export function BackendsTab() {
         aria-label="Gateway backends and add-ons"
         className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-5"
       >
-        <header className="flex items-center justify-between gap-3 border-b border-border-faint pb-3">
-          <h1 className="font-display text-lg font-bold text-foreground">Backends &amp; Add-ons</h1>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={b.handleReload}
-            className="mono gap-1.5 text-xs"
-          >
-            <RefreshCw className="size-3.5" aria-hidden />
-            Check Apply Status
-          </Button>
-        </header>
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border-faint pb-3">
+          <div className="flex flex-col gap-1">
+            <h1 className="font-display text-[22px] font-bold leading-none tracking-[-0.4px] text-foreground">
+              Backends &amp; Add-ons
+            </h1>
+            <p className="mono text-[10px] uppercase tracking-[.12em] text-muted-foreground">
+              Gateway add-on registry · health &amp; lifecycle
+            </p>
+          </div>
 
-        <RestartRequiredBanner pendingCount={pendingCount} />
+          <div className="flex items-center gap-2.5">
+            <RestartRequiredInline pendingCount={pendingCount} />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={b.handleReload}
+              aria-label="Scan backends — check registry health and apply status"
+              className="mono gap-1.5 text-xs"
+            >
+              <RadarIcon className="size-3.5" aria-hidden />
+              Scan Backends
+            </Button>
+          </div>
+        </header>
 
         <HealthPanel />
 
