@@ -1,17 +1,11 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
-// Self-hosted fonts (no Google Fonts / gstatic) — spec §5.1.
-// Inter = UI · Space Grotesk = display/numerals · JetBrains Mono = forensic data.
-import '@fontsource/inter/400.css'
-import '@fontsource/inter/500.css'
-import '@fontsource/inter/600.css'
-import '@fontsource/inter/700.css'
-import '@fontsource/space-grotesk/500.css'
-import '@fontsource/space-grotesk/600.css'
-import '@fontsource/space-grotesk/700.css'
-import '@fontsource/jetbrains-mono/400.css'
-import '@fontsource/jetbrains-mono/500.css'
+// Self-hosted fonts (no Google Fonts / gstatic) — spec §5.1. Font diet
+// (PERF-2): latin-subset woff2 only (no .woff fallback, no cyrillic/latin-ext)
+// is declared in fonts.css. Inter = UI · Space Grotesk = display/numerals ·
+// JetBrains Mono = forensic data.
+import './styles/fonts.css'
 
 import './styles/globals.css'
 

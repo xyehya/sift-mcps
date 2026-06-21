@@ -1,0 +1,83 @@
+/* ─────────────────────────────────────────────────────────────────────────
+ * Self-hosted font faces (no Google Fonts / gstatic) — spec §5.1.
+ *
+ * Font DIET (PERF-2): this English forensic console ships ONLY the `latin`
+ * subset in `woff2` (every target browser supports woff2 — the `.woff`
+ * fallback and the `latin-ext` / `cyrillic` / `cyrillic-ext` subsets that
+ * @fontsource's per-weight CSS would pull in are intentionally dropped). The
+ * woff2 files are resolved from the @fontsource package via Vite's bare-
+ * specifier url() resolution, so they are content-hashed into the bundle.
+ *
+ *   Inter          — UI (body, labels, controls)            400/500/600/700
+ *   Space Grotesk  — display / numerals (titles, big stats) 500/600/700
+ *   JetBrains Mono — forensic data (hashes, IDs, stamps)    400/500
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/* Inter */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url(@fontsource/inter/files/inter-latin-400-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url(@fontsource/inter/files/inter-latin-500-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url(@fontsource/inter/files/inter-latin-600-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url(@fontsource/inter/files/inter-latin-700-normal.woff2) format('woff2');
+}
+
+/* Space Grotesk */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url(@fontsource/space-grotesk/files/space-grotesk-latin-500-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url(@fontsource/space-grotesk/files/space-grotesk-latin-600-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url(@fontsource/space-grotesk/files/space-grotesk-latin-700-normal.woff2) format('woff2');
+}
+
+/* JetBrains Mono */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url(@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url(@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2) format('woff2');
+}
