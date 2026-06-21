@@ -43,11 +43,12 @@
   --text-muted:    #697282;
   --text-ghost:    #98A1AF;
 
-  --orange:       #DD5A2F;
-  --orange-bright:#F26C3D;
-  --orange-deep:  #B6431D;
+  --orange:       #C2410C; /* WCAG AA ≥4.5:1 as text on white (was #DD5A2F ~3.5:1) */
+  --orange-bright:#DD5A2F;
+  --orange-deep:  #9A3412;
   --orange-dim:   rgba(221, 90, 47, .12);
   --orange-faint: rgba(221, 90, 47, .05);
+  --amber-dim:    rgba(169, 117, 15, .12);
 
   --jade:    #2E8C55;
   --amber:   #A9750F;
@@ -134,6 +135,7 @@
   --orange-deep:  #D85A33;
   --orange-dim:   rgba(244, 117, 75, .12);
   --orange-faint: rgba(244, 117, 75, .05);
+  --amber-dim:    rgba(224, 162, 62, .12);
 
   --jade:    #5FB87E;
   --amber:   #E0A23E;
