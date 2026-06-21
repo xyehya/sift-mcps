@@ -39,15 +39,15 @@ export function parseArgs(argsStr) {
 
 /**
  * Compile the env-var reference grid (a list of {key, value} rows) into a flat
- * record. Keys are trimmed; rows with a blank key are dropped. Values are kept
- * verbatim (these are Gateway env-var NAMES referenced by the backend, never
- * secret material).
+ * record. Legacy parity: BOTH key and value are trimmed, and a row is dropped
+ * unless its trimmed key AND trimmed value are non-empty (these are Gateway
+ * env-var NAMES referenced by the backend, never secret material).
  */
 export function compileEnv(envList) {
   const envObj = {}
   ;(envList ?? []).forEach(({ key, value }) => {
-    if (key.trim()) {
-      envObj[key.trim()] = value
+    if (key.trim() && value.trim()) {
+      envObj[key.trim()] = value.trim()
     }
   })
   return envObj

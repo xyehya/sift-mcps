@@ -35,13 +35,18 @@ describe('backends-utils — pure logic', () => {
     expect(parseArgs('')).toEqual([])
   })
 
-  it('compileEnv: trims keys, drops blank-key rows, keeps values verbatim', () => {
+  it('compileEnv: legacy parity — trims key AND value, drops blank-key/blank-value rows', () => {
     const envList = [
       { key: 'PORT', value: '8080' },
       { key: '  HOST ', value: '127.0.0.1' },
-      { key: '', value: 'ignored' },
+      { key: '', value: 'ignored' }, // blank key → dropped
+      { key: 'A', value: '  x  ' }, // value trimmed → A:'x'
+      { key: 'B', value: '   ' }, // blank (whitespace-only) value → dropped
     ]
-    expect(compileEnv(envList)).toEqual({ PORT: '8080', HOST: '127.0.0.1' })
+    expect(compileEnv(envList)).toEqual({ PORT: '8080', HOST: '127.0.0.1', A: 'x' })
+    // Explicit locks for the legacy semantics the migration must preserve:
+    expect(compileEnv([{ key: 'A', value: '  x  ' }])).toEqual({ A: 'x' }) // value trimmed
+    expect(compileEnv([{ key: 'B', value: '   ' }])).toEqual({}) // blank value dropped
   })
 
   it('getButtonStates: start/stop/restart enablement', () => {
