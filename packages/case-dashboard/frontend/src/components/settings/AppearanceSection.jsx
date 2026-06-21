@@ -19,7 +19,7 @@ export function AppearanceSection() {
   const { theme, setTheme } = useTheme()
   return (
     <div className="rounded-lg border border-border-faint bg-card p-4">
-      <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+      <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground">
         Appearance
       </p>
       <div role="radiogroup" aria-label="Theme preference" className="flex flex-wrap gap-2">

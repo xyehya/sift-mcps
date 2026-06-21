@@ -13,7 +13,7 @@ const LABEL = 'mono mb-1 block text-[10px] text-muted-foreground'
 export function IssuePrincipalForm({ form, onField, onSubmit }) {
   return (
     <div className="flex h-fit flex-col rounded-lg border border-border-faint bg-card p-4 lg:col-span-1">
-      <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+      <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground">
         Issue JWT Session
       </p>
       <form onSubmit={onSubmit} className="space-y-4">

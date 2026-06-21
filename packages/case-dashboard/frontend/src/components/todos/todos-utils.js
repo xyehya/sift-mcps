@@ -29,11 +29,19 @@ const STATUS_CHIP = {
   completed: 'text-status-approved bg-jade/10 border-jade/30',
 }
 
+// Priority → Title-case label (matches findings-utils High/Medium/Low casing,
+// rendered through an `uppercase` chip per the typography bar §A). Fixes the
+// operator-flagged inconsistent first-letter casing (was raw lowercase `pri`).
+const PRIORITY_LABEL = { high: 'High', medium: 'Medium', low: 'Low' }
+
 export function priorityTextClass(priority) {
   return PRIORITY_TEXT[priority] || 'text-muted-foreground'
 }
 export function priorityChipClass(priority) {
   return PRIORITY_CHIP[priority] || 'text-muted-foreground bg-bg-raised border-border-soft'
+}
+export function priorityLabel(priority) {
+  return PRIORITY_LABEL[priority] || (priority ?? '—')
 }
 export function statusChipClass(status) {
   return STATUS_CHIP[status] || 'text-muted-foreground bg-bg-raised border-border-soft'

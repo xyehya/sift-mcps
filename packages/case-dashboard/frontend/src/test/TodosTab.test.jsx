@@ -57,27 +57,54 @@ beforeEach(() => {
 })
 
 describe('TodosTab — interaction', () => {
-  it('renders the populated table with sorted rows', () => {
+  it('renders the populated table with sorted rows; no static "(N of N)" chrome', () => {
     render(<TodosTab />)
     expect(screen.getByText('T-001')).toBeInTheDocument()
     expect(screen.getByText('High open task')).toBeInTheDocument()
-    expect(screen.getByText(/2 open/)).toBeInTheDocument()
+    // Static "(3 of 3)" / "X open · Y completed" decoration was removed (§B3).
+    expect(screen.queryByText(/of 3/)).toBeNull()
+    expect(screen.queryByText(/\d+ open$/)).toBeNull()
+    // Unfiltered view shows no count chrome.
+    expect(screen.queryByText(/shown/)).toBeNull()
   })
 
-  it('toggle status calls updateTodo with the next status', async () => {
+  it('shows a live "N shown" count only while filtering', () => {
+    render(<TodosTab />)
+    fireEvent.change(screen.getByLabelText(/filter by status/i), { target: { value: 'open' } })
+    expect(screen.getByText(/2 shown/)).toBeInTheDocument()
+  })
+
+  it('primary action toggles status — calls updateTodo with the next status', async () => {
     endpoints.updateTodo.mockResolvedValue({ ...TODOS[0], status: 'completed' })
     render(<TodosTab />)
+    // The primary row affordance is an icon button labelled "Complete".
     fireEvent.click(screen.getAllByRole('button', { name: /^complete$/i })[0])
     await waitFor(() => expect(endpoints.updateTodo).toHaveBeenCalledWith('T-001', { status: 'completed' }))
   })
 
-  it('delete confirms then calls deleteTodo', async () => {
+  // Radix DropdownMenuTrigger opens on pointerdown (left button) — open the
+  // first row's "⋯" overflow menu and return the located trigger.
+  function openFirstOverflow() {
+    const trigger = screen.getAllByRole('button', { name: /more actions/i })[0]
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false })
+    fireEvent.pointerUp(trigger, { button: 0 })
+  }
+
+  it('delete lives in the ⋯ overflow menu, confirms, then calls deleteTodo', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     endpoints.deleteTodo.mockResolvedValue({})
     render(<TodosTab />)
-    fireEvent.click(screen.getAllByRole('button', { name: /^delete$/i })[0])
+    openFirstOverflow()
+    fireEvent.click(await screen.findByRole('menuitem', { name: /delete/i }))
     await waitFor(() => expect(endpoints.deleteTodo).toHaveBeenCalledWith('T-001'))
     window.confirm.mockRestore()
+  })
+
+  it('edit lives in the ⋯ overflow menu and opens the inline editor', async () => {
+    render(<TodosTab />)
+    openFirstOverflow()
+    fireEvent.click(await screen.findByRole('menuitem', { name: /edit/i }))
+    expect(await screen.findByLabelText(/edit description/i)).toBeInTheDocument()
   })
 
   it('related-finding link navigates to the Findings tab', () => {
@@ -91,6 +118,8 @@ describe('TodosTab — interaction', () => {
     useStore.setState({ user: { examiner: 'a', role: 'analyst' } })
     render(<TodosTab />)
     expect(screen.queryByRole('button', { name: /new todo/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /^delete$/i })).toBeNull()
+    // No primary toggle, no overflow menu (which holds edit/delete) for analysts.
+    expect(screen.queryByRole('button', { name: /^complete$/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /more actions/i })).toBeNull()
   })
 })

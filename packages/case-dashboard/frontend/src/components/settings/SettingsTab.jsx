@@ -44,13 +44,18 @@ export function SettingsTab() {
       animate="show"
       className="h-full space-y-6 overflow-y-auto bg-bg-base p-5"
     >
-      <h1 className="font-display text-lg font-bold text-foreground">Settings</h1>
+      <div className="flex flex-col gap-1">
+        <h1 className="font-display text-[22px] font-bold leading-none tracking-[-0.4px] text-foreground">Settings</h1>
+        <p className="mono text-[10px] uppercase tracking-[.12em] text-muted-foreground">
+          Operator preferences &amp; credentials
+        </p>
+      </div>
 
       <AppearanceSection />
       <AccountSection user={user} />
 
       <div>
-        <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+        <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground">
           Agent / Service JWT Sessions
         </p>
 
