@@ -190,7 +190,7 @@ export function SideNav({ collapsed, onToggleCollapsed }) {
         )}
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-4 px-3 py-4">
           {NAV_GROUPS.map((group) => (
             <div key={group.label} className="flex flex-col gap-1">
