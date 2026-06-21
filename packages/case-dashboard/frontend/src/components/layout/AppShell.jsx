@@ -102,7 +102,7 @@ export function AppShell() {
       <div className="flex h-full min-w-[64rem]">
         <SideNav collapsed={collapsed} onToggleCollapsed={() => setCollapsed((c) => !c)} />
 
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <Header onOpenCommandPalette={openPalette} />
 
           <main
