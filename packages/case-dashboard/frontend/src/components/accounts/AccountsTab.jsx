@@ -4,7 +4,7 @@ import { Users } from 'lucide-react'
 import { useStoreSlice } from '@/store/useStore'
 import { SkeletonBlock } from '@/components/common/Skeleton'
 import { sortBy } from '@/components/common/entity-utils'
-import { EntityShell, EntityEmptyState, ChipList } from '@/components/common/EntityShell'
+import { EntityShell, EntityEmptyState, OverflowTags } from '@/components/common/EntityShell'
 import { EntityTable } from '@/components/common/EntityTable'
 import { ConfidenceBadge, StatusSummary } from '@/components/common/EntityBadges'
 import { useAccountsData } from './useAccountsData'
@@ -76,11 +76,13 @@ export function AccountsTab() {
     setActiveTab('findings')
   }
 
-  const title = `Accounts in Scope${isSingleHost ? ` — Host: ${singleHostName}` : ''}`
+  const subtitle = isSingleHost
+    ? `Host: ${singleHostName}`
+    : 'Identities attributed in this case'
 
   if (isLoading) {
     return (
-      <EntityShell title="Accounts in Scope" ariaLabel="Accounts in scope">
+      <EntityShell title="Accounts in Scope" subtitle="Identities attributed in this case" ariaLabel="Accounts in scope">
         <SkeletonBlock rows={8} gap={12} />
       </EntityShell>
     )
@@ -90,16 +92,26 @@ export function AccountsTab() {
     switch (key) {
       case 'account':
         return row.isNa ? (
-          <span className="italic text-muted-foreground">Unattributed Account</span>
+          <span className="text-[13px] italic text-muted-foreground">Unattributed Account</span>
         ) : (
-          <span className="mono font-semibold text-foreground">{row.account}</span>
+          <span className="mono text-[13px] font-medium text-foreground">{row.account}</span>
         )
       case 'findingsCount':
         return <span className="mono text-foreground">{row.findingsCount}</span>
       case 'hostCount':
         return <span className="mono text-foreground">{row.hostCount}</span>
       case 'hosts':
-        return <ChipList items={row.hosts} max />
+        return (
+          <OverflowTags
+            items={row.hosts}
+            max={3}
+            renderChip={(h) => (
+              <span className="mono rounded border border-border-faint bg-bg-raised px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {h}
+              </span>
+            )}
+          />
+        )
       case 'bestConfidence':
         return <ConfidenceBadge confidence={row.bestConfidence} />
       case 'timeRange':
@@ -112,7 +124,13 @@ export function AccountsTab() {
   }
 
   return (
-    <EntityShell title={title} count={accountsData.length} ariaLabel="Accounts in scope">
+    <EntityShell
+      title="Accounts in Scope"
+      subtitle={subtitle}
+      shownCount={rows.length}
+      totalCount={accountsData.length}
+      ariaLabel="Accounts in scope"
+    >
       {accountsData.length === 0 ? (
         <EntityEmptyState
           icon={Users}
