@@ -1,45 +1,59 @@
-import { Triangle, Diamond, Circle } from 'lucide-react'
+import { Check, MoreHorizontal, Pencil, RotateCcw, Trash2, X } from 'lucide-react'
 
-import { priorityChipClass, statusChipClass, formatDate } from './todos-utils'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  priorityChipClass,
+  priorityLabel,
+  statusChipClass,
+  formatDate,
+} from './todos-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // TodoRow — one table row (legacy parity): ID · title (inline-editable) ·
-// priority chip (severity colour) · examiner · status chip · related-finding
-// links (navigate to Findings) · created date · row actions (complete/reopen ·
-// edit · delete, or save/cancel while editing). Examiner-only actions are
-// gated by `canWrite` upstream. Reskinned to token classes + lucide priority
-// icons; the in-flight row dims via opacity (data-driven, not a hex).
+// severity chip (token colour + Title-case text label, NO shape glyph) ·
+// examiner · status chip · related-finding links (navigate to Findings) ·
+// created date · ONE row affordance (single-click status toggle as the primary
+// action + a "⋯" overflow menu holding edit / delete). Examiner-only actions
+// are gated by `canWrite` upstream. Severity rides typography + token colour,
+// not ornament (contract B2/B5); the in-flight row dims via opacity.
 // ─────────────────────────────────────────────────────────────────────────
 
 const SELECT =
   'mono rounded-lg border border-border-soft bg-bg-raised px-2 py-1 text-[11px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring'
 
-/** Module-scope priority shape icon — explicit literal branches so the JIT and
- *  the react-hooks/static-components rule both see fixed component references. */
-function PriorityIcon({ priority, className }) {
-  if (priority === 'high') return <Triangle className={className} aria-hidden />
-  if (priority === 'low') return <Circle className={className} aria-hidden />
-  return <Diamond className={className} aria-hidden />
-}
-
-function ActionButton({ onClick, disabled, tone, children }) {
-  // tone ∈ jade|amber|orange|crimson|muted — literal class maps (JIT-safe).
+/** Compact icon affordance with a Tooltip + aria-label (contract B9). */
+function IconAction({ label, onClick, disabled, tone, children }) {
+  // tone ∈ jade|muted — literal class maps (JIT-safe).
   const TONE = {
-    jade: 'text-status-approved border-jade/30 bg-jade/10',
-    amber: 'text-status-pending border-amber/30 bg-amber/10',
-    orange: 'text-primary border-primary/30 bg-primary/10',
-    crimson: 'text-destructive border-crimson/30 bg-crimson/10',
-    muted: 'text-muted-foreground border-border-soft bg-bg-raised',
+    jade: 'text-status-approved border-jade/30 bg-jade/10 hover:bg-jade/20',
+    muted: 'text-muted-foreground border-border-soft bg-bg-raised hover:text-foreground',
   }
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`mono rounded border px-2 py-1 text-[10px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 ${TONE[tone] || TONE.muted}`}
-    >
-      {children}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          onClick={onClick}
+          disabled={disabled}
+          className={`mono inline-flex size-7 items-center justify-center rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 ${TONE[tone] || TONE.muted}`}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -59,15 +73,16 @@ export function TodoRow({
 }) {
   const pri = (todo.priority ?? 'medium').toLowerCase()
   const stat = todo.status ?? 'open'
+  const completed = stat === 'completed'
   const relatedFids = todo.related_findings ?? []
 
   return (
-    <tr className={`group align-top text-text-primary ${isBusy ? 'opacity-60' : ''}`}>
-      <td className="py-3 pr-4">
-        <span className="mono whitespace-nowrap text-[11px] text-muted-foreground">{todo.todo_id}</span>
+    <tr className={`group align-top text-foreground transition-colors hover:bg-secondary/50 ${isBusy ? 'opacity-60' : ''}`}>
+      <td className="px-3 py-3">
+        <span className="mono whitespace-nowrap text-[11px] tabular-nums text-muted-foreground">{todo.todo_id}</span>
       </td>
 
-      <td className="py-3 pr-4">
+      <td className="px-3 py-3">
         {isEditing ? (
           <textarea
             autoFocus
@@ -75,16 +90,16 @@ export function TodoRow({
             value={editDraft.description}
             onChange={(e) => onEditDraft({ ...editDraft, description: e.target.value })}
             rows={2}
-            className="w-full min-w-[14rem] resize-y rounded-lg border border-border-soft bg-bg-raised px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full min-w-[14rem] resize-y rounded-lg border border-border-soft bg-bg-raised px-2 py-1 text-[13px] text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           />
         ) : (
-          <div className="max-w-xs truncate text-xs" title={todo.description}>
+          <div className="max-w-xs truncate text-[13px] font-medium" title={todo.description}>
             {todo.description || '—'}
           </div>
         )}
       </td>
 
-      <td className="py-3 pr-4">
+      <td className="px-3 py-3">
         {isEditing ? (
           <select
             aria-label="Edit priority"
@@ -98,25 +113,26 @@ export function TodoRow({
           </select>
         ) : (
           <span
-            className={`mono inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${priorityChipClass(pri)}`}
+            className={`mono inline-flex w-fit items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] ${priorityChipClass(pri)}`}
           >
-            <PriorityIcon priority={pri} className="size-2.5" />
-            <span>{pri}</span>
+            {priorityLabel(pri)}
           </span>
         )}
       </td>
 
-      <td className="py-3 pr-4">
-        <span className="text-[11px] text-muted-foreground">{todo.examiner || todo.created_by || '—'}</span>
+      <td className="px-3 py-3">
+        <span className="text-[13px] text-muted-foreground">{todo.examiner || todo.created_by || '—'}</span>
       </td>
 
-      <td className="py-3 pr-4">
-        <span className={`mono inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold ${statusChipClass(stat)}`}>
-          {stat.toUpperCase()}
+      <td className="px-3 py-3">
+        <span
+          className={`mono inline-flex w-fit items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] ${statusChipClass(stat)}`}
+        >
+          {stat}
         </span>
       </td>
 
-      <td className="py-3 pr-4">
+      <td className="px-3 py-3">
         {relatedFids.length > 0 ? (
           <div className="flex flex-wrap gap-1">
             {relatedFids.map((fid) => (
@@ -136,37 +152,62 @@ export function TodoRow({
         )}
       </td>
 
-      <td className="py-3 pr-4">
-        <span className="mono whitespace-nowrap text-[11px] text-muted-foreground">{formatDate(todo.created_at)}</span>
+      <td className="px-3 py-3">
+        <span className="mono whitespace-nowrap text-[11px] tabular-nums text-muted-foreground">{formatDate(todo.created_at)}</span>
       </td>
 
       {canWrite && (
-        <td className="py-3">
+        <td className="px-3 py-3">
           <div className="flex items-center justify-end gap-1.5">
             {isEditing ? (
               <>
-                <ActionButton onClick={() => onSaveEdit(todo)} disabled={isBusy} tone="jade">
-                  Save
-                </ActionButton>
-                <ActionButton onClick={onCancelEdit} disabled={isBusy} tone="muted">
-                  Cancel
-                </ActionButton>
+                <IconAction label="Save changes" onClick={() => onSaveEdit(todo)} disabled={isBusy} tone="jade">
+                  <Check className="size-3.5" aria-hidden />
+                </IconAction>
+                <IconAction label="Cancel edit" onClick={onCancelEdit} disabled={isBusy} tone="muted">
+                  <X className="size-3.5" aria-hidden />
+                </IconAction>
               </>
             ) : (
               <>
-                <ActionButton
+                {/* Primary action: single-click status toggle. */}
+                <IconAction
+                  label={completed ? 'Reopen' : 'Complete'}
                   onClick={() => onToggleStatus(todo)}
                   disabled={isBusy}
-                  tone={stat === 'completed' ? 'amber' : 'jade'}
+                  tone={completed ? 'muted' : 'jade'}
                 >
-                  {stat === 'completed' ? 'Reopen' : 'Complete'}
-                </ActionButton>
-                <ActionButton onClick={() => onStartEdit(todo)} disabled={isBusy} tone="orange">
-                  Edit
-                </ActionButton>
-                <ActionButton onClick={() => onDelete(todo)} disabled={isBusy} tone="crimson">
-                  Delete
-                </ActionButton>
+                  {completed ? <RotateCcw className="size-3.5" aria-hidden /> : <Check className="size-3.5" aria-hidden />}
+                </IconAction>
+
+                {/* Overflow menu: edit / delete (no cramming — contract B8). */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="More actions"
+                      disabled={isBusy}
+                      className="inline-flex size-7 items-center justify-center rounded-md border border-border-soft bg-bg-raised text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <MoreHorizontal className="size-3.5" aria-hidden />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-40">
+                    <DropdownMenuItem onSelect={() => onStartEdit(todo)} className="gap-2 text-xs">
+                      <Pencil className="size-3.5" aria-hidden />
+                      Edit
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={() => onDelete(todo)}
+                      className="gap-2 text-xs"
+                    >
+                      <Trash2 className="size-3.5" aria-hidden />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </>
             )}
           </div>
