@@ -16,6 +16,11 @@ import { OverviewTab } from '@/components/overview/OverviewTab'
 import { FindingsTab } from '@/components/findings/FindingsTab'
 import { EvidenceTab } from '@/components/evidence/EvidenceTab'
 import { BackendsTab } from '@/components/backends/BackendsTab'
+// === ENTITY tabs (Timeline · Hosts · Accounts · IOCs) ===
+import { TimelineTab } from '@/components/timeline/TimelineTab'
+import { HostsTab } from '@/components/hosts/HostsTab'
+import { AccountsTab } from '@/components/accounts/AccountsTab'
+import { IocsTab } from '@/components/iocs/IocsTab'
 
 // ─────────────────────────────────────────────────────────────────────────
 // AppShell (spec §3 layout + §4 IA) — the authenticated frame: collapsible
@@ -36,6 +41,11 @@ function TabContent({ tabId }) {
   if (tabId === 'findings') return <FindingsTab />
   if (tabId === 'evidence') return <EvidenceTab />
   if (tabId === 'backends') return <BackendsTab />
+  // === ENTITY tabs (Timeline · Hosts · Accounts · IOCs) ===
+  if (tabId === 'timeline') return <TimelineTab />
+  if (tabId === 'hosts') return <HostsTab />
+  if (tabId === 'accounts') return <AccountsTab />
+  if (tabId === 'iocs') return <IocsTab />
   return <TabPlaceholder tabId={tabId} />
 }
 
