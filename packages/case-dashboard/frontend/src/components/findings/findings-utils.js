@@ -49,13 +49,15 @@ export function confidenceScore(finding) {
 
 /**
  * Graded confidence ring (DESIGN-SYSTEM.md): ≥85 jade · ≥65 amber · else
- * crimson — graded, NOT branded by category. Returns a static token text class
- * + the matching CSS-var token for the SVG stroke (data-driven, no raw hex).
+ * crimson — graded, NOT branded by category. Returns static token classes
+ * (`text` for labels, `dot` for swatches) + the matching CSS-var token for the
+ * SVG stroke (data-driven, no raw hex). All class strings are literal so the
+ * JIT emits them (§5).
  */
 export const RING_GRADE = {
-  jade: { text: 'text-status-approved', stroke: 'var(--status-approved)' },
-  amber: { text: 'text-sev-med', stroke: 'var(--sev-med)' },
-  crimson: { text: 'text-sev-high', stroke: 'var(--sev-high)' },
+  jade: { text: 'text-status-approved', dot: 'bg-status-approved', stroke: 'var(--status-approved)' },
+  amber: { text: 'text-sev-med', dot: 'bg-sev-med', stroke: 'var(--sev-med)' },
+  crimson: { text: 'text-sev-high', dot: 'bg-sev-high', stroke: 'var(--sev-high)' },
 }
 export function confidenceGrade(score) {
   if (score == null) return null
