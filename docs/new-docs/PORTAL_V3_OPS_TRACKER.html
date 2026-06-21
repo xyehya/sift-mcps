@@ -119,7 +119,7 @@
 <tr><td>RUN-4c</td><td>06-20</td><td>review polish (9 items) · sidebar zoom · light parity</td><td class="mono">257d20e</td><td><span class="pill done">DONE</span></td></tr>
 <tr><td>P0 re-impl U1–U4</td><td>06-21</td><td>token re-port+bridge (sev-spec out) · Overview IA 1:1 · Findings 1:1 · identity</td><td class="mono">16a2668→2a47bac</td><td><span class="pill done">DONE · signed off</span></td></tr>
 <tr><td>P1 Evidence pilot</td><td>06-21</td><td>chain-of-custody registry</td><td class="mono">6033bea/5eec27c</td><td><span class="pill rej">REJECTED (parity)</span></td></tr>
-<tr><td>Operating model + contracts</td><td>06-21</td><td>SIFT Design System model · AGENTS=CLAUDE two-tier · token a11y fixes · DESIGN-SYSTEM committed · named agents created</td><td class="mono">main 52ca07c · portal 77be8e9</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>Operating model + contracts</td><td>06-21</td><td>SIFT Design System model · contract+tracker relocated to portal branch (main kept clean = origin/main) · token a11y fixes · canonical DESIGN-SYSTEM · 3 named agents created</td><td class="mono">portal b4c0cc5 · main b995491</td><td><span class="pill done">DONE</span></td></tr>
 <tr><td>P1 build session</td><td>—</td><td>orchestrator + frontend-coder / verifier-griller / security-expert; functional-parity tabs (see §5)</td><td class="mono">—</td><td><span class="pill pend">NEXT</span></td></tr>
 </tbody>
 </table>
@@ -140,13 +140,13 @@
 
 <h2>5 · Next-session launch</h2>
 <div class="card">
-<p class="sub">Launch dir — <b>cd into the worktree</b> (that folder IS branch portal-v3/p0-foundation, HEAD 77be8e9). NOT the main checkout (old portal). Then reload so the named agents register (<code>/agents</code>); confirm <code>/mcp</code> shows codebase-memory + claude-in-chrome:</p>
+<p class="sub">Launch dir — <b>cd into the worktree</b> (that folder IS branch portal-v3/p0-foundation, HEAD b4c0cc5). NOT the main checkout (old portal). Then reload so the named agents register (<code>/agents</code>); confirm <code>/mcp</code> shows codebase-memory + claude-in-chrome:</p>
 <pre id="launch">cd /home/yk/AI/SIFTHACK/sift-mcps/.claude/worktrees/portal-v3-p0-foundation && claude<button class="copybtn" onclick="cp('launch',this)">copy</button></pre>
 <p class="sub">First message (orchestrator kickoff — P1; dispatches the named agents):</p>
 <pre id="kick">Orchestrator kickoff — SIFT Examiner Portal v3, Phase P1.
 
 You are ORCHESTRATOR. Working dir = this worktree (branch portal-v3/p0-foundation,
-HEAD 77be8e9). NEVER touch the main checkout. You read / verify / gate / dispatch —
+HEAD b4c0cc5). NEVER touch the main checkout. You read / verify / gate / dispatch —
 you do NOT write code yourself.
 
 Named agents (~/.claude/agents/) — dispatch via the Agent tool:
