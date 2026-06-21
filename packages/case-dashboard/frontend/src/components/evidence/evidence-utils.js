@@ -7,99 +7,51 @@
 // Never build a token class by interpolation (`text-${x}`) — it won't generate.
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Custody status → static token classes + label + dot. */
-export const CUSTODY_CLASS = {
-  sealed: {
-    label: 'Sealed',
-    text: 'text-status-approved',
-    dot: 'bg-status-approved',
-    tint: 'bg-status-approved/10',
-    ring: 'border-status-approved/40',
-  },
-  unsealed: {
-    label: 'Unsealed',
-    text: 'text-destructive',
-    dot: 'bg-destructive',
-    tint: 'bg-destructive/10',
-    ring: 'border-destructive/40',
-  },
-  pending: {
-    label: 'Pending seal',
-    text: 'text-status-pending',
-    dot: 'bg-status-pending',
-    tint: 'bg-status-pending/10',
-    ring: 'border-status-pending/40',
-  },
-}
-
-/** Resolve custody class bundle (null when unknown). */
-export function custodyClass(status) {
-  return CUSTODY_CLASS[(status ?? '').toLowerCase()] ?? {
-    label: status || 'Unknown',
-    text: 'text-muted-foreground',
-    dot: 'bg-muted-foreground',
-    tint: 'bg-secondary',
-    ring: 'border-border',
-  }
-}
-
-/** Evidence artifact type → static label + icon-key. */
-export const TYPE_META = {
-  disk: { label: 'Disk image', icon: 'hdd' },
-  memory: { label: 'Memory dump', icon: 'cpu' },
-  network: { label: 'Network capture', icon: 'wifi' },
-  logs: { label: 'Log bundle', icon: 'scroll' },
-  registry: { label: 'Registry / DB', icon: 'database' },
-}
-
-/** Resolve type label for an evidence item. */
-export function typeMeta(type) {
-  return TYPE_META[(type ?? '').toLowerCase()] ?? { label: type || 'Other', icon: 'file' }
-}
-
-/** Format a file size from bytes into a human-readable label. */
-export function formatSize(bytes) {
-  if (bytes == null) return '—'
-  if (bytes >= 1e12) return `${(bytes / 1e12).toFixed(1)} TB`
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
-  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`
-  if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(1)} KB`
-  return `${bytes} B`
-}
-
-/** Format an ISO timestamp for display (locale-aware, compact). */
-export function formatAcquired(isoTs) {
-  if (!isoTs) return '—'
+/** Format an ISO timestamp for display (locale-aware, full form). */
+export function formatTime(timestamp) {
+  if (!timestamp) return '—'
   try {
-    const d = new Date(isoTs)
-    if (isNaN(d.getTime())) return String(isoTs)
-    return d.toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    const date = new Date(timestamp)
+    if (isNaN(date.getTime())) return String(timestamp)
+    return date.toLocaleString()
   } catch {
-    return String(isoTs)
+    return String(timestamp)
   }
-}
-
-/** Truncate a sha256 to the standard display form: first 16 chars + "…". */
-export function shortHash(sha256) {
-  if (!sha256) return '—'
-  return `${sha256.slice(0, 16)}…`
 }
 
 /**
- * Derive summary counts from an evidence item array — used for the stat tiles.
- * @param {Array} items - EVIDENCE_ITEMS array
- * @returns {{ sealed, total, pendingSeal, unsealed, writeProtected }}
+ * Seal-status badge token bundle. DB authority surfaces `seal_status`; file
+ * authority falls back to the manifest `status`. sealed→jade · violated→crimson
+ * · else amber (pending/unknown).
  */
-export function evidenceSummary(items) {
-  const arr = items ?? []
-  const sealed = arr.filter((e) => (e.custody_status ?? '').toLowerCase() === 'sealed').length
-  const unsealed = arr.filter((e) => (e.custody_status ?? '').toLowerCase() === 'unsealed').length
-  const pendingSeal = arr.filter((e) => (e.custody_status ?? '').toLowerCase() === 'pending').length
-  const writeProtected = arr.filter((e) => e.write_protected).length
-  return { sealed, total: arr.length, pendingSeal, unsealed, writeProtected }
+export function sealBadgeClass(state) {
+  if (state === 'sealed') return 'text-status-approved'
+  if (state === 'violated') return 'text-destructive'
+  return 'text-status-pending'
+}
+
+/**
+ * Sort an evidence array by a column (string or numeric), ascending/descending.
+ * Pure — returns a new array.
+ */
+export function sortEvidence(evidence, sortCol, sortAsc) {
+  return [...(evidence ?? [])].sort((a, b) => {
+    const av = a[sortCol] ?? ''
+    const bv = b[sortCol] ?? ''
+    const cmp = typeof av === 'number' && typeof bv === 'number'
+      ? av - bv
+      : String(av).localeCompare(String(bv))
+    return sortAsc ? cmp : -cmp
+  })
+}
+
+/** Normalise a custody-violation entry (string or {path}) to a path string. */
+export function violationPath(entry) {
+  return typeof entry === 'string' ? entry : (entry?.path ?? '')
+}
+
+/** Truncate a sha256 to the standard display form: first 12 chars + "…". */
+export function shortHash(sha256, len = 12) {
+  if (!sha256) return '—'
+  return `${sha256.slice(0, len)}…`
 }
