@@ -165,10 +165,20 @@ const SUMMARY = {
   todos: { open: 3 },
 }
 
+// === ENTITY fixtures — richer timeline so the Timeline tab renders populated
+// (type chips, host filter, gap + date separators, finding cross-links). MOCK
+// DATA ONLY — synthetic NORTHWIND events, not real case data. ===
 const TIMELINE = [
-  { id: 'E-1', timestamp: iso(2 * H + 20 * 60 * 1000), type: 'logon', description: 'RDP 4624 logon type 10 from 10.4.2.31', finding_refs: ['F-001'] },
-  { id: 'E-2', timestamp: iso(2 * H), type: 'logon', description: 'Service account svc-backup authenticated to DC-01', finding_refs: ['F-001'] },
-  { id: 'E-3', timestamp: iso(2 * H - 30 * 60 * 1000), type: 'process', description: 'cmd.exe spawned by mstsc on DC-01' },
+  { id: 'E-1', timestamp: iso(2 * D + 1 * H), event_type: 'auth', host: 'WS-FINANCE-03', description: 'Interactive logon (4624 type 2) for user m.reyes', status: 'approved' },
+  { id: 'E-2', timestamp: iso(2 * D), event_type: 'file', host: 'FS-01', description: 'Bulk read of \\\\FS-01\\HR-Confidential (5145) by m.reyes', finding_refs: ['F-003'], status: 'approved' },
+  { id: 'E-3', timestamp: iso(1 * D + 6 * H), event_type: 'registry', host: 'DC-01', description: 'Run key written: HKLM\\...\\Run\\UpdateSync', related_findings: ['F-002'] },
+  { id: 'E-4', timestamp: iso(2 * H + 20 * 60 * 1000), event_type: 'lateral', host: 'WS-FINANCE-03', description: 'RDP 4624 logon type 10 from 10.4.2.31', finding_refs: ['F-001'], auto_created_from: 'F-001' },
+  { id: 'E-5', timestamp: iso(2 * H), event_type: 'auth', host: 'DC-01', description: 'Service account svc-backup authenticated to DC-01', finding_refs: ['F-001'] },
+  { id: 'E-6', timestamp: iso(2 * H - 12 * 60 * 1000), event_type: 'process', host: 'DC-01', description: 'cmd.exe spawned by mstsc.exe on DC-01' },
+  { id: 'E-7', timestamp: iso(2 * H - 24 * 60 * 1000), event_type: 'execution', host: 'DC-01', description: 'rundll32 C:\\ProgramData\\sync.dll,Start launched by UpdateSync task', related_findings: ['F-002'] },
+  { id: 'E-8', timestamp: iso(2 * H - 40 * 60 * 1000), event_type: 'persistence', host: 'DC-01', description: 'Scheduled task UpdateSync registered (4698)', finding_refs: ['F-002'], status: 'approved' },
+  { id: 'E-9', timestamp: iso(3 * H), event_type: 'network', host: 'WS-FINANCE-03', description: 'Outbound 443/tcp beacon to 185.99.12.44 (60s cadence)', finding_refs: ['F-004'] },
+  { id: 'E-10', timestamp: iso(2 * D - 30 * 60 * 1000), event_type: 'other', host: 'DC-01', description: 'Security event log cleared (1102) during maintenance window', finding_refs: ['F-005'] },
 ]
 
 const CHAIN_STATUS = { status: 'ok', manifest_version: 3, hmac_verify_needed: false, write_protected: true }
@@ -281,9 +291,94 @@ const REPORTS = [
   { id: 'rpt-9c0b54', profile: 'technical', examiner: 'e.varga', created_at: iso(30 * H) },
 ]
 
+// === ENTITY fixtures — rich IOC registry so the IOCs tab renders populated
+// (category + status + confidence + sighting-host + source-finding links +
+// MITRE techniques + tags + expandable provenance). MOCK DATA ONLY. ===
 const IOCS = [
-  { id: 'ioc-1', type: 'ip', value: '185.99.12.44' },
-  { id: 'ioc-2', type: 'account', value: 'svc-backup' },
+  {
+    id: 'ioc-1',
+    type: 'ip',
+    value: '185.99.12.44',
+    category: 'network',
+    confidence: 'LOW',
+    status: 'DRAFT',
+    source_findings: ['F-004'],
+    sightings: [{ host: 'WS-FINANCE-03' }],
+    mitre_techniques: ['T1071.001'],
+    tags: ['c2', 'beacon'],
+    examiner: 'e.varga',
+    created_at: iso(2.5 * H),
+  },
+  {
+    id: 'ioc-2',
+    type: 'account',
+    value: 'svc-backup',
+    category: 'identity',
+    confidence: 'HIGH',
+    status: 'APPROVED',
+    source_findings: ['F-001'],
+    sightings: [{ host: 'WS-FINANCE-03' }, { host: 'DC-01' }],
+    mitre_techniques: ['T1078.002'],
+    tags: ['service-account', 'lateral-movement'],
+    examiner: 'e.varga',
+    created_at: iso(1.5 * H),
+  },
+  {
+    id: 'ioc-3',
+    type: 'filepath',
+    value: 'C:\\ProgramData\\sync.dll',
+    category: 'host',
+    confidence: 'MEDIUM',
+    status: 'DRAFT',
+    source_findings: ['F-002'],
+    sightings: [{ host: 'DC-01' }],
+    mitre_techniques: ['T1574.002', 'T1053.005'],
+    tags: ['persistence', 'side-loading'],
+    examiner: 'e.varga',
+    created_at: iso(4 * H),
+  },
+  {
+    id: 'ioc-4',
+    type: 'hash',
+    value: 'd41d8cd98f00b204e9800998ecf8427e',
+    category: 'host',
+    confidence: 'MEDIUM',
+    status: 'DRAFT',
+    source_findings: ['F-002'],
+    sightings: [{ host: 'DC-01' }],
+    mitre_techniques: ['T1574.002'],
+    tags: ['malware'],
+    examiner: 'e.varga',
+    created_at: iso(4 * H),
+  },
+  {
+    id: 'ioc-5',
+    type: 'account',
+    value: 'm.reyes',
+    category: 'identity',
+    confidence: 'HIGH',
+    status: 'APPROVED',
+    source_findings: ['F-003'],
+    sightings: [{ host: 'FS-01' }],
+    mitre_techniques: ['T1530', 'T1039'],
+    tags: ['collection', 'exfil-risk'],
+    examiner: 'e.varga',
+    created_at: iso(18 * H),
+  },
+  {
+    id: 'ioc-6',
+    type: 'domain',
+    value: 'updates.northwind-cdn.net',
+    category: 'network',
+    confidence: 'LOW',
+    status: 'REJECTED',
+    source_findings: ['F-004'],
+    sightings: [],
+    mitre_techniques: ['T1071'],
+    tags: [],
+    examiner: 'e.varga',
+    created_at: iso(2 * H),
+  },
 ]
 
 const USER = { examiner: 'E. Varga', role: 'examiner' }
