@@ -110,6 +110,14 @@ export function AppShell() {
   // own their own vertical scroll.
   return (
     <div className="h-screen overflow-x-auto overflow-y-hidden bg-background text-foreground">
+      {/* Skip-to-content (USE-1): visually hidden until focused, then revealed
+          as the first Tab stop so keyboard/SR users can jump past the nav. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[1000] focus:rounded-md focus:border focus:border-border-hard focus:bg-card focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        Skip to main content
+      </a>
       <div className="flex h-full min-w-[64rem]">
         <SideNav collapsed={collapsed} onToggleCollapsed={() => setCollapsed((c) => !c)} />
 
@@ -118,6 +126,7 @@ export function AppShell() {
 
           <main
             ref={mainRef}
+            id="main-content"
             tabIndex={-1}
             aria-label={`${tabLabel(activeTab)} content`}
             className="flex-1 overflow-y-auto outline-none"

@@ -57,12 +57,13 @@ export function BackendRegistryList({
                 {HEADERS.map((h) => (
                   <th
                     key={h}
+                    scope="col"
                     className="mono px-3 py-2 text-[10px] font-semibold uppercase tracking-[.1em]"
                   >
                     {h}
                   </th>
                 ))}
-                <th className="mono px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-[.1em]">
+                <th scope="col" className="mono px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-[.1em]">
                   Actions
                 </th>
               </tr>
