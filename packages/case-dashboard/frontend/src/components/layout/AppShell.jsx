@@ -14,6 +14,7 @@ import { CommitDrawer } from '@/components/layout/CommitDrawer'
 import { TabPlaceholder } from '@/components/layout/TabPlaceholder'
 import { OverviewTab } from '@/components/overview/OverviewTab'
 import { FindingsTab } from '@/components/findings/FindingsTab'
+import { EvidenceTab } from '@/components/evidence/EvidenceTab'
 
 // ─────────────────────────────────────────────────────────────────────────
 // AppShell (spec §3 layout + §4 IA) — the authenticated frame: collapsible
@@ -32,6 +33,7 @@ const MOBILE_BREAKPOINT = 1024
 function TabContent({ tabId }) {
   if (tabId === 'overview') return <OverviewTab />
   if (tabId === 'findings') return <FindingsTab />
+  if (tabId === 'evidence') return <EvidenceTab />
   return <TabPlaceholder tabId={tabId} />
 }
 
