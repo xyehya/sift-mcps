@@ -25,13 +25,47 @@ const NOT_HANDLED = { __mockHandled: false }
  * @param {string} method upper-case HTTP method
  */
 export async function mockRoute(path, method) {
-  const { BACKENDS_REGISTRY, HEALTH_PAYLOAD } = await import('@/_mock/fixtures')
+  const { BACKENDS_REGISTRY, HEALTH_PAYLOAD, selectReports, selectReport, selectPrincipals } =
+    await import('@/_mock/fixtures')
 
   // ── Reads ──────────────────────────────────────────────────────────────
   if (method === 'GET') {
     if (path === '/api/backends') return { backends: BACKENDS_REGISTRY }
     if (path === '/api/health') return HEALTH_PAYLOAD
+    // === REPORT fixtures === Reports + Settings reads (AGENT-REPORT)
+    if (path === '/api/reports') return selectReports()
+    {
+      const m = path.match(/^\/api\/reports\/([^/]+)$/)
+      if (m) return selectReport(m[1])
+    }
+    if (path === '/api/auth/principals') return selectPrincipals()
     return NOT_HANDLED
+  }
+
+  // === REPORT fixtures === Reports + Settings mutations (AGENT-REPORT).
+  // No real backend in mock; resolve to benign stubs so the toast/refresh paths
+  // exercise. report generate returns a draft echoing the requested profile.
+  if (path === '/api/reports/generate' && method === 'POST') {
+    const { selectReport: sel } = await import('@/_mock/fixtures')
+    return { ...sel('rpt-draft-mock'), id: 'rpt-draft-mock', status: 'draft' }
+  }
+  {
+    const saveMatch = path.match(/^\/api\/reports\/([^/]+)\/save$/)
+    if (saveMatch && method === 'POST') return { status: 'saved', id: saveMatch[1] }
+  }
+  if (path === '/api/auth/principals' && method === 'POST') {
+    return {
+      principal_type: 'agent',
+      principal_id: 'agt-new-mock',
+      token_type: 'supabase_jwt',
+      access_token: 'MOCK.access.token',
+      refresh_token: 'MOCK.refresh.token',
+      token_fingerprint: 'mock-fp-0011',
+      expires_at: new Date(Date.now() + 36 * 3600 * 1000).toISOString(),
+    }
+  }
+  if (/^\/api\/auth\/principals\/[^/]+\/[^/]+$/.test(path) && method === 'DELETE') {
+    return { status: 'revoked' }
   }
 
   // ── Mutations (challenge-gated admin actions) ────────────────────────────

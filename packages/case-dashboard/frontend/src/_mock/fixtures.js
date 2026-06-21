@@ -250,6 +250,10 @@ const PORTAL_STATE = {
   evidence: { sealed: 12, total: 14 },
   iocs: { total: 23, hosts: 9, accounts: 31 },
   severity: { open: 6, awaiting: 3 },
+  // === REPORT fixtures === approved-only report eligibility (DB authority).
+  // Read by ReportsTab via portalState.report_eligibility. 1 of 6 approved →
+  // eligible (the Generate button is enabled, eligibility banner shows green).
+  report_eligibility: { eligible: true, approved_findings: 1, total_findings: 6, reason: '' },
   // Evidence registry for the Evidence tab pilot (P1). Read via
   // portalState.evidence_items in EvidenceTab; this avoids a new top-level
   // store key (the store surface is frozen). MOCK DATA — synthetic, not real.
@@ -727,6 +731,139 @@ export const HEALTH_PAYLOAD = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// === REPORT fixtures === (AGENT-REPORT writer — Reports/TODOs/Settings tabs)
+// Served at the API-ADAPTER layer (apiFetch → mockRoute) so the Reports +
+// Settings tabs render POPULATED in ?mock=1 with no gateway, and seeded into
+// the store for the TODOs tab. MOCK DATA ONLY — synthetic, no secrets/tokens.
+//
+// REPORT_CONTENT: a full saved-report payload exercising every rendered
+// section (summary / findings / timeline / iocs / mitre_mapping / evidence /
+// todos), the Zeltser narrative placeholder, integrity/chain warnings, and the
+// custody/provenance appendix. SECURITY NOTE: one finding observation embeds a
+// literal "<script>" string to prove the renderer escapes it (no injection).
+// ─────────────────────────────────────────────────────────────────────────
+const REPORT_CONTENT = {
+  id: 'rpt-7f3a21',
+  profile: 'executive',
+  examiner: 'e.varga',
+  generated_at: iso(12 * H),
+  created_at: iso(12 * H),
+  status: 'saved',
+  report_data: {
+    metadata: { name: 'NORTHWIND', case_id: 'CASE-2026-0410' },
+    summary: { total_findings: 6, approved_findings: 1, open_todos: 3, evidence_items: 14 },
+    findings: [
+      {
+        id: 'F-001',
+        type: 'finding',
+        title: 'RDP lateral movement from WS-FINANCE-03 to DC-01',
+        confidence: 'HIGH',
+        host: 'WS-FINANCE-03',
+        affected_account: 'svc-backup',
+        event_timestamp: iso(2 * H),
+        tags: ['lateral-movement', 'priority'],
+        observation:
+          'EVTX 4624 logon type 10 from 10.4.2.31 → DC-01 using svc-backup. Note: a literal <script>alert(1)</script> string is present here to prove the renderer escapes report data.',
+        interpretation:
+          'Service account is not expected to perform interactive RDP. Consistent with hands-on-keyboard lateral movement.',
+      },
+    ],
+    timeline: [
+      { timestamp: iso(2 * H + 20 * 60 * 1000), host: 'WS-FINANCE-03', type: 'logon', description: 'RDP 4624 logon type 10 from 10.4.2.31' },
+      { timestamp: iso(2 * H), host: 'DC-01', type: 'logon', description: 'Service account svc-backup authenticated to DC-01' },
+    ],
+    iocs: {
+      ip: [{ value: '185.99.12.44', category: 'c2', host: 'FW-EDGE', source_findings: ['F-001'] }],
+      account: [{ value: 'svc-backup', category: 'compromised', host: 'DC-01', source_findings: ['F-001'] }],
+    },
+    mitre_mapping: {
+      'T1021.001': { name: 'Remote Services: RDP', findings: ['F-001'] },
+      'T1078.002': { name: 'Valid Accounts: Domain Accounts', findings: ['F-001'] },
+    },
+    evidence: [
+      { path: 'evidence/WS-FINANCE-03-disk.E01', size_bytes: 512000000000, sha256: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6', status: 'sealed' },
+    ],
+    todos: [
+      { title: 'Re-image WS-FINANCE-03 memory', priority: 'high', examiner: 'e.varga', description: 'Volatile capture blocked by integrity guard; operator unseal required.' },
+    ],
+  },
+  sections: [
+    { name: 'Executive Summary' },
+    { name: 'Key Metrics', data_key: 'summary' },
+    { name: 'Approved Findings', data_key: 'findings' },
+    { name: 'Incident Timeline', data_key: 'timeline' },
+    { name: 'Indicators of Compromise', data_key: 'iocs' },
+    { name: 'MITRE ATT&CK Mapping', data_key: 'mitre_mapping' },
+    { name: 'Evidence Manifest', data_key: 'evidence' },
+    { name: 'Open Tasks', data_key: 'todos' },
+  ],
+  zeltser_guidance: {
+    'Executive Summary': {
+      instructions: [
+        'State the business impact in non-technical terms.',
+        'Summarize current containment status and next actions.',
+      ],
+    },
+  },
+  human_review_required: [
+    { section: 'Executive Summary', reason: 'narrative', prompt: 'Add a 2-sentence summary for leadership before export.' },
+  ],
+  evidence_chain_warning: 'Two evidence items remain unsealed; the report reflects sealed artifacts only.',
+  custody_appendix: {
+    verification_note: 'All included findings were approved under examiner re-auth; provenance is hash-chained.',
+    authorized_by_reauth_event: 'reauth-9f8e7d6c5b4a',
+    evidence_seal: {
+      seal_status: 'sealed', manifest_version: 3,
+      manifest_hash: 'm00f1e2d3c4b5a6978899aabbccddeeff00112233445566778899aabbccddeeff',
+      chain_head_hash: 'c0ffee112233445566778899aabbccddeeff00112233445566778899aabbccdd',
+      ledger_tip_hash: 'led9c0ffee112233445566778899aabbccddeeff00112233445566778899aabb',
+      active_count: 12,
+    },
+    finding_provenance: [
+      { id: 'F-001', content_hash: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6', approved_by: 'e.varga', provenance_refs: ['AUD-1024'] },
+    ],
+  },
+}
+const REPORT_TECHNICAL = {
+  ...REPORT_CONTENT,
+  id: 'rpt-9c0b54',
+  profile: 'technical',
+  generated_at: iso(30 * H),
+  created_at: iso(30 * H),
+}
+const REPORT_BY_ID = { 'rpt-7f3a21': REPORT_CONTENT, 'rpt-9c0b54': REPORT_TECHNICAL }
+
+/** Resolve a saved report by id for the mock /api/reports/{id} route. */
+export function selectReport(id) {
+  return REPORT_BY_ID[id] || { ...REPORT_CONTENT, id }
+}
+
+// === REPORT fixtures === TODOs (store-seeded) — varied priority + status so the
+// TODOs tab renders POPULATED with filterable rows and CRUD-able entries.
+const TODOS = [
+  { todo_id: 'T-001', description: 'Unseal EV-014 and re-hash WS-FINANCE-03 memory image', priority: 'high', status: 'open', examiner: 'e.varga', created_by: 'agent', related_findings: ['F-001'], created_at: iso(6 * H) },
+  { todo_id: 'T-002', description: 'Confirm beacon C2 for UpdateSync scheduled task', priority: 'medium', status: 'open', examiner: 'e.varga', related_findings: ['F-002'], created_at: iso(20 * H) },
+  { todo_id: 'T-003', description: 'Export firewall flow logs for 02:00-03:00 UTC window', priority: 'low', status: 'open', examiner: 'm.reyes', related_findings: [], created_at: iso(28 * H) },
+  { todo_id: 'T-004', description: 'Document custody chain for FS-01 disk image', priority: 'medium', status: 'completed', examiner: 'e.varga', related_findings: ['F-004'], created_at: iso(2 * D) },
+]
+
+// === REPORT fixtures === Settings — agent/service JWT principals. Served at the
+// API-ADAPTER layer for /api/auth/principals. MOCK DATA — no real token material.
+const PRINCIPALS = [
+  { principal_type: 'agent', principal_id: 'agt-hermes-01', display_name: 'Hermes investigation agent', token_type: 'supabase_jwt', status: 'active', tool_scopes: ['mcp:*'], last_issued_expires_at: iso(-36 * H) },
+  { principal_type: 'service', principal_id: 'svc-ingest-02', display_name: 'OpenSearch ingest worker', token_type: 'supabase_jwt', status: 'active', tool_scopes: ['tool:opensearch.index', 'namespace:ingest'], last_issued_expires_at: iso(-2 * H) },
+  { principal_type: 'agent', principal_id: 'agt-legacy-09', display_name: 'Decommissioned triage agent', token_type: 'supabase_jwt', status: 'revoked', tool_scopes: ['mcp:read'], last_issued_expires_at: iso(72 * H) },
+]
+
+/** Selectors for the Settings + Reports mock routes. */
+export function selectPrincipals() {
+  return { principals: PRINCIPALS }
+}
+export function selectReports() {
+  return [REPORT_CONTENT, REPORT_TECHNICAL]
+}
+
 export const mockState = {
   user: USER,
   activeCase: ACTIVE_CASE,
@@ -735,6 +872,7 @@ export const mockState = {
   delta: DELTA,
   summary: SUMMARY,
   timeline: TIMELINE,
+  todos: TODOS,
   chainStatus: CHAIN_STATUS,
   portalState: PORTAL_STATE,
   reports: REPORTS,

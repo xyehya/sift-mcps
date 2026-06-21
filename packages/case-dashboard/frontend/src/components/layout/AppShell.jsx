@@ -16,6 +16,10 @@ import { OverviewTab } from '@/components/overview/OverviewTab'
 import { FindingsTab } from '@/components/findings/FindingsTab'
 import { EvidenceTab } from '@/components/evidence/EvidenceTab'
 import { BackendsTab } from '@/components/backends/BackendsTab'
+// === REPORT tabs === (AGENT-REPORT writer)
+import { ReportsTab } from '@/components/reports/ReportsTab'
+import { TodosTab } from '@/components/todos/TodosTab'
+import { SettingsTab } from '@/components/settings/SettingsTab'
 
 // ─────────────────────────────────────────────────────────────────────────
 // AppShell (spec §3 layout + §4 IA) — the authenticated frame: collapsible
@@ -36,6 +40,10 @@ function TabContent({ tabId }) {
   if (tabId === 'findings') return <FindingsTab />
   if (tabId === 'evidence') return <EvidenceTab />
   if (tabId === 'backends') return <BackendsTab />
+  // === REPORT tabs === (AGENT-REPORT writer)
+  if (tabId === 'reports') return <ReportsTab />
+  if (tabId === 'todos') return <TodosTab />
+  if (tabId === 'settings') return <SettingsTab />
   return <TabPlaceholder tabId={tabId} />
 }
 
