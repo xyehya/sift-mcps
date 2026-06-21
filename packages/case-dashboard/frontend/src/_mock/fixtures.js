@@ -445,13 +445,14 @@ export const EVIDENCE_ITEMS = [
     acquired_at: iso(1.5 * D),
     acquired_by: 'e.varga',
     acquisition_method: 'FTK Imager 4.7 — physical sector-level',
-    custody_status: 'pending',
-    write_protected: false,
-    manifest_entry: null,
+    custody_status: 'sealed',
+    write_protected: true,
+    manifest_entry: 'v3',
     sha256: 'a0f5c7d8b9e6de4fca1b8c7d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9',
-    hmac_ok: null,
+    hmac_ok: true,
     custody_events: [
       { at: iso(1.5 * D), by: 'e.varga', action: 'acquired', note: 'Acquired; awaiting seal.' },
+      { at: iso(1.4 * D), by: 'e.varga', action: 'sealed', note: 'Sealed in manifest v3.' },
     ],
     finding_refs: [],
   },
@@ -565,19 +566,63 @@ export const EVIDENCE_ITEMS = [
     ],
     finding_refs: [],
   },
+  {
+    id: 'EV-013',
+    name: 'WS-FINANCE-03-registry.reg',
+    description: 'Registry hive export — WS-FINANCE-03 (SYSTEM + SOFTWARE hives)',
+    type: 'registry',
+    host: 'WS-FINANCE-03',
+    size_bytes: 419_430_400,
+    size_label: '400 MB',
+    acquired_at: iso(2.8 * D),
+    acquired_by: 'e.varga',
+    acquisition_method: 'RECmd offline hive export via VSS snapshot',
+    custody_status: 'sealed',
+    write_protected: true,
+    manifest_entry: 'v3',
+    sha256: 'a1c2e3f4b5d6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2',
+    hmac_ok: true,
+    custody_events: [
+      { at: iso(2.8 * D), by: 'e.varga', action: 'acquired', note: 'Registry hives exported from VSS snapshot.' },
+      { at: iso(2.7 * D), by: 'e.varga', action: 'sealed', note: 'Sealed in manifest v3.' },
+    ],
+    finding_refs: ['F-002'],
+  },
+  {
+    id: 'EV-014',
+    name: 'DC-01-network-capture.pcap',
+    description: 'Internal network capture — DC-01 interface (24h incident window)',
+    type: 'network',
+    host: 'DC-01',
+    size_bytes: 5_368_709_120,
+    size_label: '5 GB',
+    acquired_at: iso(2.3 * D),
+    acquired_by: 'e.varga',
+    acquisition_method: 'tshark on span port — DC-01 internal NIC mirror',
+    custody_status: 'sealed',
+    write_protected: true,
+    manifest_entry: 'v3',
+    sha256: 'b2d3f4a5c6e7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3',
+    hmac_ok: true,
+    custody_events: [
+      { at: iso(2.3 * D), by: 'e.varga', action: 'acquired', note: 'DC-01 NIC capture exported from span port logger.' },
+      { at: iso(2.2 * D), by: 'e.varga', action: 'sealed', note: 'Sealed in manifest v3.' },
+    ],
+    finding_refs: ['F-001', 'F-004'],
+  },
 ]
 
 // Wire evidence_items into PORTAL_STATE so EvidenceTab can read it from the
 // portalState store key without needing a new top-level store key.
 PORTAL_STATE.evidence_items = EVIDENCE_ITEMS
 
-/** Selector: returns EVIDENCE_ITEMS merged with fixture chain status. */
+/** Selector: returns EVIDENCE_ITEMS. The custody_status on each item is
+ *  already the source of truth. 14 total / 12 sealed (EV-001..006, EV-007,
+ *  EV-008, EV-010..011, EV-013, EV-014) / 1 unsealed (EV-009) / 1 pending (EV-012).
+ *  Agrees with PORTAL_STATE.evidence = { sealed: 12, total: 14 }.
+ */
 export function selectEvidenceRegistry() {
-  const sealedIds = new Set(['EV-001', 'EV-002', 'EV-003', 'EV-004', 'EV-005', 'EV-006', 'EV-008', 'EV-010', 'EV-011'])
-  return EVIDENCE_ITEMS.map((item) => ({
-    ...item,
-    custody_status: sealedIds.has(item.id) ? 'sealed' : item.custody_status,
-  }))
+  return EVIDENCE_ITEMS
 }
 
 export const mockState = {

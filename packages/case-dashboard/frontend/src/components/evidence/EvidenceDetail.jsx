@@ -122,15 +122,8 @@ export function EvidenceDetail({ item }) {
               <span className={cn('mr-1 inline-block size-1.5 rounded-full', custody.dot)} aria-hidden />
               {custody.label}
             </Badge>
-            {item.write_protected ? (
-              <Badge variant="outline" className="mono text-[10px] text-status-approved border-status-approved/40">
-                Write-protect on
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="mono text-[10px] text-status-pending border-status-pending/40">
-                Write-protect off
-              </Badge>
-            )}
+            {/* Write-protect is a case-level property — shown once in the
+                EvidenceTab header, not per-artifact. Omitted here intentionally. */}
           </div>
           <h2
             className="mono text-sm font-bold leading-snug break-all"
