@@ -95,3 +95,24 @@ fixing anything. Known-resolved since that audit:
 - `--sev-spec` tier DROPPED (not "add it"). High/Med/Low only; historical
   SPECULATIVE findings fold into LOW for backward compat.
 - Severity scroll/`calc(100vh)` rules: enforce §8 here; verify per-tab on HEAD.
+
+## 11. Guardrails — never break (security + frozen contracts)
+- **No `dangerouslySetInnerHTML` on untrusted data.** All finding/report text
+  renders as escaped React text nodes.
+- **Frozen tests stay byte-identical and green:** `src/test/EvidenceUnseal.test.jsx`
+  and `src/test/useStore.interface.test.js`. Do not edit them.
+- **Frozen public contracts:** do not add/remove top-level `useStore` keys; store
+  / api / hooks module paths are stable (legacy feature components must keep
+  resolving). Auth / JWT / crypto = behavior-preserving **port**, not a rewrite.
+- **No inline styles** except data-driven numeric values (bar widths, chart
+  stops), and those use token vars (`var(--chart-1)`), never hex.
+- **Build hygiene:** no external/Google fonts, no inline `<style>`, no mock
+  fixture leak in dist. Goal CSP `'self'` (Phase 2).
+- Security review = ONE consolidated `codeguard-security` pass once the
+  feature LANDS and works — not per-unit during an in-progress build.
+
+## 12. HITL model + build phases
+See `04-handoff/RUN-PORTAL-V3-BUILD.md`: agent is autonomous in the MCP sandbox,
+blocked tool-calls are a READ-ONLY awareness pane (no approve/deny), and step-up
+password gates Findings **Approve** + **Commit-to-record**. This SUPERSEDES the
+old "Authorization Required" queue described in `design-system/MASTER.md` §12.

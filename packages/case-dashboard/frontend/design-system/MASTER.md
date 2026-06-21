@@ -1,3 +1,10 @@
+> ⚠️ SUPERSEDED IN PART (2026-06-21): the settled redesign dropped the `--sev-spec`
+> tier (High/Med/Low only) and FLIPPED the HITL model — the §12 "Authorization
+> Required" queue is replaced by a READ-ONLY blocked-actions pane + step-up
+> password on Approve/Commit. See `AGENTS.md` §11–§12 + the SIFT Design System
+> `04-handoff/RUN-PORTAL-V3-BUILD.md`. This file remains the frozen Phase-0
+> implementation record for token/layout discipline.
+
 # SIFT Examiner Portal v3 — Design System MASTER (FROZEN)
 
 **Status:** Frozen at end of Phase 0 (RUN-1 design system + RUN-2 shell/data +
