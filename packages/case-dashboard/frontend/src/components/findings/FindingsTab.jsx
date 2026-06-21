@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckCheck, ListChecks } from 'lucide-react'
 
+import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { parseHashFilters } from '@/hooks/useHashRoute'
 import { postDelta, deleteDelta } from '@/api/endpoints'
@@ -33,62 +34,46 @@ function EmptyDetail() {
   )
 }
 
-/** Header "Commit to record" button — glass chip, orange text, staged-count badge. */
+/** Header "Commit to record" button — glass chip, orange text, staged-count badge.
+ *  Gradient surface / edge highlight / orange-mixed border are literal token-var
+ *  arbitrary classes (no hex, no inline color). */
 function CommitButton({ stagedCount, onClick }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-2 rounded-[9px] border px-3.5 py-1.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      style={{
-        background: 'linear-gradient(155deg,var(--bg-raised),var(--bg-surface))',
-        borderColor: 'color-mix(in srgb,var(--orange) 38%,var(--border-hard))',
-        color: 'var(--orange)',
-        boxShadow: 'var(--edge)',
-      }}
+      className="flex items-center gap-2 rounded-[9px] border border-[color-mix(in_srgb,var(--orange)_38%,var(--border-hard))] bg-[linear-gradient(155deg,var(--bg-raised),var(--bg-surface))] px-3.5 py-1.5 text-sm font-semibold text-orange shadow-[var(--edge)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <CheckCheck className="size-4 shrink-0" aria-hidden />
       Commit to record
-      <span
-        className="mono rounded-md px-1.5 py-px text-[11px] font-semibold"
-        style={{ background: 'color-mix(in srgb,var(--orange) 16%,transparent)' }}
-      >
+      <span className="mono rounded-md bg-orange/16 px-1.5 py-px text-[11px] font-semibold">
         {stagedCount}
       </span>
     </button>
   )
 }
 
-/** 4 symmetric stat cards — Findings / Approved / Pending / Staged. */
+/** 4 symmetric stat cards — Findings / Approved / Pending / Staged.
+ *  Per-card numeral color + wash are literal token classes (CONF_CLASS pattern). */
+const STAT_CARDS = [
+  { key: 'total',    label: 'Findings', num: 'text-text-bright', wash: '' },
+  { key: 'approved', label: 'Approved', num: 'text-jade',        wash: 'bg-jade/8' },
+  { key: 'pending',  label: 'Pending',  num: 'text-amber',       wash: 'bg-amber/8' },
+  { key: 'staged',   label: 'Staged',   num: 'text-violet',      wash: 'bg-violet/8' },
+]
+
 function StatCards({ counts }) {
-  const cards = [
-    { label: 'Findings', value: counts.total, color: 'var(--text-bright)', wash: 'transparent' },
-    { label: 'Approved', value: counts.approved, color: 'var(--jade)', wash: 'color-mix(in srgb,var(--jade) 8%,transparent)' },
-    { label: 'Pending',  value: counts.pending,  color: 'var(--amber)', wash: 'color-mix(in srgb,var(--amber) 8%,transparent)' },
-    { label: 'Staged',   value: counts.staged,   color: 'var(--violet)', wash: 'color-mix(in srgb,var(--violet) 8%,transparent)' },
-  ]
   return (
-    <div className="grid shrink-0 gap-3" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
-      {cards.map((c) => (
+    <div className="grid shrink-0 grid-cols-4 gap-3">
+      {STAT_CARDS.map((c) => (
         <div
           key={c.label}
-          className="rounded-[12px] border p-3"
-          style={{
-            background: c.wash,
-            borderColor: 'var(--border-soft)',
-            boxShadow: 'var(--edge)',
-          }}
+          className={cn('rounded-[12px] border border-border-soft p-3 shadow-[var(--edge)]', c.wash)}
         >
-          <div
-            className="font-display text-[22px] font-bold leading-none"
-            style={{ color: c.color }}
-          >
-            {c.value ?? 0}
+          <div className={cn('font-display text-[22px] font-bold leading-none', c.num)}>
+            {counts[c.key] ?? 0}
           </div>
-          <div
-            className="mono mt-1.5 text-[9px] uppercase tracking-[.12em]"
-            style={{ color: 'var(--text-muted)' }}
-          >
+          <div className="mono mt-1.5 text-[9px] uppercase tracking-[.12em] text-text-muted">
             {c.label}
           </div>
         </div>
@@ -266,13 +251,10 @@ export function FindingsTab() {
       {/* ── Header ──────────────────────────────────────────────────── */}
       <div className="flex shrink-0 items-start justify-between gap-4 px-5 pt-5 pb-4">
         <div>
-          <h1
-            className="font-display font-bold leading-none"
-            style={{ fontSize: '24px', letterSpacing: '-.4px', color: 'var(--text-bright)' }}
-          >
+          <h1 className="font-display text-[24px] font-bold leading-none tracking-[-.4px] text-text-bright">
             Findings review
           </h1>
-          <p className="mono mt-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+          <p className="mono mt-1.5 text-xs text-text-muted">
             <kbd className="mono rounded border border-border bg-secondary px-1 py-px text-[10px]">j</kbd>
             <kbd className="mono ml-1 rounded border border-border bg-secondary px-1 py-px text-[10px]">k</kbd>
             {' '}move ·{' '}
