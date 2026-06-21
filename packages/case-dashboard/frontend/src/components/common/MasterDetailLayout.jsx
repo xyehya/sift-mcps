@@ -52,6 +52,10 @@ function Pane({ children, scroll = true, className }) {
  *                                    (default true). False when the list child
  *                                    manages its internal scroll.
  * @param {boolean} [detailScroll] - same, for the detail pane (default true).
+ * @param {boolean} [divider]      - draw a divider between the panes at ≥1024px
+ *                                    (right border on the list pane). Default
+ *                                    false — opt in when the list child does not
+ *                                    already render its own edge.
  * @param {string} [className]     - extra classes on the root.
  * @param {string} [ariaLabel]     - aria-label for the layout region.
  */
@@ -61,6 +65,7 @@ export function MasterDetailLayout({
   ratio = 'minmax(0,5fr) minmax(0,7fr)',
   listScroll = true,
   detailScroll = true,
+  divider = false,
   className,
   ariaLabel,
 }) {
@@ -76,7 +81,10 @@ export function MasterDetailLayout({
       )}
       style={{ gridTemplateColumns: ratio }}
     >
-      <Pane scroll={listScroll} className="lg:border-r lg:border-border-faint">
+      <Pane
+        scroll={listScroll}
+        className={cn(divider && 'lg:border-r lg:border-border-faint')}
+      >
         {list}
       </Pane>
       <Pane scroll={detailScroll}>{detail}</Pane>

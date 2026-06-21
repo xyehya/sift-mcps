@@ -13,6 +13,7 @@ import {
 } from '@/components/findings/findings-utils'
 import { FindingsList } from '@/components/findings/FindingsList'
 import { FindingDetail } from '@/components/findings/FindingDetail'
+import { MasterDetailLayout } from '@/components/common/MasterDetailLayout'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Findings (handoff Screen 2) — full-height flex column: header + stat cards
@@ -257,12 +258,11 @@ export function FindingsTab() {
     return () => document.removeEventListener('keydown', onKey)
   }, [commandPaletteOpen, canReview, setSelectedFindingId])
 
-  // Full-height flex column: header (shrink-0) + stat cards (shrink-0) + two-pane grid (flex-1)
+  // Full-height flex column: header (shrink-0) + stat cards (shrink-0) + two-pane
+  // MasterDetailLayout (flex-1). `h-full min-h-0` fits the viewport-bounded
+  // <main> cell (AppShell) — no magic height, zoom-safe (SCR-2 / §8).
   return (
-    <div
-      className="flex flex-col overflow-hidden"
-      style={{ height: 'calc(100vh - 86px)' }}
-    >
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* ── Header ──────────────────────────────────────────────────── */}
       <div className="flex shrink-0 items-start justify-between gap-4 px-5 pt-5 pb-4">
         <div>
@@ -292,32 +292,38 @@ export function FindingsTab() {
         <StatCards counts={counts} />
       </div>
 
-      {/* ── Two-pane grid ────────────────────────────────────────────── */}
-      <div
-        className="min-h-0 flex-1 overflow-hidden"
-        style={{ display: 'grid', gridTemplateColumns: 'minmax(0,5fr) minmax(0,7fr)' }}
-      >
-        <FindingsList
-          list={filtered}
-          loading={isLoading}
-          counts={counts}
-          canReview={canReview}
-          search={search}
-          onSearch={setSearch}
-          severityFilter={severityFilter}
-          onClearSeverity={clearSeverity}
-          selectMode={selectMode}
-          onToggleSelectMode={() => {
-            setSelectMode((v) => !v)
-            setSelectedIds(new Set())
-          }}
-          selectedIds={selectedIds}
-          onToggleSelectId={toggleSelectId}
-          onBatch={batch}
-        />
-
-        <div className="flex min-w-0 flex-col overflow-hidden">
-          {currentFinding ? (
+      {/* ── Two-pane master-detail (5fr list / 7fr detail) ──────────────
+          Both panes own their internal scroll (FindingsList / FindingDetail
+          roots are overflow-hidden with inner overflow-y-auto), so the layout
+          supplies only the bounded min-h-0 box (scroll={false}) — single
+          scrollbar per pane, no double scroll owner. */}
+      <MasterDetailLayout
+        className="flex-1"
+        ariaLabel="Findings review"
+        listScroll={false}
+        detailScroll={false}
+        list={
+          <FindingsList
+            list={filtered}
+            loading={isLoading}
+            counts={counts}
+            canReview={canReview}
+            search={search}
+            onSearch={setSearch}
+            severityFilter={severityFilter}
+            onClearSeverity={clearSeverity}
+            selectMode={selectMode}
+            onToggleSelectMode={() => {
+              setSelectMode((v) => !v)
+              setSelectedIds(new Set())
+            }}
+            selectedIds={selectedIds}
+            onToggleSelectId={toggleSelectId}
+            onBatch={batch}
+          />
+        }
+        detail={
+          currentFinding ? (
             <FindingDetail
               key={currentFinding.id}
               finding={currentFinding}
@@ -339,10 +345,12 @@ export function FindingsTab() {
               }}
             />
           ) : (
-            <EmptyDetail />
-          )}
-        </div>
-      </div>
+            <div className="flex h-full min-w-0 flex-col overflow-hidden">
+              <EmptyDetail />
+            </div>
+          )
+        }
+      />
     </div>
   )
 }
