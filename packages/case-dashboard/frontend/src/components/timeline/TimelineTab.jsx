@@ -103,14 +103,14 @@ export function TimelineTab() {
 
   if (isLoading) {
     return (
-      <EntityShell title="Timeline" ariaLabel="Investigation timeline">
+      <EntityShell title="Timeline" subtitle="Chronological event stream" ariaLabel="Investigation timeline">
         <SkeletonBlock rows={12} gap={10} />
       </EntityShell>
     )
   }
 
   return (
-    <EntityShell title="Timeline" filterBar={filterBar} ariaLabel="Investigation timeline">
+    <EntityShell title="Timeline" subtitle="Chronological event stream" filterBar={filterBar} ariaLabel="Investigation timeline">
       {filtered.length === 0 ? (
         <EntityEmptyState
           icon={Clock}

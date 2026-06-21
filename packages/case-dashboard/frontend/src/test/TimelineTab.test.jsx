@@ -3,6 +3,11 @@ import { render, screen, fireEvent } from '@testing-library/react'
 
 import { useStore } from '@/store/useStore'
 import { TimelineTab } from '@/components/timeline/TimelineTab'
+import { TooltipProvider } from '@/components/ui/tooltip'
+
+// The approved-finding check carries a Radix Tooltip, which needs a provider
+// ancestor. Wrap renders so the tab mounts the same way the app shell does.
+const renderTab = () => render(<TimelineTab />, { wrapper: TooltipProvider })
 
 // matchMedia shim (framer-motion useReducedMotion needs it under jsdom).
 beforeEach(() => {
@@ -23,13 +28,13 @@ beforeEach(() => {
 
 describe('TimelineTab — render + filters', () => {
   it('renders events chronologically with the result count', () => {
-    render(<TimelineTab />)
+    renderTab()
     expect(screen.getByText('beacon to 185.99.12.44')).toBeInTheDocument()
     expect(screen.getByText('3 events')).toBeInTheDocument()
   })
 
   it('type chip filters to matching events', () => {
-    render(<TimelineTab />)
+    renderTab()
     // Activate the "network" chip → only the network event remains.
     fireEvent.click(screen.getByRole('button', { name: 'network' }))
     expect(screen.getByText('1 events')).toBeInTheDocument()
@@ -38,27 +43,27 @@ describe('TimelineTab — render + filters', () => {
   })
 
   it('search narrows by description', () => {
-    render(<TimelineTab />)
+    renderTab()
     fireEvent.change(screen.getByLabelText(/search timeline events/i), { target: { value: 'logon' } })
     expect(screen.getByText('1 events')).toBeInTheDocument()
     expect(screen.getByText('interactive logon m.reyes')).toBeInTheDocument()
   })
 
   it('host select filters to one host', () => {
-    render(<TimelineTab />)
+    renderTab()
     fireEvent.change(screen.getByLabelText(/filter by host/i), { target: { value: 'DC-01' } })
     expect(screen.getByText('1 events')).toBeInTheDocument()
   })
 
   it('finding cross-link navigates to Findings with the finding selected', () => {
-    render(<TimelineTab />)
+    renderTab()
     fireEvent.click(screen.getByRole('button', { name: '[F-001]' }))
     expect(useStore.getState().activeTab).toBe('findings')
     expect(useStore.getState().selectedFindingId).toBe('F-001')
   })
 
   it('shows an empty state when no events match', () => {
-    render(<TimelineTab />)
+    renderTab()
     fireEvent.change(screen.getByLabelText(/search timeline events/i), { target: { value: 'zzz-no-match' } })
     expect(screen.getByText(/no events match filters/i)).toBeInTheDocument()
   })
