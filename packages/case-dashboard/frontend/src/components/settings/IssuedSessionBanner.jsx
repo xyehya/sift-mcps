@@ -31,9 +31,9 @@ export function IssuedSessionBanner({ issued, nowMs, onDismiss }) {
       >
         <X className="size-4" aria-hidden />
       </button>
-      <div className="mono flex items-center gap-1.5 text-sm font-bold text-primary">
+      <div className="mono flex items-center gap-1.5 text-[13px] font-bold uppercase tracking-[.1em] text-primary">
         <KeyRound className="size-4" aria-hidden />
-        NEW JWT SESSION ISSUED
+        New JWT Session Issued
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">
         Copy these tokens now. They are shown once and cannot be recovered.

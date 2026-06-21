@@ -15,7 +15,7 @@ import {
 // crimson (irreversible) tone.
 // ─────────────────────────────────────────────────────────────────────────
 
-const TH = 'mono py-2.5 text-[10px] font-semibold text-muted-foreground'
+const TH = 'mono whitespace-nowrap px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground'
 
 export function PrincipalsTable({ principals, loading, revoking, nowMs, onRevoke }) {
   const canRevoke = typeof onRevoke === 'function'
@@ -26,19 +26,19 @@ export function PrincipalsTable({ principals, loading, revoking, nowMs, onRevoke
         canRevoke ? 'lg:col-span-2' : 'lg:col-span-3'
       }`}
     >
-      <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+      <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground">
         Active Principals
       </p>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-left text-xs">
           <thead>
-            <tr className="border-b border-border-soft">
-              <th className={TH}>TOKEN TYPE</th>
-              <th className={TH}>NAME</th>
-              <th className={TH}>STATUS</th>
-              <th className={TH}>TTL REMAINING</th>
-              <th className={TH}>SCOPES</th>
-              {canRevoke && <th className={`${TH} text-right`}>ACTIONS</th>}
+            <tr className="border-b border-border-soft bg-secondary/40">
+              <th className={TH}>Token Type</th>
+              <th className={TH}>Name</th>
+              <th className={TH}>Status</th>
+              <th className={TH}>TTL Remaining</th>
+              <th className={TH}>Scopes</th>
+              {canRevoke && <th className={`${TH} text-right`}>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -61,36 +61,36 @@ export function PrincipalsTable({ principals, loading, revoking, nowMs, onRevoke
                 const revoked = isRevoked(p)
                 const revokeDisabled = revoked || revoking === revokeKey
                 return (
-                  <tr key={revokeKey} className="border-b border-border-faint align-top">
-                    <td className="py-3">
-                      <div className="mono text-foreground">{tokenTypeLabel(p)}</div>
+                  <tr key={revokeKey} className="border-b border-border-faint align-top transition-colors hover:bg-secondary/50">
+                    <td className="px-3 py-3">
+                      <div className="mono text-[13px] text-foreground">{tokenTypeLabel(p)}</div>
                       <div className="mono text-[10px] text-muted-foreground">{p.principal_type}</div>
                     </td>
-                    <td className="py-3">
-                      <div className="mono font-semibold text-foreground">{p.display_name || p.principal_id}</div>
+                    <td className="px-3 py-3">
+                      <div className="mono text-[13px] font-semibold text-foreground">{p.display_name || p.principal_id}</div>
                       <div className="mono text-[10px] text-muted-foreground">{p.principal_id}</div>
                     </td>
-                    <td className="py-3">
+                    <td className="px-3 py-3">
                       <span
-                        className={`mono rounded border px-1.5 py-0.5 text-[9px] font-semibold uppercase ${statusChipClass(status)}`}
+                        className={`mono inline-flex w-fit items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] ${statusChipClass(status)}`}
                       >
                         {status}
                       </span>
                     </td>
-                    <td className="mono py-3 text-[11px] text-muted-foreground">
+                    <td className="mono px-3 py-3 text-[11px] tabular-nums text-muted-foreground">
                       <div>{formatTtl(p.last_issued_expires_at, nowMs)}</div>
                       <div className="text-[10px] text-text-ghost">{formatDateTime(p.last_issued_expires_at)}</div>
                     </td>
-                    <td className="mono max-w-[220px] py-3 text-[10px] text-muted-foreground">
+                    <td className="mono max-w-[220px] px-3 py-3 text-[10px] text-muted-foreground">
                       {(p.tool_scopes || []).length > 0 ? (p.tool_scopes || []).join(', ') : 'none'}
                     </td>
                     {canRevoke && (
-                      <td className="py-3 text-right">
+                      <td className="px-3 py-3 text-right">
                         <button
                           type="button"
                           onClick={() => onRevoke(p.principal_type, p.principal_id)}
                           disabled={revokeDisabled}
-                          className={`mono rounded border px-2 py-0.5 text-[10px] font-semibold transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 ${
+                          className={`mono rounded-md border px-2.5 py-1 text-[10px] font-semibold transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40 ${
                             revokeDisabled
                               ? 'border-border-soft bg-bg-raised text-muted-foreground'
                               : 'border-crimson/30 bg-crimson/10 text-destructive'

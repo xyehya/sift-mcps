@@ -102,8 +102,9 @@ describe('SettingsTab — interaction', () => {
         expect.objectContaining({ kind: 'agent', display_name: 'New agent', password: 'pw' }),
       ),
     )
-    // Issued-once banner shows the token material.
-    expect(await screen.findByText(/NEW JWT SESSION ISSUED/)).toBeInTheDocument()
+    // Issued-once banner shows the token material (title is uppercased via CSS;
+    // DOM text is Title-case).
+    expect(await screen.findByText(/New JWT Session Issued/i)).toBeInTheDocument()
   })
 
   it('revoke confirms then calls deletePrincipal', async () => {

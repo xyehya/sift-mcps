@@ -12,7 +12,7 @@ export function AccountSection({ user }) {
   const canWrite = role === 'examiner'
   return (
     <div className="rounded-lg border border-border-faint bg-card p-4">
-      <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+      <p className="mono mb-3 text-[10px] font-semibold uppercase tracking-[.1em] text-muted-foreground">
         Account
       </p>
       <div className="flex items-center gap-3">
@@ -20,10 +20,10 @@ export function AccountSection({ user }) {
           <UserCog className="size-4" aria-hidden />
         </div>
         <div className="flex flex-col">
-          <span className="text-sm font-semibold text-foreground">{user?.examiner || 'Not signed in'}</span>
+          <span className="text-[13px] font-semibold text-foreground">{user?.examiner || 'Not signed in'}</span>
           <span className="mono flex items-center gap-2 text-[10px] text-muted-foreground">
             <span
-              className={`rounded border px-1.5 py-0.5 font-semibold uppercase ${
+              className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[.1em] ${
                 canWrite
                   ? 'border-jade/30 bg-jade/10 text-status-approved'
                   : 'border-border-soft bg-bg-raised text-muted-foreground'
