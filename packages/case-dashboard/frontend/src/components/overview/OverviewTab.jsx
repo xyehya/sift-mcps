@@ -41,9 +41,10 @@ function natureChipCls(nature) {
 
 /** Live session elapsed clock — ticks every second, format hh:mm:ss. */
 function useSessionElapsed() {
-  const startRef = useRef(Date.now())
+  const startRef = useRef(0)
   const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
+    startRef.current = Date.now()
     const id = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000)
     return () => clearInterval(id)
   }, [])

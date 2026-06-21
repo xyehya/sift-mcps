@@ -4,7 +4,6 @@ import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { navigateToTab } from '@/hooks/useHashRoute'
-import { confClass, findingTs } from '@/components/findings/findings-utils'
 import { recentActivity } from '@/components/overview/overview-metrics'
 
 // ─────────────────────────────────────────────────────────────────────────
