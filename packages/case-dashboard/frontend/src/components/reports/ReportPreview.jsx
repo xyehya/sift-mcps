@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { AlertTriangle, Download, FileText, Save } from 'lucide-react'
 
-import { serializeToMarkdown } from './reports-utils'
+import { serializeToMarkdown } from './report-markdown'
 import { ReportRenderedView } from './ReportRenderedView'
 
 // ─────────────────────────────────────────────────────────────────────────

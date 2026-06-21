@@ -3,13 +3,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 import { useStore } from '@/store/useStore'
 import * as endpoints from '@/api/endpoints'
-import {
-  serializeToMarkdown,
-  withVersions,
-  flattenIocs,
-  profileLabel,
-  formatReportDate,
-} from '@/components/reports/reports-utils'
+import { withVersions, flattenIocs, profileLabel, formatReportDate } from '@/components/reports/reports-utils'
+import { serializeToMarkdown } from '@/components/reports/report-markdown'
 import { ReportsTab } from '@/components/reports/ReportsTab'
 
 // ─────────────────────────────────────────────────────────────────────────

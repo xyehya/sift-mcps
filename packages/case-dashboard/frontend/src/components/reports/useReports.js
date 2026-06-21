@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { getReports, postReportGenerate, postReportSave, getReport } from '@/api/endpoints'
-import { withVersions } from './reports-utils'
+import { withVersions, triggerDownload } from './reports-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // useReports — owns the saved-reports list, the active draft / selected report,
@@ -118,18 +118,9 @@ export function useReports({ addToast, openChallenge }) {
   async function handleDownload(id) {
     if (!id) return
     try {
-      const url = `/portal/api/reports/${id}/download`
-      const res = await fetch(url, { credentials: 'include' })
+      const res = await fetch(`/portal/api/reports/${id}/download`, { credentials: 'include' })
       if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`)
-      const blob = await res.blob()
-      const objectUrl = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = objectUrl
-      link.download = `report_${id.slice(0, 8)}.md`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(objectUrl)
+      triggerDownload(await res.blob(), `report_${id.slice(0, 8)}.md`)
     } catch (err) {
       addToast(err.message, 'error')
     }
