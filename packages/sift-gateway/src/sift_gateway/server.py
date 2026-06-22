@@ -59,11 +59,31 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
         if "text/html" in content_type:
             path = request.url.path
             if path.startswith("/portal"):
+                # AUTHORITATIVE portal CSP. The gateway mounts the case_dashboard
+                # portal sub-app, and this middleware WRAPS it — so this header
+                # overrides case_dashboard's own SecurityHeadersMiddleware CSP for
+                # /portal text/html responses. Future portal-CSP edits MUST land
+                # here (routes.py is inert for /portal). Kept byte-consistent with
+                # case_dashboard/routes.py SecurityHeadersMiddleware.
+                #
+                # Portal v3 self-hosts fonts (@fontsource → /portal/assets/*.woff2),
+                # so font-src is 'self' and the dead Google font origins are dropped.
+                # 'unsafe-inline' is retained for style-src ONLY: a few data-driven
+                # numeric styles (progress/ring/severity-bar widths, grid ratio —
+                # AGENTS §11-sanctioned, token-var values, never untrusted) emit
+                # inline style attributes; a per-request nonce is the deferred P4
+                # path to pure 'self'.
                 response.headers["Content-Security-Policy"] = (
-                    "default-src 'self'; "
+                    "default-src 'none'; "
                     "script-src 'self'; "
-                    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-                    "font-src 'self' https://fonts.gstatic.com"
+                    "style-src 'self' 'unsafe-inline'; "
+                    "font-src 'self'; "
+                    "img-src 'self' data:; "
+                    "connect-src 'self'; "
+                    "base-uri 'none'; "
+                    "form-action 'self'; "
+                    "frame-ancestors 'none'; "
+                    "object-src 'none'"
                 )
         return response
 
