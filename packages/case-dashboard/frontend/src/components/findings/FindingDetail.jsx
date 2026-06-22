@@ -13,7 +13,6 @@ import {
 import { ConfChip, HashChip, AttChip } from '@/components/findings/FindingDetailChips'
 import { FieldSection } from '@/components/findings/FindingField'
 import { ObservationIcon, InterpretationIcon, CustodyIcon } from '@/components/findings/field-icons'
-import { StepUpApproveModal } from '@/components/findings/StepUpApproveModal'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
@@ -24,9 +23,16 @@ import { Button } from '@/components/ui/button'
 // Reject). RBAC: when `canReview` is false all action affordances are hidden.
 //
 // OLD field set (Description / Narrative / Confidence-&-Justification) has been
-// removed per handoff spec — replaced by the 3 fields above. The field editor,
-// header chips, and step-up modal live in sibling modules (FindingField /
-// FindingDetailChips / StepUpApproveModal) to keep this file under §7's ceiling.
+// removed per handoff spec — replaced by the 3 fields above. The field editor
+// and header chips live in sibling modules (FindingField / FindingDetailChips)
+// to keep this file under §7's ceiling.
+//
+// F2 (operator decision, 2026-06-22): Approve is IMMEDIATE — onApprove() stages
+// a reversible `approve` delta, exactly like Stage/Reject. The step-up password
+// modal was dropped. This deviates from the handoff's "step-up on Approve"; the
+// real irreversible auth gate stays at Commit-to-record (server-re-authed via
+// postCommit({password})→Supabase), so a password on the reversible Approve was
+// friction-theater + inconsistent with Stage/Reject.
 // ─────────────────────────────────────────────────────────────────────────
 
 // ── Footer action button (Approve / Stage / Reject) ────────────────────
@@ -58,7 +64,6 @@ function FooterAction({ accent, onClick, icon, children }) {
 export function FindingDetail({
   finding, stagedItem, canReview,
   addToast,
-  stepUpOpen, onStepUpClose, onStepUpOpen,
   onApprove, onStage, onReject, onUnstage, onEdit,
 }) {
   // FindingDetail is keyed by finding.id in the parent so it remounts whenever
@@ -213,9 +218,17 @@ export function FindingDetail({
           </Button>
         ) : (
           <>
-            {/* Approve — password-gated (step-up) */}
+            {/* Approve — immediate (F2): stages a reversible approve delta, like
+                Stage/Reject. Real auth gate is at Commit-to-record. */}
             {status !== 'approved' && (
-              <FooterAction accent="jade" onClick={() => onStepUpOpen?.()} icon={<Check className="size-3.5" aria-hidden />}>
+              <FooterAction
+                accent="jade"
+                onClick={() => {
+                  onApprove()
+                  if (addToast) addToast('Finding approved — staged for commit', 'success')
+                }}
+                icon={<Check className="size-3.5" aria-hidden />}
+              >
                 Approve
               </FooterAction>
             )}
@@ -242,25 +255,6 @@ export function FindingDetail({
           </span>
         )}
       </div>
-
-      {/* ── Step-up modal (Approve) ──────────────────────────────────── */}
-      <StepUpApproveModal
-        findingId={finding.id}
-        open={!!stepUpOpen}
-        onClose={() => onStepUpClose?.()}
-        onConfirm={() => {
-          // Prototype: the password is NOT verified — onApprove() only STAGES a
-          // reversible delta (the real irreversible gate, Commit-to-record, IS
-          // server-re-authed: CommitDrawer → postCommit({password}) → Supabase, CL3a).
-          // TODO(CG-AUTH): either drop this modal (Approve only stages) OR re-auth the
-          // password server-side via the LIVE plaintext-password→Supabase pattern
-          // (mirror postCommit/unsealEvidence({password})). NOTE: api/crypto.js
-          // computeChallengeResponse is DEAD CODE — do NOT wire to it.
-          onStepUpClose?.()
-          onApprove()
-          if (addToast) addToast('Finding approved (prototype — auth pending)', 'success')
-        }}
-      />
     </div>
   )
 }

@@ -21,8 +21,15 @@ import { MasterDetailLayout } from '@/components/common/MasterDetailLayout'
 // + two-pane grid (5fr list / 7fr detail). List uses a unified filter-dropdown
 // (replaces the old tab-strip). Detail shows the three handoff fields only
 // (Observation·fact · Interpretation·analysis · Justification & custody).
-// Keyboard review (j/k/a/s/r) + step-up modal preserved. Store/api/hooks
-// public paths unchanged.
+// Keyboard review (j/k/a/s/r). Store/api/hooks public paths unchanged.
+//
+// F2 (operator decision, 2026-06-22): Approve is IMMEDIATE — it stages a
+// reversible `approve` delta via postDelta, exactly like Stage/Reject. The old
+// step-up password modal was dropped. This deviates from the settled handoff's
+// "step-up on Approve", but the real irreversible gate (Commit-to-record) is
+// already server-re-authed (CommitDrawer → postCommit({password}) → Supabase),
+// so a password on the reversible Approve was friction-theater + inconsistent
+// with Stage/Reject.
 // ─────────────────────────────────────────────────────────────────────────
 
 function EmptyDetail() {
@@ -109,7 +116,6 @@ export function FindingsTab() {
   const [search, setSearch] = useState('')
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState(() => new Set())
-  const [stepUpOpen, setStepUpOpen] = useState(false)
 
   // Severity filter rides the hash (`#/findings?sev=high`) — kept in sync on
   // back/forward (RUN-4c deep-link plumbing).
@@ -227,8 +233,9 @@ export function FindingsTab() {
         e.preventDefault()
         if (idx > 0) setSelectedFindingId(list[idx - 1].id)
       } else if (canReview && e.key === 'a' && curId) {
+        // F2: Approve is immediate (stages a reversible approve delta).
         e.preventDefault()
-        setStepUpOpen(true)
+        stageRef.current(curId, 'approve')
       } else if (canReview && e.key === 's' && curId) {
         e.preventDefault()
         stageRef.current(curId, 'stage')
@@ -313,9 +320,6 @@ export function FindingsTab() {
               timeline={timeline}
               canReview={canReview}
               addToast={addToast}
-              stepUpOpen={stepUpOpen}
-              onStepUpClose={() => setStepUpOpen(false)}
-              onStepUpOpen={() => setStepUpOpen(true)}
               onApprove={() => stage(currentFinding.id, 'approve')}
               onStage={() => stage(currentFinding.id, 'stage')}
               onReject={() => stage(currentFinding.id, 'reject')}

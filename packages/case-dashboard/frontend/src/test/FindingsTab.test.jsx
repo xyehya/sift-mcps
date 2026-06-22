@@ -58,19 +58,16 @@ describe('FindingsTab', () => {
     expect(screen.queryByText('bulk file access')).not.toBeInTheDocument() // approved, filtered out of pending
   })
 
-  it('examiner approve opens step-up modal; confirming the password stages the approval', async () => {
-    // P0 model-shift: Approve is now password-gated (step-up authorization).
-    // Clicking Approve opens the modal; the postDelta call happens after confirm.
+  it('examiner approve is immediate — stages an approve delta with no step-up modal', async () => {
+    // F2 (operator decision, 2026-06-22): Approve is immediate, like Stage/Reject —
+    // it stages a reversible `approve` delta via postDelta with NO password modal.
+    // The real irreversible auth gate stays at Commit-to-record (server-re-authed).
     useStore.setState({ selectedFindingId: 'F-1' })
     renderTab()
-    // Open the step-up modal.
+    // Clicking Approve stages immediately — no step-up dialog appears.
     fireEvent.click(screen.getByRole('button', { name: /^Approve$/ }))
-    // The modal should now be visible.
-    expect(await screen.findByText(/Step-up authorization/i)).toBeInTheDocument()
-    // Fill in a password and confirm.
-    const passInput = screen.getByLabelText(/Examiner password/i)
-    fireEvent.change(passInput, { target: { value: 'test-pass' } })
-    fireEvent.click(screen.getByRole('button', { name: /Authorize & approve/i }))
+    expect(screen.queryByText(/Step-up authorization/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/Examiner password/i)).not.toBeInTheDocument()
     await waitFor(() => expect(postDelta).toHaveBeenCalledTimes(1))
     const sent = postDelta.mock.calls[0][0]
     expect(sent.items).toEqual([expect.objectContaining({ id: 'F-1', action: 'approve' })])
