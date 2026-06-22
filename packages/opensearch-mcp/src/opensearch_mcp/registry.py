@@ -646,12 +646,27 @@ class EnrichIntelIn(BaseModel):
 
 
 class EnrichIntelOut(BaseModel):
-    status: Literal["preview", "started"] = Field(..., description="Enrichment response status.")
+    status: Literal[
+        "preview",
+        "started",
+        # feat/opensearch-workers: privileged enrich is dispatched (non-blocking)
+        # to a dedicated sift-opensearch-worker@ via the durable job queue; the
+        # gateway returns this immediately instead of running the pipeline inline.
+        "queued",
+    ] = Field(..., description="Enrichment response status.")
     case_id: str = Field(..., description="Resolved case id.")
     ips: int | None = Field(None, description="Unique IP indicators in preview.")
     hashes: int | None = Field(None, description="Unique hash indicators in preview.")
     domains: int | None = Field(None, description="Unique domain indicators in preview.")
     total_iocs: int | None = Field(None, description="Total unique IOCs in preview.")
+    job_id: str | None = Field(
+        None, description="Durable job id for a queued (worker-dispatched) enrich; poll job_status."
+    )
+    job_type: str | None = Field(None, description="Dispatched job type (enrich) when queued.")
+    dispatched_to: str | None = Field(
+        None, description="Worker lane a queued enrich was dispatched to."
+    )
+    next_step: str | None = Field(None, description="Operator guidance for a queued dispatch.")
     pid: int | None = Field(None, description="Background process id.")
     run_id: str | None = Field(None, description="Background run id.")
     log_file: str | None = Field(None, description="Background run log file.")
@@ -1913,10 +1928,13 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "dry_run=True first to size the IOC corpus."
         ),
         "output_shape": (
-            "EnrichIntelOut: status (preview|started), case_id, ips, hashes, domains, "
-            "total_iocs (preview counts), pid, run_id, log_file, note. ASYNC on write "
-            "— returns a run reference; poll opensearch_ingest_status "
-            "(artifact_name=='intel')."
+            "EnrichIntelOut: status (preview|started|queued), case_id, ips, hashes, domains, "
+            "total_iocs (preview counts), job_id, job_type, dispatched_to, next_step, "
+            "pid, run_id, log_file, note. "
+            "Disk/E01 enrich returns status=queued + job_id (non-blocking, dispatched to "
+            "sift-opensearch-worker@); poll job_status(job_id) for realtime "
+            "worker_label/current_step. ASYNC on write — returns a run reference; "
+            "poll opensearch_ingest_status (artifact_name=='intel')."
         ),
         "response_shaping": (
             "Returns counts + a run reference, never IOC dumps or OpenCTI/OpenSearch "

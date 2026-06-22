@@ -1017,6 +1017,76 @@ class TestEnrichIntelAsync:
 
 
 # ---------------------------------------------------------------------------
+# EnrichIntelOut — output model validation (P35-5 queued status)
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichIntelOutModel:
+    """EnrichIntelOut.status must accept all three legitimate values so the
+    gateway's worker-dispatch path (which returns status='queued' + job_id)
+    passes MCP output validation instead of raising 'queued not in enum'."""
+
+    def test_accepts_preview(self):
+        """dry_run=True preview path: status='preview' must be valid."""
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        out = EnrichIntelOut(status="preview", case_id="test-case", ips=2, total_iocs=2)
+        assert out.status == "preview"
+
+    def test_accepts_started(self):
+        """Background launch path: status='started' must be valid."""
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        out = EnrichIntelOut(status="started", case_id="test-case", pid=54321, run_id="r1")
+        assert out.status == "started"
+
+    def test_accepts_queued(self):
+        """Worker-dispatch path: status='queued' must be valid (P35-5 fix).
+
+        The gateway's OpenSearchJobDispatchMiddleware returns this status when
+        opensearch_enrich_intel is redirected to a durable sift-opensearch-worker@
+        job. Before this fix, 'queued' was not in the Literal enum so the MCP
+        output validator rejected the response with 'queued is not one of
+        [preview, started]'.
+        """
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        out = EnrichIntelOut(
+            status="queued",
+            case_id="test-case",
+            job_id="job-enrich-001",
+            job_type="enrich",
+            dispatched_to="opensearch-worker",
+            next_step="Poll running_commands_status(job_id) for progress.",
+        )
+        assert out.status == "queued"
+        assert out.job_id == "job-enrich-001"
+        assert out.job_type == "enrich"
+        assert out.dispatched_to == "opensearch-worker"
+
+    def test_rejects_invalid_status(self):
+        """Invalid status values must still fail validation."""
+        import pytest
+        from pydantic import ValidationError
+
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        with pytest.raises(ValidationError):
+            EnrichIntelOut(status="running", case_id="test-case")
+
+    def test_queued_schema_enum_contains_all_three(self):
+        """JSON Schema for EnrichIntelOut.status must list all three values so
+        schema-validating MCP clients accept queued worker-dispatch responses."""
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        schema = EnrichIntelOut.model_json_schema()
+        status_enum = schema["properties"]["status"]["enum"]
+        assert "preview" in status_enum
+        assert "started" in status_enum
+        assert "queued" in status_enum
+
+
+# ---------------------------------------------------------------------------
 # R0-1: _get_active_case — env var first, file fallback
 # ---------------------------------------------------------------------------
 
