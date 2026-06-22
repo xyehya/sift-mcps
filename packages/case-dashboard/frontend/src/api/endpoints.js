@@ -43,13 +43,11 @@ export const getAudit = (findingId) => apiFetch(`/api/audit/${findingId}`)
 export const getDelta = () => apiFetch('/api/delta')
 export const postDelta = (body) => apiPost('/api/delta', body)
 export const deleteDelta = (id) => apiDelete(`/api/delta/${id}`)
-export const getCommitChallenge = () => apiFetch('/api/commit/challenge')
 export const postCommit = (body) => apiPost('/api/commit', body, REAUTH_OPTS)
 
 // --- Evidence chain ---
 export const getChainStatus = () => apiFetch('/api/evidence/chain/status')
 export const postChainRescan = () => apiPost('/api/evidence/chain/rescan', {})
-export const getChainChallenge = () => apiFetch('/api/evidence/chain/challenge')
 export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body, REAUTH_HASH_OPTS)
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)
 export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body, { timeoutMs: LONG_TIMEOUT_MS })
@@ -83,7 +81,6 @@ export const postReactivateToken = (id) => apiPost(`/api/tokens/${id}/reactivate
 
 // --- Reports ---
 export const getReports = () => apiFetch('/api/reports')
-export const getReportChallenge = () => apiFetch('/api/reports/challenge')
 export const postReportGenerate = (body) => apiPost('/api/reports/generate', body, REAUTH_OPTS)
 export const postReportSave = (id) => apiPost(`/api/reports/${id}/save`, {})
 export const getReport = (id) => apiFetch(`/api/reports/${id}`)
