@@ -1,7 +1,37 @@
+import fs from 'node:fs'
+import https from 'node:https'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+// ── Dev API proxy (F6) ──────────────────────────────────────────────────────
+// The gateway is HTTPS with a private CA. For a verified TLS path we load the
+// VM CA into an https.Agent instead of disabling verification (`secure:false`).
+// Both the target and the CA path are env-overridable so no host/IP is baked in.
+//
+// GUARD: the default dev flow runs against mock data (`?mock=1`, no proxy), so
+// startup must NEVER crash when the CA file is absent. We only attach the
+// verified agent if the CA file exists; otherwise we log one warning and fall
+// back to `secure:false` (dev-only). Production/live must provide the CA via
+// VITE_PROXY_CA so TLS is actually verified.
+const PROXY_TARGET = process.env.VITE_API_PROXY ?? 'https://192.168.122.81:4508'
+const PROXY_CA = process.env.VITE_PROXY_CA ?? '/home/yk/.sift-vm-ca-192.168.122.81.pem'
+
+function buildProxyConfig() {
+  const base = { target: PROXY_TARGET, changeOrigin: true }
+  if (fs.existsSync(PROXY_CA)) {
+    // Verified TLS: trust only the supplied CA.
+    return { ...base, agent: new https.Agent({ ca: fs.readFileSync(PROXY_CA) }) }
+  }
+  // Fallback (dev-only): CA absent → don't crash dev startup. TLS is NOT
+  // verified here; prod/live must set VITE_PROXY_CA to the VM CA.
+  console.warn(
+    `[vite] proxy CA not found at ${PROXY_CA} — falling back to secure:false ` +
+      `(dev-only, TLS unverified). Set VITE_PROXY_CA for a verified path.`,
+  )
+  return { ...base, secure: false }
+}
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -37,11 +67,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/portal/api': {
-        target: 'https://192.168.122.81:4508',
-        changeOrigin: true,
-        secure: false,
-      },
+      '/portal/api': buildProxyConfig(),
     },
   },
 })
