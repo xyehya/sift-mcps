@@ -43,3 +43,9 @@ skills-lock.json
 .claude/skills/codebase-memory/
 .claude/skills/linear-cli/
 .claude/skills/supabase-postgres-best-practices/
+
+# Portal v3 internal ops docs — kept OUT of the pushable repo; live in the
+# local ops hub ~/AI/SIFTHACK/sift-portal-ops/ (trackers, runbooks, audits,
+# design source, operating model). Repo carries code + contracts only.
+packages/case-dashboard/frontend/design/
+/security_report/
