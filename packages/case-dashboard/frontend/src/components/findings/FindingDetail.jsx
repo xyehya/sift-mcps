@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Layers, X } from 'lucide-react'
+import { Check, Layers, Lock, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import {
@@ -11,6 +11,7 @@ import {
   statusMeta,
 } from '@/components/findings/findings-utils'
 import { ConfChip, HashChip, AttChip } from '@/components/findings/FindingDetailChips'
+import { AuditTrailPanel } from '@/components/findings/AuditTrailPanel'
 import { FieldSection } from '@/components/findings/FindingField'
 import { ObservationIcon, InterpretationIcon, CustodyIcon } from '@/components/findings/field-icons'
 import { Badge } from '@/components/ui/badge'
@@ -76,6 +77,10 @@ export function FindingDetail({
   const conf = confClass(eff.confidence)
   const status = normStatus(finding)
   const sMeta = statusMeta(status)
+  // Once a finding is committed to the record it leaves the delta (stagedItem is
+  // null) and falls into the action-cluster branch below — so terminal states
+  // must be locked read-only there. Stage is independently restricted to drafts.
+  const isTerminal = ['approved', 'rejected', 'committed', 'superseded'].includes(status)
 
   const score = confidenceScore(eff)
   const grade = confidenceGrade(score)
@@ -206,6 +211,15 @@ export function FindingDetail({
           onSave={handleSave}
           modification={mods.confidence_justification}
         />
+
+        {/* Audit-trail provenance (B4): surfaces the finding's audit_ids — the
+            tool-call chain behind it. Only renders when audit_ids are present;
+            AuditTrailPanel degrades to id-only rows when getAudit resolves empty. */}
+        {finding.audit_ids?.length > 0 && (
+          <div className="border-t border-border-soft pt-5">
+            <AuditTrailPanel finding={finding} />
+          </div>
+        )}
       </div>
 
       {/* ── Footer actions ───────────────────────────────────────────── */}
@@ -216,36 +230,39 @@ export function FindingDetail({
           <Button variant="outline" size="sm" onClick={onUnstage} className="gap-1.5 text-status-staged">
             <Layers className="size-3.5" /> Undo staged {stagedItem.action}
           </Button>
+        ) : isTerminal ? (
+          // Committed/terminal finding (no longer in the delta): read-only. No
+          // Stage/Reject/Approve — the record entry is immutable from this pane.
+          <span className="flex items-center gap-1.5 text-[12px] text-text-muted">
+            <Lock className="size-3.5" aria-hidden />
+            Committed to record — read-only
+          </span>
         ) : (
           <>
             {/* Approve — immediate (F2): stages a reversible approve delta, like
                 Stage/Reject. Real auth gate is at Commit-to-record. */}
-            {status !== 'approved' && (
-              <FooterAction
-                accent="jade"
-                onClick={() => {
-                  onApprove()
-                  if (addToast) addToast('Finding approved — staged for commit', 'success')
-                }}
-                icon={<Check className="size-3.5" aria-hidden />}
-              >
-                Approve
-              </FooterAction>
-            )}
+            <FooterAction
+              accent="jade"
+              onClick={() => {
+                onApprove()
+                if (addToast) addToast('Finding approved — staged for commit', 'success')
+              }}
+              icon={<Check className="size-3.5" aria-hidden />}
+            >
+              Approve
+            </FooterAction>
 
-            {/* Stage — immediate */}
-            {onStage && (
+            {/* Stage — drafts only (never on a non-draft finding). */}
+            {onStage && status === 'draft' && (
               <FooterAction accent="violet" onClick={onStage} icon={<Layers className="size-3.5" aria-hidden />}>
                 Stage
               </FooterAction>
             )}
 
             {/* Reject — immediate */}
-            {status !== 'rejected' && (
-              <FooterAction accent="crimson" onClick={onReject} icon={<X className="size-3.5" aria-hidden />}>
-                Reject
-              </FooterAction>
-            )}
+            <FooterAction accent="crimson" onClick={onReject} icon={<X className="size-3.5" aria-hidden />}>
+              Reject
+            </FooterAction>
           </>
         )}
         <div className="flex-1" />
