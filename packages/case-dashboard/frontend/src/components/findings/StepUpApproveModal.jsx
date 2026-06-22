@@ -65,7 +65,10 @@ export function StepUpApproveModal({ findingId, open, onClose, onConfirm }) {
             size="sm"
             disabled={!pass}
             onClick={() => {
-              // TODO(CG-AUTH): wire onConfirm(pass) → computeChallengeResponse() → POST /api/auth/step-up-approve (see EvidenceUnseal)
+              // Modal correctly passes the typed password; the call-site (FindingDetail)
+              // currently ignores it (prototype). Fix is at the call-site — see its
+              // TODO(CG-AUTH). Live re-auth model = plaintext-password→Supabase
+              // (postCommit/unsealEvidence), NOT api/crypto.js (dead code).
               onConfirm(pass)
             }}
             className="gap-1.5 bg-status-approved text-primary-foreground hover:bg-status-approved/90 disabled:opacity-50"

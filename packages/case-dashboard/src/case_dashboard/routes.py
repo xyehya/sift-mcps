@@ -3849,13 +3849,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        # Portal v3 self-hosts fonts (@fontsource → /portal/assets/*.woff2), so
+        # font-src must be 'self' (the old gstatic-only value blocked them) and the
+        # Google origins are dropped. 'unsafe-inline' is retained for style-src ONLY
+        # because a few data-driven numeric styles (progress/ring/severity-bar widths,
+        # grid ratio — AGENTS §11-sanctioned, token-var values, never untrusted) emit
+        # inline style attributes; a per-request nonce is the path to pure 'self'.
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; "
             "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src https://fonts.gstatic.com; "
-            "img-src 'self'; "
-            "connect-src 'self'"
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "base-uri 'none'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'; "
+            "object-src 'none'"
         )
         return response
 

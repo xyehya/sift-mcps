@@ -249,8 +249,13 @@ export function FindingDetail({
         open={!!stepUpOpen}
         onClose={() => onStepUpClose?.()}
         onConfirm={() => {
-          // Prototype accepts any non-empty password; production wires to real step-up auth.
-          // TODO(CG-AUTH): wire onConfirm(pass) → computeChallengeResponse() → POST /api/auth/step-up-approve (see EvidenceUnseal)
+          // Prototype: the password is NOT verified — onApprove() only STAGES a
+          // reversible delta (the real irreversible gate, Commit-to-record, IS
+          // server-re-authed: CommitDrawer → postCommit({password}) → Supabase, CL3a).
+          // TODO(CG-AUTH): either drop this modal (Approve only stages) OR re-auth the
+          // password server-side via the LIVE plaintext-password→Supabase pattern
+          // (mirror postCommit/unsealEvidence({password})). NOTE: api/crypto.js
+          // computeChallengeResponse is DEAD CODE — do NOT wire to it.
           onStepUpClose?.()
           onApprove()
           if (addToast) addToast('Finding approved (prototype — auth pending)', 'success')
