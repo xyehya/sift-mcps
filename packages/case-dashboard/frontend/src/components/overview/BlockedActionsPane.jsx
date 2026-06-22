@@ -102,6 +102,7 @@ function BlockedDetailModal({ action, onClose }) {
           {action.target && (
             <div className="space-y-1">
               <p className="font-semibold text-muted-foreground uppercase tracking-wider text-[10px] mono">Target</p>
+              {/* NEVER dangerouslySetInnerHTML — agent-supplied free text, render as escaped JSX only */}
               <p className="mono text-foreground break-all">{action.target}</p>
             </div>
           )}
@@ -114,6 +115,7 @@ function BlockedDetailModal({ action, onClose }) {
           {action.detail && (
             <div className="space-y-1">
               <p className="font-semibold text-muted-foreground uppercase tracking-wider text-[10px] mono">Detail</p>
+              {/* NEVER dangerouslySetInnerHTML — agent-supplied free text, render as escaped JSX only */}
               <p className="text-muted-foreground leading-relaxed">{action.detail}</p>
             </div>
           )}

@@ -50,6 +50,12 @@ export function gatedActions(portalState) {
  * `portalState.blocked_actions` field; also falls back to `gated_actions` for
  * backwards compat so the mock data can supply either field. Each entry:
  * { id, title, tool, guard, target, timestamp, detail }.
+ *
+ * FIELD CONTRACT (F5b): `tool`, `target`, and `detail` are PLAIN-TEXT STRINGS,
+ * agent-supplied and therefore UNTRUSTED. They MUST be rendered as escaped JSX
+ * text nodes only — NEVER via dangerouslySetInnerHTML, innerHTML, or any HTML
+ * sink. They are descriptive labels (tool name, blocked target path, disposition
+ * detail), not markup.
  */
 export function blockedActions(portalState) {
   const src = portalState?.blocked_actions ?? portalState?.gated_actions ?? []
