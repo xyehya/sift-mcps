@@ -25,9 +25,7 @@ from sift_core.agent_tools import core_tool_names
 
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.audit_helpers import (
-    _extract_all_audit_ids,
     _extract_all_audit_ids_from_result,
-    _extract_audit_id,
     _extract_audit_id_from_result,
     _extract_run_command_detail,
     redact_for_audit,
@@ -991,35 +989,54 @@ class AuditEnvelopeMiddleware(Middleware):
             result = await call_next(context)
             if result.is_error:
                 status = "error"
-            # §9.3 (D1): unified extractor scans content, structured_content, and
-            # meta so proxied add-on ids (opensearch in structured_content after
-            # response-guard capping; ResultMeta-based add-ons in meta) are not lost.
+            # §9.3 (Option B): canonical id selection — core vs proxied add-on.
+            #
+            # CORE tools (backend_name == "sift-core", in-process, gateway-trusted):
+            #   canonical = native_ids[0] if present, else envelope_event_id.
+            #   Preserves existing siftgateway-* readability and finding citations.
+            #
+            # PROXIED add-on tools (everything else):
+            #   canonical = envelope_event_id ALWAYS.
+            #   A backend-supplied id MUST NOT control what the agent cites:
+            #   it could collide with another row's PK via the id::text resolver
+            #   predicate, or be forged by a compromised backend.  The gateway
+            #   owns the canonical — backends contribute only to the aliases list.
+            #
+            # ALIASES (both cases): unique(native_ids + [envelope_event_id]).
+            #   UUID-shaped native ids from proxied backends are filtered out:
+            #   they are untrustworthy and could collide with real PK rows via the
+            #   id::text resolver predicate.  Scheme-formatted ids (e.g.
+            #   "opensearch-sift-service-*") are kept and resolve via audit_aliases.
+            #
+            # backend_audit_id = canonical (the id stamped into the DB result row).
+            #
+            # §9.5 response stamping: inject canonical into both:
+            #   (a) content[0].text — JSON dict, audit_id set if absent
+            #   (b) structured_content — dict, audit_id set if absent
+            # Two-plane stamping so both MCP content renderers see the same id.
+            # Fully fail-soft: any error in the stamp block leaves result unchanged.
             native_ids = _extract_all_audit_ids_from_result(result)
-            canonical = native_ids[0] if native_ids else envelope_event_id
+            is_core = backend_name == "sift-core"
+            if is_core:
+                canonical = native_ids[0] if native_ids else envelope_event_id
+            else:
+                canonical = envelope_event_id
             backend_audit_id = canonical
-            # §9.5 response stamping: inject canonical audit_id into the agent-visible
-            # response so every tool call — core or add-on — carries a top-level
-            # audit_id.  Two planes are stamped in one pass so they stay consistent:
-            #   (a) content[0].text — JSON-parsed dict, audit_id injected if absent
-            #   (b) structured_content — dict, audit_id set when already a dict and
-            #       lacking the key (covers the output-capped case where content is a
-            #       truncated-preview string, not valid JSON, and structured_content
-            #       carries the _sift_output_capped envelope; the cap flow in
-            #       response_guard.py already preserves the native id inside the cap
-            #       envelope, but the stamp adds the canonical fallback so the key is
-            #       present even if the native id was not recoverable pre-cap)
-            # Fully fail-soft: any error leaves result unchanged.
             try:
                 content_list = list(result.content or [])
                 if content_list and isinstance(content_list[0], TextContent):
                     first_text = content_list[0].text or ""
                     try:
                         parsed = json.loads(first_text)
-                        if isinstance(parsed, dict) and "audit_id" not in parsed:
-                            parsed["audit_id"] = canonical
+                        # For core tools: preserve any existing audit_id (don't overwrite).
+                        # For proxied tools: always stamp the canonical so the agent
+                        # sees the gateway-owned envelope uuid, not the backend's id.
+                        if isinstance(parsed, dict) and (not is_core or "audit_id" not in parsed):
+                            # copy-before-mutate: don't alias the decoded dict
+                            stamped = {**parsed, "audit_id": canonical}
                             result.content = [
                                 content_list[0].model_copy(
-                                    update={"text": json.dumps(parsed, ensure_ascii=False)}
+                                    update={"text": json.dumps(stamped, ensure_ascii=False)}
                                 )
                             ] + list(content_list[1:])
                     except (json.JSONDecodeError, TypeError):
@@ -1035,10 +1052,16 @@ class AuditEnvelopeMiddleware(Middleware):
                     result.meta = dict(result.meta or {})
                     result.meta.setdefault("audit_id", canonical)
                 # (b) stamp structured_content so MCP clients that render it over
-                # content also see the audit_id (covers both the capped envelope
-                # and any add-on that populates structured_content directly).
-                if isinstance(result.structured_content, dict) and "audit_id" not in result.structured_content:
-                    result.structured_content["audit_id"] = canonical
+                # content also see the audit_id (covers the capped envelope case and
+                # any add-on that populates structured_content directly).
+                # For proxied tools, always write the canonical (envelope uuid) even if
+                # the cap path already injected the native id — the canonical governs.
+                # For core tools, only inject if the key is absent (preserve native).
+                if isinstance(result.structured_content, dict):
+                    sc = result.structured_content
+                    if not is_core or "audit_id" not in sc:
+                        # copy-before-mutate: don't modify the backend's original dict
+                        result.structured_content = {**sc, "audit_id": canonical}
             except Exception as stamp_exc:
                 logger.debug(
                     "mcp_envelope: response stamping failed for %s (non-fatal): %s",
@@ -1069,13 +1092,29 @@ class AuditEnvelopeMiddleware(Middleware):
                 )
                 if rc_detail:
                     result_detail["detail"] = rc_detail
-                # §9.3 aliases: all native ids + envelope uuid, deduped.  The
-                # envelope uuid ensures the call is always resolvable even when
-                # no backend id is present.  Redact+bound for audit safety.
+                # §9.3 aliases: all native ids + envelope uuid, deduped.
+                # For proxied add-ons, drop any native id that looks like a bare
+                # UUID (matches the uuid4 pattern) and is not our own envelope_event_id
+                # — a uuid-shaped id from an untrusted backend could collide with
+                # another row's PK via the id::text resolver predicate.
+                # Scheme-formatted ids (e.g. "opensearch-*") are kept as-is.
+                # envelope_event_id is always included as the resolver backstop.
+                _uuid_pat = (
+                    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                )
+                import re as _re  # already in stdlib; local import avoids hoisting
+                def _keep_native(nid: str) -> bool:
+                    if is_core:
+                        return True
+                    # proxied: drop bare uuid-shaped ids (not our envelope)
+                    if nid == envelope_event_id:
+                        return True
+                    return not bool(_re.match(_uuid_pat, nid, _re.IGNORECASE))
+                all_native = native_ids if result is not None else []
                 raw_aliases: list[str] = list(
                     dict.fromkeys(
-                        (native_ids if result is not None else [])
-                        + ([envelope_event_id] if envelope_event_id else [])
+                        [nid for nid in all_native if _keep_native(nid)]
+                        + [envelope_event_id]
                     )
                 )
                 audit_aliases = redact_for_audit(raw_aliases, case_dir=case_dir)
@@ -1103,11 +1142,12 @@ class AuditEnvelopeMiddleware(Middleware):
                             "phase": "result",
                             "status": status,
                             "elapsed_ms": elapsed_ms,
-                            # canonical id (§9.3 D1): native backend id if present,
-                            # else envelope_event_id — always non-None and resolvable.
+                            # canonical id (§9.3 Option B): gateway uuid for proxied
+                            # add-ons (envelope_event_id); native id for core tools.
+                            # Always non-None and always stamped into the response.
                             "backend_audit_id": backend_audit_id,
-                            # audit_aliases: all native ids + envelope uuid, so the
-                            # resolver can match any id the agent may have cited.
+                            # audit_aliases: native ids + envelope uuid (uuid-shaped
+                            # proxied ids excluded); resolver matches any cited alias.
                             "audit_aliases": audit_aliases,
                             "envelope_event_id": envelope_event_id,
                             "principal": effective_principal,

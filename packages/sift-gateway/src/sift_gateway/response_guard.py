@@ -679,37 +679,13 @@ def _cap_guarded_result(
     # §9.5 audit preservation: extract the native audit_id from the original
     # result BEFORE replacing content/structured_content.  The capped structured
     # payload will carry this id so the agent-visible audit_id survives capping.
-    # Fail-soft — any error just leaves native_audit_id as None.
+    # Reuses the shared extractor from audit_helpers to avoid drift.
+    # Local import avoids a potential circular import (response_guard ← audit_helpers
+    # has no back-edge today, but keep it local for safety).
     native_audit_id: str | None = None
     try:
-        for item in result.content or []:
-            if not isinstance(item, TextContent):
-                continue
-            raw = (item.text or "").strip()
-            # The preview may be truncated; try parsing up to the first valid
-            # JSON object boundary before the cap truncates it.
-            if raw.startswith("{"):
-                try:
-                    data = json.loads(raw)
-                    if isinstance(data, dict):
-                        val = data.get("audit_id")
-                        if isinstance(val, str) and val.strip():
-                            native_audit_id = val.strip()
-                            break
-                except (json.JSONDecodeError, ValueError):
-                    pass
-        if native_audit_id is None:
-            sc = result.structured_content
-            if isinstance(sc, dict):
-                val = sc.get("audit_id")
-                if isinstance(val, str) and val.strip():
-                    native_audit_id = val.strip()
-        if native_audit_id is None:
-            mt = result.meta
-            if isinstance(mt, dict):
-                val = mt.get("audit_id")
-                if isinstance(val, str) and val.strip():
-                    native_audit_id = val.strip()
+        from sift_gateway.audit_helpers import _extract_audit_id_from_result  # noqa: PLC0415
+        native_audit_id = _extract_audit_id_from_result(result)
     except Exception:
         pass
 

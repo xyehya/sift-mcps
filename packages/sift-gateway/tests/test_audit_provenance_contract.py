@@ -371,8 +371,9 @@ class TestResponseStamping:
         assert "audit_id" in data
         assert data["audit_id"]  # non-empty
 
-    def test_opensearch_native_id_promoted_and_used_as_canonical(self):
-        """When the backend emits audit_id, that id becomes the canonical."""
+    def test_opensearch_native_id_in_aliases_canonical_is_envelope(self):
+        """Option B: proxied add-on (opensearch) emits native id; canonical is the
+        gateway's envelope uuid (not the native id); native id goes to audit_aliases."""
         mw, db = _make_mw()
         native_id = "opensearch-hermes-20260623-001"
         payload = {"audit_id": native_id, "total": 5}
@@ -383,12 +384,16 @@ class TestResponseStamping:
             )
 
         result = _run_envelope(mw, _ctx("opensearch_status"), _next)
-        data = json.loads(result.content[0].text)
-        # Native id is preserved in content.
-        assert data["audit_id"] == native_id
-        # Result row records native as canonical backend_audit_id.
         result_row = next(c for c in db.calls if c.get("event_type") == "mcp.tool.result")
-        assert result_row["details"]["backend_audit_id"] == native_id
+        # Option B: canonical = envelope uuid, NOT the native opensearch id.
+        canonical = result_row["details"]["backend_audit_id"]
+        assert canonical != native_id, \
+            "proxied backend: canonical must be envelope uuid, not native id"
+        # Native id is preserved in audit_aliases for resolution.
+        assert native_id in result_row["details"]["audit_aliases"]
+        # Content carries the envelope uuid (stamped canonical, not native id).
+        data = json.loads(result.content[0].text)
+        assert data["audit_id"] == canonical
 
     def test_rag_no_native_id_gets_envelope_uuid_as_canonical(self):
         """When no backend id exists, envelope_event_id becomes backend_audit_id."""
@@ -408,8 +413,9 @@ class TestResponseStamping:
         data = json.loads(result.content[0].text)
         assert data["audit_id"] == result_row["details"]["backend_audit_id"]
 
-    def test_wintriage_meta_id_recovered_and_used_as_canonical(self):
-        """Wintriage stores audit_id in ToolResult.meta; unified extractor recovers it."""
+    def test_wintriage_meta_id_recovered_into_aliases_canonical_is_envelope(self):
+        """Option B: wintriage (proxied) stores audit_id in ToolResult.meta; unified
+        extractor recovers it into aliases, but canonical remains the envelope uuid."""
         mw, db = _make_mw()
         meta_id = "wintriage-hermes-20260623-001"
 
@@ -421,11 +427,15 @@ class TestResponseStamping:
 
         result = _run_envelope(mw, _ctx("wintriage_check_system"), _next)
         result_row = next(c for c in db.calls if c.get("event_type") == "mcp.tool.result")
-        # Meta id recovered as canonical.
-        assert result_row["details"]["backend_audit_id"] == meta_id
-        # Content should also be stamped (meta id promoted into content JSON).
+        # Option B: canonical = envelope uuid (not the native wintriage meta id).
+        canonical = result_row["details"]["backend_audit_id"]
+        assert canonical != meta_id, \
+            "proxied backend: canonical must be envelope uuid, not meta id"
+        # Native meta id preserved in audit_aliases.
+        assert meta_id in result_row["details"]["audit_aliases"]
+        # Content stamped with the envelope canonical (injected since content lacked audit_id).
         data = json.loads(result.content[0].text)
-        assert data["audit_id"] == meta_id
+        assert data["audit_id"] == canonical
 
     def test_audit_aliases_include_native_and_envelope(self):
         """audit_aliases in the result row includes both native id and envelope uuid."""
@@ -477,11 +487,12 @@ class TestResponseStamping:
 
     def test_capped_structured_content_gets_audit_id_stamped(self):
         """After ResponseGuard caps a large response, AuditEnvelope stamps the
-        canonical audit_id into structured_content so MCP clients that render
-        structured_content over content still see the id.
+        canonical audit_id (Option B: envelope uuid for proxied tools) into
+        structured_content so MCP clients rendering structured_content see the id.
 
-        Uses real guard_tool_result to produce the actual capped shape, then
-        runs the full AuditEnvelopeMiddleware stamp pass."""
+        The native opensearch id is preserved in audit_aliases by the cap path
+        and survives into aliases; the envelope uuid is canonical + stamped.
+        Uses real guard_tool_result to produce the actual capped shape."""
         mw, db = _make_mw()
         native_id = "opensearch-hermes-20260623-999"
         large_payload = {"audit_id": native_id, "hits": list(range(5000))}
@@ -497,21 +508,28 @@ class TestResponseStamping:
             return guarded
 
         result = _run_envelope(mw, _ctx("opensearch_search"), _next)
-
-        # structured_content must carry audit_id after the envelope stamp.
-        assert isinstance(result.structured_content, dict), \
-            "structured_content should be a dict (capped envelope)"
-        assert "audit_id" in result.structured_content, \
-            "structured_content missing audit_id after envelope stamp"
-        # The native id is preserved (not the envelope backstop).
-        assert result.structured_content["audit_id"] == native_id, \
-            f"expected native id {native_id!r}, got {result.structured_content['audit_id']!r}"
-        # The canonical in the DB row matches too.
         result_row = next(
             (c for c in db.calls if c.get("event_type") == "mcp.tool.result"), None
         )
         assert result_row is not None
-        assert result_row["details"]["backend_audit_id"] == native_id
+
+        # Option B: canonical = envelope uuid (proxied add-on).
+        canonical = result_row["details"]["backend_audit_id"]
+        assert canonical != native_id, \
+            "proxied backend: canonical must be envelope uuid, not native id"
+
+        # structured_content must carry the canonical audit_id after stamp.
+        assert isinstance(result.structured_content, dict), \
+            "structured_content should be a dict (capped envelope)"
+        assert "audit_id" in result.structured_content, \
+            "structured_content missing audit_id after envelope stamp"
+        assert result.structured_content["audit_id"] == canonical, \
+            f"structured_content audit_id should be canonical {canonical!r}"
+
+        # Native id is preserved in aliases (accessible via alias resolver predicate).
+        aliases = result_row["details"].get("audit_aliases", [])
+        assert native_id in aliases, \
+            f"native id {native_id!r} should be in aliases {aliases!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -592,3 +610,123 @@ class TestConformancePerCategory:
             f"{tool_name}: backend_audit_id is None"
         assert result_row["details"]["backend_audit_id"], \
             f"{tool_name}: backend_audit_id is empty"
+
+
+# ---------------------------------------------------------------------------
+# §9.3 Option B canonical selection — core vs proxied add-on
+# ---------------------------------------------------------------------------
+
+
+class TestOptionBCanonical:
+    """Option B: core tools may use native id as canonical; proxied add-ons
+    always use envelope_event_id as canonical regardless of backend-supplied ids."""
+
+    def test_proxied_addon_with_meta_id_uses_envelope_as_canonical(self):
+        """Proxied add-on emits audit_id in meta → canonical == envelope_event_id,
+        native id still appears in audit_aliases, agent sees envelope id.
+
+        Note: _FakeDbAudit.record() returns synthetic ids like 'evt-1' so the
+        test checks envelope identity via details.envelope_event_id, not uuid format."""
+        mw, db = _make_mw()
+        native_id = "wintriage-hermes-20260623-001"
+
+        async def _next(_ctx):
+            return ToolResult(
+                content=[TextContent(type="text", text='{"checks": []}')],
+                meta={"audit_id": native_id, "examiner": "hermes"},
+            )
+
+        result = _run_envelope(mw, _ctx("wintriage_check_system"), _next)
+        result_row = next(c for c in db.calls if c.get("event_type") == "mcp.tool.result")
+
+        # canonical must equal the envelope_event_id (NOT the native wintriage id)
+        canonical = result_row["details"]["backend_audit_id"]
+        envelope_eid = result_row["details"]["envelope_event_id"]
+        assert canonical == envelope_eid, \
+            f"proxied: canonical {canonical!r} must equal envelope_event_id {envelope_eid!r}"
+        assert canonical != native_id, \
+            f"proxied: canonical must not be the native backend id {native_id!r}"
+
+        # native id preserved in audit_aliases
+        aliases = result_row["details"]["audit_aliases"]
+        assert native_id in aliases, \
+            f"native id {native_id!r} missing from audit_aliases {aliases!r}"
+
+        # agent-visible content carries the envelope id, not the native id
+        data = json.loads(result.content[0].text)
+        assert data["audit_id"] == canonical, \
+            f"content audit_id should be canonical {canonical!r}, got {data['audit_id']!r}"
+
+    def test_core_tool_uses_native_id_as_canonical(self):
+        """Core tool emits native siftgateway-* id → canonical == that native id."""
+        mw, db = _make_mw()
+        native_id = "siftgateway-hermes-20260623-001"
+
+        async def _next(_ctx):
+            return ToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps({"audit_id": native_id, "exit_code": 0})
+                )]
+            )
+
+        result = _run_envelope(mw, _ctx("run_command"), _next)
+        result_row = next(c for c in db.calls if c.get("event_type") == "mcp.tool.result")
+
+        canonical = result_row["details"]["backend_audit_id"]
+        assert canonical == native_id, \
+            f"core: canonical should be native id, got {canonical!r}"
+        # content preserves the native id (already present, not overwritten)
+        data = json.loads(result.content[0].text)
+        assert data["audit_id"] == native_id
+
+    def test_uuid_shaped_native_id_from_proxied_backend_dropped_from_aliases(self):
+        """A uuid-shaped 'native id' from a proxied backend is excluded from aliases
+        to prevent collision with real row PKs via the id::text resolver predicate."""
+        mw, db = _make_mw()
+        # Simulate a proxied backend that returns a bare uuid in its content.
+        foreign_uuid = "12345678-abcd-ef01-2345-678901234567"
+
+        async def _next(_ctx):
+            return ToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps({"audit_id": foreign_uuid, "hits": 3})
+                )]
+            )
+
+        _run_envelope(mw, _ctx("opensearch_status"), _next)
+        result_row = next(c for c in db.calls if c.get("event_type") == "mcp.tool.result")
+
+        aliases = result_row["details"]["audit_aliases"]
+        # The uuid-shaped foreign id must NOT be in aliases.
+        assert foreign_uuid not in aliases, \
+            f"uuid-shaped proxied id {foreign_uuid!r} should not be in aliases {aliases!r}"
+        # But the envelope uuid (our own) IS in aliases as the backstop.
+        envelope_eid = result_row["details"]["envelope_event_id"]
+        assert envelope_eid in aliases, \
+            f"envelope_event_id {envelope_eid!r} missing from aliases"
+
+    def test_scheme_formatted_proxied_id_kept_in_aliases(self):
+        """A scheme-formatted native id (e.g. opensearch-*) is kept in aliases
+        even for proxied backends — it won't collide with uuid PKs."""
+        mw, db = _make_mw()
+        scheme_id = "opensearch-hermes-20260623-007"
+
+        async def _next(_ctx):
+            return ToolResult(
+                content=[TextContent(
+                    type="text",
+                    text=json.dumps({"audit_id": scheme_id, "hits": 7})
+                )]
+            )
+
+        _run_envelope(mw, _ctx("opensearch_status"), _next)
+        result_row = next(c for c in db.calls if c.get("event_type") == "mcp.tool.result")
+
+        aliases = result_row["details"]["audit_aliases"]
+        assert scheme_id in aliases, \
+            f"scheme-formatted id {scheme_id!r} missing from aliases {aliases!r}"
+        # canonical is still the envelope uuid (Option B for proxied tools)
+        canonical = result_row["details"]["backend_audit_id"]
+        assert canonical != scheme_id, "proxied: canonical must be envelope uuid, not native scheme id"

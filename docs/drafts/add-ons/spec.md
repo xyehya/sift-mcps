@@ -411,6 +411,7 @@ uv run --extra dev pytest packages/sift-gateway/tests/test_phase6.py \
 ## 10. Audit & Provenance (§9.2 invariant)
 
 _Added 2026-06-23 (Unit 1 — systemic gateway audit contract)._
+_Updated 2026-06-23 (Unit 1 amendment — Option B canonical + structured_content stamp + dedup fix)._
 
 ### 10.1 The agent-facing invariant
 
@@ -428,38 +429,49 @@ The `AuditEnvelopeMiddleware` (`policy_middleware.py`) runs on every tool call.
 It:
 
 1. Mints two universal handles before dispatch: `envelope_event_id` (the
-   call-row PK) and `request_id` (links call↔result pair). Both are non-None
-   and 100% populated.
+   call-row PK, a gateway-owned uuid) and `request_id` (links call↔result
+   pair). Both are non-None and 100% populated.
 2. After dispatch, runs the **unified extractor** (`_extract_audit_id_from_result`
    / `_extract_all_audit_ids_from_result` in `audit_helpers.py`) which scans
    the result in order: `content[].text` → `structured_content` → `meta`.
-3. Selects a **canonical id** (D1): the first native backend id found, or
-   `envelope_event_id` as backstop when the backend emits nothing.
-4. **Stamps** the canonical id into the first content item (if it parses as a
-   JSON object) so the agent always sees `response.audit_id`.
-5. Records `backend_audit_id = canonical` and `audit_aliases = [all native ids
-   + envelope_event_id]` in the `mcp.tool.result` row.
+3. Selects a **canonical id** (Option B — operator decision 2026-06-23):
+   - **Core tools** (`backend_name == "sift-core"`, in-process, gateway-trusted):
+     canonical = first native id if present, else `envelope_event_id`. Preserves
+     existing `siftgateway-*` human-readable citations and in-flight references.
+   - **Proxied add-on tools** (all other backends): canonical = `envelope_event_id`
+     ALWAYS. The gateway owns the canonical id for proxied tools — a backend-
+     supplied id must not control what the agent cites, as it could be forged
+     or collide with another row's uuid PK via the `id::text` resolver predicate.
+4. **Stamps** the canonical id into two planes so it is visible regardless of
+   which MCP content renderer the client uses:
+   - `content[0].text` — injected into the JSON dict if absent (copy-before-mutate)
+   - `structured_content` — set if it is already a dict and lacks `audit_id`
+5. Records `backend_audit_id = canonical` and `audit_aliases` in the
+   `mcp.tool.result` row. Aliases = unique(native ids + `envelope_event_id`),
+   with uuid-shaped native ids from proxied backends excluded to prevent
+   resolver collisions.
 
 ### 10.3 Backend MAY (not MUST) emit an audit id
 
 A backend is **not required** to produce an `audit_id`. The gateway guarantees
 full provenance regardless. If a backend does surface an `audit_id` (in its
-response dict, `structured_content`, or `ToolResult.meta`), the gateway will:
+response dict, `structured_content`, or `ToolResult.meta`), for proxied add-ons
+the gateway:
 
-- Preserve it as the canonical id (preferred over the envelope uuid for
-  human-readability and cross-referencing the backend's own logs).
-- Include it in `audit_aliases` alongside the envelope id.
+- Preserves it in `audit_aliases` (resolves via the aliases predicate).
+- Does NOT promote it to canonical — the canonical remains `envelope_event_id`.
 
-Backends that currently emit native ids: `sift-core/run_command` (scheme
-`siftgateway-*`), `opensearch-mcp` (scheme `opensearch-<examiner>-<date>-NNN`),
-`windows-triage-mcp` (scheme via `ResultMeta.audit_id` in `ToolResult.meta`).
-Backends that emit no id (e.g. `forensic-rag-mcp`) get full provenance via the
-envelope backstop.
+For core tools, the native id becomes canonical when present (backward
+compatibility). Backends that currently emit native ids: `sift-core/run_command`
+(scheme `siftgateway-*`), `opensearch-mcp` (scheme `opensearch-*`),
+`windows-triage-mcp` (via `ResultMeta.audit_id` in `ToolResult.meta`).
 
 ### 10.4 Resolver
 
 The portal resolver (`InvestigationService.audit_events()`) accepts any of the
-following as a valid audit reference (all case-scoped):
+following as a valid audit reference (all case-scoped). The resolver deduplicates
+by `request_id`, preferring the richer result row over the pre-dispatch call
+stub when both share the same `request_id`.
 
 | Handle | Coverage |
 |---|---|

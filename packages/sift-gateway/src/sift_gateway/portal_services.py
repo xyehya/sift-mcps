@@ -1657,13 +1657,24 @@ class InvestigationService(_BasePortalDbService):
         #   - envelope_event_id — call-row uuid always present in result details
         #   - request_id column  — 100% populated, links call↔result pair
         #   - details->>'audit_id' — parity with case_manager.py:97
-        # §9.6 issue-D fix: prefer the richer result row over the pre-dispatch
-        # 'requested' row when both match the same event id. Achieved by ordering
-        # on (id, status = 'requested') so requested sorts last within each id.
+        #
+        # §9.6 dedup fix: each envelope produces TWO rows per tool call — a
+        # pre-dispatch 'requested' row (PK = envelope_event_id) and a result row
+        # (different PK, details->>'envelope_event_id' = envelope_event_id).
+        # Citing the envelope_event_id matches BOTH via id::text AND via the
+        # envelope_event_id predicate, so naïve DISTINCT ON(id) returns both.
+        # The panel would show a sparse 'requested' stub alongside the rich result.
+        #
+        # Fix: dedupe by request_id (the stable identifier linking the pair),
+        # preferring the result row (status != 'requested') over the call stub.
+        # DISTINCT ON (request_id) ORDER BY request_id, (status = 'requested')
+        # keeps the result row when both share a request_id, and falls through
+        # to the call row only when no result row exists yet.
+        #
         # Note: literal '?' is safe here — psycopg3 only treats %s/%()s as
         # placeholders (qmark-paramstyle drivers would misparse this).
         sql = (
-            "select distinct on (id) "
+            "select distinct on (request_id) "
             "id::text, event_type, actor_type, source, status, summary, "
             "request_id, job_id::text, created_at, details "
             "from app.audit_events "
@@ -1675,7 +1686,7 @@ class InvestigationService(_BasePortalDbService):
             "    or request_id = any(%s) "
             "    or details->>'audit_id' = any(%s)"
             ") "
-            "order by id, (status = 'requested'), created_at"
+            "order by request_id, (status = 'requested'), created_at"
         )
         db_rows: list[dict[str, Any]] = []
         with self._connect() as conn:

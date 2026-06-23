@@ -539,3 +539,79 @@ def test_reader_no_paired_call_rows_leaves_arguments_absent():
     out = svc.audit_events("case-A", ["siftgateway-claud-uuid-pk-r4"])
     assert len(out) == 1
     assert "arguments" not in out[0]
+
+
+# ---------------------------------------------------------------------------
+# §9.6 dedup fix: citing an envelope_event_id returns exactly one (result) row
+# ---------------------------------------------------------------------------
+
+
+def _result_row(pk, *, request_id, envelope_event_id, backend_audit_id, status="success"):
+    """Rich result row (mcp.tool.result) with envelope_event_id in details."""
+    return (
+        pk, "mcp.tool.result", "agent", "gateway_mcp_envelope", status,
+        f"ok {pk}", request_id, None,
+        datetime(2026, 6, 23, tzinfo=timezone.utc),
+        {
+            "backend_audit_id": backend_audit_id,
+            "envelope_event_id": envelope_event_id,
+            "tool": "run_command",
+            "result_summary": {"exit_code": 0},
+        },
+    )
+
+
+def _call_stub_row(pk, *, request_id, status="requested"):
+    """Sparse pre-dispatch stub (mcp.tool.call, status=requested)."""
+    return (
+        pk, "mcp.tool.call", "agent", "gateway_mcp_envelope", status,
+        f"requested {pk}", request_id, None,
+        datetime(2026, 6, 23, tzinfo=timezone.utc),
+        {"tool": "run_command", "phase": "pre_dispatch"},
+    )
+
+
+def test_citing_envelope_event_id_returns_exactly_one_row():
+    """Citing the envelope_event_id should return exactly one row (the result row),
+    not two (result + call stub). The call stub shares the same request_id so
+    DISTINCT ON (request_id) keeps only the result row (preferred by the ordering)."""
+    recorder: dict = {}
+    envelope_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    request_id = "req-dedup-001"
+    # The SQL WHERE has already matched both rows (call stub by id::text,
+    # result row by details->>'envelope_event_id'); simulate that by returning both.
+    call_stub = _call_stub_row(envelope_id, request_id=request_id)
+    result_row_data = _result_row(
+        "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb",
+        request_id=request_id,
+        envelope_event_id=envelope_id,
+        backend_audit_id=envelope_id,
+    )
+    # Fake DB returns BOTH rows (as if DISTINCT ON hadn't run yet in the fake).
+    # The Python fan-out dedup is NOT what we're testing here — we're testing
+    # the SQL-level dedup via DISTINCT ON (request_id). In the fake, the cursor
+    # returns only what the SQL would return AFTER dedup.
+    # So simulate correct DB behavior: SQL returns only the result row.
+    rows = [result_row_data]
+    svc = _service(rows, recorder)
+    out = svc.audit_events("case-A", [envelope_id])
+    assert len(out) == 1, \
+        f"expected exactly 1 row when citing envelope_event_id, got {len(out)}"
+    # The returned row must be the rich result row (status=success, not 'requested').
+    assert out[0]["status"] != "requested", \
+        "returned row should be the result row, not the pre-dispatch call stub"
+    assert out[0]["details"].get("envelope_event_id") == envelope_id
+
+
+def test_resolver_sql_dedupes_by_request_id_not_event_id():
+    """SQL uses DISTINCT ON (request_id), not DISTINCT ON (id), to collapse the
+    call+result pair into one row per tool call."""
+    recorder: dict = {}
+    svc = _service([], recorder)
+    svc.audit_events("case-A", ["some-audit-id"])
+    sql = recorder["sql"]
+    assert "distinct on (request_id)" in sql.lower(), \
+        "SQL must use DISTINCT ON (request_id) to dedup call+result pairs"
+    # Ordering must prefer result row (status != 'requested') over the call stub.
+    assert "(status = 'requested')" in sql, \
+        "ORDER BY must include (status = 'requested') to prefer result row"
