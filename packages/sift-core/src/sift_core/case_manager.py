@@ -87,6 +87,8 @@ def _db_audit_event_has_audit_id(
 
     The gateway envelope middleware stores each tool call's backend audit id in
     ``details->>'backend_audit_id'`` (and some writers use ``details->>'audit_id'``).
+    Gateway canonical UUIDs are stored in ``details->>'envelope_event_id'`` on the
+    result row and also matched here so agents citing an envelope_event_id can resolve.
     Scoped to the case when the case UUID is known. Lightweight single-row probe.
     """
     if not candidates:
@@ -94,19 +96,21 @@ def _db_audit_event_has_audit_id(
     import psycopg
 
     match = (
-        "(details->>'backend_audit_id' = any(%s) or details->>'audit_id' = any(%s))"
+        "(details->>'backend_audit_id' = any(%s)"
+        " or details->>'audit_id' = any(%s)"
+        " or details->>'envelope_event_id' = any(%s))"
     )
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             if case_id:
                 cur.execute(
                     f"select 1 from app.audit_events where case_id = %s and {match} limit 1",
-                    (case_id, candidates, candidates),
+                    (case_id, candidates, candidates, candidates),
                 )
             else:
                 cur.execute(
                     f"select 1 from app.audit_events where {match} limit 1",
-                    (candidates, candidates),
+                    (candidates, candidates, candidates),
                 )
             return cur.fetchone() is not None
 
@@ -194,6 +198,13 @@ _ACTIVE_CASE_FILE = Path.home() / ".sift" / "active_case"
 # Audit ID format: prefix-examiner-YYYYMMDD-NNN (all lowercase alphanumeric + hyphens)
 _AUDIT_ID_PATTERN = re.compile(
     r"^[a-z]+-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?-[0-9]{8}-[0-9]{3,}\Z"
+)
+
+# Gateway canonical UUID: 8-4-4-4-12 hex (envelope_event_id assigned by AuditEnvelopeMiddleware).
+# These are accepted as valid provenance citations and routed to the DB authority check.
+_UUID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z",
+    re.IGNORECASE,
 )
 
 # Allowlist: only these fields pass through from user-supplied finding data
@@ -1891,16 +1902,65 @@ class CaseManager:
         # absent/empty even though kb_search_knowledge actually ran — the prior
         # JSONL-only check made every finding read "WEAK / forensic-rag missing"
         # after real KB searches, training the agent to ignore the signal.
-        cited_prefixes = {
-            str(aid).split("-", 1)[0].lower()
+        cited_aids: list[str] = [
+            str(aid)
             for aid in (finding.get("audit_ids") or [])
-            if isinstance(aid, str) and "-" in str(aid)
+            if isinstance(aid, str) and aid
+        ]
+        cited_prefixes = {
+            aid.split("-", 1)[0].lower()
+            for aid in cited_aids
+            if "-" in aid and not _UUID_PATTERN.match(aid)
         }
+        # For gateway canonical UUIDs (envelope_event_id), resolve the backend name
+        # from DB so the grounding scorer can credit the correct add-on plane.
+        uuid_cited_backends: set[str] = set()
+        uuid_aids = [aid for aid in cited_aids if _UUID_PATTERN.match(aid)]
+        if uuid_aids:
+            try:
+                from sift_core.active_case_context import db_authority_active
+                from sift_core.investigation_store import control_plane_dsn
+
+                if db_authority_active():
+                    dsn = control_plane_dsn()
+                    if dsn:
+                        import psycopg
+
+                        db_case_id = self._db_case_id()
+                        with psycopg.connect(dsn) as _conn:
+                            with _conn.cursor() as _cur:
+                                if db_case_id:
+                                    _cur.execute(
+                                        "select details->>'backend' from app.audit_events"
+                                        " where case_id = %s"
+                                        " and details->>'envelope_event_id' = any(%s)"
+                                        " limit %s",
+                                        (db_case_id, uuid_aids, len(uuid_aids) + 1),
+                                    )
+                                else:
+                                    _cur.execute(
+                                        "select details->>'backend' from app.audit_events"
+                                        " where details->>'envelope_event_id' = any(%s)"
+                                        " limit %s",
+                                        (uuid_aids, len(uuid_aids) + 1),
+                                    )
+                                for row in _cur.fetchall():
+                                    bk = row[0]
+                                    if bk:
+                                        uuid_cited_backends.add(bk.lower())
+            except Exception:
+                pass  # DB not reachable — fall through to JSONL check
+
         consulted: list[str] = []
         for mcp_name in available:
             # Mirror AuditWriter's prefix derivation: strip "-mcp" and dashes.
             prefix = mcp_name.replace("-mcp", "").replace("-", "").lower()
+            # Credit via scheme-format audit_id prefix match.
             if prefix and prefix in cited_prefixes:
+                consulted.append(mcp_name)
+                continue
+            # Credit via DB-resolved envelope_event_id → backend name.
+            if mcp_name.lower() in uuid_cited_backends:
                 consulted.append(mcp_name)
                 continue
             for audit_dir in self._candidate_audit_dirs(case_dir):
@@ -2019,8 +2079,10 @@ class CaseManager:
             "none": [],
         }
         for eid in audit_ids:
-            # Reject malformed audit IDs (path traversal, homoglyphs, injection)
-            if not _AUDIT_ID_PATTERN.match(eid):
+            # Reject malformed audit IDs (path traversal, homoglyphs, injection).
+            # Accept scheme-format ids (prefix-examiner-YYYYMMDD-NNN) AND gateway
+            # canonical UUIDs (envelope_event_id assigned by AuditEnvelopeMiddleware).
+            if not (_AUDIT_ID_PATTERN.match(eid) or _UUID_PATTERN.match(eid)):
                 result["none"].append(eid)
                 continue
             source = None
