@@ -82,7 +82,8 @@
 <tr><td>Open items / known regressions — FOLDED into build handoff</td><td><span class="tier durable">DESIGN PROJ</span></td><td class="path">SIFT-Design-System/04-handoff/RUN-PORTAL-V3-BUILD.md §4</td></tr>
 <tr><td>Current-state snapshot</td><td><span class="tier wt">WORKTREE</span></td><td class="path">…/frontend/design/claude-design-export/CURRENT-STATE.md</td></tr>
 <tr><td>Design tokens (single source, both themes)</td><td><span class="tier git">GIT</span></td><td class="path">…/frontend/src/styles/tokens.css</td></tr>
-<tr><td>Built code (current HEAD 257d20e)</td><td><span class="tier git">GIT</span></td><td class="path">branch portal-v3/p0-foundation @ .claude/worktrees/portal-v3-p0-foundation</td></tr>
+<tr><td>Built code (current HEAD 6529d7d)</td><td><span class="tier git">GIT</span></td><td class="path">branch portal-v3/p0-foundation @ .claude/worktrees/portal-v3-p0-foundation</td></tr>
+<tr><td><b>Current ops hub</b> — status, runbooks, trackers, B1/P35-8 record</td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/AI/SIFTHACK/sift-portal-ops/</td></tr>
 <tr><td>Cross-session memory (loads every session)</td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/.claude/projects/-home-yk-AI-SIFTHACK-sift-mcps/memory/project_portal_v3_rebuild.md</td></tr>
 <tr><td><b>This tracker</b></td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/AI/SIFTHACK/sift-mcps/docs/new-docs/PORTAL_V3_OPS_TRACKER.html</td></tr>
 </tbody>
@@ -98,9 +99,10 @@
 <tr><td>P0 foundation</td><td>tokens · theme · shadcn · shell · data port · reference Overview+Findings · MASTER freeze</td><td><span class="pill done">DONE (257d20e)</span></td></tr>
 <tr><td>P0 re-implement (settled design)</td><td>token re-port + shadcn bridge · Mission Control + Findings 1:1 · HITL flip · sev-spec dropped · scroll model</td><td><span class="pill done">DONE (2a47bac)</span></td></tr>
 <tr><td>P0 sign-off gate</td><td>operator visual approval (dark+light), live-verified</td><td><span class="pill done">SIGNED OFF · tag p0-signoff (2a47bac) 06-21</span></td></tr>
-<tr><td>P1 feature tabs</td><td>9 tabs · FUNCTIONAL PARITY w/ original portal then re-skin (NOT greenfield) · Evidence pilot rejected → rework</td><td><span class="pill now">IN PROGRESS</span></td></tr>
-<tr><td>P2 integration + CSP</td><td>integrate · tighten CSP to <code>'self'</code> · full validation</td><td><span class="pill pend">PENDING</span></td></tr>
-<tr><td>P3 security verdict</td><td>security-expert consolidated pass → verdict (auth/crypto/CSP/deps/XSS)</td><td><span class="pill pend">PENDING</span></td></tr>
+<tr><td>P1 feature tabs</td><td>9 tabs · functional parity w/ original portal then re-skin · live VM validation</td><td><span class="pill done">DONE · LIVE-PROVEN</span></td></tr>
+<tr><td>P2 integration + CSP</td><td>integrate · CSP hardened at gateway layer · full validation</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>P3 security verdict</td><td>security-expert consolidated pass → verdict (auth/crypto/CSP/deps/XSS)</td><td><span class="pill done">PASS-WITH-FIXES</span></td></tr>
+<tr><td>P3.5 tuning/backwiring</td><td>live ROCBA regressions · trust-surface fixes · placeholder→real wiring</td><td><span class="pill now">IN PROGRESS · B1 DONE</span></td></tr>
 <tr><td>P4 closeout</td><td>PR + (Linear paused)</td><td><span class="pill pend">PENDING</span></td></tr>
 </tbody>
 </table>
@@ -120,7 +122,9 @@
 <tr><td>P0 re-impl U1–U4</td><td>06-21</td><td>token re-port+bridge (sev-spec out) · Overview IA 1:1 · Findings 1:1 · identity</td><td class="mono">16a2668→2a47bac</td><td><span class="pill done">DONE · signed off</span></td></tr>
 <tr><td>P1 Evidence pilot</td><td>06-21</td><td>chain-of-custody registry</td><td class="mono">6033bea/5eec27c</td><td><span class="pill rej">REJECTED (parity)</span></td></tr>
 <tr><td>Operating model + contracts</td><td>06-21</td><td>SIFT Design System model · contract+tracker relocated to portal branch (main kept clean = origin/main) · token a11y fixes · canonical DESIGN-SYSTEM · 3 named agents created</td><td class="mono">portal b4c0cc5 · main b995491</td><td><span class="pill done">DONE</span></td></tr>
-<tr><td>P1 build session</td><td>—</td><td>orchestrator + frontend-coder / verifier-griller / security-expert; functional-parity tabs (see §5)</td><td class="mono">—</td><td><span class="pill pend">NEXT</span></td></tr>
+<tr><td>P1→P3 completion</td><td>06-22</td><td>functional-parity tabs · gateway CSP · P3 security gate · live ROCBA validation baseline</td><td class="mono">see ops hub</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>P3.5 wave 1/2</td><td>06-23</td><td>P35-1/2/5/6/7/9/10/11/12 · confidence vocabulary · audit trail · backend cards</td><td class="mono">dd34c49→7bc3699</td><td><span class="pill done">DONE · live</span></td></tr>
+<tr><td>B1 / P35-8</td><td>06-23</td><td>real DB-backed Agent Activity feed · synthetic POOL/counters/IP removed · Chrome smoke clean</td><td class="mono">6529d7d</td><td><span class="pill done">DONE · live</span></td></tr>
 </tbody>
 </table>
 </div>
@@ -140,13 +144,13 @@
 
 <h2>5 · Next-session launch</h2>
 <div class="card">
-<p class="sub">Launch dir — <b>cd into the worktree</b> (that folder IS branch portal-v3/p0-foundation, HEAD b4c0cc5). NOT the main checkout (old portal). Then reload so the named agents register (<code>/agents</code>); confirm <code>/mcp</code> shows codebase-memory + claude-in-chrome:</p>
+<p class="sub">Launch dir — <b>cd into the worktree</b> (that folder IS branch portal-v3/p0-foundation, HEAD 6529d7d). NOT the main checkout. Confirm <code>/mcp</code> shows Siftmcp + claude-in-chrome before live validation:</p>
 <pre id="launch">cd /home/yk/AI/SIFTHACK/sift-mcps/.claude/worktrees/portal-v3-p0-foundation && claude<button class="copybtn" onclick="cp('launch',this)">copy</button></pre>
-<p class="sub">First message (orchestrator kickoff — P1; dispatches the named agents):</p>
-<pre id="kick">Orchestrator kickoff — SIFT Examiner Portal v3, Phase P1.
+<p class="sub">First message (orchestrator kickoff — tuning/backwiring queue):</p>
+<pre id="kick">Orchestrator kickoff — SIFT Examiner Portal v3, P3.5 tuning/backwiring.
 
 You are ORCHESTRATOR. Working dir = this worktree (branch portal-v3/p0-foundation,
-HEAD b4c0cc5). NEVER touch the main checkout. You read / verify / gate / dispatch —
+HEAD 6529d7d). NEVER touch the main checkout. You read / verify / gate / dispatch —
 you do NOT write code yourself.
 
 Named agents (~/.claude/agents/) — dispatch via the Agent tool:
@@ -168,25 +172,22 @@ Read first, in order:
 4. frontend/DESIGN-SYSTEM.md + design-system/MASTER.md (frozen; §12 queue + sev-spec SUPERSEDED) + COVERAGE.md.
 5. git show worktree-portal-v3-spec:docs/new-docs/PORTAL_V3_REBUILD_SPEC.md — security/contracts authority.
 
-State: P0 SIGNED OFF (tag p0-signoff / 2a47bac). P1 = 9 tabs (Timeline, Evidence, Hosts,
-Accounts, IOCs, TODOs, Backends, Reports, Settings). Evidence P1 pilot was REJECTED: P1
-tabs must reach FUNCTIONAL PARITY with the ORIGINAL portal, THEN apply new design — NOT
-greenfield views. Each tab has an original full-featured component; investigate first
-(e.g. git show 4e84112:packages/case-dashboard/frontend/src/components/evidence/EvidenceTab.jsx).
+State: P1/P2/P3 are complete and live-validated on the SIFT VM. Done/live-proven:
+P35-1/2/5/6/7/8/9/10/11/12 and the Severity→Confidence vocabulary cleanup. B1/P35-8
+landed in 6529d7d: Agent Activity is DB-backed by /portal/api/agent/activity from
+app.audit_events; the synthetic POOL/counters/IP are gone.
 
 Discovery: codebase-memory-mcp (project home-yk-AI-SIFTHACK-sift-mcps), not grep.
 
-Loop per unit: you define the bounded unit + parity checklist → dispatch frontend-coder
-(it builds, gates: build+test green incl. EvidenceUnseal + useStore.interface byte-identical,
-chrome dark+light, commits) → dispatch verifier-griller vs COMMITTED state → you confirm
-(grep/paste yourself) → gate. ONE writer at a time. At feature-land: security-expert verdict.
-STOP at each phase gate for my visual sign-off. Do not jump phases.
+Loop per unit: pick the next item from /home/yk/AI/SIFTHACK/sift-portal-ops/STATUS.md,
+confirm the defect, make one bounded change, run focused tests, deploy/smoke when needed,
+then update the ops tracker entry with commit SHA and live proof. ONE writer at a time.
 
-Dev server (ONE, host-bound): cd frontend &amp;&amp; npm run dev -- --host 0.0.0.0 --port 5173
-→ http://192.168.68.13:5173/portal/?mock=1
+Live portal: https://192.168.122.81:4508/portal/
+Validation runbook: /home/yk/AI/SIFTHACK/sift-portal-ops/runbooks/PORTAL_V3_VALIDATION_RUNBOOK.md
 
-Start: confirm HEAD + clean tree, read the above, propose the P1 unit plan (which tab
-first + parity checklist) and WAIT for my go.<button class="copybtn" onclick="cp('kick',this)">copy</button></pre>
+Start: confirm HEAD + clean tree, read the ops STATUS.md, and continue with B2
+(commit-to-record badge eager delta refresh) unless the operator redirects.<button class="copybtn" onclick="cp('kick',this)">copy</button></pre>
 </div>
 
 <h2>6 · Open items / known issues</h2>
@@ -194,10 +195,11 @@ first + parity checklist) and WAIT for my go.<button class="copybtn" onclick="cp
 <table>
 <thead><tr><th>Item</th><th>Where</th><th>Status</th></tr></thead>
 <tbody>
-<tr><td><b>Scroll architecture</b> (systemic) — list won't scroll past ~3; wheel trapped at pane end. One-scroll-owner-per-page model.</td><td>AGENTS §8 · RUN-PORTAL-V3-BUILD §4</td><td><span class="pill now">queued P0</span></td></tr>
-<tr><td><b>Findings "shape off"</b> regression from RUN-4c (master-detail proportions + detail pane).</td><td>RUN-PORTAL-V3-BUILD §4</td><td><span class="pill now">queued P0</span></td></tr>
-<tr><td>Spec §8 reconcile — old "operator authorizes agent" model contradicts settled autonomous+read-only model.</td><td>spec doc</td><td><span class="pill wait">post-P0</span></td></tr>
-<tr><td>Security carry-forwards: undici HIGH (test-only devDep) · shadcn Progress CSSOM style under CSP.</td><td>memory</td><td><span class="pill pend">P3</span></td></tr>
+<tr><td><b>B2</b> — Commit-to-record badge/drawer can be stale until the 15s delta poll catches up.</td><td>sift-portal-ops/STATUS.md · extension backlog</td><td><span class="pill now">NEXT</span></td></tr>
+<tr><td><b>P35-3</b> — grounding score ignores real kb/wintriage consults; gateway/core confirmation needed.</td><td>P3.5 live-validation tracker</td><td><span class="pill pend">OPEN</span></td></tr>
+<tr><td><b>P35-4</b> — only type:finding auto-mints timeline events; confirm by-design or document/fix.</td><td>P3.5 live-validation tracker</td><td><span class="pill pend">OPEN</span></td></tr>
+<tr><td>Housekeeping — reject test probe <code>F-claud-new-portal-005</code> when convenient.</td><td>STATUS.md</td><td><span class="pill wait">OPERATOR</span></td></tr>
+<tr><td>Release path — fresh-install validation, then P4 PR only on explicit operator ask.</td><td>VM deploy/test runbooks</td><td><span class="pill pend">PENDING</span></td></tr>
 </tbody>
 </table>
 </div>
@@ -211,7 +213,7 @@ first + parity checklist) and WAIT for my go.<button class="copybtn" onclick="cp
 </div>
 
 <script>
-document.getElementById('upd').textContent='· tracker updated 2026-06-21';
+document.getElementById('upd').textContent='· tracker updated 2026-06-23 · HEAD 6529d7d';
 function cp(id,btn){var el=document.getElementById(id);var t=el.childNodes[0].nodeValue||el.textContent;navigator.clipboard.writeText(t.trim()).then(function(){var o=btn.textContent;btn.textContent='copied';setTimeout(function(){btn.textContent=o},1200)})}
 function getnotes(){try{return JSON.parse(localStorage.getItem('p3notes')||'[]')}catch(e){return[]}}
 function render(){var n=getnotes(),h='';for(var i=n.length-1;i>=0;i--){h+='<div class="scratchrow"><span class="t">'+n[i].t+'</span> — '+n[i].x.replace(/</g,'&lt;')+'</div>'}document.getElementById('notes').innerHTML=h||'<span class="note">no notes yet</span>'}
