@@ -654,7 +654,10 @@ class EnrichIntelOut(BaseModel):
         # gateway returns this immediately instead of running the pipeline inline.
         "queued",
     ] = Field(..., description="Enrichment response status.")
-    case_id: str = Field(..., description="Resolved case id.")
+    # Optional (mirrors IngestOut): the gateway's worker-dispatch payload for a
+    # queued enrich is {job_id,status,job_type,dispatched_to,next_step} and omits
+    # case_id, so a required case_id would reject the legitimate queued response.
+    case_id: str | None = Field(None, description="Resolved case id.")
     ips: int | None = Field(None, description="Unique IP indicators in preview.")
     hashes: int | None = Field(None, description="Unique hash indicators in preview.")
     domains: int | None = Field(None, description="Unique domain indicators in preview.")

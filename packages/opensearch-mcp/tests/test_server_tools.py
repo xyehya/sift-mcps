@@ -1064,6 +1064,31 @@ class TestEnrichIntelOutModel:
         assert out.job_type == "enrich"
         assert out.dispatched_to == "opensearch-worker"
 
+    def test_accepts_exact_gateway_dispatch_payload(self):
+        """Regression (live P35-5): the gateway's _enqueue payload OMITS case_id.
+
+        OpenSearchJobDispatchMiddleware._enqueue returns exactly
+        {job_id,status,job_type,dispatched_to,next_step} for both ingest and
+        enrich — no case_id. EnrichIntelOut.case_id must therefore be optional
+        (IngestOut already is). The earlier test_accepts_queued passed only
+        because it supplied case_id; the real worker-dispatch response does not,
+        and a required case_id rejected the legitimate queued response live.
+        """
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        # Byte-for-byte the shape policy_middleware._enqueue emits (no case_id).
+        payload = {
+            "job_id": "7b62ef54-3884-4baf-ade1-89954e22f4ea",
+            "status": "queued",
+            "job_type": "enrich",
+            "dispatched_to": "opensearch-worker",
+            "next_step": "Dispatched to a dedicated OpenSearch worker (non-blocking).",
+        }
+        out = EnrichIntelOut.model_validate(payload)
+        assert out.status == "queued"
+        assert out.case_id is None
+        assert out.job_id == payload["job_id"]
+
     def test_rejects_invalid_status(self):
         """Invalid status values must still fail validation."""
         import pytest

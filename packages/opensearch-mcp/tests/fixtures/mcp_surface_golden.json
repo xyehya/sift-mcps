@@ -1106,9 +1106,17 @@
           {
             "properties": {
               "case_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
                 "description": "Resolved case id.",
-                "title": "Case Id",
-                "type": "string"
+                "title": "Case Id"
               },
               "dispatched_to": {
                 "anyOf": [
@@ -1278,8 +1286,7 @@
               }
             },
             "required": [
-              "status",
-              "case_id"
+              "status"
             ],
             "title": "EnrichIntelOut",
             "type": "object"
