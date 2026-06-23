@@ -603,15 +603,58 @@ def test_citing_envelope_event_id_returns_exactly_one_row():
     assert out[0]["details"].get("envelope_event_id") == envelope_id
 
 
-def test_resolver_sql_dedupes_by_request_id_not_event_id():
-    """SQL uses DISTINCT ON (request_id), not DISTINCT ON (id), to collapse the
-    call+result pair into one row per tool call."""
+def test_resolver_sql_dedupes_by_coalesce_request_id_id():
+    """SQL uses DISTINCT ON (coalesce(request_id, id::text)) — NULL-safe dedup.
+    Envelope pairs (non-NULL request_id) collapse; NULL-request_id rows (reauth,
+    lifecycle) each keep their own unique PK as the dedup key."""
     recorder: dict = {}
     svc = _service([], recorder)
     svc.audit_events("case-A", ["some-audit-id"])
-    sql = recorder["sql"]
-    assert "distinct on (request_id)" in sql.lower(), \
-        "SQL must use DISTINCT ON (request_id) to dedup call+result pairs"
-    # Ordering must prefer result row (status != 'requested') over the call stub.
-    assert "(status = 'requested')" in sql, \
-        "ORDER BY must include (status = 'requested') to prefer result row"
+    sql = recorder["sql"].lower()
+    assert "distinct on (coalesce(request_id, id::text))" in sql, \
+        "SQL must use DISTINCT ON (coalesce(request_id, id::text)) for NULL-safe dedup"
+    assert "order by coalesce(request_id, id::text)" in sql, \
+        "ORDER BY must lead with the same COALESCE expression as DISTINCT ON"
+    assert "(status = 'requested')" in recorder["sql"], \
+        "ORDER BY must include (status = 'requested') to prefer result row over stub"
+
+
+def _null_request_id_row(pk, *, event_type="reauth.review_commit", status="success"):
+    """Simulates a NULL-request_id event (reauth.*, lifecycle, job.*).
+
+    These rows are NOT part of the MCP envelope call+result pair — they have no
+    request_id and must never be collapsed with each other even when cited together.
+    """
+    return (
+        pk, event_type, "user", "portal_reauth", status,
+        f"reauth event {pk}", None, None,   # request_id = None
+        datetime(2026, 6, 23, tzinfo=timezone.utc),
+        {"examiner": "hermes", "action": "review_commit"},
+    )
+
+
+def test_two_distinct_null_request_id_rows_both_returned():
+    """Regression: two reauth.review_commit events with distinct PKs and
+    request_id=None must BOTH be returned when cited together.
+
+    Before the NULL-safe fix (DISTINCT ON request_id), both rows had NULL
+    request_id so Postgres collapsed them into one — the second citation
+    silently resolved to nothing. DISTINCT ON (coalesce(request_id, id::text))
+    gives each NULL-request_id row its own unique dedup key (its PK uuid)."""
+    recorder: dict = {}
+    pk_a = "11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    pk_b = "22222222-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    rows = [
+        _null_request_id_row(pk_a),
+        _null_request_id_row(pk_b),
+    ]
+    svc = _service(rows, recorder)
+    # Cite both PKs — e.g. two reauth_audit_event_ids on a finding.
+    out = svc.audit_events("case-A", [pk_a, pk_b])
+    returned_ids = {r["id"] for r in out}
+    assert pk_a in returned_ids, \
+        f"first NULL-request_id row {pk_a!r} was collapsed/dropped"
+    assert pk_b in returned_ids, \
+        f"second NULL-request_id row {pk_b!r} was collapsed/dropped"
+    assert len(out) == 2, \
+        f"expected 2 rows for two distinct NULL-request_id citations, got {len(out)}"

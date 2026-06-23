@@ -1667,14 +1667,18 @@ class InvestigationService(_BasePortalDbService):
         #
         # Fix: dedupe by request_id (the stable identifier linking the pair),
         # preferring the result row (status != 'requested') over the call stub.
-        # DISTINCT ON (request_id) ORDER BY request_id, (status = 'requested')
-        # keeps the result row when both share a request_id, and falls through
-        # to the call row only when no result row exists yet.
+        # NULL-safe: rows with NULL request_id (reauth.*, lifecycle, job.* events)
+        # must NOT be collapsed — each has a unique PK and may independently be
+        # cited as a provenance reference (e.g. reauth_audit_event_id).
+        # COALESCE(request_id, id::text) gives every NULL-request_id row its own
+        # unique dedup key (its PK uuid) while request_id-bearing envelope pairs
+        # still collapse to one row.  DISTINCT ON expr MUST match the leading
+        # ORDER BY expr exactly — both use the same COALESCE expression.
         #
         # Note: literal '?' is safe here — psycopg3 only treats %s/%()s as
         # placeholders (qmark-paramstyle drivers would misparse this).
         sql = (
-            "select distinct on (request_id) "
+            "select distinct on (coalesce(request_id, id::text)) "
             "id::text, event_type, actor_type, source, status, summary, "
             "request_id, job_id::text, created_at, details "
             "from app.audit_events "
@@ -1686,7 +1690,7 @@ class InvestigationService(_BasePortalDbService):
             "    or request_id = any(%s) "
             "    or details->>'audit_id' = any(%s)"
             ") "
-            "order by request_id, (status = 'requested'), created_at"
+            "order by coalesce(request_id, id::text), (status = 'requested'), created_at"
         )
         db_rows: list[dict[str, Any]] = []
         with self._connect() as conn:
