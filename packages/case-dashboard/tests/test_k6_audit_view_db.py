@@ -130,3 +130,156 @@ def test_agent_activity_no_active_case_returns_empty_without_db_read():
     assert resp.status_code == 200
     assert resp.json() == {"events": []}
     assert inv.activity_calls == []
+
+
+# ---------------------------------------------------------------------------
+# DB details projection: route must surface tool/result_summary/params from
+# nested details so AuditEntry.hasProvenance becomes true.
+# ---------------------------------------------------------------------------
+
+
+class FakeInvestigationDBWithDetails:
+    """Returns DB-shaped audit rows: provenance nested under details, nothing at top level."""
+
+    def list_findings(self, case_id):
+        return [
+            {
+                "id": "F-rc",
+                "status": "APPROVED",
+                "audit_ids": ["siftgateway-claud-20260622-036"],
+                "artifacts": [],
+            }
+        ]
+
+    def audit_events(self, case_id, audit_ids):
+        # Mirrors the real DB row shape: tool/result/detail nested under details.
+        return [
+            {
+                "id": "uuid-pk-001",
+                "audit_id": "siftgateway-claud-20260622-036",
+                "event_type": "mcp.tool.result",
+                "source": "gateway_mcp_envelope",
+                "status": "success",
+                "summary": "ok run_command",
+                "request_id": "req-1",
+                "job_id": None,
+                "created_at": "2026-06-22T10:00:00+00:00",
+                "details": {
+                    "tool": "run_command",
+                    "backend": "shell",
+                    "result_summary": {"success": True, "exit_code": 0},
+                    "detail": {"exit_code": 0, "provenance": {"job_id": "job-abc"}},
+                    "backend_audit_id": "siftgateway-claud-20260622-036",
+                    "audit_aliases": ["shell-claud-20260622-001"],
+                    "elapsed_ms": 120.5,
+                },
+            }
+        ]
+
+    def audit_events_recent(self, case_id, *, limit=30):
+        return []
+
+
+def test_audit_route_projects_tool_from_details():
+    """Route must lift details.tool to top-level so AuditEntry.hasProvenance is true."""
+    inv = FakeInvestigationDBWithDetails()
+    resp = _client(inv).get("/api/audit/F-rc")
+    assert resp.status_code == 200
+    events = resp.json()
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.get("tool") == "run_command"
+
+
+def test_audit_route_projects_result_summary_from_details():
+    """Route must lift details.result_summary to top-level."""
+    inv = FakeInvestigationDBWithDetails()
+    resp = _client(inv).get("/api/audit/F-rc")
+    ev = resp.json()[0]
+    assert ev.get("result_summary") == {"success": True, "exit_code": 0}
+
+
+def test_audit_route_projects_params_from_detail_block():
+    """Route must lift details.detail to top-level as params (exit_code / provenance)."""
+    inv = FakeInvestigationDBWithDetails()
+    resp = _client(inv).get("/api/audit/F-rc")
+    ev = resp.json()[0]
+    assert ev.get("params") == {"exit_code": 0, "provenance": {"job_id": "job-abc"}}
+
+
+def test_audit_route_keeps_details_intact_after_projection():
+    """Projection must not remove the details dict itself."""
+    inv = FakeInvestigationDBWithDetails()
+    resp = _client(inv).get("/api/audit/F-rc")
+    ev = resp.json()[0]
+    assert "details" in ev
+    assert ev["details"]["tool"] == "run_command"
+
+
+def test_audit_route_does_not_overwrite_existing_top_level_fields():
+    """If the reader already stamped a top-level tool field, it must not be clobbered."""
+
+    class FakeAlreadyLabeled:
+        def list_findings(self, case_id):
+            return [{"id": "F-x", "status": "APPROVED", "audit_ids": ["e1"], "artifacts": []}]
+
+        def audit_events(self, case_id, audit_ids):
+            return [
+                {
+                    "id": "e1",
+                    "audit_id": "e1",
+                    "event_type": "TOOL_CALL",
+                    "source": "core",
+                    "status": "success",
+                    "summary": "s",
+                    "request_id": None,
+                    "job_id": None,
+                    "created_at": "2026-06-22T10:00:00+00:00",
+                    # top-level tool already present — must survive
+                    "tool": "record_finding",
+                    "details": {"tool": "SHOULD_NOT_WIN"},
+                }
+            ]
+
+        def audit_events_recent(self, case_id, *, limit=30):
+            return []
+
+    inv = FakeAlreadyLabeled()
+    resp = _client(inv).get("/api/audit/F-x")
+    ev = resp.json()[0]
+    assert ev["tool"] == "record_finding"  # original preserved, not overwritten
+
+
+def test_audit_route_handles_null_details_gracefully():
+    """A row with details=None must not crash the projection loop."""
+
+    class FakeNullDetails:
+        def list_findings(self, case_id):
+            return [{"id": "F-nd", "status": "APPROVED", "audit_ids": ["e2"], "artifacts": []}]
+
+        def audit_events(self, case_id, audit_ids):
+            return [
+                {
+                    "id": "e2",
+                    "audit_id": "e2",
+                    "event_type": "TOOL_CALL",
+                    "source": "core",
+                    "status": "success",
+                    "summary": "s",
+                    "request_id": None,
+                    "job_id": None,
+                    "created_at": "2026-06-22T10:00:00+00:00",
+                    "details": None,
+                }
+            ]
+
+        def audit_events_recent(self, case_id, *, limit=30):
+            return []
+
+    inv = FakeNullDetails()
+    resp = _client(inv).get("/api/audit/F-nd")
+    assert resp.status_code == 200
+    ev = resp.json()[0]
+    # No crash; no spurious top-level fields from None details.
+    assert ev.get("tool") is None
+    assert ev.get("params") is None

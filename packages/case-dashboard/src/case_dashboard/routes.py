@@ -2571,6 +2571,22 @@ async def get_audit_for_finding(request: Request) -> JSONResponse:
         events = reader(case_id, sorted(audit_ids))
         for ev in events:
             ev["_backend"] = ev.get("source", "db")
+            # Project nested details fields up to the top-level shape the frontend
+            # AuditEntry reads (tool / result_summary / params).  The old file-mode
+            # JSONL reader returned those at the top level; DB rows nest them under
+            # details.  Guards are setdefault-style: never overwrite an existing
+            # top-level value, keep ev["details"] intact for any future consumers.
+            det = ev.get("details") or {}
+            if isinstance(det, dict):
+                if ev.get("tool") is None and det.get("tool") is not None:
+                    ev["tool"] = det["tool"]
+                if ev.get("result_summary") is None and det.get("result_summary") is not None:
+                    ev["result_summary"] = det["result_summary"]
+                # Surface the bounded tool detail (exit_code / provenance) so
+                # hasProvenance = Boolean(entry.params?.command || entry.tool ||
+                # entry.params || entry.result_summary) becomes true.
+                if ev.get("params") is None and det.get("detail") is not None:
+                    ev["params"] = det["detail"]
         return JSONResponse(events)
 
     case_dir = _resolve_case_dir()
