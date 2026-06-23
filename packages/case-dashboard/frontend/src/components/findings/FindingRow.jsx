@@ -60,14 +60,13 @@ export function Row({ finding, active, selected, selectMode, staged, onClick }) 
   // ATT&CK technique: first mitre_id if present
   const attId = finding.mitre_ids?.[0] ?? null
 
-  // host · confidence
-  const confNum = finding.confidence_score != null
-    ? Math.round(finding.confidence_score)
-    : sev === 'HIGH' ? 92 : sev === 'MEDIUM' ? 74 : sev === 'LOW' ? 48 : null
+  // host · confidence — categorical label, never a fabricated % (P35-11).
+  // The model reports High/Medium/Low; mapping that to "92%" invented precision.
+  const confLabel = sevMeta === SEV_FALLBACK ? null : sevMeta.label
 
-  const meta = finding.host && confNum != null
-    ? `${finding.host} · ${confNum}%`
-    : finding.host ?? (confNum != null ? `${confNum}%` : '')
+  const meta = finding.host && confLabel
+    ? `${finding.host} · ${confLabel}`
+    : finding.host ?? confLabel ?? ''
 
   return (
     <button

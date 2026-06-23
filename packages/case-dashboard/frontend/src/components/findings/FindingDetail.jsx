@@ -4,13 +4,11 @@ import { Check, Layers, Lock, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   confClass,
-  confidenceScore,
-  confidenceGrade,
   effectiveFinding,
   normStatus,
   statusMeta,
 } from '@/components/findings/findings-utils'
-import { ConfChip, HashChip, AttChip } from '@/components/findings/FindingDetailChips'
+import { ConfChip, HashChip, AttChip, MitreChips } from '@/components/findings/FindingDetailChips'
 import { AuditTrailPanel } from '@/components/findings/AuditTrailPanel'
 import { FieldSection } from '@/components/findings/FindingField'
 import { ObservationIcon, InterpretationIcon, CustodyIcon } from '@/components/findings/field-icons'
@@ -82,10 +80,7 @@ export function FindingDetail({
   // must be locked read-only there. Stage is independently restricted to drafts.
   const isTerminal = ['approved', 'rejected', 'committed', 'superseded'].includes(status)
 
-  const score = confidenceScore(eff)
-  const grade = confidenceGrade(score)
-
-  // First ATT&CK id
+  // First ATT&CK id (header glance chip); the full set renders in the body.
   const attId = eff.mitre_ids?.[0] ?? null
 
   // Evidence/sha from fixture fields
@@ -136,8 +131,8 @@ export function FindingDetail({
           {/* ATT&CK chip */}
           <AttChip attId={attId} />
 
-          {/* Confidence chip */}
-          <ConfChip score={score} grade={grade} />
+          {/* Confidence chip — categorical text (P35-11), no fabricated % */}
+          <ConfChip confidence={eff.confidence} />
 
           {/* Hash chip */}
           <HashChip evId={evId} sha={sha} />
@@ -211,6 +206,18 @@ export function FindingDetail({
           onSave={handleSave}
           modification={mods.confidence_justification}
         />
+
+        {/* MITRE ATT&CK — the FULL technique set (P35-12). The header glance
+            chip shows only the first; the mounted detail must list every id.
+            Renders nothing when the finding carries no techniques. */}
+        {eff.mitre_ids?.length > 0 && (
+          <div className="space-y-2">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              MITRE ATT&amp;CK
+            </span>
+            <MitreChips ids={eff.mitre_ids} />
+          </div>
+        )}
 
         {/* Audit-trail provenance (B4): surfaces the finding's audit_ids — the
             tool-call chain behind it. Only renders when audit_ids are present;

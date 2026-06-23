@@ -45,6 +45,10 @@ function ResultSummary({ summary }) {
 function AuditEntry({ eid, entry, open, onToggle }) {
   const backend = entry._backend || 'unknown'
   const isShell = backend.includes('exec') || (entry.mcp || '').includes('shell') || (entry.source || '').includes('shell')
+  // An unresolved audit id (getAudit resolved nothing → entry={}) carries no
+  // tool-call provenance. Without this guard the open panel renders an empty
+  // bordered box that looks broken (P35-10).
+  const hasProvenance = Boolean(entry.params?.command || entry.tool || entry.params || entry.result_summary)
   return (
     <div className="overflow-hidden rounded-md border border-border">
       <button
@@ -83,6 +87,9 @@ function AuditEntry({ eid, entry, open, onToggle }) {
               <span className="mb-1 block font-semibold text-muted-foreground">Result</span>
               <ResultSummary summary={entry.result_summary} />
             </div>
+          )}
+          {!hasProvenance && (
+            <p className="text-muted-foreground">No tool-call provenance recorded for this audit id.</p>
           )}
         </div>
       )}

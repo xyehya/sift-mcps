@@ -1,27 +1,28 @@
 // ─────────────────────────────────────────────────────────────────────────
-// FindingDetail header chips — confidence (colored dot + NN%), hash (jade seal
-// + EV-id), and ATT&CK technique. Static chrome (border/background/text) and
-// the graded confidence dot/score color both use literal token utility classes
-// (the grade object carries `dot`/`text` class strings — §5 CONF_CLASS pattern).
+// FindingDetail header chips — confidence (colored dot + categorical label),
+// hash (jade seal + EV-id), and ATT&CK technique. Static chrome
+// (border/background/text) and the confidence dot/label color use literal token
+// utility classes (the confClass bundle carries `bg`/`text` strings — §5
+// CONF_CLASS pattern).
 // ─────────────────────────────────────────────────────────────────────────
 
 import { cn } from '@/lib/utils'
+import { confClass } from '@/components/findings/findings-utils'
 
 const CHIP_BASE = 'mono inline-flex cursor-default items-center gap-1.5 rounded-[7px] border border-border-soft bg-bg-raised px-2 py-1 text-[11px] font-semibold'
 
-// ── Confidence chip (colored dot + NN%) ────────────────────────────────
+// ── Confidence chip (colored dot + categorical label) ───────────────────
+// P35-11: shows the model's CATEGORICAL confidence (High/Medium/Low) as text —
+// never a numeric % derived from CONF_SCORE, which fabricated precision the
+// model never reported. Color stays a token (category → CONF_CLASS), not raw.
 
-export function ConfChip({ score, grade }) {
-  if (score == null) return null
-  const title = `Model confidence · ${score}%`
-  // Graded color comes from literal token classes on the grade object; falls
-  // back to muted when the score is ungraded.
-  const dotCls = grade?.dot ?? 'bg-text-muted'
-  const textCls = grade?.text ?? 'text-text-muted'
+export function ConfChip({ confidence }) {
+  const meta = confClass(confidence)
+  if (!meta) return null
   return (
-    <span title={title} className={`${CHIP_BASE} text-text-muted`}>
-      <span aria-hidden className={cn('inline-block size-[7px] shrink-0 rounded-full', dotCls)} />
-      <span className={textCls}>{score}%</span>
+    <span title={`Model confidence · ${meta.label}`} className={`${CHIP_BASE} text-text-muted`}>
+      <span aria-hidden className={cn('inline-block size-[7px] shrink-0 rounded-full', meta.bg)} />
+      <span className={meta.text}>Confidence: {meta.label}</span>
     </span>
   )
 }
@@ -52,5 +53,22 @@ export function AttChip({ attId }) {
     <span className={`${CHIP_BASE} text-text-muted`}>
       ATT&amp;CK {attId}
     </span>
+  )
+}
+
+// ── MITRE ATT&CK chip row (ALL techniques) ─────────────────────────────
+// P35-12: the mounted detail must list EVERY technique id, not just the first.
+// Read-only, escaped text. Renders nothing when there are no techniques.
+
+export function MitreChips({ ids }) {
+  if (!ids?.length) return null
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {ids.map((id) => (
+        <span key={id} className={`${CHIP_BASE} text-text-muted`}>
+          ATT&amp;CK {id}
+        </span>
+      ))}
+    </div>
   )
 }
