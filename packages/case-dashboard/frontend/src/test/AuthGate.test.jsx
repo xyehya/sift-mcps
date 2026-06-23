@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 
 import { useStore } from '../store/useStore'
 import { ThemeProvider } from '../lib/theme'
@@ -15,6 +15,7 @@ vi.mock('../api/endpoints', async (importOriginal) => {
   return {
     ...actual,
     getMe: vi.fn(),
+    postSupabaseLogin: vi.fn(),
     getCase: empty,
     getCases: vi.fn().mockResolvedValue({ cases: [] }),
     getSummary: empty,
@@ -70,6 +71,25 @@ describe('auth gating', () => {
     expect(await screen.findByText('Protocol SIFT Gateway')).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: /primary/i })).toBeInTheDocument()
     // The principal is mirrored into the store for RBAC consumers.
+    await waitFor(() => expect(useStore.getState().user?.role).toBe('examiner'))
+  })
+
+  it('mirrors the PRINCIPAL (not the login envelope) into the store after a fresh login', async () => {
+    // Regression: /api/auth/login returns {ok, principal, must_reset} while
+    // getMe() returns the bare principal. RBAC reads user.role, so storing the
+    // envelope leaves role undefined → a freshly-logged-in examiner is stuck in
+    // VIEW ONLY until a page reload re-probes getMe.
+    endpoints.getMe.mockResolvedValue(null) // start unauthed → login screen
+    endpoints.postSupabaseLogin.mockResolvedValue({
+      ok: true,
+      principal: { examiner: 'alice', role: 'examiner' },
+      must_reset: false,
+    })
+    renderApp()
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'a@b.c' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+    // Must be the principal's role, not undefined (envelope).
     await waitFor(() => expect(useStore.getState().user?.role).toBe('examiner'))
   })
 })

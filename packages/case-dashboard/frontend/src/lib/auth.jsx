@@ -65,7 +65,11 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(
     (result) => {
-      applyUser(result)
+      // /api/auth/login returns an envelope {ok, principal, must_reset}, whereas
+      // getMe() returns the bare principal. RBAC reads user.role, so we must
+      // store the PRINCIPAL, not the envelope — otherwise a fresh login lands
+      // the user in VIEW ONLY (role undefined) until a reload re-probes getMe().
+      applyUser(result?.principal ?? result)
       setStatus('authed')
     },
     [applyUser],
