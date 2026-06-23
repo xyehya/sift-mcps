@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Layers, Lock, Pencil, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
+import { useDeltaRefetch } from '@/hooks/useDeltaRefetch'
 import { deleteDelta, postCommit } from '@/api/endpoints'
 import {
   Sheet,
@@ -42,12 +43,21 @@ export function CommitDrawer() {
     addToast: s.addToast,
   }))
 
+  const refetchDelta = useDeltaRefetch()
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
   const [success, setSuccess] = useState(false)
   const [holdPct, setHoldPct] = useState(0)
   const holdTimer = useRef(null)
   const holdRAF = useRef(null)
+
+  // B2: when the drawer opens, eagerly refetch /api/delta so the staged list
+  // reflects server truth (the agent may have mutated it since the last 15s
+  // poll) instead of whatever was last seen. Covers every open path (commit
+  // button, command palette) since it keys off the shared `open` flag.
+  useEffect(() => {
+    if (open) refetchDelta()
+  }, [open, refetchDelta])
 
   const findingById = useMemo(() => new Map(findings.map((f) => [f.id, f])), [findings])
   const canCommit = delta.length > 0 && password.length > 0
@@ -56,6 +66,7 @@ export function CommitDrawer() {
     try {
       await deleteDelta(id)
       setDelta(delta.filter((d) => d.id !== id))
+      refetchDelta() // B2: reconcile with server truth without waiting for the 15s poll
     } catch (ex) {
       addToast(ex.message, 'error')
     }
@@ -94,6 +105,7 @@ export function CommitDrawer() {
       setPassword('')
       await postCommit({ password: submitted })
       setDelta([])
+      refetchDelta() // B2: confirm the cleared delta against the server, not a 15s-stale view
       setSuccess(true)
       addToast('Changes committed successfully', 'success')
       setTimeout(() => {

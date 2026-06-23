@@ -4,6 +4,7 @@ import { ArrowUpCircle, Check, FileSearch, RefreshCw, X } from 'lucide-react'
 import { useStoreSlice } from '@/store/useStore'
 import { useAuth } from '@/lib/auth-context'
 import { navigateToTab } from '@/hooks/useHashRoute'
+import { useDeltaRefetch } from '@/hooks/useDeltaRefetch'
 import { postDelta } from '@/api/endpoints'
 import {
   CommandDialog,
@@ -50,6 +51,7 @@ export function CommandPalette() {
     addToast: s.addToast,
   }))
 
+  const refetchDelta = useDeltaRefetch()
   const [recentIds, setRecentIds] = useState([])
   const findingById = useMemo(() => new Map(findings.map((f) => [f.id, f])), [findings])
 
@@ -89,6 +91,7 @@ export function CommandPalette() {
       await postDelta({ items: newDelta })
       setDelta(newDelta)
       addToast(`${action === 'approve' ? 'Approved' : 'Rejected'} ${finding.id} — staged`, action === 'approve' ? 'success' : 'warn')
+      refetchDelta() // B2: reconcile badge with server truth without waiting for the 15s poll
     } catch (ex) {
       addToast(ex.message, 'error')
     }

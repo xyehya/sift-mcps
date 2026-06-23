@@ -4,6 +4,7 @@ import { CheckCheck, ListChecks } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { parseHashFilters } from '@/hooks/useHashRoute'
+import { useDeltaRefetch } from '@/hooks/useDeltaRefetch'
 import { postDelta, deleteDelta } from '@/api/endpoints'
 import {
   buildEditItem,
@@ -112,6 +113,7 @@ export function FindingsTab() {
     setCommitDrawerOpen: s.setCommitDrawerOpen,
   }))
 
+  const refetchDelta = useDeltaRefetch()
   const canReview = (user?.role || '').toLowerCase() === 'examiner'
   const [search, setSearch] = useState('')
   const [selectMode, setSelectMode] = useState(false)
@@ -160,11 +162,12 @@ export function FindingsTab() {
         await postDelta({ items: next })
         setDelta(next)
         addToast(`${VERB[action] ?? 'Staged'} ${findingId} — staged for commit`, TONE[action] ?? 'info')
+        refetchDelta() // B2: reconcile badge with server truth without waiting for the 15s poll
       } catch (ex) {
         addToast(ex.message, 'error')
       }
     },
-    [findingById, delta, setDelta, addToast],
+    [findingById, delta, setDelta, addToast, refetchDelta],
   )
 
   const unstage = useCallback(
@@ -173,11 +176,12 @@ export function FindingsTab() {
         await deleteDelta(findingId)
         setDelta(delta.filter((d) => d.id !== findingId))
         addToast(`Unstaged ${findingId}`, 'info')
+        refetchDelta() // B2: reconcile badge with server truth without waiting for the 15s poll
       } catch (ex) {
         addToast(ex.message, 'error')
       }
     },
-    [delta, setDelta, addToast],
+    [delta, setDelta, addToast, refetchDelta],
   )
 
   const editField = useCallback(
@@ -187,11 +191,12 @@ export function FindingsTab() {
         await postDelta({ items: next })
         setDelta(next)
         addToast(`Updated ${field} (staged)`, 'success')
+        refetchDelta() // B2: reconcile badge with server truth without waiting for the 15s poll
       } catch (ex) {
         addToast(ex.message, 'error')
       }
     },
-    [delta, deltaById, setDelta, addToast],
+    [delta, deltaById, setDelta, addToast, refetchDelta],
   )
 
   async function batch(action) {
