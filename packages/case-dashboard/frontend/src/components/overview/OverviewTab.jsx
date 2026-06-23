@@ -215,7 +215,7 @@ export function OverviewTab() {
                 <Section title="Finding velocity">
                   <VelocityCard findings={findings} loading={isLoading} />
                 </Section>
-                <Section title="Severity" contentClassName="flex-1">
+                <Section title="Confidence" contentClassName="flex-1">
                   <SeverityDistribution findings={findings} loading={isLoading} />
                 </Section>
               </div>

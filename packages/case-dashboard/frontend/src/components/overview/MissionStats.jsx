@@ -24,7 +24,7 @@ const ICONS = { archive: Archive, flame: Flame, crosshair: Crosshair, server: Se
 const TILE_TAB = { evidence: 'evidence', iocs: 'iocs', backends: 'backends' }
 const TILE_GOTO = {
   evidence: 'Evidence',
-  high: 'Findings (High severity)',
+  high: 'Findings (High confidence)',
   iocs: 'IOCs',
   backends: 'Backends',
 }

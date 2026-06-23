@@ -33,6 +33,17 @@ export function confClass(confidence) {
 }
 
 /**
+ * Display label for a finding's CATEGORICAL confidence (e.g. 'High'), or null.
+ * The model emits High/Medium/Low; the UI shows this text — never a numeric %
+ * derived from CONF_SCORE, which fabricates precision the model never reported
+ * (operator decision, P35-11). The numeric helpers below stay for the (unused)
+ * graded ring and remain pure, but no finding badge renders a % anymore.
+ */
+export function confidenceLabel(confidence) {
+  return confClass(confidence)?.label ?? null
+}
+
+/**
  * Representative numeric score per categorical confidence, used by the graded
  * confidence ring when a finding carries no explicit `confidence_score`. The
  * categorical label stays the source of truth; the score only grades the ring.
