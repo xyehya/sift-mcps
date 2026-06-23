@@ -179,15 +179,24 @@ def _extract_audit_id(result: list) -> str | None:
     return None
 
 
-def _collect_audit_ids_from_obj(obj: Any, out: list[str], budget: list[int]) -> None:
+# Maximum nesting depth explored by _collect_audit_ids_from_obj.  Prevents
+# pathologically deep responses (e.g. {"a":{"a":{…2000 deep…}}}) from
+# exhausting the Python call stack before the count budget is hit.
+_AUDIT_MAX_DEPTH = 64
+
+
+def _collect_audit_ids_from_obj(
+    obj: Any, out: list[str], budget: list[int], depth: int = 0
+) -> None:
     """Recursively collect values under ``audit_id``/``audit_ids`` keys.
 
     Conservative: only follows dict and list nodes; collects non-empty strings
     under keys whose name is exactly ``audit_id`` or ``audit_ids``.  Bounded by
-    ``budget[0]`` (item count) so the list never grows unbounded regardless of
-    response size.
+    ``budget[0]`` (item count) and ``depth`` (nesting level, capped at
+    ``_AUDIT_MAX_DEPTH``) so neither the output list nor the call stack can grow
+    unbounded regardless of response shape.
     """
-    if budget[0] <= 0:
+    if budget[0] <= 0 or depth > _AUDIT_MAX_DEPTH:
         return
     if isinstance(obj, dict):
         for key, val in obj.items():
@@ -204,12 +213,12 @@ def _collect_audit_ids_from_obj(obj: Any, out: list[str], budget: list[int]) -> 
                             budget[0] -= 1
             else:
                 # Recurse into nested dicts/lists (e.g. provenance, stages)
-                _collect_audit_ids_from_obj(val, out, budget)
+                _collect_audit_ids_from_obj(val, out, budget, depth + 1)
     elif isinstance(obj, (list, tuple)):
         for item in obj:
             if budget[0] <= 0:
                 break
-            _collect_audit_ids_from_obj(item, out, budget)
+            _collect_audit_ids_from_obj(item, out, budget, depth + 1)
 
 
 def _extract_all_audit_ids(result: list) -> list[str]:

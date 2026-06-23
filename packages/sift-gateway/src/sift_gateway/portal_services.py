@@ -1637,6 +1637,10 @@ class InvestigationService(_BasePortalDbService):
         requested id that belongs to another case is never surfaced here, even if
         that case's audit row carries a matching alias.  Rows that satisfy multiple
         predicates are de-duplicated by ``DISTINCT``.
+
+        Note: ``audit_aliases`` are response-asserted by the backend that ran the
+        tool — within-case corroboration is only as trustworthy as that backend.
+        Cross-case surfacing is structurally blocked by the ``case_id`` scope.
         """
         ids = [str(a) for a in (audit_ids or []) if str(a).strip()]
         if not ids:
@@ -1649,6 +1653,8 @@ class InvestigationService(_BasePortalDbService):
             "where case_id = %s and ("
             "    id::text = any(%s) "
             "    or details->>'backend_audit_id' = any(%s) "
+            # Note: literal '?' is safe here — psycopg3 only treats %s/%()s as
+            # placeholders (qmark-paramstyle drivers would misparse this).
             "    or details->'audit_aliases' ?| %s"
             ") "
             "order by id, created_at"

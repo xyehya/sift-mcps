@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from mcp.types import TextContent
 
-from sift_gateway.audit_helpers import _extract_all_audit_ids
+from sift_gateway.audit_helpers import _AUDIT_MAX_DEPTH, _collect_audit_ids_from_obj, _extract_all_audit_ids
 from sift_gateway.portal_services import InvestigationService
 
 
@@ -318,3 +318,31 @@ def test_extract_all_audit_ids_empty_on_non_json():
 
 def test_extract_all_audit_ids_empty_list_on_empty_result():
     assert _extract_all_audit_ids([]) == []
+
+
+def test_collect_audit_ids_depth_cap_returns_early_without_crash():
+    """A response nested far beyond _AUDIT_MAX_DEPTH must not recurse to Python's
+    stack limit — _collect_audit_ids_from_obj returns early at the cap."""
+    # Build a dict nested 2 * _AUDIT_MAX_DEPTH deep with an audit_id at the bottom.
+    depth = _AUDIT_MAX_DEPTH * 2
+    obj: Any = {"audit_id": "deep-id"}
+    for _ in range(depth):
+        obj = {"nested": obj}
+    out: list[str] = []
+    budget = [200]
+    # Must return without RecursionError and without finding the deeply-nested id.
+    _collect_audit_ids_from_obj(obj, out, budget)
+    assert "deep-id" not in out  # capped before reaching it
+
+
+def test_collect_audit_ids_depth_cap_does_not_block_shallow_ids():
+    """Ids within the depth cap are still collected normally."""
+    payload = {
+        "audit_id": "top-level",
+        "provenance": {"audit_id": "nested-1"},
+    }
+    out: list[str] = []
+    budget = [200]
+    _collect_audit_ids_from_obj(payload, out, budget)
+    assert "top-level" in out
+    assert "nested-1" in out

@@ -1012,7 +1012,11 @@ class AuditEnvelopeMiddleware(Middleware):
                 # Collect every audit-id string visible in this response so the
                 # read path can resolve finding.audit_ids (human/backend-scheme
                 # strings) against app.audit_events.details (alias set).
-                audit_aliases = _extract_all_audit_ids(result_content)
+                # Redact+bound consistently with result_summary and rc_detail so
+                # no secret embedded in an alias string lands raw in the audit row.
+                audit_aliases = redact_for_audit(
+                    _extract_all_audit_ids(result_content), case_dir=case_dir
+                )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "mcp_envelope: result detail extraction failed for %s: %s",
