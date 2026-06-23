@@ -109,13 +109,17 @@ function evidenceHealth(chainStatus) {
  * back to chain/findings/ioc slices. Returns presentation-ready rows with a
  * stable `key`, an icon key, a token tone class and a foot note.
  */
-export function missionTiles(portalState, { chainStatus, findings, iocs } = {}) {
+export function missionTiles(portalState, { chainStatus, findings, iocs, backends } = {}) {
   const evidence = evidenceHealth(chainStatus)
   const sev = portalState?.severity ?? highSeverity(findings)
   const io = portalState?.iocs ?? {}
   const iocTotal = io.total ?? (iocs ?? []).length
   const be = portalState?.backends ?? {}
-  const beUp = be.up ?? null
+  // P35-7: when portalState carries no backend up/total split, fall back to the
+  // /api/backends count (registered backends). Per-backend `online` is not
+  // exposed there, so we show the count without claiming an up/total health split.
+  const beCount = backends?.count ?? null
+  const beUp = be.up ?? beCount
   const beTotal = be.total ?? null
   const degraded = be.degraded ?? []
 

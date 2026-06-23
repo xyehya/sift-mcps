@@ -1,8 +1,10 @@
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Archive, Crosshair, Flame, Server } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
+import { getBackends } from '@/api/endpoints'
 import { navigateToTab, navigateToFindings } from '@/hooks/useHashRoute'
 import { useMotionVariants, useCountUp } from '@/lib/motion'
 import { missionTiles } from '@/lib/agent-state'
@@ -95,7 +97,19 @@ export function MissionStats() {
     setFindingsFilter: s.setFindingsFilter,
   }))
 
-  const tiles = missionTiles(portalState, { chainStatus, findings, iocs })
+  // P35-7: the registered-backend count isn't in portalState/poll, so fetch it
+  // once for the MCP-backends tile (read-only, no store key — same pattern as
+  // AuditTrailPanel's getAudit). Backends rarely change within a session.
+  const [backends, setBackends] = useState(null)
+  useEffect(() => {
+    let active = true
+    getBackends()
+      .then((d) => { if (active) setBackends(d) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
+
+  const tiles = missionTiles(portalState, { chainStatus, findings, iocs, backends })
 
   function open(tile) {
     if (tile.key === 'high') {

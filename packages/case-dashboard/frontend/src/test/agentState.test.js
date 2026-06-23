@@ -110,6 +110,14 @@ describe('missionTiles', () => {
     expect(byKey.iocs.value).toBe(2)
     expect(byKey.evidence.value).toBe('—')
   })
+
+  it('shows the MCP-backends count from /api/backends when portalState lacks it', () => {
+    const tiles = missionTiles(null, { backends: { count: 3 } })
+    const be = tiles.find((t) => t.key === 'backends')
+    expect(be.value).toBe(3)
+    expect(be.sub).toBe('') // no up/total split available — don't claim "/N up"
+    expect(be.foot).toMatch(/all online/)
+  })
 })
 
 describe('policyGates (HITL — exactly two triggers)', () => {
