@@ -97,7 +97,7 @@ export function missionTiles(portalState, { chainStatus, findings, iocs } = {}) 
     },
     {
       key: 'high',
-      label: 'High severity',
+      label: 'High confidence',
       icon: 'flame',
       tone: 'text-sev-high',
       value: sev.open ?? 0,

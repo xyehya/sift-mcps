@@ -47,7 +47,7 @@ export function SeverityDistribution({ findings, loading }) {
   }
 
   if (totalFindings === 0) {
-    return <p className="text-sm text-muted-foreground">No findings recorded yet — severity appears once findings exist.</p>
+    return <p className="text-sm text-muted-foreground">No findings recorded yet — confidence appears once findings exist.</p>
   }
 
   return (
@@ -64,13 +64,13 @@ export function SeverityDistribution({ findings, loading }) {
         </div>
       </div>
 
-      <ul className="flex flex-1 flex-col gap-1.5" aria-label="Severity distribution — select a tier to filter findings">
+      <ul className="flex flex-1 flex-col gap-1.5" aria-label="Confidence distribution — select a tier to filter findings">
         {rows.map((r) => (
           <li key={r.key} className="flex-1">
             <button
               type="button"
               onClick={() => open(r.key)}
-              aria-label={`${r.label}: ${r.count} finding${r.count === 1 ? '' : 's'}${r.awaiting ? `, ${r.awaiting} awaiting review` : ''}. Filter findings to ${r.label} severity.`}
+              aria-label={`${r.label}: ${r.count} finding${r.count === 1 ? '' : 's'}${r.awaiting ? `, ${r.awaiting} awaiting review` : ''}. Filter findings to ${r.label} confidence.`}
               className="flex h-full w-full flex-col justify-center gap-1 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <div className="flex items-center justify-between gap-2 text-xs">

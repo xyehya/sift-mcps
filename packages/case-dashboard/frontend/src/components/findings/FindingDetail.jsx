@@ -3,7 +3,6 @@ import { Check, Layers, Lock, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import {
-  confClass,
   effectiveFinding,
   normStatus,
   statusMeta,
@@ -72,7 +71,6 @@ export function FindingDetail({
   const eff = effectiveFinding(finding, stagedItem)
   const mods = stagedItem?.modifications ?? {}
 
-  const conf = confClass(eff.confidence)
   const status = normStatus(finding)
   const sMeta = statusMeta(status)
   // Once a finding is committed to the record it leaves the delta (stagedItem is
@@ -107,13 +105,6 @@ export function FindingDetail({
           <span className="font-display text-[20px] font-bold tracking-[-.2px] text-text-bright">
             {finding.id}
           </span>
-
-          {/* Severity chip */}
-          {conf && (
-            <Badge variant="outline" className={cn(conf.ring, conf.text, 'text-[11px]')}>
-              {conf.label}
-            </Badge>
-          )}
 
           {/* Status chip */}
           {stagedItem ? (

@@ -125,7 +125,7 @@ export function Row({ finding, active, selected, selectMode, staged, onClick }) 
 
       {/* Dual letter badges: severity over status */}
       <div className="flex shrink-0 flex-col items-center justify-center gap-1 pr-2.5">
-        <LetterBadge letter={sevMeta.letter} tone={sevMeta.badge} title={`${sevMeta.label} severity`} />
+        <LetterBadge letter={sevMeta.letter} tone={sevMeta.badge} title={`${sevMeta.label} confidence`} />
         <LetterBadge letter={stMeta.letter} tone={stMeta.badge} title={stMeta.label} />
       </div>
     </button>

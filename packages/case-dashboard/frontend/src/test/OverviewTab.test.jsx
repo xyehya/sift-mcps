@@ -69,14 +69,14 @@ describe('OverviewTab (handoff layout rebuild)', () => {
     expect(screen.queryByRole('button', { name: /Review & authorize/i })).not.toBeInTheDocument()
   })
 
-  it('renders the MissionStats KPI tiles (Evidence / High severity / IOCs / MCP backends)', () => {
+  it('renders the MissionStats KPI tiles (Evidence / High confidence / IOCs / MCP backends)', () => {
     renderOverview()
     expect(screen.getByText('Evidence')).toBeInTheDocument()
-    expect(screen.getByText('High severity')).toBeInTheDocument()
+    expect(screen.getByText('High confidence')).toBeInTheDocument()
     expect(screen.getByText('MCP backends')).toBeInTheDocument()
   })
 
-  it('renders the severity distribution rows (High/Med/Low)', () => {
+  it('renders the confidence distribution rows (High/Med/Low)', () => {
     renderOverview()
     // SeverityDistribution renders High / Medium / Low rows
     expect(screen.getByText('High')).toBeInTheDocument()

@@ -60,10 +60,10 @@ describe('Mission Control overview', () => {
     expect(screen.queryByRole('button', { name: /Review & authorize/i })).not.toBeInTheDocument()
   })
 
-  it('renders the mission KPI tiles (Evidence · High severity · IOCs · MCP backends)', () => {
+  it('renders the mission KPI tiles (Evidence · High confidence · IOCs · MCP backends)', () => {
     renderOverview()
     expect(screen.getByText('Evidence')).toBeInTheDocument()
-    expect(screen.getByText('High severity')).toBeInTheDocument()
+    expect(screen.getByText('High confidence')).toBeInTheDocument()
     expect(screen.getByText('MCP backends')).toBeInTheDocument()
     expect(screen.getByText(/degraded · yara/)).toBeInTheDocument()
   })

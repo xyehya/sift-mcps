@@ -93,7 +93,7 @@ function FilterPanel({ open, onClose, sevFilter, onSevFilter, stateFilter, onSta
       className="absolute left-2 right-2 top-full z-20 mt-1 rounded-[10px] border border-border-soft bg-bg-overlay/82 p-4 shadow-lg backdrop-blur-[16px] backdrop-saturate-[1.4] animate-[dropin_.22s_var(--ease-snap)_both]"
     >
       <div className="flex flex-col gap-4">
-        <Segmented label="Severity" options={SEV_OPTIONS} value={sevFilter} onChange={onSevFilter} />
+        <Segmented label="Confidence" options={SEV_OPTIONS} value={sevFilter} onChange={onSevFilter} />
         <Segmented label="State" options={STATE_OPTIONS} value={stateFilter} onChange={onStateFilter} />
         <Segmented label="Time" options={SORT_OPTIONS} value={sortFilter} onChange={onSortFilter} />
         {activeCount > 0 && (
