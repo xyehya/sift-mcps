@@ -138,8 +138,40 @@ def test_agent_activity_no_active_case_returns_empty_without_db_read():
 # ---------------------------------------------------------------------------
 
 
+def _db_row(audit_id, *, arguments=None, details=None):
+    """Build a DB-shaped audit row as the reader emits it (post-labeling/fan-out)."""
+    base_details = details or {
+        "tool": "run_command",
+        "backend": "shell",
+        "result_summary": {"success": True},
+        "detail": {"exit_code": 0, "provenance": {"job_id": "job-abc"}},
+        "backend_audit_id": audit_id,
+        "audit_aliases": ["shell-claud-20260622-001"],
+        "elapsed_ms": 120.5,
+    }
+    row = {
+        "id": "uuid-pk-001",
+        "audit_id": audit_id,
+        "event_type": "mcp.tool.result",
+        "source": "gateway_mcp_envelope",
+        "status": "success",
+        "summary": f"ok {base_details.get('tool', 'tool')}",
+        "request_id": "req-1",
+        "job_id": None,
+        "created_at": "2026-06-22T10:00:00+00:00",
+        "details": base_details,
+    }
+    if arguments is not None:
+        row["arguments"] = arguments
+    return row
+
+
 class FakeInvestigationDBWithDetails:
-    """Returns DB-shaped audit rows: provenance nested under details, nothing at top level."""
+    """Returns DB-shaped audit rows; optional arguments simulates the reader
+    having pre-attached them from the paired mcp.tool.call event."""
+
+    def __init__(self, *, arguments=None):
+        self._arguments = arguments
 
     def list_findings(self, case_id):
         return [
@@ -152,29 +184,7 @@ class FakeInvestigationDBWithDetails:
         ]
 
     def audit_events(self, case_id, audit_ids):
-        # Mirrors the real DB row shape: tool/result/detail nested under details.
-        return [
-            {
-                "id": "uuid-pk-001",
-                "audit_id": "siftgateway-claud-20260622-036",
-                "event_type": "mcp.tool.result",
-                "source": "gateway_mcp_envelope",
-                "status": "success",
-                "summary": "ok run_command",
-                "request_id": "req-1",
-                "job_id": None,
-                "created_at": "2026-06-22T10:00:00+00:00",
-                "details": {
-                    "tool": "run_command",
-                    "backend": "shell",
-                    "result_summary": {"success": True, "exit_code": 0},
-                    "detail": {"exit_code": 0, "provenance": {"job_id": "job-abc"}},
-                    "backend_audit_id": "siftgateway-claud-20260622-036",
-                    "audit_aliases": ["shell-claud-20260622-001"],
-                    "elapsed_ms": 120.5,
-                },
-            }
-        ]
+        return [_db_row("siftgateway-claud-20260622-036", arguments=self._arguments)]
 
     def audit_events_recent(self, case_id, *, limit=30):
         return []
@@ -185,26 +195,37 @@ def test_audit_route_projects_tool_from_details():
     inv = FakeInvestigationDBWithDetails()
     resp = _client(inv).get("/api/audit/F-rc")
     assert resp.status_code == 200
-    events = resp.json()
-    assert len(events) == 1
-    ev = events[0]
+    ev = resp.json()[0]
     assert ev.get("tool") == "run_command"
 
 
-def test_audit_route_projects_result_summary_from_details():
-    """Route must lift details.result_summary to top-level."""
-    inv = FakeInvestigationDBWithDetails()
+def test_audit_route_params_uses_arguments_when_present():
+    """When the reader attached arguments (real command), route uses them as params."""
+    args = {"command": "ls -la evidence", "purpose": "list files", "preview_lines": 20}
+    inv = FakeInvestigationDBWithDetails(arguments=args)
     resp = _client(inv).get("/api/audit/F-rc")
     ev = resp.json()[0]
-    assert ev.get("result_summary") == {"success": True, "exit_code": 0}
+    assert ev.get("params") == args
 
 
-def test_audit_route_projects_params_from_detail_block():
-    """Route must lift details.detail to top-level as params (exit_code / provenance)."""
-    inv = FakeInvestigationDBWithDetails()
+def test_audit_route_params_falls_back_to_detail_when_no_arguments():
+    """Without arguments, route falls back to details.detail so hasProvenance stays true."""
+    inv = FakeInvestigationDBWithDetails(arguments=None)
     resp = _client(inv).get("/api/audit/F-rc")
     ev = resp.json()[0]
+    # details.detail = {"exit_code": 0, "provenance": {"job_id": "job-abc"}}
     assert ev.get("params") == {"exit_code": 0, "provenance": {"job_id": "job-abc"}}
+
+
+def test_audit_route_result_summary_merges_exit_code_from_detail():
+    """result_summary should merge exit_code from details.detail."""
+    inv = FakeInvestigationDBWithDetails()
+    resp = _client(inv).get("/api/audit/F-rc")
+    ev = resp.json()[0]
+    rs = ev.get("result_summary") or {}
+    # details.result_summary = {"success": True}; details.detail.exit_code = 0
+    assert rs.get("success") is True
+    assert rs.get("exit_code") == 0
 
 
 def test_audit_route_keeps_details_intact_after_projection():
@@ -235,8 +256,7 @@ def test_audit_route_does_not_overwrite_existing_top_level_fields():
                     "request_id": None,
                     "job_id": None,
                     "created_at": "2026-06-22T10:00:00+00:00",
-                    # top-level tool already present — must survive
-                    "tool": "record_finding",
+                    "tool": "record_finding",  # already at top level — must survive
                     "details": {"tool": "SHOULD_NOT_WIN"},
                 }
             ]
@@ -247,7 +267,7 @@ def test_audit_route_does_not_overwrite_existing_top_level_fields():
     inv = FakeAlreadyLabeled()
     resp = _client(inv).get("/api/audit/F-x")
     ev = resp.json()[0]
-    assert ev["tool"] == "record_finding"  # original preserved, not overwritten
+    assert ev["tool"] == "record_finding"
 
 
 def test_audit_route_handles_null_details_gracefully():
@@ -280,6 +300,5 @@ def test_audit_route_handles_null_details_gracefully():
     resp = _client(inv).get("/api/audit/F-nd")
     assert resp.status_code == 200
     ev = resp.json()[0]
-    # No crash; no spurious top-level fields from None details.
     assert ev.get("tool") is None
     assert ev.get("params") is None

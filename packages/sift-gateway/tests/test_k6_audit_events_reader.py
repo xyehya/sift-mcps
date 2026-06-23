@@ -19,10 +19,11 @@ from sift_gateway.portal_services import InvestigationService
 
 
 class _FakeCursor:
-    def __init__(self, recorder, rows):
+    def __init__(self, recorder, rows, *, call_key="sql", description=None):
         self._recorder = recorder
         self._rows = rows
-        self.description = [
+        self._call_key = call_key
+        self.description = description or [
             ("id",), ("event_type",), ("actor_type",), ("source",), ("status",),
             ("summary",), ("request_id",), ("job_id",), ("created_at",), ("details",),
         ]
@@ -34,17 +35,30 @@ class _FakeCursor:
         return False
 
     def execute(self, sql, params):
-        self._recorder["sql"] = sql
-        self._recorder["params"] = params
+        # call_key is "sql" for the main query (back-compat: recorder["sql"],
+        # recorder["params"]) and "call_sql" for the paired-call fetch
+        # (recorder["call_sql"], recorder["call_params"]).
+        self._recorder[self._call_key] = sql
+        params_key = "params" if self._call_key == "sql" else "call_params"
+        self._recorder[params_key] = params
 
     def fetchall(self):
         return self._rows
 
 
 class _FakeConn:
-    def __init__(self, recorder, rows):
+    """Fake connection supporting two sequential cursor() calls.
+
+    First cursor() call → main result rows (the resolver query).
+    Second cursor() call → paired-call rows (the envelope_event_id batch fetch).
+    Extra cursor() calls return empty rows.
+    """
+
+    def __init__(self, recorder, rows, *, call_rows=None):
         self._recorder = recorder
         self._rows = rows
+        self._call_rows = call_rows or []  # rows for the paired-call fetch
+        self._cursor_count = 0
 
     def __enter__(self):
         return self
@@ -53,12 +67,17 @@ class _FakeConn:
         return False
 
     def cursor(self):
-        return _FakeCursor(self._recorder, self._rows)
+        self._cursor_count += 1
+        if self._cursor_count == 1:
+            # Main resolver query: recorder["sql"] + recorder["params"] (back-compat).
+            return _FakeCursor(self._recorder, self._rows, call_key="sql")
+        # Second cursor: paired-call batch fetch → recorder["call_sql"] + recorder["call_params"].
+        return _FakeCursor(self._recorder, self._call_rows, call_key="call_sql")
 
 
-def _service(rows, recorder):
+def _service(rows, recorder, *, call_rows=None):
     svc = InvestigationService("postgresql://fake")
-    svc._connect = lambda: _FakeConn(recorder, rows)  # type: ignore[assignment]
+    svc._connect = lambda: _FakeConn(recorder, rows, call_rows=call_rows)  # type: ignore[assignment]
     return svc
 
 
@@ -442,3 +461,78 @@ def test_audit_events_labels_preserve_other_columns():
     assert row["event_type"] == "TOOL_CALL"
     assert row["status"] == "success"
     assert row["created_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Paired-call fetch: reader attaches arguments from the envelope call event
+# ---------------------------------------------------------------------------
+
+
+def _result_row_with_envelope(pk, *, envelope_event_id, backend_audit_id=None):
+    """Result row that carries a details.envelope_event_id linking to its call event."""
+    return _row_with_details(
+        pk,
+        details={
+            "backend_audit_id": backend_audit_id or f"siftgateway-claud-{pk}",
+            "envelope_event_id": envelope_event_id,
+            "tool": "run_command",
+            "result_summary": {"success": True},
+        },
+    )
+
+
+def _call_row(call_id, arguments):
+    """Simulates the mcp.tool.call DB row returned by the paired-call fetch.
+
+    The paired-call cursor returns (id::text, details) tuples only.
+    """
+    return (call_id, {"arguments": arguments, "phase": "pre_dispatch"})
+
+
+def test_reader_attaches_arguments_from_paired_call_event():
+    """When a result row has details.envelope_event_id and the paired call event
+    exists in the DB, reader attaches its arguments as row['arguments']."""
+    recorder: dict = {}
+    result_rows = [_result_row_with_envelope("uuid-pk-r1", envelope_event_id="uuid-call-1")]
+    call_rows = [_call_row("uuid-call-1", {"command": "ls -la evidence", "purpose": "list files"})]
+    svc = _service(result_rows, recorder, call_rows=call_rows)
+    out = svc.audit_events("case-A", ["siftgateway-claud-uuid-pk-r1"])
+    assert len(out) == 1
+    assert out[0].get("arguments") == {"command": "ls -la evidence", "purpose": "list files"}
+
+
+def test_reader_paired_call_query_is_case_scoped():
+    """The paired-call batch query must be scoped to case_id (security invariant)."""
+    recorder: dict = {}
+    result_rows = [_result_row_with_envelope("uuid-pk-r2", envelope_event_id="uuid-call-2")]
+    call_rows = [_call_row("uuid-call-2", {"command": "fls -r image.E01"})]
+    svc = _service(result_rows, recorder, call_rows=call_rows)
+    svc.audit_events("case-B", ["siftgateway-claud-uuid-pk-r2"])
+    # The paired-call SQL must also be scoped to the case.
+    call_sql = recorder.get("call_sql", "")
+    assert "app.audit_events" in call_sql
+    assert "case_id = %s" in call_sql
+    call_params = recorder.get("call_params", ())
+    assert call_params[0] == "case-B"
+
+
+def test_reader_row_without_envelope_event_id_is_untouched():
+    """A row with no details.envelope_event_id gets no 'arguments' key attached."""
+    recorder: dict = {}
+    # Row has no envelope_event_id in details.
+    result_rows = [_row_with_details("uuid-pk-r3", details={"tool": "case_info"})]
+    svc = _service(result_rows, recorder)
+    out = svc.audit_events("case-A", ["uuid-pk-r3"])
+    assert len(out) == 1
+    assert "arguments" not in out[0]
+
+
+def test_reader_no_paired_call_rows_leaves_arguments_absent():
+    """If the paired-call fetch returns no matching rows, 'arguments' is not set."""
+    recorder: dict = {}
+    result_rows = [_result_row_with_envelope("uuid-pk-r4", envelope_event_id="uuid-call-missing")]
+    # call_rows is empty — the call event was not found.
+    svc = _service(result_rows, recorder, call_rows=[])
+    out = svc.audit_events("case-A", ["siftgateway-claud-uuid-pk-r4"])
+    assert len(out) == 1
+    assert "arguments" not in out[0]

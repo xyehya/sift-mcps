@@ -1674,6 +1674,39 @@ class InvestigationService(_BasePortalDbService):
                     row["created_at"] = _iso(row.get("created_at"))
                     db_rows.append(row)
 
+            # Batch-fetch the paired mcp.tool.call events so the panel can show
+            # the real tool arguments (command/purpose/etc.).  Each result row
+            # stamped by the gateway envelope carries details.envelope_event_id
+            # pointing to its pre-dispatch call record.  One query, case-scoped.
+            envelope_ids = [
+                str(row.get("details", {}).get("envelope_event_id") or "")
+                for row in db_rows
+                if isinstance(row.get("details"), dict)
+                and row["details"].get("envelope_event_id")
+            ]
+            call_args: dict[str, Any] = {}  # envelope_event_id → arguments dict
+            if envelope_ids:
+                call_sql = (
+                    "select id::text, details "
+                    "from app.audit_events "
+                    # SECURITY: case_id scope preserved — same invariant as above.
+                    "where case_id = %s and id::text = any(%s)"
+                )
+                with conn.cursor() as cur2:
+                    cur2.execute(call_sql, (case_id, envelope_ids))
+                    for call_id, call_details in cur2.fetchall():
+                        if isinstance(call_details, dict):
+                            args = call_details.get("arguments")
+                            if args is not None:
+                                call_args[call_id] = args
+
+        # Attach paired-call arguments onto each result row before fan-out.
+        for row in db_rows:
+            det = row.get("details") or {}
+            eid = det.get("envelope_event_id") if isinstance(det, dict) else None
+            if eid and eid in call_args:
+                row["arguments"] = call_args[eid]
+
         # Label each DB row with the requested human id(s) it satisfies so the
         # frontend (AuditTrailPanel) can group by audit_id.  The old file-mode
         # reader returned raw JSONL entries that carried audit_id = the human id;

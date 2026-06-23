@@ -2571,22 +2571,37 @@ async def get_audit_for_finding(request: Request) -> JSONResponse:
         events = reader(case_id, sorted(audit_ids))
         for ev in events:
             ev["_backend"] = ev.get("source", "db")
-            # Project nested details fields up to the top-level shape the frontend
-            # AuditEntry reads (tool / result_summary / params).  The old file-mode
-            # JSONL reader returned those at the top level; DB rows nest them under
-            # details.  Guards are setdefault-style: never overwrite an existing
-            # top-level value, keep ev["details"] intact for any future consumers.
+            # Project nested fields up to the top-level shape AuditEntry reads.
+            # Guards are setdefault-style: never overwrite existing top-level
+            # values; ev["details"] is kept intact for any future consumers.
             det = ev.get("details") or {}
             if isinstance(det, dict):
+                # Tool name — always project from details.tool.
                 if ev.get("tool") is None and det.get("tool") is not None:
                     ev["tool"] = det["tool"]
-                if ev.get("result_summary") is None and det.get("result_summary") is not None:
-                    ev["result_summary"] = det["result_summary"]
-                # Surface the bounded tool detail (exit_code / provenance) so
-                # hasProvenance = Boolean(entry.params?.command || entry.tool ||
-                # entry.params || entry.result_summary) becomes true.
-                if ev.get("params") is None and det.get("detail") is not None:
-                    ev["params"] = det["detail"]
+                # Params — prefer the real call arguments (command / purpose /
+                # preview_lines) fetched from the paired mcp.tool.call event and
+                # attached by the reader as ev["arguments"].  Fall back to
+                # details.detail (exit_code/provenance) only when absent so
+                # hasProvenance stays true even for non-envelope sources.
+                if ev.get("params") is None:
+                    args = ev.get("arguments")
+                    if args is not None:
+                        ev["params"] = args
+                    elif det.get("detail") is not None:
+                        ev["params"] = det["detail"]
+                # Result summary — start from details.result_summary then layer
+                # in exit_code (and output keys) from details.detail so the
+                # frontend ResultSummary can render "Exit: 0".
+                if ev.get("result_summary") is None:
+                    base: dict[str, Any] = dict(det.get("result_summary") or {})
+                    detail_block = det.get("detail")
+                    if isinstance(detail_block, dict):
+                        for key in ("exit_code", "output_file", "output_sha256", "stdout_head"):
+                            if key in detail_block and key not in base:
+                                base[key] = detail_block[key]
+                    if base:
+                        ev["result_summary"] = base
         return JSONResponse(events)
 
     case_dir = _resolve_case_dir()
