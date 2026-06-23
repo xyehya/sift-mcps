@@ -309,9 +309,15 @@ def _protected_write(path: Path, content: str) -> None:
 
 _ACTIVE_CASE_FILE = Path.home() / ".sift" / "active_case"
 
-# Audit ID format: prefix-examiner-YYYYMMDD-NNN (all lowercase alphanumeric + hyphens)
+# Audit ID format: prefix-examiner-YYYYMMDD-NNN (all lowercase alphanumeric + hyphens).
+# The prefix segment is ``[a-z][a-z0-9]*`` (must START with a letter — the
+# anti-injection guarantee — but may then carry digits). The opensearch ingest
+# scheme embeds the worker PID in the prefix, e.g.
+# ``opensearchingest1018805-sift-service-20260623-040``; a letters-only ``[a-z]+``
+# prefix wrongly rejected those, so a finding citing a real ingest id was denied
+# "no evidence trail" before the DB authority check ran (Gap B live-prove fix).
 _AUDIT_ID_PATTERN = re.compile(
-    r"^[a-z]+-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?-[0-9]{8}-[0-9]{3,}\Z"
+    r"^[a-z][a-z0-9]*-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?-[0-9]{8}-[0-9]{3,}\Z"
 )
 
 # Gateway canonical UUID: 8-4-4-4-12 hex (envelope_event_id assigned by AuditEnvelopeMiddleware).
