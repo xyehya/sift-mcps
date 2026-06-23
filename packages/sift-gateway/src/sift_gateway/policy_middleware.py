@@ -25,6 +25,7 @@ from sift_core.agent_tools import core_tool_names
 
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.audit_helpers import (
+    _extract_all_audit_ids,
     _extract_audit_id,
     _extract_run_command_detail,
     redact_for_audit,
@@ -996,6 +997,7 @@ class AuditEnvelopeMiddleware(Middleware):
             # redacted + bounded so no secret or host path lands in the row.
             result_content = list(result.content or []) if result is not None else []
             result_detail: dict[str, Any] = {}
+            audit_aliases: list[str] = []
             try:
                 summary = _summarize_audit_result(result_content)
                 if summary:
@@ -1007,6 +1009,10 @@ class AuditEnvelopeMiddleware(Middleware):
                 )
                 if rc_detail:
                     result_detail["detail"] = rc_detail
+                # Collect every audit-id string visible in this response so the
+                # read path can resolve finding.audit_ids (human/backend-scheme
+                # strings) against app.audit_events.details (alias set).
+                audit_aliases = _extract_all_audit_ids(result_content)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "mcp_envelope: result detail extraction failed for %s: %s",
@@ -1032,6 +1038,10 @@ class AuditEnvelopeMiddleware(Middleware):
                             "status": status,
                             "elapsed_ms": elapsed_ms,
                             "backend_audit_id": backend_audit_id,
+                            # audit_aliases: every audit-id string visible in this
+                            # response, for the portal read-path resolver.  Kept
+                            # alongside backend_audit_id (back-compat).
+                            "audit_aliases": audit_aliases,
                             "envelope_event_id": envelope_event_id,
                             "principal": effective_principal,
                             **result_detail,

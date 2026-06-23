@@ -1626,26 +1626,44 @@ class InvestigationService(_BasePortalDbService):
         tampering with or deleting the JSONL files cannot spoof, hide, or fabricate
         the audit trail shown for a finding. Scoped to ``case_id`` so a leaked
         event id from another case cannot be surfaced here.
+
+        Resolution order (any match returns the row once):
+        1. ``id::text = any(%s)`` — uuid PK match (legacy / direct references).
+        2. ``details->>'backend_audit_id' = any(%s)`` — gateway-stamped core-plane id.
+        3. ``details->'audit_aliases' ?| %s`` — any alias in the per-response set
+           stamped by the gateway envelope (sub-plane ids: shell exec, ingest, etc.).
+
+        SECURITY INVARIANT: every predicate is ANDed with ``case_id = %s`` so a
+        requested id that belongs to another case is never surfaced here, even if
+        that case's audit row carries a matching alias.  Rows that satisfy multiple
+        predicates are de-duplicated by ``DISTINCT``.
         """
         ids = [str(a) for a in (audit_ids or []) if str(a).strip()]
         if not ids:
             return []
         sql = (
-            "select id::text, event_type, actor_type, source, status, summary, "
+            "select distinct on (id) "
+            "id::text, event_type, actor_type, source, status, summary, "
             "request_id, job_id::text, created_at, details "
             "from app.audit_events "
-            "where case_id = %s and id::text = any(%s) "
-            "order by created_at"
+            "where case_id = %s and ("
+            "    id::text = any(%s) "
+            "    or details->>'backend_audit_id' = any(%s) "
+            "    or details->'audit_aliases' ?| %s"
+            ") "
+            "order by id, created_at"
         )
         rows: list[dict[str, Any]] = []
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, (case_id, ids))
+                cur.execute(sql, (case_id, ids, ids, ids))
                 cols = [d[0] for d in cur.description]
                 for record in cur.fetchall():
                     row = dict(zip(cols, record, strict=False))
                     row["created_at"] = _iso(row.get("created_at"))
                     rows.append(row)
+        # Re-sort by created_at after DISTINCT ON (id) collapses duplicates.
+        rows.sort(key=lambda r: r.get("created_at") or "")
         return rows
 
     def audit_events_recent(

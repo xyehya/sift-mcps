@@ -179,6 +179,69 @@ def _extract_audit_id(result: list) -> str | None:
     return None
 
 
+def _collect_audit_ids_from_obj(obj: Any, out: list[str], budget: list[int]) -> None:
+    """Recursively collect values under ``audit_id``/``audit_ids`` keys.
+
+    Conservative: only follows dict and list nodes; collects non-empty strings
+    under keys whose name is exactly ``audit_id`` or ``audit_ids``.  Bounded by
+    ``budget[0]`` (item count) so the list never grows unbounded regardless of
+    response size.
+    """
+    if budget[0] <= 0:
+        return
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            if key in ("audit_id", "audit_ids"):
+                if isinstance(val, str) and val.strip():
+                    out.append(val.strip())
+                    budget[0] -= 1
+                elif isinstance(val, (list, tuple)):
+                    for item in val:
+                        if budget[0] <= 0:
+                            break
+                        if isinstance(item, str) and item.strip():
+                            out.append(item.strip())
+                            budget[0] -= 1
+            else:
+                # Recurse into nested dicts/lists (e.g. provenance, stages)
+                _collect_audit_ids_from_obj(val, out, budget)
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            if budget[0] <= 0:
+                break
+            _collect_audit_ids_from_obj(item, out, budget)
+
+
+def _extract_all_audit_ids(result: list) -> list[str]:
+    """Return every audit-id string visible in *result* content, deduped.
+
+    Collects values found under ``audit_id`` or ``audit_ids`` keys anywhere in
+    the parsed JSON response (top-level, nested ``provenance``, ``stages``,
+    ingest provenance, etc.).  Only string values that appear under those exact
+    key names are gathered — no arbitrary strings.  The output list is bounded
+    by ``_AUDIT_MAX_ITEMS`` and deduplicated while preserving first-seen order.
+    """
+    seen: set[str] = set()
+    collected: list[str] = []
+    budget = [_AUDIT_MAX_ITEMS]
+    for item in result:
+        text = getattr(item, "text", None)
+        if not text:
+            continue
+        try:
+            data = json.loads(text)
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            continue
+        _collect_audit_ids_from_obj(data, collected, budget)
+    # Deduplicate preserving first-seen order.
+    out: list[str] = []
+    for aid in collected:
+        if aid not in seen:
+            seen.add(aid)
+            out.append(aid)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Audit-detail redaction + bounding (gateway-centric detail capture).
 #
