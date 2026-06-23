@@ -676,6 +676,43 @@ def _cap_guarded_result(
     if original_bytes <= max_bytes:
         return None
 
+    # §9.5 audit preservation: extract the native audit_id from the original
+    # result BEFORE replacing content/structured_content.  The capped structured
+    # payload will carry this id so the agent-visible audit_id survives capping.
+    # Fail-soft — any error just leaves native_audit_id as None.
+    native_audit_id: str | None = None
+    try:
+        for item in result.content or []:
+            if not isinstance(item, TextContent):
+                continue
+            raw = (item.text or "").strip()
+            # The preview may be truncated; try parsing up to the first valid
+            # JSON object boundary before the cap truncates it.
+            if raw.startswith("{"):
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        val = data.get("audit_id")
+                        if isinstance(val, str) and val.strip():
+                            native_audit_id = val.strip()
+                            break
+                except (json.JSONDecodeError, ValueError):
+                    pass
+        if native_audit_id is None:
+            sc = result.structured_content
+            if isinstance(sc, dict):
+                val = sc.get("audit_id")
+                if isinstance(val, str) and val.strip():
+                    native_audit_id = val.strip()
+        if native_audit_id is None:
+            mt = result.meta
+            if isinstance(mt, dict):
+                val = mt.get("audit_id")
+                if isinstance(val, str) and val.strip():
+                    native_audit_id = val.strip()
+    except Exception:
+        pass
+
     output_file: str | None = None
     if case_dir:
         output_file, sha = _spill_full_output(full_text, case_dir, tool_name)
@@ -722,7 +759,7 @@ def _cap_guarded_result(
         # Audit (operator-visible) keeps the absolute path for forensic recall.
         meta["output_file"] = output_file
 
-    result.structured_content = {
+    capped_payload: dict[str, Any] = {
         "_sift_output_capped": {
             "original_bytes": meta["original_bytes"],
             "returned_bytes": meta["returned_bytes"],
@@ -732,8 +769,18 @@ def _cap_guarded_result(
             **({"output_file": display_file} if display_file else {}),
         }
     }
+    # §9.5: preserve native audit_id in the capped structured payload so the
+    # agent-visible response still carries a citable id even when content is
+    # truncated and no longer valid JSON.  This is the only place the id can
+    # be saved — by the time AuditEnvelopeMiddleware runs its stamp pass, the
+    # original content has already been replaced by the preview+marker.
+    if native_audit_id:
+        capped_payload["audit_id"] = native_audit_id
+    result.structured_content = capped_payload
     result.meta = dict(result.meta or {})
-    result.meta["_sift_output_capped"] = result.structured_content["_sift_output_capped"]
+    result.meta["_sift_output_capped"] = capped_payload["_sift_output_capped"]
+    if native_audit_id:
+        result.meta["audit_id"] = native_audit_id
     meta["returned_bytes"] = len(_result_to_json_text(result).encode("utf-8"))
     return meta
 

@@ -35,6 +35,7 @@ from sift_gateway.policy_middleware import (
     _CORE_DURABLE_LANE_TOOLS,
     _use_gateway_active_case,
 )
+from sift_gateway.response_guard import guard_tool_result
 
 
 # ---------------------------------------------------------------------------
@@ -146,13 +147,26 @@ class TestUnifiedExtractorSingle:
         )
         assert _extract_audit_id_from_result(tr) == "siftgateway-hermes-20260623-001"
 
-    def test_structured_content(self):
-        """Opensearch-style after response-guard caps content: id in structured_content."""
+    def test_structured_content_after_real_cap(self):
+        """After ResponseGuard caps a large result, _cap_guarded_result preserves
+        the native audit_id in structured_content so the extractor can recover it.
+        Uses the real guard_tool_result path (not a fabricated shape)."""
+        native_id = "opensearch-hermes-20260623-001"
+        large_payload = {"audit_id": native_id, "hits": list(range(5000))}
         tr = ToolResult(
-            content=[TextContent(type="text", text="[OUTPUT CAPPED BY GATEWAY...]")],
-            structured_content={"audit_id": "opensearch-hermes-20260623-001", "_sift_output_capped": {}},
+            content=[TextContent(type="text", text=json.dumps(large_payload))]
         )
-        assert _extract_audit_id_from_result(tr) == "opensearch-hermes-20260623-001"
+        # Cap at 500 bytes — well below the full payload.
+        guarded, _findings, _meta = guard_tool_result(
+            tr, override_active=False, case_dir=None,
+            tool_name="opensearch_search", cap_bytes=500,
+        )
+        # After cap: content is truncated (preview+marker), structured_content is
+        # the _sift_output_capped envelope WITH the native audit_id preserved.
+        assert guarded.structured_content is not None
+        assert guarded.structured_content.get("audit_id") == native_id
+        # Extractor should still recover the id from structured_content.
+        assert _extract_audit_id_from_result(guarded) == native_id
 
     def test_meta_only(self):
         """Wintriage-style: audit_id in ToolResult.meta (ResultMeta field)."""
@@ -460,6 +474,44 @@ class TestResponseStamping:
         _run_envelope(mw, _ctx("kb_search_knowledge"), _next)
         result_row = next(c for c in db.calls if c.get("event_type") == "mcp.tool.result")
         assert result_row["details"]["backend_audit_id"] is not None
+
+    def test_capped_structured_content_gets_audit_id_stamped(self):
+        """After ResponseGuard caps a large response, AuditEnvelope stamps the
+        canonical audit_id into structured_content so MCP clients that render
+        structured_content over content still see the id.
+
+        Uses real guard_tool_result to produce the actual capped shape, then
+        runs the full AuditEnvelopeMiddleware stamp pass."""
+        mw, db = _make_mw()
+        native_id = "opensearch-hermes-20260623-999"
+        large_payload = {"audit_id": native_id, "hits": list(range(5000))}
+        large_text = json.dumps(large_payload)
+
+        async def _next(_ctx):
+            # Simulate ResponseGuard (inner middleware) capping the result.
+            raw = ToolResult(content=[TextContent(type="text", text=large_text)])
+            guarded, _findings, _cap_meta = guard_tool_result(
+                raw, override_active=False, case_dir=None,
+                tool_name="opensearch_search", cap_bytes=500,
+            )
+            return guarded
+
+        result = _run_envelope(mw, _ctx("opensearch_search"), _next)
+
+        # structured_content must carry audit_id after the envelope stamp.
+        assert isinstance(result.structured_content, dict), \
+            "structured_content should be a dict (capped envelope)"
+        assert "audit_id" in result.structured_content, \
+            "structured_content missing audit_id after envelope stamp"
+        # The native id is preserved (not the envelope backstop).
+        assert result.structured_content["audit_id"] == native_id, \
+            f"expected native id {native_id!r}, got {result.structured_content['audit_id']!r}"
+        # The canonical in the DB row matches too.
+        result_row = next(
+            (c for c in db.calls if c.get("event_type") == "mcp.tool.result"), None
+        )
+        assert result_row is not None
+        assert result_row["details"]["backend_audit_id"] == native_id
 
 
 # ---------------------------------------------------------------------------

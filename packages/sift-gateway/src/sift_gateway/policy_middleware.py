@@ -999,7 +999,16 @@ class AuditEnvelopeMiddleware(Middleware):
             backend_audit_id = canonical
             # §9.5 response stamping: inject canonical audit_id into the agent-visible
             # response so every tool call — core or add-on — carries a top-level
-            # audit_id.  Fully fail-soft: any error leaves result unchanged.
+            # audit_id.  Two planes are stamped in one pass so they stay consistent:
+            #   (a) content[0].text — JSON-parsed dict, audit_id injected if absent
+            #   (b) structured_content — dict, audit_id set when already a dict and
+            #       lacking the key (covers the output-capped case where content is a
+            #       truncated-preview string, not valid JSON, and structured_content
+            #       carries the _sift_output_capped envelope; the cap flow in
+            #       response_guard.py already preserves the native id inside the cap
+            #       envelope, but the stamp adds the canonical fallback so the key is
+            #       present even if the native id was not recoverable pre-cap)
+            # Fully fail-soft: any error leaves result unchanged.
             try:
                 content_list = list(result.content or [])
                 if content_list and isinstance(content_list[0], TextContent):
@@ -1025,6 +1034,11 @@ class AuditEnvelopeMiddleware(Middleware):
                 elif not content_list:
                     result.meta = dict(result.meta or {})
                     result.meta.setdefault("audit_id", canonical)
+                # (b) stamp structured_content so MCP clients that render it over
+                # content also see the audit_id (covers both the capped envelope
+                # and any add-on that populates structured_content directly).
+                if isinstance(result.structured_content, dict) and "audit_id" not in result.structured_content:
+                    result.structured_content["audit_id"] = canonical
             except Exception as stamp_exc:
                 logger.debug(
                     "mcp_envelope: response stamping failed for %s (non-fatal): %s",
