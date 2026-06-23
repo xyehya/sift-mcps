@@ -346,3 +346,99 @@ def test_collect_audit_ids_depth_cap_does_not_block_shallow_ids():
     _collect_audit_ids_from_obj(payload, out, budget)
     assert "top-level" in out
     assert "nested-1" in out
+
+
+# ---------------------------------------------------------------------------
+# audit_id labeling: each returned row carries the requested human id it matched
+# ---------------------------------------------------------------------------
+
+
+def _row_with_details(pk, *, details=None, created_at=None):
+    """Return a _FakeCursor row tuple, injecting a details dict."""
+    return (
+        pk, "TOOL_CALL", "agent", "gateway", "success",
+        "summary", "req-x", None,
+        created_at or datetime(2026, 6, 23, tzinfo=timezone.utc),
+        details or {},
+    )
+
+
+def test_audit_events_labels_row_with_uuid_id_when_matched_by_pk():
+    """When a requested id equals the row's uuid PK, audit_id = that id."""
+    recorder: dict = {}
+    rows = [_row_with_details("uuid-pk-aaa")]
+    svc = _service(rows, recorder)
+    out = svc.audit_events("case-A", ["uuid-pk-aaa"])
+    assert len(out) == 1
+    assert out[0]["audit_id"] == "uuid-pk-aaa"
+
+
+def test_audit_events_labels_row_with_backend_audit_id_match():
+    """When a requested id matches details->>'backend_audit_id', that id is the label."""
+    recorder: dict = {}
+    rows = [_row_with_details(
+        "uuid-pk-bbb",
+        details={"backend_audit_id": "siftgateway-claud-20260622-036"},
+    )]
+    svc = _service(rows, recorder)
+    out = svc.audit_events("case-A", ["siftgateway-claud-20260622-036"])
+    assert len(out) == 1
+    assert out[0]["audit_id"] == "siftgateway-claud-20260622-036"
+    assert out[0]["id"] == "uuid-pk-bbb"
+
+
+def test_audit_events_labels_row_with_alias_match():
+    """When a requested id is in audit_aliases, that id becomes the label."""
+    recorder: dict = {}
+    rows = [_row_with_details(
+        "uuid-pk-ccc",
+        details={
+            "backend_audit_id": "siftgateway-claud-20260622-001",
+            "audit_aliases": ["shell-claud-20260622-001", "opensearchingest951032-sift-service-20260618-035"],
+        },
+    )]
+    svc = _service(rows, recorder)
+    out = svc.audit_events("case-A", ["opensearchingest951032-sift-service-20260618-035"])
+    assert len(out) == 1
+    assert out[0]["audit_id"] == "opensearchingest951032-sift-service-20260618-035"
+    assert out[0]["id"] == "uuid-pk-ccc"
+
+
+def test_audit_events_one_row_matching_two_ids_emits_two_entries():
+    """A single DB row satisfying two requested ids → two returned entries."""
+    recorder: dict = {}
+    rows = [_row_with_details(
+        "uuid-pk-ddd",
+        details={
+            "backend_audit_id": "siftgateway-claud-20260622-999",
+            "audit_aliases": ["shell-claud-20260622-999"],
+        },
+    )]
+    svc = _service(rows, recorder)
+    out = svc.audit_events("case-A", [
+        "siftgateway-claud-20260622-999",
+        "shell-claud-20260622-999",
+    ])
+    assert len(out) == 2
+    labeled = {r["audit_id"] for r in out}
+    assert labeled == {"siftgateway-claud-20260622-999", "shell-claud-20260622-999"}
+    # Both copies refer to the same underlying DB row.
+    assert all(r["id"] == "uuid-pk-ddd" for r in out)
+
+
+def test_audit_events_labels_preserve_other_columns():
+    """The audit_id label is added alongside existing columns; none are lost."""
+    recorder: dict = {}
+    rows = [_row_with_details(
+        "uuid-pk-eee",
+        details={"backend_audit_id": "siftgateway-claud-20260623-001"},
+    )]
+    svc = _service(rows, recorder)
+    out = svc.audit_events("case-B", ["siftgateway-claud-20260623-001"])
+    assert len(out) == 1
+    row = out[0]
+    assert row["audit_id"] == "siftgateway-claud-20260623-001"
+    assert row["id"] == "uuid-pk-eee"
+    assert row["event_type"] == "TOOL_CALL"
+    assert row["status"] == "success"
+    assert row["created_at"] is not None

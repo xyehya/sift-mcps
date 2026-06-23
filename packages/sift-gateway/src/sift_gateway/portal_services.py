@@ -1636,7 +1636,12 @@ class InvestigationService(_BasePortalDbService):
         SECURITY INVARIANT: every predicate is ANDed with ``case_id = %s`` so a
         requested id that belongs to another case is never surfaced here, even if
         that case's audit row carries a matching alias.  Rows that satisfy multiple
-        predicates are de-duplicated by ``DISTINCT``.
+        predicates are de-duplicated by ``DISTINCT ON (id)`` in SQL.
+
+        Each returned row carries an ``audit_id`` field set to the requested
+        human/backend-scheme id it satisfied, mirroring the old file-mode JSONL
+        reader so the frontend can group results by ``audit_id``.  A single DB
+        row may appear more than once if it satisfies multiple requested ids.
 
         Note: ``audit_aliases`` are response-asserted by the backend that ran the
         tool — within-case corroboration is only as trustworthy as that backend.
@@ -1659,7 +1664,7 @@ class InvestigationService(_BasePortalDbService):
             ") "
             "order by id, created_at"
         )
-        rows: list[dict[str, Any]] = []
+        db_rows: list[dict[str, Any]] = []
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (case_id, ids, ids, ids))
@@ -1667,10 +1672,42 @@ class InvestigationService(_BasePortalDbService):
                 for record in cur.fetchall():
                     row = dict(zip(cols, record, strict=False))
                     row["created_at"] = _iso(row.get("created_at"))
-                    rows.append(row)
-        # Re-sort by created_at after DISTINCT ON (id) collapses duplicates.
-        rows.sort(key=lambda r: r.get("created_at") or "")
-        return rows
+                    db_rows.append(row)
+
+        # Label each DB row with the requested human id(s) it satisfies so the
+        # frontend (AuditTrailPanel) can group by audit_id.  The old file-mode
+        # reader returned raw JSONL entries that carried audit_id = the human id;
+        # this fan-out preserves that contract for DB-mode rows.
+        #
+        # One DB row can back multiple requested ids (e.g. backend_audit_id matches
+        # one cited id while an alias matches a second) → emit one copy per matched
+        # id.  Defensive fallback: if no requested id maps to the row (impossible
+        # given the SQL matched it) emit a single row keyed by its uuid.
+        out: list[dict[str, Any]] = []
+        ids_set = set(ids)
+        for row in db_rows:
+            row_uuid = row.get("id", "")
+            details = row.get("details") or {}
+            bid = details.get("backend_audit_id")
+            aliases: set[str] = set(details.get("audit_aliases") or [])
+            matched = [
+                aid for aid in ids
+                if aid == row_uuid or aid == bid or aid in aliases
+            ]
+            if not matched:
+                # Defensive: SQL matched the row but we can't pin it to a
+                # specific requested id — emit once keyed by the uuid PK.
+                row_copy = dict(row)
+                row_copy["audit_id"] = row_uuid
+                out.append(row_copy)
+            else:
+                for aid in matched:
+                    row_copy = dict(row)
+                    row_copy["audit_id"] = aid
+                    out.append(row_copy)
+
+        out.sort(key=lambda r: r.get("created_at") or "")
+        return out
 
     def audit_events_recent(
         self, case_id: str, *, limit: int = 30
