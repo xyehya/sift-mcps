@@ -26,7 +26,9 @@ from sift_core.agent_tools import core_tool_names
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.audit_helpers import (
     _extract_all_audit_ids,
+    _extract_all_audit_ids_from_result,
     _extract_audit_id,
+    _extract_audit_id_from_result,
     _extract_run_command_detail,
     redact_for_audit,
 )
@@ -920,7 +922,11 @@ class AuditEnvelopeMiddleware(Middleware):
         case_dir = case.artifact_path if case is not None else None
 
         request_id = self._request_id()
-        envelope_event_id: str | None = None
+        # §9.3: always generate a local fallback so the canonical id is never
+        # None even when db_audit is absent (no-DSN or pre-dispatch DB miss).
+        # The DB-persisted uuid overwrites this when the pre-dispatch record
+        # succeeds; the fallback is used as-is otherwise.
+        envelope_event_id: str = str(uuid.uuid4())
 
         # Capture the tool's REDACTED arguments for the operator audit trail.
         # This applies uniformly to core and proxied add-on tools, so e.g.
@@ -980,11 +986,51 @@ class AuditEnvelopeMiddleware(Middleware):
         status = "ok"
         backend_audit_id: str | None = None
         result: ToolResult | None = None
+        native_ids: list[str] = []
         try:
             result = await call_next(context)
             if result.is_error:
                 status = "error"
-            backend_audit_id = _extract_audit_id(list(result.content or []))
+            # §9.3 (D1): unified extractor scans content, structured_content, and
+            # meta so proxied add-on ids (opensearch in structured_content after
+            # response-guard capping; ResultMeta-based add-ons in meta) are not lost.
+            native_ids = _extract_all_audit_ids_from_result(result)
+            canonical = native_ids[0] if native_ids else envelope_event_id
+            backend_audit_id = canonical
+            # §9.5 response stamping: inject canonical audit_id into the agent-visible
+            # response so every tool call — core or add-on — carries a top-level
+            # audit_id.  Fully fail-soft: any error leaves result unchanged.
+            try:
+                content_list = list(result.content or [])
+                if content_list and isinstance(content_list[0], TextContent):
+                    first_text = content_list[0].text or ""
+                    try:
+                        parsed = json.loads(first_text)
+                        if isinstance(parsed, dict) and "audit_id" not in parsed:
+                            parsed["audit_id"] = canonical
+                            result.content = [
+                                content_list[0].model_copy(
+                                    update={"text": json.dumps(parsed, ensure_ascii=False)}
+                                )
+                            ] + list(content_list[1:])
+                    except (json.JSONDecodeError, TypeError):
+                        # Root is not a JSON object — stash in meta as best-effort.
+                        result.meta = dict(result.meta or {})
+                        result.meta.setdefault("audit_id", canonical)
+                        logger.debug(
+                            "mcp_envelope: %s response root is not a JSON object; "
+                            "audit_id stored in meta only",
+                            name,
+                        )
+                elif not content_list:
+                    result.meta = dict(result.meta or {})
+                    result.meta.setdefault("audit_id", canonical)
+            except Exception as stamp_exc:
+                logger.debug(
+                    "mcp_envelope: response stamping failed for %s (non-fatal): %s",
+                    name,
+                    stamp_exc,
+                )
             return result
         except Exception:
             status = "error"
@@ -1009,14 +1055,16 @@ class AuditEnvelopeMiddleware(Middleware):
                 )
                 if rc_detail:
                     result_detail["detail"] = rc_detail
-                # Collect every audit-id string visible in this response so the
-                # read path can resolve finding.audit_ids (human/backend-scheme
-                # strings) against app.audit_events.details (alias set).
-                # Redact+bound consistently with result_summary and rc_detail so
-                # no secret embedded in an alias string lands raw in the audit row.
-                audit_aliases = redact_for_audit(
-                    _extract_all_audit_ids(result_content), case_dir=case_dir
+                # §9.3 aliases: all native ids + envelope uuid, deduped.  The
+                # envelope uuid ensures the call is always resolvable even when
+                # no backend id is present.  Redact+bound for audit safety.
+                raw_aliases: list[str] = list(
+                    dict.fromkeys(
+                        (native_ids if result is not None else [])
+                        + ([envelope_event_id] if envelope_event_id else [])
+                    )
                 )
+                audit_aliases = redact_for_audit(raw_aliases, case_dir=case_dir)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "mcp_envelope: result detail extraction failed for %s: %s",
@@ -1041,10 +1089,11 @@ class AuditEnvelopeMiddleware(Middleware):
                             "phase": "result",
                             "status": status,
                             "elapsed_ms": elapsed_ms,
+                            # canonical id (§9.3 D1): native backend id if present,
+                            # else envelope_event_id — always non-None and resolvable.
                             "backend_audit_id": backend_audit_id,
-                            # audit_aliases: every audit-id string visible in this
-                            # response, for the portal read-path resolver.  Kept
-                            # alongside backend_audit_id (back-compat).
+                            # audit_aliases: all native ids + envelope uuid, so the
+                            # resolver can match any id the agent may have cited.
                             "audit_aliases": audit_aliases,
                             "envelope_event_id": envelope_event_id,
                             "principal": effective_principal,
@@ -1100,10 +1149,21 @@ class AuditEnvelopeMiddleware(Middleware):
         return not _tool_read_only(self.gateway, name)
 
     def _backend_name(self, tool_name: str) -> str:
-        if tool_name in core_tool_names() or tool_name == "capability_guide":
+        if (
+            tool_name in core_tool_names()
+            or tool_name == "capability_guide"
+            # §9.7: durable-lane tools are gateway-embedded core tools; they are
+            # NOT registered as add-on backends so _tool_map misses them and they
+            # fall through to "unknown".  Tag them sift-core explicitly.
+            or tool_name in _CORE_DURABLE_LANE_TOOLS
+        ):
             return "sift-core"
         return getattr(self.gateway, "_tool_map", {}).get(tool_name, "unknown")
 
+
+# §9.7 (backend-tagging fix): gateway-embedded durable-lane tools that are NOT
+# registered as add-on backends (so _tool_map misses them) but belong to sift-core.
+_CORE_DURABLE_LANE_TOOLS = frozenset({"run_command_job", "running_commands_status"})
 
 _OPENSEARCH_JOB_DISPATCH_TOOLS = frozenset({"opensearch_ingest", "opensearch_enrich_intel"})
 

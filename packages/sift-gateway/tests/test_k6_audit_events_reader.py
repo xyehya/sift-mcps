@@ -222,13 +222,17 @@ def test_audit_events_sql_includes_backend_audit_id_and_aliases_predicates():
 
 
 def test_audit_events_all_three_params_carry_same_ids():
-    """The ids list is passed to all three match slots so every path is tried."""
+    """The ids list is passed to all six match slots (§9.6 superset resolver)."""
     recorder: dict = {}
     svc = _service([], recorder)
     ids = ["siftgateway-claud-20260622-036", "shell-claud-20260622-001"]
     svc.audit_events("case-A", ids)
-    # params: (case_id, ids, ids, ids)
-    assert recorder["params"] == ("case-A", ids, ids, ids)
+    # params: (case_id, ids × 6 predicates)
+    # [0]=case_id [1]=id::text [2]=backend_audit_id [3]=audit_aliases
+    # [4]=envelope_event_id [5]=request_id [6]=audit_id
+    assert recorder["params"][0] == "case-A"
+    for i in range(1, 7):
+        assert recorder["params"][i] == ids, f"param[{i}] should be ids"
 
 
 def test_audit_events_resolves_row_when_backend_audit_id_matches():
@@ -238,10 +242,9 @@ def test_audit_events_resolves_row_when_backend_audit_id_matches():
     rows = [_row("uuid-pk-001")]
     svc = _service(rows, recorder)
     out = svc.audit_events("case-A", ["siftgateway-claud-20260622-036"])
-    # The id list is forwarded to all three predicates.
-    assert recorder["params"][1] == ["siftgateway-claud-20260622-036"]
-    assert recorder["params"][2] == ["siftgateway-claud-20260622-036"]
-    assert recorder["params"][3] == ["siftgateway-claud-20260622-036"]
+    # The id list is forwarded to all six predicates (params 1–6).
+    for i in range(1, 7):
+        assert recorder["params"][i] == ["siftgateway-claud-20260622-036"]
     # Row is returned (the fake cursor returns whatever the fake DB returns).
     assert out[0]["id"] == "uuid-pk-001"
 
@@ -253,7 +256,7 @@ def test_audit_events_resolves_row_when_audit_alias_matches():
     svc = _service(rows, recorder)
     out = svc.audit_events("case-B", ["opensearchingest951032-sift-service-20260618-035"])
     assert out[0]["id"] == "uuid-pk-002"
-    # aliases slot carries the requested id.
+    # aliases slot (param[3]) carries the requested id.
     assert "opensearchingest951032-sift-service-20260618-035" in recorder["params"][3]
 
 

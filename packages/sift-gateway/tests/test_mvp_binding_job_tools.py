@@ -271,6 +271,9 @@ async def test_gateway_mcp_run_command_job_invokes_gateway_bound_handler(tmp_pat
         )
 
     body = _payload(result.content)
+    # §9.5: gateway now injects audit_id into every tool response; remove it
+    # before comparing so the assertion stays focused on job semantics.
+    body.pop("audit_id", None)
     assert body == {"job_id": "job-1", "status": "queued", "job_type": "run_command"}
     assert gateway.job_service.enqueued[0]["job_type"] == "run_command"
 

@@ -408,7 +408,71 @@ uv run --extra dev pytest packages/sift-gateway/tests/test_phase6.py \
 
 ---
 
-## 10. Summary Checklist for Conformant Manifests
+## 10. Audit & Provenance (§9.2 invariant)
+
+_Added 2026-06-23 (Unit 1 — systemic gateway audit contract)._
+
+### 10.1 The agent-facing invariant
+
+> **For every tool call, the response the agent receives carries a top-level
+> `audit_id`, and that exact id resolves in `app.audit_events` (case-scoped)
+> to the tool's call+result provenance (Tool + Params + Result).**
+
+This invariant is **gateway-enforced** and applies to every tool on every
+backend — core and add-on alike. It holds regardless of whether the backend
+itself emits an audit id.
+
+### 10.2 How it works
+
+The `AuditEnvelopeMiddleware` (`policy_middleware.py`) runs on every tool call.
+It:
+
+1. Mints two universal handles before dispatch: `envelope_event_id` (the
+   call-row PK) and `request_id` (links call↔result pair). Both are non-None
+   and 100% populated.
+2. After dispatch, runs the **unified extractor** (`_extract_audit_id_from_result`
+   / `_extract_all_audit_ids_from_result` in `audit_helpers.py`) which scans
+   the result in order: `content[].text` → `structured_content` → `meta`.
+3. Selects a **canonical id** (D1): the first native backend id found, or
+   `envelope_event_id` as backstop when the backend emits nothing.
+4. **Stamps** the canonical id into the first content item (if it parses as a
+   JSON object) so the agent always sees `response.audit_id`.
+5. Records `backend_audit_id = canonical` and `audit_aliases = [all native ids
+   + envelope_event_id]` in the `mcp.tool.result` row.
+
+### 10.3 Backend MAY (not MUST) emit an audit id
+
+A backend is **not required** to produce an `audit_id`. The gateway guarantees
+full provenance regardless. If a backend does surface an `audit_id` (in its
+response dict, `structured_content`, or `ToolResult.meta`), the gateway will:
+
+- Preserve it as the canonical id (preferred over the envelope uuid for
+  human-readability and cross-referencing the backend's own logs).
+- Include it in `audit_aliases` alongside the envelope id.
+
+Backends that currently emit native ids: `sift-core/run_command` (scheme
+`siftgateway-*`), `opensearch-mcp` (scheme `opensearch-<examiner>-<date>-NNN`),
+`windows-triage-mcp` (scheme via `ResultMeta.audit_id` in `ToolResult.meta`).
+Backends that emit no id (e.g. `forensic-rag-mcp`) get full provenance via the
+envelope backstop.
+
+### 10.4 Resolver
+
+The portal resolver (`InvestigationService.audit_events()`) accepts any of the
+following as a valid audit reference (all case-scoped):
+
+| Handle | Coverage |
+|---|---|
+| `id::text` (PK uuid) | Always — direct row match |
+| `details->>'backend_audit_id'` | Any tool whose result was recorded |
+| `details->'audit_aliases' ?|` | All native + envelope aliases |
+| `details->>'envelope_event_id'` | Every result row (100%) |
+| `request_id` | Every row, links call↔result pair |
+| `details->>'audit_id'` | Parity with `case_manager.py` |
+
+---
+
+## 11. Summary Checklist for Conformant Manifests
 
 A manifest is accepted when:
 

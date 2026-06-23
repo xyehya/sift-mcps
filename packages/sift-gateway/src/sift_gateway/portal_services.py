@@ -1650,6 +1650,18 @@ class InvestigationService(_BasePortalDbService):
         ids = [str(a) for a in (audit_ids or []) if str(a).strip()]
         if not ids:
             return []
+        # §9.6 superset resolver: match any id the agent could have cited so
+        # every gateway-issued audit handle resolves, regardless of backend.
+        # Predicates (all ANDed with case_id):
+        #   - PK uuid / backend_audit_id / audit_aliases  (existing)
+        #   - envelope_event_id — call-row uuid always present in result details
+        #   - request_id column  — 100% populated, links call↔result pair
+        #   - details->>'audit_id' — parity with case_manager.py:97
+        # §9.6 issue-D fix: prefer the richer result row over the pre-dispatch
+        # 'requested' row when both match the same event id. Achieved by ordering
+        # on (id, status = 'requested') so requested sorts last within each id.
+        # Note: literal '?' is safe here — psycopg3 only treats %s/%()s as
+        # placeholders (qmark-paramstyle drivers would misparse this).
         sql = (
             "select distinct on (id) "
             "id::text, event_type, actor_type, source, status, summary, "
@@ -1658,16 +1670,17 @@ class InvestigationService(_BasePortalDbService):
             "where case_id = %s and ("
             "    id::text = any(%s) "
             "    or details->>'backend_audit_id' = any(%s) "
-            # Note: literal '?' is safe here — psycopg3 only treats %s/%()s as
-            # placeholders (qmark-paramstyle drivers would misparse this).
-            "    or details->'audit_aliases' ?| %s"
+            "    or details->'audit_aliases' ?| %s "
+            "    or details->>'envelope_event_id' = any(%s) "
+            "    or request_id = any(%s) "
+            "    or details->>'audit_id' = any(%s)"
             ") "
-            "order by id, created_at"
+            "order by id, (status = 'requested'), created_at"
         )
         db_rows: list[dict[str, Any]] = []
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, (case_id, ids, ids, ids))
+                cur.execute(sql, (case_id, ids, ids, ids, ids, ids, ids))
                 cols = [d[0] for d in cur.description]
                 for record in cur.fetchall():
                     row = dict(zip(cols, record, strict=False))
@@ -1717,15 +1730,25 @@ class InvestigationService(_BasePortalDbService):
         # id.  Defensive fallback: if no requested id maps to the row (impossible
         # given the SQL matched it) emit a single row keyed by its uuid.
         out: list[dict[str, Any]] = []
-        ids_set = set(ids)
         for row in db_rows:
             row_uuid = row.get("id", "")
             details = row.get("details") or {}
+            row_req_id = str(row.get("request_id") or "")
             bid = details.get("backend_audit_id")
             aliases: set[str] = set(details.get("audit_aliases") or [])
+            envelope_eid = details.get("envelope_event_id") or ""
+            detail_audit_id = details.get("audit_id") or ""
+            # §9.6: match against every handle the superset SQL may have matched.
             matched = [
                 aid for aid in ids
-                if aid == row_uuid or aid == bid or aid in aliases
+                if (
+                    aid == row_uuid
+                    or aid == bid
+                    or aid in aliases
+                    or (envelope_eid and aid == envelope_eid)
+                    or (row_req_id and aid == row_req_id)
+                    or (detail_audit_id and aid == detail_audit_id)
+                )
             ]
             if not matched:
                 # Defensive: SQL matched the row but we can't pin it to a
