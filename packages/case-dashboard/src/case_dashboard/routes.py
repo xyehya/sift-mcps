@@ -2497,6 +2497,43 @@ async def get_evidence(request: Request) -> JSONResponse:
     return JSONResponse([])
 
 
+def _query_int_clamped(request: Request, name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = request.query_params.get(name)
+    try:
+        value = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(value, max_value))
+
+
+async def get_agent_activity(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
+    case_id = _active_case_id()
+    if not case_id or _INVESTIGATION_DB is None:
+        return JSONResponse({"events": []})
+
+    reader = getattr(_INVESTIGATION_DB, "audit_events_recent", None)
+    if not callable(reader):
+        return JSONResponse({"events": []})
+
+    limit = _query_int_clamped(request, "limit", 30, min_value=1, max_value=100)
+    try:
+        events = reader(case_id, limit=limit)
+    except Exception:
+        logger.exception("DB agent activity read failed")
+        return JSONResponse(
+            {"error": "Agent activity unavailable — check gateway logs"},
+            status_code=500,
+        )
+    return JSONResponse({"events": events if isinstance(events, list) else []})
+
+
 async def get_audit_for_finding(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -5756,6 +5793,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/findings/{id}", get_finding_by_id, methods=["GET"]),
         Route("/api/timeline", get_timeline, methods=["GET"]),
         Route("/api/evidence", get_evidence, methods=["GET"]),
+        Route("/api/agent/activity", get_agent_activity, methods=["GET"]),
         Route("/api/audit/{finding_id}", get_audit_for_finding, methods=["GET"]),
         Route("/api/delta", get_delta, methods=["GET"]),
         Route("/api/delta", post_delta, methods=["POST"]),

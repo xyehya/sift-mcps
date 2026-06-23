@@ -47,9 +47,7 @@ export function deriveAgentState(portalState, chainStatus, delta) {
     queued,
     headline,
     metrics: [
-      { key: 'records_parsed', value: m.records_parsed ?? 0, label: 'records parsed' },
       { key: 'findings_proposed', value: m.findings_proposed ?? 0, label: 'findings proposed' },
-      { key: 'sources_fused', value: m.sources_fused ?? 0, label: 'sources fused' },
     ],
   }
 }

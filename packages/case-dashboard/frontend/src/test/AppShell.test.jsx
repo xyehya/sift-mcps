@@ -29,6 +29,16 @@ vi.mock('../api/endpoints', async (importOriginal) => {
     getTodos: vi.fn().mockResolvedValue([]),
     getReports: vi.fn().mockResolvedValue([]),
     getPortalState: empty,
+    getAgentActivity: vi.fn().mockResolvedValue({
+      events: [
+        {
+          id: 'evt-polled',
+          ts: '2026-06-08T00:01:00+00:00',
+          kind: 'discovery',
+          text: 'Recorded finding - External RDP (HIGH)',
+        },
+      ],
+    }),
   }
 })
 
@@ -50,6 +60,7 @@ beforeEach(() => {
     commandPaletteOpen: false,
     findings: [],
     summary: null,
+    agentActivity: [],
     user: { examiner: 'test', role: 'examiner' },
   })
 })
@@ -71,6 +82,21 @@ function renderShell() {
 }
 
 describe('hash routing (URL-hash deep-linking)', () => {
+  it('polls agent activity into the store', async () => {
+    renderShell()
+
+    await waitFor(() =>
+      expect(useStore.getState().agentActivity).toEqual([
+        {
+          id: 'evt-polled',
+          ts: '2026-06-08T00:01:00+00:00',
+          kind: 'discovery',
+          text: 'Recorded finding - External RDP (HIGH)',
+        },
+      ]),
+    )
+  })
+
   it('parseHashTab maps a valid hash to a tab and rejects junk', () => {
     expect(parseHashTab('#/findings')).toBe('findings')
     expect(parseHashTab('#findings')).toBe('findings')

@@ -54,6 +54,157 @@ def _iso(value: Any) -> str | None:
     return str(value)
 
 
+def _compact_label(value: Any, *, limit: int = 90) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[: max(0, limit - 3)].rstrip()
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0].rstrip()
+    return f"{cut.rstrip(' ,.;:-')}..."
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            for key in ("message", "error", "detail", "title", "finding_id", "description"):
+                found = _first_text(value.get(key))
+                if found:
+                    return found
+            continue
+        if isinstance(value, list):
+            for item in value:
+                found = _first_text(item)
+                if found:
+                    return found
+            continue
+        text = _compact_label(value)
+        if text:
+            return text
+    return ""
+
+
+def _event_details(row: dict[str, Any]) -> dict[str, Any]:
+    details = row.get("details")
+    return details if isinstance(details, dict) else {}
+
+
+def _activity_args(row: dict[str, Any]) -> dict[str, Any]:
+    for details in (_event_details(row), row.get("_pre_details")):
+        if not isinstance(details, dict):
+            continue
+        args = details.get("arguments")
+        if isinstance(args, dict):
+            return args
+    return {}
+
+
+def _activity_tool(row: dict[str, Any]) -> str:
+    details = _event_details(row)
+    return _compact_label(details.get("tool") or row.get("event_type") or "activity", limit=64)
+
+
+def _activity_backend(row: dict[str, Any]) -> str:
+    details = _event_details(row)
+    return _compact_label(details.get("backend") or row.get("source") or "unknown", limit=64)
+
+
+def _activity_kind(tool: str, status: str) -> str:
+    if status == "failure":
+        return "alert"
+    if tool == "record_finding":
+        return "discovery"
+    if tool in {"record_timeline_event", "manage_todo"}:
+        return "io"
+    if tool.startswith("kb_"):
+        return "info"
+    if (
+        tool == "run_command"
+        or tool.startswith("opensearch_")
+        or tool.startswith("wintriage_")
+    ):
+        return "analysis"
+    return "info"
+
+
+def _activity_label(row: dict[str, Any]) -> str:
+    details = _event_details(row)
+    tool = _activity_tool(row)
+    status = str(row.get("status") or details.get("status") or "").lower()
+    summary = _compact_label(row.get("summary"), limit=90)
+    result = details.get("result_summary")
+    detail = details.get("detail")
+    args = _activity_args(row)
+
+    if status == "failure":
+        reason = _first_text(result, detail, summary)
+        return _compact_label(f"{tool} failed - {reason}" if reason else f"{tool} failed")
+
+    if tool == "record_finding":
+        title = _first_text(args.get("title"), result)
+        confidence = _first_text(args.get("confidence"))
+        suffix = f" ({confidence})" if confidence else ""
+        return _compact_label(f"Recorded finding - {title}{suffix}" if title else "Recorded finding")
+
+    if tool == "record_timeline_event":
+        desc = _first_text(args.get("description"), args.get("title"), result)
+        return _compact_label(f"Timeline event added - {desc}" if desc else "Timeline event added")
+
+    if tool == "manage_todo":
+        action = _first_text(args.get("action"), args.get("operation"))
+        return _compact_label(f"TODO {action}" if action else "TODO updated")
+
+    if tool == "run_command":
+        command = _first_text(args.get("command"), detail.get("command") if isinstance(detail, dict) else None)
+        exit_code = None
+        if isinstance(result, dict):
+            exit_code = result.get("exit_code")
+        if exit_code is None and isinstance(detail, dict):
+            exit_code = detail.get("exit_code")
+        exit_part = f" (exit {exit_code})" if exit_code is not None else ""
+        return _compact_label(f"Ran command - {command}{exit_part}" if command else f"Ran command{exit_part}")
+
+    if tool.startswith("opensearch_"):
+        op = tool.removeprefix("opensearch_").replace("_", " ")
+        count = None
+        if isinstance(result, dict):
+            for key in ("hits", "count", "total", "records"):
+                if result.get(key) is not None:
+                    count = result.get(key)
+                    break
+        count_part = f" - {count} hits" if count is not None else ""
+        return _compact_label(f"OpenSearch {op}{count_part}")
+
+    if tool.startswith("wintriage_"):
+        op = tool.removeprefix("wintriage_").replace("_", " ")
+        return _compact_label(f"Triage {op}")
+
+    if tool.startswith("kb_"):
+        op = tool.removeprefix("kb_").replace("_", " ")
+        return _compact_label(f"Knowledge base {op}")
+
+    return summary or _compact_label(tool)
+
+
+def _collapse_activity_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in rows:
+        key = str(row.get("request_id") or row.get("id") or "")
+        if not key:
+            continue
+        if key not in grouped:
+            grouped[key] = row
+            order.append(key)
+            continue
+        details = _event_details(row)
+        if details.get("phase") == "pre_dispatch" and details.get("arguments"):
+            grouped[key]["_pre_details"] = details
+    return [grouped[key] for key in order[:limit]]
+
+
 def _actor_columns(actor: Any) -> tuple[str, str | None, str | None, str | None]:
     if not isinstance(actor, dict):
         return "system", None, None, None
@@ -1492,10 +1643,62 @@ class InvestigationService(_BasePortalDbService):
                 cur.execute(sql, (case_id, ids))
                 cols = [d[0] for d in cur.description]
                 for record in cur.fetchall():
-                    row = dict(zip(cols, record))
+                    row = dict(zip(cols, record, strict=False))
                     row["created_at"] = _iso(row.get("created_at"))
                     rows.append(row)
         return rows
+
+    def audit_events_recent(
+        self, case_id: str, *, limit: int = 30
+    ) -> list[dict[str, Any]]:
+        """Return recent DB-authoritative tool activity for one active case.
+
+        This is the real-mode source for the portal Overview agent-activity
+        feed. It reads only ``app.audit_events`` scoped to the server-resolved
+        ``case_id`` and collapses the requested/result envelope pair by
+        request_id so the UI shows one row per tool call.
+        """
+        try:
+            safe_limit = int(limit or 30)
+        except (TypeError, ValueError):
+            safe_limit = 30
+        safe_limit = max(1, min(safe_limit, 100))
+        sql = (
+            "select id::text, event_type, actor_type, source, status, summary, "
+            "request_id, job_id::text, created_at, details "
+            "from app.audit_events "
+            "where case_id = %s "
+            "order by created_at desc "
+            "limit %s"
+        )
+        rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (case_id, safe_limit * 2))
+                cols = [d[0] for d in cur.description]
+                for record in cur.fetchall():
+                    row = dict(zip(cols, record, strict=False))
+                    row["created_at"] = _iso(row.get("created_at"))
+                    rows.append(row)
+
+        events: list[dict[str, Any]] = []
+        for row in _collapse_activity_rows(rows, safe_limit):
+            details = _event_details(row)
+            tool = _activity_tool(row)
+            status = str(row.get("status") or details.get("status") or "requested").lower()
+            events.append(
+                {
+                    "id": str(row.get("id") or ""),
+                    "ts": row.get("created_at"),
+                    "tool": tool,
+                    "backend": _activity_backend(row),
+                    "status": status,
+                    "principal": _compact_label(details.get("principal"), limit=80),
+                    "kind": _activity_kind(tool, status),
+                    "text": _activity_label(row),
+                }
+            )
+        return events
 
     def create_todo(
         self,

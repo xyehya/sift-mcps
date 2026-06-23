@@ -37,6 +37,7 @@ export const createTodo = (body) => apiPost('/api/todos', body)
 export const updateTodo = (id, body) => apiPatch(`/api/todos/${id}`, body)
 export const deleteTodo = (id) => apiDelete(`/api/todos/${id}`)
 export const getSummary = () => apiFetch('/api/summary')
+export const getAgentActivity = () => apiFetch('/api/agent/activity')
 export const getAudit = (findingId) => apiFetch(`/api/audit/${findingId}`)
 
 // --- Delta (review workflow) ---

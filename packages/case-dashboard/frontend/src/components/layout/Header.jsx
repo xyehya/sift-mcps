@@ -40,8 +40,8 @@ import { ActivateCaseDialog, CreateCaseDialog } from '@/components/layout/CaseDi
  */
 function processingTasks(portalState, chainStatus, delta, agent) {
   const tasks = []
-  const m = portalState?.agent?.metrics ?? {}
   const agentRunning = agent.key === 'working' || agent.key === 'awaiting-authorization'
+  const queued = agent.queued ?? 0
   tasks.push({
     key: 'agent',
     label: 'Autonomous investigation',
@@ -49,7 +49,7 @@ function processingTasks(portalState, chainStatus, delta, agent) {
     tone: agentRunning ? 'text-primary' : 'text-muted-foreground',
     dot: agentRunning ? 'bg-primary' : 'bg-muted-foreground',
     pulse: agent.key === 'working',
-    detail: `${(m.records_parsed ?? 0).toLocaleString()} records parsed`,
+    detail: queued > 0 ? `${queued} authorization${queued === 1 ? '' : 's'} pending` : agent.label,
   })
   const ev = portalState?.evidence
   if (ev?.total != null) {

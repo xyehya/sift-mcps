@@ -10,11 +10,9 @@ from __future__ import annotations
 
 import secrets
 
-from starlette.testclient import TestClient
-
-from case_dashboard.routes import create_dashboard_v2_app
-
 from _supabase_reauth_harness import ReauthFakeSupabaseAuth, set_operator_session
+from case_dashboard.routes import create_dashboard_v2_app
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 _CASE_ID = "22222222-2222-2222-2222-222222222222"
@@ -29,9 +27,15 @@ class FakeActiveCases:
         return self._Case()
 
 
+class FakeNoActiveCases:
+    def get_active_case(self, principal=None):
+        return None
+
+
 class FakeInvestigationDB:
     def __init__(self):
         self.audit_calls = []
+        self.activity_calls = []
 
     def list_findings(self, case_id):
         return [
@@ -52,12 +56,23 @@ class FakeInvestigationDB:
         }
         return [catalog[i] for i in audit_ids if i in catalog]
 
+    def audit_events_recent(self, case_id, *, limit=30):
+        self.activity_calls.append((case_id, limit))
+        return [
+            {
+                "id": "evt-activity",
+                "ts": "2026-06-08T00:01:00+00:00",
+                "kind": "discovery",
+                "text": "Recorded finding - External RDP (HIGH)",
+            }
+        ]
 
-def _client(inv):
+
+def _client(inv, *, active_case_service=None):
     # B-MVP-023: migrated to Supabase-envelope harness.
     app = create_dashboard_v2_app(
         session_secret=_SECRET,
-        active_case_service=FakeActiveCases(),
+        active_case_service=active_case_service or FakeActiveCases(),
         investigation_service=inv,
         supabase_auth=ReauthFakeSupabaseAuth(),
     )
@@ -90,3 +105,28 @@ def test_audit_view_ignores_tampered_findings_file(tmp_path, monkeypatch):
     assert resp.json() == []
     # No DB audit query made for an unknown finding.
     assert inv.audit_calls == []
+
+
+def test_agent_activity_reads_active_case_db_tail():
+    inv = FakeInvestigationDB()
+    resp = _client(inv).get("/api/agent/activity?limit=5")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "events": [
+            {
+                "id": "evt-activity",
+                "ts": "2026-06-08T00:01:00+00:00",
+                "kind": "discovery",
+                "text": "Recorded finding - External RDP (HIGH)",
+            }
+        ]
+    }
+    assert inv.activity_calls == [(_CASE_ID, 5)]
+
+
+def test_agent_activity_no_active_case_returns_empty_without_db_read():
+    inv = FakeInvestigationDB()
+    resp = _client(inv, active_case_service=FakeNoActiveCases()).get("/api/agent/activity?limit=bad")
+    assert resp.status_code == 200
+    assert resp.json() == {"events": []}
+    assert inv.activity_calls == []

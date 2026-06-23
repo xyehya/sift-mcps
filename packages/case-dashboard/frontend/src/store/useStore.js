@@ -68,6 +68,9 @@ const createInvestigationSlice = (set) => ({
   timeline: [],
   setTimeline: (timeline) => set({ timeline }),
 
+  agentActivity: [],
+  setAgentActivity: (agentActivity) => set({ agentActivity }),
+
   // Evidence chain seal/custody status.
   chainStatus: null,
   setChainStatus: (chainStatus) => set({ chainStatus }),

@@ -88,3 +88,79 @@ def test_audit_events_drops_blank_ids():
     svc = _service([], recorder)
     svc.audit_events("case-1", ["", "  ", "evt-9"])
     assert recorder["params"][1] == ["evt-9"]
+
+
+def test_audit_events_recent_collapses_tool_call_pairs():
+    recorder: dict = {}
+    rows = [
+        (
+            "evt-result",
+            "TOOL_CALL",
+            "agent",
+            "gateway",
+            "success",
+            "completed",
+            "req-1",
+            None,
+            datetime(2026, 6, 8, 0, 1, tzinfo=timezone.utc),
+            {"tool": "record_finding", "backend": "core", "principal": "agent"},
+        ),
+        (
+            "evt-request",
+            "TOOL_CALL",
+            "agent",
+            "gateway",
+            "requested",
+            "requested",
+            "req-1",
+            None,
+            datetime(2026, 6, 8, 0, 0, tzinfo=timezone.utc),
+            {
+                "phase": "pre_dispatch",
+                "tool": "record_finding",
+                "arguments": {"title": "External RDP", "confidence": "HIGH"},
+            },
+        ),
+    ]
+    svc = _service(rows, recorder)
+    out = svc.audit_events_recent("case-1", limit=5)
+
+    assert "app.audit_events" in recorder["sql"]
+    assert "case_id = %s" in recorder["sql"]
+    assert recorder["params"] == ("case-1", 10)
+    assert out == [
+        {
+            "id": "evt-result",
+            "ts": "2026-06-08T00:01:00+00:00",
+            "tool": "record_finding",
+            "backend": "core",
+            "status": "success",
+            "principal": "agent",
+            "kind": "discovery",
+            "text": "Recorded finding - External RDP (HIGH)",
+        }
+    ]
+
+
+def test_audit_events_recent_maps_failures_and_defaults_bad_limit():
+    recorder: dict = {}
+    rows = [
+        (
+            "evt-fail",
+            "TOOL_CALL",
+            "agent",
+            "gateway",
+            "failure",
+            "failed",
+            "req-2",
+            None,
+            datetime(2026, 6, 8, 0, 2, tzinfo=timezone.utc),
+            {"tool": "run_command", "backend": "shell", "detail": {"message": "policy denied"}},
+        )
+    ]
+    svc = _service(rows, recorder)
+    out = svc.audit_events_recent("case-1", limit="not-a-number")  # type: ignore[arg-type]
+
+    assert recorder["params"] == ("case-1", 60)
+    assert out[0]["kind"] == "alert"
+    assert out[0]["text"] == "run_command failed - policy denied"

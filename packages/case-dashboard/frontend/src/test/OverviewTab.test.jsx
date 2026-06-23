@@ -23,6 +23,14 @@ beforeEach(() => {
     chainStatus: { status: 'ok', manifest_version: 2, write_protected: true },
     isLoading: false,
     findingsFilter: 'pending',
+    agentActivity: [
+      {
+        id: 'evt-activity',
+        ts: '2026-06-08T00:01:00+00:00',
+        kind: 'discovery',
+        text: 'Recorded finding - External RDP (HIGH)',
+      },
+    ],
     portalState: {
       agent: { state: 'working', metrics: { records_parsed: 412309, findings_proposed: 2, sources_fused: 1 } },
       evidence: { sealed: 12, total: 14 },
@@ -99,6 +107,10 @@ describe('OverviewTab (handoff layout rebuild)', () => {
   it('renders the Agent activity feed panel', () => {
     renderOverview()
     expect(screen.getByText('Agent activity')).toBeInTheDocument()
+    expect(screen.getByText('Recorded finding - External RDP (HIGH)')).toBeInTheDocument()
+    expect(screen.queryByText(/185\.66\.0\.12/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/records parsed/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/sources fused/i)).not.toBeInTheDocument()
   })
 
   it('shows the no-case empty state when there is no active case', () => {

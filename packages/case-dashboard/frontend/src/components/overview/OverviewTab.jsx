@@ -97,11 +97,14 @@ export function OverviewTab() {
   }))
 
   const operator = user?.examiner || user?.email || 'E.VARGA'
-  const operatorLabel = `${operator.toUpperCase()} · 185.66.0.12`
+  const operatorLabel = operator.toUpperCase()
 
   // Case brief: nature tag from incident_type or nature field
   const caseNature =
     (activeCase?.incident_type ?? activeCase?.nature ?? '').toUpperCase()
+  const caseScope = activeCase?.affected_systems?.length > 0
+    ? activeCase.affected_systems.join(' · ')
+    : activeCase?.scope
 
   return (
     <div className="relative isolate flex min-h-full flex-col">
@@ -198,12 +201,9 @@ export function OverviewTab() {
 
                 <CardContent className="flex-1 overflow-y-auto p-4 pt-3">
                   {/* Scope line */}
-                  {(activeCase?.affected_systems?.length > 0 || activeCase?.scope) && (
+                  {caseScope && (
                     <p className="mono mb-3 text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
-                      Scope{' '}
-                      {activeCase.affected_systems?.join(' · ') ??
-                        activeCase.scope ??
-                        'WS-07 · DC-01 · FW-EDGE'}
+                      Scope {caseScope}
                     </p>
                   )}
                   <CaseContextCard activeCase={activeCase} />
