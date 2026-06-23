@@ -111,6 +111,20 @@ def _run_pipeline_job(job: ClaimedJob, ctx: JobContext, *, kind: str) -> JobResu
     # SIFT_CASE_DIR. Bind both so the worker child mounts/indexes the right case.
     prev_env = os.environ.get("SIFT_CASE_DIR")
     os.environ["SIFT_CASE_DIR"] = case_dir
+    # B-D1 + B-D2: bind the gateway-injected control-plane DSN and the case UUID
+    # into the subprocess env so the ingest_cli child can forward-write one
+    # app.audit_events row per artifact (Gap B). Both are read from the
+    # anti-spoofed spec_internal / job.case_id (never client-supplied); the
+    # child inherits them. Mirror the same save/set/finally-restore discipline
+    # as SIFT_CASE_DIR so the worker's own env is left untouched between jobs.
+    dsn = str(job.spec_internal.get("control_plane_dsn") or "").strip()
+    case_uuid = str(job.case_id or "").strip()
+    prev_dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN")
+    prev_case_uuid = os.environ.get("SIFT_CASE_UUID")
+    if dsn:
+        os.environ["SIFT_CONTROL_PLANE_DSN"] = dsn
+    if case_uuid:
+        os.environ["SIFT_CASE_UUID"] = case_uuid
     try:
         with use_active_case_context(context):
             launch = _launch(kind, spec, case_dir)
@@ -119,6 +133,14 @@ def _run_pipeline_job(job: ClaimedJob, ctx: JobContext, *, kind: str) -> JobResu
             os.environ.pop("SIFT_CASE_DIR", None)
         else:
             os.environ["SIFT_CASE_DIR"] = prev_env
+        if prev_dsn is None:
+            os.environ.pop("SIFT_CONTROL_PLANE_DSN", None)
+        else:
+            os.environ["SIFT_CONTROL_PLANE_DSN"] = prev_dsn
+        if prev_case_uuid is None:
+            os.environ.pop("SIFT_CASE_UUID", None)
+        else:
+            os.environ["SIFT_CASE_UUID"] = prev_case_uuid
 
     launch = launch if isinstance(launch, dict) else {"status": "unknown"}
 

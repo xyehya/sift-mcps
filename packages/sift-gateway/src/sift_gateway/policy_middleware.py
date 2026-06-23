@@ -1310,6 +1310,13 @@ class OpenSearchJobDispatchMiddleware(Middleware):
             "examiner": getattr(identity, "principal", None) or "agent",
             "tool": name,
         }
+        # B-D1: carry the control-plane DSN into the worker so the ingest
+        # subprocess can forward-write per-artifact provenance rows to
+        # app.audit_events (Gap B). spec_internal NEVER reaches the agent
+        # (the jobs view excludes it). Only inject when non-empty; never log it.
+        control_plane_dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN", "").strip()
+        if control_plane_dsn:
+            spec_internal["control_plane_dsn"] = control_plane_dsn
         job_service = self.gateway.job_service
         if job_service is None:  # pragma: no cover - guarded by on_call_tool
             raise RuntimeError("job service unavailable")

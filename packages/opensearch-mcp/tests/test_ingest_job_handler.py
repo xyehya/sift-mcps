@@ -109,6 +109,62 @@ def test_handler_passes_db_case_dir_to_entrypoint_and_blocks_until_complete(db, 
     assert rp["hosts_complete"] == 1
 
 
+def test_dsn_and_case_uuid_bound_into_subprocess_env_then_restored(db, monkeypatch):
+    """B-D1 worker side: the gateway-injected control_plane_dsn (in spec_internal)
+    and the case UUID (job.case_id) are exported into the env for the duration of
+    the launch — so the spawned ingest_cli child inherits them and can
+    forward-write provenance — and the worker's own env is restored afterward
+    (mirrors the SIFT_CASE_DIR save/finally-restore discipline)."""
+    import os
+
+    job = db.enqueue(
+        _Job(
+            "ingest",
+            case_id="uuid-rocba-2",
+            spec_public={"path": "evidence/x.e01", "format": "auto", "force": True},
+            spec_internal={
+                "case_dir": "/cases/case-rocba",
+                "case_key": "case-rocba",
+                "examiner": "agent",
+                "control_plane_dsn": "postgresql://svc:pw@db:5432/sift",
+            },
+        )
+    )
+
+    captured = {}
+
+    def fake_ingest(**kwargs):
+        # Snapshot the env exactly as the spawned child would inherit it.
+        captured["dsn"] = os.environ.get("SIFT_CONTROL_PLANE_DSN")
+        captured["case_uuid"] = os.environ.get("SIFT_CASE_UUID")
+        captured["case_dir"] = os.environ.get("SIFT_CASE_DIR")
+        return {"status": "started", "run_id": "run-1", "pid": 1}
+
+    monkeypatch.setattr("opensearch_mcp.server.opensearch_ingest", fake_ingest, raising=False)
+    monkeypatch.setattr(
+        "opensearch_mcp.ingest_status.read_active_ingests",
+        lambda: [{"run_id": "run-1", "status": "complete",
+                  "totals": {"indexed": 1}, "hosts": []}],
+        raising=False,
+    )
+    monkeypatch.setattr(ingest_job, "_POLL_SECONDS", 0)
+
+    monkeypatch.delenv("SIFT_CONTROL_PLANE_DSN", raising=False)
+    monkeypatch.delenv("SIFT_CASE_UUID", raising=False)
+
+    w = _worker(db, {"ingest": ingest_job.opensearch_ingest_job_handler}, worker_id="osw-1")
+    w.run_once(job_types=["ingest"])
+
+    # During the launch the child saw both the DSN and the case UUID.
+    assert captured["dsn"] == "postgresql://svc:pw@db:5432/sift"
+    assert captured["case_uuid"] == "uuid-rocba-2"
+    assert captured["case_dir"] == "/cases/case-rocba"
+    # After the launch the worker's own env is clean again (no leak between jobs).
+    assert os.environ.get("SIFT_CONTROL_PLANE_DSN") is None
+    assert os.environ.get("SIFT_CASE_UUID") is None
+    assert job.status == "succeeded"
+
+
 def test_progress_mirrored_into_job_steps_with_worker_label(db, monkeypatch):
     _enqueue_ingest(db)
     polls = iter(

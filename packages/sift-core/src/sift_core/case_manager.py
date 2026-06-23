@@ -31,6 +31,109 @@ logger = logging.getLogger(__name__)
 ReferenceBackendProvider = Any
 _reference_backend_provider: ReferenceBackendProvider | None = None
 
+# B-D3: bound length for a redacted supporting-command string stored in the
+# forward-written app.audit_events row. Agent-narrated commands can be long and
+# may carry sensitive tokens; bound hard and strip obvious secrets.
+_SHELL_AUDIT_FIELD_MAX = 500
+
+# Obvious secret-bearing fragments to scrub from an agent-narrated supporting
+# command before it lands in an audit row. Conservative, anchored patterns —
+# a token=value / Bearer xxx / password=... assignment, an http(s) URL with
+# embedded credentials, and long high-entropy base64-ish blobs. This is a
+# defense-in-depth scrub, not a parser; the value is also length-bounded.
+_SHELL_SECRET_PATTERNS = [
+    # Bearer <token> (run first: an Authorization header value is "Bearer xxx",
+    # which has internal whitespace the key=value rule below would not consume).
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]+"),
+    # URL with embedded credentials (scheme://user:pass@host)
+    re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]+:[^\s:/@]+@"),
+    # AWS-style access key id
+    re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{12,}\b"),
+    # key=value or key: value for sensitive key names (token, secret, password,
+    # passwd, pwd, api[_-]?key, apikey, dsn, authorization, auth, access[_-]?key).
+    # Run LAST so an already-scrubbed Bearer token is not re-matched; consume the
+    # remaining non-whitespace value after the separator.
+    re.compile(
+        r"(?i)\b(?:authorization|auth|api[_-]?key|apikey|access[_-]?key|secret|"
+        r"token|password|passwd|pwd|dsn)\b\s*[=:]\s*\S+"
+    ),
+]
+
+
+def _redact_supporting_command(value: Any) -> str:
+    """Redact + bound an agent-narrated supporting-command string for audit.
+
+    Strips obvious secret-bearing fragments (token=…/Bearer …/creds-in-URL/AWS
+    keys), then hard-bounds the length. Never raises — on any error returns a
+    short marker rather than leaking the original. The command is also stored in
+    the local JSONL ledger by ``audit.log`` (file mode); this redaction governs
+    only the DB-mode app.audit_events row written by B-D3.
+    """
+    try:
+        s = str(value or "")
+        for pat in _SHELL_SECRET_PATTERNS:
+            s = pat.sub("[REDACTED:secret]", s)
+        if len(s) > _SHELL_AUDIT_FIELD_MAX:
+            s = s[:_SHELL_AUDIT_FIELD_MAX] + "...[truncated]"
+        return s
+    except Exception:  # noqa: BLE001 — defensive: never leak the original
+        return "[REDACTED:error]"
+
+
+def _persist_shell_audit_event(
+    shell_eid: str,
+    *,
+    command: str,
+    purpose: str,
+    case_id: str,
+    examiner: str = "",
+) -> None:
+    """Forward-write ONE ``app.audit_events`` row for a supporting command (B-D3).
+
+    ``shell-*`` ids are minted inside ``record_finding`` for agent-narrated
+    supporting commands and written only to the local JSONL ledger, so they
+    don't resolve in the DB-mode portal provenance panel. This persists a
+    citable row keyed by ``shell_eid`` as ``details.backend_audit_id`` (the
+    column the §9.6 case-scoped resolver matches), case-scoped to the case UUID.
+
+    Caller contract: only invoke when DB-active (``case_id`` is the case UUID,
+    never None). Fail-soft: any DSN/psycopg/insert error is raised to the caller
+    only via return-by-exception — the caller wraps this and appends to
+    ``audit_warnings``; it must NEVER block record_finding. The command/purpose
+    are redacted + bounded before storage.
+    """
+    from sift_core.investigation_store import control_plane_dsn
+
+    dsn = control_plane_dsn()
+    if not dsn or not case_id or not shell_eid:
+        return
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    details = {
+        "backend_audit_id": str(shell_eid),
+        "command": _redact_supporting_command(command),
+        "purpose": _redact_supporting_command(purpose),
+    }
+    sql = (
+        "insert into app.audit_events "
+        "(event_type, actor_type, source, status, case_id, summary, details) "
+        "values (%s, %s, %s, %s, %s, %s, %s)"
+    )
+    values = [
+        "finding.supporting_command",
+        "service",
+        "shell_self_report",
+        "success",
+        str(case_id),
+        "supporting command",
+        Jsonb(details),
+    ]
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, values)
+        conn.commit()
+
 
 def set_reference_backend_provider(provider: ReferenceBackendProvider | None) -> None:
     """Install the gateway/backend-manifest lookup used by grounding."""
@@ -1036,6 +1139,30 @@ class CaseManager:
                     if logged_id is None:
                         audit_warnings.append(
                             f"Audit write failed for shell evidence {shell_eid}"
+                        )
+                # B-D3: in DB-active mode the shell-* id is minted here and never
+                # seen by the gateway envelope, so a finding that cites it would
+                # dangle in the DB-mode portal panel. Forward-write a citable
+                # app.audit_events row keyed by shell_eid (case-scoped to the
+                # case UUID). Best-effort: never block record_finding.
+                _db_case_uuid = self._db_case_id()
+                if _db_case_uuid:
+                    try:
+                        _persist_shell_audit_event(
+                            shell_eid,
+                            command=command,
+                            purpose=purpose,
+                            case_id=_db_case_uuid,
+                            examiner=exam,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — fail-soft
+                        logger.debug(
+                            "shell audit_events forward-write skipped for %s: %s",
+                            shell_eid,
+                            type(exc).__name__,
+                        )
+                        audit_warnings.append(
+                            f"DB audit write failed for shell evidence {shell_eid}"
                         )
 
         # Validate artifacts — parameter wins over finding dict (dedup)

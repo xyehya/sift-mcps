@@ -230,3 +230,37 @@ async def test_no_job_service_falls_through_without_error():
         gateway, "opensearch_ingest", {"path": "evidence/x.e01", "dry_run": False}
     )
     assert "PROXIED" in result.content[0].text
+
+
+# ---------------------------------------------------------------------------
+# B-D1: control-plane DSN injected into spec_internal (worker provenance bind)
+# ---------------------------------------------------------------------------
+
+
+async def test_control_plane_dsn_injected_into_spec_internal(monkeypatch):
+    """B-D1: when SIFT_CONTROL_PLANE_DSN is set the gateway carries it into the
+    worker spec_internal so the ingest subprocess can forward-write provenance.
+    It is never copied to spec_public (which is path/secret-free)."""
+    monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://svc:pw@db:5432/sift")
+    gateway = _gateway_with_jobs()
+    await _call(
+        gateway, "opensearch_ingest",
+        {"path": "evidence/rocba-cdrive.e01", "dry_run": False},
+    )
+    call = gateway.job_service.calls[0]
+    assert call["spec_internal"]["control_plane_dsn"] == "postgresql://svc:pw@db:5432/sift"
+    # The DSN is internal-only: it must never appear in the agent-facing spec.
+    assert "control_plane_dsn" not in call["spec_public"]
+    assert "postgresql://" not in json.dumps(call["spec_public"], default=str)
+
+
+async def test_control_plane_dsn_absent_when_env_unset(monkeypatch):
+    """B-D1: no DSN env -> the key is simply omitted (no empty-string injection),
+    so the worker/subprocess no-ops the provenance write rather than mis-binding."""
+    monkeypatch.delenv("SIFT_CONTROL_PLANE_DSN", raising=False)
+    gateway = _gateway_with_jobs()
+    await _call(
+        gateway, "opensearch_enrich_intel", {"force": True},
+    )
+    call = gateway.job_service.calls[0]
+    assert "control_plane_dsn" not in call["spec_internal"]
