@@ -68,15 +68,49 @@ function highSeverity(findings) {
 }
 
 /**
- * missionTiles — the four KPI tiles (Evidence sealed/total · High severity ·
+ * Evidence custody health for the mission tile (P35-6). Derives an OK / Warning
+ * status from the chain-status authority — NOT a sealed count. `portalState`'s
+ * `evidence.total` over-counts ignored dotfiles, and the chain status carries
+ * the real integrity signal (seal state + missing/modified/unregistered/issues +
+ * examiner-action). Returns `{ value, tone, sub, foot }`. `—` when status is
+ * not yet loaded.
+ */
+function evidenceHealth(chainStatus) {
+  if (!chainStatus) {
+    return { value: '—', tone: 'text-muted-foreground', sub: '', foot: 'Evidence status unavailable' }
+  }
+  const len = (a) => (Array.isArray(a) ? a.length : 0)
+  const sealed = chainStatus.seal_status === 'sealed' || chainStatus.status === 'sealed'
+  const problems = len(chainStatus.issues) + len(chainStatus.missing) + len(chainStatus.modified) + len(chainStatus.unregistered)
+  const ok = sealed && problems === 0 && !chainStatus.requires_examiner_action
+  const sub = chainStatus.active_count != null ? `${chainStatus.active_count} sealed` : ''
+  if (ok) {
+    return { value: 'OK', tone: 'text-status-approved', sub, foot: 'Custody intact' }
+  }
+  const foot = chainStatus.requires_examiner_action
+    ? 'Examiner action required'
+    : len(chainStatus.missing)
+      ? `${len(chainStatus.missing)} missing`
+      : len(chainStatus.modified)
+        ? `${len(chainStatus.modified)} modified`
+        : len(chainStatus.unregistered)
+          ? `${len(chainStatus.unregistered)} unregistered`
+          : len(chainStatus.issues)
+            ? `${len(chainStatus.issues)} integrity issue${len(chainStatus.issues) > 1 ? 's' : ''}`
+            : !sealed
+              ? 'Not fully sealed'
+              : 'Integrity warning'
+  return { value: 'Warning', tone: 'text-status-pending', sub, foot }
+}
+
+/**
+ * missionTiles — the four KPI tiles (Evidence OK/Warning · High confidence ·
  * IOCs · MCP backends up/total). Prefers portalState (DB authority) and falls
  * back to chain/findings/ioc slices. Returns presentation-ready rows with a
  * stable `key`, an icon key, a token tone class and a foot note.
  */
 export function missionTiles(portalState, { chainStatus, findings, iocs } = {}) {
-  const ev = portalState?.evidence ?? {}
-  const sealed = ev.sealed ?? (chainStatus?.sealed_count ?? null)
-  const evTotal = ev.total ?? (chainStatus?.total_count ?? null)
+  const evidence = evidenceHealth(chainStatus)
   const sev = portalState?.severity ?? highSeverity(findings)
   const io = portalState?.iocs ?? {}
   const iocTotal = io.total ?? (iocs ?? []).length
@@ -90,10 +124,10 @@ export function missionTiles(portalState, { chainStatus, findings, iocs } = {}) 
       key: 'evidence',
       label: 'Evidence',
       icon: 'archive',
-      tone: 'text-status-approved',
-      value: sealed ?? '—',
-      sub: evTotal != null ? `/${evTotal}` : '',
-      foot: sealed != null && evTotal != null && sealed === evTotal ? 'Sealed · custody full' : 'Sealed of total',
+      tone: evidence.tone,
+      value: evidence.value,
+      sub: evidence.sub,
+      foot: evidence.foot,
     },
     {
       key: 'high',

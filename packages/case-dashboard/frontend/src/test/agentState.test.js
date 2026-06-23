@@ -65,15 +65,36 @@ describe('gatedActions + riskMeta', () => {
 })
 
 describe('missionTiles', () => {
+  const SEALED_CHAIN = {
+    seal_status: 'sealed', active_count: 14,
+    issues: [], missing: [], modified: [], unregistered: [], requires_examiner_action: false,
+  }
+
   it('builds the four KPI tiles from portalState (DB authority)', () => {
-    const tiles = missionTiles(PORTAL, {})
+    const tiles = missionTiles(PORTAL, { chainStatus: SEALED_CHAIN })
     expect(tiles.map((t) => t.key)).toEqual(['evidence', 'high', 'iocs', 'backends'])
     const byKey = Object.fromEntries(tiles.map((t) => [t.key, t]))
-    expect(byKey.evidence).toMatchObject({ value: 12, sub: '/14' })
+    // P35-6: evidence tile shows custody HEALTH (OK/Warning) from chain status.
+    expect(byKey.evidence).toMatchObject({ value: 'OK', sub: '14 sealed', tone: 'text-status-approved' })
     expect(byKey.high.value).toBe(6)
     expect(byKey.iocs.value).toBe(23)
     expect(byKey.backends).toMatchObject({ value: 7, sub: '/8 up' })
     expect(byKey.backends.foot).toMatch(/degraded · yara/)
+  })
+
+  it('shows evidence Warning when the chain reports integrity problems', () => {
+    const tiles = missionTiles(PORTAL, { chainStatus: { ...SEALED_CHAIN, missing: ['evidence/rocba-cdrive.e01'] } })
+    const ev = tiles.find((t) => t.key === 'evidence')
+    expect(ev.value).toBe('Warning')
+    expect(ev.tone).toBe('text-status-pending')
+    expect(ev.foot).toMatch(/1 missing/)
+  })
+
+  it('shows evidence Warning when the examiner must act / not sealed', () => {
+    const action = missionTiles(PORTAL, { chainStatus: { ...SEALED_CHAIN, requires_examiner_action: true } })
+    expect(action.find((t) => t.key === 'evidence').foot).toMatch(/Examiner action required/)
+    const unsealed = missionTiles(PORTAL, { chainStatus: { ...SEALED_CHAIN, seal_status: 'partial' } })
+    expect(unsealed.find((t) => t.key === 'evidence')).toMatchObject({ value: 'Warning', foot: 'Not fully sealed' })
   })
 
   it('falls back to chain/findings/ioc slices without portalState', () => {

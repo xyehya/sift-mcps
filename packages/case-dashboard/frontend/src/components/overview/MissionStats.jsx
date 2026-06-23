@@ -29,11 +29,13 @@ const TILE_GOTO = {
   backends: 'Backends',
 }
 
-function TileValue({ value }) {
+function TileValue({ value, tone }) {
   const numeric = typeof value === 'number'
   const counted = useCountUp(numeric ? value : 0)
+  // Numeric KPIs stay uniform (foreground); a non-numeric status word (e.g. the
+  // Evidence OK/Warning tile) takes the tile tone so the status reads at a glance.
   return (
-    <span className="tnum font-display text-[26px] font-bold leading-none text-foreground">
+    <span className={cn('tnum font-display text-[26px] font-bold leading-none', numeric ? 'text-foreground' : (tone ?? 'text-foreground'))}>
       {numeric ? Math.round(counted).toLocaleString() : value}
     </span>
   )
@@ -70,7 +72,7 @@ function Tile({ tile, onOpen, variants }) {
               )}
             </div>
             <div className="flex items-baseline gap-1">
-              <TileValue value={tile.value} />
+              <TileValue value={tile.value} tone={tile.tone} />
               {tile.sub && <span className="mono text-xs text-muted-foreground">{tile.sub}</span>}
             </div>
             <div className={cn('text-[11px]', tile.tone)}>{tile.foot}</div>
