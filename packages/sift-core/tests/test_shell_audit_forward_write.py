@@ -109,6 +109,27 @@ def test_redact_never_raises_on_bad_input():
     assert cm._redact_supporting_command(Bad()) == "[REDACTED:error]"
 
 
+def test_redact_underscore_prefixed_and_bare_provider_tokens():
+    """Security follow-up: underscore-prefixed key names (client_secret,
+    AWS_SECRET_ACCESS_KEY, GH_TOKEN, my_access_key) and BARE provider PAT tokens
+    (ghp_…) must be scrubbed — none of the secret values may survive."""
+    r = cm._redact_supporting_command
+    # key=value with the keyword as a substring of a longer identifier
+    assert "abc123def456" not in r("foo --client_secret=abc123def456")
+    assert "wJalrXUtnFEMI" not in r("env AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIsecretvalue")
+    assert "ghp_0123456789abcdef" not in r("export GH_TOKEN=ghp_0123456789abcdef")
+    assert "AKIAIOSFODNN7EXAMPLE" not in r("set my_access_key=AKIAIOSFODNN7EXAMPLE")
+    # BARE provider token with no key= prefix
+    assert "ghp_0123456789abcdefABCD" not in r("curl -u ghp_0123456789abcdefABCD https://api")
+
+
+def test_redact_does_not_over_redact_benign_forensic_command():
+    """The benign forensic command must pass through UN-redacted — the broadened
+    keyword/substring rules must not catch ordinary EZ-tool invocations/paths."""
+    cmd = "EvtxECmd.exe -f Security.evtx --csv /tmp/out"
+    assert cm._redact_supporting_command(cmd) == cmd
+
+
 # ---------------------------------------------------------------------------
 # DB forward-write
 # ---------------------------------------------------------------------------

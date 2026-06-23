@@ -49,13 +49,24 @@ _SHELL_SECRET_PATTERNS = [
     re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]+:[^\s:/@]+@"),
     # AWS-style access key id
     re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{12,}\b"),
-    # key=value or key: value for sensitive key names (token, secret, password,
-    # passwd, pwd, api[_-]?key, apikey, dsn, authorization, auth, access[_-]?key).
-    # Run LAST so an already-scrubbed Bearer token is not re-matched; consume the
+    # Bare provider PAT/secret tokens by well-known prefix (GitHub ghp_/gho_/…,
+    # github_pat_, GitLab glpat-, Slack xoxb-/xoxp-/…, Stripe sk_/pk_, Google
+    # AIza…). Run BEFORE the key=value rule so a bare token with no `key=` prefix
+    # is still scrubbed (and a prefixed one is caught here too, so the value never
+    # survives even if the key name is unfamiliar).
+    re.compile(
+        r"(?i)\b(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[baprs]|sk|pk|AIza)"
+        r"[-_][A-Za-z0-9_\-]{10,}"
+    ),
+    # key=value or key: value for sensitive key NAMES, where the keyword may be a
+    # substring of a longer identifier (e.g. client_secret, AWS_SECRET_ACCESS_KEY,
+    # GH_TOKEN, my_access_key). The `[\w-]*` wrappers replace the rigid `\b`
+    # anchor so underscore/hyphen-prefixed and -suffixed key names match. Run LAST
+    # so an already-scrubbed Bearer/PAT value is not re-matched; consume the
     # remaining non-whitespace value after the separator.
     re.compile(
-        r"(?i)\b(?:authorization|auth|api[_-]?key|apikey|access[_-]?key|secret|"
-        r"token|password|passwd|pwd|dsn)\b\s*[=:]\s*\S+"
+        r"(?i)(?:[\w-]*(?:secret|token|password|passwd|pwd|api[_-]?key|apikey|"
+        r"access[_-]?key|authorization|auth|dsn|credential)[\w-]*)\s*[=:]\s*\S+"
     ),
 ]
 
