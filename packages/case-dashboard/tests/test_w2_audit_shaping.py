@@ -12,15 +12,10 @@ event_type/source into the top-level fields the AuditTrailPanel reads
   STRING — must NOT crash dict("<string>") (the panel-poisoning 500); project the
   string through and the structured context (tool/run_id/mcp_name/hostname/
   index_name) into params.
-
-Worktree-source proof: test_w2_routes_module_is_worktree_source asserts the
-imported routes module resolves under this worktree (not an installed copy), so
-green here proves the edited file.
 """
 
 from __future__ import annotations
 
-import inspect
 import secrets
 
 from _supabase_reauth_harness import ReauthFakeSupabaseAuth, set_operator_session
@@ -132,14 +127,6 @@ def _client(inv):
 
 def _by_id(events):
     return {e["audit_id"]: e for e in events}
-
-
-def test_w2_routes_module_is_worktree_source():
-    import case_dashboard.routes as r
-
-    path = inspect.getfile(r)
-    assert "/.claude/worktrees/portal-v3-p0-foundation/" in path, path
-    assert path.endswith("packages/case-dashboard/src/case_dashboard/routes.py"), path
 
 
 def test_w2_endpoint_returns_200_not_500_for_ingest_row():

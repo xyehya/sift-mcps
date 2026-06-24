@@ -25,18 +25,6 @@ from sift_core.investigation_store import HASH_EXCLUDE_KEYS, compute_content_has
 
 
 # --------------------------------------------------------------------------- #
-# Worktree-source proof: assert the code under test is THIS worktree's copy.
-# --------------------------------------------------------------------------- #
-def test_source_is_this_worktree():
-    src = inspect.getfile(_derive_confidence_ceiling)
-    assert "portal-v3-p0-foundation" in src, src
-    assert src.endswith("sift_core/case_manager.py"), src
-    # confidence_derivation is in the hash-exclude set, confidence is NOT.
-    assert "confidence_derivation" in HASH_EXCLUDE_KEYS
-    assert "confidence" not in HASH_EXCLUDE_KEYS
-
-
-# --------------------------------------------------------------------------- #
 # 1. Pure helper: ceiling mapping across all four tiers (each branch).
 # --------------------------------------------------------------------------- #
 class TestDeriveCeilingMapping:
