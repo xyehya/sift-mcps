@@ -79,3 +79,25 @@ jobs:
             --extra windows-triage \
             --extra dev \
             python scripts/check_package_coverage.py
+
+  portal-dist:
+    # G8: the gateway mounts a COMMITTED frontend build (no node on the install
+    # VM). Guard against a stale dist by rebuilding from source and failing if
+    # the committed static/v2 differs from a fresh build.
+    name: Portal dist freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: packages/case-dashboard/frontend/package.json
+          cache: npm
+          cache-dependency-path: packages/case-dashboard/frontend/package-lock.json
+
+      - name: Check committed portal dist is fresh
+        run: bash scripts/check-portal-dist.sh
