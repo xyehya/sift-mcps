@@ -31,79 +31,30 @@ logger = logging.getLogger(__name__)
 ReferenceBackendProvider = Any
 _reference_backend_provider: ReferenceBackendProvider | None = None
 
-# B-D3: bound length for a redacted supporting-command string stored in the
-# forward-written app.audit_events row. Agent-narrated commands can be long and
-# may carry sensitive tokens; bound hard and strip obvious secrets.
-_SHELL_AUDIT_FIELD_MAX = 500
-
-# Obvious secret-bearing fragments to scrub from an agent-narrated supporting
-# command before it lands in an audit row. Conservative, anchored patterns —
-# a token=value / Bearer xxx / password=... assignment, an http(s) URL with
-# embedded credentials, and long high-entropy base64-ish blobs. This is a
-# defense-in-depth scrub, not a parser; the value is also length-bounded.
-_SHELL_SECRET_PATTERNS = [
-    # Bearer <token> (run first: an Authorization header value is "Bearer xxx",
-    # which has internal whitespace the key=value rule below would not consume).
-    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]+"),
-    # URL with embedded credentials (scheme://user:pass@host)
-    re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]+:[^\s:/@]+@"),
-    # AWS-style access key id
-    re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{12,}\b"),
-    # Stripe live/test secret keys: the FULL forms only (sk_live_/sk_test_/
-    # pk_live_/pk_test_/rk_live_/rk_test_ + the key body). I-2: the previous bare
-    # `sk`/`pk` prefixes (with just a `[-_]` separator + ≥10 chars) over-redacted
-    # benign forensic tokens like `sk-something-1234567890`; only the full Stripe
-    # forms are actual secrets, so match those and leave generic `sk-…`/`pk-…`
-    # alone.
-    re.compile(r"(?i)\b[srp]k_(?:live|test)_[A-Za-z0-9]{10,}"),
-    # Bare provider PAT/secret tokens by well-known prefix (GitHub ghp_/gho_/…,
-    # github_pat_, GitLab glpat-, Slack xoxb-/xoxp-/…, Google AIza…). Run BEFORE
-    # the key=value rule so a bare token with no `key=` prefix is still scrubbed
-    # (and a prefixed one is caught here too, so the value never survives even if
-    # the key name is unfamiliar).
-    re.compile(
-        r"(?i)\b(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[baprs]|AIza)"
-        r"[-_][A-Za-z0-9_\-]{10,}"
-    ),
-    # key=value or key: value for sensitive key NAMES, where the keyword may be a
-    # substring of a longer identifier (e.g. client_secret, AWS_SECRET_ACCESS_KEY,
-    # GH_TOKEN, my_access_key). The `[\w-]*` wrappers replace the rigid `\b`
-    # anchor so underscore/hyphen-prefixed and -suffixed key names match. Run LAST
-    # so an already-scrubbed Bearer/PAT value is not re-matched; consume the
-    # remaining non-whitespace value after the separator.
-    re.compile(
-        r"(?i)(?:[\w-]*(?:secret|token|password|passwd|pwd|api[_-]?key|apikey|"
-        r"access[_-]?key|authorization|auth|dsn|credential)[\w-]*)\s*[=:]\s*\S+"
-    ),
-]
+# C1 (operator decision): the human examiner must see FULL, unredacted
+# command/purpose in the portal — this is a single-tenant FORENSIC appliance.
+# Redaction applies ONLY to what AGENTS receive (response_guard / redact_structured
+# in the gateway). This constant is a DB-bloat guard ONLY, not secret protection.
+_SHELL_AUDIT_FIELD_MAX = 8000
 
 
-def _redact_supporting_command(value: Any) -> str:
-    """Redact + bound an agent-narrated supporting-command string for audit.
+def _bound_supporting_command(value: Any) -> str:
+    """Bound an agent-narrated supporting-command string for audit storage.
 
-    Strips obvious secret-bearing fragments (token=…/Bearer …/creds-in-URL/AWS
-    keys), then hard-bounds the length. Never raises — on any error returns a
-    short marker rather than leaking the original. The command is also stored in
-    the local JSONL ledger by ``audit.log`` (file mode); this redaction governs
-    only the DB-mode app.audit_events row written by B-D3.
+    Hard-bounds length to ``_SHELL_AUDIT_FIELD_MAX`` (DB-bloat guard only —
+    NOT a secret scrubber; see C1). The command is also stored in the local
+    JSONL ledger by ``audit.log`` (file mode); this bound governs only the
+    DB-mode app.audit_events row written by B-D3.
+
+    Never raises — on any error returns a short marker rather than the original.
     """
     try:
         s = str(value or "")
-        # W1-S2 (CWE-1333 ReDoS): the key=value rule's `[\w-]*…[\w-]*` wrappers
-        # backtrack catastrophically on long keyword-dense input (measured 3.4s
-        # @2KB, >20s @4KB), and command/purpose have no upstream length cap. Bound
-        # the input BEFORE the regex loop so redaction is O(bounded) regardless of
-        # agent-supplied length. The post-loop truncation stays (a match expanding
-        # to the longer marker can still push past the bound).
-        if len(s) > _SHELL_AUDIT_FIELD_MAX:
-            s = s[:_SHELL_AUDIT_FIELD_MAX] + "...[truncated]"
-        for pat in _SHELL_SECRET_PATTERNS:
-            s = pat.sub("[REDACTED:secret]", s)
         if len(s) > _SHELL_AUDIT_FIELD_MAX:
             s = s[:_SHELL_AUDIT_FIELD_MAX] + "...[truncated]"
         return s
-    except Exception:  # noqa: BLE001 — defensive: never leak the original
-        return "[REDACTED:error]"
+    except Exception:  # noqa: BLE001 — defensive: never propagate
+        return "[error: could not convert to string]"
 
 
 def _persist_shell_audit_event(
@@ -126,7 +77,9 @@ def _persist_shell_audit_event(
     never None). Fail-soft: any DSN/psycopg/insert error is raised to the caller
     only via return-by-exception — the caller wraps this and appends to
     ``audit_warnings``; it must NEVER block record_finding. The command/purpose
-    are redacted + bounded before storage.
+    are length-bounded before storage (C1: full values stored — operator sees
+    unredacted forensic detail in the portal; agent-facing redaction is in the
+    gateway response_guard, not here).
     """
     # L-1b: prefer the least-privilege audit-writer DSN when configured; fall
     # back to the full control-plane DSN otherwise (non-breaking rollout).
@@ -140,8 +93,8 @@ def _persist_shell_audit_event(
 
     details = {
         "backend_audit_id": str(shell_eid),
-        "command": _redact_supporting_command(command),
-        "purpose": _redact_supporting_command(purpose),
+        "command": _bound_supporting_command(command),
+        "purpose": _bound_supporting_command(purpose),
     }
     sql = (
         "insert into app.audit_events "

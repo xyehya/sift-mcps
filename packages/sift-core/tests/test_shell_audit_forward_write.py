@@ -1,13 +1,17 @@
 """Unit 2 / Gap B-D3: record_finding forward-writes one app.audit_events row per
 agent-narrated supporting command, keyed by the ``shell-*`` id as
-``details.backend_audit_id``, ONLY in DB-active mode and with the command/purpose
-REDACTED + bounded.
+``details.backend_audit_id``, ONLY in DB-active mode.
 
-These exercise ``_persist_shell_audit_event`` and ``_redact_supporting_command``
+These exercise ``_persist_shell_audit_event`` and ``_bound_supporting_command``
 directly with a faithful in-memory fake ``psycopg`` (no real Postgres). The
 record_finding wiring (DB-active gate via ``_db_case_id``, best-effort try/except
-that appends to ``audit_warnings`` and never raises) is unit-tested separately
-against the same redaction contract.
+that appends to ``audit_warnings`` and never raises) is unit-tested separately.
+
+C1 (operator decision): the human examiner must see FULL, unredacted values in
+the portal (forensic single-tenant appliance). Redaction applies only to agent-
+facing tool responses (gateway response_guard). The stored command/purpose are
+therefore full values, only length-bounded (_SHELL_AUDIT_FIELD_MAX = 8000) as a
+DB-bloat guard.
 """
 
 from __future__ import annotations
@@ -77,117 +81,37 @@ def _install_fake_psycopg(monkeypatch, store, *, raise_on_connect=False):
 
 
 # ---------------------------------------------------------------------------
-# redaction
+# C1: _bound_supporting_command — DB-bloat guard, NOT secret scrubber.
+# Redaction is agent-facing only (response_guard in the gateway).
 # ---------------------------------------------------------------------------
 
 
-def test_redact_strips_obvious_secrets():
-    r = cm._redact_supporting_command
-    assert "abc123secret" not in r('curl -H "Authorization: Bearer abc123secret" http://x')
-    assert "Sup3rSecret" not in r("mysql --password=Sup3rSecret -u root")
-    assert "pass" not in r("git clone https://user:pass@github.com/x/y.git").split("github")[0]
-    assert "AKIAIOSFODNN7EXAMPLE" not in r("export AWS=AKIAIOSFODNN7EXAMPLE")
-    assert "[REDACTED:secret]" in r("--token=zzz")
+def test_bound_preserves_full_command():
+    """C1: the full command (including tokens) is stored for the operator."""
+    cmd = 'curl -H "Authorization: Bearer SECRETTOKEN" https://api.example.com'
+    out = cm._bound_supporting_command(cmd)
+    assert out == cmd
 
 
-def test_redact_bounds_length():
-    out = cm._redact_supporting_command("g" * 5000)
-    assert len(out) <= cm._SHELL_AUDIT_FIELD_MAX + 20
+def test_bound_truncates_very_long_command():
+    out = cm._bound_supporting_command("g" * 9000)
+    assert len(out) <= cm._SHELL_AUDIT_FIELD_MAX + len("...[truncated]")
     assert out.endswith("...[truncated]")
 
 
-def test_redact_preserves_a_clean_command():
-    out = cm._redact_supporting_command("grep -i evil C/Windows/System32/config")
-    assert out == "grep -i evil C/Windows/System32/config"
+def test_bound_short_command_unchanged():
+    cmd = "grep -i rdp connections.log"
+    assert cm._bound_supporting_command(cmd) == cmd
 
 
-def test_redact_never_raises_on_bad_input():
+def test_bound_never_raises_on_bad_input():
     class Bad:
         def __str__(self):
             raise ValueError("nope")
 
-    assert cm._redact_supporting_command(Bad()) == "[REDACTED:error]"
-
-
-def test_redact_underscore_prefixed_and_bare_provider_tokens():
-    """Security follow-up: underscore-prefixed key names (client_secret,
-    AWS_SECRET_ACCESS_KEY, GH_TOKEN, my_access_key) and BARE provider PAT tokens
-    (ghp_…) must be scrubbed — none of the secret values may survive."""
-    r = cm._redact_supporting_command
-    # key=value with the keyword as a substring of a longer identifier
-    assert "abc123def456" not in r("foo --client_secret=abc123def456")
-    assert "wJalrXUtnFEMI" not in r("env AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIsecretvalue")
-    assert "ghp_0123456789abcdef" not in r("export GH_TOKEN=ghp_0123456789abcdef")
-    assert "AKIAIOSFODNN7EXAMPLE" not in r("set my_access_key=AKIAIOSFODNN7EXAMPLE")
-    # BARE provider token with no key= prefix
-    assert "ghp_0123456789abcdefABCD" not in r("curl -u ghp_0123456789abcdefABCD https://api")
-
-
-def test_redact_does_not_over_redact_benign_forensic_command():
-    """The benign forensic command must pass through UN-redacted — the broadened
-    keyword/substring rules must not catch ordinary EZ-tool invocations/paths."""
-    cmd = "EvtxECmd.exe -f Security.evtx --csv /tmp/out"
-    assert cm._redact_supporting_command(cmd) == cmd
-
-
-def test_redact_w1s2_redos_bounded_input_is_fast():
-    """W1-S2 (CWE-1333): a long keyword-dense input must redact quickly because the
-    redactor bounds the input to _SHELL_AUDIT_FIELD_MAX BEFORE the regex loop.
-
-    Without the pre-loop bound the key=value rule backtracks catastrophically
-    (measured multi-second @2-4KB). With it, redaction is O(bounded) and the
-    redactor only ever processes a bounded-length string."""
-    import time
-
-    # Keyword-dense, no separator — maximizes the alternation's backtracking on
-    # the unbounded path. ~5000 chars (well over the cap + no upstream limit).
-    payload = "auth_secret_token_password_apikey_" * 150
-    assert len(payload) >= 5000
-
-    start = time.perf_counter()
-    out = cm._redact_supporting_command(payload)
-    elapsed = time.perf_counter() - start
-
-    # Bounded redaction must be near-instant (generous ceiling vs the >20s ReDoS).
-    assert elapsed < 1.0, f"redaction took {elapsed:.3f}s — ReDoS bound not enforced"
-    # Output is bounded (the post-loop truncation marker is present).
-    assert len(out) <= cm._SHELL_AUDIT_FIELD_MAX + len("...[truncated]")
-    # Never raises; returns a string.
-    assert isinstance(out, str)
-
-
-def test_redact_i2_sk_pk_full_stripe_forms_only():
-    """I-2: only the FULL Stripe key forms (sk_live_/sk_test_/pk_live_/pk_test_/
-    rk_live_/rk_test_) are redacted; a benign `sk-something-1234567890` token (a
-    generic short prefix) must NOT be over-redacted, and representative forensic
-    arg strings must pass through untouched."""
-    r = cm._redact_supporting_command
-
-    # Benign short prefixes must survive verbatim (the old over-redaction bug).
-    assert r("sk-something-1234567890") == "sk-something-1234567890"
-    assert r("pk-some-config-9876543210") == "pk-some-config-9876543210"
-
-    # Full Stripe secret keys MUST be redacted to the marker (value gone).
-    sk_live = "sk_live_" + "a" * 24
-    sk_test = "sk_test_" + "b" * 24
-    pk_live = "pk_live_" + "c" * 24
-    rk_live = "rk_live_" + "d" * 24
-    for tok in (sk_live, sk_test, pk_live, rk_live):
-        out = r(tok)
-        assert tok not in out, f"full Stripe key not redacted: {tok!r} -> {out!r}"
-        assert "[REDACTED:secret]" in out
-
-    # Other provider prefixes still redact (no regression).
-    assert "ghp_0123456789abcdef" not in r("export GH=ghp_0123456789abcdef")
-
-    # Representative forensic args must NOT be over-redacted.
-    for cmd in (
-        "EvtxECmd.exe -f x.evtx --csv /tmp/out",
-        "grep -r foo",
-        "fls -r image.dd",
-        "vol -f mem.raw windows.pslist",
-    ):
-        assert r(cmd) == cmd, f"forensic command over-redacted: {cmd!r}"
+    result = cm._bound_supporting_command(Bad())
+    assert isinstance(result, str)
+    assert "error" in result
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +142,9 @@ def test_writes_row_keyed_by_shell_eid(monkeypatch):
     assert details["purpose"] == "confirm interactive logon"
 
 
-def test_command_is_redacted_in_the_row(monkeypatch):
+def test_command_is_stored_full_in_the_row(monkeypatch):
+    """C1: command is stored FULL (unredacted) for the operator — forensic
+    full-fidelity. Agent-facing redaction lives in the gateway response_guard."""
     store: dict = {}
     _install_fake_psycopg(monkeypatch, store)
     monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://x@db/s")
@@ -229,7 +155,8 @@ def test_command_is_redacted_in_the_row(monkeypatch):
         case_id="99999999-9999-9999-9999-999999999999",
     )
     details = store["values"][6].value
-    assert "SUPERSECRETTOKEN" not in details["command"]
+    # Full value must be present — operator sees unredacted forensic detail.
+    assert "SUPERSECRETTOKEN" in details["command"]
 
 
 def test_noop_without_dsn(monkeypatch):
