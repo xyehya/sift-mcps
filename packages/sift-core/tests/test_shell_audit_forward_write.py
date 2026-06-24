@@ -130,6 +130,32 @@ def test_redact_does_not_over_redact_benign_forensic_command():
     assert cm._redact_supporting_command(cmd) == cmd
 
 
+def test_redact_w1s2_redos_bounded_input_is_fast():
+    """W1-S2 (CWE-1333): a long keyword-dense input must redact quickly because the
+    redactor bounds the input to _SHELL_AUDIT_FIELD_MAX BEFORE the regex loop.
+
+    Without the pre-loop bound the key=value rule backtracks catastrophically
+    (measured multi-second @2-4KB). With it, redaction is O(bounded) and the
+    redactor only ever processes a bounded-length string."""
+    import time
+
+    # Keyword-dense, no separator — maximizes the alternation's backtracking on
+    # the unbounded path. ~5000 chars (well over the cap + no upstream limit).
+    payload = "auth_secret_token_password_apikey_" * 150
+    assert len(payload) >= 5000
+
+    start = time.perf_counter()
+    out = cm._redact_supporting_command(payload)
+    elapsed = time.perf_counter() - start
+
+    # Bounded redaction must be near-instant (generous ceiling vs the >20s ReDoS).
+    assert elapsed < 1.0, f"redaction took {elapsed:.3f}s — ReDoS bound not enforced"
+    # Output is bounded (the post-loop truncation marker is present).
+    assert len(out) <= cm._SHELL_AUDIT_FIELD_MAX + len("...[truncated]")
+    # Never raises; returns a string.
+    assert isinstance(out, str)
+
+
 def test_redact_i2_sk_pk_full_stripe_forms_only():
     """I-2: only the FULL Stripe key forms (sk_live_/sk_test_/pk_live_/pk_test_/
     rk_live_/rk_test_) are redacted; a benign `sk-something-1234567890` token (a

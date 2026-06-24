@@ -89,6 +89,14 @@ def _redact_supporting_command(value: Any) -> str:
     """
     try:
         s = str(value or "")
+        # W1-S2 (CWE-1333 ReDoS): the key=value rule's `[\w-]*…[\w-]*` wrappers
+        # backtrack catastrophically on long keyword-dense input (measured 3.4s
+        # @2KB, >20s @4KB), and command/purpose have no upstream length cap. Bound
+        # the input BEFORE the regex loop so redaction is O(bounded) regardless of
+        # agent-supplied length. The post-loop truncation stays (a match expanding
+        # to the longer marker can still push past the bound).
+        if len(s) > _SHELL_AUDIT_FIELD_MAX:
+            s = s[:_SHELL_AUDIT_FIELD_MAX] + "...[truncated]"
         for pat in _SHELL_SECRET_PATTERNS:
             s = pat.sub("[REDACTED:secret]", s)
         if len(s) > _SHELL_AUDIT_FIELD_MAX:
