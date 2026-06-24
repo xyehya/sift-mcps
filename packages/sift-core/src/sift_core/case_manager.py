@@ -120,9 +120,11 @@ def _persist_shell_audit_event(
     ``audit_warnings``; it must NEVER block record_finding. The command/purpose
     are redacted + bounded before storage.
     """
-    from sift_core.investigation_store import control_plane_dsn
+    # L-1b: prefer the least-privilege audit-writer DSN when configured; fall
+    # back to the full control-plane DSN otherwise (non-breaking rollout).
+    from sift_core.investigation_store import audit_forward_write_dsn
 
-    dsn = control_plane_dsn()
+    dsn = audit_forward_write_dsn()
     if not dsn or not case_id or not shell_eid:
         return
     import psycopg

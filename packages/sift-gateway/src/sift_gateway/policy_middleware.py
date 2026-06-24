@@ -1310,13 +1310,23 @@ class OpenSearchJobDispatchMiddleware(Middleware):
             "examiner": getattr(identity, "principal", None) or "agent",
             "tool": name,
         }
-        # B-D1: carry the control-plane DSN into the worker so the ingest
+        # B-D1: carry the audit-write DSN into the worker so the ingest
         # subprocess can forward-write per-artifact provenance rows to
         # app.audit_events (Gap B). spec_internal NEVER reaches the agent
         # (the jobs view excludes it). Only inject when non-empty; never log it.
-        control_plane_dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN", "").strip()
-        if control_plane_dsn:
-            spec_internal["control_plane_dsn"] = control_plane_dsn
+        #
+        # L-1b: prefer the least-privilege SIFT_AUDIT_WRITER_DSN when configured;
+        # fall back to the full control-plane DSN otherwise (non-breaking
+        # rollout — least-privilege activates the moment the operator sets the
+        # secret). audit_forward_write_dsn() logs a debug note on fallback. The
+        # subprocess still reads it from SIFT_CONTROL_PLANE_DSN (ingest_job.py
+        # binds spec_internal["control_plane_dsn"] -> that env var), so only the
+        # injected *value* narrows — the plumbing is unchanged.
+        from sift_core.investigation_store import audit_forward_write_dsn
+
+        forward_write_dsn = (audit_forward_write_dsn() or "").strip()
+        if forward_write_dsn:
+            spec_internal["control_plane_dsn"] = forward_write_dsn
         job_service = self.gateway.job_service
         if job_service is None:  # pragma: no cover - guarded by on_call_tool
             raise RuntimeError("job service unavailable")

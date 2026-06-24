@@ -238,9 +238,11 @@ async def test_no_job_service_falls_through_without_error():
 
 
 async def test_control_plane_dsn_injected_into_spec_internal(monkeypatch):
-    """B-D1: when SIFT_CONTROL_PLANE_DSN is set the gateway carries it into the
-    worker spec_internal so the ingest subprocess can forward-write provenance.
-    It is never copied to spec_public (which is path/secret-free)."""
+    """B-D1: when SIFT_CONTROL_PLANE_DSN is set (and the L-1b writer DSN is not)
+    the gateway carries it into the worker spec_internal so the ingest subprocess
+    can forward-write provenance. It is never copied to spec_public (which is
+    path/secret-free)."""
+    monkeypatch.delenv("SIFT_AUDIT_WRITER_DSN", raising=False)
     monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://svc:pw@db:5432/sift")
     gateway = _gateway_with_jobs()
     await _call(
@@ -257,6 +259,7 @@ async def test_control_plane_dsn_injected_into_spec_internal(monkeypatch):
 async def test_control_plane_dsn_absent_when_env_unset(monkeypatch):
     """B-D1: no DSN env -> the key is simply omitted (no empty-string injection),
     so the worker/subprocess no-ops the provenance write rather than mis-binding."""
+    monkeypatch.delenv("SIFT_AUDIT_WRITER_DSN", raising=False)
     monkeypatch.delenv("SIFT_CONTROL_PLANE_DSN", raising=False)
     gateway = _gateway_with_jobs()
     await _call(
@@ -264,3 +267,55 @@ async def test_control_plane_dsn_absent_when_env_unset(monkeypatch):
     )
     call = gateway.job_service.calls[0]
     assert "control_plane_dsn" not in call["spec_internal"]
+
+
+# ---------------------------------------------------------------------------
+# L-1b: least-privilege SIFT_AUDIT_WRITER_DSN selection at the B-D1 inject
+# ---------------------------------------------------------------------------
+
+
+async def test_audit_writer_dsn_preferred_when_set(monkeypatch):
+    """L-1b: when the scoped SIFT_AUDIT_WRITER_DSN is set, the gateway injects
+    THAT (the least-privilege role's DSN), not the full control-plane DSN."""
+    monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://service@db/full")
+    monkeypatch.setenv("SIFT_AUDIT_WRITER_DSN", "postgresql://sift_audit_writer@db/scoped")
+    gateway = _gateway_with_jobs()
+    await _call(
+        gateway, "opensearch_ingest",
+        {"path": "evidence/rocba-cdrive.e01", "dry_run": False},
+    )
+    call = gateway.job_service.calls[0]
+    assert call["spec_internal"]["control_plane_dsn"] == "postgresql://sift_audit_writer@db/scoped"
+    # The full control-plane DSN must NOT have been injected.
+    assert "full" not in call["spec_internal"]["control_plane_dsn"]
+    # Still internal-only.
+    assert "control_plane_dsn" not in call["spec_public"]
+
+
+async def test_falls_back_to_control_plane_dsn_when_writer_unset(monkeypatch):
+    """L-1b non-breaking rollout: with the writer DSN unset, the inject falls back
+    to the full control-plane DSN so provenance keeps working before the secret
+    is provisioned."""
+    monkeypatch.delenv("SIFT_AUDIT_WRITER_DSN", raising=False)
+    monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://service@db/full")
+    gateway = _gateway_with_jobs()
+    await _call(
+        gateway, "opensearch_ingest",
+        {"path": "evidence/rocba-cdrive.e01", "dry_run": False},
+    )
+    call = gateway.job_service.calls[0]
+    assert call["spec_internal"]["control_plane_dsn"] == "postgresql://service@db/full"
+
+
+async def test_empty_writer_dsn_falls_back(monkeypatch):
+    """L-1b: an empty/whitespace SIFT_AUDIT_WRITER_DSN is treated as unset (falls
+    back to the control-plane DSN), never injected as an empty string."""
+    monkeypatch.setenv("SIFT_AUDIT_WRITER_DSN", "   ")
+    monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://service@db/full")
+    gateway = _gateway_with_jobs()
+    await _call(
+        gateway, "opensearch_ingest",
+        {"path": "evidence/rocba-cdrive.e01", "dry_run": False},
+    )
+    call = gateway.job_service.calls[0]
+    assert call["spec_internal"]["control_plane_dsn"] == "postgresql://service@db/full"

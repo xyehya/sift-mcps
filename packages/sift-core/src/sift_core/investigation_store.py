@@ -24,11 +24,14 @@ Authority invariants enforced here:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Status values that represent a final human decision; agents must not overwrite.
 HUMAN_LOCKED_STATUSES = frozenset({"APPROVED", "REJECTED"})
@@ -659,6 +662,41 @@ class PostgresInvestigationStore(InvestigationAuthorityStore):
 def control_plane_dsn() -> str | None:
     dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN", "").strip()
     return dsn or None
+
+
+def audit_writer_dsn() -> str | None:
+    """L-1b: the least-privilege audit-write DSN, when configured.
+
+    Returns the value of ``SIFT_AUDIT_WRITER_DSN`` (the scoped ``sift_audit_writer``
+    role's connection string) or ``None`` when it is unset/empty. Callers on the
+    forward-write path prefer this over :func:`control_plane_dsn` so the audit
+    forward-writes run under the least-privilege role; they fall back to the full
+    control-plane DSN when this is unset (non-breaking rollout — least-privilege
+    activates only once the operator sets the secret).
+    """
+    dsn = os.environ.get("SIFT_AUDIT_WRITER_DSN", "").strip()
+    return dsn or None
+
+
+def audit_forward_write_dsn() -> str | None:
+    """The DSN the audit forward-write path should connect with.
+
+    Prefers the scoped :func:`audit_writer_dsn` (L-1b least-privilege role);
+    falls back to the full :func:`control_plane_dsn` when the scoped DSN is unset
+    so provenance keeps working before the operator provisions the role/secret.
+    A debug note is logged on fallback so it is observable that least-privilege
+    is not yet active. Returns ``None`` only when NEITHER is configured.
+    """
+    scoped = audit_writer_dsn()
+    if scoped:
+        return scoped
+    full = control_plane_dsn()
+    if full:
+        logger.debug(
+            "audit forward-write: SIFT_AUDIT_WRITER_DSN unset — falling back to "
+            "the full control-plane DSN (L-1b least-privilege role not active)"
+        )
+    return full
 
 
 def resolve_investigation_store() -> InvestigationAuthorityStore | None:
