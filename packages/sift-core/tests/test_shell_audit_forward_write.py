@@ -57,15 +57,16 @@ class _FakeConn:
 
 
 def _install_fake_psycopg(monkeypatch, store, *, raise_on_connect=False):
-    mod = types.ModuleType("psycopg")
+    """Patch the audit forward-write path with a fake connection.
 
-    def connect(dsn):
-        store["dsn"] = dsn
-        if raise_on_connect:
-            raise RuntimeError("boom")
-        return _FakeConn(store)
+    C4: the forward-write now calls borrow_audit_write_connection() from
+    investigation_store rather than psycopg.connect() directly. We patch both:
+    (a) borrow_audit_write_connection — returns the fake conn directly (bypasses
+        the per-process cache so tests are isolated from each other); records dsn.
+    (b) psycopg.types.json.Jsonb — required for the INSERT values construction.
+    """
+    import sift_core.investigation_store as istore
 
-    mod.connect = connect
     types_mod = types.ModuleType("psycopg.types")
     json_mod = types.ModuleType("psycopg.types.json")
 
@@ -75,9 +76,18 @@ def _install_fake_psycopg(monkeypatch, store, *, raise_on_connect=False):
 
     json_mod.Jsonb = Jsonb
     types_mod.json = json_mod
-    monkeypatch.setitem(sys.modules, "psycopg", mod)
     monkeypatch.setitem(sys.modules, "psycopg.types", types_mod)
     monkeypatch.setitem(sys.modules, "psycopg.types.json", json_mod)
+
+    def fake_borrow(dsn, *, provider=None):
+        store["dsn"] = dsn
+        if raise_on_connect:
+            raise RuntimeError("boom")
+        return _FakeConn(store)
+
+    monkeypatch.setattr(istore, "borrow_audit_write_connection", fake_borrow)
+    # Also stub evict so the error path doesn't try to close a fake connection.
+    monkeypatch.setattr(istore, "evict_audit_write_connection", lambda dsn: None)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +307,10 @@ def test_l1b_permission_error_propagates_for_caller_failsoft(monkeypatch):
 
     The record_finding caller wrapping is exercised separately; here we prove the
     scoped-DSN permission failure surfaces the SAME way (so the existing
-    best-effort wrapper degrades to a skipped row)."""
+    best-effort wrapper degrades to a skipped row).
+
+    C4: patched via borrow_audit_write_connection (the new cached connection
+    provider) rather than psycopg.connect directly."""
     store: dict = {}
 
     class _DeniedCursor:
@@ -311,23 +324,14 @@ def test_l1b_permission_error_propagates_for_caller_failsoft(monkeypatch):
             raise RuntimeError("permission denied for table audit_events")
 
     class _Conn:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
         def cursor(self):
             return _DeniedCursor()
 
         def commit(self):
             store["committed"] = True
 
-    import sys
-    import types
+    import sift_core.investigation_store as istore
 
-    mod = types.ModuleType("psycopg")
-    mod.connect = lambda dsn: (_Conn())
     types_mod = types.ModuleType("psycopg.types")
     json_mod = types.ModuleType("psycopg.types.json")
 
@@ -337,9 +341,11 @@ def test_l1b_permission_error_propagates_for_caller_failsoft(monkeypatch):
 
     json_mod.Jsonb = Jsonb
     types_mod.json = json_mod
-    monkeypatch.setitem(sys.modules, "psycopg", mod)
     monkeypatch.setitem(sys.modules, "psycopg.types", types_mod)
     monkeypatch.setitem(sys.modules, "psycopg.types.json", json_mod)
+
+    monkeypatch.setattr(istore, "borrow_audit_write_connection", lambda dsn, **kw: _Conn())
+    monkeypatch.setattr(istore, "evict_audit_write_connection", lambda dsn: None)
 
     monkeypatch.setenv("SIFT_AUDIT_WRITER_DSN", "postgresql://sift_audit_writer@db/scoped")
     with pytest.raises(RuntimeError, match="permission denied"):

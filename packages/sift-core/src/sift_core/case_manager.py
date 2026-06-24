@@ -80,15 +80,22 @@ def _persist_shell_audit_event(
     are length-bounded before storage (C1: full values stored — operator sees
     unredacted forensic detail in the portal; agent-facing redaction is in the
     gateway response_guard, not here).
+
+    C4: reuses one cached write connection per (pid, dsn) via the E1-methodology
+    audit-write connection cache in investigation_store. Any error evicts the
+    cached connection so the next call gets a fresh socket.
     """
     # L-1b: prefer the least-privilege audit-writer DSN when configured; fall
     # back to the full control-plane DSN otherwise (non-breaking rollout).
-    from sift_core.investigation_store import audit_forward_write_dsn
+    from sift_core.investigation_store import (
+        audit_forward_write_dsn,
+        borrow_audit_write_connection,
+        evict_audit_write_connection,
+    )
 
     dsn = audit_forward_write_dsn()
     if not dsn or not case_id or not shell_eid:
         return
-    import psycopg
     from psycopg.types.json import Jsonb
 
     details = {
@@ -110,10 +117,15 @@ def _persist_shell_audit_event(
         "supporting command",
         Jsonb(details),
     ]
-    with psycopg.connect(dsn) as conn:
+    conn = borrow_audit_write_connection(dsn)
+    try:
         with conn.cursor() as cur:
             cur.execute(sql, values)
         conn.commit()
+    except Exception:
+        # Evict the (possibly dead/poisoned) connection; the next call gets fresh.
+        evict_audit_write_connection(dsn)
+        raise
 
 
 def set_reference_backend_provider(provider: ReferenceBackendProvider | None) -> None:

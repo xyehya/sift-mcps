@@ -79,8 +79,11 @@ def _persist_ingest_audit_event(
     if not resolved_case_id:
         return
     try:
-        import psycopg
         from psycopg.types.json import Jsonb
+        from sift_core.investigation_store import (
+            borrow_audit_write_connection,
+            evict_audit_write_connection,
+        )
 
         summary = str(result_summary or "")
         if len(summary) > _INGEST_AUDIT_SUMMARY_MAX:
@@ -108,10 +111,17 @@ def _persist_ingest_audit_event(
             f"ingest {tool}".strip()[:_INGEST_AUDIT_SUMMARY_MAX],
             Jsonb(details),
         ]
-        with psycopg.connect(dsn) as conn:
+        # C4: reuse one cached write connection per (pid, dsn) — same E1-methodology
+        # as the case-store read cache. Any error evicts the connection so the next
+        # call gets a fresh socket; fail-soft contract preserved.
+        conn = borrow_audit_write_connection(dsn)
+        try:
             with conn.cursor() as cur:
                 cur.execute(sql, values)
             conn.commit()
+        except Exception:
+            evict_audit_write_connection(dsn)
+            raise
     except Exception as exc:  # noqa: BLE001 — fail-soft: never block ingest
         logger.debug(
             "ingest audit_events forward-write skipped for %s: %s",

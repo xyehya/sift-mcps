@@ -911,6 +911,99 @@ except (AttributeError, ValueError):  # pragma: no cover - non-fork platforms
     pass
 
 
+# --------------------------------------------------------------------------- #
+# C4: audit-write connection reuse (same methodology as E1 case-store cache).
+#
+# The forward-write paths (_persist_shell_audit_event in case_manager.py and
+# _persist_ingest_audit_event in opensearch_mcp/ingest.py) previously opened a
+# fresh psycopg.connect() per row — a TCP+TLS+auth round-trip on every INSERT.
+# C4 applies the E1 pattern: one cached write-capable connection per (pid, dsn),
+# reused across calls. The connection is evicted on any error so the next call
+# gets a fresh socket.
+#
+# Design choices (mirroring E1 §4 constraints):
+#   * autocommit=False — INSERTs still commit per-statement via explicit
+#     conn.commit(); no autocommit so the caller controls the transaction.
+#   * prepare_threshold=None — safe for PgBouncer transaction-mode poolers.
+#   * connect_timeout=5 — fail fast on DB outage rather than blocking ingest.
+#   * application_name — visible in pg_stat_activity for leak diagnosis.
+# --------------------------------------------------------------------------- #
+
+# Separate cache so write connections never share keys with the read-only store.
+_AUDIT_WRITE_CONN_CACHE: dict[tuple[int, str], Any] = {}
+_AUDIT_WRITE_CACHE_LOCK = threading.Lock()
+_AUDIT_WRITE_APPLICATION_NAME = "sift-audit-writer"
+
+
+def _audit_write_connection_for(dsn: str):
+    """Create one write-capable psycopg connection for the audit forward-write path.
+
+    This is the single creation point for the write-connection cache. Tests may
+    inject a fake provider to prove reuse without a live database.
+    """
+    psycopg = _psycopg()
+    return psycopg.connect(
+        dsn,
+        autocommit=False,
+        prepare_threshold=None,
+        connect_timeout=5,
+        application_name=_AUDIT_WRITE_APPLICATION_NAME,
+    )
+
+
+def borrow_audit_write_connection(dsn: str, *, provider=None):
+    """Return the cached write connection for ``(pid, dsn)``, creating it if absent.
+
+    Same methodology as :func:`_borrow_connection` (E1 read-store cache). The
+    caller (forward-write helper) owns commit/rollback; the connection is NOT
+    closed after use — it is returned to the cache for the next call.
+
+    ``provider`` is injectable for tests (pass a factory that returns a fake conn).
+    """
+    key = (os.getpid(), dsn)
+    _provider = provider if provider is not None else _audit_write_connection_for
+    with _AUDIT_WRITE_CACHE_LOCK:
+        conn = _AUDIT_WRITE_CONN_CACHE.get(key)
+        if conn is None:
+            conn = _provider(dsn)
+            _AUDIT_WRITE_CONN_CACHE[key] = conn
+        return conn
+
+
+def evict_audit_write_connection(dsn: str) -> None:
+    """Evict and best-effort close the cached write connection for ``(pid, dsn)``.
+
+    Called when a forward-write error signals the connection is dead or poisoned.
+    The next call to :func:`borrow_audit_write_connection` will open a fresh one.
+    """
+    key = (os.getpid(), dsn)
+    with _AUDIT_WRITE_CACHE_LOCK:
+        conn = _AUDIT_WRITE_CONN_CACHE.pop(key, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - socket may already be gone
+            pass
+
+
+def _clear_audit_write_cache() -> None:
+    """Fork hook: drop inherited write-connection cache entries WITHOUT closing.
+
+    Same posture as :func:`_clear_cache`: after fork, closing a parent's socket
+    from the child would corrupt the parent's session. We drop references; the
+    pid-key already prevents the child from finding them.
+    """
+    global _AUDIT_WRITE_CACHE_LOCK
+    _AUDIT_WRITE_CONN_CACHE.clear()
+    _AUDIT_WRITE_CACHE_LOCK = threading.Lock()
+
+
+try:
+    os.register_at_fork(after_in_child=_clear_audit_write_cache)
+except (AttributeError, ValueError):  # pragma: no cover - non-fork platforms
+    pass
+
+
 class PostgresCaseStore:
     """Read-only DB authority for ``app.cases`` metadata (BU1; E1 conn reuse).
 
