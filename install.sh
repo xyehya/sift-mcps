@@ -2301,7 +2301,13 @@ PY
   # exit path from here (incl. a fail-soft early return below), so under
   # `set -Eeuo pipefail` a failed svc_install_file never leaves a 0600 temp file
   # containing the secret on disk.
-  trap 'rm -f "$tmp"' RETURN
+  #
+  # bash RETURN traps are GLOBAL, not function-local — so the handler self-clears
+  # (`trap - RETURN`) to fire EXACTLY ONCE on this function's own return and never
+  # again (otherwise it would re-fire on main()'s return where $tmp is unset and,
+  # under set -u, abort with "tmp: unbound variable"). `${tmp:-}` keeps the
+  # handler set -u-safe even if it ever runs with tmp unset.
+  trap 'rm -f "${tmp:-}"; trap - RETURN' RETURN
   # Copy existing keys EXCEPT any prior SIFT_AUDIT_WRITER_DSN line, then append
   # the fresh one. svc_read uses sudo to read the sift-service-owned 0600 file.
   svc_read "$control_env_file" | grep -v '^SIFT_AUDIT_WRITER_DSN=' > "$tmp" || true
