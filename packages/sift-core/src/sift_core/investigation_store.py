@@ -689,7 +689,7 @@ def audit_forward_write_dsn() -> str | None:
     Prefers the scoped :func:`audit_writer_dsn` (L-1b least-privilege role);
     falls back to the full :func:`control_plane_dsn` when the scoped DSN is unset
     so provenance keeps working before the operator provisions the role/secret.
-    A debug note is logged on fallback so it is observable that least-privilege
+    A warning is logged on fallback so it is observable that least-privilege
     is not yet active. Returns ``None`` only when NEITHER is configured.
     """
     scoped = audit_writer_dsn()
@@ -697,7 +697,7 @@ def audit_forward_write_dsn() -> str | None:
         return scoped
     full = control_plane_dsn()
     if full:
-        logger.debug(
+        logger.warning(
             "audit forward-write: SIFT_AUDIT_WRITER_DSN unset — falling back to "
             "the full control-plane DSN (L-1b least-privilege role not active)"
         )
