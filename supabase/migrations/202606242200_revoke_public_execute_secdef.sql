@@ -42,7 +42,12 @@ begin
     execute 'revoke execute on function ' || fn_sig || ' from public';
 
     -- Preserve the legitimate privileged-caller path (idempotent: no-op if already granted).
-    execute 'grant execute on function ' || fn_sig || ' to service_role';
+    -- G5: guard the service_role grant like every other migration — service_role
+    -- may not exist on a non-Supabase Postgres, and an unguarded GRANT would abort
+    -- this do-block (leaving the PUBLIC revokes half-applied). Safe on Supabase.
+    if exists (select 1 from pg_roles where rolname = 'service_role') then
+      execute 'grant execute on function ' || fn_sig || ' to service_role';
+    end if;
   end loop;
 end;
 $$;

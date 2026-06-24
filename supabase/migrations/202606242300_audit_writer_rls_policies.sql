@@ -32,6 +32,15 @@
 do $$
 begin
 
+  -- G4 (fresh-install defensive): if the role is absent (a partial/edited ledger
+  -- state where 202606242100 did not run), this whole migration is a clean no-op
+  -- rather than a mid-block abort on `create policy ... to sift_audit_writer`.
+  -- Normal-path semantics are unchanged when the role exists.
+  if not exists (select 1 from pg_roles where rolname = 'sift_audit_writer') then
+    raise notice 'sift_audit_writer role absent — skipping RLS policy migration (no-op).';
+    return;
+  end if;
+
   -- -------------------------------------------------------------------------
   -- app.audit_events: INSERT policy for sift_audit_writer
   -- -------------------------------------------------------------------------
