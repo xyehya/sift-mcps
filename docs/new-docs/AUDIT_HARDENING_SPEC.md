@@ -1,11 +1,26 @@
 # Audit-Provenance Hardening Wave — Requirements & Design Spec
 
-**Status:** APPROVED — decisions LOCKED 2026-06-24 (W3 = cap-hint; L-1b = implement now; L-2a = defer). Implementation cleared (W1 → W2 → W3, gated loops).
+**Status:** DONE + LIVE-PROVEN + PUSHED (origin/portal-v3/p0-foundation @ `a76a940`; `main` clean). Decisions LOCKED 2026-06-24 (W3 = cap-hint; L-1b = implement; L-2a = defer→later SUPERSEDED). W1/W2/W3 shipped, then a Round-2 follow-up — see "Round-2 amendments" below.
 **Branch:** `portal-v3/p0-foundation` · **HEAD at spec time:** `62cb650` (Unit 1 Gap A + Unit 2 Gap B complete + live-proven; NOT pushed; `main` clean at `b995491`).
 **Authority basis:** `trackers/AUDIT_STATE_VERIFICATION.md` §9 (systemic contract), §10/§10b (Unit 1/2 status); `trackers/PORTAL_V3_EXTENSION_BACKLOG.md` B7 (UI render req); `security_report/sec_review_portal-v3-p0-foundation_2026-06-24_19-44-25.md` (open items I-2/L-1/L-2).
 **Discovery basis:** 3 parallel read-only investigators (2026-06-24), findings folded in below with file:line anchors.
 
 This wave hardens an **already-working, already-centralized** pipeline. It is assurance + render-completeness + a contract change for confidence — NOT a re-architecture.
+
+---
+
+## Round-2 amendments (2026-06-24 — implemented, gated, live-proven, pushed @ `a76a940`)
+
+After W1/W2/W3 landed, the operator approved a follow-up round. These AMEND the body below where noted:
+- **B1** — removed the hardcoded-worktree-path guard tests (branch is merge-ready for `main`).
+- **C1 — operator-facing redaction REMOVED (SUPERSEDES §L-2a and the W1/I-2/W1-S2 redaction work for this path).** Operator decision: this is a single-tenant FORENSIC appliance — the human examiner must see FULL command/paths/values. `_redact_supporting_command` + `_SHELL_SECRET_PATTERNS` were deleted (also eliminating the W1-S2 ReDoS surface); only a length bound (8000) remains as a DB-bloat guard. **Redaction now lives ONLY on the agent-facing path** (`sift-gateway/.../response_guard.py` — agents still get secrets scrubbed from tool responses; UNCHANGED). ⇒ The §L-2a "entropy backstop" decision below is MOOT for the operator path (there is no operator-facing redaction to backstop).
+- **C2** — durable migration `202606242200`: revoke PUBLIC EXECUTE on ALL `app` SECDEF functions + re-grant `service_role` (generalizes W1-S1; live: 0 app SECDEF fns PUBLIC-executable).
+- **C3+C5** — `confidence` hard-rejected when missing/empty/whitespace/invalid (finding_validation.py); record_finding tool description documents the enum + the W3 auto-clamp for agents.
+- **C4** — forward-writes reuse an E1-style connection cache (`borrow_audit_write_connection`, separate from the read cache, fail-soft) instead of connect-per-row (closes I-1).
+- **D1** — L-1b granted INSERT-only on `app.audit_events` (see §SEC-DEC-1 sub-note); SELECT unneeded (grounding SELECTs run on the full DSN).
+- **D2 — `sift_audit_writer` BYPASSRLS DROPPED (SUPERSEDES the §SEC-DEC-1 / §0 BYPASSRLS posture).** Migration `202606242300`: `NOBYPASSRLS` + scoped per-table RLS write policies (audit_events INSERT; 2 opensearch tables INSERT+UPDATE). Live re-prove: forward-write lands under RLS (row-count +1), out-of-scope INSERT denied, `rolbypassrls=false`. Least-privilege is now policy-gated with no global bypass.
+
+Round-2 commits: `a1b781c` `1098308` `05e9782` `02a79e2` `d60974e` `03a6082` `a76a940`. Gates: verifier CONFIRMED · security PASS. The original W1/W2/W3 design text below is preserved as-shipped; where C1/D2 supersede it, this block governs.
 
 ---
 
