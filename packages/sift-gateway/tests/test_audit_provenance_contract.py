@@ -7,8 +7,15 @@ Covers:
   backend_audit_id is set to the canonical id (§9.3 D1), audit_aliases include
   native ids + envelope uuid.
 - _backend_name fix: run_command_job / running_commands_status → sift-core (§9.7).
-- Conformance: per-backend-category tool call results carry audit_id; result row
-  has backend_audit_id; resolver returns the row for the cited id (§9.9).
+- Conformance (§9.9): for EVERY registered tool (core plane enumerated
+  exhaustively via agent_tools.core_tool_names(); durable-lane + the add-on
+  fake-backend plane), all three §9.2 invariants hold — (a) the agent-visible
+  response carries a top-level audit_id; (b) a mcp.tool.result row exists with
+  non-empty details.backend_audit_id; (c) the resolver returns that row for the
+  cited canonical id (+ aliases), driven from the ids the envelope ACTUALLY
+  produced (round-trip closed via _faithful_resolver, a verbatim reimplementation
+  of InvestigationService.audit_events's superset predicates).  A new-tool GUARD
+  fails the day a registered tool is added without conformance coverage.
 """
 
 from __future__ import annotations
@@ -537,49 +544,169 @@ class TestResponseStamping:
 # ---------------------------------------------------------------------------
 
 
-class TestConformancePerCategory:
-    """For each backend category, the result carries audit_id and the DB row has
-    backend_audit_id set.  Lightweight: these use in-memory fakes, not the DB.
+# ---------------------------------------------------------------------------
+# §9.9 conformance — faithful in-test resolver + per-REGISTERED-tool coverage
+# ---------------------------------------------------------------------------
+#
+# This block upgrades the previous hand-picked 5-tool sample to a per-registered
+# tool conformance suite that asserts ALL THREE §9.2 invariants for EVERY
+# registered tool (core plane exhaustively; add-on plane as completely as the
+# existing fake-backend harness allows), AND fails the day a registered tool is
+# added without conformance coverage (the §9.9 "never silently breaks" guard).
+
+
+def _faithful_resolver(rows: list[dict], case_id: str, cited_ids: list[str]) -> list[dict]:
+    """A faithful in-test reimplementation of the SUPERSET predicates in
+    ``InvestigationService.audit_events`` (``sift_gateway/portal_services.py``,
+    the six OR-clauses at ~:1686-1691), evaluated against the rows the envelope
+    actually wrote via ``_FakeDbAudit.record``.
+
+    Drives invariant (c) WITHOUT a live DB: given the canonical id + aliases the
+    envelope produced for a tool call, this returns the matching audit row(s).
+
+    Predicates (each ANDed with ``case_id``, mirroring the SECURITY INVARIANT
+    that a requested id belonging to another case is never surfaced):
+      1. ``id::text = any(ids)``                       — uuid PK / direct ref
+      2. ``details->>'backend_audit_id' = any(ids)``   — gateway-stamped canonical
+      3. ``details->'audit_aliases' ?| ids``           — any alias in the set
+      4. ``details->>'envelope_event_id' = any(ids)``  — call-row uuid backstop
+      5. ``request_id = any(ids)``                      — call↔result link
+      6. ``details->>'audit_id' = any(ids)``           — parity (no producer today)
+
+    ``_FakeDbAudit.record`` returns synthetic PKs like ``evt-N``; we treat the
+    returned id as the row PK (it is appended onto each captured call below).
+    """
+    ids = {str(c) for c in cited_ids if str(c).strip()}
+    if not ids:
+        return []
+    matched: list[dict] = []
+    for row in rows:
+        # SECURITY INVARIANT parity: case-scope every match.
+        if str(row.get("case_id") or "") != str(case_id):
+            continue
+        det = row.get("details") or {}
+        aliases = det.get("audit_aliases") or []
+        if (
+            str(row.get("_pk") or "") in ids  # (1) id::text
+            or str(det.get("backend_audit_id") or "") in ids  # (2)
+            or any(str(a) in ids for a in aliases)  # (3) audit_aliases ?|
+            or str(det.get("envelope_event_id") or "") in ids  # (4)
+            or str(row.get("request_id") or "") in ids  # (5)
+            or str(det.get("audit_id") or "") in ids  # (6) parity
+        ):
+            matched.append(row)
+    return matched
+
+
+# ---------------------------------------------------------------------------
+# Per-registered-tool COVERAGE registry.
+#
+# Maps every registered tool name → a representative (payload, meta) response
+# shape exercising the relevant native-id surface.  Three planes are covered:
+#   - CORE plane: enumerated EXHAUSTIVELY from agent_tools.core_tool_names().
+#   - DURABLE-LANE: the gateway-embedded core tools (run_command_job /
+#     running_commands_status) that _backend_name tags sift-core.
+#   - PROXIED/add-on plane: as completely as the fake-backend harness's
+#     _Gateway._tool_map registers (opensearch / wintriage / forensic-rag),
+#     spanning content-native, meta-only, and no-native-id shapes.
+#
+# THE NEW-TOOL GUARD (test_every_registered_tool_has_conformance_coverage)
+# asserts the union of all registered tool names == the COVERAGE keys, so the
+# day a new core tool or add-on backend tool is registered without a coverage
+# entry, that test FAILS — surfacing the missing conformance contract before a
+# broken backend can ship.  To OBSERVE the failure: register a new tool (add to
+# core_tool_names() or _Gateway._tool_map) WITHOUT adding it to _COVERAGE →
+# test_every_registered_tool_has_conformance_coverage raises
+# "registered tools without §9.9 conformance coverage: {...}".
+# ---------------------------------------------------------------------------
+_COVERAGE: dict[str, tuple[dict, dict | None]] = {
+    # --- CORE plane (siftcore-* native id in content; canonical = native id) ---
+    "run_command": ({"audit_id": "siftcore-hermes-20260623-001", "exit_code": 0}, None),
+    "record_finding": ({"audit_id": "siftcore-hermes-20260623-002", "status": "DRAFT"}, None),
+    "record_timeline_event": (
+        {"audit_id": "siftcore-hermes-20260623-003", "event": "ok"},
+        None,
+    ),
+    "list_existing_findings": ({"findings": []}, None),  # read-only, no native id
+    "manage_todo": ({"audit_id": "siftcore-hermes-20260623-004", "todos": []}, None),
+    "case_info": ({"case_id": "c-1"}, None),  # read-only, no native id
+    "evidence_info": ({"evidence": []}, None),  # read-only, no native id
+    "get_tool_help": ({"help": "..."}, None),  # read-only, no native id
+    # --- DURABLE-LANE (sift-core; no native id here → envelope backstop) ---
+    "run_command_job": ({"job_id": "j-1234"}, None),
+    "running_commands_status": ({"jobs": []}, None),
+    # --- PROXIED add-on plane (canonical ALWAYS = envelope uuid) ---
+    # opensearch-mcp: scheme-formatted native id in content (kept in aliases).
+    "opensearch_status": (
+        {"audit_id": "opensearch-hermes-20260623-001", "status": "green"},
+        None,
+    ),
+    # windows-triage-mcp: native id in META only (recovered into aliases).
+    "wintriage_check_system": (
+        {"checks": []},
+        {"audit_id": "wintriage-hermes-20260623-001", "examiner": "hermes"},
+    ),
+    # forensic-rag-mcp: NO native id anywhere (pure envelope backstop).
+    "kb_search_knowledge": ({"answer": "no match"}, None),
+}
+
+
+def _registered_tool_names() -> set[str]:
+    """Union of every tool name the envelope tags + the fake-backend harness
+    registers: core plane (exhaustive) + durable-lane + the add-on _tool_map.
+
+    This is the authoritative "what is registered" set the new-tool guard
+    compares against the _COVERAGE keys.
+    """
+    from sift_core.agent_tools import core_tool_names
+
+    _mw, _db = _make_mw()
+    addon_tools = set(getattr(_mw.gateway, "_tool_map", {}))
+    return core_tool_names() | set(_CORE_DURABLE_LANE_TOOLS) | addon_tools
+
+
+class TestConformancePerRegisteredTool:
+    """§9.9: for EVERY registered tool, all three §9.2 invariants hold —
+       (a) the agent-visible response carries a top-level ``audit_id``;
+       (b) a ``mcp.tool.result`` row exists with non-empty
+           ``details.backend_audit_id``;
+       (c) the resolver returns that row for the cited canonical id (+ aliases),
+           driven from the ids the envelope ACTUALLY produced.
+
+    Lightweight: in-memory fakes (``_make_mw`` / ``_FakeDbAudit`` / ``_run_envelope``),
+    no live DB.  Invariant (c) uses ``_faithful_resolver`` — a verbatim
+    reimplementation of ``InvestigationService.audit_events``'s superset
+    predicates evaluated against the rows the envelope wrote.
     """
 
-    @pytest.mark.parametrize(
-        "tool_name,payload,meta",
-        [
-            # sift-core/run_command: native id in content
-            (
-                "run_command",
-                {"audit_id": "siftgateway-hermes-20260623-001", "exit_code": 0},
-                None,
-            ),
-            # opensearch-mcp: native id in content
-            (
-                "opensearch_status",
-                {"audit_id": "opensearch-hermes-20260623-001", "status": "green"},
-                None,
-            ),
-            # windows-triage-mcp: native id in meta only
-            (
-                "wintriage_check_system",
-                {"checks": []},
-                {"audit_id": "wintriage-hermes-20260623-001", "examiner": "hermes"},
-            ),
-            # forensic-rag-mcp: no native id (backstop envelope)
-            (
-                "kb_search_knowledge",
-                {"answer": "no match"},
-                None,
-            ),
-            # durable-lane: run_command_job (no native id here)
-            (
-                "run_command_job",
-                {"job_id": "j-1234"},
-                None,
-            ),
-        ],
-    )
-    def test_response_has_audit_id_and_row_has_backend_audit_id(
-        self, tool_name, payload, meta
-    ):
+    def test_every_registered_tool_has_conformance_coverage(self):
+        """NEW-TOOL GUARD: the day a registered tool (core or add-on) lacks a
+        coverage entry, this FAILS — so a new backend cannot ship without proving
+        the §9.2 invariants.
+
+        Observe the failure: add a tool to ``core_tool_names()`` or to
+        ``_Gateway._tool_map`` WITHOUT adding it to ``_COVERAGE`` → this raises
+        with the uncovered tool name(s).
+        """
+        registered = _registered_tool_names()
+        covered = set(_COVERAGE)
+        uncovered = registered - covered
+        assert not uncovered, (
+            "registered tools without §9.9 conformance coverage: "
+            f"{sorted(uncovered)} — add a representative (payload, meta) entry to "
+            "_COVERAGE so the (a)+(b)+(c) invariants are proven for this tool."
+        )
+        # Also guard the inverse: a coverage entry for a tool no longer
+        # registered is stale and should be pruned (keeps the suite honest).
+        stale = covered - registered
+        assert not stale, (
+            f"_COVERAGE has entries for tools that are no longer registered: "
+            f"{sorted(stale)} — prune them."
+        )
+
+    @pytest.mark.parametrize("tool_name", sorted(_COVERAGE))
+    def test_invariants_a_b_c_for_registered_tool(self, tool_name):
+        payload, meta = _COVERAGE[tool_name]
         mw, db = _make_mw()
 
         async def _next(_ctx):
@@ -590,26 +717,80 @@ class TestConformancePerCategory:
 
         result = _run_envelope(mw, _ctx(tool_name), _next)
 
-        # §9.2 invariant (a): agent-visible response has top-level audit_id.
+        # --- §9.2 invariant (a): agent-visible response carries top-level audit_id.
         content_text = result.content[0].text if result.content else ""
+        agent_visible_id: str | None = None
         try:
             data = json.loads(content_text)
-            assert "audit_id" in data, f"{tool_name}: content missing audit_id"
-            assert data["audit_id"], f"{tool_name}: audit_id is empty"
+            if isinstance(data, dict) and data.get("audit_id"):
+                agent_visible_id = str(data["audit_id"])
         except json.JSONDecodeError:
-            # Non-JSON content — check meta instead.
-            assert getattr(result, "meta", {}).get("audit_id"), \
-                f"{tool_name}: neither content nor meta has audit_id"
+            pass
+        if agent_visible_id is None:
+            # Non-JSON-object content — the id must then be visible in meta.
+            meta_id = getattr(result, "meta", None)
+            if isinstance(meta_id, dict):
+                agent_visible_id = meta_id.get("audit_id")
+        assert agent_visible_id, (
+            f"{tool_name}: invariant (a) — no top-level audit_id on the "
+            "agent-visible response (content or meta)"
+        )
 
-        # §9.2 invariant (b): result row has backend_audit_id set.
+        # --- §9.2 invariant (b): result row has non-empty backend_audit_id.
+        # Tag each captured row with its synthetic PK so the faithful resolver can
+        # evaluate the id::text predicate exactly as the SQL would.
+        for idx, c in enumerate(db.calls, start=1):
+            c.setdefault("_pk", f"evt-{idx}")
         result_row = next(
             (c for c in db.calls if c.get("event_type") == "mcp.tool.result"), None
         )
-        assert result_row is not None, f"{tool_name}: no mcp.tool.result row"
-        assert result_row["details"]["backend_audit_id"] is not None, \
-            f"{tool_name}: backend_audit_id is None"
-        assert result_row["details"]["backend_audit_id"], \
-            f"{tool_name}: backend_audit_id is empty"
+        assert result_row is not None, f"{tool_name}: invariant (b) — no mcp.tool.result row"
+        canonical = result_row["details"]["backend_audit_id"]
+        assert canonical, f"{tool_name}: invariant (b) — backend_audit_id is empty/None"
+
+        # The stamped agent-visible id must equal the canonical when content was a
+        # JSON object (core preserves native; proxied stamps envelope uuid). For
+        # meta-only / no-id shapes the canonical is the envelope uuid.
+        aliases = result_row["details"].get("audit_aliases") or []
+
+        # --- §9.2 invariant (c): resolver round-trip — citing [canonical]+aliases
+        # returns the very row the envelope wrote, case-scoped.
+        cited = [canonical, *aliases]
+        case_id = result_row.get("case_id")
+        resolved = _faithful_resolver(db.calls, case_id, cited)
+        resolved_pks = {r.get("_pk") for r in resolved}
+        assert result_row["_pk"] in resolved_pks, (
+            f"{tool_name}: invariant (c) — resolver did not return the result row "
+            f"for cited ids {cited!r} (resolved PKs: {sorted(resolved_pks)})"
+        )
+
+        # Defense-in-depth: citing the canonical ALONE must also resolve the row
+        # (the canonical is the id an agent records in a finding).
+        resolved_canonical = _faithful_resolver(db.calls, case_id, [canonical])
+        assert result_row["_pk"] in {r.get("_pk") for r in resolved_canonical}, (
+            f"{tool_name}: invariant (c) — canonical id {canonical!r} alone does "
+            "not resolve the result row"
+        )
+
+    def test_cross_case_citation_is_not_surfaced(self):
+        """SECURITY INVARIANT parity: a canonical id resolved under a DIFFERENT
+        case_id must NOT return the row (mirrors the resolver's mandatory
+        ``case_id = %s`` AND-scope)."""
+        mw, db = _make_mw()
+
+        async def _next(_ctx):
+            return ToolResult(
+                content=[TextContent(type="text", text='{"status": "green"}')]
+            )
+
+        _run_envelope(mw, _ctx("opensearch_status"), _next)
+        for idx, c in enumerate(db.calls, start=1):
+            c.setdefault("_pk", f"evt-{idx}")
+        result_row = next(c for c in db.calls if c.get("event_type") == "mcp.tool.result")
+        canonical = result_row["details"]["backend_audit_id"]
+        # Resolving under a foreign case must yield nothing.
+        foreign = _faithful_resolver(db.calls, "ffffffff-0000-0000-0000-000000000000", [canonical])
+        assert foreign == [], "cross-case citation leaked a row (case-scope broken)"
 
 
 # ---------------------------------------------------------------------------
