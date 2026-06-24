@@ -1656,7 +1656,15 @@ class InvestigationService(_BasePortalDbService):
         #   - PK uuid / backend_audit_id / audit_aliases  (existing)
         #   - envelope_event_id — call-row uuid always present in result details
         #   - request_id column  — 100% populated, links call↔result pair
-        #   - details->>'audit_id' — parity with case_manager.py:97
+        #   - details->>'audit_id' (the clause at the bottom of the SQL below) —
+        #     INTENTIONAL defense-in-depth / future-proofing seam, kept on purpose
+        #     (G2): no producer writes a top-level details.audit_id today (every
+        #     writer uses backend_audit_id / envelope_event_id / audit_aliases),
+        #     so it currently matches nothing — DO NOT delete it as dead code. It
+        #     mirrors the same predicate in case_manager.py:214
+        #     (_db_audit_event_has_audit_id) so a future writer that emits
+        #     details.audit_id resolves through BOTH the fail-closed write-side
+        #     verifier and this read-side resolver without a code change.
         #
         # §9.6 dedup fix: each envelope produces TWO rows per tool call — a
         # pre-dispatch 'requested' row (PK = envelope_event_id) and a result row
