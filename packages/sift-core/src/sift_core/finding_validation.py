@@ -47,10 +47,19 @@ def validate(finding: dict) -> dict:
             f"Invalid type '{finding_type}'. Must be one of: {sorted(VALID_TYPES)}"
         )
 
-    # Confidence validation
+    # Confidence validation — C3: strictly required, non-empty, exact enum match.
+    # Missing key: caught by the required-fields loop above.
+    # Empty string "": the required-fields `not finding.get(field)` catches it too,
+    # but we add an explicit non-empty guard here so the enum branch is unambiguous.
     confidence = finding.get("confidence", "").upper()
     valid_confidence = set(confidence_defs.keys())
-    if confidence and confidence not in valid_confidence:
+    if not confidence:
+        # Explicit empty-string guard (belt-and-suspenders with the required check).
+        errors.append(
+            "confidence must not be empty; must be one of: "
+            f"{sorted(valid_confidence)}"
+        )
+    elif confidence not in valid_confidence:
         errors.append(
             f"Invalid confidence '{confidence}'. Must be one of: {sorted(valid_confidence)}"
         )

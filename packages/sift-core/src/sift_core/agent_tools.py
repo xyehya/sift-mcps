@@ -210,6 +210,14 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "mitre_ids, iocs, event_type, event_timestamp, artifact_ref, related_findings, "
         "supersedes (finding id(s) this finding corrects/replaces, for self-correction chains), "
         "affected_account.\n\n"
+        "CONFIDENCE RULES (C3/W3):\n"
+        "  (a) REQUIRED — must be exactly one of HIGH, MEDIUM, LOW, SPECULATIVE. "
+        "Missing or empty confidence is REJECTED.\n"
+        "  (b) AUTO-CLAMPED DOWN to a provenance-derived ceiling (W3 cap-hint): "
+        "final = min(agent_confidence, derived_ceiling). You CANNOT over-claim. "
+        "Cite stronger provenance (more resolved MCP audit_ids, evidence-traced artifacts) "
+        "to support a higher confidence — the ceiling is raised by what you can prove, "
+        "not by assertion.\n\n"
         "EXAMPLE: {\"finding\": {\"title\": \"Suspicious PowerShell Execution\", \"type\": \"finding\", "
         "\"host\": \"WEBSRV01\", \"observation\": \"Encoded PowerShell ran from outlook.exe — EventID 1, "
         "ParentImage: outlook.exe, Image: powershell.exe\", \"interpretation\": \"Likely initial access "
@@ -232,7 +240,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
                         "host": {"type": "string", "description": "Affected hostname"},
                         "observation": {"type": "string", "description": "Raw evidence observed"},
                         "interpretation": {"type": "string", "description": "Analytical interpretation of observation"},
-                        "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW", "SPECULATIVE"]},
+                        "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW", "SPECULATIVE"], "description": "REQUIRED. Exactly one of HIGH/MEDIUM/LOW/SPECULATIVE. Empty or invalid is REJECTED. Auto-clamped DOWN to a provenance ceiling (W3) — cite strong MCP audit_ids + evidence artifacts to support higher values."},
                         "confidence_justification": {"type": "string", "description": "Why this confidence level is justified"},
                         "audit_ids": {"type": "array", "items": {"type": "string"}},
                         "mitre_ids": {"type": "array", "items": {"type": "string"}},
