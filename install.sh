@@ -2151,6 +2151,164 @@ PY
   fi
 }
 
+# =============================================================================
+# G1 — provision the least-privilege audit-write role (sift_audit_writer).
+# =============================================================================
+# Migration 202606242100_audit_writer_role.sql CREATEs the scoped role WITH LOGIN
+# but deliberately NO password (never hardcode a credential in a migration). The
+# gateway reads SIFT_AUDIT_WRITER_DSN and FALLS BACK to the full control-plane
+# (service_role / BYPASSRLS) DSN when it is unset — so without this step the
+# least-privilege role ships INERT and forward-writes keep using the broad DSN.
+#
+# This function mints a password for the role and writes the scoped DSN into the
+# 0600 sift-service control-plane.env. It runs AFTER apply_db_migrations so the
+# role already exists. It is an ENHANCEMENT, not a hard dependency: on any
+# failure (role absent, DB unreachable, parse error) it WARNS and continues — the
+# code-side fallback keeps provenance working.
+#
+# Secret handling (security-reviewed):
+#   - The password is generated with random_hex (CSPRNG via openssl) and passed
+#     to Python ONLY through an environment variable (AUDIT_WRITER_PW), never on
+#     argv (avoids /proc/<pid>/cmdline + `ps` leakage).
+#   - The ALTER ROLE ... PASSWORD statement is composed with psycopg.sql
+#     (Identifier for the role, Literal for the password) — the raw password is
+#     NEVER f-string-interpolated into DDL.
+#   - The scoped DSN is derived with urllib.parse (urlsplit/urlunsplit), the
+#     password URL-encoded with quote(safe=''); host/port/path(db)/query are
+#     preserved verbatim (sslmode etc. survive).
+#   - Python emits ONLY a single `dsn:<value>` marker line on stdout; status
+#     markers go to stderr. Bash captures the DSN but NEVER passes it (or the
+#     password) to log/warn/echo. The DSN lands only in the 0600 env file.
+provision_audit_writer() {
+  if [[ "${SIFT_CORE_ONLY:-0}" == "1" ]]; then
+    log "provision_audit_writer: core-only — skipping."
+    return 0
+  fi
+
+  local cp_dsn
+  cp_dsn="$(_resolved_control_plane_dsn)"
+  if [[ -z "$cp_dsn" ]]; then
+    log "provision_audit_writer: no control-plane DSN — skipping (least-privilege role stays inert)."
+    return 0
+  fi
+
+  local control_env_file="$SIFT_HOME/control-plane.env"
+
+  # Preserve-on-rerun: if the scoped DSN is already present, reuse it. Re-minting
+  # the password would invalidate the live role's existing credential.
+  local existing_writer_dsn
+  existing_writer_dsn="$(_env_file_value "$control_env_file" "SIFT_AUDIT_WRITER_DSN")"
+  if [[ -n "$existing_writer_dsn" ]]; then
+    log "provision_audit_writer: SIFT_AUDIT_WRITER_DSN already set — preserving (no password churn)."
+    export SIFT_AUDIT_WRITER_DSN="$existing_writer_dsn"
+    return 0
+  fi
+
+  log "provision_audit_writer: minting sift_audit_writer credential + scoped DSN."
+
+  # CSPRNG password — passed to Python via env (AUDIT_WRITER_PW), never argv.
+  local audit_pw
+  audit_pw="$(random_hex 32)"
+
+  local scoped_dsn
+  scoped_dsn="$(
+    SIFT_CONTROL_PLANE_DSN="$cp_dsn" AUDIT_WRITER_PW="$audit_pw" \
+      "$VENV_DIR/bin/python" - <<'PY'
+import os, sys
+from urllib.parse import urlsplit, urlunsplit, quote
+
+dsn = os.environ["SIFT_CONTROL_PLANE_DSN"]
+pw = os.environ["AUDIT_WRITER_PW"]
+ROLE = "sift_audit_writer"
+
+try:
+    import psycopg
+    from psycopg import sql
+except ImportError as exc:
+    print(f"skip:psycopg_unavailable:{exc}", file=sys.stderr)
+    sys.exit(0)
+
+# 1. Confirm the role exists (migration may have been skipped / DB partial).
+try:
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        cur = conn.execute(
+            "select 1 from pg_roles where rolname = %s", (ROLE,)
+        )
+        if cur.fetchone() is None:
+            print("skip:role_absent", file=sys.stderr)
+            sys.exit(0)
+        # 2. Set the password. Composed via psycopg.sql — the raw password is
+        #    NEVER string-formatted into the DDL text.
+        conn.execute(
+            sql.SQL("alter role {} with password {}").format(
+                sql.Identifier(ROLE),
+                sql.Literal(pw),
+            )
+        )
+except Exception as exc:  # noqa: BLE001 — best-effort enhancement, fail-soft
+    short = str(exc).split("\n")[0][:120]
+    print(f"error:alter_failed:{short}", file=sys.stderr)
+    sys.exit(1)
+
+# 3. Derive the scoped DSN: swap username -> sift_audit_writer and password ->
+#    the minted (URL-encoded) password; keep host/port/path(db)/query verbatim.
+parts = urlsplit(dsn)
+host = parts.hostname or ""
+userinfo = ROLE + ":" + quote(pw, safe="")
+netloc = userinfo + "@" + host
+if parts.port is not None:
+    netloc += ":" + str(parts.port)
+scoped = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+# 4. Emit ONLY the DSN marker on stdout (status markers go to stderr).
+sys.stdout.write("dsn:" + scoped + "\n")
+PY
+  )" || {
+    warn "provision_audit_writer: credential provisioning failed — least-privilege role stays inert."
+    warn "  Forward-writes fall back to the full control-plane DSN (provenance still works)."
+    unset audit_pw
+    return 0
+  }
+
+  # Extract the dsn: marker (do NOT echo/log the value).
+  local writer_dsn=""
+  while IFS= read -r line; do
+    case "$line" in
+      dsn:*) writer_dsn="${line#dsn:}" ;;
+    esac
+  done <<< "$scoped_dsn"
+
+  # Scrub the plaintext password from this shell's memory ASAP.
+  unset audit_pw scoped_dsn
+
+  if [[ -z "$writer_dsn" ]]; then
+    warn "provision_audit_writer: role absent or no DSN returned — skipping (least-privilege inactive)."
+    return 0
+  fi
+
+  # UPSERT SIFT_AUDIT_WRITER_DSN into control-plane.env, preserving every other
+  # key. Re-install 0600 sift-service via svc_install_file. The DSN value never
+  # touches a log/echo line — it lives only in the operator-temp -> 0600 file.
+  if ! svc_test_f "$control_env_file"; then
+    warn "provision_audit_writer: $control_env_file missing — skipping DSN write."
+    unset writer_dsn
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  # Copy existing keys EXCEPT any prior SIFT_AUDIT_WRITER_DSN line, then append
+  # the fresh one. svc_read uses sudo to read the sift-service-owned 0600 file.
+  svc_read "$control_env_file" | grep -v '^SIFT_AUDIT_WRITER_DSN=' > "$tmp" || true
+  printf 'SIFT_AUDIT_WRITER_DSN=%s\n' "$writer_dsn" >> "$tmp"
+  svc_install_file "$tmp" "$control_env_file" 600
+  rm -f "$tmp"
+
+  export SIFT_AUDIT_WRITER_DSN="$writer_dsn"
+  unset writer_dsn
+  log "provision_audit_writer: scoped DSN written to control-plane.env (least-privilege active)."
+}
+
 write_gateway_config() {
   # SIFT_CONFIG lives under SIFT_HOME (sift-service-owned 0700/0600), so the
   # existence check must use sudo.
@@ -3556,6 +3714,10 @@ main() {
   if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
     if apply_db_migrations; then
       DB_MIGRATIONS_RESULT="applied"
+      # G1: the sift_audit_writer role is created by a migration INSIDE
+      # apply_db_migrations, so it only exists now. Mint its password + write the
+      # scoped SIFT_AUDIT_WRITER_DSN so least-privilege is ACTIVE (fail-soft).
+      provision_audit_writer
     else
       DB_MIGRATIONS_RESULT="failed"
     fi
