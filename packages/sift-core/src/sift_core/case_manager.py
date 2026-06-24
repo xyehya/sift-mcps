@@ -49,13 +49,20 @@ _SHELL_SECRET_PATTERNS = [
     re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]+:[^\s:/@]+@"),
     # AWS-style access key id
     re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{12,}\b"),
+    # Stripe live/test secret keys: the FULL forms only (sk_live_/sk_test_/
+    # pk_live_/pk_test_/rk_live_/rk_test_ + the key body). I-2: the previous bare
+    # `sk`/`pk` prefixes (with just a `[-_]` separator + ≥10 chars) over-redacted
+    # benign forensic tokens like `sk-something-1234567890`; only the full Stripe
+    # forms are actual secrets, so match those and leave generic `sk-…`/`pk-…`
+    # alone.
+    re.compile(r"(?i)\b[srp]k_(?:live|test)_[A-Za-z0-9]{10,}"),
     # Bare provider PAT/secret tokens by well-known prefix (GitHub ghp_/gho_/…,
-    # github_pat_, GitLab glpat-, Slack xoxb-/xoxp-/…, Stripe sk_/pk_, Google
-    # AIza…). Run BEFORE the key=value rule so a bare token with no `key=` prefix
-    # is still scrubbed (and a prefixed one is caught here too, so the value never
-    # survives even if the key name is unfamiliar).
+    # github_pat_, GitLab glpat-, Slack xoxb-/xoxp-/…, Google AIza…). Run BEFORE
+    # the key=value rule so a bare token with no `key=` prefix is still scrubbed
+    # (and a prefixed one is caught here too, so the value never survives even if
+    # the key name is unfamiliar).
     re.compile(
-        r"(?i)\b(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[baprs]|sk|pk|AIza)"
+        r"(?i)\b(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[baprs]|AIza)"
         r"[-_][A-Za-z0-9_\-]{10,}"
     ),
     # key=value or key: value for sensitive key NAMES, where the keyword may be a

@@ -130,6 +130,40 @@ def test_redact_does_not_over_redact_benign_forensic_command():
     assert cm._redact_supporting_command(cmd) == cmd
 
 
+def test_redact_i2_sk_pk_full_stripe_forms_only():
+    """I-2: only the FULL Stripe key forms (sk_live_/sk_test_/pk_live_/pk_test_/
+    rk_live_/rk_test_) are redacted; a benign `sk-something-1234567890` token (a
+    generic short prefix) must NOT be over-redacted, and representative forensic
+    arg strings must pass through untouched."""
+    r = cm._redact_supporting_command
+
+    # Benign short prefixes must survive verbatim (the old over-redaction bug).
+    assert r("sk-something-1234567890") == "sk-something-1234567890"
+    assert r("pk-some-config-9876543210") == "pk-some-config-9876543210"
+
+    # Full Stripe secret keys MUST be redacted to the marker (value gone).
+    sk_live = "sk_live_" + "a" * 24
+    sk_test = "sk_test_" + "b" * 24
+    pk_live = "pk_live_" + "c" * 24
+    rk_live = "rk_live_" + "d" * 24
+    for tok in (sk_live, sk_test, pk_live, rk_live):
+        out = r(tok)
+        assert tok not in out, f"full Stripe key not redacted: {tok!r} -> {out!r}"
+        assert "[REDACTED:secret]" in out
+
+    # Other provider prefixes still redact (no regression).
+    assert "ghp_0123456789abcdef" not in r("export GH=ghp_0123456789abcdef")
+
+    # Representative forensic args must NOT be over-redacted.
+    for cmd in (
+        "EvtxECmd.exe -f x.evtx --csv /tmp/out",
+        "grep -r foo",
+        "fls -r image.dd",
+        "vol -f mem.raw windows.pslist",
+    ):
+        assert r(cmd) == cmd, f"forensic command over-redacted: {cmd!r}"
+
+
 # ---------------------------------------------------------------------------
 # DB forward-write
 # ---------------------------------------------------------------------------
