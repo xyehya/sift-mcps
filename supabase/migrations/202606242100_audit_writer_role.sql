@@ -111,6 +111,29 @@ begin
 end
 $$;
 
+-- W1-S1 (CWE-732/266) — close a privilege-escalation seam this role would
+-- otherwise open. Granting `sift_audit_writer` USAGE on schema app re-exposes
+-- app.evidence_unseal(uuid, text, uuid, uuid, uuid): a SECURITY DEFINER function
+-- (202606160100_evidence_unseal.sql:59-68) that runs as its OWNER. The
+-- append-only harden migration (202606141400) does a `revoke execute ... from
+-- public` SWEEP, but it runs at timestamp 141400 — BEFORE evidence_unseal was
+-- created at 160100 — so evidence_unseal still carries the DEFAULT PUBLIC
+-- EXECUTE. With schema USAGE, sift_audit_writer (or any PUBLIC role) could
+-- EXECUTE evidence_unseal as the owner and flip a sealed evidence item to
+-- unsealed — independent of this role's 3 table grants + BYPASSRLS, and bypassing
+-- the intended "service-only" exposure. Revoke that default PUBLIC grant now.
+--
+-- service_role ALREADY holds an EXPLICIT execute grant on evidence_unseal
+-- (202606160100_evidence_unseal.sql:144-151), so the revoke-from-public does NOT
+-- break the legitimate gateway unseal path — no re-grant to service_role is
+-- needed (verified). Scoped to THIS one function only; the broad SECURITY
+-- DEFINER PUBLIC-revoke sweep for post-141400 functions is a tracked follow-up.
+--
+-- Idempotent: REVOKE of a non-existent grant is a no-op, so this is safe to
+-- re-run (and a no-op if a future migration already revoked it).
+revoke execute on function app.evidence_unseal(uuid, text, uuid, uuid, uuid)
+  from public;
+
 comment on role sift_audit_writer is
   'L-1b least-privilege audit-write role for the B-D1 forward-write path. '
   'Scoped to INSERT app.audit_events + INSERT/UPDATE the two opensearch '
