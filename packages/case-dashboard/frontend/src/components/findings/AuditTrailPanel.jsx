@@ -69,6 +69,11 @@ function AuditEntry({ eid, entry, open, onToggle }) {
               <pre className="overflow-x-auto whitespace-pre-wrap rounded border border-border bg-background p-2">{entry.params.command}</pre>
             </div>
           )}
+          {isShell && entry.params?.purpose && (
+            <div>
+              <span className="font-semibold text-muted-foreground">Purpose:</span> <span>{entry.params.purpose}</span>
+            </div>
+          )}
           {!isShell && entry.tool && (
             <div>
               <span className="font-semibold text-muted-foreground">Tool:</span> <span>{entry.tool}</span>
