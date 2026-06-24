@@ -2576,7 +2576,55 @@ async def get_audit_for_finding(request: Request) -> JSONResponse:
             # values; ev["details"] is kept intact for any future consumers.
             det = ev.get("details") or {}
             if isinstance(det, dict):
-                # Tool name — always project from details.tool.
+                # W2: shape per tier, keyed off event_type/source. The two
+                # non-gateway tiers (shell self-report, opensearch ingest) write
+                # their own details schema that the gateway-envelope projection
+                # below does not read, so they previously rendered dead (shell)
+                # or 500'd the whole panel (ingest — see the result_summary note
+                # below). These branches populate the SAME top-level fields the
+                # panel already reads (tool / params / result_summary) and use
+                # `is None` guards so they never clobber a value the gateway path
+                # set. Gateway rows (source == "gateway_mcp_envelope") match
+                # neither branch and fall straight through unchanged.
+                src = ev.get("source") or ""
+                etype = ev.get("event_type") or ""
+
+                # Shell tier (B-D3): finding.supporting_command / shell_self_report.
+                # details carries the redacted command + analyst purpose. isShell
+                # is already true on the frontend (source contains "shell"); it
+                # reads entry.params?.command for the Command block, so project
+                # both into params.
+                if src == "shell_self_report" or etype == "finding.supporting_command":
+                    if ev.get("params") is None:
+                        ev["params"] = {
+                            "command": det.get("command"),
+                            "purpose": det.get("purpose"),
+                        }
+
+                # Ingest tier (B-D2): opensearch.ingest.artifact. details carries
+                # structured context + a STRING result_summary. Project the
+                # context into params and pass the string summary through (the
+                # frontend ResultSummary already renders a string). NOTE: do NOT
+                # dict() result_summary for this tier — it is a str; dict("...")
+                # raises ValueError. The string-safe handling below also fixes
+                # that panel-poisoning 500.
+                elif etype == "opensearch.ingest.artifact":
+                    if ev.get("tool") is None and det.get("tool") is not None:
+                        ev["tool"] = det["tool"]
+                    if ev.get("params") is None:
+                        ctx = {
+                            k: det.get(k)
+                            for k in ("tool", "run_id", "mcp_name", "hostname", "index_name")
+                            if det.get(k) is not None
+                        }
+                        if ctx:
+                            ev["params"] = ctx
+                    if ev.get("result_summary") is None:
+                        rs = det.get("result_summary")
+                        if isinstance(rs, str) and rs:
+                            ev["result_summary"] = rs
+
+                # Tool name — always project from details.tool (gateway path).
                 if ev.get("tool") is None and det.get("tool") is not None:
                     ev["tool"] = det["tool"]
                 # Params — prefer the real call arguments (command / purpose /
@@ -2592,16 +2640,24 @@ async def get_audit_for_finding(request: Request) -> JSONResponse:
                         ev["params"] = det["detail"]
                 # Result summary — start from details.result_summary then layer
                 # in exit_code (and output keys) from details.detail so the
-                # frontend ResultSummary can render "Exit: 0".
+                # frontend ResultSummary can render "Exit: 0".  String-safe:
+                # only dict()-merge when result_summary is itself a dict (the
+                # gateway tier); a non-empty string summary (ingest tier) is
+                # carried through verbatim instead of crashing dict("<string>").
                 if ev.get("result_summary") is None:
-                    base: dict[str, Any] = dict(det.get("result_summary") or {})
-                    detail_block = det.get("detail")
-                    if isinstance(detail_block, dict):
-                        for key in ("exit_code", "output_file", "output_sha256", "stdout_head"):
-                            if key in detail_block and key not in base:
-                                base[key] = detail_block[key]
-                    if base:
-                        ev["result_summary"] = base
+                    raw_rs = det.get("result_summary")
+                    if isinstance(raw_rs, str):
+                        if raw_rs:
+                            ev["result_summary"] = raw_rs
+                    else:
+                        base: dict[str, Any] = dict(raw_rs or {})
+                        detail_block = det.get("detail")
+                        if isinstance(detail_block, dict):
+                            for key in ("exit_code", "output_file", "output_sha256", "stdout_head"):
+                                if key in detail_block and key not in base:
+                                    base[key] = detail_block[key]
+                        if base:
+                            ev["result_summary"] = base
         return JSONResponse(events)
 
     case_dir = _resolve_case_dir()
