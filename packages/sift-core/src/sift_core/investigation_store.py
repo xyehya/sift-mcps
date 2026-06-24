@@ -181,6 +181,11 @@ HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({
     "provenance_gaps",
     "timeline_event_id",
     "source_evidence",
+    # W3: provenance metadata recording how confidence was derived/clamped.
+    # EXCLUDED from the hash — confidence ITSELF (the final clamped value) stays
+    # IN the hash as the recorded fact; this companion field is reasoning-about
+    # that fact and would only bloat/destabilize the content hash.
+    "confidence_derivation",
 })
 
 # Private alias kept for internal use within this module.

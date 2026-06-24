@@ -508,6 +508,52 @@ from sift_core.ioc_helpers import (  # noqa: E402
 )
 
 
+def _derive_confidence_ceiling(
+    provenance: dict,
+    finding_prov_grade: str,
+    source_evidence: object,
+    validated_commands: list,
+) -> str:
+    """Derive a confidence CEILING from provenance signals (W3 cap-hint).
+
+    Pure function over signals already computed at record_finding time. Returns
+    one of HIGH/MEDIUM/LOW/SPECULATIVE. This is a *ceiling*: the caller clamps
+    the agent-supplied confidence DOWN to it (``min`` by rank), never up — so a
+    self-asserted HIGH citing only NONE/unverified ids gets capped, closing the
+    self-asserted-HIGH-on-NONE gap (spec W3.2). It never raises an agent's value.
+
+    Mapping (spec W3.2), re-based on *resolved* ids:
+      - HIGH:  FULL grade AND >=2 resolved MCP ids AND no NONE ids.
+      - MEDIUM: (FULL AND >=1 resolved MCP id) OR (>=2 resolved MCP/HOOK ids AND
+                source_evidence present).
+      - LOW:   >=1 resolved (MCP/HOOK) id but below MEDIUM, OR shell-only with
+               validated_commands.
+      - SPECULATIVE: floor — only none/unverified ids (no resolved provenance).
+    """
+    mcp = provenance.get("mcp") or []
+    hook = provenance.get("hook") or []
+    none = provenance.get("none") or []
+    n_mcp = len(mcp)
+    n_hook = len(hook)
+    resolved = n_mcp + n_hook
+    has_source = bool(source_evidence)
+
+    # HIGH: strongest — fully-graded, multi-MCP, no unresolved ids.
+    if finding_prov_grade == "FULL" and n_mcp >= 2 and len(none) == 0:
+        return "HIGH"
+    # MEDIUM: fully-graded w/ at least one MCP id, OR two resolved ids backed by
+    # traced evidence.
+    if (finding_prov_grade == "FULL" and n_mcp >= 1) or (
+        resolved >= 2 and has_source
+    ):
+        return "MEDIUM"
+    # LOW: at least one resolved id (but below MEDIUM), or shell-only w/ commands.
+    if resolved >= 1 or (validated_commands and resolved == 0):
+        return "LOW"
+    # Floor: only NONE/unverified ids reached confidence assignment.
+    return "SPECULATIVE"
+
+
 def _validate_case_id(case_id: str) -> None:
     """Validate case_id to prevent path traversal."""
     if not case_id or not case_id.strip():
@@ -1657,8 +1703,49 @@ class CaseManager:
         if not validated_artifacts:
             finding_prov_grade = "PARTIAL"  # shell-only (no artifacts)
 
+        # W3 cap-hint: clamp the agent-supplied confidence DOWN to a ceiling
+        # derived from resolved provenance. Provenance may only LOWER the
+        # agent's value, never raise it (final = weaker of the two by rank).
+        # NEW findings only — confidence is inside the content hash, so this MUST
+        # run before _compute_content_hash and is never backfilled onto existing
+        # findings (that would mutate their hash and break the approval ledger).
+        agent_conf = (sanitized.get("confidence") or "").upper()
+        derived_ceiling = _derive_confidence_ceiling(
+            provenance,
+            finding_prov_grade,
+            sanitized.get("source_evidence"),
+            validated_commands,
+        )
+        # min() by rank = the WEAKER of the two (higher rank number).
+        final_conf = (
+            agent_conf
+            if _conf_rank(agent_conf) >= _conf_rank(derived_ceiling)
+            else derived_ceiling
+        )
+        clamped = final_conf != agent_conf
+        sanitized["confidence"] = final_conf
+        confidence_derivation = {
+            "agent": agent_conf,
+            "derived_ceiling": derived_ceiling,
+            "final": final_conf,
+            "clamped": clamped,
+            "basis": {
+                "prov_grade": finding_prov_grade,
+                "mcp_ids": len(provenance.get("mcp") or []),
+                "hook_ids": len(provenance.get("hook") or []),
+                "none_ids": len(provenance.get("none") or []),
+            },
+        }
+        if clamped:
+            audit_warnings.append(
+                f"confidence capped {agent_conf}->{final_conf}: "
+                f"{len(provenance.get('mcp') or [])} resolved MCP ids, "
+                f"prov_grade={finding_prov_grade}"
+            )
+
         finding_record = {
             **sanitized,
+            "confidence_derivation": confidence_derivation,
             "id": finding_id,
             "status": "DRAFT",
             "staged": now,
