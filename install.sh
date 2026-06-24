@@ -2297,12 +2297,22 @@ PY
 
   local tmp
   tmp="$(mktemp)"
+  # The temp file transiently holds the scoped DSN — ensure it is removed on EVERY
+  # exit path from here (incl. a fail-soft early return below), so under
+  # `set -Eeuo pipefail` a failed svc_install_file never leaves a 0600 temp file
+  # containing the secret on disk.
+  trap 'rm -f "$tmp"' RETURN
   # Copy existing keys EXCEPT any prior SIFT_AUDIT_WRITER_DSN line, then append
   # the fresh one. svc_read uses sudo to read the sift-service-owned 0600 file.
   svc_read "$control_env_file" | grep -v '^SIFT_AUDIT_WRITER_DSN=' > "$tmp" || true
   printf 'SIFT_AUDIT_WRITER_DSN=%s\n' "$writer_dsn" >> "$tmp"
-  svc_install_file "$tmp" "$control_env_file" 600
-  rm -f "$tmp"
+  # Fail-soft: per this function's contract least-privilege is an enhancement, not
+  # a hard dependency — a write failure must NOT abort the whole install. Warn
+  # (no secret) and continue; forward-writes fall back to the full control-plane DSN.
+  svc_install_file "$tmp" "$control_env_file" 600 || {
+    warn "provision_audit_writer: audit-writer DSN write failed — least-privilege role inactive (forward-writes use the full control-plane DSN); continuing."
+    return 0
+  }
 
   export SIFT_AUDIT_WRITER_DSN="$writer_dsn"
   unset writer_dsn
