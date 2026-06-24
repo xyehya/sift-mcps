@@ -132,4 +132,5 @@ supabase migration list
 | `supabase/migrations/*.sql` | Schema migrations applied by `supabase start` / `db reset` |
 | `scripts/setup-supabase.sh` | Bring-up script (install CLI, start, write env) |
 | `configs/supabase/auth-jwt.env.template` | Documents the 48h JWT requirement (AUT2-B0) |
+| `configs/supabase/solana-anchor.env.template` | Documents the operator-optional Solana proof anchoring (`SIFT_SOLANA_KEYPAIR` / `SIFT_SOLANA_CLUSTER`; unset => 503, no-op) |
 | `configs/supabase/README.md` | This file |

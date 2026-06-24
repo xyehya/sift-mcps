@@ -5873,7 +5873,7 @@ async def get_portal_state(request: Request) -> JSONResponse:
 
 
 def _dashboard_api_routes() -> list[Route]:
-    """API routes shared by v1 and v2 dashboard apps."""
+    """API routes for the v2 dashboard app."""
     return [
         Route("/api/portal/state", get_portal_state, methods=["GET"]),
         Route("/api/jobs/{job_id}", get_job_status, methods=["GET"]),
