@@ -49,7 +49,7 @@ class FakeInvestigationDB:
             {
                 "id": "F-tiers",
                 "status": "APPROVED",
-                "audit_ids": ["evt-gw", "evt-shell", "evt-ingest"],
+                "audit_ids": ["evt-gw", "evt-shell", "evt-ingest", "evt-listrs"],
                 "artifacts": [],
             }
         ]
@@ -97,6 +97,20 @@ class FakeInvestigationDB:
                     "result_summary": "1280 events indexed",
                 },
             },
+            # Malformed/unexpected tier — a JSON LIST result_summary. dict([..])
+            # would raise TypeError out of the unguarded loop and 500 the whole
+            # response (same crash class as the string bug). Must NOT crash:
+            # non-dict/non-str → empty base → no result_summary, 200.
+            "evt-listrs": {
+                "id": "evt-listrs",
+                "audit_id": "evt-listrs",
+                "event_type": "opensearch.ingest.artifact",
+                "source": "opensearch-ingest",
+                "details": {
+                    "tool": "ingest_weird",
+                    "result_summary": [1, 2],
+                },
+            },
         }
         return [catalog[i] for i in audit_ids if i in catalog]
 
@@ -133,6 +147,17 @@ def test_w2_endpoint_returns_200_not_500_for_ingest_row():
     # → the whole /audit response 500'd → the panel dead-ended for every id.
     resp = _client(FakeInvestigationDB()).get("/api/audit/F-tiers")
     assert resp.status_code == 200
+
+
+def test_w2_endpoint_returns_200_for_non_dict_non_str_result_summary():
+    # Security-gate Low: a JSON LIST (or number/bool) details.result_summary
+    # would hit dict([1, 2]) → TypeError out of the unguarded per-row loop →
+    # 500 (same crash class as the string bug). evt-listrs carries a list;
+    # the whole response must still be 200 and the list must NOT be projected
+    # as result_summary (only dict/str shapes render).
+    events = _by_id(_client(FakeInvestigationDB()).get("/api/audit/F-tiers").json())
+    listrs = events["evt-listrs"]
+    assert "result_summary" not in listrs or listrs.get("result_summary") in (None, {})
 
 
 def test_w2_gateway_tier_unchanged():

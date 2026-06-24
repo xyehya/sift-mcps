@@ -2650,7 +2650,13 @@ async def get_audit_for_finding(request: Request) -> JSONResponse:
                         if raw_rs:
                             ev["result_summary"] = raw_rs
                     else:
-                        base: dict[str, Any] = dict(raw_rs or {})
+                        # dict-merge ONLY when result_summary is itself a dict.
+                        # A non-dict, non-str value (JSON list / number / bool)
+                        # must NOT reach dict(raw_rs) — dict([1, 2]) raises
+                        # TypeError out of this un-try/except'd loop and 500s the
+                        # whole /audit response (same crash class as the string
+                        # bug). Anything else → empty base, no crash.
+                        base: dict[str, Any] = dict(raw_rs) if isinstance(raw_rs, dict) else {}
                         detail_block = det.get("detail")
                         if isinstance(detail_block, dict):
                             for key in ("exit_code", "output_file", "output_sha256", "stdout_head"):
