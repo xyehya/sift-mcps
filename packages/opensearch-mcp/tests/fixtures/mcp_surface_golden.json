@@ -1576,7 +1576,7 @@
                       "type": "string"
                     },
                     "total_indexed": {
-                      "description": "Total submitted documents.",
+                      "description": "Documents submitted to the bulk indexer (duplicate _ids from multi-timestamp rows \u2014 e.g. timeliner \u2014 collapse on write; final unique count may be lower; confirm with opensearch_count).",
                       "title": "Total Indexed",
                       "type": "integer"
                     },

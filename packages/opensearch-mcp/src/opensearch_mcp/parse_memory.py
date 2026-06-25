@@ -129,6 +129,79 @@ _MAX_JSON_BYTES = 200 * 1024 * 1024  # 200MB
 _VOL3_CMD: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# RAM preflight helpers (M-WORKER-DBDROP)
+# ---------------------------------------------------------------------------
+
+
+def _read_mem_available_bytes() -> int | None:
+    """Read MemAvailable from /proc/meminfo and return bytes.
+
+    Returns None on any error (file unreadable, key absent, parse failure)
+    so callers can always treat None as "unknown, skip the check".
+    """
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                # Format: "MemAvailable:  12345678 kB"
+                return int(line.split()[1]) * 1024  # kB → bytes
+    except Exception:
+        return None
+    return None
+
+
+def memory_ram_preflight(
+    image_path: Path,
+    *,
+    headroom_gb: float | None = None,
+    multiplier: float | None = None,
+) -> str | None:
+    """Non-blocking warning if available RAM looks insufficient for a vol3
+    memory ingest.  Returns a human-readable warning string when RAM is low,
+    or None when RAM looks sufficient or the check cannot be performed.
+
+    Fail-safe: never raises, never blocks, never refuses an ingest.
+    Defaults are env-tunable so ops can adjust per host without a redeploy:
+      SIFT_MEM_PREFLIGHT_HEADROOM_GB  — float, default 4.0
+      SIFT_MEM_PREFLIGHT_MULTIPLIER   — float, default 1.0
+
+    Justification for defaults: timeliner peak RSS was 12.6 GB on a 19 GB
+    image (~0.66×); multiplier=1.0 is conservative-safe (over-warns rather
+    than under-warns). The 4 GB headroom covers co-resident OpenSearch JVM +
+    Postgres + OS that must survive alongside vol.
+    """
+    import os
+
+    try:
+        _hg = float(os.environ.get("SIFT_MEM_PREFLIGHT_HEADROOM_GB", "")) if os.environ.get("SIFT_MEM_PREFLIGHT_HEADROOM_GB", "").strip() else None
+        _mx = float(os.environ.get("SIFT_MEM_PREFLIGHT_MULTIPLIER", "")) if os.environ.get("SIFT_MEM_PREFLIGHT_MULTIPLIER", "").strip() else None
+    except (ValueError, TypeError):
+        _hg = _mx = None
+
+    effective_headroom_gb = headroom_gb if headroom_gb is not None else (_hg if _hg is not None else 4.0)
+    effective_multiplier = multiplier if multiplier is not None else (_mx if _mx is not None else 1.0)
+
+    try:
+        image_bytes = image_path.stat().st_size
+        mem_avail = _read_mem_available_bytes()
+        if mem_avail is None:
+            return None
+        required = int(image_bytes * effective_multiplier) + int(effective_headroom_gb * 1024**3)
+        if mem_avail < required:
+            return (
+                f"Low memory for this ingest: image ~{image_bytes / 1024**3:.1f} GB, "
+                f"available RAM ~{mem_avail / 1024**3:.1f} GB, recommended "
+                f"~{required / 1024**3:.1f} GB (vol3 timeliner peak ~ image size + "
+                f"{effective_headroom_gb:.0f} GB headroom for OpenSearch/Postgres/OS). The "
+                "heaviest plugins (timeliner, filescan, handles) may be OOM-killed, "
+                "failing the whole job. Consider a lower tier, excluding timeliner, "
+                "or raising VM RAM."
+            )
+    except Exception:
+        return None
+    return None
+
+
 def _find_vol3() -> str:
     """Find the vol3 command.
 

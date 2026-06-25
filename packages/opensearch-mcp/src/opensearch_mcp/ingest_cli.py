@@ -2319,6 +2319,16 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
     else:
         plugin_list = TIER_1
 
+    # M-WORKER-DBDROP (worker plane): RAM preflight warning.  Computed here,
+    # after plugin_list is resolved, so it can be threaded into every
+    # _write_mem_status totals write and surfaced via result_public.warning.
+    # Fail-safe: None on any error; never refuses the ingest.
+    from opensearch_mcp.parse_memory import memory_ram_preflight as _ram_preflight
+
+    _mem_warning: str | None = _ram_preflight(image_path)
+    if _mem_warning:
+        print(f"WARNING: {_mem_warning}", file=sys.stderr)
+
     print(f"Memory image: {image_path.name}")
     print(f"Hostname: {hostname}")
     print(f"Tier {tier}: {len(plugin_list)} plugins")
@@ -2356,19 +2366,25 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
 
         total_indexed = sum(r.get("indexed", 0) for r in _plugin_results.values())
         n_done = sum(1 for a in status_plugins if a["status"] == "complete")
+        totals: dict = {
+            "indexed": total_indexed,
+            "artifacts_total": len(status_plugins),
+            "artifacts_complete": n_done,
+            "hosts_total": 1,
+            "hosts_complete": 1 if n_done == len(status_plugins) else 0,
+        }
+        # M-WORKER-DBDROP: carry the RAM preflight warning through the status
+        # record's totals (mirrors the F8 intel_backend lift) so _aggregate in
+        # ingest_job.py can surface it in result_public.warning.
+        if _mem_warning:
+            totals["mem_warning"] = _mem_warning
         write_status(
             case_id,
             os.getpid(),
             run_id,
             status,
             [status_host],
-            {
-                "indexed": total_indexed,
-                "artifacts_total": len(status_plugins),
-                "artifacts_complete": n_done,
-                "hosts_total": 1,
-                "hosts_complete": 1 if n_done == len(status_plugins) else 0,
-            },
+            totals,
             started_ts,
             error=error,
             elapsed_seconds=time.monotonic() - start_mono,
@@ -2478,7 +2494,11 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
             "run_id": run_id,
             "bulk_failed": total_bulk_failed,
         },
-        result_summary=(f"{total} indexed, {len(failed)} failed, {total_bulk_failed} bulk failed"),
+        result_summary=(
+            f"{total} submitted to bulk indexer (duplicates collapse on write; "
+            f"final unique count may be lower — use opensearch_count to verify), "
+            f"{len(failed)} failed, {total_bulk_failed} bulk failed"
+        ),
         input_files=[str(image_path)],
     )
 
