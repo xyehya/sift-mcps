@@ -330,6 +330,16 @@ def run_command(
             }
             if stderr_tail:
                 stage_info["stderr_tail"] = stderr_tail
+            elif exit_code not in (0, None):
+                # F3-stderr: the stage failed but produced no stderr.  This is a
+                # common footgun with forensic tools (e.g. mmls on an image with no
+                # partition table exits nonzero silently).  Attach a hint so the
+                # agent gets actionable context without having to inspect the binary.
+                stage_info["hint"] = (
+                    "stage produced no stderr; nonzero exit with empty diagnostics "
+                    "often means an unsupported input (e.g. mmls on a single-volume "
+                    "image with no partition table)"
+                )
             executed_stages_info.append(stage_info)
 
         if pipeline_result:
