@@ -66,3 +66,68 @@ def test_e01_with_partitions_no_note(monkeypatch, tmp_path):
 
     assert result["container_type"] == "e01"
     assert "partition_note" not in result, result
+
+
+# ---------------------------------------------------------------------------
+# REGISTRY-SURFACE tests (the actual agent-facing contract). The earlier impl
+# tests passed gates but the fix was INERT live because InspectContainerOut
+# (the Pydantic out_model) dropped partition_note. These pin the surface.
+# ---------------------------------------------------------------------------
+
+
+class TestInspectContainerRegistrySurface:
+    def test_out_model_has_partition_note_field(self):
+        from opensearch_mcp.registry import InspectContainerOut
+
+        assert "partition_note" in InspectContainerOut.model_fields
+
+    def test_out_model_serializes_partition_note(self):
+        """A partition_note set on the model must survive model_dump (the
+        payload the agent actually receives)."""
+        from opensearch_mcp.registry import InspectContainerOut
+
+        out = InspectContainerOut(
+            path="evidence/disk.E01",
+            resolved_path="evidence/disk.E01",
+            container_type="e01",
+            tool_available=True,
+            partition_note="no partition table — use fls -i ewf -f ntfs",
+        )
+        dumped = out.model_dump(mode="json")
+        assert dumped["partition_note"] == "no partition table — use fls -i ewf -f ntfs"
+
+    def test_out_model_partition_note_defaults_none(self):
+        from opensearch_mcp.registry import InspectContainerOut
+
+        out = InspectContainerOut(
+            path="p", resolved_path="p", container_type="file", tool_available=False
+        )
+        assert out.model_dump(mode="json")["partition_note"] is None
+
+    def test_run_inspect_container_propagates_partition_note(self, monkeypatch):
+        """End-to-end registry surface: when the impl returns partition_note, the
+        ToolResult structured_content (what the agent sees) carries it."""
+        import asyncio
+
+        from opensearch_mcp import registry
+
+        raw = {
+            "path": "evidence/disk.E01",
+            "resolved_path": "evidence/disk.E01",
+            "container_type": "e01",
+            "tool_available": True,
+            "partitions": [],
+            "partition_note": "no partition table detected — use fls -i ewf -f ntfs <path> directly",
+        }
+
+        class _FakeImpl:
+            def opensearch_inspect_container(self, **kwargs):
+                return raw
+
+        monkeypatch.setattr(registry, "_impl_server", lambda: _FakeImpl())
+
+        params = registry.InspectContainerIn(path="evidence/disk.E01")
+        result = asyncio.run(registry.run_opensearch_inspect_container(params))
+        sc = result.structured_content
+        assert sc["partition_note"] == raw["partition_note"]
+        assert sc["container_type"] == "e01"

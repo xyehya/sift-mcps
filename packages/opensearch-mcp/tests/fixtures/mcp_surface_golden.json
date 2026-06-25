@@ -3194,7 +3194,7 @@
         "category": "evidence-survey",
         "defer_loading": true,
         "defer_loading_rationale": "SURVEY-phase tool used once per evidence item; Tool-Search `defer_loading` candidate.",
-        "output_shape": "InspectContainerOut: path, resolved_path, container_type (e01|raw|file|unknown), tool_available, size_bytes, size_human, hashes{}, partitions[], acquiry_info{}, raw_info (truncated).",
+        "output_shape": "InspectContainerOut: path, resolved_path, container_type (e01|raw|file|unknown), tool_available, size_bytes, size_human, hashes{}, partitions[], acquiry_info{}, raw_info (truncated), partition_note (guidance when no partition table \u2014 use fls -i ewf -f ntfs directly).",
         "recommended_for_phase": "SURVEY",
         "response_shaping": "raw_info is truncated fdisk/img_stat text \u2014 a preview, not the full tool dump. Read-only; never modifies evidence.",
         "usage_examples": [
@@ -3244,6 +3244,19 @@
                 "description": "Reported hashes.",
                 "title": "Hashes",
                 "type": "object"
+              },
+              "partition_note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Guidance when no partition table (single-volume image) \u2014 use fls -i ewf -f ntfs directly.",
+                "title": "Partition Note"
               },
               "partitions": {
                 "description": "Detected partitions when available.",

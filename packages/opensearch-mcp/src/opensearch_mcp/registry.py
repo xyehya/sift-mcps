@@ -483,6 +483,13 @@ class InspectContainerOut(BaseModel):
         None, description="E01 acquisition metadata from ewfinfo."
     )
     raw_info: str | None = Field(None, description="Truncated fdisk/img_stat output.")
+    partition_note: str | None = Field(
+        None,
+        description=(
+            "Guidance when no partition table (single-volume image) — use "
+            "fls -i ewf -f ntfs directly."
+        ),
+    )
 
 
 class IngestFormat(str, Enum):
@@ -1141,6 +1148,7 @@ async def run_opensearch_inspect_container(params: InspectContainerIn) -> ToolRe
         partitions=list(raw.get("partitions") or []),
         acquiry_info=raw.get("acquiry_info") or raw.get("acquiry"),
         raw_info=raw.get("raw_info"),
+        partition_note=raw.get("partition_note"),
     )
     return _success_tool_result(out, meta)
 
@@ -1809,7 +1817,8 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
         "output_shape": (
             "InspectContainerOut: path, resolved_path, container_type "
             "(e01|raw|file|unknown), tool_available, size_bytes, size_human, hashes{}, "
-            "partitions[], acquiry_info{}, raw_info (truncated)."
+            "partitions[], acquiry_info{}, raw_info (truncated), partition_note "
+            "(guidance when no partition table — use fls -i ewf -f ntfs directly)."
         ),
         "response_shaping": (
             "raw_info is truncated fdisk/img_stat text — a preview, not the full tool "
