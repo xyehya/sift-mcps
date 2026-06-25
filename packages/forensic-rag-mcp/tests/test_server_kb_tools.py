@@ -215,3 +215,108 @@ def test_kb_tools_registered_on_mcp():
         "kb_list_knowledge_sources",
         "kb_get_knowledge_stats",
     } <= tools
+
+
+# ---------------------------------------------------------------------------
+# F10: technique-filter fallback (corpus not technique-tagged)
+# ---------------------------------------------------------------------------
+
+
+class _TechniqueAwareStore(_FakeStore):
+    """Returns hits ONLY when no technique filter is applied — models a corpus
+    whose chunks are not tagged with the requested (sub-)technique id."""
+
+    def search(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get("technique"):
+            return RagSearchResult(case_id=None, hits=[])
+        return RagSearchResult(case_id=None, hits=list(self.hits))
+
+
+class _TechniqueMatchStore(_FakeStore):
+    """Returns hits regardless of technique — models a corpus where the
+    technique filter DOES match (no relaxation should occur)."""
+
+    def search(self, **kwargs):
+        self.calls.append(kwargs)
+        return RagSearchResult(case_id=None, hits=list(self.hits))
+
+
+@pytest.fixture
+def server_technique_aware(monkeypatch):
+    s = srv.RAGServer()
+    store = _TechniqueAwareStore()
+    monkeypatch.setattr(s, "_get_store", lambda: store)
+    monkeypatch.setattr(s, "_get_embedder", lambda: _FakeEmbedder())
+    return s, store
+
+
+def test_technique_filter_relaxes_when_zero_results(server_technique_aware):
+    """F10: technique filter that matches nothing → fall back to unfiltered
+    semantic search and annotate the relaxation."""
+    s, store = server_technique_aware
+    out = s._search(
+        query="RDP lateral movement remote desktop",
+        top_k=5,
+        source="",
+        source_ids=None,
+        technique="T1021.001",
+        platform="",
+    )
+    assert out["status"] == "ok"
+    # The fallback returned the unfiltered hits.
+    assert out["results"], out
+    assert out["results"][0]["provenance_id"] == "prov-1"
+    # Annotated as relaxed.
+    assert "technique_filter" in out
+    assert "relaxed" in out["technique_filter"]
+    assert "T1021.001" in out["technique_filter"]
+    # Two store calls: first with technique, second relaxed to None.
+    assert len(store.calls) == 2
+    assert store.calls[0]["technique"] == "T1021.001"
+    assert store.calls[1]["technique"] is None
+
+
+def test_technique_relaxation_preserves_other_filters(server_technique_aware):
+    """Source/platform filters must survive the relaxation; only technique drops."""
+    s, store = server_technique_aware
+    s._search(
+        query="q",
+        top_k=5,
+        source="sigma",
+        source_ids=None,
+        technique="T1003",
+        platform="windows",
+    )
+    relaxed_call = store.calls[1]
+    assert relaxed_call["technique"] is None
+    assert relaxed_call["source"] == "sigma"
+    assert relaxed_call["platform"] == "windows"
+
+
+def test_technique_filter_honoured_when_it_matches(monkeypatch):
+    """When the technique filter DOES match, no relaxation and no annotation."""
+    s = srv.RAGServer()
+    store = _TechniqueMatchStore()
+    monkeypatch.setattr(s, "_get_store", lambda: store)
+    monkeypatch.setattr(s, "_get_embedder", lambda: _FakeEmbedder())
+    out = s._search(
+        query="credential dumping",
+        top_k=5,
+        source="",
+        source_ids=None,
+        technique="T1003",
+        platform="",
+    )
+    assert out["results"], out
+    assert "technique_filter" not in out  # no relaxation
+    assert len(store.calls) == 1  # only one search, technique honoured
+    assert store.calls[0]["technique"] == "T1003"
+
+
+def test_no_technique_no_relaxation_path(server):
+    """Without a technique filter, the relaxation branch never runs."""
+    s, store, _ = server
+    out = s._search(query="q", top_k=5, source="", source_ids=None, technique="", platform="")
+    assert "technique_filter" not in out
+    assert len(store.calls) == 1

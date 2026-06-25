@@ -116,9 +116,16 @@ class RAGServer:
                     precedence over `source`. Use kb_list_knowledge_sources to
                     discover valid IDs.
                 technique: Filter by MITRE technique ID (e.g. 'T1003', 'T1059.001').
+                    NOTE: the corpus is not reliably technique-tagged, so a
+                    technique filter that matches nothing AUTOMATICALLY RELAXES to
+                    an unfiltered semantic search (other filters preserved) rather
+                    than returning 0 hits; the response then carries
+                    ``technique_filter: "relaxed — ..."``.  When the filter does
+                    match, it is honoured and no relaxation occurs.
                 platform: Filter by platform: one of windows, linux, macos.
 
-            Returns: {status, query, results[], matched_sources? | warning?}
+            Returns: {status, query, results[], technique_filter? |
+                matched_sources? | warning?}
             """
             return self._search(
                 query=query,
@@ -247,6 +254,32 @@ class RAGServer:
             "query": query,
             "results": public.get("results", []),
         }
+
+        # F10: technique is a HARD metadata-equality filter in the store, but the
+        # corpus is not reliably tagged with MITRE (sub-)technique ids — so a
+        # technique-filtered search frequently returns 0 even when strong semantic
+        # matches exist.  When that happens, fall back to the same semantic search
+        # WITHOUT the technique filter (other filters — source/source_ids/platform
+        # — are preserved) and annotate the relaxation so the agent knows the
+        # technique constraint did not narrow.  If the technique filter DID match,
+        # it is honoured unchanged (no relaxation).
+        if technique and not response["results"]:
+            relaxed = store.search(
+                query_embedding=embedding,
+                top_k=top_k,
+                source=source or None,
+                source_ids=clean_source_ids,
+                technique=None,
+                platform=platform or None,
+            )
+            relaxed_public = relaxed.public_dict()
+            response["results"] = relaxed_public.get("results", [])
+            response["technique_filter"] = (
+                "relaxed — corpus not technique-tagged; "
+                f"no chunk matched technique={technique!r}, "
+                "returned unfiltered semantic matches instead"
+            )
+
         # Filter feedback parity with the original tool: when a source filter was
         # applied but matched nothing, hint at kb_list_knowledge_sources.
         applied_source = clean_source_ids or ([source] if source else None)
