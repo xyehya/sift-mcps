@@ -1654,6 +1654,236 @@ class TestCaseDirKwargNoRaiseLive:
 
 
 # ---------------------------------------------------------------------------
+# M-INGSTATUS surface tests — run_opensearch_ingest_status (registry wrapper)
+# must surface durable job_id in ingests[].details.job_id (flat, no double-nest)
+# ---------------------------------------------------------------------------
+
+import json as _json_surface  # distinct alias from the json imported above
+
+import opensearch_mcp.server as _srv_mod
+from opensearch_mcp.registry import IngestStatusIn, run_opensearch_ingest_status
+
+
+_FAKE_DURABLE_ROW = {
+    "job_id": "aabb-1234-ccdd-5678",
+    "job_type": "ingest",
+    "status": "running",
+    "case_id": "case-surface-test",
+    "evidence_id": None,
+    "priority": 100,
+    "attempts": 1,
+    "max_attempts": 3,
+    "spec_public": {"path": "evidence/test.e01"},
+    "result_public": {"indexed_docs": 8000},
+    "error_summary": None,
+    "provenance_id": None,
+    "created_at": "2026-06-25T10:00:00Z",
+    "started_at": "2026-06-25T10:01:00Z",
+    "finished_at": None,
+    "updated_at": "2026-06-25T10:05:00Z",
+    "step_count": 3,
+    "steps_succeeded": 2,
+    "worker_label": "osw-ingest-5678",
+    "current_step": {"name": "evtx", "detail": "8000 indexed"},
+}
+
+
+class TestMIngestStatusRegistrySurface:
+    """M-INGSTATUS: registry surface (run_opensearch_ingest_status) must surface
+    durable job_id in ingests[].details.job_id — not nested as .details.details.job_id.
+
+    The double-nesting bug: server.py puts durable fields in {'details': {...}}
+    inside each ingest item dict, but the registry's _details overflow collector
+    didn't exclude 'details' from its catch-all pass-through, so the agent saw
+    ingests[].details.details.job_id.  Fixed by adding 'details' to the exclusion
+    set and wiring item.get('details') directly into IngestRun.details.
+    """
+
+    def _run(self, coro):
+        loop = _asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def test_job_id_is_flat_in_details_not_double_nested(self, monkeypatch):
+        """M-INGSTATUS: job_id must be at ingests[0].details.job_id, NOT .details.details.job_id."""
+        monkeypatch.setattr(_srv_mod, "_get_active_case", lambda: "case-surface-test")
+        monkeypatch.setattr(_srv_mod, "_JOB_STATUS_LISTER", lambda case_id: [_FAKE_DURABLE_ROW])
+
+        with (
+            patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
+            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
+        ):
+            params = IngestStatusIn(case_id="case-surface-test")
+            result = self._run(run_opensearch_ingest_status(params))
+
+        assert not result.is_error, f"Expected success, got error: {result}"
+        payload = _json_surface.loads(result.content[0].text)
+
+        ingests = payload.get("ingests", [])
+        assert len(ingests) == 1, f"Expected 1 ingest row, got {len(ingests)}"
+
+        details = ingests[0].get("details", {})
+        # job_id must be at ingests[0].details.job_id (flat)
+        assert details.get("job_id") == "aabb-1234-ccdd-5678", (
+            f"job_id not flat in details: {details!r}. "
+            "Must be ingests[0].details.job_id, not ingests[0].details.details.job_id"
+        )
+        # worker_label must also be flat (not nested under another details key)
+        assert details.get("worker_label") == "osw-ingest-5678", (
+            f"worker_label not flat in details: {details!r}"
+        )
+        # No double-nesting: details must not contain another 'details' key
+        assert "details" not in details, (
+            f"Double-nesting detected: ingests[0].details.details exists: {details.get('details')!r}"
+        )
+
+    def test_authority_postgres_in_result(self, monkeypatch):
+        """In DB-active mode the authority field must be 'postgres-durable-jobs'."""
+        monkeypatch.setattr(_srv_mod, "_get_active_case", lambda: "case-surface-test")
+        monkeypatch.setattr(_srv_mod, "_JOB_STATUS_LISTER", lambda case_id: [])
+
+        with (
+            patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
+            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
+        ):
+            params = IngestStatusIn(case_id="case-surface-test")
+            result = self._run(run_opensearch_ingest_status(params))
+
+        payload = _json_surface.loads(result.content[0].text)
+        assert payload.get("authority") == "postgres-durable-jobs", (
+            f"Expected postgres-durable-jobs authority, got: {payload.get('authority')!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# M-HOSTNAME surface tests — IngestIn must advertise hostname as optional;
+# memory/e01 derive-wins even with explicit hostname; json/accesslog use it.
+# ---------------------------------------------------------------------------
+
+from opensearch_mcp.registry import IngestIn
+
+
+class TestMHostnameIngestInSurface:
+    """M-HOSTNAME: registry surface (IngestIn model) must advertise optional hostname.
+
+    Operator decision: derive-first — auto/memory/e01-disk derivation wins even
+    when caller passes hostname.  json/accesslog/non-recursive-delimited must still
+    accept a caller-supplied hostname since those formats have no derivable host.
+    """
+
+    def test_hostname_is_optional_in_ingest_in_schema(self):
+        """hostname field must exist in IngestIn but be optional (default='')."""
+        schema = IngestIn.model_json_schema()
+        props = schema.get("properties", {})
+        assert "hostname" in props, (
+            "hostname must be present in IngestIn schema so json/accesslog/delimited "
+            "callers can supply it"
+        )
+        # Optional means it's not in the 'required' list
+        required = schema.get("required", [])
+        assert "hostname" not in required, (
+            "hostname must NOT be required in IngestIn — only used for hostless formats"
+        )
+
+    def test_hostname_default_is_empty_string(self):
+        """IngestIn.hostname defaults to '' so callers don't need to supply it."""
+        m = IngestIn(path="evidence/test.e01")
+        assert m.hostname == "", f"Default hostname must be '', got {m.hostname!r}"
+
+    def test_memory_format_description_says_ignored(self):
+        """hostname field description must say it is IGNORED for memory/e01-disk formats."""
+        schema = IngestIn.model_json_schema()
+        desc = schema["properties"]["hostname"].get("description", "")
+        assert "IGNORED" in desc, (
+            f"hostname description must say IGNORED for memory/e01-disk, got: {desc!r}"
+        )
+        assert "json" in desc.lower() or "accesslog" in desc.lower(), (
+            f"hostname description must mention the hostless formats, got: {desc!r}"
+        )
+
+    def test_hostname_in_served_tool_schema(self):
+        """The served tool schema (what the Gateway sees) must include hostname."""
+        schemas = _served_tool_schemas()
+        assert "opensearch_ingest" in schemas, "opensearch_ingest must be in served schemas"
+        props = schemas["opensearch_ingest"].get("properties", {})
+        assert "hostname" in props, (
+            "hostname must be in the served opensearch_ingest schema — missing means "
+            "json/accesslog callers can't pass it through the Gateway"
+        )
+
+    def test_memory_ingest_derivation_wins_over_passed_hostname(self, monkeypatch, tmp_path):
+        """memory format: _derive_hostname_from_image is called even when hostname passed.
+
+        Tests the idx_ingest_memory path in server.py via opensearch_ingest.
+        The image must live inside the case evidence dir (path-containment gate).
+        """
+        case_dir = tmp_path / "case-derive-test"
+        evidence_dir = case_dir / "evidence"
+        evidence_dir.mkdir(parents=True)
+        image = evidence_dir / "memdump.raw"
+        image.write_bytes(b"\x00" * 16)
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+        derive_called = {"n": 0}
+
+        def _spy_derive(path, timeout=120):
+            derive_called["n"] += 1
+            return ("REGISTRY-DERIVED", "registry")
+
+        # Patch the module attribute — server.py does a local `from … import`
+        # inside idx_ingest_memory at call time, which reads from the module
+        # object, so patching opensearch_mcp.parse_memory._derive_hostname_from_image
+        # is the correct intercept point.
+        with patch(
+            "opensearch_mcp.parse_memory._derive_hostname_from_image",
+            side_effect=_spy_derive,
+        ):
+            opensearch_ingest(
+                path="evidence/memdump.raw",
+                format="memory",
+                hostname="EXPLICIT-WRONG-HOST",  # should be ignored — derive wins
+                dry_run=True,
+            )
+
+        assert derive_called["n"] >= 1, (
+            "Derivation must be called even when explicit hostname is passed "
+            "(M-HOSTNAME: derive-first is authoritative for memory format)"
+        )
+
+    def test_json_ingest_passes_hostname_to_server(self, mock_client, monkeypatch, tmp_path):
+        """json format: caller-supplied hostname is passed through to idx_ingest_json.
+
+        For formats with no derivable host (json/accesslog/delimited), the
+        agent-supplied hostname must reach the server function.
+        """
+        case_dir = tmp_path / "case-json-test"
+        (case_dir / "evidence").mkdir(parents=True)
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "case-json-test")
+
+        captured_hostname = []
+
+        def _capture_json(path, hostname, *args, **kwargs):
+            captured_hostname.append(hostname)
+            return {"status": "preview", "format": "json"}
+
+        with patch("opensearch_mcp.server.idx_ingest_json", side_effect=_capture_json):
+            opensearch_ingest(
+                path="evidence/events.jsonl",
+                format="json",
+                hostname="WEB-SRV01",
+                dry_run=True,
+            )
+
+        assert captured_hostname, "idx_ingest_json was not called"
+        assert captured_hostname[0] == "WEB-SRV01", (
+            f"hostname must be passed to idx_ingest_json for json format, "
+            f"got: {captured_hostname[0]!r}"
+        )
+
+# ---------------------------------------------------------------------------
 # M-QUERYERR — surface test: run_opensearch_search must return typed user error
 # for query parse failures (not the generic "internal / check backend logs").
 # The surface is the registry's run_opensearch_search which calls _impl_server()
