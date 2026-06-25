@@ -384,7 +384,26 @@
           }
         },
         {
-          "description": "Deep memory analysis, write (host auto-derived via vol3)",
+          "description": "Ingest a flat JSON event log where host can't be derived — supply hostname explicitly",
+          "arguments": {
+            "path": "evidence/events.jsonl",
+            "format": "json",
+            "hostname": "SRL-FORGE",
+            "time_field": "@timestamp",
+            "dry_run": false
+          }
+        },
+        {
+          "description": "Ingest an access log without a derivable host — supply hostname explicitly",
+          "arguments": {
+            "path": "evidence/apache_access.log",
+            "format": "accesslog",
+            "hostname": "WEB-SRV01",
+            "dry_run": false
+          }
+        },
+        {
+          "description": "Deep memory analysis, write (host auto-derived via vol3; hostname ignored)",
           "arguments": {
             "path": "evidence/memdump.raw",
             "format": "memory",
@@ -409,7 +428,7 @@
       "description": "Check running/recent ingest and enrichment operations for a case (\"*\" for all cases), with the per-host artifact checklist. In DB-active mode (BATCH-K4), reads durable jobs from app.job_status_public and returns them in ingests[] with worker_label and current_step; use running_commands_status(job_id) for per-job detail. Pass job_id (from the opensearch_ingest dispatch response) to get a direct link. Also the status channel for async enrichment.",
       "when_to_use": "Use to check whether a non-DB-active ingest is running (~every 30s while active). In DB-active mode, this returns durable job rows from app.job_status_public plus an authority pointer; use running_commands_status(job_id) for per-job realtime status.",
       "avoid_when": "Operational status only \u2014 inspect indexed records (opensearch_search) for evidence, not this.",
-      "output_notes": "In DB-active mode, ingests=[] always (BATCH-K4); authority and job_id fields redirect to the canonical durable job. In legacy mode, ingests[] carries per-artifact progress from local status files.",
+      "output_notes": "In DB-active mode (BATCH-K4), ingests[] contains durable job rows from app.job_status_public (no local mirror files are read); details{} carries job_id, worker_label, current_step. In legacy mode, ingests[] carries per-artifact progress from local status files.",
       "output_shape": "IngestStatusOut: ingests[] of {case_id, status, pid, elapsed, total_indexed, bulk_failed, hosts_complete/total, artifacts_complete/total, log_file, checklist[], message, halt_reason, errors[], next_steps[], warnings[], details{}}, message, authority (DB-active mode only), job_id (when supplied), next_step.",
       "response_shaping": "In DB-active mode returns a redirect only (no mirror content). In legacy mode returns a structured progress summary plus a log_file reference.",
       "usage_examples": [
