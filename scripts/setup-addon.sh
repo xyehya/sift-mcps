@@ -2,42 +2,75 @@
 set -Eeuo pipefail
 
 # =============================================================================
-# setup-addon.sh — OPTIONAL helper for external add-on backends
+# setup-addon.sh — OPTIONAL helper to PREPARE external/add-on backends
 # =============================================================================
 #
-# The SIFT Protocol Gateway (SPG) — core + gateway + portal + the agent's
-# in-process MCP server — is the product. The native stack is installed by:
+# PURPOSE
+#   This is a PREP-ONLY helper for the add-on backends that ./install.sh does
+#   NOT wire on its own — notably windows-triage and opencti. The SIFT Protocol
+#   Gateway core (gateway + portal + opensearch + forensic-rag) is ALREADY
+#   complete after ./install.sh; you do NOT need this script for those. Add-on
+#   backends (OpenCTI, windows-triage, or ANY backend written to the SIFT MCP
+#   Backend Contract) are EXTERNAL, INDEPENDENT, and OPTIONAL — the ones shipped
+#   here are reference implementations. Run zero, one, or several — or bring your
+#   own. (forensic-rag-mcp is the knowledge reference backend — kb_search_knowledge
+#   etc. — backed by Supabase pgvector; install.sh already seeds it.)
 #
-#       ./install.sh
+# WHEN / PREREQUISITES
+#   Run this AFTER ./install.sh, from the STAGED runtime root (default
+#   /opt/sift-mcps — the tree the gateway's sift-service user execs from, NOT
+#   wherever this file happens to live). Requires `uv` and a control-plane DSN
+#   context (the same environment install.sh set up). If the staged root or its
+#   .venv is missing, the script fails fast with remediation.
 #
-# and is complete on its own. Add-on backends (OpenCTI, OpenSearch,
-# forensic-rag, or ANY backend a third party writes to the
-# SIFT MCP Backend Contract) are EXTERNAL, INDEPENDENT, and OPTIONAL. The ones
-# shipped here are merely *reference implementations* of the contract. An
-# NOTE (BATCH-OSX-RAG): forensic-rag-mcp is registered as the knowledge
-# reference backend (kb_search_knowledge etc.) backed by Supabase pgvector;
-# the gateway rag_search_case shim PMI2 added has been removed.
-# operator may run zero, one, or several — or bring their own.
+# USAGE
+#   sudo ./scripts/setup-addon.sh        # interactive menu (option 4 = windows-triage)
+#   ./scripts/setup-addon.sh --help
 #
-# There is exactly ONE integration door, identical for every backend:
+#   windows-triage menu answers (sensible defaults):
+#     - Triage baseline DB dir: keep the default /var/lib/sift/windows-triage
+#       (= the add-on's OWN config default) so the backend resolves it with NO
+#       gateway env-ref and registers out of the box. A different dir keeps an
+#       env-ref you must wire first.
+#     - Baselines: the base known_good.db / context.db cover most checks.
+#     - The OPTIONAL full registry baseline (known_good_registry.db, ~12 GB on
+#       disk, needs ~15 GB free) is OPT-IN — only `wintriage_check_registry`
+#       needs it; decline it unless you run that check.
 #
-#       point the portal at the backend's `sift-backend.json` manifest
-#         -> the portal validates it against the spec
-#         -> on pass, it registers the backend and hot-reloads the gateway
+# VENV SAFETY (regression we fixed — read before editing the uv calls)
+#   `uv sync` / `uv run` are DECLARATIVE: syncing a venv with only an add-on's
+#   extra (e.g. `--extra windows-triage`) PRUNES every package outside that
+#   selection. install.sh builds the shared runtime venv with `--extra full`
+#   (or `--extra core` for core-only); a naive add-on sync would tear `full`'s
+#   opensearch-mcp / forensic-rag-mcp / psycopg / sift-gateway deps OUT of that
+#   venv and brick the gateway (it imports psycopg, so it could not restart).
+#   Therefore EVERY runtime-venv sync/run here is ADDITIVE via `--inexact`, which
+#   keeps already-installed packages. NEVER drop `--inexact` from a uv sync/run
+#   that targets the staged runtime venv.
 #
-# This script NEVER registers anything and NEVER edits gateway.yaml. The core
-# stays add-on-agnostic. All this helper does is, per backend you select:
+# PREP-ONLY — REGISTRATION IS PORTAL-MANAGED
+#   This script changes NOTHING in the running gateway: it NEVER registers a
+#   backend and NEVER edits gateway.yaml. Per backend you select it (1) optionally
+#   provisions prerequisites (downloads / Docker stacks / index bootstrap),
+#   (2) prompts for + ECHOes every config/env var, and (3) writes a ready-to-submit
+#   register payload to  ~/.sift/addon-register/<name>.json  (operator-owned, 0700
+#   dir). You then drive registration yourself:
+#       Portal -> Backends -> Add backend
+#         - Command  = the ABSOLUTE console-script path, e.g.
+#                       /opt/sift-mcps/.venv/bin/windows-triage-mcp
+#                       (bare path, NO stray characters / quotes / trailing args —
+#                        the gateway execs it verbatim as the sift-service user)
+#         - Manifest = packages/<name>/sift-backend.json
+#       -> Validate -> Register -> hot-reload.
+#   That is the same door a community backend uses; the emitted payload carries an
+#   explicit `manifest_path`, exactly as an external backend would.
 #
-#   1. (optionally) provision that reference backend's prerequisites
-#      (downloads / Docker stacks / index bootstrap), and
-#   2. prompt for + ECHO every config and env variable, then
-#   3. write a ready-to-submit register payload to
-#      ~/.sift/addon-register/<name>.json
-#
-# You then drive validate -> register -> hot-reload yourself, from
-# Portal -> Backends (or the REST API). That is the same door a community
-# backend uses — the payload this script writes carries an explicit
-# `manifest_path`, exactly as an external backend would.
+# OWNERSHIP / PRIVILEGES (why sudo)
+#   The staged runtime tree + its .venv (/opt/sift-mcps) are OPERATOR-owned, but
+#   the baseline DB dir under /var/lib/sift is SIFT-SERVICE-owned — provisioning
+#   touches both, hence `sudo`. After staging you may want to chown the venv back
+#   to the operator and the baseline DB dir to the sift-service user so the
+#   running backend can read its DBs.
 #
 # Usage:
 #   ./scripts/setup-addon.sh            # interactive menu
@@ -75,7 +108,9 @@ ask_yes() {
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  sed -n '4,52p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # Print the header doc block (lines 4-78: the boxed comment above) with the
+  # leading "# " stripped. Keep this range in sync with the header if it moves.
+  sed -n '4,78p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 
@@ -504,8 +539,19 @@ setup_wintriage() {
     if ask_yes "Also download the OPTIONAL full registry baseline (~12 GB on disk; needs ~15 GB free)?"; then
       wt_registry_flags=(--with-registry --yes)
     fi
+    # VENV SAFETY: `uv run --extra windows-triage` triggers a project sync before
+    # executing the downloader. `--inexact` makes that sync ADDITIVE so it can
+    # NEVER prune packages outside the windows-triage selection — without it a
+    # sync of only `windows-triage` would tear the `full` extra (opensearch-mcp,
+    # forensic-rag-mcp, psycopg, sift-gateway deps) out of the shared runtime
+    # venv and brick the gateway (which itself imports psycopg). Mirrors the
+    # explicit `--inexact` on the stage_runtime_command sync below. Also pass
+    # --no-managed-python / --no-python-downloads to match the staging sync and
+    # keep the run pinned to the system interpreter.
     SIFT_WINDOWS_TRIAGE_DB_DIR="$SIFT_WINDOWS_TRIAGE_DB_DIR" \
-      "$UV_BIN" run --project "$SIFT_MCPS_ROOT" --extra windows-triage \
+    UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never \
+      "$UV_BIN" run --inexact --project "$SIFT_MCPS_ROOT" --extra windows-triage \
+      --python "$PYTHON_BIN" --no-managed-python --no-python-downloads \
       python -m windows_triage_mcp.scripts.download_databases "${wt_registry_flags[@]}" \
       || warn "Baseline DB download incomplete — backend may start degraded (UNKNOWN-only)."
   fi
