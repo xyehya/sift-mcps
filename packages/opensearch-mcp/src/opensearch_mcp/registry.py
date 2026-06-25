@@ -313,6 +313,11 @@ class FieldValuesOut(BaseModel):
     field: str = Field(..., description="Field enumerated.")
     values: list[FieldValue] = Field(..., description="Distinct values with counts.")
     truncated: bool = Field(..., description="True when more distinct values exist than returned.")
+    advisory: str | None = Field(
+        None,
+        description="Set when an empty result is due to the field being absent from the index "
+        "mapping (i.e. 'field not mapped', not 'no values'); names available fields.",
+    )
 
 
 class StatusIn(BaseModel):
@@ -1059,6 +1064,7 @@ async def run_opensearch_field_values(params: FieldValuesIn) -> ToolResult:
         field=str(raw.get("field", params.field)),
         values=values,
         truncated=bool(raw.get("truncated", False)),
+        advisory=raw.get("advisory"),
     )
     return _success_tool_result(out, meta)
 
