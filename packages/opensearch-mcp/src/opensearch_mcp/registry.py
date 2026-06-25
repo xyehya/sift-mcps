@@ -509,11 +509,15 @@ class IngestIn(BaseModel):
         IngestFormat.auto,
         description="auto=containers/artifact dirs; otherwise choose a specific evidence format.",
     )
-    # M-HOSTNAME: hostname is NOT agent-settable. Host is auto-derived from the
-    # evidence (registry ComputerName for disk/archive images, vol3 for memory
-    # images). Use opensearch_fix_host_mapping to correct a wrong host mapping
-    # after ingest. For flat formats (json/accesslog/delimited) the host is
-    # derived from the filename convention or the indexed field 'Computer'.
+    hostname: str = Field(
+        "",
+        description=(
+            "Only used for formats with no derivable host (json, accesslog, "
+            "non-recursive delimited). IGNORED for auto/memory/e01-disk/recursive-"
+            "delimited, where the true host is derived from the registry ComputerName "
+            "/ parser. Correct a wrong derived host with opensearch_fix_host_mapping."
+        ),
+    )
     index_suffix: str = Field("", description="Optional index suffix.")
     time_field: str = Field("", description="Optional timestamp field.")
     delimiter: str = Field("", description="Optional delimiter for delimited input.")
@@ -1249,30 +1253,35 @@ async def run_opensearch_ingest_status(params: IngestStatusIn) -> ToolResult:
     meta = _meta_from_raw(raw)
     runs: list[IngestRun] = []
     for item in raw.get("ingests", []):
-        details = {
-            key: value
-            for key, value in item.items()
-            if key
-            not in {
-                "case_id",
-                "status",
-                "pid",
-                "elapsed",
-                "total_indexed",
-                "bulk_failed",
-                "hosts_complete",
-                "hosts_total",
-                "artifacts_complete",
-                "artifacts_total",
-                "log_file",
-                "checklist",
-                "message",
-                "halt_reason",
-                "errors",
-                "next_steps",
-                "warnings",
-            }
+        # Collect any extra fields NOT explicitly mapped below into the overflow bag.
+        # "details" is excluded here because it is already an explicit named field
+        # on the item dict (server.py puts durable-job fields there directly) — we
+        # wire it through to IngestRun.details below.  Excluding it prevents the
+        # double-nesting bug where the agent would see ingests[].details.details.*
+        _named_fields = {
+            "case_id",
+            "status",
+            "pid",
+            "elapsed",
+            "total_indexed",
+            "bulk_failed",
+            "hosts_complete",
+            "hosts_total",
+            "artifacts_complete",
+            "artifacts_total",
+            "log_file",
+            "checklist",
+            "message",
+            "halt_reason",
+            "errors",
+            "next_steps",
+            "warnings",
+            "details",  # explicit — wired directly below, not via overflow
         }
+        overflow = {key: value for key, value in item.items() if key not in _named_fields}
+        # Merge named details dict (from server.py) with any overflow keys so the
+        # agent surface is a flat IngestRun.details dict with all extra fields.
+        details: dict = {**(item.get("details") or {}), **overflow}
         runs.append(
             IngestRun(
                 case_id=item.get("case_id"),

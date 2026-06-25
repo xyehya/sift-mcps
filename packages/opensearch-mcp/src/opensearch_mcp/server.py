@@ -3944,29 +3944,37 @@ def idx_ingest_memory(
         # F-MVP-2: omit the absolute resolved path; the agent supplied `path`.
         return {"error": f"Path not found: {path}"}
 
-    # B-MVP-042: auto-derive hostname from the image when operator did not supply one.
+    # M-HOSTNAME fix: derivation is authoritative for memory images — always
+    # attempt derivation first so the derived host wins over any caller-supplied
+    # value.  The caller-supplied hostname is only used as a last-resort fallback
+    # when derivation returns nothing (e.g. non-Windows image, vol3 not found).
     # Derivation runs here (before subprocess spawn) so the subprocess always
     # receives a concrete --hostname value (the CLI arg is required=True).
-    hostname_source: str = "operator"
-    if not hostname:
-        from opensearch_mcp.parse_memory import _derive_hostname_from_image as _derive_hn
-        from pathlib import Path as _Path
+    hostname_source: str | None = None
+    from opensearch_mcp.parse_memory import _derive_hostname_from_image as _derive_hn
+    from pathlib import Path as _Path
 
-        _derived, hostname_source = _derive_hn(_Path(resolved_path), timeout=120)
-        if not _derived:
-            return {
-                "error": "hostname is required for format='memory'.",
-                "detail": (
-                    "Auto-derivation was attempted (windows.registry.printkey + "
-                    "windows.envars) but both probes returned nothing. "
-                    "Supply hostname= explicitly."
-                ),
-                "next_step": (
-                    "Call opensearch_ingest(..., format='memory', "
-                    "hostname='<source-host>', dry_run=True)."
-                ),
-            }
+    _derived, _derived_source = _derive_hn(_Path(resolved_path), timeout=120)
+    if _derived:
+        # Derived host wins — even if caller supplied a value it is ignored here.
         hostname = _derived
+        hostname_source = _derived_source
+    elif hostname:
+        # Derivation returned nothing; accept the caller-supplied fallback.
+        hostname_source = "operator"
+    else:
+        return {
+            "error": "hostname is required for format='memory'.",
+            "detail": (
+                "Auto-derivation was attempted (windows.registry.printkey + "
+                "windows.envars) but both probes returned nothing. "
+                "Supply hostname= explicitly."
+            ),
+            "next_step": (
+                "Call opensearch_ingest(..., format='memory', "
+                "hostname='<source-host>', dry_run=True)."
+            ),
+        }
 
     from opensearch_mcp.parse_memory import TIER_1, TIER_2, TIER_3
 

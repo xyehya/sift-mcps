@@ -31,7 +31,7 @@ These handlers run *inside the worker process* (shared mount namespace). They:
    FUSE mount succeeds;
 3. mirror the existing ``ingest_status`` progress (path-free counts: indexed
    docs, artifacts/hosts complete, hayabusa alerts) into durable per-job steps
-   so ``job_status`` surfaces realtime ``worker_label`` / ``current_step``;
+   so ``running_commands_status`` surfaces realtime ``worker_label`` / ``current_step``;
 4. block until the run reaches a terminal state, then return a path-free
    ``result_public``.
 
