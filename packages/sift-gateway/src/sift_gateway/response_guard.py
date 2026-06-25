@@ -71,14 +71,25 @@ _PATTERNS: list[_Pattern] = [
     _Pattern("EC Private Key",    re.compile(r'-----BEGIN EC PRIVATE KEY-----'), "critical"),
     _Pattern("OpenSSH Private Key", re.compile(r'-----BEGIN OPENSSH PRIVATE KEY-----'), "critical"),
     _Pattern("Connection String", re.compile(r'(?:mongodb|postgres|mysql|redis|amqp)://[^\s"\']+@[^\s"\']+'), "critical"),
-    _Pattern("API Key Config",    re.compile(r'(?i)(?:api_key|secret_key|master_secret)\s*[=:]\s*["\']?[^\s"\']{12,}'), "critical"),
+    # Value class excludes backslash (F2): run_command output is redacted on its
+    # JSON-SERIALIZED form, where real whitespace becomes literal \t/\n (non-
+    # whitespace). A backslash there is an escaped-whitespace/JSON boundary, so it
+    # must terminate the secret value rather than be swallowed — otherwise a
+    # benign "api_key:\t\tnot_set\n\n..." run reads as a 12+ char secret value.
+    # A genuine secret (contiguous non-whitespace) still matches.
+    _Pattern("API Key Config",    re.compile(r'(?i)(?:api_key|secret_key|master_secret)\s*[=:]\s*["\']?[^\s"\'\\]{12,}'), "critical"),
     _Pattern("Mnemonic Seed",     re.compile(r'(?i)(?:mnemonic|seed\s*phrase)\s*[=:]\s*"[a-z\s]{20,}"'), "critical"),
     _Pattern("Hex Private Key",   re.compile(r'(?i)private[_\-]?key\s*[=:]\s*["\']?(?:0x)?[0-9a-fA-F]{64}'), "critical"),
     # ── high ──────────────────────────────────────────────────────────────────
     _Pattern("Slack Token",       re.compile(r'xox[bpras]-[A-Za-z0-9\-]{10,}'), "high"),
     _Pattern("Google API Key",    re.compile(r'AIza[0-9A-Za-z\-_]{35}'), "high"),
     _Pattern("Telegram Bot Token",re.compile(r'\d{8,10}:[A-Za-z0-9_-]{35}'), "high"),
-    _Pattern("Generic Password",  re.compile(r'(?i)(?:password|passwd|pwd)\s*[=:]\s*["\']?[^\s"\']{8,}'), "high"),
+    # Value class excludes backslash (F2): see the API Key Config note above.
+    # Real whitespace in run_command stdout becomes literal \t/\n once the payload
+    # is JSON-serialized for redaction; a backslash terminates the value so a
+    # benign "Password:\t\tN/A\n\nEWF..." (ewfinfo) is no longer a false positive,
+    # while a genuine "password=<contiguous-secret>" still matches.
+    _Pattern("Generic Password",  re.compile(r'(?i)(?:password|passwd|pwd)\s*[=:]\s*["\']?[^\s"\'\\]{8,}'), "high"),
     _Pattern("Bearer Token",      re.compile(r'(?i)bearer\s+[A-Za-z0-9\-._~+/]+=*'), "high"),
     _Pattern("JWT Token",         re.compile(r'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), "high"),
     _Pattern("Session Auth Blob", re.compile(r'"auth(?:_token|orization)?"\s*:\s*"[A-Za-z0-9+/=]{20,}"'), "high"),

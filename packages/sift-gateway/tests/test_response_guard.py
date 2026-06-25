@@ -89,11 +89,16 @@ class TestScanToolResult:
         assert pw
         assert pw[0]["severity"] == "high"
 
-    # F2 regression: ewfinfo "Password" field false-positive investigation.
-    # The {8,} bound in the Generic Password pattern already prevents short
-    # benign forensic metadata values from matching.  These tests document the
-    # confirmed-safe boundaries so future pattern changes cannot silently
-    # re-introduce the false positive.
+    # F2 regression — ewfinfo "Password" field false positive.
+    #
+    # The REAL bug (verified empirically) is on the JSON-SERIALIZED run_command
+    # path: guard_tool_result redacts the json.dumps() of the tool payload, where
+    # real tabs/newlines become literal \t/\n (backslash+letter = NON-whitespace),
+    # so the Generic Password value class [^\s"']{8,} swallowed "\t\tN/A\n\nEWF..."
+    # and matched.  The fix excludes backslash from the value class
+    # ([^\s"'\\]{8,}) so an escaped-whitespace/JSON boundary terminates the value.
+    # The decoded-string boundary tests below still hold (real whitespace already
+    # broke the run); the SERIALIZED-path tests further down pin the actual fix.
     def test_ewfinfo_password_na_not_flagged(self):
         """'Password: N/A' (3 chars) must NOT match — below the {8,} bound."""
         assert scan_tool_result("Password:\t\t\tN/A") == []
@@ -123,6 +128,78 @@ class TestScanToolResult:
         redacted, findings = redact_tool_result(block)
         assert redacted == block, "ewfinfo block must not be redacted"
         assert findings == []
+
+    # --- F2 serialized-JSON path (the real false positive + its fix) ---------
+
+    # The exact ewfinfo stdout that reproduced the FP on the deployed gateway.
+    _EWFINFO_STDOUT = (
+        "ewfinfo 20.1\n\tPassword:\t\tN/A\n\nEWF information\n"
+        "File format:\t\tEWF-E01\n"
+    )
+
+    def test_serialized_ewfinfo_not_flagged_scan(self):
+        """The json.dumps()-serialized ewfinfo payload (real whitespace → literal
+        \\t/\\n) must NOT raise a Generic Password finding after the fix."""
+        serialized = json.dumps({"success": True, "data": {"stdout": self._EWFINFO_STDOUT}})
+        # Sanity: the literal escapes that used to trigger the FP are present.
+        assert "\\t\\tN/A\\n\\nEWF" in serialized
+        names = [f["pattern_name"] for f in scan_tool_result(serialized)]
+        assert "Generic Password" not in names, names
+
+    def test_serialized_ewfinfo_not_redacted(self):
+        """redact over the serialized payload leaves no [REDACTED:Generic Password]."""
+        serialized = json.dumps({"success": True, "data": {"stdout": self._EWFINFO_STDOUT}})
+        redacted, findings = redact_tool_result(serialized)
+        assert "[REDACTED:Generic Password]" not in redacted
+        assert all(f["pattern_name"] != "Generic Password" for f in findings)
+
+    def test_guard_tool_result_ewfinfo_not_redacted_end_to_end(self):
+        """Full production path: guard_tool_result on a run_command TextContent
+        whose stdout is the ewfinfo block must not redact the benign Password
+        field (it serializes internally, which is where the FP lived)."""
+        result = ToolResult(
+            content=[
+                TextContent(
+                    type="text",
+                    text=json.dumps({"success": True, "stdout": self._EWFINFO_STDOUT}),
+                )
+            ]
+        )
+        guarded, findings, _ = guard_tool_result(
+            result,
+            override_active=False,
+            case_dir=None,
+            tool_name="run_command",
+            cap_bytes=100_000,
+        )
+        out_text = guarded.content[0].text
+        assert "[REDACTED:Generic Password]" not in out_text
+        assert all(f["pattern_name"] != "Generic Password" for f in findings)
+        # The benign value survives intact.
+        assert "Password:" in json.loads(out_text)["stdout"]
+
+    def test_serialized_real_password_still_redacted(self):
+        """Guard against over-relaxing: a REAL password=<secret> embedded in the
+        serialized run_command output IS still detected and redacted."""
+        serialized = json.dumps({"stdout": "config password=SuperSecretValue123 loaded"})
+        names = [f["pattern_name"] for f in scan_tool_result(serialized)]
+        assert "Generic Password" in names, names
+        redacted, _ = redact_tool_result(serialized)
+        assert "[REDACTED:Generic Password]" in redacted
+        assert "SuperSecretValue123" not in redacted
+
+    def test_serialized_real_api_key_still_redacted(self):
+        """API Key Config (same backslash-excluded fix) still catches a real key
+        in serialized output."""
+        serialized = json.dumps({"stdout": "env api_key=RealApiKeyValue123456 set"})
+        names = [f["pattern_name"] for f in scan_tool_result(serialized)]
+        assert "API Key Config" in names, names
+
+    def test_serialized_api_key_benign_not_flagged(self):
+        """A benign 'api_key:\\t\\tnot_set\\n\\n...' forensic line no longer FPs."""
+        serialized = json.dumps({"stdout": "config api_key:\t\tnot_configured\n\nnext line"})
+        names = [f["pattern_name"] for f in scan_tool_result(serialized)]
+        assert "API Key Config" not in names, names
 
 
 # ---------------------------------------------------------------------------
