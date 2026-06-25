@@ -605,3 +605,105 @@ class TestExtractorRejectsGarbageAndSurfacesFieldAttribution:
             f"top-offender field ({fields[0]}) must appear before "
             f"the lower-count field ({fields[1]}) in stderr output:\n{captured}"
         )
+
+
+# ---------------------------------------------------------------------------
+# F8 (deploy-mode worker path): enrich_case must surface status:"unavailable"
+# when IOCs were extracted but NO intel backend processed the lookups
+# (batch_lookup returns a bare {} only in that case — a backend that ran
+# always attaches "_intel_coverage").
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichCaseUnavailableSignal:
+    def test_iocs_extracted_but_no_backend_returns_unavailable(self, monkeypatch):
+        from opensearch_mcp import threat_intel
+
+        monkeypatch.setattr(
+            threat_intel,
+            "extract_unique_iocs",
+            lambda client, pattern, force=False: {
+                "ip": {"1.2.3.4", "5.6.7.8"},
+                "hash": set(),
+                "domain": set(),
+            },
+        )
+        # Bare {} == no intel backend processed lookups.
+        monkeypatch.setattr(threat_intel, "batch_lookup", lambda iocs, on_progress=None: {})
+        # stamp_documents must NOT be reached on the unavailable path.
+        stamp_called = []
+        monkeypatch.setattr(
+            threat_intel, "stamp_documents",
+            lambda *a, **kw: stamp_called.append(True) or 0,
+        )
+
+        out = threat_intel.enrich_case(MagicMock(), "TEST-CASE")
+        assert out["status"] == "unavailable", out
+        assert out["iocs_extracted"] == 2
+        assert out["iocs_looked_up"] == 0
+        assert "setup-addon" in out["message"]
+        assert stamp_called == [], "must not stamp when no backend processed lookups"
+
+    def test_backend_present_found_nothing_stays_complete(self, monkeypatch):
+        """A backend that ran but matched nothing still attaches _intel_coverage,
+        so results is non-empty → status stays 'complete' (NOT unavailable)."""
+        from opensearch_mcp import threat_intel
+
+        monkeypatch.setattr(
+            threat_intel,
+            "extract_unique_iocs",
+            lambda client, pattern, force=False: {
+                "ip": {"9.9.9.9"},
+                "hash": set(),
+                "domain": set(),
+            },
+        )
+        # Backend ran, matched nothing, but attaches _intel_coverage.
+        monkeypatch.setattr(
+            threat_intel, "batch_lookup",
+            lambda iocs, on_progress=None: {"_intel_coverage": {"enriched": [], "skipped": {}}},
+        )
+        monkeypatch.setattr(threat_intel, "stamp_documents", lambda *a, **kw: 0)
+
+        out = threat_intel.enrich_case(MagicMock(), "TEST-CASE")
+        assert out["status"] == "complete", out
+        assert out["iocs_extracted"] == 1
+
+    def test_backend_present_with_matches_stays_complete(self, monkeypatch):
+        from opensearch_mcp import threat_intel
+
+        monkeypatch.setattr(
+            threat_intel,
+            "extract_unique_iocs",
+            lambda client, pattern, force=False: {
+                "ip": {"6.6.6.6"},
+                "hash": set(),
+                "domain": set(),
+            },
+        )
+        monkeypatch.setattr(
+            threat_intel, "batch_lookup",
+            lambda iocs, on_progress=None: {
+                "6.6.6.6": {"threat_intel.verdict": "MALICIOUS"},
+                "_intel_coverage": {"enriched": ["6.6.6.6"], "skipped": {}},
+            },
+        )
+        monkeypatch.setattr(threat_intel, "stamp_documents", lambda *a, **kw: 1)
+
+        out = threat_intel.enrich_case(MagicMock(), "TEST-CASE")
+        assert out["status"] == "complete", out
+        assert out["malicious"] == 1
+        assert out["documents_updated"] == 1
+
+    def test_no_iocs_returns_no_iocs_not_unavailable(self, monkeypatch):
+        """Zero IOCs extracted → 'no_iocs' (unchanged); the unavailable branch
+        only triggers when IOCs WERE extracted but nothing processed them."""
+        from opensearch_mcp import threat_intel
+
+        monkeypatch.setattr(
+            threat_intel,
+            "extract_unique_iocs",
+            lambda client, pattern, force=False: {"ip": set(), "hash": set(), "domain": set()},
+        )
+        out = threat_intel.enrich_case(MagicMock(), "TEST-CASE")
+        assert out["status"] == "no_iocs", out
