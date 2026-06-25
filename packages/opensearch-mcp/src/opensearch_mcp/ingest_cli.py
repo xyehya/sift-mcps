@@ -424,6 +424,7 @@ def _write_bg_status(
     files_done=0,
     files_total=0,
     error="",
+    intel_backend="",
 ):
     """Write status for background ingest (delimited/json/accesslog/enrich).
 
@@ -444,19 +445,26 @@ def _write_bg_status(
     if files_done:
         art["files_done"] = files_done
     done = 1 if status == "complete" else 0
+    totals = {
+        "indexed": indexed,
+        "artifacts_complete": done,
+        "artifacts_total": 1,
+        "hosts_total": 1,
+        "hosts_complete": done,
+    }
+    # F8: carry the intel-backend-unavailable signal through the status record's
+    # totals (a free-form dict already read by ingest_job._aggregate) so the
+    # worker envelope can surface it in result_public — without marking the job
+    # failed.
+    if intel_backend:
+        totals["intel_backend"] = intel_backend
     write_status(
         case_id=case_id,
         pid=os.getpid(),
         run_id=run_id,
         status=status,
         hosts=[{"hostname": hostname, "artifacts": [art]}],
-        totals={
-            "indexed": indexed,
-            "artifacts_complete": done,
-            "artifacts_total": 1,
-            "hosts_total": 1,
-            "hosts_complete": done,
-        },
+        totals=totals,
         started=started,
         error=error,
         elapsed_seconds=elapsed,
@@ -2122,7 +2130,9 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
     start_mono = time.monotonic()
     started_ts = datetime.now(timezone.utc).isoformat()
 
-    def _write_enrich_status(status, indexed=0, files_done=0, files_total=0, error=""):
+    def _write_enrich_status(
+        status, indexed=0, files_done=0, files_total=0, error="", intel_backend=""
+    ):
         """Write enrichment status record. No-op if not running under run_id."""
         if not run_id:
             return
@@ -2138,6 +2148,7 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
             files_done=files_done,
             files_total=files_total,
             error=error,
+            intel_backend=intel_backend,
         )
 
     # Initial "running" write — idempotent under monotonic protection
@@ -2187,6 +2198,24 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
     if result["status"] == "no_iocs":
         print("No external IOCs found in indexed data.")
         _write_enrich_status("complete")
+        return
+
+    # F8: enrich_case reports "unavailable" when IOCs were extracted but no
+    # intel backend processed the lookups. Its dict carries NONE of the
+    # documents_updated/malicious/suspicious keys, so handle it BEFORE the
+    # access below (which would otherwise KeyError → terminal "failed", hiding
+    # the real signal). Write a terminal-but-not-failed status that carries the
+    # unavailable marker so the worker envelope (ingest_job._aggregate) can
+    # surface intel_backend:"unavailable" in result_public without hanging or
+    # mislabelling the job as failed.
+    if result["status"] == "unavailable":
+        msg = str(result.get("message", "intel enrichment unavailable"))
+        print(f"\n{msg}")
+        _write_enrich_status(
+            "complete",
+            files_total=result.get("iocs_extracted", 0),
+            intel_backend="unavailable",
+        )
         return
 
     print(f"\nDone. {result['documents_updated']} documents updated.")

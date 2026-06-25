@@ -315,6 +315,7 @@ def _aggregate(latest_by_run: dict[str, dict[str, Any]], run_ids: set[str]) -> d
     hosts_total = 0
     statuses: list[str] = []
     errors: list[str] = []
+    intel_backend = ""  # F8: enrich-unavailable signal carried in totals
 
     for rid in run_ids:
         rec = latest_by_run.get(rid)
@@ -323,6 +324,8 @@ def _aggregate(latest_by_run: dict[str, dict[str, Any]], run_ids: set[str]) -> d
             continue
         statuses.append(str(rec.get("status") or "running"))
         totals = rec.get("totals") or {}
+        if totals.get("intel_backend"):
+            intel_backend = str(totals.get("intel_backend"))
         indexed += int(totals.get("indexed") or 0)
         artifacts_complete += int(totals.get("artifacts_complete") or 0)
         artifacts_total += int(totals.get("artifacts_total") or 0)
@@ -357,6 +360,11 @@ def _aggregate(latest_by_run: dict[str, dict[str, Any]], run_ids: set[str]) -> d
     }
     if hayabusa_alerts:
         detail["hayabusa_alerts"] = hayabusa_alerts
+    # F8: surface the intel-backend-unavailable signal so result_public carries
+    # it (the agent polling running_commands_status sees the true condition
+    # instead of a clean "complete" with 0 indexed docs).
+    if intel_backend:
+        detail["intel_backend"] = intel_backend
     out: dict[str, Any] = {"terminal": terminal, "failed": failed, "detail": detail}
     if errors:
         out["error"] = "; ".join(errors[:3])
