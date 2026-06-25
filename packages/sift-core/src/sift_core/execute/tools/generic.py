@@ -39,9 +39,14 @@ _SIGPIPE_EXIT_CODES = (141, -13)
 
 # Broken-pipe stderr markers.  grep exits 2 (not 141) on Linux when it gets
 # EPIPE from a closed downstream pipe (e.g. `grep … | head -N`) and emits a
-# "write error: Broken pipe" message.  We treat that as a SIGPIPE-equivalent
-# for the purpose of partial_failure exemption when a later stage exited 0.
-_BROKEN_PIPE_MARKERS = ("broken pipe", "write error")
+# "grep: write error: Broken pipe" message.  We treat that as a SIGPIPE-
+# equivalent for the partial_failure exemption when a later stage exited 0.
+#
+# These markers are deliberately broken-pipe-SPECIFIC.  A bare "write error"
+# marker would also match genuine non-final-stage failures such as
+# "write error: No space left on device", wrongly exempting them from
+# partial_failure.  Only phrases unambiguously tied to a closed pipe are listed.
+_BROKEN_PIPE_MARKERS = ("broken pipe", "write error: broken pipe")
 
 
 def _is_broken_pipe_stderr(stderr_tail: str) -> bool:

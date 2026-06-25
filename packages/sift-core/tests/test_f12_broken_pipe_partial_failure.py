@@ -42,17 +42,23 @@ class TestIsBrokenPipeStderr:
     def test_broken_pipe_detected(self):
         assert _is_broken_pipe_stderr("grep: write error: Broken pipe") is True
 
-    def test_write_error_alone_detected(self):
-        assert _is_broken_pipe_stderr("grep: write error") is True
+    def test_bare_write_error_NOT_detected(self):
+        """Reviewer tightening: bare 'write error' (no 'broken pipe') must NOT
+        match — a real failure like 'write error: No space left on device'
+        must stay flagged."""
+        assert _is_broken_pipe_stderr("grep: write error") is False
+        assert _is_broken_pipe_stderr("write error: No space left on device") is False
 
     def test_broken_pipe_case_insensitive(self):
         assert _is_broken_pipe_stderr("Broken Pipe") is True
         assert _is_broken_pipe_stderr("BROKEN PIPE") is True
+        assert _is_broken_pipe_stderr("grep: write error: BROKEN PIPE") is True
 
     def test_real_error_not_detected(self):
         assert _is_broken_pipe_stderr("grep: No such file or directory") is False
         assert _is_broken_pipe_stderr("grep: Invalid option") is False
         assert _is_broken_pipe_stderr("Permission denied") is False
+        assert _is_broken_pipe_stderr("write error: No space left on device") is False
 
 
 # ---------------------------------------------------------------------------
@@ -106,13 +112,19 @@ class TestPartialFailureBrokenPipe:
         ]
         assert _check_partial_failure(stages) is False
 
-    def test_grep_exit2_write_error_abbreviated_not_partial(self):
-        """'write error' alone (without 'Broken pipe') is also exempt."""
+    def test_write_error_no_space_left_still_partial(self):
+        """Reviewer tightening: a non-final stage failing with
+        'write error: No space left on device' followed by a later exit-0 stage
+        must STILL flag partial_failure — it is a real failure, not a pipe close."""
         stages = [
-            {"argv": ["grep", "pattern"], "exit_code": 2, "stderr_tail": "grep: write error"},
+            {
+                "argv": ["grep", "pattern"],
+                "exit_code": 2,
+                "stderr_tail": "grep: write error: No space left on device",
+            },
             {"argv": ["head", "-5"], "exit_code": 0},
         ]
-        assert _check_partial_failure(stages) is False
+        assert _check_partial_failure(stages) is True
 
     def test_grep_exit2_real_error_no_such_file_still_partial(self):
         """grep exits 2 with a real error → partial_failure stays True."""
