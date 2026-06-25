@@ -341,3 +341,203 @@ async def test_augment_preserves_backend_fields_not_in_ingests():
     )
     assert payload.get("job_id") == "some-job-id"
     assert payload.get("next_step") is not None
+
+
+# ---------------------------------------------------------------------------
+# M-INGSTATUS Seam B: SDK outputSchema enforcement — the exact gap that shipped
+# ---------------------------------------------------------------------------
+# The existing tests above call ``mcp.call_tool()`` (FastMCP level) which does
+# NOT run the SDK ``outputSchema`` check.  The real failure fires at the MCP SDK
+# lowlevel handler (mcp/server/lowlevel/server.py:560-567) when:
+#   - the tool has an ``outputSchema`` (IngestStatusOut is registered with one), AND
+#   - the ToolResult has ``structured_content=None`` (the pre-fix augment path returned
+#     a text-only ToolResult when the backend payload was not a dict).
+#
+# This test registers the REAL IngestStatusOut outputSchema, makes the augment
+# return a text-only ToolResult (structured_content=None), drives the SDK
+# CallToolRequest handler, and asserts the SDK fires:
+#   "outputSchema defined but no structured output returned"
+
+
+def _server_with_real_schema(gateway, backend_payload: dict, *, text_only: bool = False):
+    """Mount augment middleware over a stub with the REAL IngestStatusOut outputSchema.
+
+    When ``text_only=True`` the stub returns a ToolResult with
+    ``structured_content=None`` — the pre-fix behaviour that triggered the live
+    SDK rejection.  When ``text_only=False`` (default) it returns structured_content
+    populated (the post-fix, correct behaviour).
+    """
+    from opensearch_mcp.registry import IngestStatusOut
+    from sift_common.registry_helpers import tool_output_schema
+
+    schema = tool_output_schema(IngestStatusOut)
+    mcp = FastMCP("parent", middleware=[OpenSearchIngestStatusAugmentMiddleware(gateway)])
+
+    @mcp.tool(name="opensearch_ingest_status", output_schema=schema)
+    async def _status(case_id: str = "", job_id: str = "", case_dir: str = ""):
+        text = json.dumps(backend_payload)
+        if text_only:
+            # Pre-fix: text-only result; SDK will reject when outputSchema is defined.
+            return ToolResult(
+                content=[TextContent(type="text", text=text)],
+                structured_content=None,
+                is_error=False,
+            )
+        # Post-fix: structured_content populated.
+        return ToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=backend_payload,
+            is_error=False,
+        )
+
+    return mcp
+
+
+async def test_ingstatus_sdk_rejects_text_only_result_with_real_schema():
+    """M-INGSTATUS Seam B: SDK fires outputSchema error when structured_content=None.
+
+    This test drives the REAL SDK ``CallToolRequest`` handler (not just
+    ``mcp.call_tool()``) with the REAL ``IngestStatusOut`` outputSchema registered.
+    When the result has ``structured_content=None`` the SDK fires:
+      "outputSchema defined but no structured output returned"
+
+    This is the exact gap that shipped: the existing augment tests called
+    ``mcp.call_tool()`` which does NOT run the SDK outputSchema check; only the
+    lowlevel handler at mcp/server/lowlevel/server.py:560-567 does.
+
+    Fail-on-revert proof (2026-06-26):
+      text_only=True → SDK fires outputSchema error → inner.isError=True, PASS.
+      Change to text_only=False → inner.isError=False → assertion fails, confirming
+      the test is load-bearing (proven by test_ingstatus_sdk_accepts_structured_content_result).
+    """
+    import mcp.types as mcp_types
+    from mcp.types import CallToolRequest, CallToolRequestParams
+
+    gateway = Gateway({"backends": {}, "execute": {"security": {"denied_binaries": []}}})
+    mcp_server = _server_with_real_schema(gateway, _BACKEND_DB_ACTIVE_ENVELOPE, text_only=True)
+
+    # Prime handler registration: get_tools() triggers FastMCP's _setup_handlers.
+    await mcp_server.list_tools()
+    lowlevel = mcp_server._mcp_server
+
+    request = CallToolRequest(
+        method="tools/call",
+        params=CallToolRequestParams(name="opensearch_ingest_status", arguments={}),
+    )
+    handler = lowlevel.request_handlers.get(type(request))
+    if handler is None:
+        pytest.skip(
+            "SDK CallToolRequest handler not populated without a running transport; "
+            "Seam B regression is still covered by test_ingstatus_assert_passes_schema_catches_text_only."
+        )
+
+    # The handler calls _call_tool_mcp which wraps request_context access in
+    # try/except (AttributeError, LookupError): pass — safe to call without a session.
+    server_result = await handler(request)
+
+    inner = server_result.root if hasattr(server_result, "root") else server_result
+    assert isinstance(inner, mcp_types.CallToolResult), (
+        f"Expected CallToolResult, got {type(inner).__name__!r}: {inner!r}"
+    )
+    assert inner.isError, (
+        "SDK must return isError=True when structured_content=None and outputSchema is defined. "
+        "M-INGSTATUS Seam B: text-only augmented result must be rejected at the SDK layer."
+    )
+    error_text = " ".join(
+        block.text for block in (inner.content or []) if hasattr(block, "text")
+    )
+    assert "outputSchema defined but no structured output returned" in error_text, (
+        f"SDK error must contain the outputSchema rejection string; got: {error_text!r}"
+    )
+
+
+async def test_ingstatus_sdk_accepts_structured_content_result():
+    """M-INGSTATUS Seam B: SDK accepts augmented result when structured_content is set.
+
+    Counterpart: when structured_content is populated the SDK must NOT return an
+    error.  Making the stub return text_only=True (structured_content=None) here
+    would cause isError=True, proving SDK enforcement is active and this test is
+    load-bearing.
+    """
+    import mcp.types as mcp_types
+    from mcp.types import CallToolRequest, CallToolRequestParams
+
+    gateway = Gateway({"backends": {}, "execute": {"security": {"denied_binaries": []}}})
+    mcp_server = _server_with_real_schema(gateway, _BACKEND_DB_ACTIVE_ENVELOPE, text_only=False)
+
+    await mcp_server.list_tools()
+    lowlevel = mcp_server._mcp_server
+
+    request = CallToolRequest(
+        method="tools/call",
+        params=CallToolRequestParams(name="opensearch_ingest_status", arguments={}),
+    )
+    handler = lowlevel.request_handlers.get(type(request))
+    if handler is None:
+        pytest.skip("SDK CallToolRequest handler not populated without a running transport.")
+
+    server_result = await handler(request)
+
+    inner = server_result.root if hasattr(server_result, "root") else server_result
+    assert isinstance(inner, mcp_types.CallToolResult)
+    assert not inner.isError, (
+        "SDK must accept a result with structured_content populated when outputSchema is defined. "
+        f"Got error: {[getattr(b,'text','?') for b in (inner.content or [])]!r}"
+    )
+
+
+async def test_ingstatus_real_schema_validates_structured_content_shape():
+    """M-INGSTATUS Seam B (assert_passes_output_schema): structured_content must pass IngestStatusOut schema.
+
+    Uses the lightweight ``assert_passes_output_schema`` helper (replicates the
+    SDK jsonschema.validate call without needing the full SDK dispatch context).
+    This complements the SDK-dispatch test above and provides a stable fallback
+    even when request_handlers is not populated.
+
+    Fail-on-revert: setting structured_content=None in the result causes
+    assert_passes_output_schema to raise AssertionError with the SDK error string.
+    """
+    from opensearch_mcp.registry import IngestStatusOut
+    from sift_common.registry_helpers import tool_output_schema
+    from sift_common.testing.surface import assert_passes_output_schema
+
+    schema = tool_output_schema(IngestStatusOut)
+    gateway = _gateway_with_job_service(rows=[_FAKE_JOB_ROW])
+    result = await _call(gateway, {}, _BACKEND_DB_ACTIVE_ENVELOPE)
+
+    # Post-fix: structured_content is populated; assert_passes_output_schema must not raise.
+    assert_passes_output_schema(schema, result, tool_name="opensearch_ingest_status")
+
+    # Also assert the shape matches what IngestStatusOut expects at the top level.
+    sc = result.structured_content
+    assert isinstance(sc, dict)
+    assert "ingests" in sc
+    assert "authority" in sc
+
+
+async def test_ingstatus_assert_passes_schema_catches_text_only():
+    """Revert proof: assert_passes_output_schema raises for structured_content=None.
+
+    If the augment middleware regresses to returning text-only (structured_content=None),
+    assert_passes_output_schema must raise AssertionError with the SDK error string.
+    This is the lightweight Seam B regression guard for the M-INGSTATUS bug class.
+    """
+    from opensearch_mcp.registry import IngestStatusOut
+    from sift_common.registry_helpers import tool_output_schema
+    from sift_common.testing.surface import assert_passes_output_schema
+
+    import pytest
+
+    schema = tool_output_schema(IngestStatusOut)
+    # Simulate a pre-fix text-only result (structured_content=None).
+    text_only_result = ToolResult(
+        content=[TextContent(type="text", text=json.dumps(_BACKEND_DB_ACTIVE_ENVELOPE))],
+        structured_content=None,
+        is_error=False,
+    )
+    with pytest.raises(AssertionError) as exc_info:
+        assert_passes_output_schema(schema, text_only_result, tool_name="opensearch_ingest_status")
+    assert "outputSchema defined but no structured output returned" in str(exc_info.value), (
+        f"assert_passes_output_schema must raise with the SDK error string; "
+        f"got: {exc_info.value!r}"
+    )
