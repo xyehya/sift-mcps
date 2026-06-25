@@ -57,6 +57,23 @@ def set_host_identity_recorder(recorder) -> None:
     _HOST_IDENTITY_RECORDER = recorder
 
 
+# M-INGSTATUS fix: injectable durable-job lister for opensearch_ingest_status.
+# In DB-active mode the agent backend has no DB credentials by design, so a
+# DB-capable reader must be injected from the worker/Gateway bootstrap (which
+# owns the service DSN). Signature: (case_id: str) -> list[dict] — returns
+# the sanitized app.job_status_public rows for recent ingest/enrich jobs for
+# the case, or [] on any error (fail-closed). When not injected (standalone
+# CLI / no DB active), opensearch_ingest_status falls back to the local mirror
+# files as before — no regression for non-DB-active mode.
+_JOB_STATUS_LISTER = None
+
+
+def set_job_status_lister(lister) -> None:
+    """Inject (or clear) the durable job status lister. See above."""
+    global _JOB_STATUS_LISTER
+    _JOB_STATUS_LISTER = lister
+
+
 # --- DB-authoritative active-case directory propagation --------------------
 # The Gateway is the sole active-case authority: it reads the deployment active
 # case from Postgres (app.active_case_state) and propagates the authoritative
@@ -2743,7 +2760,7 @@ def _last_completed_from_opensearch(filter_case: str) -> dict | None:
         "note": (
             "Derived from OpenSearch case indices (NOT the Postgres durable-job "
             "record). Confirms a prior ingest landed; for authoritative per-job "
-            "status of a worker-dispatched ingest, poll job_status(job_id)."
+            "status of a worker-dispatched ingest, poll running_commands_status(job_id)."
         )
         + ctime_note,
     }
@@ -2758,9 +2775,9 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
     last_completed summary DERIVED FROM OPENSEARCH (most-recent case index +
     doc total) so you can confirm a finished run without polling opensearch_count.
     Only a worker-dispatched ingest (opensearch_ingest status="queued") yields a
-    durable job_id you can poll with job_status(job_id); a non-dispatched ingest
-    returns only run_id/audit_id and has NO pollable job_id — confirm it landed
-    with opensearch_count / opensearch_case_summary instead.
+    durable job_id you can poll with running_commands_status(job_id); a
+    non-dispatched ingest returns only run_id/audit_id and has NO pollable job_id
+    — confirm it landed with opensearch_count / opensearch_case_summary instead.
 
     Args:
         case_id: Filter to this case (default: active case). "*" for all.
@@ -2768,8 +2785,9 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
             the Gateway populates it from the DB active case.
         job_id: Optional durable job_id, only available when opensearch_ingest
             returned status="queued" (worker-dispatched). When set, the response
-            echoes it with a job_status(job_id) next_step. opensearch_ingest's
-            run_id/audit_id are NOT job_ids and cannot be polled here.
+            echoes it with a running_commands_status(job_id) next_step.
+            opensearch_ingest's run_id/audit_id are NOT job_ids and cannot be
+            polled here.
     """
     from opensearch_mcp.ingest_status import db_status_active, read_active_ingests
 
@@ -2783,39 +2801,109 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
             "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
         }
 
-    # B3 (K4-preserving): in DB-active mode Postgres is the authoritative
-    # ingest-status authority (app.job_status_public). The agent backend has no
-    # DB credentials by design; local status JSON files can be tampered and MUST
-    # NOT be read (BATCH-K4 locked contract). Return ingests=[] and an accurate
-    # pointer to the durable job authority.
-    #
-    # IMPORTANT (B-MVP-029): opensearch_ingest does NOT emit a Postgres job_id —
-    # it returns a `run_id` (background run id) plus an `audit_id`. Only a
-    # *queued* worker-dispatched ingest (status="queued") carries a durable
-    # `job_id`; a non-dispatched/inline ingest never does. So this redirect must
-    # not promise "job_status(job_id=<from ingest>)" unconditionally — that was a
-    # dead-end. Real DB-job-row injection here (so every ingest exposes a
-    # pollable job_id) is DEFERRED; it depends on the durable-lane work tracked
-    # by B-MVP-027.
+    # M-INGSTATUS fix (B3 K4-preserving): in DB-active mode Postgres is the
+    # authoritative ingest-status authority (app.job_status_public). Local
+    # status JSON files MUST NOT be read (BATCH-K4 locked contract — tamper
+    # vector). When the injectable _JOB_STATUS_LISTER has been wired (by the
+    # worker/Gateway bootstrap which owns the service DSN), we read actual
+    # durable job rows for the case and populate ingests[] so the agent can
+    # discover progress. When the lister is not wired (standalone CLI, worker
+    # bootstrap pre-injection), ingests=[] degrades gracefully — fail-closed.
     _db_active = db_status_active()
     if _db_active:
+        durable_ingests: list[dict] = []
+        if _JOB_STATUS_LISTER is not None and filter_case and filter_case != "*":
+            # Fail-closed: the JobService lister already catches DB errors and
+            # returns []. Guard here as well in case the lister itself raises
+            # unexpectedly (e.g. injection error).
+            try:
+                durable_ingests = _JOB_STATUS_LISTER(filter_case)
+            except Exception:  # noqa: BLE001 - fail-closed; DB errors must not crash status checks
+                durable_ingests = []
+
+        # Build ingest-status-compatible dicts from durable job rows so the
+        # registry IngestRun schema can absorb them. Fields that have no
+        # ingest-status analogue (worker_label, current_step, result_public)
+        # land in the ``details`` pass-through.
+        ingests_out: list[dict] = []
+        for row in durable_ingests:
+            job_status_val = str(row.get("status") or "unknown")
+            # Map durable job status to IngestRun status literals.
+            status_map = {
+                "pending": "starting",
+                "running": "running",
+                "retrying": "running",
+                "succeeded": "complete",
+                "failed": "failed",
+                "expired": "failed",
+            }
+            ingest_status = status_map.get(job_status_val, "unknown")
+            # current_step carries indexed/host/artifact progress before
+            # terminal result_public lands.
+            step = row.get("current_step") or {}
+            result = row.get("result_public") or {}
+            host_label = step.get("detail", "") or ""
+            ingests_out.append(
+                {
+                    "case_id": row.get("case_id"),
+                    "status": ingest_status,
+                    "pid": None,  # durable jobs have no local PID
+                    "elapsed": "",
+                    "total_indexed": int(result.get("indexed_docs") or 0),
+                    "bulk_failed": 0,
+                    "hosts_complete": int(result.get("hosts_complete") or 0),
+                    "hosts_total": int(result.get("hosts_total") or 0),
+                    "artifacts_complete": int(result.get("artifacts_complete") or 0),
+                    "artifacts_total": int(result.get("artifacts_total") or 0),
+                    "log_file": "",
+                    "checklist": [],
+                    "message": (
+                        f"Worker-dispatched {row.get('job_type', 'ingest')} job "
+                        f"({job_status_val}). Poll "
+                        f"running_commands_status(job_id='{row.get('job_id', '')}') "
+                        "for realtime worker_label, current_step, and terminal result_public."
+                    ),
+                    # Pass durable-job fields through so the registry IngestRun
+                    # details dict carries them to the agent surface.
+                    "details": {
+                        "job_id": row.get("job_id"),
+                        "job_type": row.get("job_type"),
+                        "worker_label": row.get("worker_label"),
+                        "current_step": step,
+                        "result_public": result,
+                        "error_summary": row.get("error_summary"),
+                        "created_at": row.get("created_at"),
+                        "started_at": row.get("started_at"),
+                        "finished_at": row.get("finished_at"),
+                        "updated_at": row.get("updated_at"),
+                        "step_label": host_label,
+                    },
+                }
+            )
+
         resp: dict = {
-            "ingests": [],
+            "ingests": ingests_out,
             "authority": "postgres-durable-jobs",
             "message": (
-                "Durable job authority is active. Local ingest-mirror files are "
-                "not read (BATCH-K4). If your opensearch_ingest returned a "
-                "job_id (status='queued', worker-dispatched), poll "
-                "job_status(job_id=<that job_id>) for realtime worker_label, "
-                "current_step, and the terminal result_public. A non-dispatched "
-                "ingest returns only a run_id/audit_id and has no pollable "
-                "job_id; confirm completion with opensearch_count / "
-                "opensearch_case_summary on the target indices."
+                "Durable job authority is active. "
+                + (
+                    f"{len(ingests_out)} ingest/enrich job(s) found for this case. "
+                    "For per-job realtime detail poll "
+                    "running_commands_status(job_id=<job_id from details>)."
+                    if ingests_out
+                    else "No active or recent ingest/enrich jobs found for this case. "
+                    "If your opensearch_ingest returned a job_id (status='queued'), "
+                    "poll running_commands_status(job_id=<that job_id>) directly. "
+                    "Confirm a completed ingest with opensearch_count / "
+                    "opensearch_case_summary on the target indices."
+                )
             ),
         }
         if job_id:
             resp["job_id"] = job_id
-            resp["next_step"] = f"Call job_status(job_id='{job_id}') for durable status."
+            resp["next_step"] = (
+                f"Call running_commands_status(job_id='{job_id}') for durable status."
+            )
         # Last-completed signal derived from OpenSearch (the backend has no DB
         # creds; this confirms a finished run without polling opensearch_count).
         last_completed = _last_completed_from_opensearch(filter_case)

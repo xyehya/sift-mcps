@@ -1944,7 +1944,7 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "total_iocs (preview counts), job_id, job_type, dispatched_to, next_step, "
             "pid, run_id, log_file, note. "
             "Disk/E01 enrich returns status=queued + job_id (non-blocking, dispatched to "
-            "sift-opensearch-worker@); poll job_status(job_id) for realtime "
+            "sift-opensearch-worker@); poll running_commands_status(job_id) for realtime "
             "worker_label/current_step. ASYNC on write — returns a run reference; "
             "poll opensearch_ingest_status (artifact_name=='intel')."
         ),

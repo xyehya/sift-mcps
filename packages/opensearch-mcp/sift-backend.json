@@ -448,7 +448,7 @@
       "when_to_use": "Use after indexed indicators exist and CTI context would help prioritize pivots.",
       "avoid_when": "Avoid when OpenCTI is unavailable or when indicators are speculative. Use dry_run=True first to size the IOC corpus.",
       "output_notes": "Starts asynchronous enrichment; follow status/results before relying on output. No OpenCTI credentials or OpenSearch passwords are returned. Enrichment cannot approve findings, alter evidence, or decide reports.",
-      "output_shape": "EnrichIntelOut: status (preview|started|queued), case_id, ips, hashes, domains, total_iocs (preview counts), job_id, job_type, dispatched_to, next_step, pid, run_id, log_file, note. Disk/E01 enrich returns status=queued + job_id (non-blocking, dispatched to sift-opensearch-worker@); poll job_status(job_id). Async on write \u2014 poll opensearch_ingest_status (artifact_name=='intel').",
+      "output_shape": "EnrichIntelOut: status (preview|started|queued), case_id, ips, hashes, domains, total_iocs (preview counts), job_id, job_type, dispatched_to, next_step, pid, run_id, log_file, note. Disk/E01 enrich returns status=queued + job_id (non-blocking, dispatched to sift-opensearch-worker@); poll running_commands_status(job_id). Async on write \u2014 poll opensearch_ingest_status (artifact_name=='intel').",
       "response_shaping": "Returns counts + a run reference, never IOC dumps or OpenCTI/OpenSearch credentials.",
       "usage_examples": [
         {

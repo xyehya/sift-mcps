@@ -275,6 +275,62 @@ class JobService:
             self._assert_case_member(principal, record.get("case_id"))
         return self._sanitize_status(record)
 
+    def list_ingest_jobs_for_case(
+        self,
+        case_id: str,
+        *,
+        include_terminal: bool = True,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return recent ingest/enrich durable jobs for ``case_id`` from app.job_status_public.
+
+        Used by opensearch_ingest_status in DB-active mode to populate ingests[]
+        instead of returning an empty list. Only the safe allow-list fields are
+        returned (no spec_internal, lease internals, or worker_id). Fail-closed:
+        returns [] on any DB/connection error so opensearch_ingest_status degrades
+        gracefully.
+
+        Args:
+            case_id: The case UUID to filter by (required; "*" not supported here —
+                the caller filters when needed).
+            include_terminal: When True (default), include recently finished jobs
+                (succeeded/failed) as well as active ones so the agent can see
+                the last completed run. When False, only pending/running/retrying.
+            limit: Max rows returned (default 10, hard cap).
+        """
+        limit = max(1, min(limit, 50))
+        if include_terminal:
+            status_filter = "('pending', 'running', 'retrying', 'succeeded', 'failed')"
+        else:
+            status_filter = "('pending', 'running', 'retrying')"
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        select job_id::text, job_type, status, case_id::text,
+                               evidence_id::text, priority, attempts, max_attempts,
+                               spec_public, result_public, error_summary,
+                               provenance_id::text, created_at, started_at,
+                               finished_at, updated_at, step_count, steps_succeeded,
+                               worker_label, current_step
+                        from app.job_status_public
+                        where case_id = %s
+                          and job_type in ('ingest', 'enrich')
+                          and status in {status_filter}
+                        order by created_at desc
+                        limit %s
+                        """,
+                        (case_id, limit),
+                    )
+                    rows = cur.fetchall()
+        except Exception:  # noqa: BLE001 - fail-closed; caller returns []
+            logger.warning(
+                "list_ingest_jobs_for_case: DB error listing jobs for case %s", case_id
+            )
+            return []
+        return [self._sanitize_status(dict(zip(_PUBLIC_STATUS_FIELDS, row, strict=True))) for row in rows]
+
     def _sanitize_status(self, record: dict[str, Any]) -> dict[str, Any]:
         sanitized: dict[str, Any] = {}
         for field in _PUBLIC_STATUS_FIELDS:

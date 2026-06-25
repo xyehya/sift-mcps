@@ -140,7 +140,12 @@ class TestB3IngestStatusDBActive:
         assert read_called == [], "read_active_ingests must NOT be called in DB-active mode"
         # Authority pointer must be present.
         assert resp.get("authority") == "postgres-durable-jobs"
-        assert "job_status" in resp.get("message", "")
+        # M-JOBSTATUS-NAME fix: message must reference running_commands_status, not job_status.
+        msg = resp.get("message", "")
+        assert "running_commands_status" in msg, f"Message must reference running_commands_status: {msg!r}"
+        assert "job_status" not in msg or "running_commands_status" in msg, (
+            "Message must not reference the nonexistent job_status tool"
+        )
         # Tamper values from _RUNNING_MIRROR must not appear.
         assert "srl-forge" not in repr(resp)
         assert "12000" not in repr(resp)
@@ -156,6 +161,10 @@ class TestB3IngestStatusDBActive:
         assert resp.get("job_id") == "abc-job-1"
         assert "next_step" in resp
         assert "abc-job-1" in resp["next_step"]
+        # M-JOBSTATUS-NAME: next_step must use running_commands_status not job_status.
+        assert "running_commands_status" in resp["next_step"], (
+            f"next_step must reference running_commands_status: {resp['next_step']!r}"
+        )
 
     def test_no_job_id_returns_redirect_without_job_id_key(self, monkeypatch):
         """Without a job_id argument, redirect has no job_id key."""
@@ -215,6 +224,78 @@ class TestB3IngestStatusDBActive:
 
         assert resp["ingests"] == []
         assert resp.get("authority") == "postgres-durable-jobs"
+
+    def test_m_ingstatus_lister_populates_ingests_when_wired(self, monkeypatch):
+        """M-INGSTATUS: when _JOB_STATUS_LISTER is injected, ingests[] is populated
+        from app.job_status_public instead of returning empty list."""
+        self._active_case(monkeypatch)
+
+        # Fake durable job row (what the JobService.list_ingest_jobs_for_case returns)
+        fake_durable_jobs = [
+            {
+                "job_id": "aabb-1234-ccdd-5678",
+                "job_type": "ingest",
+                "status": "running",
+                "case_id": _CASE_ID,
+                "evidence_id": None,
+                "priority": 100,
+                "attempts": 1,
+                "max_attempts": 3,
+                "spec_public": {"path": "evidence/test.e01"},
+                "result_public": {"indexed_docs": 5000},
+                "error_summary": None,
+                "provenance_id": None,
+                "created_at": "2026-06-25T10:00:00Z",
+                "started_at": "2026-06-25T10:01:00Z",
+                "finished_at": None,
+                "updated_at": "2026-06-25T10:05:00Z",
+                "step_count": 3,
+                "steps_succeeded": 2,
+                "worker_label": "osw-ingest-1234",
+                "current_step": {"name": "evtx", "detail": "12000 indexed"},
+            }
+        ]
+
+        monkeypatch.setattr(srv, "_JOB_STATUS_LISTER", lambda case_id: fake_durable_jobs)
+
+        with (
+            patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
+            patch(
+                "opensearch_mcp.ingest_status.read_active_ingests",
+                return_value=[],  # Mirror must not be consulted
+            ),
+        ):
+            resp = opensearch_ingest_status()
+
+        # ingests[] must now carry the durable job row
+        assert len(resp["ingests"]) == 1, "ingests must contain the durable job row"
+        ingest = resp["ingests"][0]
+        assert ingest["status"] == "running"
+        assert ingest["case_id"] == _CASE_ID
+        # details must carry durable-job fields
+        assert ingest.get("details", {}).get("job_id") == "aabb-1234-ccdd-5678"
+        assert ingest.get("details", {}).get("worker_label") == "osw-ingest-1234"
+        # message must reference running_commands_status (not job_status)
+        msg = ingest.get("message", "")
+        assert "running_commands_status" in msg, f"Item message must name running_commands_status: {msg!r}"
+        # authority is still postgres-durable-jobs
+        assert resp.get("authority") == "postgres-durable-jobs"
+
+    def test_m_ingstatus_lister_fail_closed_returns_empty_ingests(self, monkeypatch):
+        """M-INGSTATUS: when lister raises, ingests=[] — fail-closed, must not crash."""
+        self._active_case(monkeypatch)
+
+        def _failing_lister(case_id):
+            raise RuntimeError("DB unavailable")
+
+        monkeypatch.setattr(srv, "_JOB_STATUS_LISTER", _failing_lister)
+
+        with patch("opensearch_mcp.ingest_status.db_status_active", return_value=True):
+            resp = opensearch_ingest_status()
+
+        # Must not raise; must degrade to empty ingests
+        assert resp.get("authority") == "postgres-durable-jobs"
+        assert resp["ingests"] == [], "Lister exception must degrade to empty ingests"
 
 
 class TestB3IngestStatusNonDBActive:

@@ -69,6 +69,26 @@ def build_handlers(dsn: str, *, job_types: list[str] | None = None):
             logger.warning("Failed to wire host_identity_recorder to opensearch server: %s", exc)
     except ImportError:
         pass
+
+    # M-INGSTATUS: wire the durable job status lister so opensearch_ingest_status
+    # can populate ingests[] from app.job_status_public in DB-active mode. The
+    # JobService owns the DSN; the agent backend has no DB creds by design.
+    # Import-guarded so a missing gateway module never disables the worker.
+    try:
+        from sift_gateway.jobs import JobService as _JobService
+
+        _job_service = _JobService(dsn)
+        try:
+            from opensearch_mcp import server as _os_server  # noqa: F811 - already imported above
+
+            _os_server.set_job_status_lister(
+                lambda case_id: _job_service.list_ingest_jobs_for_case(case_id)
+            )
+        except Exception as exc:
+            logger.warning("Failed to wire job_status_lister to opensearch server: %s", exc)
+    except ImportError:
+        pass
+
     return handlers
 
 
