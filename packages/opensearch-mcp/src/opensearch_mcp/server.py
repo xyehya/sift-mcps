@@ -780,6 +780,36 @@ def _resolve_tool_path(path: str, *, default_subdir: str = "evidence") -> tuple[
         }
 
 
+# OpenSearch meta-fields are not document fields and reject the `unmapped_type`
+# sort option (it is only valid for real fields with a potential mapping gap).
+# Attaching it to `_score`/`_doc` makes OpenSearch 400 → opaque "tool execution
+# failed".  Listed here so the sort-body builder can omit `unmapped_type` for them.
+_SORT_META_FIELDS = frozenset({"_score", "_doc"})
+
+
+def _build_sort_body(sort: str) -> list[dict]:
+    """Build an OpenSearch sort body from a ``field:order`` string.
+
+    - Meta-fields (``_score``/``_doc``) get ``{order}`` only — ``unmapped_type``
+      is invalid for them and triggers a 400.
+    - Real document fields keep ``unmapped_type: date`` so a sort on a field that
+      is unmapped in some of the searched indices does not error (mixed-mapping
+      guard).
+    - An empty/blank sort string defaults to ``@timestamp:desc``.
+    Order is validated against an allowlist (asc/desc); anything else → desc.
+    """
+    sort = (sort or "").strip() or "@timestamp:desc"
+    sort_field, _, sort_order = sort.partition(":")
+    sort_field = sort_field.strip() or "@timestamp"
+    sort_order = sort_order.strip()
+    if sort_order not in ("asc", "desc", ""):
+        sort_order = "desc"
+    spec: dict = {"order": sort_order or "desc"}
+    if sort_field not in _SORT_META_FIELDS:
+        spec["unmapped_type"] = "date"
+    return [{sort_field: spec}]
+
+
 def opensearch_search(
     query: str,
     index: str = "",
@@ -843,10 +873,7 @@ def opensearch_search(
     client = _get_os()
     limit = min(limit, 200)
 
-    sort_field, _, sort_order = sort.partition(":")
-    if sort_order not in ("asc", "desc", ""):
-        sort_order = "desc"
-    sort_body = [{sort_field: {"order": sort_order or "desc", "unmapped_type": "date"}}]
+    sort_body = _build_sort_body(sort)
 
     query_body: dict = {"query_string": {"query": query}}
     if time_from or time_to:
