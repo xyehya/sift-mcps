@@ -607,7 +607,14 @@ class IngestRun(BaseModel):
     )
     pid: int | None = Field(None, description="Worker process id.")
     elapsed: str = Field(..., description="Elapsed time display.")
-    total_indexed: int = Field(..., description="Total submitted documents.")
+    total_indexed: int = Field(
+        ...,
+        description=(
+            "Documents submitted to the bulk indexer (duplicate _ids from "
+            "multi-timestamp rows — e.g. timeliner — collapse on write; final "
+            "unique count may be lower; confirm with opensearch_count)."
+        ),
+    )
     bulk_failed: int = Field(..., description="Bulk write failures.")
     hosts_complete: int = Field(..., description="Completed host count.")
     hosts_total: int = Field(..., description="Total host count.")

@@ -316,6 +316,7 @@ def _aggregate(latest_by_run: dict[str, dict[str, Any]], run_ids: set[str]) -> d
     statuses: list[str] = []
     errors: list[str] = []
     intel_backend = ""  # F8: enrich-unavailable signal carried in totals
+    mem_warning = ""   # M-WORKER-DBDROP: RAM preflight warning carried in totals
 
     for rid in run_ids:
         rec = latest_by_run.get(rid)
@@ -326,6 +327,8 @@ def _aggregate(latest_by_run: dict[str, dict[str, Any]], run_ids: set[str]) -> d
         totals = rec.get("totals") or {}
         if totals.get("intel_backend"):
             intel_backend = str(totals.get("intel_backend"))
+        if totals.get("mem_warning"):
+            mem_warning = str(totals.get("mem_warning"))
         indexed += int(totals.get("indexed") or 0)
         artifacts_complete += int(totals.get("artifacts_complete") or 0)
         artifacts_total += int(totals.get("artifacts_total") or 0)
@@ -365,6 +368,10 @@ def _aggregate(latest_by_run: dict[str, dict[str, Any]], run_ids: set[str]) -> d
     # instead of a clean "complete" with 0 indexed docs).
     if intel_backend:
         detail["intel_backend"] = intel_backend
+    # M-WORKER-DBDROP: surface the RAM preflight warning in result_public so
+    # the agent polling running_commands_status sees the low-RAM advisory.
+    if mem_warning:
+        detail["warning"] = mem_warning
     out: dict[str, Any] = {"terminal": terminal, "failed": failed, "detail": detail}
     if errors:
         out["error"] = "; ".join(errors[:3])

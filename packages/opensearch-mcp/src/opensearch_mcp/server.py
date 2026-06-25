@@ -379,6 +379,40 @@ def _build_coverage_state(
             "warning": None,
         })
 
+    # F4/Hayabusa (Option B): surface a remediation gap when evtx is indexed but
+    # hayabusa Sigma detection has not run.  Hayabusa executes at evtx-ingest time
+    # (cmd_scan → run_hayabusa_batch over raw .evtx); there is no standalone re-scan
+    # path (the source .evtx files are cleaned up post-ingest). Re-ingest with a
+    # force flag is the only way to re-run detection.  Option A (retention +
+    # hayabusa-only re-scan mode) is deferred — high effort, custody implications.
+    if (
+        disk_artifacts.get("hayabusa") == "not_run"
+        and disk_artifacts.get("evtx") == "indexed"
+    ):
+        gaps.append({
+            "coverage_gap": (
+                "Hayabusa Sigma detection not run — Windows event log threat "
+                "detections unavailable. evtx is indexed but hayabusa was not "
+                "executed at ingest time (binary missing or --no-hayabusa used)."
+            ),
+            "when_to_run": (
+                "When Hayabusa is installed on the SIFT VM and threat detection "
+                "coverage over evtx logs is required."
+            ),
+            "command": (
+                "opensearch_ingest(path='<disk_image>', format='auto', "
+                "hostname='<hostname>', force=True)  # force re-ingest to re-run hayabusa"
+            ),
+            "output_path": None,
+            "next_mcp_step": (
+                "opensearch_case_summary to verify hayabusa index after re-ingest; "
+                "opensearch_list_detections to review Sigma hits"
+            ),
+            "warning": (
+                "Force re-ingest re-processes the entire disk image — only needed "
+                "when Hayabusa detection coverage is required and was missed on first ingest."
+            ),
+        })
 
     if enrichment_state["threat_intel"] == "not_run" and art_keys:
         gaps.append({
@@ -1333,6 +1367,55 @@ def opensearch_field_values(
     ]
 
     resp = {"field": field, "values": values, "truncated": len(values) >= limit}
+
+    # M-FIELDVALS: when values is empty, check whether the field is absent from
+    # the mapping entirely — an empty result means "no values" for a real field
+    # but "field absent" for an unmapped field.  Surface an advisory so the agent
+    # gets an actionable diagnosis instead of silently returning [].
+    if not values:
+        try:
+            mapping_resp = _os_call(
+                client.indices.get_field_mapping,
+                index=index,
+                fields=field,
+            )
+            # mapping_resp is {index_name: {mappings: {field: {...}}}} for each index.
+            # If the field key is absent from ALL index mappings, it's not in the schema.
+            field_mapped = any(
+                field in idx_data.get("mappings", {})
+                for idx_data in mapping_resp.values()
+            )
+            if not field_mapped:
+                # Best-effort: collect top-level field names from any available index
+                top_fields: list[str] = []
+                try:
+                    any_mapping = _os_call(
+                        client.indices.get_field_mapping,
+                        index=index,
+                        fields="*",
+                    )
+                    seen: set[str] = set()
+                    for idx_data in any_mapping.values():
+                        for fname in idx_data.get("mappings", {}):
+                            top = fname.split(".")[0]
+                            if top not in seen:
+                                seen.add(top)
+                                top_fields.append(top)
+                    top_fields = sorted(top_fields)[:30]
+                except Exception:
+                    pass
+                resp["advisory"] = (
+                    f"Field '{field}' is not in the mapping for index '{index}'; "
+                    f"an empty result means 'field absent', not 'no values'. "
+                    + (
+                        f"Available top-level fields: {', '.join(top_fields)}."
+                        if top_fields
+                        else "Use opensearch_search to inspect available fields."
+                    )
+                )
+        except Exception:
+            pass  # Fail-safe: mapping read error — skip advisory, return empty values
+
     aid = audit.log(
         tool="opensearch_field_values",
         params={"field": field, "query": query, "index": index},
@@ -2409,15 +2492,11 @@ def opensearch_ingest(
                 is_memory = _looks_like_memory(c)
 
                 if is_memory:
-                    if not hostname:
-                        started.append(
-                            {
-                                "path": rel_path,
-                                "status": "skipped",
-                                "reason": "Memory format requires hostname= parameter",
-                            }
-                        )
-                        continue
+                    # M-HOSTNAME fix: idx_ingest_memory always derives the hostname
+                    # from the image (registry ComputerName, then envars) when
+                    # hostname is empty, and only returns the structured error if
+                    # BOTH probes fail.  The old `if not hostname: skip` block was
+                    # dead defensive code that defeated derive-first.
                     result = idx_ingest_memory(
                         rel_path,
                         hostname,
@@ -3894,6 +3973,8 @@ def idx_ingest_memory(
         plugin_list = TIER_1
 
     if dry_run:
+        from opensearch_mcp.parse_memory import memory_ram_preflight as _ram_preflight
+
         resp = {
             "status": "preview",
             "tier": tier,
@@ -3902,7 +3983,22 @@ def idx_ingest_memory(
             # B-MVP-042: surface derived hostname in dry-run so agent can confirm
             "hostname": hostname,
             "hostname_source": hostname_source,
+            # M-DRYRUN-MEM: surface routing + estimate so the agent knows where
+            # the real ingest will land before committing.
+            "dispatched_to": "opensearch-worker",
+            "estimate": {
+                "plugin_count": len(plugin_list),
+                "note": (
+                    "tier-3 timeliner dominates runtime/RAM; "
+                    "expect ~image-size peak RSS"
+                ),
+            },
         }
+        # M-WORKER-DBDROP (preview plane): warn before the operator commits
+        # to a 26-min run when RAM looks insufficient.
+        _ram_warn = _ram_preflight(resolved)
+        if _ram_warn:
+            resp["warning"] = _ram_warn
         aid = audit.log(
             tool="idx_ingest_memory",
             params={"path": resolved_path, "dry_run": True, "tier": tier,
