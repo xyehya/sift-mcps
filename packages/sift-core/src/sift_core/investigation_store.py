@@ -704,6 +704,71 @@ def audit_forward_write_dsn() -> str | None:
     return full
 
 
+def list_sealed_evidence_db(case_id: str) -> list[dict]:
+    """Return sealed evidence entries from Postgres for a given case.
+
+    In DB-authority mode the on-disk ``evidence.json`` manifest is empty;
+    the authoritative registry lives in ``app.evidence_objects``.  This
+    function reads that table and returns rows shaped identically to
+    file-manifest entries so the existing provenance grader loop in
+    ``case_manager.py`` consumes them unchanged:
+
+        [{"path": <display_path, relative>, "sha256": <bare 64-hex>, "status": "sealed"}]
+
+    Fails CLOSED (returns ``[]``) on any error — including a missing DSN,
+    missing psycopg, DB connectivity failures, and malformed rows.  It must
+    NEVER fail open to a fake-registered state.
+
+    SQL uses parameterised queries (CodeGuard: input-validation-injection).
+    """
+    if not case_id:
+        return []
+    dsn = control_plane_dsn()
+    if not dsn:
+        return []
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select display_path, current_sha256"
+                    " from app.evidence_objects"
+                    " where case_id = %s"
+                    " and status = 'sealed'"
+                    " and seal_status = 'sealed'",
+                    (case_id,),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        logger.warning(
+            "list_sealed_evidence_db: DB read failed (fail-closed, returning [])",
+            exc_info=True,
+        )
+        return []
+
+    result: list[dict] = []
+    for display_path, current_sha256 in rows:
+        if not display_path:
+            continue
+        # Strip the "sha256:" prefix so the bare 64-hex matches ev_by_hash keys.
+        sha256_bare = ""
+        if current_sha256:
+            raw = str(current_sha256)
+            if raw.startswith("sha256:"):
+                sha256_bare = raw[len("sha256:"):]
+            else:
+                sha256_bare = raw
+        result.append(
+            {
+                "path": str(display_path),
+                "sha256": sha256_bare,
+                "status": "sealed",
+            }
+        )
+    return result
+
+
 def resolve_investigation_store() -> InvestigationAuthorityStore | None:
     """Return a DB authority store when the current call is DB-active.
 

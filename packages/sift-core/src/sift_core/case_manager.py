@@ -1319,8 +1319,25 @@ class CaseManager:
         # Per-artifact provenance resolution
         finding_prov_grade = "PARTIAL"
         if all_audit_entries and validated_artifacts:
-            manifest = load_manifest(case_dir) or {}
-            evidence = manifest.get("files", [])
+            # In DB-authority mode the on-disk evidence.json is empty ([]); the
+            # real sealed-evidence registry lives in Postgres.  Load from DB when
+            # active so confidence grading and the artifact-source hard-reject
+            # both see the actual sealed evidence set.  File mode keeps the
+            # existing load_manifest() path.  Fails closed (empty list) on any
+            # DB error — identical to the legacy behaviour when no files are
+            # registered (PARTIAL grade, artifact rejected).
+            try:
+                from sift_core.active_case_context import db_authority_active
+                from sift_core.investigation_store import list_sealed_evidence_db
+
+                if db_authority_active():
+                    evidence = list_sealed_evidence_db(self._db_case_id() or "")
+                else:
+                    manifest = load_manifest(case_dir) or {}
+                    evidence = manifest.get("files", [])
+            except Exception:
+                manifest = load_manifest(case_dir) or {}
+                evidence = manifest.get("files", [])
             registered = set()
             ev_by_hash = {}
             for e in evidence:
