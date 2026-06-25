@@ -2140,6 +2140,11 @@ REGISTRY.append(
             "List Security Analytics detection findings, or suggest a Hayabusa "
             "query when Sigma is unavailable or empty. Use to triage rule-based "
             "detections; severity filtering is applied behavior-compatibly. "
+            "Rule-based detection on this deployment is Hayabusa-on-ingest "
+            "(Sigma/Security-Analytics is disabled on OpenSearch 3.5); when no "
+            "Hayabusa alerts exist yet, the fallback is manual EVTX hunting "
+            "(e.g. EventID:4625/4624/7045) via opensearch_search — the response "
+            "message spells this out rather than dead-ending. "
             "Example: opensearch_list_detections(severity='high')."
         ),
     )

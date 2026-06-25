@@ -4130,6 +4130,20 @@ def _hayabusa_absent_hint() -> str:
     )
 
 
+# F4: rule-based detection on this deployment is Hayabusa-on-ingest (Sigma via
+# the Security Analytics plugin is disabled on OpenSearch 3.5).  When no Hayabusa
+# alerts are available either, the rule-based path is a dead end UNTIL Hayabusa
+# is staged/ingested — so the message must hand the agent the manual fallback:
+# hunt the raw EVTX logon events directly with opensearch_search.
+_MANUAL_HUNT_FALLBACK = (
+    "Rule-based detection on this deployment is Hayabusa-on-ingest (Sigma is "
+    "disabled on OpenSearch 3.5). Until Hayabusa alerts exist, hunt manually: "
+    "e.g. failed logons opensearch_search(query='EventID:4625', "
+    "index='case-*-evtx-*'); successful logons EventID:4624; "
+    "service installs EventID:7045 — then pivot with opensearch_search."
+)
+
+
 def _hayabusa_suggestion(client) -> str:
     """Build the Hayabusa fallback suggestion when no Sigma detections are shown.
 
@@ -4140,8 +4154,11 @@ def _hayabusa_suggestion(client) -> str:
 
     - alerts present:  ``"No Sigma detections. {N} Hayabusa alerts available. Query: ..."``
     - binary absent:   the disabled lead + :func:`_hayabusa_absent_hint` staging text
-    - installed-empty: ``"...Hayabusa is installed but no alerts are indexed for this case yet..."``
+                       + the manual EVTX-hunt fallback (F4)
+    - installed-empty: ``"...Hayabusa is installed but no alerts are indexed..."``
+                       + the manual EVTX-hunt fallback (F4)
     - count error:     the disabled lead + a generic "check Hayabusa" pointer
+                       + the manual EVTX-hunt fallback (F4)
     """
     import shutil as _shutil
 
@@ -4155,18 +4172,21 @@ def _hayabusa_suggestion(client) -> str:
                 "index='case-*-hayabusa-*')"
             )
         if not _shutil.which("hayabusa"):
-            # No Sigma AND no Hayabusa binary — be explicit, don't imply it ran.
-            return disabled + _hayabusa_absent_hint()
+            # No Sigma AND no Hayabusa binary — be explicit, don't imply it ran,
+            # and give the manual fallback so this isn't a dead end.
+            return disabled + _hayabusa_absent_hint() + " " + _MANUAL_HUNT_FALLBACK
         return (
             disabled + "Hayabusa is installed but no alerts are indexed for this "
-            "case yet — run evtx ingest to populate detections."
+            "case yet — run evtx ingest to populate detections. "
+            + _MANUAL_HUNT_FALLBACK
         )
     except Exception:
         # Count failed (or no usable count) — degrade to a generic pointer,
         # matching the prior per-branch behavior.
         return (
             disabled + "Check Hayabusa: "
-            "opensearch_search(query='Level:*', index='case-*-hayabusa-*')"
+            "opensearch_search(query='Level:*', index='case-*-hayabusa-*'). "
+            + _MANUAL_HUNT_FALLBACK
         )
 
 

@@ -439,3 +439,41 @@ class TestDetectionsToolRegistration:
         # (idx_install_pipelines removed in Phase 6; ensure_winlog_pipeline
         # runs at startup instead.)
         assert len(tool_names) == 15
+
+
+class TestHayabusaSuggestionManualFallback:
+    """F4: the no-detection messages must hand the agent the manual EVTX-hunt
+    fallback instead of dead-ending."""
+
+    def test_alerts_present_no_manual_fallback(self):
+        client = MagicMock()
+        client.count.return_value = {"count": 42}
+        msg = srv._hayabusa_suggestion(client)
+        assert "42 Hayabusa alerts available" in msg
+        # When real alerts exist, point at them — no manual-hunt boilerplate.
+        assert "EventID:4625" not in msg
+
+    def test_binary_absent_includes_manual_fallback(self):
+        client = MagicMock()
+        client.count.return_value = {"count": 0}
+        with patch("shutil.which", return_value=None):
+            msg = srv._hayabusa_suggestion(client)
+        assert "NOT installed" in msg
+        assert "Hayabusa-on-ingest" in msg
+        assert "EventID:4625" in msg
+        assert "opensearch_search" in msg
+
+    def test_installed_but_empty_includes_manual_fallback(self):
+        client = MagicMock()
+        client.count.return_value = {"count": 0}
+        with patch("shutil.which", return_value="/usr/local/bin/hayabusa"):
+            msg = srv._hayabusa_suggestion(client)
+        assert "installed but no alerts" in msg
+        assert "EventID:4625" in msg
+
+    def test_count_error_includes_manual_fallback(self):
+        client = MagicMock()
+        client.count.side_effect = RuntimeError("count failed")
+        msg = srv._hayabusa_suggestion(client)
+        assert "Check Hayabusa" in msg
+        assert "EventID:4625" in msg
