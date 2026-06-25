@@ -10,6 +10,53 @@ from pathlib import Path
 from opensearchpy import OpenSearch
 
 
+# F9 (proposed; NOT yet wired into the live ingest path — see NOTE below).
+#
+# Root cause (confirmed from code): there is NO application-id → name resolution
+# step anywhere in the opensearch-mcp ingest code.  The `application` field on a
+# SRUM document is written 1:1 from whatever the parser tool (SrumECmd / Plaso)
+# emits.  SRUM stores each row's application as a numeric SruDbId foreign key
+# into SruDbIdMapTable; SrumECmd normally resolves it to an ExeInfo string
+# (e.g. "TermService"), but some rows can still surface a bare numeric id
+# (e.g. "1").  Because we do no resolution and no flagging, a bare `1` is
+# indexed as if it were an application NAME — misleading top-egress views.
+#
+# This helper is the non-destructive half of the fix the coordinator allowed
+# ("resolve OR explicitly flag unresolved ids — don't present a bare 1 as an
+# app"): it FLAGS a SRUM doc whose `application` is a bare integer so downstream
+# views can distinguish "unresolved id" from a real app name, without altering
+# any already-resolved row.
+#
+# NOTE / needs-live-confirmation: wiring this into _parse_srum_wintools /
+# _parse_srum_plaso requires a real SRUM sample to confirm (a) which CSV/JSONL
+# column SrumECmd/Plaso write into `application`, and (b) whether an adjacent
+# resolved-name column (ExeInfo) is available to prefer instead of merely
+# flagging.  Until that sample exists, this stays an unwired, unit-tested
+# building block so it cannot regress the working (resolved) rows.
+def flag_unresolved_srum_application(doc: dict) -> dict:
+    """Flag a SRUM document whose ``application`` is an unresolved numeric id.
+
+    If ``doc["application"]`` is a bare integer (e.g. ``"1"`` or ``1``) — i.e. an
+    unresolved SruDbId rather than a resolved executable name — set
+    ``application_unresolved = True`` and preserve the raw id in
+    ``application_id``.  Resolved string names (e.g. ``"TermService"``) and
+    missing/empty values are left untouched.  Mutates and returns ``doc``.
+    """
+    if not isinstance(doc, dict):
+        return doc
+    app = doc.get("application")
+    if app is None or app == "":
+        return doc
+    # Bare integer (int, or a string that is all digits) ⇒ unresolved SruDbId.
+    is_bare_int = isinstance(app, int) and not isinstance(app, bool)
+    if isinstance(app, str) and app.strip().isdigit():
+        is_bare_int = True
+    if is_bare_int:
+        doc["application_unresolved"] = True
+        doc["application_id"] = str(app).strip()
+    return doc
+
+
 def parse_srum(
     srum_path: Path,
     client: OpenSearch,
