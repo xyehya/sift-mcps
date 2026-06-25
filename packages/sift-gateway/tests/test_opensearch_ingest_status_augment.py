@@ -12,10 +12,11 @@ same harness style as test_opensearch_dispatch_middleware.py.
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
 
 import pytest
 from fastmcp import FastMCP
+from fastmcp.tools import ToolResult
+from mcp.types import TextContent
 
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.identity import Identity
@@ -104,12 +105,26 @@ def _gateway_with_job_service(rows=None, raise_exc=None):
 
 
 def _server(gateway, backend_payload: dict):
-    """Mount the augment middleware over a stub that returns a fixed backend payload."""
+    """Mount the augment middleware over a stub that returns a fixed backend payload.
+
+    The stub returns a ToolResult with BOTH content (text) and structured_content,
+    mirroring the real opensearch_ingest_status backend which declares an outputSchema
+    (IngestStatusOut) and therefore always sets structured_content.  This is critical:
+    the augment middleware must preserve structured_content on its returned ToolResult —
+    FastMCP's live output validator rejects a result whose structured_content is None
+    when outputSchema is defined.
+    """
     mcp = FastMCP("parent", middleware=[OpenSearchIngestStatusAugmentMiddleware(gateway)])
 
     @mcp.tool(name="opensearch_ingest_status")
     async def _status(case_id: str = "", job_id: str = "", case_dir: str = ""):
-        return json.dumps(backend_payload)
+        # Return a ToolResult with structured_content set, like the real backend does.
+        text = json.dumps(backend_payload)
+        return ToolResult(
+            content=[TextContent(type="text", text=text)],
+            structured_content=backend_payload,
+            is_error=False,
+        )
 
     return mcp
 
@@ -189,6 +204,43 @@ async def test_augment_populates_ingests_from_job_service():
     )
 
 
+async def test_augment_result_has_structured_content():
+    """Augmented ToolResult MUST carry structured_content (not text-only).
+
+    opensearch_ingest_status declares outputSchema (IngestStatusOut).  FastMCP's
+    live output validator rejects ToolResult.structured_content=None with:
+      "outputSchema defined but no structured output returned"
+
+    This test is the regression guard that would have caught the original bug:
+    a text-only ToolResult (structured_content=None or missing) must FAIL here.
+    """
+    gateway = _gateway_with_job_service(rows=[_FAKE_JOB_ROW])
+    result = await _call(gateway, {}, _BACKEND_DB_ACTIVE_ENVELOPE)
+
+    assert not result.is_error
+    # structured_content must be a dict — never None.
+    assert isinstance(result.structured_content, dict), (
+        f"structured_content must be a dict for outputSchema compliance, "
+        f"got: {type(result.structured_content).__name__!r} = {result.structured_content!r}. "
+        "A text-only ToolResult causes 'outputSchema defined but no structured output returned' live."
+    )
+    # The dict must carry the augmented ingests[].
+    sc = result.structured_content
+    assert "ingests" in sc, f"structured_content missing 'ingests': {sc!r}"
+    assert len(sc["ingests"]) == 1, (
+        f"structured_content.ingests must contain 1 row: {sc['ingests']!r}"
+    )
+    # Authority field must be present.
+    assert sc.get("authority") == "postgres-durable-jobs", (
+        f"structured_content missing authority: {sc!r}"
+    )
+    # ingests[] in structured_content must match content (text) — no split-brain.
+    payload_from_text = json.loads(result.content[0].text)
+    assert sc["ingests"] == payload_from_text["ingests"], (
+        "structured_content.ingests must match the text representation"
+    )
+
+
 async def test_augment_updates_summary_message_when_jobs_found():
     """Summary message must reflect the count of found jobs when ingests[] is non-empty."""
     gateway = _gateway_with_job_service(rows=[_FAKE_JOB_ROW])
@@ -220,7 +272,7 @@ async def test_augment_fail_closed_on_db_error():
     """If JobService.list_ingest_jobs_for_case raises, middleware returns backend result unchanged.
 
     Fail-closed: DB errors must never crash the call; the original authority envelope
-    (ingests=[], authority, message) is returned as-is.
+    (ingests=[], authority, message, and structured_content) is returned as-is.
     """
     gateway = _gateway_with_job_service(raise_exc=RuntimeError("DB unavailable"))
     result = await _call(gateway, {}, _BACKEND_DB_ACTIVE_ENVELOPE)
@@ -230,6 +282,10 @@ async def test_augment_fail_closed_on_db_error():
     payload = json.loads(result.content[0].text)
     assert payload.get("authority") == "postgres-durable-jobs"
     assert payload.get("ingests") == [], "On DB error ingests must degrade to []"
+    # structured_content must still be present (the backend's original SC is preserved).
+    assert isinstance(result.structured_content, dict), (
+        "On DB error, backend's structured_content must be preserved (not dropped)"
+    )
 
 
 async def test_augment_skips_when_no_job_service():

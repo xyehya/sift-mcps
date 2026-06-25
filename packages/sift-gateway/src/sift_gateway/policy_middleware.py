@@ -1405,7 +1405,16 @@ class OpenSearchIngestStatusAugmentMiddleware(Middleware):
         )
         new_text = json.dumps(payload)
         new_content = [TextContent(type="text", text=new_text)]
-        return ToolResult(content=new_content, is_error=False)
+        # structured_content MUST be populated: opensearch_ingest_status declares an
+        # outputSchema (IngestStatusOut).  FastMCP's live output validator rejects a
+        # ToolResult whose structured_content is None when outputSchema is defined,
+        # raising "outputSchema defined but no structured output returned".
+        # Mutate from the backend's existing structured_content (a dict) so any extra
+        # envelope fields the backend set (last_completed, next_step, job_id, …) are
+        # preserved alongside our augmented ingests[]/message.
+        base_sc = result.structured_content if isinstance(result.structured_content, dict) else {}
+        new_sc = {**base_sc, **payload}
+        return ToolResult(content=new_content, structured_content=new_sc, is_error=False)
 
 
 class OpenSearchJobDispatchMiddleware(Middleware):
