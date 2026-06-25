@@ -1820,6 +1820,18 @@ def opensearch_inspect_container(path: str, case_dir: str = "") -> dict:
                 result["container_type"] = "e01"
                 info = _parse_ewfinfo(proc.stdout)
                 result.update(info)
+                # F3-DIAG: ewfinfo reports acquisition metadata but does NOT
+                # enumerate partitions.  Many triage E01s are a single NTFS
+                # volume with no partition table, where mmls exits 1 with empty
+                # output — a common dead-end.  Surface an actionable note when no
+                # partitions were discovered so the agent goes straight to fls.
+                if not result.get("partitions"):
+                    result["partition_note"] = (
+                        "no partition table detected (ewfinfo does not enumerate "
+                        "partitions; single-volume images have none) — mmls will "
+                        "exit 1 with empty output; use "
+                        "fls -i ewf -f ntfs <path> directly"
+                    )
                 return result
         except (subprocess.TimeoutExpired, OSError):
             pass
@@ -1838,6 +1850,14 @@ def opensearch_inspect_container(path: str, case_dir: str = "") -> dict:
             if proc.returncode == 0:
                 result["container_type"] = "raw"
                 result["raw_info"] = proc.stdout.strip()[:2000]
+                # F3-DIAG: same single-volume footgun for raw images — if no
+                # partitions were discovered, point at fls directly.
+                if not result.get("partitions"):
+                    result["partition_note"] = (
+                        "no partition table detected — mmls will exit 1 with "
+                        "empty output for a single-volume image; use "
+                        "fls -f ntfs <path> directly"
+                    )
                 break
         except (subprocess.TimeoutExpired, OSError):
             pass
