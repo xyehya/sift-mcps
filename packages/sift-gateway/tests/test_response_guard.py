@@ -89,6 +89,41 @@ class TestScanToolResult:
         assert pw
         assert pw[0]["severity"] == "high"
 
+    # F2 regression: ewfinfo "Password" field false-positive investigation.
+    # The {8,} bound in the Generic Password pattern already prevents short
+    # benign forensic metadata values from matching.  These tests document the
+    # confirmed-safe boundaries so future pattern changes cannot silently
+    # re-introduce the false positive.
+    def test_ewfinfo_password_na_not_flagged(self):
+        """'Password: N/A' (3 chars) must NOT match — below the {8,} bound."""
+        assert scan_tool_result("Password:\t\t\tN/A") == []
+        assert scan_tool_result("Password: N/A") == []
+        assert scan_tool_result("Password:                       N/A") == []
+
+    def test_ewfinfo_password_not_set_not_flagged(self):
+        """'Password: (not set)' — 9 chars but contains parentheses and spaces
+        which break the [^\\s\"']{8,} character class (spaces are excluded)."""
+        assert scan_tool_result("Password:                       (not set)") == []
+        assert scan_tool_result("Set password:                   (not set)") == []
+
+    def test_ewfinfo_password_empty_not_flagged(self):
+        """Empty / whitespace-only value after 'Password:' → no match."""
+        assert scan_tool_result("Password:") == []
+        assert scan_tool_result("Password:          ") == []
+
+    def test_ewfinfo_typical_block_not_redacted(self):
+        """A typical ewfinfo metadata block with N/A password clears unmodified."""
+        block = (
+            "Acquisition date:\t2026-06-24\n"
+            "System date:\t\t2026-06-24\n"
+            "Password:\t\t\tN/A\n"
+            "Set password:\t\t(not set)\n"
+            "Compression method:\tdeflate\n"
+        )
+        redacted, findings = redact_tool_result(block)
+        assert redacted == block, "ewfinfo block must not be redacted"
+        assert findings == []
+
 
 # ---------------------------------------------------------------------------
 # redact_tool_result
