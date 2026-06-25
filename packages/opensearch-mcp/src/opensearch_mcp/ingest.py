@@ -44,6 +44,7 @@ def _persist_ingest_audit_event(
     index_name: str = "",
     result_summary: str = "",
     case_id: str | None = None,
+    input_files: list[str] | None = None,
 ) -> None:
     """Forward-write ONE ``app.audit_events`` row for an ingest artifact (B-D2).
 
@@ -63,9 +64,15 @@ def _persist_ingest_audit_event(
     Any DSN / psycopg / insert error is swallowed (logged at debug) so the
     artifact's own indexing is unaffected.
 
-    NB: no absolute paths or secrets are stored — only the opaque artifact id,
-    tool name, run id, mcp name, hostname, index name, and a bounded summary.
-    Paths (file=, source_evidence=) deliberately stay out of ``details``.
+    NB: no secrets are stored — only the opaque artifact id, tool name, run id,
+    mcp name, hostname, index name, a bounded summary, and (CONF-1-IDX) the
+    ingested artifact path(s) in ``input_files``.  The ingested artifact path is
+    the SAME evidence path the control plane already holds in
+    ``app.evidence_objects.display_path``; recording it here lets the DB-mode
+    opensearch-indirect provenance resolver trace an ``idx_`` citation back to the
+    sealed source evidence (it requires a non-empty ``input_files`` on the ingest
+    audit row — fail-closed: no path ⇒ no FULL grade).  Callers pass the relative
+    evidence path where available.
     """
     if not audit_id:
         return
@@ -96,6 +103,7 @@ def _persist_ingest_audit_event(
             "hostname": str(hostname or ""),
             "index_name": str(index_name or ""),
             "result_summary": summary,
+            "input_files": [str(f) for f in (input_files or []) if f],
         }
         sql = (
             "insert into app.audit_events "
@@ -765,6 +773,7 @@ def _ingest_hosts(
                             hostname=host.hostname,
                             index_name=index_name,
                             result_summary=_evtx_summary,
+                            input_files=[str(evtx_file)],
                         )
                         # Per-file status update
                         if evtx_status:
@@ -972,6 +981,7 @@ def _ingest_hosts(
                     hostname=host.hostname,
                     index_name=index_name,
                     result_summary=_ez_summary,
+                    input_files=[str(artifact_path)],
                 )
                 if tool_status:
                     tool_status["status"] = "complete"
@@ -1120,6 +1130,7 @@ def _ingest_plaso_artifact(
             hostname=host.hostname,
             index_name=index_name,
             result_summary=_plaso_summary,
+            input_files=[str(artifact_path)],
         )
         if tool_status:
             tool_status["status"] = "complete"
@@ -1249,6 +1260,7 @@ def _ingest_custom_artifact(
             hostname=host.hostname,
             index_name=index_name,
             result_summary=_custom_summary,
+            input_files=[str(artifact_path)],
         )
         if tool_status:
             tool_status["status"] = "complete"

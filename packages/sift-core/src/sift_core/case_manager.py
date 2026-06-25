@@ -1411,6 +1411,12 @@ class CaseManager:
                     logger.warning("Duplicate audit_id in trail: %s", aid_key)
                 audit_by_id[aid_key] = e
             active_cid = self._active_case_id or ""
+            # CONF-1-IDX: DB-mode audit entries (from list_audit_provenance_db)
+            # carry the case UUID, whereas _active_case_id is the human case key.
+            # The idx_ cross-case guard below compares an entry's case_id against
+            # this set, so include BOTH forms — otherwise every DB-mode ingest
+            # entry is wrongly dropped (UUID != key) and the indirect trace fails.
+            _active_cids = {c for c in (active_cid, self._db_case_id() or "") if c}
 
             # Pre-build output→input and output→entry lookups
             shared_output_map: dict[str, list[str]] = {}
@@ -1503,20 +1509,40 @@ class CaseManager:
                     except OSError:
                         pass
 
-                # Indirect path: opensearch_search/opensearch_aggregate → trace to opensearch_ingest
+                # Indirect path: opensearch_search/opensearch_aggregate → trace to
+                # the opensearch ingest of the sealed source evidence.
+                # The cited entry's tool is the search/aggregate tool: in file mode
+                # the legacy in-process readers used an ``idx_`` prefix; the gateway
+                # / DB-authority path records the canonical ``opensearch_search`` /
+                # ``opensearch_aggregate`` names (CONF-1-IDX).  Match both so the
+                # indirect FULL-grade trace is reachable in DB mode too.
                 tool = entry.get("tool", "")
-                if tool.startswith("idx_"):
+                if (
+                    tool.startswith("idx_")
+                    or tool in ("opensearch_search", "opensearch_aggregate")
+                ):
                     search_index = entry.get("params", {}).get("index", "")
                     # Collect candidates, score by filename affinity
                     candidates: list[tuple[int, dict, list[str]]] = []
                     for e in all_audit_entries:
                         e_tool = e.get("tool", "")
+                        # Accept the top-level ``opensearch_ingest`` row (file mode)
+                        # AND the per-artifact ``ingest_*`` rows (the only ingest
+                        # rows that carry input_files in DB-authority mode, written
+                        # by opensearch-mcp _persist_ingest_audit_event — CONF-1-IDX).
+                        # A non-empty input_files is required either way, so an
+                        # ingest row that recorded no path can never grade FULL
+                        # (fail-closed).
                         if not (
-                            e_tool.startswith("opensearch_ingest") and e.get("input_files")
+                            (
+                                e_tool.startswith("opensearch_ingest")
+                                or e_tool.startswith("ingest_")
+                            )
+                            and e.get("input_files")
                         ):
                             continue
                         e_cid = e.get("case_id", "")
-                        if e_cid and active_cid and e_cid != active_cid:
+                        if e_cid and _active_cids and e_cid not in _active_cids:
                             continue
                         ingest_hosts: list[str] = []
                         if search_index and "*" not in search_index:

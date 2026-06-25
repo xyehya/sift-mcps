@@ -566,6 +566,62 @@ class TestListAuditProvenanceDbUnit:
         )
         assert list_audit_provenance_db(CASE_UUID) == []
 
+    def test_ingest_row_populates_input_files_and_params(self, monkeypatch):
+        """CONF-1-IDX: an ingest_* row carries input_files + params.hosts so the
+        idx_ indirect resolver can trace it."""
+        from sift_core.investigation_store import list_audit_provenance_db
+
+        monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://fake")
+        details = {
+            "backend_audit_id": "opensearchingest-evtx-001",
+            "tool": "ingest_evtx",
+            "hostname": "WS01",
+            "input_files": ["evidence/triage/WS01/Security.evtx"],
+            "result_summary": "1000 indexed",
+        }
+        monkeypatch.setattr(
+            "psycopg.connect", lambda dsn, **kw: _make_fake_conn([(details,)])
+        )
+        rows = list_audit_provenance_db(CASE_UUID)
+        assert len(rows) == 1
+        e = rows[0]
+        assert e["tool"] == "ingest_evtx"
+        assert e["input_files"] == ["evidence/triage/WS01/Security.evtx"]
+        assert e["params"]["hostname"] == "WS01"
+        assert e["params"]["hosts"] == ["WS01"]
+
+    def test_non_ingest_row_keeps_empty_input_files_and_params(self, monkeypatch):
+        """A run_command row must keep input_files:[] / params:{} (unchanged)."""
+        from sift_core.investigation_store import list_audit_provenance_db
+
+        monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://fake")
+        details = _result_details("siftgateway-claude-20260625-050", [])
+        monkeypatch.setattr(
+            "psycopg.connect", lambda dsn, **kw: _make_fake_conn([(details,)])
+        )
+        rows = list_audit_provenance_db(CASE_UUID)
+        assert rows[0]["input_files"] == []
+        assert rows[0]["params"] == {}
+
+    def test_ingest_row_without_input_files_stays_empty(self, monkeypatch):
+        """Fail-closed: an ingest row that recorded no input_files yields [] (so
+        the resolver cannot grade it FULL)."""
+        from sift_core.investigation_store import list_audit_provenance_db
+
+        monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://fake")
+        details = {
+            "backend_audit_id": "opensearchingest-evtx-002",
+            "tool": "ingest_evtx",
+            "hostname": "WS01",
+            # no input_files key
+            "result_summary": "1000 indexed",
+        }
+        monkeypatch.setattr(
+            "psycopg.connect", lambda dsn, **kw: _make_fake_conn([(details,)])
+        )
+        rows = list_audit_provenance_db(CASE_UUID)
+        assert rows[0]["input_files"] == []
+
 
 # ---------------------------------------------------------------------------
 # AUDIT-CONF-1 Layer-2: pure-DB evidence-ref FULL path integration tests
@@ -698,6 +754,129 @@ class TestDbEvidenceRefFullPath:
             examiner_override="alice",
         )
         # No sealed registry → registered set empty → artifact source rejected.
+        if res["status"] == "STAGED":
+            staged = next(iter(store.findings.values()))
+            assert staged["artifacts"][0].get("provenance_grade") != "FULL"
+        else:
+            assert res["status"] == "REJECTED", res
+
+
+# ---------------------------------------------------------------------------
+# CONF-1-IDX: opensearch-indirect (idx_) FULL grade in DB mode.
+# An artifact cites an opensearch_search audit_id; the DB trail also carries
+# the ingest_evtx of the sealed evtx, so the resolver traces search → ingest →
+# sealed evidence and grades FULL.
+# ---------------------------------------------------------------------------
+
+EVTX_REL = "evidence/triage/WS01/Security.evtx"
+SEARCH_AID = "siftgateway-claude-20260625-777"
+INGEST_AID = "opensearchingest-evtx-777"
+
+
+class TestDbIdxIndirectFullPath:
+    def _make_evtx(self, case_dir):
+        p = case_dir / "evidence" / "triage" / "WS01"
+        p.mkdir(parents=True, exist_ok=True)
+        f = p / "Security.evtx"
+        f.write_bytes(b"\x00" * 8)
+        return f
+
+    def _finding_cite_search(self, case_dir, evtx_abs):
+        return {
+            "title": "Failed logon burst (idx_ indirect)",
+            "type": "finding",
+            "host": "WS01",
+            "observation": "Many 4625 events for admin",
+            "interpretation": "Password spray",
+            "confidence": "HIGH",
+            "confidence_justification": "opensearch_search over ingested sealed evtx",
+            "event_timestamp": "2026-06-25T00:00:00Z",
+            "artifacts": [
+                {
+                    "source": evtx_abs,
+                    "extraction": "opensearch_search EventID:4625",
+                    "content": "30 failed logons",
+                    "audit_id": SEARCH_AID,
+                }
+            ],
+        }
+
+    def _patch(self, monkeypatch, case_dir, *, ingest_input_files):
+        evtx_abs = str((case_dir / EVTX_REL).resolve())
+        sealed = [{
+            "evidence_id": "evid-evtx-1",
+            "path": EVTX_REL,
+            "sha256": "f" * 64,
+            "status": "sealed",
+        }]
+        monkeypatch.setattr(
+            "sift_core.investigation_store.list_sealed_evidence_db",
+            lambda case_id: sealed,
+        )
+        # DB audit trail: the cited opensearch_search + the ingest_evtx that
+        # read the sealed evtx (input_files populated by CONF-1-IDX change b).
+        entries = [
+            {
+                "audit_id": SEARCH_AID,
+                "tool": "opensearch_search",
+                "evidence_refs": [],
+                "audit_aliases": [SEARCH_AID],
+                "envelope_event_id": "",
+                "input_files": [],
+                "result_summary": {},
+                "params": {"index": "case-test-conf1-evtx-ws01"},
+                "case_id": CASE_UUID,
+            },
+            {
+                "audit_id": INGEST_AID,
+                "tool": "ingest_evtx",
+                "evidence_refs": [],
+                "audit_aliases": [INGEST_AID],
+                "envelope_event_id": "",
+                "input_files": ingest_input_files,
+                "result_summary": {},
+                "params": {"hostname": "ws01", "hosts": ["ws01"]},
+                "case_id": CASE_UUID,
+            },
+        ]
+        monkeypatch.setattr(
+            "sift_core.investigation_store.list_audit_provenance_db",
+            lambda case_id: entries,
+        )
+        return evtx_abs
+
+    def test_idx_indirect_grades_full_via_ingest_trace(self, db_manager, monkeypatch):
+        """Cited opensearch_search → traced ingest_evtx input_files → sealed evtx
+        ⇒ artifact FULL."""
+        mgr, store, case_dir = db_manager
+        self._make_evtx(case_dir)
+        evtx_abs_path = str((case_dir / EVTX_REL).resolve())
+        evtx_abs = self._patch(
+            monkeypatch, case_dir, ingest_input_files=[evtx_abs_path]
+        )
+        res = mgr.record_finding(
+            self._finding_cite_search(case_dir, evtx_abs),
+            examiner_override="alice",
+        )
+        assert res["status"] == "STAGED", res
+        staged = next(iter(store.findings.values()))
+        art = staged["artifacts"][0]
+        assert art.get("provenance_grade") == "FULL", art
+        assert art.get("source_evidence"), art
+
+    def test_idx_indirect_fail_closed_when_ingest_has_no_input_files(
+        self, db_manager, monkeypatch
+    ):
+        """Fail-closed: ingest row with empty input_files ⇒ cannot grade FULL."""
+        mgr, store, case_dir = db_manager
+        self._make_evtx(case_dir)
+        evtx_abs = self._patch(monkeypatch, case_dir, ingest_input_files=[])
+        res = mgr.record_finding(
+            self._finding_cite_search(case_dir, evtx_abs),
+            examiner_override="alice",
+        )
+        # Source path IS sealed (registered), so it may STAGE PARTIAL, but the
+        # idx_ indirect trace must NOT have graded it FULL.
         if res["status"] == "STAGED":
             staged = next(iter(store.findings.values()))
             assert staged["artifacts"][0].get("provenance_grade") != "FULL"

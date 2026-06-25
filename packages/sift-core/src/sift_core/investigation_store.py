@@ -841,15 +841,33 @@ def list_audit_provenance_db(case_id: str) -> list[dict]:
         aliases = details.get("audit_aliases", []) or []
         if not isinstance(aliases, list):
             aliases = []
+        # CONF-1-IDX: for opensearch ingest rows, carry the ingested artifact
+        # path(s) and host into input_files / params so the opensearch-indirect
+        # (idx_) provenance resolver can trace a cited opensearch_search back to
+        # the ingest of sealed evidence and grade it FULL.  Non-ingest rows keep
+        # the empty defaults.  Fail-closed: an ingest row that recorded no
+        # input_files yields [] here, so the resolver cannot grade it FULL.
+        tool_name = str(details.get("tool", ""))
+        idx_input_files: list[str] = []
+        idx_params: dict = {}
+        if tool_name.startswith("opensearch_ingest") or tool_name.startswith("ingest_"):
+            raw_inputs = details.get("input_files", []) or []
+            if isinstance(raw_inputs, list):
+                idx_input_files = [str(f) for f in raw_inputs if f]
+            hostname = str(details.get("hostname", "") or "")
+            idx_params = {
+                "hostname": hostname,
+                "hosts": [hostname] if hostname else [],
+            }
         entry = {
             "audit_id": str(backend_audit_id),
-            "tool": str(details.get("tool", "")),
+            "tool": tool_name,
             "evidence_refs": [str(r) for r in evidence_refs if r],
             "audit_aliases": [str(a) for a in aliases if a],
             "envelope_event_id": str(details.get("envelope_event_id", "")),
-            "input_files": [],
+            "input_files": idx_input_files,
             "result_summary": result_summary,
-            "params": {},
+            "params": idx_params,
             "case_id": str(case_id),
         }
         result.append(entry)
