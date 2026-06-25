@@ -862,6 +862,11 @@ def list_audit_provenance_db(case_id: str) -> list[dict]:
         entry = {
             "audit_id": str(backend_audit_id),
             "tool": tool_name,
+            # backend: the registered MCP backend name recorded by the gateway
+            # envelope middleware (details->>'backend').  Used by _score_grounding
+            # to attribute a grounding source via the stable backend name rather
+            # than the content-free UUID canonical id.
+            "backend": str(details.get("backend", "")),
             "evidence_refs": [str(r) for r in evidence_refs if r],
             "audit_aliases": [str(a) for a in aliases if a],
             "envelope_event_id": str(details.get("envelope_event_id", "")),

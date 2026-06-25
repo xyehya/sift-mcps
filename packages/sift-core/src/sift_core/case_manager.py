@@ -2212,121 +2212,181 @@ class CaseManager:
 
     # --- Grounding Score ---
 
+    # Structural tool-prefix → backend name map used when the DB entry carries no
+    # explicit ``backend`` field (JSONL-mode entries, legacy).  The gateway sets
+    # details->>'backend' for every proxied call; this map is the no-DB fallback.
+    # opensearch_* is intentionally absent — opensearch is primary evidence, not a
+    # grounding source (operator decision, P35-3 brief §2).
+    _TOOL_BACKEND_PREFIX_MAP: dict[str, str] = {
+        "kb_": "forensic-rag-mcp",
+        "wintriage_": "windows-triage-mcp",
+        "opencti_": "opencti-mcp",
+        "threat_intel_": "opencti-mcp",
+        "run_command": "sift-core",
+        "record_": "sift-core",
+        "shell_": "sift-core",
+    }
+
+    @classmethod
+    def _backend_for_tool(cls, tool: str, backend_hint: str = "") -> str:
+        """Map a tool name to its backend MCP name.
+
+        Priority: (1) ``backend_hint`` (the ``backend`` field from the DB audit
+        entry, written by AuditEnvelopeMiddleware — most reliable); (2) structural
+        prefix map (covers JSONL/file-mode entries that predate the ``backend``
+        field); (3) empty string (uncreditable).
+
+        Never raises — returns ``""`` for unrecognised tools so they are not
+        credited and do not crash record_finding.
+        """
+        if backend_hint:
+            return backend_hint.lower()
+        tool_lower = tool.lower() if tool else ""
+        for prefix, backend in cls._TOOL_BACKEND_PREFIX_MAP.items():
+            if tool_lower.startswith(prefix):
+                return backend
+        return ""
+
     def _score_grounding(self, finding: dict) -> dict:
         """Score how well a finding is grounded by external reference MCPs.
 
-        Scans the case audit directory for evidence of declared reference MCP
-        usage. Returns WEAK/PARTIAL/STRONG with suggestions for unconsulted
-        sources.
+        Attribution is tool→backend off the DB audit trail (``_scan_audit_trail``
+        / ``list_audit_provenance_db``), with old id-prefix and JSONL fallbacks so
+        file-mode and legacy native-scheme citations are still credited.
 
-        Returns empty dict when STRONG (2+ sources consulted).
+        Level is WEAK/MEDIUM/HIGH scaled by the count of DISTINCT credited backends:
+          0 or 1 credited backend → WEAK
+          2 credited backends    → MEDIUM
+          3+ credited backends   → HIGH
+
+        Creditable backends (operator decision, P35-3 §2):
+          sift-core (run_command / record_*), forensic-rag-mcp (kb_*),
+          windows-triage-mcp (wintriage_*), opencti-mcp (opencti/threat-intel).
+        opensearch is NOT credited (primary evidence, not a grounding source).
+
+        Fail-soft: the DB audit-trail step is wrapped in try/except; any DB error
+        falls back to the prefix/JSONL path.  record_finding never crashes here.
         """
         case_dir = self.active_case_dir
         if case_dir is None or not case_dir.exists():
             return {}
 
+        # The check_set is the union of:
+        #  (a) declared reference backends (from the gateway-injected provider)
+        #  (b) sift-core — credited per operator decision even though it is not a
+        #      ``provides:["reference"]`` backend.
         available = _declared_reference_backends()
-        if not available:
-            return self._grounding_result([], finding)
+        creditable: set[str] = set(available) | {"sift-core"}
 
-        # A reference backend counts as consulted when EITHER:
-        #  (1) the finding cites an audit_id produced by that backend, or
-        #  (2) the backend left a non-empty per-case audit JSONL.
-        # Crediting cited audit_ids is essential in DB-active mode, where the
-        # transport audit is written to Postgres and the local JSONL may be
-        # absent/empty even though kb_search_knowledge actually ran — the prior
-        # JSONL-only check made every finding read "WEAK / forensic-rag missing"
-        # after real KB searches, training the agent to ignore the signal.
+        if not creditable:
+            return self._grounding_result(set(), finding, available)
+
         cited_aids: list[str] = [
             str(aid)
             for aid in (finding.get("audit_ids") or [])
             if isinstance(aid, str) and aid
         ]
+        if not cited_aids:
+            return self._grounding_result(set(), finding, available)
+
+        # --- Primary attribution: audit trail entries (stable post-Unit-1) -------
+        # _scan_audit_trail merges JSONL + DB entries; each entry carries tool,
+        # backend, audit_id, audit_aliases, envelope_event_id.  We match a cited
+        # audit_id against any of those forms and resolve the backend.
+        consulted_backends: set[str] = set()
+        try:
+            _, trail_entries = self._scan_audit_trail(case_dir)
+            # Build lookup: id form → entry, so we can credit any cited form.
+            cited_set: set[str] = set(cited_aids)
+            for entry in trail_entries:
+                # Match canonical audit_id, any alias, or envelope_event_id.
+                entry_ids: set[str] = {entry.get("audit_id", "")}
+                for alias in entry.get("audit_aliases") or []:
+                    if alias:
+                        entry_ids.add(alias)
+                env = entry.get("envelope_event_id", "")
+                if env:
+                    entry_ids.add(env)
+                if not (cited_set & entry_ids):
+                    continue
+                # Resolve backend from entry's ``backend`` field first, then tool.
+                backend = self._backend_for_tool(
+                    entry.get("tool", ""), entry.get("backend", "")
+                )
+                if backend and backend in creditable:
+                    consulted_backends.add(backend)
+        except Exception:
+            # Fail-soft: fall back to prefix/JSONL path below.
+            logger.warning(
+                "_score_grounding: audit-trail attribution failed (fail-soft, "
+                "falling back to prefix/JSONL)",
+                exc_info=True,
+            )
+
+        # --- Fallback 1: scheme-prefix match on native-format audit_ids ----------
+        # Covers JSONL-mode and native-scheme citations (``windowstriage-*``,
+        # ``siftgateway-*``) that do not appear in the DB trail, and run_command
+        # core ids where the canonical is already native.
         cited_prefixes = {
             aid.split("-", 1)[0].lower()
             for aid in cited_aids
             if "-" in aid and not _UUID_PATTERN.match(aid)
         }
-        # For gateway canonical UUIDs (envelope_event_id), resolve the backend name
-        # from DB so the grounding scorer can credit the correct add-on plane.
-        uuid_cited_backends: set[str] = set()
-        uuid_aids = [aid for aid in cited_aids if _UUID_PATTERN.match(aid)]
-        if uuid_aids:
-            try:
-                from sift_core.active_case_context import db_authority_active
-                from sift_core.investigation_store import control_plane_dsn
-
-                if db_authority_active():
-                    dsn = control_plane_dsn()
-                    if dsn:
-                        import psycopg
-
-                        db_case_id = self._db_case_id()
-                        with psycopg.connect(dsn) as _conn:
-                            with _conn.cursor() as _cur:
-                                if db_case_id:
-                                    _cur.execute(
-                                        "select details->>'backend' from app.audit_events"
-                                        " where case_id = %s"
-                                        " and details->>'envelope_event_id' = any(%s)"
-                                        " limit %s",
-                                        (db_case_id, uuid_aids, len(uuid_aids) + 1),
-                                    )
-                                else:
-                                    _cur.execute(
-                                        "select details->>'backend' from app.audit_events"
-                                        " where details->>'envelope_event_id' = any(%s)"
-                                        " limit %s",
-                                        (uuid_aids, len(uuid_aids) + 1),
-                                    )
-                                for row in _cur.fetchall():
-                                    bk = row[0]
-                                    if bk:
-                                        uuid_cited_backends.add(bk.lower())
-            except Exception:
-                pass  # DB not reachable — fall through to JSONL check
-
-        consulted: list[str] = []
-        for mcp_name in available:
-            # Mirror AuditWriter's prefix derivation: strip "-mcp" and dashes.
-            prefix = mcp_name.replace("-mcp", "").replace("-", "").lower()
-            # Credit via scheme-format audit_id prefix match.
+        for backend_name in creditable:
+            if backend_name in consulted_backends:
+                continue  # already credited via trail
+            prefix = backend_name.replace("-mcp", "").replace("-", "").lower()
             if prefix and prefix in cited_prefixes:
-                consulted.append(mcp_name)
-                continue
-            # Credit via DB-resolved envelope_event_id → backend name.
-            if mcp_name.lower() in uuid_cited_backends:
-                consulted.append(mcp_name)
+                consulted_backends.add(backend_name)
+
+        # --- Fallback 2: non-empty per-case JSONL audit file ---------------------
+        # Covers backends in file-authority mode that left a JSONL but the finding
+        # doesn't cite a matching id directly.
+        for backend_name in available:  # JSONL files only exist for declared backends
+            if backend_name in consulted_backends:
                 continue
             for audit_dir in self._candidate_audit_dirs(case_dir):
-                audit_file = audit_dir / f"{mcp_name}.jsonl"
+                audit_file = audit_dir / f"{backend_name}.jsonl"
                 if audit_file.exists() and audit_file.stat().st_size > 0:
-                    consulted.append(mcp_name)
+                    consulted_backends.add(backend_name)
                     break
 
-        return self._grounding_result(consulted, finding, available)
+        return self._grounding_result(consulted_backends, finding, available)
 
     def _grounding_result(
         self,
-        consulted: list[str],
+        consulted_backends: set[str],
         finding: dict,
         available: list[str] | None = None,
     ) -> dict:
-        """Build grounding score result from consulted sources list."""
-        if len(consulted) >= 2:
-            return {}  # STRONG — don't clutter
+        """Build grounding score result from consulted backend set.
 
-        # Only flag backends that are actually deployed (have audit files)
+        Level = count of DISTINCT credited backends:
+          0 or 1 → WEAK
+          2       → MEDIUM
+          3+      → HIGH
+        PARTIAL is folded into WEAK (3-tier vocabulary: WEAK/MEDIUM/HIGH).
+        The ``>=2 → return {}`` suppression is removed; the block is always emitted
+        when creditable sources are in scope.  ``sources_count`` is added.
+        """
         check_set = available if available is not None else _declared_reference_backends()
-        missing = [m for m in check_set if m not in consulted]
-        # No deployed grounding backends — nothing to flag
-        if not consulted and not missing:
-            return {}
-        # If finding has provenance chain to registered evidence, at least PARTIAL
-        has_provenance = bool(finding.get("source_evidence"))
-        level = "PARTIAL" if consulted or has_provenance else "WEAK"
+        # sources_missing is relative to declared reference backends only (sift-core
+        # is an implicit creditable source, not a user-declared reference backend).
+        missing = [m for m in check_set if m not in consulted_backends]
 
-        # Load corroboration suggestions from FK for unconsulted sources
+        # No declared reference backends and nothing consulted → nothing to flag.
+        if not consulted_backends and not missing:
+            return {}
+
+        n = len(consulted_backends)
+        if n >= 3:
+            level = "HIGH"
+        elif n == 2:
+            level = "MEDIUM"
+        else:
+            level = "WEAK"  # 0 or 1 backend (PARTIAL folded into WEAK)
+
+        # Load corroboration suggestions from FK for unconsulted declared sources.
         suggestions = []
         finding_type = finding.get("type", "")
         if finding_type:
@@ -2337,7 +2397,7 @@ class CaseManager:
                 if checks:
                     for check in checks:
                         check_text = check.get("check", "")
-                        # Only suggest checks from missing MCPs
+                        # Only suggest checks from missing declared MCPs.
                         for mcp in missing:
                             short_name = mcp.replace("-mcp", "")
                             if short_name in check_text.lower():
@@ -2350,7 +2410,8 @@ class CaseManager:
 
         result: dict[str, Any] = {
             "level": level,
-            "sources_consulted": consulted,
+            "sources_count": n,
+            "sources_consulted": sorted(consulted_backends),
             "sources_missing": missing,
         }
         if suggestions:
