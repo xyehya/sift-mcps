@@ -350,7 +350,8 @@ def test_enrich_intel_execute_returns_pollable_status(monkeypatch, tmp_path):
     monkeypatch.setenv("SIFT_CASE_DIR", str(tmp_path / "INC-POLL"))
     (tmp_path / "INC-POLL").mkdir(parents=True)
 
-    with patch("opensearch_mcp.server._spawn_ingest") as mock_spawn, \
+    with patch("opensearch_mcp.gateway.gateway_available", return_value=True), \
+         patch("opensearch_mcp.server._spawn_ingest") as mock_spawn, \
          patch("opensearch_mcp.ingest_status.write_status"), \
          patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]):
         mock_proc = MagicMock()

@@ -3289,6 +3289,26 @@ def opensearch_enrich_intel(
             "domains": len(iocs["domain"]),
             "total_iocs": sum(len(v) for v in iocs.values()),
         }
+        # F8: the dry-run extracts IOCs from OpenSearch but does NOT contact the
+        # intel backend, so it cannot tell the caller whether the *actual*
+        # enrichment (dry_run=False) would be able to run.  Without a registered
+        # OpenCTI/intel backend, execute-mode lookups are silently skipped
+        # (threat_intel.batch_lookup → gateway_available() guard), so an agent
+        # that sees a clean "preview" is misled into expecting enrichment to work.
+        # Surface a clear unavailable signal here instead.  This does NOT block
+        # the preview (IOC extraction is still useful) — it annotates it.
+        from opensearch_mcp.gateway import gateway_available
+
+        if not gateway_available():
+            resp["intel_backend"] = "unavailable"
+            resp["intel_backend_message"] = (
+                "intel enrichment unavailable — no OpenCTI/intel backend is "
+                "registered. IOC extraction succeeded, but running enrichment "
+                "(dry_run=False) would index 0 enriched docs. Register OpenCTI "
+                "via setup-addon, then re-run."
+            )
+        else:
+            resp["intel_backend"] = "available"
         aid = audit.log(
             tool="opensearch_enrich_intel",
             params={"case_id": cid, "dry_run": True, "force": force},
@@ -3300,6 +3320,26 @@ def opensearch_enrich_intel(
         if aid:
             resp["audit_id"] = aid
         return resp
+
+    # F8: execute mode — refuse to launch a background enrichment that would
+    # index 0 docs because no intel backend is registered.  Return a clear
+    # unavailable signal instead of a misleading "started".
+    from opensearch_mcp.gateway import gateway_available
+
+    if not gateway_available():
+        return {
+            "status": "unavailable",
+            "case_id": cid,
+            "error": (
+                "intel enrichment unavailable — no OpenCTI/intel backend is "
+                "registered. Register OpenCTI via setup-addon, then re-run."
+            ),
+            "intel_backend": "unavailable",
+            "guidance": (
+                "Run dry_run=True to extract and count IOCs without a backend; "
+                "register OpenCTI to enable lookups."
+            ),
+        }
 
     resp = _launch_enrich_background(cid, force=force)
     # BATCH-OS5: add poll guidance so callers know how to track enrichment status.

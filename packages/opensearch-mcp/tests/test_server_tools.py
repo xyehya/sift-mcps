@@ -925,6 +925,7 @@ class TestEnrichIntelAsync:
         # Run the background helper against mocked _spawn_ingest and
         # write_status so nothing real forks.
         with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
             patch("opensearch_mcp.server._spawn_ingest", return_value=fake_proc),
             patch("opensearch_mcp.ingest_status.write_status"),
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
@@ -963,6 +964,7 @@ class TestEnrichIntelAsync:
             return fake_proc
 
         with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
             patch("opensearch_mcp.server._spawn_ingest", side_effect=_capture_spawn),
             patch("opensearch_mcp.ingest_status.write_status"),
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
@@ -990,6 +992,7 @@ class TestEnrichIntelAsync:
             return fake_proc
 
         with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
             patch("opensearch_mcp.server._spawn_ingest", side_effect=_capture_spawn),
             patch("opensearch_mcp.ingest_status.write_status"),
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
@@ -1010,10 +1013,75 @@ class TestEnrichIntelAsync:
             {"status": "running", "case_id": f"C{i}", "pid": 1000 + i}
             for i in range(_MAX_CONCURRENT_INGESTS)
         ]
-        with patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=full_roster):
+        with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
+            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=full_roster),
+        ):
             resp = opensearch_enrich_intel(dry_run=False)
         assert "error" in resp
         assert "Too many concurrent" in resp["error"]
+
+
+class TestEnrichIntelBackendUnavailable:
+    """F8: when no OpenCTI/intel backend is registered, the tool must surface a
+    clear unavailable signal instead of a misleading success/started."""
+
+    def test_dry_run_flags_unavailable_backend(self, mock_client, monkeypatch):
+        """dry_run still previews IOCs but annotates that enrichment can't run."""
+        from opensearch_mcp.server import opensearch_enrich_intel
+
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
+        fake_iocs = {"ip": {"1.2.3.4"}, "hash": {"abc"}, "domain": set()}
+        with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=False),
+            patch("opensearch_mcp.threat_intel.extract_unique_iocs", return_value=fake_iocs),
+        ):
+            resp = opensearch_enrich_intel(dry_run=True)
+        # Preview still works (IOC extraction is independent of the backend).
+        assert resp["status"] == "preview"
+        assert resp["total_iocs"] == 2
+        # But the unavailability is now explicit, not silent.
+        assert resp["intel_backend"] == "unavailable"
+        assert "unavailable" in resp["intel_backend_message"].lower()
+        assert "setup-addon" in resp["intel_backend_message"]
+
+    def test_dry_run_flags_available_backend(self, mock_client, monkeypatch):
+        """When a backend is present, dry_run marks intel_backend available."""
+        from opensearch_mcp.server import opensearch_enrich_intel
+
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
+        fake_iocs = {"ip": {"1.2.3.4"}, "hash": set(), "domain": set()}
+        with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
+            patch("opensearch_mcp.threat_intel.extract_unique_iocs", return_value=fake_iocs),
+        ):
+            resp = opensearch_enrich_intel(dry_run=True)
+        assert resp["status"] == "preview"
+        assert resp["intel_backend"] == "available"
+        assert "intel_backend_message" not in resp
+
+    def test_execute_returns_unavailable_not_started(self, mock_client, monkeypatch):
+        """dry_run=False with no backend must NOT launch — returns unavailable."""
+        from opensearch_mcp.server import opensearch_enrich_intel
+
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
+        spawn_called = []
+
+        def _spy_spawn(*a, **k):
+            spawn_called.append(True)
+            return MagicMock(pid=1)
+
+        with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=False),
+            patch("opensearch_mcp.server._spawn_ingest", side_effect=_spy_spawn),
+            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
+        ):
+            resp = opensearch_enrich_intel(dry_run=False)
+        assert resp["status"] == "unavailable"
+        assert resp["intel_backend"] == "unavailable"
+        assert "setup-addon" in resp["error"]
+        # Critically: no background enrichment was launched.
+        assert spawn_called == []
 
 
 # ---------------------------------------------------------------------------
