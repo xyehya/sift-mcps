@@ -912,7 +912,35 @@ def _impl_search_hit(hit: dict[str, Any]) -> SearchHit:
 
 
 async def run_opensearch_search(params: SearchIn) -> ToolResult:
-    raw = _impl_server().opensearch_search(**params.model_dump())
+    # M-QUERYERR fix: intercept query-parse errors (OpenSearch 400 /
+    # query_shard_exception / parsing_exception) BEFORE they reach the generic
+    # except-Exception wrapper at registry.py:2518, which collapses them to an
+    # opaque "internal / check backend logs" message.
+    #
+    # _os_call (server.py) already catches RequestError (400-class) and
+    # re-raises it as ValueError("Query error: <reason>") — that specific
+    # prefix is the signal we detect here. Genuine 5xx errors (RuntimeError
+    # from ConnectionTimeout/ConnectionError/AuthorizationException) propagate
+    # unchanged to the generic wrapper, which remains correct for backend errors.
+    try:
+        raw = _impl_server().opensearch_search(**params.model_dump())
+    except ValueError as exc:  # noqa: BLE001 — narrow: only query-parse ValueErrors
+        msg = str(exc)
+        if msg.startswith("Query error:"):
+            # Strip the "Query error: " prefix — the reason is already user-readable.
+            reason = msg[len("Query error:"):].strip()
+            return _tool_error_result(
+                ErrorCode.invalid_input,
+                f"query_string parse error: {reason}",
+                (
+                    "Fix the query syntax and retry. Tips: quote values with special "
+                    "characters (source.ip:\"::1\"), use wildcards for partial matches "
+                    "(*ServiceUpdater*), avoid unmatched parentheses or unescaped "
+                    "reserved chars (+ - = && || > < ! ( ) { } [ ] ^ \" ~ * ? : \\ /)."
+                ),
+                retryable=True,
+            )
+        raise  # not a query-parse error; let the generic wrapper handle it
     if "error" in raw:
         return _impl_error(raw)
     meta = _meta_from_raw(raw)

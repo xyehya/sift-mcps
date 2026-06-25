@@ -1651,3 +1651,97 @@ class TestCaseDirKwargNoRaiseLive:
             field="user.name", index="case-x-*", case_dir="/cases/c1"
         )
         assert plain["values"] == injected["values"] == []
+
+
+# ---------------------------------------------------------------------------
+# M-QUERYERR — surface test: run_opensearch_search must return typed user error
+# for query parse failures (not the generic "internal / check backend logs").
+# The surface is the registry's run_opensearch_search which calls _impl_server()
+# and must intercept ValueError("Query error: ...") before it reaches the
+# generic except-Exception wrapper at registry.py:2518.
+# ---------------------------------------------------------------------------
+
+import asyncio as _asyncio
+
+from opensearchpy.exceptions import RequestError as _OSRequestError
+
+from opensearch_mcp.registry import SearchIn, run_opensearch_search
+
+
+def _make_request_error(reason: str) -> _OSRequestError:
+    """Construct a RequestError mimicking a 400 query_shard_exception."""
+    info = {"error": {"type": "query_shard_exception", "reason": reason}}
+    return _OSRequestError(400, "query_shard_exception", info)
+
+
+class TestMQueryErrSurface:
+    """M-QUERYERR: run_opensearch_search must surface query-parse errors as typed
+    user-input errors (not internal/opaque messages) at the registry surface."""
+
+    def _run(self, coro):
+        loop = _asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def test_bad_query_string_returns_invalid_input_not_internal(self, mock_client):
+        """A query_shard_exception / parsing_exception from OpenSearch must produce
+        error='invalid_input' (not 'internal') with a query-parse message."""
+        mock_client.search.side_effect = _make_request_error(
+            "Failed to parse query [... AND (broken]"
+        )
+        params = SearchIn(query="... AND (broken", index="case-test-*")
+        result = self._run(run_opensearch_search(params))
+
+        assert result.is_error, "Bad query must return a ToolResult with is_error=True"
+        import json as _json
+        payload = _json.loads(result.content[0].text)
+        assert payload.get("error") == "invalid_input", (
+            f"Expected invalid_input, got {payload.get('error')!r}. "
+            "Must NOT be 'internal'."
+        )
+        msg = payload.get("message", "")
+        assert "parse error" in msg.lower() or "query" in msg.lower(), (
+            f"Message must mention parse error, got: {msg!r}"
+        )
+        # Must NOT say 'check backend logs' (that's the opaque internal message)
+        assert "check backend logs" not in payload.get("remediation", ""), (
+            "Remediation must not say 'check backend logs' for a user-caused parse error"
+        )
+        # Must give a quoting/syntax hint
+        remediation = payload.get("remediation", "")
+        assert remediation, "Remediation must not be empty for a parse error"
+
+    def test_valid_query_still_works(self, mock_client):
+        """A syntactically valid query must succeed normally (no regression)."""
+        mock_client.search.return_value = {
+            "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []},
+        }
+        params = SearchIn(query="event.code:4624", index="case-test-*")
+        result = self._run(run_opensearch_search(params))
+
+        assert not result.is_error, "Valid query must not return an error"
+
+    def test_genuine_backend_error_propagates_for_dispatch_wrapper(self, mock_client):
+        """A non-parse RuntimeError (backend/connection failure) must NOT be caught
+        by the query-parse ValueError handler — it must propagate so the generic
+        dispatch wrapper (registry.py:2518) can label it 'internal'.
+
+        run_opensearch_search only catches ValueError with "Query error:" prefix.
+        A connection RuntimeError must re-raise so it reaches the generic except-
+        Exception at registry.py:2518 → 'internal' ErrorCode (verified by the live
+        agent surface, not this unit test which calls run_opensearch_search directly).
+        """
+        from opensearchpy.exceptions import ConnectionError as _OSConnErr
+        # Simulate a genuine backend connection failure (not a query-parse error)
+        mock_client.search.side_effect = _OSConnErr("N/A", "Connection refused")
+        params = SearchIn(query="event.code:4624", index="case-test-*")
+        # run_opensearch_search must raise RuntimeError (not catch it as invalid_input).
+        # The generic dispatch wrapper catches it and returns 'internal'.
+        with pytest.raises(RuntimeError, match="connection") as exc_info:
+            self._run(run_opensearch_search(params))
+        # Confirm it's a connection/backend error, not a query-parse ValueError
+        assert not isinstance(exc_info.value, ValueError), (
+            "Backend RuntimeError must not be converted to a user-input ValueError"
+        )
