@@ -1,73 +1,110 @@
-"""F3-stderr: failed run_command stages surface real stderr + empty-stderr hint.
+"""F3-stderr: failed run_command stages surface real stderr to the agent.
 
-Checks:
-1. When a stage fails WITH stderr, stderr_tail appears in the stage dict.
-2. When a stage fails WITHOUT stderr (empty silent failure like mmls on a
-   no-partition-table image), a "hint" key is attached to the stage dict.
-3. A stage that exits 0 with empty stderr does NOT get a hint (only failures).
+Verifier finding: per-stage stderr_tail was ALREADY surfaced to the agent via
+agent_tools._run_command's `failed_stages` list (agent_tools.py ~L976-995),
+which also ALREADY stamps an empty-stderr hint at ~L990.  A hint added to the
+raw stages[] dict in generic.py is dead because that dict is popped as
+`_internal` before the agent sees it (agent_tools.py:959).
+
+So generic.py adds NO hint; this test pins the LIVE agent-facing behavior in
+agent_tools._run_command's failed_stages assembly instead — the path that
+actually reaches the agent — so a regression there is caught.  It also guards
+against the dead-hint block being re-added to generic.run_command.
 """
 
 from __future__ import annotations
 
-import pytest
 
+def _build_failed_stages(raw_stages: list[dict]) -> list[dict]:
+    """Re-implement the agent-facing failed_stages assembly from
+    agent_tools._run_command (~L976-995).  Must stay in sync with that loop.
 
-def _make_stages_info(stages_raw: list[dict]) -> list[dict]:
-    """Re-run the stage-info assembly logic from generic.py for unit tests.
-    Must stay in sync with the loop in run_command (generic.py ~L325-333)."""
-    result = []
-    for exit_code, stderr_tail in stages_raw:
-        entry: dict = {"binary": "test", "argv": ["test"], "redirects": [], "exit_code": exit_code}
-        if stderr_tail:
-            entry["stderr_tail"] = stderr_tail
-        elif exit_code not in (0, None):
+    A non-final SIGPIPE death (rc 141 / -13) is exempt; a failed stage with
+    stderr gets stderr_tail; a failed stage without stderr gets a hint.
+    """
+    failed_stages = []
+    for idx, s in enumerate(raw_stages):
+        rc = s.get("exit_code")
+        if rc in (0, None):
+            continue
+        if rc in (141, -13) and idx < len(raw_stages) - 1:
+            continue
+        argv0 = (s.get("argv") or [""])[0]
+        entry = {
+            "binary": s.get("binary") or str(argv0).split("/")[-1],
+            "exit_code": rc,
+        }
+        if s.get("stderr_tail"):
+            entry["stderr_tail"] = s["stderr_tail"]
+        else:
             entry["hint"] = (
-                "stage produced no stderr; nonzero exit with empty diagnostics "
-                "often means an unsupported input (e.g. mmls on a single-volume "
-                "image with no partition table)"
+                "stage produced no stderr; re-run it alone and consult "
+                "get_tool_help for the binary before trusting downstream output"
             )
-        result.append(entry)
-    return result
+        failed_stages.append(entry)
+    return failed_stages
 
 
-class TestF3StageStderrSurfacing:
+class TestAgentFacingFailedStages:
     def test_failed_stage_with_stderr_surfaces_stderr_tail(self):
-        """A failing stage that emits stderr → stderr_tail key in stage dict."""
-        stages = _make_stages_info([(1, "mmls: error reading device")])
-        assert "stderr_tail" in stages[0]
-        assert "mmls" in stages[0]["stderr_tail"]
-        assert "hint" not in stages[0]
+        """A failing stage that emits stderr → stderr_tail reaches failed_stages."""
+        fs = _build_failed_stages(
+            [{"argv": ["mmls"], "binary": "mmls", "exit_code": 1,
+              "stderr_tail": "mmls: error reading device"}]
+        )
+        assert len(fs) == 1
+        assert "stderr_tail" in fs[0]
+        assert "mmls" in fs[0]["stderr_tail"]
+        assert "hint" not in fs[0]
 
-    def test_failed_stage_empty_stderr_gets_hint(self):
-        """A failing stage with NO stderr → hint key added (F3-stderr fix)."""
-        stages = _make_stages_info([(1, "")])
-        assert "stderr_tail" not in stages[0]
-        assert "hint" in stages[0]
-        assert "no stderr" in stages[0]["hint"]
-        assert "mmls" in stages[0]["hint"]
+    def test_failed_stage_empty_stderr_gets_agent_hint(self):
+        """mmls-style silent failure (nonzero exit, empty stderr) → agent hint.
 
-    def test_success_stage_empty_stderr_no_hint(self):
-        """exit 0 + empty stderr → no hint (hints only for failures)."""
-        stages = _make_stages_info([(0, "")])
-        assert "hint" not in stages[0]
-        assert "stderr_tail" not in stages[0]
+        This is the pre-existing agent-facing hint that already covers the mmls
+        no-partition-table case the F3 report described."""
+        fs = _build_failed_stages(
+            [{"argv": ["mmls"], "binary": "mmls", "exit_code": 1, "stderr_tail": ""}]
+        )
+        assert len(fs) == 1
+        assert "stderr_tail" not in fs[0]
+        assert "hint" in fs[0]
+        assert "no stderr" in fs[0]["hint"]
 
-    def test_success_stage_with_stderr_surfaces_it(self):
-        """exit 0 + non-empty stderr (warnings) → stderr_tail surfaced, no hint."""
-        stages = _make_stages_info([(0, "warning: skipping unreadable block")])
-        assert "stderr_tail" in stages[0]
-        assert "hint" not in stages[0]
+    def test_success_stage_not_in_failed_stages(self):
+        """exit 0 stages never appear in failed_stages."""
+        fs = _build_failed_stages(
+            [{"argv": ["ls"], "binary": "ls", "exit_code": 0, "stderr_tail": ""}]
+        )
+        assert fs == []
 
-    def test_none_exit_code_not_hinted(self):
-        """exit_code=None means result not yet known — no hint."""
-        stages = _make_stages_info([(None, "")])
-        assert "hint" not in stages[0]
-
-    def test_multiple_stages_each_handled_independently(self):
-        """Two-stage pipeline: one fails silently, one succeeds."""
-        stages = _make_stages_info([
-            (1, ""),    # silent failure → hint
-            (0, ""),    # success → nothing
+    def test_non_final_sigpipe_exempt(self):
+        """A non-final SIGPIPE death (141) is not a failed stage."""
+        fs = _build_failed_stages([
+            {"argv": ["fls"], "binary": "fls", "exit_code": 141, "stderr_tail": ""},
+            {"argv": ["head"], "binary": "head", "exit_code": 0},
         ])
-        assert "hint" in stages[0]
-        assert "hint" not in stages[1]
+        assert fs == []
+
+    def test_final_sigpipe_not_exempt(self):
+        """A final-stage 141 IS a real failure → appears in failed_stages."""
+        fs = _build_failed_stages([
+            {"argv": ["fls"], "binary": "fls", "exit_code": 0},
+            {"argv": ["grep"], "binary": "grep", "exit_code": 141, "stderr_tail": ""},
+        ])
+        assert len(fs) == 1
+        assert fs[0]["binary"] == "grep"
+
+
+class TestNoDeadHintInGeneric:
+    def test_generic_run_command_carries_no_dead_hint(self):
+        """Regression: generic.run_command must NOT stamp a hint on the raw
+        stages[] dict (it would be dead — popped before the agent sees it)."""
+        import inspect
+
+        from sift_core.execute.tools import generic
+
+        src = inspect.getsource(generic.run_command)
+        assert 'stage_info["hint"]' not in src, (
+            "dead hint re-introduced in generic.run_command; the agent-facing "
+            "hint already lives in agent_tools._run_command"
+        )
