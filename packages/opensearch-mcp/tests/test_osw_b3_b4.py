@@ -225,77 +225,53 @@ class TestB3IngestStatusDBActive:
         assert resp["ingests"] == []
         assert resp.get("authority") == "postgres-durable-jobs"
 
-    def test_m_ingstatus_lister_populates_ingests_when_wired(self, monkeypatch):
-        """M-INGSTATUS: when _JOB_STATUS_LISTER is injected, ingests[] is populated
-        from app.job_status_public instead of returning empty list."""
+    def test_m_ingstatus_backend_always_returns_empty_ingests_in_db_active(self, monkeypatch):
+        """M-INGSTATUS: in DB-active mode the BACKEND always returns ingests=[].
+
+        The gateway's OpenSearchIngestStatusAugmentMiddleware (policy_middleware.py)
+        populates ingests[] using its own DSN. The backend has no DB credentials by
+        design. This test pins that the backend envelope is stable and never changes
+        from the expected ingests=[]+authority+message shape — the gateway augments on
+        top of this exact envelope.
+        """
         self._active_case(monkeypatch)
-
-        # Fake durable job row (what the JobService.list_ingest_jobs_for_case returns)
-        fake_durable_jobs = [
-            {
-                "job_id": "aabb-1234-ccdd-5678",
-                "job_type": "ingest",
-                "status": "running",
-                "case_id": _CASE_ID,
-                "evidence_id": None,
-                "priority": 100,
-                "attempts": 1,
-                "max_attempts": 3,
-                "spec_public": {"path": "evidence/test.e01"},
-                "result_public": {"indexed_docs": 5000},
-                "error_summary": None,
-                "provenance_id": None,
-                "created_at": "2026-06-25T10:00:00Z",
-                "started_at": "2026-06-25T10:01:00Z",
-                "finished_at": None,
-                "updated_at": "2026-06-25T10:05:00Z",
-                "step_count": 3,
-                "steps_succeeded": 2,
-                "worker_label": "osw-ingest-1234",
-                "current_step": {"name": "evtx", "detail": "12000 indexed"},
-            }
-        ]
-
-        monkeypatch.setattr(srv, "_JOB_STATUS_LISTER", lambda case_id: fake_durable_jobs)
 
         with (
             patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
             patch(
                 "opensearch_mcp.ingest_status.read_active_ingests",
-                return_value=[],  # Mirror must not be consulted
+                return_value=[],  # K4: mirror must not be consulted
             ),
         ):
             resp = opensearch_ingest_status()
 
-        # ingests[] must now carry the durable job row
-        assert len(resp["ingests"]) == 1, "ingests must contain the durable job row"
-        ingest = resp["ingests"][0]
-        assert ingest["status"] == "running"
-        assert ingest["case_id"] == _CASE_ID
-        # details must carry durable-job fields
-        assert ingest.get("details", {}).get("job_id") == "aabb-1234-ccdd-5678"
-        assert ingest.get("details", {}).get("worker_label") == "osw-ingest-1234"
-        # message must reference running_commands_status (not job_status)
-        msg = ingest.get("message", "")
-        assert "running_commands_status" in msg, f"Item message must name running_commands_status: {msg!r}"
-        # authority is still postgres-durable-jobs
+        # Backend always returns ingests=[] — gateway augments on top.
+        assert resp["ingests"] == [], (
+            "Backend must always return ingests=[] in DB-active mode — "
+            "the gateway's augment middleware populates it"
+        )
         assert resp.get("authority") == "postgres-durable-jobs"
+        # Message must reference running_commands_status (not job_status).
+        msg = resp.get("message", "")
+        assert "running_commands_status" in msg, (
+            f"Backend message must name running_commands_status: {msg!r}"
+        )
 
-    def test_m_ingstatus_lister_fail_closed_returns_empty_ingests(self, monkeypatch):
-        """M-INGSTATUS: when lister raises, ingests=[] — fail-closed, must not crash."""
-        self._active_case(monkeypatch)
+    def test_m_ingstatus_backend_has_no_job_status_lister(self, monkeypatch):
+        """M-INGSTATUS: the backend server module must NOT have a _JOB_STATUS_LISTER
+        attribute. Population is the gateway's responsibility, not the backend's.
 
-        def _failing_lister(case_id):
-            raise RuntimeError("DB unavailable")
-
-        monkeypatch.setattr(srv, "_JOB_STATUS_LISTER", _failing_lister)
-
-        with patch("opensearch_mcp.ingest_status.db_status_active", return_value=True):
-            resp = opensearch_ingest_status()
-
-        # Must not raise; must degrade to empty ingests
-        assert resp.get("authority") == "postgres-durable-jobs"
-        assert resp["ingests"] == [], "Lister exception must degrade to empty ingests"
+        Regression guard: the old injected-lister approach was inert (the subprocess
+        never received the injection) and has been removed. Ensure it doesn't return.
+        """
+        assert not hasattr(srv, "_JOB_STATUS_LISTER"), (
+            "_JOB_STATUS_LISTER must be removed from the backend — "
+            "population is now the gateway's OpenSearchIngestStatusAugmentMiddleware"
+        )
+        assert not hasattr(srv, "set_job_status_lister"), (
+            "set_job_status_lister must be removed from the backend — "
+            "population is now the gateway's OpenSearchIngestStatusAugmentMiddleware"
+        )
 
 
 class TestB3IngestStatusNonDBActive:

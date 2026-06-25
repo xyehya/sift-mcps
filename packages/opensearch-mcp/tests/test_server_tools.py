@@ -1689,14 +1689,12 @@ _FAKE_DURABLE_ROW = {
 
 
 class TestMIngestStatusRegistrySurface:
-    """M-INGSTATUS: registry surface (run_opensearch_ingest_status) must surface
-    durable job_id in ingests[].details.job_id — not nested as .details.details.job_id.
+    """M-INGSTATUS: registry surface (run_opensearch_ingest_status) envelope in DB-active mode.
 
-    The double-nesting bug: server.py puts durable fields in {'details': {...}}
-    inside each ingest item dict, but the registry's _details overflow collector
-    didn't exclude 'details' from its catch-all pass-through, so the agent saw
-    ingests[].details.details.job_id.  Fixed by adding 'details' to the exclusion
-    set and wiring item.get('details') directly into IngestRun.details.
+    Architecture: the backend always returns ingests=[] + authority='postgres-durable-jobs'
+    in DB-active mode. The gateway's OpenSearchIngestStatusAugmentMiddleware
+    (policy_middleware.py) intercepts the result and populates ingests[] using its own DSN.
+    These tests pin the backend's stable envelope shape at the registry surface layer.
     """
 
     def _run(self, coro):
@@ -1706,10 +1704,13 @@ class TestMIngestStatusRegistrySurface:
         finally:
             loop.close()
 
-    def test_job_id_is_flat_in_details_not_double_nested(self, monkeypatch):
-        """M-INGSTATUS: job_id must be at ingests[0].details.job_id, NOT .details.details.job_id."""
+    def test_backend_returns_empty_ingests_and_authority_in_db_active_mode(self, monkeypatch):
+        """Backend registry surface must return ingests=[] + authority in DB-active mode.
+
+        The gateway augments ingests[] — the backend provides only the authority envelope.
+        K4-compliant: no local mirror files consulted.
+        """
         monkeypatch.setattr(_srv_mod, "_get_active_case", lambda: "case-surface-test")
-        monkeypatch.setattr(_srv_mod, "_JOB_STATUS_LISTER", lambda case_id: [_FAKE_DURABLE_ROW])
 
         with (
             patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
@@ -1721,39 +1722,32 @@ class TestMIngestStatusRegistrySurface:
         assert not result.is_error, f"Expected success, got error: {result}"
         payload = _json_surface.loads(result.content[0].text)
 
-        ingests = payload.get("ingests", [])
-        assert len(ingests) == 1, f"Expected 1 ingest row, got {len(ingests)}"
-
-        details = ingests[0].get("details", {})
-        # job_id must be at ingests[0].details.job_id (flat)
-        assert details.get("job_id") == "aabb-1234-ccdd-5678", (
-            f"job_id not flat in details: {details!r}. "
-            "Must be ingests[0].details.job_id, not ingests[0].details.details.job_id"
+        # Backend envelope: ingests=[] always (gateway fills it via augment middleware).
+        assert payload.get("ingests") == [], (
+            "Backend must return ingests=[] in DB-active mode; "
+            "gateway OpenSearchIngestStatusAugmentMiddleware populates it"
         )
-        # worker_label must also be flat (not nested under another details key)
-        assert details.get("worker_label") == "osw-ingest-5678", (
-            f"worker_label not flat in details: {details!r}"
-        )
-        # No double-nesting: details must not contain another 'details' key
-        assert "details" not in details, (
-            f"Double-nesting detected: ingests[0].details.details exists: {details.get('details')!r}"
-        )
-
-    def test_authority_postgres_in_result(self, monkeypatch):
-        """In DB-active mode the authority field must be 'postgres-durable-jobs'."""
-        monkeypatch.setattr(_srv_mod, "_get_active_case", lambda: "case-surface-test")
-        monkeypatch.setattr(_srv_mod, "_JOB_STATUS_LISTER", lambda case_id: [])
-
-        with (
-            patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
-            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
-        ):
-            params = IngestStatusIn(case_id="case-surface-test")
-            result = self._run(run_opensearch_ingest_status(params))
-
-        payload = _json_surface.loads(result.content[0].text)
         assert payload.get("authority") == "postgres-durable-jobs", (
             f"Expected postgres-durable-jobs authority, got: {payload.get('authority')!r}"
+        )
+        # Message must reference running_commands_status (not the removed job_status).
+        msg = payload.get("message", "")
+        assert "running_commands_status" in msg, (
+            f"Backend message must reference running_commands_status: {msg!r}"
+        )
+
+    def test_backend_has_no_job_status_lister(self):
+        """Backend server module must NOT expose _JOB_STATUS_LISTER.
+
+        The injectable-lister approach was inert (subprocess never received the injection)
+        and has been superseded by the gateway-side augment middleware.
+        """
+        assert not hasattr(_srv_mod, "_JOB_STATUS_LISTER"), (
+            "_JOB_STATUS_LISTER must be removed from the backend server module — "
+            "use the gateway's OpenSearchIngestStatusAugmentMiddleware instead"
+        )
+        assert not hasattr(_srv_mod, "set_job_status_lister"), (
+            "set_job_status_lister must be removed from the backend server module"
         )
 
 

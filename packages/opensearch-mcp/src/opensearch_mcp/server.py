@@ -57,23 +57,6 @@ def set_host_identity_recorder(recorder) -> None:
     _HOST_IDENTITY_RECORDER = recorder
 
 
-# M-INGSTATUS fix: injectable durable-job lister for opensearch_ingest_status.
-# In DB-active mode the agent backend has no DB credentials by design, so a
-# DB-capable reader must be injected from the worker/Gateway bootstrap (which
-# owns the service DSN). Signature: (case_id: str) -> list[dict] — returns
-# the sanitized app.job_status_public rows for recent ingest/enrich jobs for
-# the case, or [] on any error (fail-closed). When not injected (standalone
-# CLI / no DB active), opensearch_ingest_status falls back to the local mirror
-# files as before — no regression for non-DB-active mode.
-_JOB_STATUS_LISTER = None
-
-
-def set_job_status_lister(lister) -> None:
-    """Inject (or clear) the durable job status lister. See above."""
-    global _JOB_STATUS_LISTER
-    _JOB_STATUS_LISTER = lister
-
-
 # --- DB-authoritative active-case directory propagation --------------------
 # The Gateway is the sole active-case authority: it reads the deployment active
 # case from Postgres (app.active_case_state) and propagates the authoritative
@@ -2801,102 +2784,25 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
             "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
         }
 
-    # M-INGSTATUS fix (B3 K4-preserving): in DB-active mode Postgres is the
-    # authoritative ingest-status authority (app.job_status_public). Local
-    # status JSON files MUST NOT be read (BATCH-K4 locked contract — tamper
-    # vector). When the injectable _JOB_STATUS_LISTER has been wired (by the
-    # worker/Gateway bootstrap which owns the service DSN), we read actual
-    # durable job rows for the case and populate ingests[] so the agent can
-    # discover progress. When the lister is not wired (standalone CLI, worker
-    # bootstrap pre-injection), ingests=[] degrades gracefully — fail-closed.
+    # B3 K4-preserving: in DB-active mode Postgres is the authoritative ingest-
+    # status authority (app.job_status_public). Local status JSON files MUST NOT
+    # be read (BATCH-K4 locked contract — tamper vector). The backend has no DB
+    # credentials by design; ingests[] is populated by the GATEWAY's
+    # OpenSearchIngestStatusAugmentMiddleware (policy_middleware.py), which calls
+    # JobService.list_ingest_jobs_for_case(case_uuid) using the gateway DSN and
+    # merges the rows into the ingests[] this envelope provides. We return the
+    # authority envelope here; the gateway fills ingests[].
     _db_active = db_status_active()
     if _db_active:
-        durable_ingests: list[dict] = []
-        if _JOB_STATUS_LISTER is not None and filter_case and filter_case != "*":
-            # Fail-closed: the JobService lister already catches DB errors and
-            # returns []. Guard here as well in case the lister itself raises
-            # unexpectedly (e.g. injection error).
-            try:
-                durable_ingests = _JOB_STATUS_LISTER(filter_case)
-            except Exception:  # noqa: BLE001 - fail-closed; DB errors must not crash status checks
-                durable_ingests = []
-
-        # Build ingest-status-compatible dicts from durable job rows so the
-        # registry IngestRun schema can absorb them. Fields that have no
-        # ingest-status analogue (worker_label, current_step, result_public)
-        # land in the ``details`` pass-through.
-        ingests_out: list[dict] = []
-        for row in durable_ingests:
-            job_status_val = str(row.get("status") or "unknown")
-            # Map durable job status to IngestRun status literals.
-            status_map = {
-                "pending": "starting",
-                "running": "running",
-                "retrying": "running",
-                "succeeded": "complete",
-                "failed": "failed",
-                "expired": "failed",
-            }
-            ingest_status = status_map.get(job_status_val, "unknown")
-            # current_step carries indexed/host/artifact progress before
-            # terminal result_public lands.
-            step = row.get("current_step") or {}
-            result = row.get("result_public") or {}
-            host_label = step.get("detail", "") or ""
-            ingests_out.append(
-                {
-                    "case_id": row.get("case_id"),
-                    "status": ingest_status,
-                    "pid": None,  # durable jobs have no local PID
-                    "elapsed": "",
-                    "total_indexed": int(result.get("indexed_docs") or 0),
-                    "bulk_failed": 0,
-                    "hosts_complete": int(result.get("hosts_complete") or 0),
-                    "hosts_total": int(result.get("hosts_total") or 0),
-                    "artifacts_complete": int(result.get("artifacts_complete") or 0),
-                    "artifacts_total": int(result.get("artifacts_total") or 0),
-                    "log_file": "",
-                    "checklist": [],
-                    "message": (
-                        f"Worker-dispatched {row.get('job_type', 'ingest')} job "
-                        f"({job_status_val}). Poll "
-                        f"running_commands_status(job_id='{row.get('job_id', '')}') "
-                        "for realtime worker_label, current_step, and terminal result_public."
-                    ),
-                    # Pass durable-job fields through so the registry IngestRun
-                    # details dict carries them to the agent surface.
-                    "details": {
-                        "job_id": row.get("job_id"),
-                        "job_type": row.get("job_type"),
-                        "worker_label": row.get("worker_label"),
-                        "current_step": step,
-                        "result_public": result,
-                        "error_summary": row.get("error_summary"),
-                        "created_at": row.get("created_at"),
-                        "started_at": row.get("started_at"),
-                        "finished_at": row.get("finished_at"),
-                        "updated_at": row.get("updated_at"),
-                        "step_label": host_label,
-                    },
-                }
-            )
-
         resp: dict = {
-            "ingests": ingests_out,
+            "ingests": [],  # populated by the gateway's augment middleware
             "authority": "postgres-durable-jobs",
             "message": (
-                "Durable job authority is active. "
-                + (
-                    f"{len(ingests_out)} ingest/enrich job(s) found for this case. "
-                    "For per-job realtime detail poll "
-                    "running_commands_status(job_id=<job_id from details>)."
-                    if ingests_out
-                    else "No active or recent ingest/enrich jobs found for this case. "
-                    "If your opensearch_ingest returned a job_id (status='queued'), "
-                    "poll running_commands_status(job_id=<that job_id>) directly. "
-                    "Confirm a completed ingest with opensearch_count / "
-                    "opensearch_case_summary on the target indices."
-                )
+                "No active or recent ingest/enrich jobs found for this case. "
+                "If your opensearch_ingest returned a job_id (status='queued'), "
+                "poll running_commands_status(job_id=<that job_id>) directly. "
+                "Confirm a completed ingest with opensearch_count / "
+                "opensearch_case_summary on the target indices."
             ),
         }
         if job_id:

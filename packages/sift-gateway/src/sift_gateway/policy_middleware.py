@@ -1248,6 +1248,166 @@ def _drop_empty(data: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in data.items() if v not in (None, "", [], False)}
 
 
+def _first_text(result: ToolResult) -> str | None:
+    """Extract the first text content from a ToolResult, or None."""
+    for item in result.content or []:
+        if getattr(item, "type", None) == "text":
+            return item.text
+    return None
+
+
+class OpenSearchIngestStatusAugmentMiddleware(Middleware):
+    """M-INGSTATUS: augment opensearch_ingest_status with durable job rows at the gateway.
+
+    Root cause: the opensearch backend (a stdio subprocess spawned by the gateway
+    plugin system) has no control-plane DSN by design — DB creds must not leave the
+    gateway process.  The backend's DB-active handler therefore returns ingests=[] and
+    a redirect message.  The fix lives HERE, in the gateway, which owns the DSN and
+    can call JobService.list_ingest_jobs_for_case(case.case_id) to populate ingests[].
+
+    Pattern: call_next() to get the backend's authority envelope (message, authority,
+    last_completed, next_step), then merge durable job rows into ingests[].  Fail-
+    closed: any DB error or JSON parse error → preserve the backend's original result
+    (ingests=[] + authority redirect) unchanged.
+
+    Placement: alongside OpenSearchJobDispatchMiddleware (innermost pair). By the time
+    this runs the call has passed auth, active-case injection, audit, and evidence gate.
+    The result still passes through ResponseGuardMiddleware (outermost) above us.
+    """
+
+    def __init__(self, gateway: GatewayProtocol) -> None:
+        self.gateway = gateway
+
+    async def on_call_tool(self, context, call_next):
+        if _tool_name(context) != "opensearch_ingest_status":
+            return await call_next(context)
+        job_service = getattr(self.gateway, "job_service", None)
+        case = _current_gateway_active_case()
+        # If no job_service or no active case, fall through unmodified.
+        if job_service is None or case is None:
+            return await call_next(context)
+        # Proxy to the backend first to obtain the authority envelope.
+        result = await call_next(context)
+        if result.is_error:
+            return result
+        try:
+            return await asyncio.to_thread(
+                self._augment, result, job_service, case
+            )
+        except Exception as exc:  # fail-closed: never let augmentation break the call
+            logger.warning(
+                "opensearch_ingest_status augment failed (degrading to backend result): %s",
+                exc,
+            )
+            return result
+
+    def _augment(
+        self, result: ToolResult, job_service: Any, case: Any
+    ) -> ToolResult:
+        """Synchronous augmentation: fetch durable rows from DB and merge into ingests[].
+
+        Runs in a thread (asyncio.to_thread) so the blocking DB call doesn't stall
+        the event loop.  Fail-closed: any exception propagates to the caller, which
+        returns the original result.
+        """
+        text = _first_text(result)
+        if text is None:
+            return result
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return result
+        if not isinstance(payload, dict):
+            return result
+
+        # Query durable job rows for this case using the gateway's DSN.
+        # case.case_id is the UUID that app.job_status_public stores as case_id
+        # (the same UUID the dispatch middleware stores in the job row).
+        durable_rows = job_service.list_ingest_jobs_for_case(case.case_id)
+
+        # Build the ingests[] entries matching IngestRun's expected shape
+        # (the same shape server.py's DB-active block produces when _JOB_STATUS_LISTER
+        # is wired — now produced here at the gateway instead).
+        _STATUS_MAP = {
+            "pending": "starting",
+            "running": "running",
+            "retrying": "running",
+            "succeeded": "complete",
+            "failed": "failed",
+            "expired": "failed",
+        }
+        ingest_runs = []
+        for row in durable_rows:
+            job_status_val = str(row.get("status") or "unknown")
+            ingest_status = _STATUS_MAP.get(job_status_val, "unknown")
+            step = row.get("current_step") or {}
+            result_pub = row.get("result_public") or {}
+            job_id_str = str(row.get("job_id") or "")
+            ingest_runs.append(
+                {
+                    "case_id": row.get("case_id"),
+                    "status": ingest_status,
+                    "pid": None,
+                    "elapsed": "",
+                    "total_indexed": int(result_pub.get("indexed_docs") or 0),
+                    "bulk_failed": 0,
+                    "hosts_complete": int(result_pub.get("hosts_complete") or 0),
+                    "hosts_total": int(result_pub.get("hosts_total") or 0),
+                    "artifacts_complete": int(result_pub.get("artifacts_complete") or 0),
+                    "artifacts_total": int(result_pub.get("artifacts_total") or 0),
+                    "log_file": "",
+                    "checklist": [],
+                    "message": (
+                        f"Worker-dispatched {row.get('job_type', 'ingest')} job "
+                        f"({job_status_val}). Poll "
+                        f"running_commands_status(job_id='{job_id_str}') "
+                        "for realtime worker_label, current_step, and terminal result_public."
+                    ),
+                    "halt_reason": None,
+                    "errors": [],
+                    "next_steps": [],
+                    "warnings": [],
+                    # details: flat dict — job_id and friends live HERE, not nested
+                    "details": {
+                        "job_id": row.get("job_id"),
+                        "job_type": row.get("job_type"),
+                        "worker_label": row.get("worker_label"),
+                        "current_step": step,
+                        "result_public": result_pub,
+                        "error_summary": row.get("error_summary"),
+                        "created_at": row.get("created_at"),
+                        "started_at": row.get("started_at"),
+                        "finished_at": row.get("finished_at"),
+                        "updated_at": row.get("updated_at"),
+                        "step_label": str(step.get("detail") or ""),
+                    },
+                }
+            )
+
+        payload["ingests"] = ingest_runs
+        # Update the summary message to reflect whether rows were found.
+        n = len(ingest_runs)
+        payload["message"] = (
+            "Durable job authority is active. "
+            + (
+                f"{n} ingest/enrich job(s) found for this case. "
+                "For per-job realtime detail poll "
+                "running_commands_status(job_id=<job_id from details>)."
+                if ingest_runs
+                else (
+                    "No active or recent ingest/enrich jobs found for this case. "
+                    "If your opensearch_ingest returned a job_id (status='queued'), "
+                    "poll running_commands_status(job_id=<that job_id>) directly. "
+                    "Confirm a completed ingest with opensearch_count / "
+                    "opensearch_case_summary on the target indices."
+                )
+            )
+        )
+        new_text = json.dumps(payload)
+        new_content = [TextContent(type="text", text=new_text)]
+        return ToolResult(content=new_content, is_error=False)
+
+
 class OpenSearchJobDispatchMiddleware(Middleware):
     """feat/opensearch-workers: redirect privileged OpenSearch ingest/enrich to a durable job.
 
@@ -1416,6 +1576,12 @@ def gateway_policy_middlewares(
         ProxyActiveCaseMiddleware(gateway),
         EvidenceGateMiddleware(gateway),
         ResponseGuardMiddleware(gateway),
+        # M-INGSTATUS: augment opensearch_ingest_status with durable job rows
+        # from app.job_status_public via the gateway's own DSN (the only process
+        # that has DB credentials — the opensearch backend stdio subprocess does
+        # not).  Runs before the dispatch middleware so the augmented result still
+        # passes through ResponseGuardMiddleware above.
+        OpenSearchIngestStatusAugmentMiddleware(gateway),
         # feat/opensearch-workers: INNERMOST — runs only after the call has
         # cleared auth, active-case injection, audit, and the evidence gate.
         # Redirects opensearch_ingest/opensearch_enrich_intel to a durable worker
