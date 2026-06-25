@@ -519,35 +519,43 @@ def ingest_memory(
     else:
         plugin_list = TIER_1
 
-    # --- B-MVP-042 / XYE-11: determine the hostname source label ---
-    # When a caller already derived the hostname it passes the real source
-    # through (hostname_source != None). The server-side opensearch_ingest
-    # wrapper does exactly this: it derives the hostname *before* spawning this
-    # worker so the CLI's required --hostname is always populated, which would
-    # otherwise make this branch mislabel a derived hostname as "operator".
-    # Only derive / default to "operator" here when no source was provided.
+    # --- M-HOSTNAME fix: derivation is authoritative; operator value is last resort ---
+    # When a caller already derived the hostname it passes the real source through
+    # (hostname_source != None) and we skip derivation entirely — that path is clean.
+    # When hostname_source is None we ALWAYS attempt derivation first regardless of
+    # whether the caller supplied a hostname value. A successful derivation wins
+    # (ComputerName from the registry is more authoritative than an agent-supplied
+    # string); the operator/caller value becomes a last-resort fallback only when
+    # derivation returns nothing. This matches the evtx path and the host-identity
+    # spec: opensearch_fix_host_mapping is the sole intentional-rename mechanism.
+    #
+    # Previously: derivation was gated `if not hostname:` so an agent-supplied
+    # value silently bypassed registry ComputerName, causing host.name drift.
     if hostname_source is None:
-        if not hostname:
-            derived, hostname_source = _derive_hostname_from_image(
-                image_path, timeout=min(timeout, 120)
-            )
-            if not derived:
-                return {
-                    "error": "hostname is required for format='memory'.",
-                    "detail": (
-                        "Auto-derivation was attempted (windows.registry.printkey + "
-                        "windows.envars) but both probes returned nothing. "
-                        "Supply hostname= explicitly."
-                    ),
-                    "next_step": (
-                        "Call opensearch_ingest(..., format='memory', "
-                        "hostname='<source-host>', dry_run=True)."
-                    ),
-                }
+        derived, derived_source = _derive_hostname_from_image(
+            image_path, timeout=min(timeout, 120)
+        )
+        if derived:
             hostname = derived
-        else:
+            hostname_source = derived_source
+        elif hostname:
+            # Derivation returned nothing; fall back to caller-supplied value.
             hostname_source = "operator"
-    # --- end B-MVP-042 / XYE-11 ---
+        else:
+            return {
+                "error": "hostname is required for format='memory'.",
+                "detail": (
+                    "Auto-derivation was attempted (windows.registry.printkey + "
+                    "windows.envars) but both probes returned nothing. "
+                    "Use opensearch_fix_host_mapping to correct a wrong mapping after ingest."
+                ),
+                "next_step": (
+                    "Ingest will proceed with best-effort host detection. "
+                    "Verify host.name after ingest with opensearch_search and "
+                    "correct if needed with opensearch_fix_host_mapping."
+                ),
+            }
+    # --- end M-HOSTNAME ---
 
     source_file = str(image_path)
     results: dict = {}

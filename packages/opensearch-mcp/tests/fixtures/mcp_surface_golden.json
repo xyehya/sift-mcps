@@ -1180,7 +1180,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Durable job id for a queued (worker-dispatched) enrich; poll job_status.",
+                "description": "Durable job id for a queued (worker-dispatched) enrich; poll running_commands_status(job_id).",
                 "title": "Job Id"
               },
               "job_type": {
@@ -1795,12 +1795,6 @@
             "title": "Full",
             "type": "boolean"
           },
-          "hostname": {
-            "default": "",
-            "description": "Source hostname. Required for json/accesslog/memory and most delimited. 'auto' detects from filenames for flat delimited dirs.",
-            "title": "Hostname",
-            "type": "string"
-          },
           "include": {
             "anyOf": [
               {
@@ -1902,11 +1896,11 @@
         "type": "object"
       },
       "meta": {
-        "avoid_when": "Do NOT set dry_run=False until the target evidence and plan are clear. Use force=True only for an intentional re-ingest when the case already has docs.",
+        "avoid_when": "Do NOT set dry_run=False until the target evidence and plan are clear. Use force=True only for an intentional re-ingest when the case already has docs. Do NOT pass hostname \u2014 host is auto-derived; use opensearch_fix_host_mapping to correct a wrong mapping after ingest.",
         "category": "ingest",
         "defer_loading": false,
         "defer_loading_rationale": "Central INGEST-phase verb; keep always-loaded.",
-        "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, next_step, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns status=queued + job_id (non-blocking, dispatched to a sift-opensearch-worker@); poll job_status(job_id) for realtime worker_label/current_step.",
+        "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, next_step, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns status=queued + job_id (non-blocking, dispatched to a sift-opensearch-worker@); poll running_commands_status(job_id) for realtime worker_label/current_step.",
         "recommended_for_phase": "INGEST",
         "response_shaping": "Returns a plan/run reference (run_id, log_file) rather than streaming ingest output \u2014 poll opensearch_ingest_status for progress. The 'password' arg is a SECRET, redacted from audit/logs/results.",
         "usage_examples": [
@@ -1921,27 +1915,25 @@
             "arguments": {
               "dry_run": false,
               "format": "delimited",
-              "hostname": "wksn01",
               "include": [
                 "amcache",
                 "shimcache"
               ],
               "path": "evidence/triage/wksn01"
             },
-            "description": "Ingest a specific delimited artifact set for one host"
+            "description": "Ingest a specific delimited artifact set (host derived from evidence)"
           },
           {
             "arguments": {
               "dry_run": false,
               "format": "memory",
-              "hostname": "wksn01",
               "path": "evidence/memdump.raw",
               "tier": 3
             },
-            "description": "Deep memory analysis, write"
+            "description": "Deep memory analysis, write (host auto-derived via vol3)"
           }
         ],
-        "when_to_use": "Discover and ingest forensic artifacts into OpenSearch after examiner approval. dry_run=True (default) previews the plan; set dry_run=False to write. Supports container/artifact-dir auto-detect, format override, include/exclude artifact filters, memory tiers/plugins, and VSS."
+        "when_to_use": "Discover and ingest forensic artifacts into OpenSearch after examiner approval. dry_run=True (default) previews the plan; set dry_run=False to write. Supports container/artifact-dir auto-detect, format override, include/exclude artifact filters, memory tiers/plugins, and VSS. Host is auto-derived from the evidence (registry ComputerName for disk/archive images, vol3 for memory); correct a wrong mapping with opensearch_fix_host_mapping after ingest."
       },
       "name": "opensearch_ingest",
       "output_schema": {
@@ -2018,7 +2010,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Durable job id for a queued (worker-dispatched) ingest; poll job_status.",
+                "description": "Durable job id for a queued (worker-dispatched) ingest; poll running_commands_status(job_id).",
                 "title": "Job Id"
               },
               "job_type": {

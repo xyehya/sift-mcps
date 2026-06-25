@@ -780,27 +780,32 @@ def cmd_scan(args: argparse.Namespace) -> None:
                         if vss_volumes:
                             print(f"  Found {len(vss_volumes)} volume shadow copies")
 
-                    # Priority-2 registry detect — reads ComputerName+Domain
-                    # from the mounted volume's SYSTEM hive. Replaces the
-                    # removed archive-basename fallback with a grounded
-                    # source of truth. When it fails, warn the operator
-                    # explicitly — control falls through to discover()
-                    # which derives hostname from directory/mount names,
-                    # a weaker signal that can still pollute host.name
-                    # (silently-wrong of a different shape). C1 closes
-                    # this via batch-discovery + host-unmapped.yaml.
-                    if not hostname and volumes:
+                    # M-HOSTNAME fix: derivation is authoritative — always attempt
+                    # registry ComputerName detection first regardless of whether
+                    # a hostname was passed in. A derived value wins; the
+                    # passed-in value is a last-resort fallback only when
+                    # detection returns nothing. opensearch_fix_host_mapping is
+                    # the intentional rename path (host-identity spec).
+                    if volumes:
                         from opensearch_mcp.hostname import detect_hostname_from_volume
 
                         detected = detect_hostname_from_volume(volumes[0])
                         if detected:
+                            if hostname and detected != hostname:
+                                print(
+                                    f"  Hostname from volume registry ({detected!r}) "
+                                    f"overrides caller-supplied value ({hostname!r}). "
+                                    "Use opensearch_fix_host_mapping for intentional renames.",
+                                    file=sys.stderr,
+                                )
                             hostname = detected
                             print(f"  Hostname from volume registry: {hostname}")
                         else:
                             print(
                                 "  WARNING: could not detect hostname from registry; "
                                 "falling back to directory-scan (weaker signal — "
-                                "consider passing --hostname <canonical> explicitly)",
+                                "verify host.name after ingest and correct with "
+                                "opensearch_fix_host_mapping if needed)",
                                 file=sys.stderr,
                             )
 
@@ -823,24 +828,32 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 sys.exit(1)
             print(f"  Mounted {len(volumes)} volume(s)")
 
-            # Priority-2 registry detect on the mounted volume. Takes
-            # precedence over the previous input_path.stem fallback so
-            # disk images get the real ComputerName, not the filename.
-            # Warn on miss — see the archive-path block above for why.
-            if not hostname:
-                from opensearch_mcp.hostname import detect_hostname_from_volume
+            # M-HOSTNAME fix: derivation is authoritative — always attempt
+            # registry ComputerName detection first regardless of whether a
+            # hostname was passed in. A derived value wins; the passed-in
+            # value is a last-resort fallback only when detection returns
+            # nothing. opensearch_fix_host_mapping is the intentional rename.
+            from opensearch_mcp.hostname import detect_hostname_from_volume
 
-                detected = detect_hostname_from_volume(volumes[0])
-                if detected:
-                    hostname = detected
-                    print(f"  Hostname from volume registry: {hostname}")
-                else:
+            detected = detect_hostname_from_volume(volumes[0])
+            if detected:
+                if hostname and detected != hostname:
                     print(
-                        "  WARNING: could not detect hostname from registry; "
-                        "falling back to directory-scan (weaker signal — "
-                        "consider passing --hostname <canonical> explicitly)",
+                        f"  Hostname from volume registry ({detected!r}) "
+                        f"overrides caller-supplied value ({hostname!r}). "
+                        "Use opensearch_fix_host_mapping for intentional renames.",
                         file=sys.stderr,
                     )
+                hostname = detected
+                print(f"  Hostname from volume registry: {hostname}")
+            else:
+                print(
+                    "  WARNING: could not detect hostname from registry; "
+                    "falling back to directory-scan (weaker signal — "
+                    "verify host.name after ingest and correct with "
+                    "opensearch_fix_host_mapping if needed)",
+                    file=sys.stderr,
+                )
 
             # VSS handling
             if vss_flag:

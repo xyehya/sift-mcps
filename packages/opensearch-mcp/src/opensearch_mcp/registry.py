@@ -509,13 +509,11 @@ class IngestIn(BaseModel):
         IngestFormat.auto,
         description="auto=containers/artifact dirs; otherwise choose a specific evidence format.",
     )
-    hostname: str = Field(
-        "",
-        description=(
-            "Source hostname. Required for json/accesslog/memory and most delimited. "
-            "'auto' detects from filenames for flat delimited dirs."
-        ),
-    )
+    # M-HOSTNAME: hostname is NOT agent-settable. Host is auto-derived from the
+    # evidence (registry ComputerName for disk/archive images, vol3 for memory
+    # images). Use opensearch_fix_host_mapping to correct a wrong host mapping
+    # after ingest. For flat formats (json/accesslog/delimited) the host is
+    # derived from the filename convention or the indexed field 'Computer'.
     index_suffix: str = Field("", description="Optional index suffix.")
     time_field: str = Field("", description="Optional timestamp field.")
     delimiter: str = Field("", description="Optional delimiter for delimited input.")
@@ -561,7 +559,7 @@ class IngestOut(BaseModel):
     ] = Field(..., description="Ingest response status.")
     case_id: str | None = Field(None, description="Resolved active case id.")
     job_id: str | None = Field(
-        None, description="Durable job id for a queued (worker-dispatched) ingest; poll job_status."
+        None, description="Durable job id for a queued (worker-dispatched) ingest; poll running_commands_status(job_id)."
     )
     job_type: str | None = Field(None, description="Dispatched job type (ingest/enrich) when queued.")
     dispatched_to: str | None = Field(
@@ -670,7 +668,7 @@ class EnrichIntelOut(BaseModel):
     domains: int | None = Field(None, description="Unique domain indicators in preview.")
     total_iocs: int | None = Field(None, description="Total unique IOCs in preview.")
     job_id: str | None = Field(
-        None, description="Durable job id for a queued (worker-dispatched) enrich; poll job_status."
+        None, description="Durable job id for a queued (worker-dispatched) enrich; poll running_commands_status(job_id)."
     )
     job_type: str | None = Field(None, description="Dispatched job type (enrich) when queued.")
     dispatched_to: str | None = Field(
@@ -1843,12 +1841,16 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "Discover and ingest forensic artifacts into OpenSearch after examiner "
             "approval. dry_run=True (default) previews the plan; set dry_run=False to "
             "write. Supports container/artifact-dir auto-detect, format override, "
-            "include/exclude artifact filters, memory tiers/plugins, and VSS."
+            "include/exclude artifact filters, memory tiers/plugins, and VSS. "
+            "Host is auto-derived from the evidence (registry ComputerName for disk/"
+            "archive images, vol3 for memory); correct a wrong mapping with "
+            "opensearch_fix_host_mapping after ingest."
         ),
         "avoid_when": (
             "Do NOT set dry_run=False until the target evidence and plan are clear. "
             "Use force=True only for an intentional re-ingest when the case already "
-            "has docs."
+            "has docs. Do NOT pass hostname — host is auto-derived; use "
+            "opensearch_fix_host_mapping to correct a wrong mapping after ingest."
         ),
         "output_shape": (
             "IngestOut: status (preview|started|containers_detected|multi_started|"
@@ -1856,7 +1858,7 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "next_step, plan{}, container{}, already_indexed{}, suggested_hostname, "
             "warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns "
             "status=queued + job_id (non-blocking, dispatched to a sift-opensearch-worker@); "
-            "poll job_status(job_id) for realtime worker_label/current_step."
+            "poll running_commands_status(job_id) for realtime worker_label/current_step."
         ),
         "response_shaping": (
             "Returns a plan/run reference (run_id, log_file) rather than streaming "
@@ -1870,18 +1872,16 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
                 format="auto"
             ),
             _example(
-                "Ingest a specific delimited artifact set for one host",
+                "Ingest a specific delimited artifact set (host derived from evidence)",
                 path="evidence/triage/wksn01",
                 format="delimited",
-                hostname="wksn01",
                 include=["amcache", "shimcache"],
                 dry_run=False,
             ),
             _example(
-                "Deep memory analysis, write",
+                "Deep memory analysis, write (host auto-derived via vol3)",
                 path="evidence/memdump.raw",
                 format="memory",
-                hostname="wksn01",
                 tier=3,
                 dry_run=False,
             ),
