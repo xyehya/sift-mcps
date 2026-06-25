@@ -10,29 +10,30 @@ from pathlib import Path
 from opensearchpy import OpenSearch
 
 
-# F9 (proposed; NOT yet wired into the live ingest path — see NOTE below).
+# F9 (LIVE-CONFIRMED + WIRED for the Plaso path).
 #
 # Root cause (confirmed from code): there is NO application-id → name resolution
 # step anywhere in the opensearch-mcp ingest code.  The `application` field on a
-# SRUM document is written 1:1 from whatever the parser tool (SrumECmd / Plaso)
-# emits.  SRUM stores each row's application as a numeric SruDbId foreign key
-# into SruDbIdMapTable; SrumECmd normally resolves it to an ExeInfo string
-# (e.g. "TermService"), but some rows can still surface a bare numeric id
-# (e.g. "1").  Because we do no resolution and no flagging, a bare `1` is
-# indexed as if it were an application NAME — misleading top-egress views.
+# SRUM document is written 1:1 from whatever the parser tool emits.  SRUM stores
+# each row's application as a numeric SruDbId foreign key into SruDbIdMapTable.
 #
-# This helper is the non-destructive half of the fix the coordinator allowed
-# ("resolve OR explicitly flag unresolved ids — don't present a bare 1 as an
-# app"): it FLAGS a SRUM doc whose `application` is a bare integer so downstream
-# views can distinguish "unresolved id" from a real app name, without altering
-# any already-resolved row.
+# Live ground truth (case-test-case-06251017-srum-rocba, every row
+# sift.parse_method:"plaso"): Plaso's esedb/srum emits EITHER a resolved name
+# (application:"TermService", user_identifier:"S-1-5-20") OR a bare numeric id
+# (application:1, user_identifier:2, data_type:"windows:srum:network_usage")
+# when the SruDbIdMapTable entry for that id does not decode to a name.  Plaso
+# itself printed "Application: 1" in `message`, so re-resolving is unreliable —
+# FLAGGING (this helper) is the correct, validated behaviour.  Without it a bare
+# `1` is indexed as if it were an application NAME, misleading top-egress views.
 #
-# NOTE / needs-live-confirmation: wiring this into _parse_srum_wintools /
-# _parse_srum_plaso requires a real SRUM sample to confirm (a) which CSV/JSONL
-# column SrumECmd/Plaso write into `application`, and (b) whether an adjacent
-# resolved-name column (ExeInfo) is available to prefer instead of merely
-# flagging.  Until that sample exists, this stays an unwired, unit-tested
-# building block so it cannot regress the working (resolved) rows.
+# WIRED: applied in parse_plaso._ingest_jsonl, gated on
+# data_type == "windows:srum:network_usage" (that path is shared by other Plaso
+# parsers, so only SRUM network-usage docs are touched).
+#
+# SrumECmd / CSV path: N/A here.  parse_csv.py has no `application` field at all
+# (the SrumECmd CSV uses a different column, e.g. ExeInfo), so this Plaso-shaped
+# flag does not apply.  Wiring a SrumECmd-path equivalent is DEFERRED until a
+# SrumECmd-parsed case exists to confirm that column's semantics.
 def flag_unresolved_srum_application(doc: dict) -> dict:
     """Flag a SRUM document whose ``application`` is an unresolved numeric id.
 
