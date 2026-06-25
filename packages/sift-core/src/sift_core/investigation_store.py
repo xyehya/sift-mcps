@@ -709,11 +709,17 @@ def list_sealed_evidence_db(case_id: str) -> list[dict]:
 
     In DB-authority mode the on-disk ``evidence.json`` manifest is empty;
     the authoritative registry lives in ``app.evidence_objects``.  This
-    function reads that table and returns rows shaped identically to
-    file-manifest entries so the existing provenance grader loop in
-    ``case_manager.py`` consumes them unchanged:
+    function reads that table and returns rows shaped to match file-manifest
+    entries (plus the ``evidence_id``) so the existing provenance grader loop
+    in ``case_manager.py`` consumes them unchanged:
 
-        [{"path": <display_path, relative>, "sha256": <bare 64-hex>, "status": "sealed"}]
+        [{"evidence_id": <id::text>, "path": <display_path, relative>,
+          "sha256": <bare 64-hex>, "status": "sealed"}]
+
+    The ``evidence_id`` is the ``app.evidence_objects.id`` (uuid) that the
+    gateway records as the resolved ``evidence_refs`` in ``app.audit_events``;
+    it powers the DB-mode evidence-ref FULL-grade path.  The Layer-1 consumer
+    (registered/ev_by_hash builder) ignores the extra key.
 
     Fails CLOSED (returns ``[]``) on any error — including a missing DSN,
     missing psycopg, DB connectivity failures, and malformed rows.  It must
@@ -732,7 +738,7 @@ def list_sealed_evidence_db(case_id: str) -> list[dict]:
         with psycopg.connect(dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "select display_path, current_sha256"
+                    "select id::text, display_path, current_sha256"
                     " from app.evidence_objects"
                     " where case_id = %s"
                     " and status = 'sealed'"
@@ -748,7 +754,7 @@ def list_sealed_evidence_db(case_id: str) -> list[dict]:
         return []
 
     result: list[dict] = []
-    for display_path, current_sha256 in rows:
+    for evidence_id, display_path, current_sha256 in rows:
         if not display_path:
             continue
         # Strip the "sha256:" prefix so the bare 64-hex matches ev_by_hash keys.
@@ -761,11 +767,92 @@ def list_sealed_evidence_db(case_id: str) -> list[dict]:
                 sha256_bare = raw
         result.append(
             {
+                "evidence_id": str(evidence_id) if evidence_id else "",
                 "path": str(display_path),
                 "sha256": sha256_bare,
                 "status": "sealed",
             }
         )
+    return result
+
+
+def list_audit_provenance_db(case_id: str) -> list[dict]:
+    """Return tool-result audit entries from Postgres for a given case.
+
+    In pure DB-authority mode there are NO per-case JSONL audit files — the
+    run_command/tool audit is written to ``app.audit_events``.  ``record_finding``'s
+    provenance block is gated on a non-empty audit trail, so without this the
+    whole block is skipped and every finding floors at LOW.  This reader makes
+    the DB-recorded tool calls visible to that block.
+
+    Reads the ``mcp.tool.result`` rows and shapes each into the JSONL-entry
+    contract the provenance resolver expects, carrying the gateway-resolved
+    ``evidence_refs`` (a list of ``app.evidence_objects.id`` uuids) so the
+    DB-mode evidence-ref FULL path can match them against the sealed registry.
+
+    Rows with no ``backend_audit_id`` are skipped (no agent-facing audit_id to
+    cite).  Returns ``[]`` on ANY psycopg/connection error (fail-closed): the
+    grader then degrades to PARTIAL, never fabricating provenance.
+
+    SQL uses parameterised queries (CodeGuard: input-validation-injection).
+    ``case_id`` is the authoritative DB case UUID, never agent input.
+    """
+    if not case_id:
+        return []
+    dsn = control_plane_dsn()
+    if not dsn:
+        return []
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select details from app.audit_events"
+                    " where case_id = %s"
+                    " and event_type = 'mcp.tool.result'"
+                    " and status in ('ok', 'success')"
+                    " order by created_at",
+                    (case_id,),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        logger.warning(
+            "list_audit_provenance_db: DB read failed (fail-closed, returning [])",
+            exc_info=True,
+        )
+        return []
+
+    result: list[dict] = []
+    for (details,) in rows:
+        if not isinstance(details, dict):
+            continue
+        backend_audit_id = details.get("backend_audit_id") or ""
+        if not backend_audit_id:
+            continue
+        detail = details.get("detail") or {}
+        provenance = detail.get("provenance") or {} if isinstance(detail, dict) else {}
+        evidence_refs = provenance.get("evidence_refs", []) or []
+        if not isinstance(evidence_refs, list):
+            evidence_refs = []
+        result_summary = details.get("result_summary") or {}
+        if not isinstance(result_summary, dict):
+            result_summary = {}
+        aliases = details.get("audit_aliases", []) or []
+        if not isinstance(aliases, list):
+            aliases = []
+        entry = {
+            "audit_id": str(backend_audit_id),
+            "tool": str(details.get("tool", "")),
+            "evidence_refs": [str(r) for r in evidence_refs if r],
+            "audit_aliases": [str(a) for a in aliases if a],
+            "envelope_event_id": str(details.get("envelope_event_id", "")),
+            "input_files": [],
+            "result_summary": result_summary,
+            "params": {},
+            "case_id": str(case_id),
+        }
+        result.append(entry)
     return result
 
 

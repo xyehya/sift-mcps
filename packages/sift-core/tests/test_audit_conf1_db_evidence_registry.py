@@ -337,7 +337,9 @@ class TestListSealedEvidenceDbUnit:
 
         monkeypatch.setattr(
             "psycopg.connect",
-            lambda dsn, **kw: _FakeConn([("evidence/rocba-cdrive.e01", f"sha256:{'b' * 64}")]),
+            lambda dsn, **kw: _FakeConn(
+                [("486ef9e2-0000-0000-0000-000000000001", "evidence/rocba-cdrive.e01", f"sha256:{'b' * 64}")]
+            ),
         )
 
         rows = list_sealed_evidence_db(CASE_UUID)
@@ -345,6 +347,7 @@ class TestListSealedEvidenceDbUnit:
         assert rows[0]["sha256"] == "b" * 64
         assert rows[0]["path"] == "evidence/rocba-cdrive.e01"
         assert rows[0]["status"] == "sealed"
+        assert rows[0]["evidence_id"] == "486ef9e2-0000-0000-0000-000000000001"
 
     def test_sha256_without_prefix_kept_as_is(self, monkeypatch):
         """current_sha256 with no prefix → returned unchanged."""
@@ -357,7 +360,7 @@ class TestListSealedEvidenceDbUnit:
                 pass
 
             def fetchall(self):
-                return [("evidence/rocba-cdrive.e01", "c" * 64)]
+                return [("evid-1", "evidence/rocba-cdrive.e01", "c" * 64)]
 
             def __enter__(self):
                 return self
@@ -379,6 +382,7 @@ class TestListSealedEvidenceDbUnit:
 
         rows = list_sealed_evidence_db(CASE_UUID)
         assert rows[0]["sha256"] == "c" * 64
+        assert rows[0]["evidence_id"] == "evid-1"
 
     def test_db_error_returns_empty_list(self, monkeypatch):
         """Any DB exception → [] (fail-closed, no raise)."""
@@ -404,7 +408,10 @@ class TestListSealedEvidenceDbUnit:
                 pass
 
             def fetchall(self):
-                return [(None, f"sha256:{'d' * 64}"), ("evidence/ok.e01", f"sha256:{'e' * 64}")]
+                return [
+                    ("evid-null", None, f"sha256:{'d' * 64}"),
+                    ("evid-ok", "evidence/ok.e01", f"sha256:{'e' * 64}"),
+                ]
 
             def __enter__(self):
                 return self

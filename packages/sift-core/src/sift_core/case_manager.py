@@ -880,6 +880,13 @@ class CaseManager:
         Entries are deduped by audit_id across dirs so the downstream
         provenance pass does not see duplicates when the same JSONL is
         reachable through two candidate dirs.
+
+        In DB-authority mode there are no per-case JSONL audit files — the
+        tool audit lives in ``app.audit_events``.  We additionally pull the
+        DB-recorded ``mcp.tool.result`` rows (fail-closed: [] on any DB error)
+        and merge them in, deduped by audit_id, so the provenance block in
+        ``record_finding`` is reachable in pure DB mode.  File-mode behaviour
+        is unchanged (the DB read returns [] when authority is not DB).
         """
         eid_set: set[str] = set()
         entries: list[dict] = []
@@ -905,6 +912,39 @@ class CaseManager:
                             entries.append(entry)
                 except OSError:
                     continue
+
+        # DB-authority mode: merge Postgres-recorded tool-result audit entries.
+        try:
+            from sift_core.active_case_context import db_authority_active
+
+            if db_authority_active():
+                from sift_core.investigation_store import list_audit_provenance_db
+
+                db_entries = list_audit_provenance_db(self._db_case_id() or "")
+                for entry in db_entries:
+                    aid = entry.get("audit_id", "")
+                    if aid and aid in eid_set:
+                        # Already seen from JSONL — do not double-add.
+                        continue
+                    if aid:
+                        eid_set.add(aid)
+                    # Credit alias / envelope forms too so an agent that cites
+                    # the envelope UUID still resolves against this entry.
+                    for alias in entry.get("audit_aliases", []):
+                        if alias:
+                            eid_set.add(alias)
+                    env = entry.get("envelope_event_id", "")
+                    if env:
+                        eid_set.add(env)
+                    entries.append(entry)
+        except Exception:
+            # Fail-closed: any error in the DB merge leaves the JSONL-derived
+            # trail intact; the provenance grader degrades to PARTIAL.
+            logger.warning(
+                "_scan_audit_trail: DB audit merge failed (fail-closed)",
+                exc_info=True,
+            )
+
         return eid_set, entries
 
     @staticmethod
@@ -1326,20 +1366,28 @@ class CaseManager:
             # existing load_manifest() path.  Fails closed (empty list) on any
             # DB error — identical to the legacy behaviour when no files are
             # registered (PARTIAL grade, artifact rejected).
+            db_mode_active = False
             try:
                 from sift_core.active_case_context import db_authority_active
                 from sift_core.investigation_store import list_sealed_evidence_db
 
-                if db_authority_active():
+                db_mode_active = db_authority_active()
+                if db_mode_active:
                     evidence = list_sealed_evidence_db(self._db_case_id() or "")
                 else:
                     manifest = load_manifest(case_dir) or {}
                     evidence = manifest.get("files", [])
             except Exception:
+                db_mode_active = False
                 manifest = load_manifest(case_dir) or {}
                 evidence = manifest.get("files", [])
             registered = set()
             ev_by_hash = {}
+            # DB-mode evidence-ref FULL path: map sealed evidence_id → resolved
+            # path.  Only sealed+sealed objects (the SQL filter) enter these,
+            # so an unsealed or foreign evidence_ref can never grade FULL.
+            registered_evidence_ids: set[str] = set()
+            evid_to_path: dict[str, str] = {}
             for e in evidence:
                 if e.get("status") in ("IGNORED", "RETIRED"):
                     continue
@@ -1350,6 +1398,10 @@ class CaseManager:
                     h = e.get("sha256", "")
                     if h:
                         ev_by_hash[h] = resolved_p
+                    evid = e.get("evidence_id", "")
+                    if evid:
+                        registered_evidence_ids.add(evid)
+                        evid_to_path[evid] = resolved_p
             audit_by_id: dict[str, dict] = {}
             for e in all_audit_entries:
                 aid_key = e.get("audit_id", "")
@@ -1394,7 +1446,34 @@ class CaseManager:
                     art["provenance_grade"] = "PARTIAL"
                     continue
 
-                # Direct path: audit entry has input_files
+                # DB-mode evidence-ref FULL path: the gateway WROTE the resolved
+                # sealed evidence_id(s) into the audit row's
+                # detail.provenance.evidence_refs.  These are authoritative
+                # (gateway-written, not agent-supplied) and sidestep the
+                # large-file hash that the gateway marks "skipped:too_large".
+                # Grade FULL only when a ref is in the sealed registry, so an
+                # unsealed/foreign ref cannot grade FULL.
+                if db_mode_active:
+                    refs = entry.get("evidence_refs") or []
+                    hit = next(
+                        (r for r in refs if r in registered_evidence_ids), None
+                    )
+                    if hit:
+                        art["source_evidence"] = evid_to_path.get(hit, "")
+                        art["provenance_grade"] = "FULL"
+                        art["provenance_chain"] = [
+                            {
+                                "audit_id": art_aid,
+                                "evidence_id": hit,
+                                "role": "evidence_ref",
+                            }
+                        ]
+                        continue
+
+                # Direct path: audit entry has input_files.
+                # NOTE: the idx_ indirect path (opensearch_search → ingest) below
+                # still relies on ingest audit entries being present in the trail
+                # and is intentionally out of scope for this DB-evidence-ref fix.
                 art_input_files = entry.get("input_files", [])
                 if art_input_files:
                     try:
