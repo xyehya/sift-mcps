@@ -4,13 +4,12 @@ import json
 import logging
 import os
 import shutil
-import ipaddress
-import socket
 from pathlib import Path
 from urllib.parse import urlparse
 import jsonschema
 
 from sift_gateway.backends.base import MCPBackend
+from sift_gateway.backends.egress import EgressTarget, validate_egress_url
 from sift_gateway.backends.http_backend import HttpMCPBackend
 from sift_gateway.backends.stdio_backend import StdioMCPBackend
 
@@ -22,29 +21,13 @@ VALID_EVIDENCE_CLASSES = {"read_only", "analysis", "mutating"}
 VALID_PHASES = {"SURVEY", "INGEST", "ANALYZE", "CORRELATE", "FINDING"}
 
 
-def _validate_remote_fetch_url(url: str, *, label: str) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError(f"{label} must be an http(s) URL with a hostname")
-    try:
-        infos = socket.getaddrinfo(
-            parsed.hostname,
-            parsed.port or (443 if parsed.scheme == "https" else 80),
-            type=socket.SOCK_STREAM,
-        )
-    except socket.gaierror as exc:
-        raise ValueError(f"{label} hostname could not be resolved") from exc
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
-            raise ValueError(f"{label} resolves to a blocked private/link-local address")
+def _validate_remote_fetch_url(url: str, *, label: str) -> EgressTarget:
+    """Validate a manifest-fetch URL via the shared SEC-3 egress policy.
+
+    Returns the pinned :class:`EgressTarget` so the caller fetches from the
+    vetted IP (anti-rebinding) rather than a freshly re-resolved hostname.
+    """
+    return validate_egress_url(url, label=label)
 
 
 def _validate_manifest_instructions(manifest: dict, manifest_path: Path | None) -> None:
@@ -280,10 +263,11 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
         if explicit_path:
             # manifest_path could be a local file path or a URL
             if explicit_path.startswith(("http://", "https://")):
-                import httpx
+                from sift_gateway.backends.egress import build_pinned_sync_client
                 try:
-                    _validate_remote_fetch_url(explicit_path, label="manifest_path")
-                    resp = httpx.get(explicit_path, timeout=5.0, follow_redirects=False)
+                    target = _validate_remote_fetch_url(explicit_path, label="manifest_path")
+                    with build_pinned_sync_client(target) as client:
+                        resp = client.get(explicit_path, timeout=5.0)
                     if resp.status_code == 200:
                         manifest_data = resp.json()
                         manifest_source = explicit_path
@@ -305,10 +289,11 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
             url = config.get("url")
             if url:
                 manifest_url = url.rstrip("/") + "/manifest"
-                import httpx
+                from sift_gateway.backends.egress import build_pinned_sync_client
                 try:
-                    _validate_remote_fetch_url(manifest_url, label="backend manifest URL")
-                    resp = httpx.get(manifest_url, timeout=5.0, follow_redirects=False)
+                    target = _validate_remote_fetch_url(manifest_url, label="backend manifest URL")
+                    with build_pinned_sync_client(target) as client:
+                        resp = client.get(manifest_url, timeout=5.0)
                     if resp.status_code == 200:
                         manifest_data = resp.json()
                         manifest_source = manifest_url
@@ -418,6 +403,11 @@ def create_backend(name: str, config: dict, *, manifest: dict | None = None) -> 
             )
         if not parsed.hostname:
             raise ValueError(f"Backend {name!r}: URL must include a hostname")
+        # SEC-3: materialization gate — refuse to build an HTTP backend whose URL
+        # resolves to a non-routable/internal address (defense-in-depth; the
+        # authoritative gate is HttpMCPBackend.start(), which re-validates and
+        # pins immediately before each connect).
+        validate_egress_url(url, label=f"Backend {name!r}: URL")
         return HttpMCPBackend(name, config, manifest=manifest)
 
     else:
