@@ -248,5 +248,30 @@ needs-root investigation), SEC-15 (OpenCTI). Deferred non-blocking follow-ups: S
 SEC-11 non-x86_64 seccomp honesty (inert on target), SEC-8 list↔extract TOCTOU (caps-only, mitigated by sealed evidence),
 SEC3-F2 (Supabase egress pin), SEC-14 gateway-posture-drift docstring.
 
+## GitHub Issues Board — installer/platform track (15 issues, Claude-verified 2026-06-26)
+Separate track from the SEC-1..16 Codex remediation above; recorded here for continuity since PR #28's
+#16/#13/#27 landed in Phase 5. Board is clean (6 closed, 9 open).
+
+### ✅ Closed this session (6)
+- **#16 · #13 · #27** — fixed in **PR #28** (merged `main @ d973d73`), each **live-VM proven**: immutable `/cases`
+  survives `./install.sh --uninstall` · SRUM/Prefetch sub-table `_id` collision → no-collision on live OpenSearch ·
+  ~200 duplicate audit IDs under worker contention → 0.
+- **#24** — OBSOLETE (uv.lock committed + CI `--locked`-enforced).
+- **#26** — DONE (OpenCTI add-on already Backend-Contract conformant).
+- **#23** — DEFERRED per D6 (reopenable).
+
+### 🟡 Remaining open (9) — one coherent track: installer modernization → public PyPI
+- **#17** uv SHA-pin (harden the `curl|sh` fallback) — standalone security quick-win, **NO blockers (unblocked now)**.
+- **#18** modularize `install.sh` ──► **#19** dist rename ──► **#20** meta-pkg + release CI ──► **#22** registry cutover
+  (sequenced chain; the whole #18→#22 rewrites `install.sh` → land as its own sequenced effort).
+- **#15** version single-source ───────────────────────────────────────────►┘ (feeds #20).
+- **#21** setup-addon decouple ◄── needs **#18**.
+- **#25** umbrella (tracks #15/#17–#22). Its **"evidence-safe uninstall" sub-item is now satisfied by merged #16** —
+  tick that box; the rest maps to open #15/#17–#22.
+- **#11** tool-catalog honesty (rolls up #1/#3/#4/#6 — platform / exec-context tagging + post-install verify).
+
+**Two unblocked, low-risk pickups anytime:** #17 (unhashed-uv fallback) and #11 (catalog tagging). Everything else
+gates on the #18→#22 install.sh-rewrite chain.
+
 ## Legend
 STILL-VALID · PARTIALLY-FIXED · ALREADY-FIXED · FALSE-POSITIVE · NEEDS-OPERATOR-DECISION
