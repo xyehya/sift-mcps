@@ -210,5 +210,43 @@ codeguard-security:codeguard run (codebase-memory MCP was disconnected → ripgr
 
 **Wave-2 batch-2 COMPLETE.** Remaining build order: SEC-6 → SEC-5 → SEC-8 → SEC-11 → SEC-16 → SEC-14 → SEC-10. Carried: SEC-9 (live-VM vol-plugin needs-root investigation), SEC-15 (defer OpenCTI). Open follow-ups: SEC3-F2 (pin Supabase control-plane egress, defense-in-depth).
 
+## Phase 5 — Wave-2 batch-3 built + reviewed + integrated + deployed + LIVE-PROVEN + pushed (2026-06-26)
+4 parallel writer agents (Opus, isolated worktrees off HEAD) built SEC-6/8/11-16/14; orchestrator-verified each
+(trap-corrected pytest + ruff/pyright new-vs-existing); 1 batched security-expert pass over the 3 non-auth branches
+(all PASS) + 1 dedicated SEC-6 review (PASS). One cheap NEW finding closed pre-merge (SEC-14 non-2xx body read cap).
+
+- **SEC-14** `sec/rag-egress @ f828bab` — resolve-and-pin + no-auto-redirect + per-hop revalidation + cross-host
+  cred-drop in rag_mcp/sources.py; self-contained. 112 tests, 0-new lint. UNIT-proven (offline CLI add-on, no live backend).
+- **SEC-8** `sec/archive-extractor @ edd5a93` — single hardened `extract_container` chokepoint (member preflight +
+  bomb caps + statvfs + 7z rc==1=fail + memory-path into case jail); rejection rides existing `error`/`status:failed`
+  envelope. 198 tests, 0-new. **LIVE-PROVEN:** malicious tar (symlink→/etc/passwd + ../escape.txt) ingested via
+  opensearch_ingest → job `failed`, `error_summary="archive_rejected: tar member rejected by data filter: 'evil_symlink'
+  is a link to an absolute path"`; 0 docs indexed, nothing extracted.
+- **SEC-11+16** `sec/exec-isolation-seccomp @ 9f67ea0` — drop systemd `auto` silent-downgrade (missing systemd-run ⇒
+  fail-closed); `isolation` block surfaces (response root + audit_events.details); gateway sync lane flipped seccomp
+  log→kill with socket(41) always-LOG first in the BPF program. 47 SEC tests, 0-new. **LIVE-PROVEN:** run_command(id)
+  returns `isolation{seccomp_mode:kill, landlock:required, systemd_scope_applied:true}`; curl ran (exit 7 cgroup-egress,
+  NOT SIGSYS — socket() not killed); gateway healthy across 4 commands under kill. Kill-fires-on-denylisted-syscall
+  NOT live-triggerable (run_command binary allowlist blocks unshare/etc before exec) → unit-proven (47 tests).
+- **SEC-6** `sec/legacy-auth-removal @ a6a4896` — FULL legacy auth removal; Supabase sole authority; 5xx⇒503 fail-closed;
+  no mcp:* default; `/api/tokens/*` lifecycle retired (modern reverify-gated principal issuance preserved). gw 776/2skip,
+  cd 395, 0-new ruff, 0-new pyright baseline (trap-corrected). **LIVE-PROVEN (denial-only, operator-chosen):** legacy
+  api-key token 406→**401** on /mcp + /api after deploy (garbage 401 both; health 200). Hard cutover confirmed; the
+  harness MCP connection (legacy token) is now down — agents must be re-issued Supabase JWTs. Positive Supabase-JWT path
+  stays test-proven (776 tests). VM precheck: `auth.supabase.enabled:true` confirmed before deploy.
+
+**Integration topology (this session):** merged PR#28 (#16/#13/#27, GitHub, live-proven by operator) → origin/main
+`d973d73`; replayed local docs/lsp commit `9e4675b` (1 policy_middleware.py overlap with PR#28's cast — resolved to the
+unquoted/import-cleanup version) → `28fa7d7`; merged the 4 batch-3 branches (fully file-disjoint, 0 conflicts) → **pushed
+`origin/main @ dde083f`.** VM deployed (SEC-8 + SEC-11/16 first via MCP while legacy auth worked, SEC-6 last via curl);
+seccomp unit flipped to kill + daemon-reload; all 4 services restarted, healthy.
+
+**Wave-2 batch-3 COMPLETE & PUSHED.** Remaining: **SEC-5** (serialize after SEC-6 — collapse REST tool-exec to a
+worker-only governed endpoint), **SEC-10** (accept-risk doc + optional isolation_tier). Carried: SEC-9 (live vol-plugin
+needs-root investigation), SEC-15 (OpenCTI). Deferred non-blocking follow-ups: SEC-6 dead `resolve_identity` block excision
+(mcp_endpoint.py:414-457, unreachable, has a test at test_pr03:412), SEC-16 BPF arch-guard (32-bit ABI bypass, pre-existing),
+SEC-11 non-x86_64 seccomp honesty (inert on target), SEC-8 list↔extract TOCTOU (caps-only, mitigated by sealed evidence),
+SEC3-F2 (Supabase egress pin), SEC-14 gateway-posture-drift docstring.
+
 ## Legend
 STILL-VALID · PARTIALLY-FIXED · ALREADY-FIXED · FALSE-POSITIVE · NEEDS-OPERATOR-DECISION
