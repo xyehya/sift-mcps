@@ -1,4 +1,4 @@
-name: AU1 Live VM Manual Proof
+name: Manual Live VM Proof
 
 on:
   workflow_dispatch:
@@ -7,10 +7,10 @@ on:
         description: "Operator name or handle recording the proof."
         required: true
         type: string
-      linear_issue:
-        description: "Linear issue identifier for this proof run."
-        required: true
-        default: "XYE-13"
+      proof_ref:
+        description: "Issue / ticket / change reference for this proof run (e.g. a GitHub issue number, Jira key, or a short description)."
+        required: false
+        default: ""
         type: string
       health_verified:
         description: "I manually verified the live VM /health endpoint."
@@ -47,13 +47,13 @@ permissions:
 
 jobs:
   manual-proof:
-    name: Record manual live VM proof checklist
+    name: Record manual live-VM proof checklist
     runs-on: ubuntu-latest
     steps:
       - name: Display proof checklist
         env:
           OPERATOR: ${{ inputs.operator }}
-          LINEAR_ISSUE: ${{ inputs.linear_issue }}
+          PROOF_REF: ${{ inputs.proof_ref }}
           HEALTH_VERIFIED: ${{ inputs.health_verified }}
           PORTAL_VERIFIED: ${{ inputs.portal_verified }}
           MCP_VERIFIED: ${{ inputs.mcp_verified }}
@@ -62,18 +62,18 @@ jobs:
           PROOF_SUMMARY: ${{ inputs.proof_summary }}
         run: |
           cat <<'CHECKLIST'
-          AU1 manual proof checklist:
+          Manual live-VM proof checklist:
           1. Confirm the target is the intended SIFT VM and no credentials are recorded in this run.
           2. Verify the live gateway health endpoint manually.
           3. Verify portal create/edit behavior manually.
           4. Verify MCP orientation manually with a portal-issued agent/service credential.
           5. Verify the required tamper/refusal behavior manually.
           6. Verify agent-facing paths refuse raw DSN use.
-          7. Record sanitized proof in Linear before moving the issue forward.
+          7. Record sanitized proof summary in the proof_ref ticket before closing the item.
           CHECKLIST
 
           printf 'Operator: %s\n' "$OPERATOR"
-          printf 'Linear issue: %s\n' "$LINEAR_ISSUE"
+          printf 'Proof reference: %s\n' "$PROOF_REF"
           printf 'Health verified: %s\n' "$HEALTH_VERIFIED"
           printf 'Portal verified: %s\n' "$PORTAL_VERIFIED"
           printf 'MCP verified: %s\n' "$MCP_VERIFIED"
