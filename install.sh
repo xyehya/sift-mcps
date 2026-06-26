@@ -616,15 +616,30 @@ backup_preexisting_data_if_fresh() {
     base="$(basename "$src")"
     dst="$backup_root/$base"
     warn "    $src  ->  $dst"
-    # Same-filesystem mv is a fast rename and works even with chattr +i evidence
-    # inside. Across filesystems, fall back to copy-then-purge (_purge_tree clears
-    # immutable/append-only flags first).
+    # Same-filesystem mv is a fast rename and works even on immutable-flagged
+    # evidence inside (rename touches only the parent dir, not the immutable
+    # files). That is the ONLY move the installer performs.
+    #
+    # D5 / immutability boundary #2: the installer must have NO code path that can
+    # delete evidence. So a cross-filesystem move is NOT auto-completed by a
+    # copy-then-delete of the source (that would mean unlocking the immutability
+    # flags and recursively removing the cases/state root from inside install.sh).
+    # Instead we copy the bytes across, LEAVE the source untouched, and tell the
+    # operator to remove it by hand via the gated scripts/uninstall.sh path.
     if ! sudo_if_needed mv "$src" "$dst" 2>/dev/null; then
-      sudo_if_needed cp -a "$src" "$dst" && _purge_tree "$src"
+      if sudo_if_needed cp -a "$src" "$dst"; then
+        warn "    Cross-filesystem move: copied $src -> $dst but LEFT the original"
+        warn "    in place (installer never deletes evidence/state). Remove the"
+        warn "    original yourself once verified, e.g. via scripts/uninstall.sh."
+      else
+        die "Failed to copy pre-existing data aside ($src -> $dst); aborting so no data is lost."
+      fi
     fi
   done
   warn "  Pre-install backup complete: $backup_root"
-  warn "  It may contain write-protected (chattr +i) evidence; clear with 'sudo chattr -R -i' before removing."
+  warn "  It may contain write-protected (immutable-flagged) evidence; the installer"
+  warn "  will not unlock or remove it. Use the gated scripts/uninstall.sh evidence"
+  warn "  path if you ever need to delete it."
   warn "  Proceeding with a clean install."
 }
 
@@ -3393,176 +3408,74 @@ print_summary() {
 }
 
 # =============================================================================
-# Uninstall — reverse what install.sh provisioned
+# Uninstall — DELEGATED to scripts/uninstall.sh (the single, gated teardown)
 # =============================================================================
 #
-#   ./install.sh --uninstall                # remove the software install only
-#   ./install.sh --uninstall --purge-data   # ALSO wipe forensic/state data
+#   ./install.sh --uninstall   # tear down the SIFT software install
 #
-# Two tiers, on purpose:
-#   * Base uninstall removes install *artifacts* — the systemd service, the venv,
-#     ~/.sift (config, TLS, secrets, hayabusa), the system-hardening configs
-#     (auditd rules, AppArmor profile), the hayabusa symlink, and any docker
-#     containers (without touching their volumes). This is safe and reversible
-#     by re-running install.sh.
-#   * --purge-data additionally destroys DATA that install.sh seeded but that the
-#     investigation owns: /var/lib/sift (integrity records, tokens, passwords,
-#     snapshots) + /cases (EVIDENCE) + docker volumes (indexed evidence). This is
-#     irreversible, so it requires a typed "yes" unless -y/--yes is given.
-
-_confirm_destructive() {
-  # $1 = prompt. Honors ASSUME_YES. Dies on anything but a typed "yes".
-  if [[ "${ASSUME_YES:-0}" == "1" ]]; then
-    log "Assuming yes (-y): $1"
-    return 0
-  fi
-  local reply=""
-  printf '[sift-mcps] %s\n' "$1" >&2
-  printf '[sift-mcps] Type "yes" to proceed: ' >&2
-  read -r reply 2>/dev/null || reply=""
-  [[ "$reply" == "yes" ]] || die "Aborted — nothing was purged."
-}
-
-uninstall_systemd() {
-  # System (not --user) services now: stop/disable/remove via sudo.
-  if command -v systemctl >/dev/null 2>&1; then
-    sudo_if_needed systemctl stop sift-gateway.service sift-job-worker.service 2>/dev/null || true
-    sudo_if_needed systemctl disable sift-gateway.service sift-job-worker.service 2>/dev/null || true
-  fi
-  local removed=0
-  for service_file in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE"; do
-    if sudo_if_needed test -f "$service_file"; then
-      sudo_if_needed rm -f "$service_file"
-      removed=1
-      log "Removed systemd system service ($service_file)."
-    fi
-  done
-  command -v systemctl >/dev/null 2>&1 && sudo_if_needed systemctl daemon-reload 2>/dev/null || true
-  [[ "$removed" -eq 1 ]] || log "No systemd system services to remove."
-}
-
-uninstall_docker_stacks() {
-  command -v docker >/dev/null 2>&1 || return 0
-  docker compose version >/dev/null 2>&1 || return 0
-  local down_args=(down)
-  if [[ "${PURGE_DATA:-0}" == "1" ]]; then
-    down_args=(down -v)   # -v removes named volumes (indexed evidence)
-  fi
-  local compose
-  for compose in docker-compose.yml docker-compose.opencti.yml docker-compose.opencti-connectors.yml; do
-    [[ -f "$REPO_DIR/$compose" ]] || continue
-    docker compose -f "$REPO_DIR/$compose" "${down_args[@]}" 2>/dev/null || true
-  done
-  if [[ "${PURGE_DATA:-0}" == "1" ]]; then
-    log "Stopped docker stacks and removed their volumes."
-  else
-    log "Stopped docker stacks (volumes preserved)."
-  fi
-}
-
-uninstall_system_hardening() {
-  # auditd evidence rules
-  local rules_dst="/etc/audit/rules.d/99-sift-evidence.rules"
-  if [[ -f "$rules_dst" ]]; then
-    sudo_if_needed rm -f "$rules_dst"
-    if command -v augenrules >/dev/null 2>&1; then
-      sudo_if_needed augenrules --load 2>/dev/null || true
-    fi
-    log "Removed auditd evidence rules."
-  fi
-  # AppArmor profile
-  local profile_dst="/etc/apparmor.d/sift-gateway"
-  if [[ -f "$profile_dst" ]]; then
-    sudo_if_needed apparmor_parser -R "$profile_dst" 2>/dev/null || true
-    sudo_if_needed rm -f "$profile_dst"
-    log "Removed AppArmor profile."
-  fi
-  # hayabusa system-wide symlink
-  if [[ -L /usr/local/bin/hayabusa ]]; then
-    sudo_if_needed rm -f /usr/local/bin/hayabusa
-    log "Removed /usr/local/bin/hayabusa symlink."
-  fi
-  # native run_command user-isolation sudoers bridge
-  if [[ -f /etc/sudoers.d/sift-agent-runtime ]]; then
-    sudo_if_needed rm -f /etc/sudoers.d/sift-agent-runtime
-    log "Removed run_command runtime sudoers bridge."
-  fi
-  if [[ -f /etc/sudoers.d/sift-run-command-systemd-scope ]]; then
-    sudo_if_needed rm -f /etc/sudoers.d/sift-run-command-systemd-scope
-    log "Removed run_command systemd scope sudoers helper."
-  fi
-  if [[ -f /usr/local/sbin/sift-run-command-systemd-scope ]]; then
-    sudo_if_needed rm -f /usr/local/sbin/sift-run-command-systemd-scope
-    log "Removed run_command systemd scope helper."
-  fi
-}
-
-uninstall_runtime() {
-  # CAP_LINUX_IMMUTABLE lived on the venv python — removing the venv drops it.
-  if [[ -d "$VENV_DIR" ]]; then
-    rm -rf "$VENV_DIR"
-    log "Removed venv ($VENV_DIR)."
-  fi
-  # SIFT_HOME (=/var/lib/sift/.sift) is sift-service-owned 0700 — remove via sudo.
-  # This removes config/TLS/secrets/hayabusa but leaves the rest of
-  # /var/lib/sift (state) intact; that is only wiped by --purge-data.
-  if sudo_if_needed test -d "$SIFT_HOME"; then
-    sudo_if_needed rm -rf "$SIFT_HOME"
-    log "Removed $SIFT_HOME (config, TLS, secrets, backups, hayabusa)."
-  fi
-}
-
-_purge_tree() {
-  # Remove a directory tree that may contain evidence files marked immutable
-  # (chattr +i) or append-only (chattr +a) by the forensic write-protection
-  # (CAP_LINUX_IMMUTABLE). A plain `rm -rf` returns "Operation not permitted" on
-  # those, so the attributes MUST be cleared first. No-op on filesystems without
-  # chattr support.
-  local target="$1"
-  [[ -d "$target" ]] || return 0
-  if command -v chattr >/dev/null 2>&1; then
-    # -R recurses; ignore errors on fs/files that don't carry the attrs.
-    sudo_if_needed chattr -R -f -i "$target" 2>/dev/null || true
-    sudo_if_needed chattr -R -f -a "$target" 2>/dev/null || true
-  fi
-  sudo_if_needed rm -rf "$target"
-}
-
-purge_data() {
-  [[ "${PURGE_DATA:-0}" == "1" ]] || return 0
-  _confirm_destructive "ABOUT TO PERMANENTLY DELETE: $SIFT_STATE_DIR (integrity records, tokens, passwords, snapshots) and $SIFT_CASE_ROOT (EVIDENCE, incl. immutable-flagged files). This cannot be undone."
-  if [[ -d "$SIFT_STATE_DIR" ]]; then
-    _purge_tree "$SIFT_STATE_DIR"
-    log "Purged state dir ($SIFT_STATE_DIR)."
-  fi
-  if [[ -d "$SIFT_CASE_ROOT" ]]; then
-    _purge_tree "$SIFT_CASE_ROOT"
-    log "Purged case root ($SIFT_CASE_ROOT) — EVIDENCE deleted (immutable flags cleared first)."
-  fi
-}
+# D5 / immutability boundary #2 (#16): the INSTALLER MUST HAVE NO CODE PATH THAT
+# CAN DELETE CASE EVIDENCE. There is therefore no inline purge here and no
+# data-purge flag on install.sh. `./install.sh --uninstall` is a thin shim that
+# runs the canonical, multi-gated uninstaller `scripts/uninstall.sh`, which:
+#   * NEVER touches /cases (evidence) unless an operator runs IT directly with the
+#     two explicit evidence-removal gate flags AND --yes AND types
+#     "DELETE EVIDENCE" at its prompt; and
+#   * preserves the evidence root even when its own state-purge runs (it actively
+#     guards the cases root / any ancestor).
+# This shim deliberately NEVER passes those evidence-removal gate flags through:
+# evidence teardown is only ever reachable by invoking scripts/uninstall.sh directly.
+#
+# Scope of the delegated software teardown (no data loss): systemd units + service
+# users, the staged runtime + venv + SIFT_HOME (config/TLS/secrets/hayabusa), and
+# the system-hardening drop-ins (auditd rules, AppArmor profile). Forensic STATE
+# under /var/lib/sift, docker data volumes, and EVIDENCE under /cases are preserved.
+# To remove those, run scripts/uninstall.sh directly with the appropriate
+# (non-evidence) components — e.g. `scripts/uninstall.sh --components state,cache,
+# opensearch,supabase --yes --i-understand`.
 
 do_uninstall() {
-  log "Uninstalling sift-mcps."
-  if [[ "${PURGE_DATA:-0}" == "1" ]]; then
-    log "Mode: FULL WIPE (--purge-data) — software + state + evidence."
+  local uninstaller="$REPO_DIR/scripts/uninstall.sh"
+  if [[ ! -x "$uninstaller" ]]; then
+    if [[ -f "$uninstaller" ]]; then
+      uninstaller=("bash" "$uninstaller")
+    else
+      die "Canonical uninstaller not found at $REPO_DIR/scripts/uninstall.sh — cannot uninstall."
+    fi
   else
-    log "Mode: software only — /var/lib/sift and /cases are preserved (use --purge-data to wipe them)."
+    uninstaller=("$uninstaller")
   fi
-  uninstall_systemd
-  uninstall_docker_stacks
-  uninstall_system_hardening
-  uninstall_runtime
-  purge_data
 
-  log "Uninstall complete."
-  if [[ "${PURGE_DATA:-0}" != "1" ]]; then
-    printf '\n'
-    printf 'Preserved (data — not touched):\n'
-    printf '  State:    %s   (integrity records, tokens, passwords, snapshots)\n' "$SIFT_STATE_DIR"
-    printf '  Evidence: %s\n' "$SIFT_CASE_ROOT"
-    printf '  Docker volumes (if any) left intact.\n'
-    printf 'To wipe those too:  ./install.sh --uninstall --purge-data\n'
+  log "Uninstalling sift-mcps (software only — evidence under /cases is never touched here)."
+  log "Delegating to the canonical, evidence-gated uninstaller: scripts/uninstall.sh"
+
+  # Software-only teardown that preserves DATA (state, docker volumes) and EVIDENCE:
+  #   systemd  — sift-gateway/sift-job-worker units + service users
+  #   runtime  — staged tree, .venv, SIFT_HOME (config/TLS/secrets/hayabusa)
+  #   auditd   — /etc/audit/rules.d/99-sift-evidence.rules
+  #   apparmor — /etc/apparmor.d/sift-gateway
+  #   tls      — TLS/CA material under SIFT_HOME/tls
+  # NEVER: state, cache, opensearch, supabase, opencti (data) — and NEVER evidence.
+  # --i-understand is required because these tear down the running platform; we add
+  # it here (this shim is itself the explicit `--uninstall` intent). We never add
+  # the evidence-removal gate flags, so evidence stays off-limits by construction.
+  local args=(--components systemd,runtime,auditd,apparmor,tls --i-understand)
+  if [[ "${ASSUME_YES:-0}" == "1" ]]; then
+    args+=(--yes)
+  else
+    log "Running in DRY-RUN mode (scripts/uninstall.sh default). Re-run with -y/--yes to actually remove."
   fi
+
+  "${uninstaller[@]}" "${args[@]}"
+
+  log "Uninstall delegation complete."
+  printf '\n'
+  printf 'Preserved (never removed by ./install.sh --uninstall):\n'
+  printf '  State:    %s   (integrity records, tokens, passwords, snapshots)\n' "$SIFT_STATE_DIR"
+  printf '  Evidence: %s   (immutable; only the gated scripts/uninstall.sh evidence path can ever touch it)\n' "$SIFT_CASE_ROOT"
+  printf '  Docker volumes (if any) left intact.\n'
+  printf 'To remove forensic STATE or docker data too, run scripts/uninstall.sh directly\n'
+  printf 'with non-evidence components, e.g.:\n'
+  printf '  scripts/uninstall.sh --components state,cache,opensearch,supabase --yes --i-understand\n'
   printf 'The repo checkout itself was left in place. Reinstall with: ./install.sh [--core-only]\n'
 }
 
@@ -3586,7 +3499,6 @@ main() {
       -y|--yes)               ASSUME_YES=1; shift ;;
       --core-only)            SIFT_CORE_ONLY=1; shift ;;
       --uninstall|--remove)   uninstall_mode=1; shift ;;
-      --purge-data)           PURGE_DATA=1; shift ;;
       --no-opencti)           flag_no_opencti=1; shift ;;
       --no-rag)               flag_no_rag=1; shift ;;
       --external-supabase)    SIFT_EXTERNAL_SUPABASE=1; shift ;;
@@ -3616,13 +3528,15 @@ main() {
         printf '  --apparmor-enforce   Load the SIFT AppArmor profiles in ENFORCE mode instead of\n'
         printf '                       the complain-mode default. Opt-in hardening (B-MVP-046); the\n'
         printf '                       same posture is available post-install via ./harden.sh.\n'
-        printf '  --uninstall          Reverse the install: stop/remove the systemd service, venv,\n'
-        printf '                       ~/.sift (config/TLS/secrets), auditd + AppArmor configs, the\n'
-        printf '                       hayabusa symlink, and docker containers. Preserves data\n'
-        printf '                       (/var/lib/sift, /cases, docker volumes).\n'
-        printf '  --purge-data         With --uninstall, ALSO delete /var/lib/sift and /cases\n'
-        printf '                       (EVIDENCE) and docker volumes. Irreversible — prompts unless -y.\n'
-        printf '  -y, --yes            Assume yes to destructive prompts (non-interactive purge).\n'
+        printf '  --uninstall          Reverse the SOFTWARE install: delegates to scripts/uninstall.sh\n'
+        printf '                       to stop/remove the systemd service + service users, venv,\n'
+        printf '                       ~/.sift (config/TLS/secrets), and auditd + AppArmor configs.\n'
+        printf '                       PRESERVES all data: /var/lib/sift state, docker volumes, and\n'
+        printf '                       /cases EVIDENCE are never touched. Dry-run unless -y is given.\n'
+        printf '                       To remove forensic STATE/docker data, run scripts/uninstall.sh\n'
+        printf '                       directly with non-evidence components. EVIDENCE can only be\n'
+        printf '                       removed via the gated scripts/uninstall.sh evidence path.\n'
+        printf '  -y, --yes            Proceed non-interactively (otherwise --uninstall is a dry-run).\n'
         exit 0
         ;;
       *)
