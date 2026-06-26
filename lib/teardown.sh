@@ -131,6 +131,8 @@ do_uninstall() {
       die "Canonical uninstaller not found at $REPO_DIR/scripts/uninstall.sh — cannot uninstall."
     fi
   else
+    # shellcheck disable=SC2128  # false positive: in THIS (mutually-exclusive)
+    # branch $uninstaller is still the string path from line 126, not an array.
     uninstaller=("$uninstaller")
   fi
 
@@ -147,6 +149,8 @@ do_uninstall() {
   # --i-understand is required because these tear down the running platform; we add
   # it here (this shim is itself the explicit `--uninstall` intent). We never add
   # the evidence-removal gate flags, so evidence stays off-limits by construction.
+  # shellcheck disable=SC2054  # the commas form a single --components VALUE (a
+  # comma-separated component list), not array-element separators.
   local args=(--components systemd,runtime,auditd,apparmor,tls --i-understand)
   if [[ "${ASSUME_YES:-0}" == "1" ]]; then
     args+=(--yes)

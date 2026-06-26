@@ -248,7 +248,10 @@ install_hayabusa() {
     sudo_if_needed rm -rf "$rules_dir"
     sudo_if_needed cp -r "$tmpd/extracted/rules" "$rules_dir"
     sudo_if_needed chown -R "$SIFT_GATEWAY_SERVICE_USER:$SIFT_GATEWAY_SERVICE_USER" "$rules_dir"
-    log "hayabusa rules installed: $(sudo_if_needed find "$rules_dir" -name '*.yml' | wc -l) YAML files"
+    # Cache the count so report_hayabusa_status (called later this run) doesn't
+    # re-walk the ~3-4k-file rules tree a second time.
+    HAYABUSA_RULES_COUNT="$(sudo_if_needed find "$rules_dir" -name '*.yml' | wc -l | tr -d ' ')"
+    log "hayabusa rules installed: ${HAYABUSA_RULES_COUNT} YAML files"
   else
     warn "Bundled rules not found in release archive."
   fi
@@ -267,10 +270,14 @@ report_hayabusa_status() {
   local binary="$SIFT_HOME/bin/hayabusa"
   local rules_dir="$SIFT_HOME/hayabusa-rules"
   if sudo_if_needed test -x "$binary"; then
-    local rules_count=0
-    if sudo_if_needed test -d "$rules_dir"; then
+    # Reuse the count install_hayabusa already computed this run; only walk the
+    # tree again if it wasn't set (e.g. hayabusa was already present so the
+    # install path short-circuited before counting).
+    local rules_count="${HAYABUSA_RULES_COUNT:-}"
+    if [[ -z "$rules_count" ]] && sudo_if_needed test -d "$rules_dir"; then
       rules_count="$(sudo_if_needed find "$rules_dir" -name '*.yml' 2>/dev/null | wc -l | tr -d ' ')"
     fi
+    rules_count="${rules_count:-0}"
     log "STATUS hayabusa: installed at $binary (rules: ${rules_count} *.yml under $rules_dir). Sigma detection will run during evtx ingest."
   else
     warn "STATUS hayabusa: NOT installed. evtx ingest will index logs but SKIP Sigma detection."
@@ -345,9 +352,14 @@ install_zimmerman_symlinks() {
     return 0
   fi
   local created=0 existing=0 dll result
-  # Discover .dll assemblies at the top level of /opt/zimmermantools (the SANS
-  # layout). NUL-delimited so spaces in names are safe; sudo because the dir may
-  # not be operator-readable.
+  # Discover .dll assemblies at the TOP LEVEL of /opt/zimmermantools (the
+  # Get-ZimmermanTools net6/net9 single-folder layout, where every tool's main
+  # assembly sits flat). -maxdepth 1 is DELIBERATE: each EZ tool ships its
+  # dependency assemblies as *.dll too, so a recursive find would emit bogus
+  # wrappers for those deps. Tools shipped one dir deep (the legacy
+  # <Tool>/<Tool>.dll layout) are intentionally not auto-wrapped — out of scope
+  # for the current bundle. NUL-delimited so spaces in names are safe; sudo
+  # because the dir may not be operator-readable.
   while IFS= read -r -d '' dll; do
     result="$(_zimmerman_emit_wrapper "$dll" "$bindir")"
     case "$result" in
