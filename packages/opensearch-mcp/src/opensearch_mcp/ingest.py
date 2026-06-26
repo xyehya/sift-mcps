@@ -8,13 +8,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from opensearch_mcp.discover import safe_rglob
-
 from opensearchpy import OpenSearch
 from sift_common.audit import AuditWriter
 
 from opensearch_mcp import __version__
-from opensearch_mcp.discover import DiscoveredHost, scan_triage_directory
+from opensearch_mcp.discover import DiscoveredHost, safe_rglob, scan_triage_directory
 from opensearch_mcp.ingest_status import write_status
 from opensearch_mcp.manifest import sha256_file
 from opensearch_mcp.parse_evtx import parse_and_index
@@ -156,10 +154,9 @@ def _write_ingest_manifest(
     try:
         import hashlib as _hashlib
         import json as _json
+        import os as _os
         from datetime import datetime as _dt
         from datetime import timezone as _tz
-
-        import os as _os
 
         case_dir_env = _os.environ.get("SIFT_CASE_DIR", "").strip()
         if case_dir_env:
@@ -279,7 +276,11 @@ def discover(
 
         # Flat evtx directory — no Windows tree, just loose evtx files
         if not hosts:
-            evtx_files = [f for f in path.iterdir() if f.suffix.lower() == ".evtx" and f.is_file()]
+            evtx_files = [
+                f
+                for f in path.iterdir()
+                if f.suffix.lower() == ".evtx" and f.is_file() and not f.is_symlink()
+            ]
             if evtx_files:
                 host = DiscoveredHost(hostname=hostname, volume_root=path)
                 host.evtx_dir = path

@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio as _asyncio
+import json as _json
+from pathlib import Path as _Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opensearchpy.exceptions import RequestError as _OSRequestError
 
+import opensearch_mcp.server as _srv_mod
 import opensearch_mcp.server as srv
+from opensearch_mcp.registry import (
+    IngestIn,
+    IngestStatusIn,
+    SearchIn,
+    run_opensearch_ingest_status,
+    run_opensearch_search,
+)
 from opensearch_mcp.server import (
     _get_os,
     _os_call,
@@ -1304,7 +1316,6 @@ class TestIdxIngestActiveCase:
     def test_no_active_case_returns_portal_hint(self, mock_client, monkeypatch):
         """When no active case is set, returns portal_hint (not legacy CLI error)."""
         monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
-        fake_home = monkeypatch.monkeypatch if False else None
         # Point sift_dir to empty tmp so file fallback also fails
         monkeypatch.setattr(srv, "_get_active_case", lambda: None)
         # A valid path to satisfy path validation
@@ -1338,7 +1349,9 @@ class TestIdxIngestActiveCase:
 
 
 class TestIdxIngestContainerDetection:
-    def test_directory_with_e01_returns_containers_detected(self, mock_client, tmp_path, monkeypatch):
+    def test_directory_with_e01_returns_containers_detected(
+        self, mock_client, tmp_path, monkeypatch
+    ):
         """Directory containing .e01 file → containers_detected with next_step."""
         case_dir = tmp_path / "test-case-001"
         evidence_dir = case_dir / "evidence"
@@ -1358,8 +1371,6 @@ class TestIdxIngestContainerDetection:
             assert "path" not in c
             assert "relative_path" in c
             assert not str(c["relative_path"]).startswith("/")
-        import json as _json
-
         assert str(case_dir) not in _json.dumps(resp)
 
     def test_directory_empty_returns_error(self, mock_client, tmp_path, monkeypatch):
@@ -1371,7 +1382,9 @@ class TestIdxIngestContainerDetection:
         assert "error" in resp
         assert "containers_detected" != resp.get("status")
 
-    def test_directory_no_containers_preserves_original_error(self, mock_client, tmp_path, monkeypatch):
+    def test_directory_no_containers_preserves_original_error(
+        self, mock_client, tmp_path, monkeypatch
+    ):
         """Dir with only non-container files → 'No Windows artifacts found'."""
         case_dir = tmp_path / "test-case-001"
         evidence_dir = case_dir / "evidence"
@@ -1381,6 +1394,55 @@ class TestIdxIngestContainerDetection:
         resp = opensearch_ingest(path="evidence", dry_run=True)
         assert "error" in resp
         assert "No Windows artifacts found" in resp["error"]
+
+    def test_directory_container_detection_ignores_symlinks(
+        self, mock_client, tmp_path, monkeypatch
+    ):
+        """Directory auto-detection must not follow symlinks to container files."""
+        active_case_dir = tmp_path / "active-case"
+        evidence_dir = active_case_dir / "evidence"
+        evidence_dir.mkdir(parents=True)
+        other_case_dir = tmp_path / "other-case"
+        other_evidence_dir = other_case_dir / "evidence"
+        other_evidence_dir.mkdir(parents=True)
+        target = other_evidence_dir / "disk.e01"
+        target.write_bytes(b"EVF" + b"\x00" * 100)
+        try:
+            (evidence_dir / "other-case.e01").symlink_to(target)
+        except OSError:
+            pytest.skip(
+                "Symbolic links are not supported or privileges are missing on this platform"
+            )
+        monkeypatch.setenv("SIFT_CASE_DIR", str(active_case_dir))
+
+        with patch("opensearch_mcp.ingest.discover", return_value=[]):
+            resp = opensearch_ingest(path="evidence", dry_run=True)
+
+        assert "error" in resp
+        assert resp.get("status") != "containers_detected"
+
+    def test_directory_discovery_ignores_symlinked_host_dirs(
+        self, mock_client, tmp_path, monkeypatch
+    ):
+        """Directory discovery must not follow symlinked host dirs to another case."""
+        active_case_dir = tmp_path / "active-case"
+        evidence_dir = active_case_dir / "evidence"
+        evidence_dir.mkdir(parents=True)
+        other_host = tmp_path / "other-case" / "evidence" / "HOSTA"
+        (other_host / "Windows" / "System32" / "config").mkdir(parents=True)
+        (other_host / "Windows" / "System32" / "config" / "SYSTEM").write_bytes(b"")
+        try:
+            (evidence_dir / "HOSTA").symlink_to(other_host, target_is_directory=True)
+        except OSError:
+            pytest.skip(
+                "Symbolic links are not supported or privileges are missing on this platform"
+            )
+        monkeypatch.setenv("SIFT_CASE_DIR", str(active_case_dir))
+
+        resp = opensearch_ingest(path="evidence", dry_run=True)
+
+        assert "error" in resp
+        assert resp.get("status") != "ok"
 
     def test_idx_ingest_directory_auto_launches_containers(
         self, mock_client, tmp_path, monkeypatch
@@ -1400,7 +1462,9 @@ class TestIdxIngestContainerDetection:
             patch("opensearch_mcp.shard_capacity.check_shard_headroom", return_value=(True, "ok")),
             patch("opensearch_mcp.server._spawn_ingest", side_effect=[proc1, proc2]) as mock_spawn,
         ):
-            resp = opensearch_ingest(path="evidence", hostname="srl-forge", dry_run=False, force=True)
+            resp = opensearch_ingest(
+                path="evidence", hostname="srl-forge", dry_run=False, force=True
+            )
 
         assert resp["status"] == "multi_started"
         assert len(resp["containers"]) == 2
@@ -1551,9 +1615,6 @@ class TestSpawnIngestUserBusFallback:
 # ---------------------------------------------------------------------------
 # B-MVP-036: gateway case_dir kwarg-injection must never raise
 # ---------------------------------------------------------------------------
-
-import json as _json
-from pathlib import Path as _Path
 
 # The manifest is the source of truth for which tool calls the Gateway injects
 # arguments into: every tool whose ``safe_case_argument_names`` lists
@@ -1767,17 +1828,6 @@ class TestCaseDirKwargNoRaiseLive:
         assert plain["values"] == injected["values"] == []
 
 
-# ---------------------------------------------------------------------------
-# M-INGSTATUS surface tests — run_opensearch_ingest_status (registry wrapper)
-# must surface durable job_id in ingests[].details.job_id (flat, no double-nest)
-# ---------------------------------------------------------------------------
-
-import json as _json_surface  # distinct alias from the json imported above
-
-import opensearch_mcp.server as _srv_mod
-from opensearch_mcp.registry import IngestStatusIn, run_opensearch_ingest_status
-
-
 _FAKE_DURABLE_ROW = {
     "job_id": "aabb-1234-ccdd-5678",
     "job_type": "ingest",
@@ -1834,7 +1884,7 @@ class TestMIngestStatusRegistrySurface:
             result = self._run(run_opensearch_ingest_status(params))
 
         assert not result.is_error, f"Expected success, got error: {result}"
-        payload = _json_surface.loads(result.content[0].text)
+        payload = _json.loads(result.content[0].text)
 
         # Backend envelope: ingests=[] always (gateway fills it via augment middleware).
         assert payload.get("ingests") == [], (
@@ -1863,14 +1913,6 @@ class TestMIngestStatusRegistrySurface:
         assert not hasattr(_srv_mod, "set_job_status_lister"), (
             "set_job_status_lister must be removed from the backend server module"
         )
-
-
-# ---------------------------------------------------------------------------
-# M-HOSTNAME surface tests — IngestIn must advertise hostname as optional;
-# memory/e01 derive-wins even with explicit hostname; json/accesslog use it.
-# ---------------------------------------------------------------------------
-
-from opensearch_mcp.registry import IngestIn
 
 
 class TestMHostnameIngestInSurface:
@@ -1990,21 +2032,6 @@ class TestMHostnameIngestInSurface:
             f"hostname must be passed to idx_ingest_json for json format, "
             f"got: {captured_hostname[0]!r}"
         )
-
-# ---------------------------------------------------------------------------
-# M-QUERYERR — surface test: run_opensearch_search must return typed user error
-# for query parse failures (not the generic "internal / check backend logs").
-# The surface is the registry's run_opensearch_search which calls _impl_server()
-# and must intercept ValueError("Query error: ...") before it reaches the
-# generic except-Exception wrapper at registry.py:2518.
-# ---------------------------------------------------------------------------
-
-import asyncio as _asyncio
-
-from opensearchpy.exceptions import RequestError as _OSRequestError
-
-from opensearch_mcp.registry import SearchIn, run_opensearch_search
-
 
 def _make_request_error(reason: str) -> _OSRequestError:
     """Construct a RequestError mimicking a 400 query_shard_exception."""

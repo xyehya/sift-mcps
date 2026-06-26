@@ -207,7 +207,7 @@ class TestPathEdgeCases:
         assert result is None
 
     def test_symlinks_in_evidence_dir(self, tmp_path):
-        """Symlinks in evidence directory are followed for file detection."""
+        """Symlinked evidence roots are rejected for case-scope safety."""
         from _helpers import make_windows_tree
 
         from opensearch_mcp.discover import find_volume_root
@@ -215,10 +215,13 @@ class TestPathEdgeCases:
         real_dir = tmp_path / "real"
         make_windows_tree(real_dir)
         link_dir = tmp_path / "linked"
-        link_dir.symlink_to(real_dir)
+        try:
+            link_dir.symlink_to(real_dir)
+        except OSError:
+            pytest.skip("Symbolic links are not supported or privileges are missing")
 
-        vr = find_volume_root(link_dir)
-        assert vr is not None  # symlinks should be followed
+        assert find_volume_root(real_dir) == real_dir
+        assert find_volume_root(link_dir) is None
 
     def test_permission_denied_on_evidence_file(self, tmp_path):
         """Permission denied on an evidence file is handled gracefully."""
