@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json as _json
+from pathlib import Path as _Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1044,7 +1046,6 @@ class TestIdxIngestActiveCase:
     def test_no_active_case_returns_portal_hint(self, mock_client, monkeypatch):
         """When no active case is set, returns portal_hint (not legacy CLI error)."""
         monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
-        fake_home = monkeypatch.monkeypatch if False else None
         # Point sift_dir to empty tmp so file fallback also fails
         monkeypatch.setattr(srv, "_get_active_case", lambda: None)
         # A valid path to satisfy path validation
@@ -1078,7 +1079,9 @@ class TestIdxIngestActiveCase:
 
 
 class TestIdxIngestContainerDetection:
-    def test_directory_with_e01_returns_containers_detected(self, mock_client, tmp_path, monkeypatch):
+    def test_directory_with_e01_returns_containers_detected(
+        self, mock_client, tmp_path, monkeypatch
+    ):
         """Directory containing .e01 file → containers_detected with next_step."""
         case_dir = tmp_path / "test-case-001"
         evidence_dir = case_dir / "evidence"
@@ -1098,8 +1101,6 @@ class TestIdxIngestContainerDetection:
             assert "path" not in c
             assert "relative_path" in c
             assert not str(c["relative_path"]).startswith("/")
-        import json as _json
-
         assert str(case_dir) not in _json.dumps(resp)
 
     def test_directory_empty_returns_error(self, mock_client, tmp_path, monkeypatch):
@@ -1111,7 +1112,9 @@ class TestIdxIngestContainerDetection:
         assert "error" in resp
         assert "containers_detected" != resp.get("status")
 
-    def test_directory_no_containers_preserves_original_error(self, mock_client, tmp_path, monkeypatch):
+    def test_directory_no_containers_preserves_original_error(
+        self, mock_client, tmp_path, monkeypatch
+    ):
         """Dir with only non-container files → 'No Windows artifacts found'."""
         case_dir = tmp_path / "test-case-001"
         evidence_dir = case_dir / "evidence"
@@ -1134,7 +1137,12 @@ class TestIdxIngestContainerDetection:
         other_evidence_dir.mkdir(parents=True)
         target = other_evidence_dir / "disk.e01"
         target.write_bytes(b"EVF" + b"\x00" * 100)
-        (evidence_dir / "other-case.e01").symlink_to(target)
+        try:
+            (evidence_dir / "other-case.e01").symlink_to(target)
+        except OSError:
+            pytest.skip(
+                "Symbolic links are not supported or privileges are missing on this platform"
+            )
         monkeypatch.setenv("SIFT_CASE_DIR", str(active_case_dir))
 
         with patch("opensearch_mcp.ingest.discover", return_value=[]):
@@ -1142,6 +1150,29 @@ class TestIdxIngestContainerDetection:
 
         assert "error" in resp
         assert resp.get("status") != "containers_detected"
+
+    def test_directory_discovery_ignores_symlinked_host_dirs(
+        self, mock_client, tmp_path, monkeypatch
+    ):
+        """Directory discovery must not follow symlinked host dirs to another case."""
+        active_case_dir = tmp_path / "active-case"
+        evidence_dir = active_case_dir / "evidence"
+        evidence_dir.mkdir(parents=True)
+        other_host = tmp_path / "other-case" / "evidence" / "HOSTA"
+        (other_host / "Windows" / "System32" / "config").mkdir(parents=True)
+        (other_host / "Windows" / "System32" / "config" / "SYSTEM").write_bytes(b"")
+        try:
+            (evidence_dir / "HOSTA").symlink_to(other_host, target_is_directory=True)
+        except OSError:
+            pytest.skip(
+                "Symbolic links are not supported or privileges are missing on this platform"
+            )
+        monkeypatch.setenv("SIFT_CASE_DIR", str(active_case_dir))
+
+        resp = opensearch_ingest(path="evidence", dry_run=True)
+
+        assert "error" in resp
+        assert resp.get("status") != "ok"
 
     def test_idx_ingest_directory_auto_launches_containers(
         self, mock_client, tmp_path, monkeypatch
@@ -1161,7 +1192,9 @@ class TestIdxIngestContainerDetection:
             patch("opensearch_mcp.shard_capacity.check_shard_headroom", return_value=(True, "ok")),
             patch("opensearch_mcp.server._spawn_ingest", side_effect=[proc1, proc2]) as mock_spawn,
         ):
-            resp = opensearch_ingest(path="evidence", hostname="srl-forge", dry_run=False, force=True)
+            resp = opensearch_ingest(
+                path="evidence", hostname="srl-forge", dry_run=False, force=True
+            )
 
         assert resp["status"] == "multi_started"
         assert len(resp["containers"]) == 2
@@ -1312,9 +1345,6 @@ class TestSpawnIngestUserBusFallback:
 # ---------------------------------------------------------------------------
 # B-MVP-036: gateway case_dir kwarg-injection must never raise
 # ---------------------------------------------------------------------------
-
-import json as _json
-from pathlib import Path as _Path
 
 # The manifest is the source of truth for which tool calls the Gateway injects
 # arguments into: every tool whose ``safe_case_argument_names`` lists

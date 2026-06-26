@@ -11,6 +11,16 @@ from opensearch_mcp.paths import resolve_case_insensitive
 logger = logging.getLogger(__name__)
 
 
+def _is_real_dir(path: Path) -> bool:
+    """Return true for directories without following symlinked directories."""
+    return path.is_dir() and not path.is_symlink()
+
+
+def _is_real_file(path: Path) -> bool:
+    """Return true for regular files without following symlinked files."""
+    return path.is_file() and not path.is_symlink()
+
+
 def safe_rglob(directory: Path, pattern: str) -> list[Path]:
     """Recursive glob that survives corrupted NTFS paths.
 
@@ -76,6 +86,9 @@ def find_volume_root(host_dir: Path) -> Path | None:
     Uses case-insensitive path resolution to handle NTFS case variations
     in KAPE, Velociraptor, and other triage tools.
     """
+    if host_dir.is_symlink():
+        return None
+
     # Direct check: host_dir itself is the volume root
     if resolve_case_insensitive(host_dir, _WINDOWS_SENTINEL) is not None:
         return host_dir
@@ -83,7 +96,7 @@ def find_volume_root(host_dir: Path) -> Path | None:
     # One level deep: drive-letter dirs like C/, C%3A/, D/
     try:
         for child in host_dir.iterdir():
-            if not child.is_dir() or child.name.startswith("."):
+            if not _is_real_dir(child) or child.name.startswith("."):
                 continue
             if len(child.name) > 4:
                 continue
@@ -109,24 +122,28 @@ def discover_artifacts(host: DiscoveredHost) -> None:
         if full_path is None:
             continue
         if artifact_name in ("recyclebin", "prefetch"):
-            if full_path.is_dir():
+            if _is_real_dir(full_path):
                 host.artifacts.append((artifact_name, full_path))
-        elif full_path.is_file():
+        elif _is_real_file(full_path):
             host.artifacts.append((artifact_name, full_path))
 
     # Event logs directory
     evtx_dir = resolve_case_insensitive(vr, "Windows/System32/winevt/Logs")
-    if evtx_dir is not None and evtx_dir.is_dir():
-        evtx_count = sum(1 for f in evtx_dir.iterdir() if f.suffix.lower() == ".evtx")
+    if evtx_dir is not None and _is_real_dir(evtx_dir):
+        evtx_count = sum(
+            1
+            for f in evtx_dir.iterdir()
+            if f.suffix.lower() == ".evtx" and _is_real_file(f)
+        )
         if evtx_count > 0:
             host.evtx_dir = evtx_dir
 
     # User profiles
     users_dir = resolve_case_insensitive(vr, "Users")
-    if users_dir is not None and users_dir.is_dir():
+    if users_dir is not None and _is_real_dir(users_dir):
         skip_names = {"public", "default", "default user", "all users"}
         for profile in sorted(users_dir.iterdir()):
-            if profile.is_dir() and profile.name.lower() not in skip_names:
+            if _is_real_dir(profile) and profile.name.lower() not in skip_names:
                 host.user_profiles.append(profile)
 
                 # Per-user artifacts
@@ -134,13 +151,13 @@ def discover_artifacts(host: DiscoveredHost) -> None:
                     if isinstance(rel_paths, list):
                         for rp in rel_paths:
                             full = resolve_case_insensitive(profile, rp)
-                            if full is not None and full.is_dir():
+                            if full is not None and _is_real_dir(full):
                                 host.artifacts.append((artifact_name, full))
                     elif rel_paths == "":
                         host.artifacts.append((artifact_name, profile))
                     else:
                         full = resolve_case_insensitive(profile, rel_paths)
-                        if full is not None and (full.is_dir() or full.is_file()):
+                        if full is not None and (_is_real_dir(full) or _is_real_file(full)):
                             host.artifacts.append((artifact_name, full))
 
     # PowerShell transcripts — read GP config from registry, then discover files
@@ -164,24 +181,28 @@ def discover_artifacts(host: DiscoveredHost) -> None:
 
     # Defender MPLog
     mplog_dir = resolve_case_insensitive(vr, "ProgramData/Microsoft/Windows Defender/Support")
-    if mplog_dir and mplog_dir.is_dir():
-        mplogs = [f for f in mplog_dir.iterdir() if f.name.lower().startswith("mplog")]
+    if mplog_dir and _is_real_dir(mplog_dir):
+        mplogs = [
+            f
+            for f in mplog_dir.iterdir()
+            if f.name.lower().startswith("mplog") and _is_real_file(f)
+        ]
         if mplogs:
             host.artifacts.append(("defender", mplog_dir))
 
     # IIS logs (only if inetpub exists — server hosts)
     iis_dir = resolve_case_insensitive(vr, "inetpub/logs/LogFiles")
-    if iis_dir and iis_dir.is_dir():
+    if iis_dir and _is_real_dir(iis_dir):
         host.artifacts.append(("iis", iis_dir))
 
     # HTTPERR
     httperr_dir = resolve_case_insensitive(vr, "Windows/System32/LogFiles/HTTPERR")
-    if httperr_dir and httperr_dir.is_dir():
+    if httperr_dir and _is_real_dir(httperr_dir):
         host.artifacts.append(("httperr", httperr_dir))
 
     # Scheduled Tasks XML
     tasks_dir = resolve_case_insensitive(vr, "Windows/System32/Tasks")
-    if tasks_dir and tasks_dir.is_dir():
+    if tasks_dir and _is_real_dir(tasks_dir):
         host.artifacts.append(("tasks", tasks_dir))
 
     # WER reports — check ALL locations
@@ -190,22 +211,22 @@ def discover_artifacts(host: DiscoveredHost) -> None:
         "ProgramData/Microsoft/Windows/WER/ReportQueue",
     ]:
         wer_dir = resolve_case_insensitive(vr, wer_path)
-        if wer_dir and wer_dir.is_dir():
+        if wer_dir and _is_real_dir(wer_dir):
             host.artifacts.append(("wer", wer_dir))
     for profile in host.user_profiles:
         user_wer = resolve_case_insensitive(profile, "AppData/Local/Microsoft/Windows/WER")
-        if user_wer and user_wer.is_dir():
+        if user_wer and _is_real_dir(user_wer):
             host.artifacts.append(("wer", user_wer))
 
     # Firewall log
     fw_log = resolve_case_insensitive(vr, "Windows/System32/LogFiles/Firewall/pfirewall.log")
-    if fw_log and fw_log.is_file():
+    if fw_log and _is_real_file(fw_log):
         host.artifacts.append(("firewall", fw_log))
 
     # OpenSSH text logs
     for ssh_path in ["ProgramData/ssh/logs", "Windows/System32/OpenSSH/logs"]:
         ssh_dir = resolve_case_insensitive(vr, ssh_path)
-        if ssh_dir and ssh_dir.is_dir():
+        if ssh_dir and _is_real_dir(ssh_dir):
             host.artifacts.append(("ssh", ssh_dir))
 
 
@@ -229,7 +250,7 @@ def scan_triage_directory(root: Path) -> list[DiscoveredHost]:
 
     # Scan subdirectories as host directories
     for subdir in sorted(root.iterdir()):
-        if not subdir.is_dir():
+        if not _is_real_dir(subdir):
             continue
         if subdir.name.startswith("."):
             continue
