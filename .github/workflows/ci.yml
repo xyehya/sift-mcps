@@ -129,16 +129,22 @@ jobs:
             --extra windows-triage \
             --extra dev
 
-      - name: Run full test suite
-        # No positional path arg — pytest reads testpaths=['tests','packages'] from
-        # pyproject.toml, so all 221+ files (root + every package) are included.
+      - name: Test (per-package — a single root pytest can't collect this monorepo in one pass)
+        # Bare `pytest` with testpaths=['tests','packages'] hits 101 collection errors
+        # (duplicate-module collisions across packages). Run root tests + each package
+        # separately. Accumulate failures (|| rc=1) so one bad package doesn't hide
+        # later ones. Exclude integration tests (live DB/OpenSearch) — no services in CI.
         run: |
-          uv run --locked \
-            --extra full \
-            --extra opencti \
-            --extra windows-triage \
-            --extra dev \
-            pytest
+          UVR="uv run --locked --extra full --extra opencti --extra windows-triage --extra dev"
+          rc=0
+          echo "::group::pytest tests (root)"; $UVR pytest tests -m "not integration" || rc=1; echo "::endgroup::"
+          for d in packages/*/tests; do
+            pkg=$(dirname "$d")
+            echo "::group::pytest $pkg"
+            $UVR pytest "$d" -m "not integration" || rc=1
+            echo "::endgroup::"
+          done
+          exit $rc
 
   coverage:
     name: Package coverage floors
