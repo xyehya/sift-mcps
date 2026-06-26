@@ -538,35 +538,6 @@
       "secret_leak_guarantee": "No OpenCTI credentials, OpenSearch passwords, DB DSNs, or service tokens are returned in any response."
     },
     {
-      "name": "opensearch_list_detections",
-      "description": "List Security Analytics (Sigma) detection findings for triage pivots, filtered by severity/detector_type; falls back to a Hayabusa query suggestion when the Sigma plugin is unavailable or empty.",
-      "when_to_use": "Use to identify indexed Sigma/Security Analytics detections for triage pivots.",
-      "avoid_when": "Detection hits are leads, not conclusions \u2014 validate against source events and surrounding context before recording a finding.",
-      "output_notes": "Detection hits require validation against source events and surrounding context.",
-      "output_shape": "ListDetectionsOut: findings[] of {id, timestamp, index, rules[] of {name, tags[]}, matched_docs}, total, returned, offset, suggestion (Hayabusa fallback when present).",
-      "response_shaping": "Paginate with limit/offset; the per-finding payload references matched docs by count, not by embedding them.",
-      "usage_examples": [
-        {
-          "description": "All detections, first page",
-          "arguments": {}
-        },
-        {
-          "description": "High-severity detections only",
-          "arguments": {
-            "severity": "high"
-          }
-        }
-      ],
-      "defer_loading": true,
-      "defer_loading_rationale": "Depends on the optional Security Analytics plugin; lower-frequency. Tool-Search defer_loading candidate.",
-      "read_only": true,
-      "readOnlyHint": true,
-      "evidence_class": "read_only",
-      "category": "search-analysis",
-      "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": []
-    },
-    {
       "name": "opensearch_fix_host_mapping",
       "description": "Correct a wrong host.id mapping across all indexed documents (reindexes affected docs). Canonical tool; the deprecated alias opensearch_host_fix is preserved by the tool registry for one cutover cycle. Scoped to OpenSearch index/alias and host-identity derived state. In DB-active mode the correction is recorded as an authoritative Postgres host-identity receipt (source/canonical/actor/tool/affected index IDs/audit id); the local host-dictionary.yaml is a parser-compatibility artifact only. In DB-active mode WITHOUT a recorder, the correction is DENIED with typed guidance (fail closed).",
       "when_to_use": "Use only when indexed host identity is known to be wrong and needs correction.",

@@ -63,7 +63,6 @@ The LLM gets these tools via the MCP protocol:
 | `idx_ingest_status` | Monitor running ingest operations |
 | `idx_enrich_triage` | Baseline enrichment via windows-triage-mcp |
 | `idx_enrich_intel` | Threat intel enrichment via OpenCTI |
-| `idx_list_detections` | Detection alerts (Hayabusa/Sigma) |
 
 ### Enrich
 

@@ -730,38 +730,6 @@ class EnrichIntelOut(BaseModel):
     note: str | None = Field(None, description="Polling note.")
 
 
-class ListDetectionsIn(BaseModel):
-    severity: Literal["", "critical", "high", "medium", "low"] = Field(
-        "", description="Severity filter; empty returns all severities."
-    )
-    detector_type: str = Field("", description="Detector type filter; empty returns all.")
-    limit: int = Field(50, ge=1, le=500, description="Max findings. Hard cap 500.")
-    offset: int = Field(0, ge=0, description="Pagination start.")
-
-
-class DetectionRuleRef(BaseModel):
-    name: str | None = Field(None, description="Detection rule name.")
-    tags: list[str] = Field(default_factory=list, description="Rule tags.")
-
-
-class Detection(BaseModel):
-    id: str | None = Field(None, description="Finding id.")
-    timestamp: str | int | None = Field(None, description="Finding timestamp.")
-    index: str | None = Field(None, description="Source index.")
-    rules: list[DetectionRuleRef] = Field(default_factory=list, description="Matched rules.")
-    matched_docs: int = Field(..., description="Related document count.")
-
-
-class ListDetectionsOut(BaseModel):
-    findings: list[Detection] = Field(..., description="Detection findings.")
-    total: int = Field(..., description="Total findings reported by upstream.")
-    returned: int = Field(..., description="Findings returned after filtering.")
-    offset: int = Field(..., description="Pagination offset.")
-    suggestion: str | None = Field(
-        None, description="Hayabusa fallback query when Sigma is unavailable or empty."
-    )
-
-
 class FixHostMappingIn(BaseModel):
     raw: str = Field(
         ..., min_length=1, description="The raw host.name value with the wrong mapping."
@@ -1395,36 +1363,6 @@ async def run_opensearch_enrich_intel(params: EnrichIntelIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
-async def run_opensearch_list_detections(params: ListDetectionsIn) -> ToolResult:
-    try:
-        raw = _impl_server().opensearch_list_detections(**params.model_dump())
-    except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
-        return _tool_error_result(
-            ErrorCode.upstream_unavailable,
-            f"{type(exc).__name__}: detection lookup failed.",
-            "Check OpenSearch Security Analytics availability, then retry.",
-            retryable=True,
-        )
-    if "error" in raw and "Security Analytics plugin not available" not in str(raw.get("error")):
-        return _impl_error(raw, default_code=ErrorCode.upstream_unavailable)
-    raw.pop("error", None)
-    meta = _meta_from_raw(raw)
-    out = ListDetectionsOut(
-        findings=[Detection.model_validate(item) for item in raw.get("findings", [])],
-        total=int(raw.get("total", 0)),
-        returned=int(raw.get("returned", 0)),
-        offset=int(raw.get("offset", params.offset)),
-        suggestion=raw.get("suggestion"),
-    )
-    return _success_tool_result(out, meta)
-
-
-async def opensearch_case_detections_resource(case_id: str) -> str:
-    _ = case_id
-    result = await run_opensearch_list_detections(ListDetectionsIn())
-    return _json_from_tool_result(result)
-
-
 def triage_host_prompt(host: str, case_id: str = "") -> str:
     case_arg = f", case_id={case_id!r}" if case_id else ""
     return (
@@ -1455,7 +1393,7 @@ def ioc_sweep_prompt(case_id: str = "") -> str:
         f"opensearch_enrich_intel({case_arg}dry_run=True) to size the IOC corpus. "
         "If appropriate, run the enrichment asynchronously, poll "
         "opensearch_ingest_status, then search for "
-        "threat_intel.verdict:MALICIOUS and review opensearch_list_detections."
+        "threat_intel.verdict:MALICIOUS with opensearch_search."
     )
 
 
@@ -1512,41 +1450,6 @@ async def opensearch_field_catalog_resource(artifact_type: str) -> str:
                 "artifact_type": artifact_type,
                 "fields": [],
                 "error": f"{type(exc).__name__}: field catalog unavailable.",
-            }
-        )
-
-
-async def opensearch_detection_catalog_resource() -> str:
-    try:
-        client = _impl_server()._get_os()
-        response = client.transport.perform_request(
-            "GET",
-            "/_plugins/_security_analytics/detectors/_search",
-            params={"size": 1000},
-        )
-        detectors = response.get("detectors") or response.get("hits", {}).get("hits", [])
-        by_type: dict[str, int] = {}
-        for detector in detectors:
-            source = detector.get("_source", detector) if isinstance(detector, dict) else {}
-            dtype = str(source.get("detector_type") or source.get("detectorType") or "unknown")
-            by_type[dtype] = by_type.get(dtype, 0) + 1
-        return _json_text(
-            {
-                "total_detectors": len(detectors),
-                "detectors_by_type": by_type,
-                "hayabusa_note": "Hayabusa alerts use case-*-hayabusa-* when available.",
-            }
-        )
-    except Exception as exc:  # noqa: BLE001 - Sigma is often unavailable on OpenSearch 3.5
-        return _json_text(
-            {
-                "total_detectors": 0,
-                "detectors_by_type": {},
-                "hayabusa_note": (
-                    "Security Analytics detector catalog unavailable; query "
-                    "case-*-hayabusa-* for Hayabusa alerts when evtx ingest ran."
-                ),
-                "error": f"{type(exc).__name__}: detection catalog unavailable.",
             }
         )
 
@@ -2052,37 +1955,6 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "`defer_loading` candidate."
         ),
     },
-    "opensearch_list_detections": {
-        "category": "search-analysis",
-        "recommended_for_phase": "ANALYZE",
-        "when_to_use": (
-            "List Security Analytics (Sigma) detection findings for triage pivots, "
-            "filtered by severity/detector_type; falls back to a Hayabusa query "
-            "suggestion when the Sigma plugin is unavailable or empty."
-        ),
-        "avoid_when": (
-            "Detection hits are leads, not conclusions — validate against source events "
-            "and surrounding context before recording a finding."
-        ),
-        "output_shape": (
-            "ListDetectionsOut: findings[] of Detection{id, timestamp, index, rules[] "
-            "of {name, tags[]}, matched_docs}, total, returned, offset, suggestion "
-            "(Hayabusa fallback when present)."
-        ),
-        "response_shaping": (
-            "Paginate with limit/offset; the per-finding payload references matched "
-            "docs by count, not by embedding them."
-        ),
-        "usage_examples": [
-            _example("All detections, first page", ),
-            _example("High-severity detections only", severity="high"),
-        ],
-        "defer_loading": True,
-        "defer_loading_rationale": (
-            "Depends on the optional Security Analytics plugin; lower-frequency. "
-            "Tool-Search `defer_loading` candidate."
-        ),
-    },
     "opensearch_fix_host_mapping": {
         "category": "admin",
         "recommended_for_phase": "INGEST",
@@ -2223,38 +2095,6 @@ REGISTRY.append(
     )
 )
 
-REGISTRY.append(
-    ToolDef(
-        name="opensearch_list_detections",
-        fn=run_opensearch_list_detections,
-        in_model=ListDetectionsIn,
-        out_model=ListDetectionsOut,
-        annotations=_read_annotations("Security Analytics Detections"),
-        title="Security Analytics Detections",
-        description=(
-            "List Security Analytics detection findings, or suggest a Hayabusa "
-            "query when Sigma is unavailable or empty. Use to triage rule-based "
-            "detections; severity filtering is applied behavior-compatibly. "
-            "Rule-based detection on this deployment is Hayabusa-on-ingest "
-            "(Sigma/Security-Analytics is disabled on OpenSearch 3.5); when no "
-            "Hayabusa alerts exist yet, the fallback is manual EVTX hunting "
-            "(e.g. EventID:4625/4624/7045) via opensearch_search — the response "
-            "message spells this out rather than dead-ending. "
-            "Example: opensearch_list_detections(severity='high')."
-        ),
-    )
-)
-
-RESOURCE_REGISTRY.append(
-    ResourceDef(
-        uri="opensearch://case/{case_id}/detections",
-        fn=opensearch_case_detections_resource,
-        name="opensearch_case_detections",
-        title="Case Detection Findings",
-        description="Unfiltered resource view of detection findings for case-oriented clients.",
-    )
-)
-
 PROMPT_REGISTRY.extend(
     [
         PromptDef(
@@ -2293,13 +2133,6 @@ RESOURCE_REGISTRY.extend(
             name="opensearch_field_catalog",
             title="Field Mapping Dictionary",
             description="Flattened field-to-type mapping for an artifact type.",
-        ),
-        ResourceDef(
-            uri="opensearch://catalog/detections",
-            fn=opensearch_detection_catalog_resource,
-            name="opensearch_detection_catalog",
-            title="Detection Rule Catalog",
-            description="Installed Sigma detector counts, with Hayabusa fallback guidance.",
         ),
     ]
 )

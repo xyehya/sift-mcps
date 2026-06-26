@@ -190,7 +190,6 @@ class TestToolRegistry:
             "opensearch_status",
             "opensearch_shard_status",
             "opensearch_case_summary",
-            "opensearch_list_detections",
         ]
         tools = _served_tools()
 

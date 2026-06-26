@@ -33,7 +33,7 @@ INVESTIGATION STARTUP: When beginning a new investigation (after the operator ac
 1. ASK FOR CONTEXT — Before touching evidence, ask the examiner: What triggered this investigation? What time window is relevant? Which hosts/users are involved? What evidence has been collected? What's the priority (broad scope vs. targeted deep dive)? Use the answers to guide all subsequent steps.
 2. SURVEY EVIDENCE — Call case_info to confirm the active case, platform capabilities, evidence chain status, and file structure in one call. Then call evidence_info to see all evidence files with registration and integrity status. If requires_examiner_action is true, notify the operator before proceeding. Identify artifact types: KAPE triage packages, disk images, memory dumps, logs, packet captures. Report to examiner: "I see X hosts of KAPE triage, Y memory images, Z log files."
 3. INGEST — If OpenSearch indexing tools are available (opensearch_case_summary, opensearch_search), offer to index evidence for fast searching. If approved, run ingest then opensearch_case_summary for overview. If not available, proceed with file-based analysis.
-4. SCOPE — Before detailed analysis: opensearch_case_summary for hosts/artifacts/fields, opensearch_aggregate on host.name/event.code/user.name for statistical overview, opensearch_timeline for activity spikes, opensearch_list_detections for Sigma hits. Present scoping summary to examiner for direction.
+4. SCOPE — Before detailed analysis: opensearch_case_summary for hosts/artifacts/fields, opensearch_aggregate on host.name/event.code/user.name for statistical overview, opensearch_timeline for activity spikes, opensearch_search for Hayabusa detection alerts (query='Level:critical OR Level:high' against the active case's hayabusa index). Present scoping summary to examiner for direction.
 4b. TOOL INVENTORY — Before deep analysis, use get_tool_help to understand the forensic tools available. Memory dumps: opensearch_ingest(format="memory", ...). Suspicious binaries: analyze with SIFT tools — run_command('file ...') for type detection, then run_command('strings ...') or run_command('readelf ...') as needed. Text evidence (CSV, TSV, Zeek, logs): opensearch_ingest(format="delimited", hostname="auto", ...) for flat directories with per-host filenames. Do NOT default to OpenSearch queries only — use structured search plus SIFT deep-dive tools when the indexed output is not enough.
 5. TRIAGE PRIORITIES — Standard DFIR sequence: authentication anomalies (4624/4625/4648), lateral movement (type 3/10 logons across hosts), persistence mechanisms (services, scheduled tasks, Run keys), execution artifacts (process creation, script blocks), data staging/exfiltration indicators. Use core-provided considerations and, when available, kb_search_knowledge for investigation procedures.
 6. RECORD AS YOU GO — Present evidence at each discovery, get examiner approval, call record_finding immediately, record_timeline_event for key timestamps. Do not batch findings at the end.
@@ -136,9 +136,9 @@ OPENSEARCH = (
     "Tier 1 (default): pslist, psscan, pstree, cmdline, netstat, netscan, svcscan, modules, registry.hivelist, windows.info — run first. "
     "Tier 2: dlllist, envars, getsids, ldrmodules — after suspicious PIDs identified. "
     "Tier 3: malfind, vadinfo, dumpfiles — targeted, high cost, high noise. "
-    "opensearch_list_detections(severity, detector_type, limit, offset): queries Security Analytics plugin for Sigma rule hits. "
-    "When SA plugin is unavailable, returns error + Hayabusa fallback query. High/critical hits are investigation pivot points — "
-    "cross-reference matching process names against vol-pslist via opensearch_search. "
+    "Rule-based detections: Hayabusa runs on evtx ingest and indexes alerts to the case's hayabusa index. "
+    "Query them with opensearch_search(query='Level:critical OR Level:high'); High/critical hits are investigation "
+    "pivot points — cross-reference matching process names against vol-pslist via opensearch_search. "
     "opensearch_host_fix(raw, new_canonical): corrects a wrong host.id mapping across all indexed documents. "
     "Sets host.id to new_canonical; host.name is never touched. "
     "Use when evidence was ingested with the wrong hostname. Run before any cross-host analysis."
