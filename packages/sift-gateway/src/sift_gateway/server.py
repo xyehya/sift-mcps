@@ -1187,39 +1187,17 @@ class Gateway:
                         raise RuntimeError(f"client-supplied {key} does not match DB active case")
                     arguments[key] = expected
 
-            # SEC-2: validate free-form, case-bound args (the OpenSearch
-            # ``index``) stay within the DB-active case. Unlike case_id/case_dir
-            # these are NOT overwritten — the agent may narrow to an artifact
-            # family within its OWN case (e.g. case-<key>-evtx-*) but a value
-            # naming another case (case-*, case-OTHER-*, an exact other-case
-            # index) is rejected exactly as a mismatching case_id is. This is the
-            # policy-boundary half of the both-layers fix; the OpenSearch backend
-            # also binds ``index`` to the active case (defense in depth) and is
-            # the sole authority for tools the Gateway cannot inject case_dir into
-            # (opensearch_get_event). This runs regardless of safe_args (read-only
-            # check, no mutation of arguments).
-            bound_args = self.case_bound_argument_names(name)
-            if bound_args:
-                prefix = self._active_case_index_prefix(active_case)
-                for key in bound_args:
-                    supplied = arguments.get(key)
-                    if not supplied:
-                        continue
-                    for segment in str(supplied).split(","):
-                        segment = segment.strip()
-                        if not segment:
-                            # Fail closed: a blank comma segment is rejected, not
-                            # skipped, so a value can't pass on its other segments
-                            # alone (SEC-2 hardening).
-                            raise RuntimeError(
-                                f"client-supplied {key} contains an empty segment "
-                                "(cross-case access denied)"
-                            )
-                        if not segment.startswith(prefix):
-                            raise RuntimeError(
-                                f"client-supplied {key} segment '{segment}' is "
-                                "outside the DB active case (cross-case access denied)"
-                            )
+            # SEC-2 case_bound (the OpenSearch ``index``) enforcement is NOT here.
+            # Gateway.call_tool is the portal-only (human) path; the agent tool
+            # call goes through the policy_middleware chain. Binding a free-form
+            # arg to the active case must run on BOTH surfaces, so the check lives
+            # in ProxyActiveCaseMiddleware.on_call_tool (gate ⑥), which runs for
+            # every case-scoped tool regardless of safe_args — including
+            # opensearch_get_event (empty safe_case_argument_names, so the backend
+            # cannot bind it via an injected case_dir). The backend
+            # _validate_index remains defense-in-depth. The helpers
+            # case_bound_argument_names() and _active_case_index_prefix() below are
+            # reused by that middleware.
 
         # Lazy recovery — restart backend if it crashed
         if not backend.started:

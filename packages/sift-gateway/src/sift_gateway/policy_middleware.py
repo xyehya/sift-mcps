@@ -86,6 +86,7 @@ class GatewayProtocol(Protocol):
     def addon_authority_for_tool(self, tool_name: str) -> Mapping[str, Any] | None: ...
     def is_case_scoped_tool(self, tool_name: str) -> bool: ...
     def safe_case_argument_names(self, tool_name: str) -> Iterable[str] | None: ...
+    def case_bound_argument_names(self, tool_name: str) -> Iterable[str]: ...
 
 
 @contextmanager
@@ -228,6 +229,39 @@ def _safe_case_args(gateway: GatewayProtocol, name: str) -> set[str] | None:
     if result is None:
         return None
     return set(result)
+
+
+def _case_bound_args(gateway: GatewayProtocol, name: str) -> set[str]:
+    """SEC-2: free-form, agent-settable args (e.g. the OpenSearch ``index``) whose
+    value must be VALIDATED to stay within the active case — not injected/
+    overwritten like the safe case args. Mirrors :func:`_safe_case_args`; returns
+    an empty set when none are declared (the common case)."""
+    fn = getattr(gateway, "case_bound_argument_names", None)
+    if not callable(fn):
+        return set()
+    result = fn(name)
+    return set(result) if result else set()
+
+
+def _active_case_index_prefix(gateway: GatewayProtocol, case: ActiveCase) -> str | None:
+    """SEC-2: the authoritative active-case OpenSearch index prefix
+    (``case-{key}-``), or None when it cannot be determined (no artifact_path or
+    the gateway helper is absent), in which case the caller skips binding and the
+    backend ``_validate_index`` remains the defense-in-depth guard.
+
+    Reuses :meth:`Gateway._active_case_index_prefix` (defensive getattr) so the
+    middleware agrees with the backend resolver without re-deriving the prefix."""
+    if not getattr(case, "artifact_path", None):
+        return None
+    fn = getattr(gateway, "_active_case_index_prefix", None)
+    if not callable(fn):
+        return None
+    try:
+        prefix = fn(case)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("case_bound: active-case prefix lookup failed: %s", exc)
+        return None
+    return prefix or None
 
 
 def _is_gateway_local_tool(gateway: GatewayProtocol, name: str) -> bool:
@@ -820,6 +854,57 @@ class ProxyActiveCaseMiddleware(Middleware):
         case = _current_gateway_active_case()
         if case is None:
             return await call_next(context)
+        # SEC-2 (agent path): bind free-form case-bound args (the OpenSearch
+        # ``index``) to the active case BEFORE dispatch, for EVERY case-scoped
+        # tool — including those with empty safe_case_argument_names
+        # (opensearch_get_event carries no injected case_dir, so the backend
+        # cannot bind it). This runs ahead of the safe_args branch so it also
+        # covers tools that pass through without injection. The agent caller may
+        # narrow WITHIN its own case (case-{key}-evtx-*) but a value naming
+        # another case (case-*, another case's pattern, an exact other-case index)
+        # or a blank comma segment is denied here at the policy boundary — the
+        # authoritative home for case isolation. The backend _validate_index is
+        # defense-in-depth.
+        bound_args = _case_bound_args(self.gateway, name)
+        if bound_args:
+            prefix = _active_case_index_prefix(self.gateway, case)
+            args = _tool_args(context)
+            for key in bound_args:
+                supplied = args.get(key)
+                if not supplied:
+                    continue
+                # Fail closed: a case_bound value was supplied but the active-case
+                # prefix cannot be resolved (abnormal — an active case with no
+                # artifact_path). Deny rather than fall through to the backend
+                # guard, which cannot bind tools that receive no injected case_dir
+                # (opensearch_get_event). A security gate that cannot evaluate
+                # must deny, not skip.
+                if not prefix:
+                    await self._audit_denial(name, case, "case_bound_prefix_unresolved")
+                    return _error_result(
+                        "invalid_input",
+                        f"client-supplied {key} cannot be bound to the active case "
+                        "(cross-case access denied)",
+                        tool=name,
+                    )
+                for segment in str(supplied).split(","):
+                    segment = segment.strip()
+                    if not segment:
+                        await self._audit_denial(name, case, "case_bound_empty_segment")
+                        return _error_result(
+                            "invalid_input",
+                            f"client-supplied {key} contains an empty segment "
+                            "(cross-case access denied)",
+                            tool=name,
+                        )
+                    if not segment.startswith(prefix):
+                        await self._audit_denial(name, case, "case_bound_cross_case")
+                        return _error_result(
+                            "invalid_input",
+                            f"client-supplied {key} segment '{segment}' is outside "
+                            "the DB active case (cross-case access denied)",
+                            tool=name,
+                        )
         safe_args = _safe_case_args(self.gateway, name)
         # OS2: safe_args == None means the tool's case-arg contract is unknown
         # (no manifest declaration and no schema property found) — deny
