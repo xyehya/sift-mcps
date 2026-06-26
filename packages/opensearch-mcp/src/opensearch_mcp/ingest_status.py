@@ -129,6 +129,9 @@ def write_status(
 HALT_SHARD_CAPACITY = "shard_capacity_exhausted"
 HALT_CIRCUIT_BREAKER = "circuit_breaker_tripped"
 HALT_HAYABUSA_NO_RULES = "hayabusa_no_rules"
+# SEC-8: a malicious/over-budget archive was refused by extract_container
+# (traversal/symlink/device member, or a decompression-bomb cap).
+HALT_ARCHIVE_REJECTED = "archive_rejected"
 
 
 def read_active_ingests() -> list[dict]:

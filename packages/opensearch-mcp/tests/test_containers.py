@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import io
 import json
+import shutil
+import subprocess
+import tarfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from opensearch_mcp.containers import (
+    ArchiveRejected,
     MountContext,
     cleanup_tmpdir,
     detect_container,
@@ -17,6 +22,36 @@ from opensearch_mcp.containers import (
     normalize_velociraptor,
     read_velociraptor_hostname,
 )
+
+HAVE_7Z = shutil.which("7z") is not None
+
+
+# ---------------------------------------------------------------------------
+# Archive-building helpers for the SEC-8 hardening tests
+# ---------------------------------------------------------------------------
+
+
+def _add_tar_file(tf: tarfile.TarFile, name: str, data: bytes, mode: int = 0o644) -> None:
+    ti = tarfile.TarInfo(name)
+    ti.size = len(data)
+    ti.mode = mode
+    tf.addfile(ti, io.BytesIO(data))
+
+
+def _add_tar_special(tf: tarfile.TarFile, name: str, ttype: bytes, linkname: str = "") -> None:
+    ti = tarfile.TarInfo(name)
+    ti.type = ttype
+    ti.linkname = linkname
+    if ttype in (tarfile.CHRTYPE, tarfile.BLKTYPE):
+        ti.devmajor = 1
+        ti.devminor = 3
+    tf.addfile(ti)
+
+
+def _clean_member():
+    from opensearch_mcp.containers import _Member
+
+    return _Member(name="ok.txt", size=5, kind="file", setid=False)
 
 # ---------------------------------------------------------------------------
 # detect_container
@@ -109,63 +144,61 @@ class TestDetectContainer:
 
 
 class TestExtractContainer:
-    @patch("opensearch_mcp.containers.subprocess")
-    def test_extract_7z_calls_7z(self, mock_subprocess, tmp_path):
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-        src = tmp_path / "test.zip"
-        src.touch()
-        dest = tmp_path / "out"
-        dest.mkdir()
-        extract_container(src, dest)
-        call_args = mock_subprocess.run.call_args[0][0]
-        assert call_args[0] == "7z"
-        assert str(src) in call_args
+    """Clean-path extraction with the real tar/7z binaries (SEC-8 chokepoint)."""
 
-    @patch("opensearch_mcp.containers.subprocess")
-    def test_extract_7z_with_password(self, mock_subprocess, tmp_path):
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-        src = tmp_path / "test.7z"
-        src.touch()
-        dest = tmp_path / "out"
-        dest.mkdir()
-        extract_container(src, dest, password="infected")
-        call_args = mock_subprocess.run.call_args[0][0]
-        assert "-pinfected" in call_args
-
-    @patch("opensearch_mcp.containers.subprocess")
-    def test_extract_7z_exit_1_is_warning(self, mock_subprocess, tmp_path):
-        """7z exit code 1 (warning) should not raise."""
-        mock_subprocess.run.return_value = MagicMock(returncode=1)
-        src = tmp_path / "test.zip"
-        src.touch()
+    def test_extract_clean_tar(self, tmp_path):
+        src = tmp_path / "triage.tar"
+        with tarfile.open(src, "w") as tf:
+            _add_tar_file(tf, "host/note.txt", b"hello")
         dest = tmp_path / "out"
         dest.mkdir()
         extract_container(src, dest)  # should not raise
+        assert (dest / "host" / "note.txt").read_bytes() == b"hello"
 
-    @patch("opensearch_mcp.containers.subprocess")
-    def test_extract_7z_exit_2_raises(self, mock_subprocess, tmp_path):
-        """7z exit code 2+ (error) should raise."""
-        import subprocess
+    def test_extract_clean_tar_gz(self, tmp_path):
+        src = tmp_path / "triage.tar.gz"
+        with tarfile.open(src, "w:gz") as tf:
+            _add_tar_file(tf, "data.bin", b"abc" * 100)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        extract_container(src, dest)
+        assert (dest / "data.bin").is_file()
 
-        mock_subprocess.run.return_value = MagicMock(returncode=2, stdout=b"", stderr=b"error")
-        mock_subprocess.CalledProcessError = subprocess.CalledProcessError
-        src = tmp_path / "test.zip"
-        src.touch()
+    @pytest.mark.skipif(not HAVE_7Z, reason="7z binary not on PATH")
+    def test_extract_clean_7z(self, tmp_path):
+        member = tmp_path / "evidence.txt"
+        member.write_text("clean")
+        src = tmp_path / "triage.7z"
+        subprocess.run(["7z", "a", str(src), str(member)], check=True, capture_output=True)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        extract_container(src, dest)
+        assert (dest / "evidence.txt").read_text() == "clean"
+
+    @pytest.mark.skipif(not HAVE_7Z, reason="7z binary not on PATH")
+    def test_extract_7z_warning_rc1_is_failure(self, tmp_path, monkeypatch):
+        """SEC-8: 7z rc==1 (warning) must be treated as FAILURE, not success."""
+        import opensearch_mcp.containers as containers
+
+        # Force preflight to pass with a single benign member, then make the
+        # extraction subprocess return rc==1 (warning) — it must raise.
+        monkeypatch.setattr(
+            containers, "_list_7z_members", lambda *a, **k: [_clean_member()]
+        )
+        real_run = subprocess.run
+
+        def fake_run(cmd, *a, **k):
+            if cmd[:2] == ["7z", "x"]:
+                return MagicMock(returncode=1, stdout=b"", stderr=b"warning")
+            return real_run(cmd, *a, **k)
+
+        monkeypatch.setattr(containers.subprocess, "run", fake_run)
+        src = tmp_path / "x.7z"
+        src.write_bytes(b"PK")
         dest = tmp_path / "out"
         dest.mkdir()
         with pytest.raises(subprocess.CalledProcessError):
             extract_container(src, dest)
-
-    @patch("opensearch_mcp.containers.subprocess")
-    def test_extract_tar(self, mock_subprocess, tmp_path):
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-        src = tmp_path / "test.tar.gz"
-        src.touch()
-        dest = tmp_path / "out"
-        dest.mkdir()
-        extract_container(src, dest)
-        call_args = mock_subprocess.run.call_args[0][0]
-        assert call_args[0] == "tar"
 
     def test_unknown_format_raises(self, tmp_path):
         src = tmp_path / "test.xyz"
@@ -542,3 +575,270 @@ class TestCollectFilesystemMeta:
 
         result = _collect_filesystem_meta("/fake/disk.img", "disk")
         assert result["image_type"] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# SEC-8: malicious-member rejection (the app REJECTS — not merely "no escape")
+# ---------------------------------------------------------------------------
+
+
+class TestMaliciousArchiveRejected:
+    """Each fixture asserts extract_container RAISES before/instead of writing."""
+
+    def _build(self, tmp_path, builder):
+        src = tmp_path / "evil.tar"
+        with tarfile.open(src, "w") as tf:
+            _add_tar_file(tf, "host/real.txt", b"keep")  # a benign member too
+            builder(tf)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        return src, dest
+
+    def test_traversal_member_rejected(self, tmp_path):
+        src, dest = self._build(
+            tmp_path, lambda tf: _add_tar_file(tf, "../escape.txt", b"x")
+        )
+        with pytest.raises(ArchiveRejected):
+            extract_container(src, dest)
+        assert not (tmp_path / "escape.txt").exists()
+
+    def test_absolute_member_rejected(self, tmp_path):
+        src, dest = self._build(
+            tmp_path, lambda tf: _add_tar_file(tf, "/etc/sift_pwn", b"x")
+        )
+        with pytest.raises(ArchiveRejected):
+            extract_container(src, dest)
+
+    def test_symlink_member_rejected(self, tmp_path):
+        src, dest = self._build(
+            tmp_path,
+            lambda tf: _add_tar_special(tf, "link", tarfile.SYMTYPE, "/etc/passwd"),
+        )
+        with pytest.raises(ArchiveRejected):
+            extract_container(src, dest)
+
+    def test_hardlink_member_rejected(self, tmp_path):
+        src, dest = self._build(
+            tmp_path,
+            lambda tf: _add_tar_special(tf, "hl", tarfile.LNKTYPE, "host/real.txt"),
+        )
+        with pytest.raises(ArchiveRejected):
+            extract_container(src, dest)
+
+    def test_char_device_member_rejected(self, tmp_path):
+        src, dest = self._build(
+            tmp_path, lambda tf: _add_tar_special(tf, "dev/null", tarfile.CHRTYPE)
+        )
+        with pytest.raises(ArchiveRejected):
+            extract_container(src, dest)
+
+    def test_fifo_member_rejected(self, tmp_path):
+        src, dest = self._build(
+            tmp_path, lambda tf: _add_tar_special(tf, "pipe", tarfile.FIFOTYPE)
+        )
+        with pytest.raises(ArchiveRejected):
+            extract_container(src, dest)
+
+    def test_setuid_member_rejected(self, tmp_path):
+        src, dest = self._build(
+            tmp_path, lambda tf: _add_tar_file(tf, "rootkit", b"x", mode=0o4755)
+        )
+        with pytest.raises(ArchiveRejected):
+            extract_container(src, dest)
+
+
+# ---------------------------------------------------------------------------
+# SEC-8: decompression-bomb / disk-exhaustion caps
+# ---------------------------------------------------------------------------
+
+
+class TestDecompressionBombCaps:
+    def test_compression_ratio_cap_rejects(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SIFT_ARCHIVE_MAX_RATIO", "5")
+        src = tmp_path / "bomb.tar.gz"
+        with tarfile.open(src, "w:gz") as tf:
+            _add_tar_file(tf, "zeros.bin", b"\x00" * 200_000)  # compresses ~>>5:1
+        dest = tmp_path / "out"
+        dest.mkdir()
+        with pytest.raises(ArchiveRejected, match="ratio"):
+            extract_container(src, dest)
+
+    def test_entry_count_cap_rejects(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SIFT_ARCHIVE_MAX_ENTRIES", "2")
+        src = tmp_path / "many.tar"
+        with tarfile.open(src, "w") as tf:
+            for i in range(5):
+                _add_tar_file(tf, f"f{i}.txt", b"x")
+        dest = tmp_path / "out"
+        dest.mkdir()
+        with pytest.raises(ArchiveRejected, match="entry count"):
+            extract_container(src, dest)
+
+    def test_uncompressed_total_cap_rejects(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SIFT_ARCHIVE_MAX_UNCOMPRESSED_BYTES", "50")
+        src = tmp_path / "big.tar"
+        with tarfile.open(src, "w") as tf:
+            _add_tar_file(tf, "data.bin", b"y" * 200)
+        dest = tmp_path / "out"
+        dest.mkdir()
+        with pytest.raises(ArchiveRejected, match="uncompressed size"):
+            extract_container(src, dest)
+
+    def test_clean_archive_passes_caps(self, tmp_path):
+        """A normal small archive must NOT trip any cap (fail-on-revert guard)."""
+        src = tmp_path / "ok.tar"
+        with tarfile.open(src, "w") as tf:
+            _add_tar_file(tf, "a.txt", b"hello world")
+        dest = tmp_path / "out"
+        dest.mkdir()
+        extract_container(src, dest)
+        assert (dest / "a.txt").is_file()
+
+
+# ---------------------------------------------------------------------------
+# SEC-8: 7z -slt listing parser + attribute classification
+# ---------------------------------------------------------------------------
+
+
+_SLT_SAMPLE = """\
+7-Zip 26.01
+
+Listing archive: /cases/x/triage.7z
+
+--
+Path = /cases/x/triage.7z
+Type = 7z
+Physical Size = 1234
+
+----------
+Path = host/note.txt
+Folder = -
+Size = 12
+Attributes = A_ -rw-r--r--
+
+Path = host/sub
+Folder = +
+Size = 0
+Attributes = D_ drwxr-xr-x
+
+Path = host/evil-link
+Folder = -
+Size = 0
+Attributes = A_ lrwxrwxrwx
+
+Path = host/setuid-bin
+Folder = -
+Size = 100
+Attributes = A_ -rwsr-xr-x
+
+Path = ../escape.txt
+Folder = -
+Size = 5
+Attributes = A_ -rw-r--r--
+"""
+
+
+class Test7zSltParser:
+    def test_parser_skips_archive_header_record(self):
+        from opensearch_mcp.containers import _parse_7z_slt
+
+        members = _parse_7z_slt(_SLT_SAMPLE)
+        names = [m.name for m in members]
+        # The archive's own /cases/x/triage.7z header must NOT be a member.
+        assert "/cases/x/triage.7z" not in names
+        assert "host/note.txt" in names
+
+    def test_parser_classifies_kinds_and_setid(self):
+        from opensearch_mcp.containers import _parse_7z_slt
+
+        by_name = {m.name: m for m in _parse_7z_slt(_SLT_SAMPLE)}
+        assert by_name["host/note.txt"].kind == "file"
+        assert by_name["host/sub"].kind == "dir"
+        assert by_name["host/evil-link"].kind == "symlink"
+        assert by_name["host/setuid-bin"].setid is True
+
+    def test_policy_rejects_symlink_member(self):
+        from opensearch_mcp.containers import _enforce_policy, _Member
+
+        with pytest.raises(ArchiveRejected, match="symlink"):
+            _enforce_policy(
+                Path("/nonexistent.7z"),
+                Path("/tmp"),
+                [_Member("l", 0, "symlink", False)],
+            )
+
+    def test_policy_rejects_traversal_member(self):
+        from opensearch_mcp.containers import _enforce_policy, _Member
+
+        with pytest.raises(ArchiveRejected, match="unsafe member path"):
+            _enforce_policy(
+                Path("/nonexistent.7z"),
+                Path("/tmp"),
+                [_Member("../escape.txt", 5, "file", False)],
+            )
+
+    def test_url_encoded_velociraptor_name_is_safe(self):
+        """Velociraptor C%3A members are relative — must not be flagged unsafe."""
+        from opensearch_mcp.containers import _is_unsafe_path
+
+        assert _is_unsafe_path("uploads/auto/C%3A/Windows/System32") is False
+        assert _is_unsafe_path("C:/Windows") is True  # real absolute drive path
+
+
+# ---------------------------------------------------------------------------
+# SEC-8 surfacing: the rejection reason rides the worker failed/result_public
+# envelope (Seam C — the aggregate that becomes result_public).
+# ---------------------------------------------------------------------------
+
+
+class TestArchiveRejectionSurface:
+    def test_reason_surfaces_on_failed_envelope(self):
+        from opensearch_mcp.ingest_job import _aggregate
+        from opensearch_mcp.ingest_status import HALT_ARCHIVE_REJECTED
+
+        rid = "run-sec8"
+        rec = {
+            "status": "failed",
+            "error": f"{HALT_ARCHIVE_REJECTED}: disallowed member type symlink: 'l'",
+        }
+        out = _aggregate({rid: rec}, {rid})
+        assert out["failed"] is True
+        assert HALT_ARCHIVE_REJECTED in out["error"]
+        assert "symlink" in out["error"]
+
+
+# ---------------------------------------------------------------------------
+# SEC-8: memory archive path stages INSIDE the case jail (was /tmp)
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryPathJail:
+    def test_memory_block_uses_case_jail_not_tmp(self):
+        """The memory archive block must stage via make_ingest_tmpdir, not /tmp."""
+        import inspect
+
+        from opensearch_mcp.ingest_cli import cmd_ingest_memory
+
+        src = inspect.getsource(cmd_ingest_memory)
+        assert "make_ingest_tmpdir" in src
+        assert "extract_container" in src
+        assert "tempfile.mkdtemp" not in src
+
+    @pytest.mark.skipif(not HAVE_7Z, reason="7z binary not on PATH")
+    def test_extract_lands_in_case_dir(self, tmp_path, monkeypatch):
+        from opensearch_mcp.containers import make_ingest_tmpdir
+
+        case_dir = tmp_path / "case-sec8"
+        case_dir.mkdir()
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+        mem = tmp_path / "image.raw"
+        mem.write_bytes(b"MEMDUMP" * 100)
+        src = tmp_path / "mem.7z"
+        subprocess.run(["7z", "a", str(src), str(mem)], check=True, capture_output=True)
+
+        jail = make_ingest_tmpdir("case-sec8")
+        extract_container(src, jail)
+        staged = list(jail.rglob("image.raw"))
+        assert staged, "extracted image not found in case jail"
+        assert staged[0].resolve().is_relative_to(case_dir.resolve())

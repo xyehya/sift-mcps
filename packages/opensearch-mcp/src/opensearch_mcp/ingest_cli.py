@@ -11,6 +11,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NoReturn
 
 import yaml
 from sift_common.audit import AuditWriter
@@ -21,7 +22,7 @@ from opensearch_mcp.ingest import discover, ingest
 from opensearch_mcp.ingest_status import write_status
 from opensearch_mcp.manifest import sha256_file
 from opensearch_mcp.parse_csv import ingest_csv
-from opensearch_mcp.paths import build_index_pattern, sift_dir, sanitize_index_component
+from opensearch_mcp.paths import build_index_pattern, sanitize_index_component, sift_dir
 from opensearch_mcp.tools import TOOLS
 
 logger = logging.getLogger(__name__)
@@ -650,6 +651,34 @@ def _merge_config(args: argparse.Namespace, config: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _fail_archive_rejected(case_id: str, reason: str) -> NoReturn:
+    """Write a terminal ``failed`` status carrying a SEC-8 rejection and exit.
+
+    The reason rides the status ``error`` field with the HALT_ARCHIVE_REJECTED
+    prefix so ``opensearch_ingest_status`` / the worker ``result_public`` surface
+    a typed reason (per the MCP fix-surfacing lesson) instead of letting the
+    rejection masquerade as a generic ``process_died_unexpectedly`` crash.
+    """
+    from opensearch_mcp.ingest_status import HALT_ARCHIVE_REJECTED
+
+    run_id = os.environ.get("SIFT_INGEST_RUN_ID", "")
+    try:
+        write_status(
+            case_id=case_id,
+            pid=os.getpid(),
+            run_id=run_id,
+            status="failed",
+            hosts=[],
+            totals={},
+            started=datetime.now(timezone.utc).isoformat(),
+            error=f"{HALT_ARCHIVE_REJECTED}: {reason}",
+        )
+    except Exception as exc:  # noqa: BLE001 — never let status writing mask the abort
+        logger.debug("archive-rejected status write failed: %s", exc)
+    print(f"ABORT: {HALT_ARCHIVE_REJECTED}: {reason}", file=sys.stderr)
+    sys.exit(1)
+
+
 def cmd_scan(args: argparse.Namespace) -> None:
     """Scan a directory for artifacts, run EZ tools, index."""
     from opensearch_mcp.containers import (
@@ -742,7 +771,16 @@ def cmd_scan(args: argparse.Namespace) -> None:
         if container_type == "archive":
             tmpdir = make_ingest_tmpdir(case_id)
             print(f"Extracting {input_path.name}...")
-            extract_container(input_path, tmpdir, password=password)
+            from opensearch_mcp.containers import ArchiveRejected
+
+            try:
+                extract_container(input_path, tmpdir, password=password)
+            except ArchiveRejected as exc:
+                # SEC-8: surface the typed rejection reason on the failed
+                # envelope and clean up the partial tmpdir before exiting.
+                cleanup_tmpdir(tmpdir, force=False)
+                tmpdir = None
+                _fail_archive_rejected(case_id, str(exc))
 
             # Check for Velociraptor offline collector
             if is_velociraptor_collection(tmpdir):
@@ -2269,37 +2307,57 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
     image_path = Path(args.path)
     _mem_extract_dir = None  # Track for cleanup
 
-    # Extract from archive if needed
+    case_id = _resolve_case_id(getattr(args, "case", None))
+
+    # Extract from archive if needed. SEC-8: route through the hardened
+    # extract_container chokepoint and land INSIDE the case jail (was /tmp,
+    # outside any containment) so a malicious member can't escape the case dir.
     if image_path.suffix.lower() in (".7z", ".zip"):
         import shutil
         import subprocess
-        import tempfile
 
-        _mem_extract_dir = Path(tempfile.mkdtemp(prefix="sift-mem-"))
+        from opensearch_mcp.containers import (
+            ArchiveRejected,
+            extract_container,
+            make_ingest_tmpdir,
+        )
+
+        _mem_extract_dir = make_ingest_tmpdir(case_id)
         try:
-            password = os.environ.get("SIFT_ARCHIVE_PASSWORD", "")
-            cmd = ["7z", "x", f"-o{_mem_extract_dir}", str(image_path)]
-            if password:
-                cmd.insert(2, f"-p{password}")
-            subprocess.run(cmd, check=True, capture_output=True, timeout=600)
-            memory_exts = {".img", ".raw", ".vmem", ".dmp", ".mem", ".bin", ".lime"}
-            extracted = [f for f in _mem_extract_dir.iterdir() if f.suffix.lower() in memory_exts]
-            if not extracted:
-                shutil.rmtree(_mem_extract_dir, ignore_errors=True)
-                print(f"Error: No memory image found in {image_path}", file=sys.stderr)
-                sys.exit(1)
-            image_path = extracted[0]
-            print(f"Extracted: {image_path} ({image_path.stat().st_size / (1024**3):.1f} GB)")
+            extract_container(
+                image_path,
+                _mem_extract_dir,
+                password=os.environ.get("SIFT_ARCHIVE_PASSWORD") or None,
+            )
+        except ArchiveRejected as exc:
+            shutil.rmtree(_mem_extract_dir, ignore_errors=True)
+            _fail_archive_rejected(case_id, str(exc))
         except subprocess.CalledProcessError as e:
             shutil.rmtree(_mem_extract_dir, ignore_errors=True)
             print(f"Error: Failed to extract {image_path}: {e}", file=sys.stderr)
             sys.exit(1)
 
+        memory_exts = {".img", ".raw", ".vmem", ".dmp", ".mem", ".bin", ".lime"}
+        jail = _mem_extract_dir.resolve()
+        extracted = [
+            f
+            for f in _mem_extract_dir.rglob("*")
+            if f.is_file()
+            and not f.is_symlink()
+            and f.suffix.lower() in memory_exts
+            and f.resolve().is_relative_to(jail)
+        ]
+        if not extracted:
+            shutil.rmtree(_mem_extract_dir, ignore_errors=True)
+            print(f"Error: No memory image found in {image_path}", file=sys.stderr)
+            sys.exit(1)
+        image_path = extracted[0]
+        print(f"Extracted: {image_path} ({image_path.stat().st_size / (1024**3):.1f} GB)")
+
     if not image_path.is_file():
         print(f"Error: {image_path} is not a file.", file=sys.stderr)
         sys.exit(1)
 
-    case_id = _resolve_case_id(getattr(args, "case", None))
     _ensure_case_active(case_id)
     hostname = args.hostname
     # XYE-11: when the server pre-derived the hostname it forwards the true
