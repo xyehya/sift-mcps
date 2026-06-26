@@ -118,12 +118,9 @@ def _activity_kind(tool: str, status: str) -> str:
         return "discovery"
     if tool in {"record_timeline_event", "manage_todo"}:
         return "io"
-    if tool.startswith("kb_"):
-        return "info"
     if (
         tool == "run_command"
         or tool.startswith("opensearch_")
-        or tool.startswith("wintriage_")
     ):
         return "analysis"
     return "info"
@@ -177,13 +174,11 @@ def _activity_label(row: dict[str, Any]) -> str:
         count_part = f" - {count} hits" if count is not None else ""
         return _compact_label(f"OpenSearch {op}{count_part}")
 
-    if tool.startswith("wintriage_"):
-        op = tool.removeprefix("wintriage_").replace("_", " ")
-        return _compact_label(f"Triage {op}")
-
-    if tool.startswith("kb_"):
-        op = tool.removeprefix("kb_").replace("_", " ")
-        return _compact_label(f"Knowledge base {op}")
+    # Generic add-on tool: format as "namespace op" for any "prefix_action" pattern.
+    if "_" in tool:
+        ns, _, rest = tool.partition("_")
+        op = rest.replace("_", " ")
+        return _compact_label(f"{ns} {op}" if op else ns)
 
     return summary or _compact_label(tool)
 

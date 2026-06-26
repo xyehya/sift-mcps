@@ -11,6 +11,7 @@ via uuid PK, backend_audit_id, and audit_aliases — all scoped to case_id.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from mcp.types import TextContent
 
