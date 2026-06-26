@@ -307,6 +307,27 @@ class TestValidateIndexActiveCaseBinding:
 
         assert _validate_index("case-a-1234-evtx-*,case-b-9999-*") is not None
 
+    # ---- empty/blank comma segments rejected, not skipped (SEC-2 hardening) ----
+    def test_trailing_comma_empty_segment_denied(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-a-1234-evtx-*,") is not None
+
+    def test_leading_comma_empty_segment_denied(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index(",case-a-1234-*") is not None
+
+    def test_double_comma_empty_segment_denied(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-a-1234-*,,case-a-1234-evtx-*") is not None
+
+    def test_whitespace_only_segment_denied(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-a-1234-*,   ") is not None
+
     # ---- allowed (intra-case narrowing) ----------------------------------
     def test_active_case_full_pattern_allowed(self):
         from opensearch_mcp.server import _validate_index

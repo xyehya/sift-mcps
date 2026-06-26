@@ -787,6 +787,21 @@ def test_gateway_denies_cross_case_index_at_boundary():
             )
 
 
+def test_gateway_denies_empty_index_segment_at_boundary():
+    """SEC-2 hardening: a blank comma segment (trailing/leading/double comma) is
+    rejected fail-closed, not skipped on the strength of its valid segments."""
+    gateway = _gateway_with_backends(_opensearch_query_manifest())
+    gateway.active_case_service = _active_case_service(
+        "case-a-1234", "/cases/case-a-1234"
+    )
+
+    for bad in ("case-a-1234-evtx-*,", ",case-a-1234-*", "case-a-1234-*,,case-a-1234-evtx-*"):
+        with pytest.raises(RuntimeError, match="cross-case access denied"):
+            asyncio.run(
+                gateway.call_tool("opensearch_search", {"index": bad}, identity=None)
+            )
+
+
 def test_gateway_allows_intra_case_index_at_boundary():
     """SEC-2: an `index` that narrows WITHIN the active case passes the boundary
     check (it must not raise the cross-case denial)."""

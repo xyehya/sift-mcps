@@ -181,7 +181,13 @@ def _validate_index(index: str) -> str | None:
     for segment in index.split(","):
         segment = segment.strip()
         if not segment:
-            continue
+            # Fail closed: a blank comma segment (e.g. trailing/leading/double
+            # comma) is rejected rather than skipped, so a value cannot pass on
+            # the strength of its other segments alone (SEC-2 hardening).
+            return (
+                "Index contains an empty segment "
+                "(remove stray/leading/trailing commas)"
+            )
         if active_prefix is not None:
             if not segment.startswith(active_prefix):
                 return (

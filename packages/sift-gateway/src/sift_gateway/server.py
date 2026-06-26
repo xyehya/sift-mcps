@@ -1207,7 +1207,15 @@ class Gateway:
                         continue
                     for segment in str(supplied).split(","):
                         segment = segment.strip()
-                        if segment and not segment.startswith(prefix):
+                        if not segment:
+                            # Fail closed: a blank comma segment is rejected, not
+                            # skipped, so a value can't pass on its other segments
+                            # alone (SEC-2 hardening).
+                            raise RuntimeError(
+                                f"client-supplied {key} contains an empty segment "
+                                "(cross-case access denied)"
+                            )
+                        if not segment.startswith(prefix):
                             raise RuntimeError(
                                 f"client-supplied {key} segment '{segment}' is "
                                 "outside the DB active case (cross-case access denied)"
