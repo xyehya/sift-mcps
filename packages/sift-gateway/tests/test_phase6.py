@@ -485,6 +485,12 @@ def test_register_route_keeps_gated_backend_unavailable(tmp_path, monkeypatch):
     manifest = _manifest(requires=["unknown:req"])
     manifest_path = tmp_path / "sift-backend.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    # SEC-4: a registered stdio command must be an installed/allowlisted launcher
+    # (absolute path in an allowlisted dir). Use a real launcher under an
+    # explicitly-allowlisted dir so this gating test exercises a valid command.
+    launcher = tmp_path / "sample-addon-launcher"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("SIFT_ADDON_COMMAND_ALLOWLIST_DIRS", str(tmp_path))
     gateway = Gateway({"backends": {}, **_execute_security()})
     gateway.mcp_backend_registry = _FakeRegistry()
     client = _rest_client(gateway)
@@ -495,7 +501,7 @@ def test_register_route_keeps_gated_backend_unavailable(tmp_path, monkeypatch):
             "name": "sample-addon",
             "config": {
                 "type": "stdio",
-                "command": "true",
+                "command": str(launcher),
                 "manifest_path": str(manifest_path),
             },
         },

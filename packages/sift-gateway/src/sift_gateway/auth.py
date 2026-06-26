@@ -242,6 +242,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.role = identity.role
         request.state.token_id = identity.token_id
         request.state.source_ip = identity.source_ip
+        # SEC-1: record whether Supabase is the active authority for this request
+        # so control-plane step-up (require_recent_reauth) is a no-op on pure
+        # legacy / single-user deployments and enforced only where re-auth exists.
+        request.state.supabase_enabled = self._supabase_enabled()
 
 
 def resolve_examiner(request: Request) -> dict:
@@ -288,3 +292,158 @@ def is_agent_principal(request: Request) -> bool:
     if role in ("agent", "service"):
         return True
     return False
+
+
+# SEC-1 (DSS-CAN-002): the Gateway `/api/v1` control plane (backend registry,
+# service lifecycle, join-code mint) must be operator-only. `AuthMiddleware`
+# proves *who* but applies no authority gate to `/api/v1`, so a sandboxed
+# agent/service principal — exactly what the least-priv sandbox exists to
+# contain — could register/start backends or mint join codes. These shared
+# dependencies are the single authority + step-up gate the mutation handlers
+# invoke (CWE-862 missing function-level authorization; deny-by-default).
+#
+# Operator principal_types allowed to mutate the control plane. Anything else
+# (agent/service) is denied. Mirrors `_REST_TOOL_OPERATOR_TYPES`.
+_CONTROL_PLANE_OPERATOR_TYPES = frozenset({"user", "operator", "examiner"})
+# Roles denied control-plane mutation even when principal_type is a human/user
+# (readonly examiners may observe but never mutate).
+_CONTROL_PLANE_DENIED_ROLES = frozenset({"agent", "service", "readonly"})
+
+
+def require_control_plane_operator(request: Request) -> JSONResponse | None:
+    """Deny-by-default authority gate for `/api/v1` control-plane mutations.
+
+    Returns ``None`` when the authenticated principal may mutate the control
+    plane (examiner / operator / single-user-anonymous), or a 403
+    :class:`JSONResponse` when it may not. Invoke at the TOP of every
+    control-plane mutation handler (register/unregister/enable backends,
+    service start/stop/restart, mint join-code).
+
+    Denial rules (deny-by-default):
+      - ``principal_type`` in {agent, service} -> 403 (the sandboxed principal
+        the least-priv model exists to contain).
+      - ``role`` in {agent, service, readonly} -> 403 (readonly users observe,
+        never mutate).
+      - Anonymous single-user mode (no identity, no role) is treated as
+        operator so existing single-operator deployments keep working — this
+        mirrors :func:`is_agent_principal`'s anonymous handling.
+
+    Generic 403 body (no principal/secret material echoed); the denial is
+    logged with the non-PII rationale for the authorization matrix.
+    """
+    identity = getattr(request.state, "identity", None)
+    principal_type = getattr(identity, "principal_type", None)
+    role = getattr(request.state, "role", None)
+
+    denied_reason: str | None = None
+    if principal_type is not None and principal_type not in _CONTROL_PLANE_OPERATOR_TYPES:
+        denied_reason = f"principal_type={principal_type}"
+    elif role in _CONTROL_PLANE_DENIED_ROLES:
+        denied_reason = f"role={role}"
+
+    if denied_reason is not None:
+        logger.warning(
+            "Control-plane mutation denied (%s) path=%s method=%s token_id=%s",
+            denied_reason,
+            request.url.path,
+            request.method,
+            getattr(request.state, "token_id", None),
+        )
+        return JSONResponse(
+            {"error": "Operator authority required for control-plane mutation"},
+            status_code=403,
+        )
+    return None
+
+
+def _recent_reauth_denied(exc: Exception) -> JSONResponse:
+    """Map a step-up re-verify failure to a fail-closed denial (default 401).
+
+    Honors a typed ``.http_status`` (clamped to 4xx/5xx) when the reverify
+    primitive raises a Supabase auth error; otherwise denies 401. Never returns
+    < 400, never echoes token or password material.
+    """
+    status = getattr(exc, "http_status", None)
+    if not isinstance(status, int) or status < 400 or status > 599:
+        status = 401
+    if status == 503:
+        msg = "Control plane unavailable — re-auth could not be verified."
+    elif status == 403:
+        msg = "Re-auth denied for this operator."
+    else:
+        msg = "Re-authentication failed."
+    return JSONResponse({"error": msg}, status_code=status)
+
+
+async def require_recent_reauth(request: Request, body: dict) -> JSONResponse | None:
+    """Step-up re-auth gate for the highest-impact control-plane mutations.
+
+    Applied to *register-a-new-backend* and *mint-join-code* (decision: examiner
+    + step-up). Returns ``None`` when the step-up requirement is satisfied (or
+    not applicable), or a fail-closed denial :class:`JSONResponse` otherwise.
+
+    Behavior:
+      - **No-op when Supabase is not the active authority** (``request.state.
+        supabase_enabled`` is false) — pure legacy / single-user deployments
+        have no re-auth plane, so step-up cannot apply. This preserves
+        pre-Supabase behavior.
+      - **When Supabase is enabled**, require the operator to re-supply their
+        credentials in the request body (``password`` + ``email``/
+        ``reauth_email``) and re-verify them against Supabase via the shared
+        portal re-verify primitive (``app.state.supabase_reverify`` ->
+        ``SupabaseAuthCallbacks.reverify_password``). The grant is bound to the
+        bearer token's own ``auth_user_id`` (``expected_auth_user_id``) so a
+        stolen bearer token cannot be step-upped with a different operator's
+        password. The grant's session tokens are discarded by the primitive.
+
+    Fails CLOSED on every uncertain path (missing primitive, missing
+    credentials, wrong password, identity mismatch, control plane unreachable):
+    never returns ``None`` except on a verified re-auth or the no-op case.
+    """
+    if not getattr(request.state, "supabase_enabled", False):
+        return None  # no re-auth plane on legacy/single-user deployments
+
+    reverify = getattr(request.app.state, "supabase_reverify", None)
+    if not callable(reverify):
+        # Supabase is the active authority but the re-verify primitive is not
+        # wired — fail closed rather than silently skipping step-up.
+        logger.warning(
+            "Step-up required but supabase_reverify is not wired; denying %s",
+            request.url.path,
+        )
+        return JSONResponse(
+            {"error": "Re-auth unavailable: control plane not wired."},
+            status_code=503,
+        )
+
+    if not isinstance(body, dict):
+        body = {}
+    password = body.get("password")
+    if not isinstance(password, str) or not password:
+        return JSONResponse(
+            {"error": "Re-auth required: confirm your password."},
+            status_code=401,
+        )
+    email = body.get("reauth_email") or body.get("email")
+    if not isinstance(email, str) or not email:
+        return JSONResponse(
+            {"error": "Re-auth required: operator email."},
+            status_code=401,
+        )
+
+    identity = getattr(request.state, "identity", None)
+    expected_auth_user_id = getattr(identity, "auth_user_id", None)
+    source_ip = getattr(request.state, "source_ip", None)
+    try:
+        await reverify(
+            email,
+            password,
+            source_ip,
+            expected_auth_user_id=expected_auth_user_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - never leak token/password material
+        # FAIL CLOSED on ANY error (incl. a TypeError from a primitive that
+        # cannot bind expected_auth_user_id): never retry without the identity
+        # binding and never fall through to "allowed".
+        return _recent_reauth_denied(exc)
+    return None

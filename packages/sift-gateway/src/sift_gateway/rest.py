@@ -17,7 +17,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from sift_gateway.auth import is_agent_principal, resolve_examiner
+from sift_gateway.auth import (
+    is_agent_principal,
+    require_control_plane_operator,
+    require_recent_reauth,
+    resolve_examiner,
+)
 from sift_gateway.join import (
     check_join_rate_limit,
     generate_join_code,
@@ -483,6 +488,9 @@ async def list_services(request: Request) -> JSONResponse:
 
 async def start_service(request: Request) -> JSONResponse:
     """POST /api/v1/services/{name}/start — start a backend and rebuild tool map."""
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
@@ -525,6 +533,9 @@ async def start_service(request: Request) -> JSONResponse:
 
 async def stop_service(request: Request) -> JSONResponse:
     """POST /api/v1/services/{name}/stop — stop a backend and rebuild tool map."""
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
@@ -551,6 +562,9 @@ async def stop_service(request: Request) -> JSONResponse:
 
 async def restart_service(request: Request) -> JSONResponse:
     """POST /api/v1/services/{name}/restart — stop + start a backend."""
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
@@ -612,14 +626,27 @@ async def create_join_code(request: Request) -> JSONResponse:
 
     Requires bearer token auth (authenticated examiner).
     """
+    # SEC-1: control-plane mutation (mints a credential that bootstraps a fresh
+    # gateway token / new backend) — operator-only + step-up re-auth.
+    authz = require_control_plane_operator(request)
+    if authz is not None:
+        return authz
+
     expires_hours = 2
+    data: dict = {}
     body = await request.body()
     if body:
         try:
             data = json.loads(body)
-            expires_hours = data.get("expires_hours", 2)
         except json.JSONDecodeError:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(data, dict):
+            return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+        expires_hours = data.get("expires_hours", 2)
+
+    reauth = await require_recent_reauth(request, data)  # SEC-1: step-up on mint
+    if reauth is not None:
+        return reauth
 
     if (
         not isinstance(expires_hours, (int, float))
@@ -943,6 +970,9 @@ async def reload_backends(request: Request) -> JSONResponse:
     D34 is restart-to-apply for FastMCP catalog exposure. This endpoint does not
     live-remount providers; it reports which DB rows are pending Gateway restart.
     """
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     registry = getattr(gateway, "mcp_backend_registry", None)
     if registry is None:
@@ -1036,9 +1066,17 @@ async def register_backend_logic(gateway, body: dict, *, actor=None) -> tuple[di
         )
     if not reasons:
         try:
-            from sift_gateway.mcp_backends_registry import normalize_connection_config
+            from sift_gateway.mcp_backends_registry import (
+                assert_stdio_command_allowlisted,
+                normalize_connection_config,
+            )
 
             normalize_connection_config(config)
+            # SEC-4: a registered stdio backend launches as the gateway account,
+            # so constrain its command to the installed add-on catalog (reject
+            # arbitrary interpreters/binaries) at the registration surface.
+            if str(config.get("type") or "stdio") == "stdio":
+                assert_stdio_command_allowlisted(config.get("command"))
         except Exception as exc:
             reasons.append({"field": "config", "reason": str(exc)})
 
@@ -1096,6 +1134,11 @@ async def register_backend_logic(gateway, body: dict, *, actor=None) -> tuple[di
 
 async def validate_backend(request: Request) -> JSONResponse:
     """POST /api/v1/backends/validate — validate a backend manifest/config."""
+    # SEC-1: validation triggers a remote manifest fetch (egress) and is a
+    # control-plane operation — operator-only, not agent/service/readonly.
+    authz = require_control_plane_operator(request)
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     body, error = await _read_json_body(request)
     if error:
@@ -1107,11 +1150,19 @@ async def validate_backend(request: Request) -> JSONResponse:
 
 async def register_backend(request: Request) -> JSONResponse:
     """POST /api/v1/backends — validate, persist, and hot-register a backend."""
+    # SEC-1: registering a backend persists a row the gateway later launches
+    # (stdio process / HTTP egress) — operator-only + step-up re-auth.
+    authz = require_control_plane_operator(request)
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     body, error = await _read_json_body(request)
     if error:
         return error
     assert body is not None
+    reauth = await require_recent_reauth(request, body)  # SEC-1: step-up
+    if reauth is not None:
+        return reauth
     actor = getattr(request.state, "identity", None)
     response, status_code = await register_backend_logic(gateway, body, actor=actor)
     return JSONResponse(response, status_code=status_code)
@@ -1124,6 +1175,9 @@ async def unregister_backend(request: Request) -> JSONResponse:
     unregister is a DB/catalog change that requires Gateway restart to apply to
     the served `/mcp` catalog.
     """
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     registry = getattr(gateway, "mcp_backend_registry", None)
     if registry is None:
@@ -1186,6 +1240,9 @@ async def set_backend_enabled(request: Request) -> JSONResponse:
     that the served /mcp aggregate applies on Gateway restart, so it reports
     ``restart_required``. Body: {"enabled": bool}.
     """
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     name = request.path_params["name"]
     registry = getattr(gateway, "mcp_backend_registry", None)

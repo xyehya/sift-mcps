@@ -1474,6 +1474,17 @@ class Gateway:
         # Attach gateway to app state so endpoints can access it
         app.state.gateway = gateway
 
+        # SEC-1: expose the parsed auth config + the portal re-verify primitive
+        # to the /api/v1 control-plane handlers so require_recent_reauth() can
+        # enforce step-up on register-new-backend / mint-join-code. The reverify
+        # callable is the same SupabaseAuthCallbacks.reverify_password the portal
+        # uses (password grant, identity-bound, session tokens discarded); it is
+        # only wired when Supabase auth is configured, so step-up is a no-op on
+        # pure legacy / single-user deployments.
+        app.state.auth_config = auth_config
+        if supabase_callbacks is not None and hasattr(supabase_callbacks, "reverify_password"):
+            app.state.supabase_reverify = supabase_callbacks.reverify_password
+
         async def _sanitized_error(request, exc):
             """Global unhandled exception handler — never leak file paths or tracebacks."""
             logger.exception("Unhandled error: %s", exc)

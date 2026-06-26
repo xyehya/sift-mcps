@@ -304,13 +304,18 @@ class TestBackendsPortal:
         }
         manifest_path = tmp_path / "sift-backend.json"
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        # SEC-4: a registered stdio command must be an installed/allowlisted
+        # launcher (absolute path in an allowlisted dir).
+        launcher = tmp_path / "test-backend-launcher"
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setenv("SIFT_ADDON_COMMAND_ALLOWLIST_DIRS", str(tmp_path))
 
         # Valid re-auth + config payload
         payload = {
             "name": "test-backend",
             "config": {
                 "type": "stdio",
-                "command": "true",
+                "command": str(launcher),
                 "manifest_path": str(manifest_path)
             },
             "password": GOOD_PASSWORD,

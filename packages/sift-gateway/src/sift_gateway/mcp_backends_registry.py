@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -262,6 +263,48 @@ def _operator_id(principal: Any) -> str | None:
     return _principal_id(principal)
 
 
+def _actor_role(principal: Any) -> str | None:
+    """Best-effort coarse role for an actor (``readonly``/``examiner``/...)."""
+    if isinstance(principal, Identity):
+        return principal.role
+    if isinstance(principal, dict):
+        value = principal.get("role") or principal.get("system_role")
+        return str(value) if value else None
+    return None
+
+
+def assert_actor_may_mutate_control_plane(actor: Any) -> None:
+    """Defense-in-depth authority check for registry control-plane writes (SEC-1).
+
+    The route handlers gate ``/api/v1`` mutations with
+    ``require_control_plane_operator``; this is the registry-layer backstop so a
+    future caller that forgets the route guard still cannot persist a backend
+    mutation as a sandboxed principal (it raises, instead of merely stamping
+    ``registered_by``).
+
+    - ``actor is None`` -> allowed. A ``None`` actor denotes a trusted in-process
+      / system caller (the headless wintools join flow, the installer's direct
+      ``registry.register``, startup reconciliation, unit tests). HTTP callers
+      always flow a resolved identity, so ``None`` is never an external request.
+    - agent / service ``principal_type`` -> denied (403). The sandboxed
+      principal the least-priv model exists to contain.
+    - ``readonly`` role -> denied (403). Readonly examiners observe, never mutate.
+    """
+    if actor is None:
+        return
+    ptype = _principal_type(actor)
+    if ptype in ("agent", "service"):
+        raise BackendRegistryError(
+            "control-plane mutation denied for agent/service principal",
+            http_status=403,
+        )
+    if _actor_role(actor) == "readonly":
+        raise BackendRegistryError(
+            "control-plane mutation denied for readonly principal",
+            http_status=403,
+        )
+
+
 def _validate_env_name(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or not _ENV_NAME_RE.match(value):
         raise BackendRegistryError(f"{field} must be an environment variable name")
@@ -354,6 +397,93 @@ def _resolve_env_ref(name: str, environ: dict[str, str], field: str) -> str:
     return str(environ[name])
 
 
+def _addon_command_allowlist_dirs() -> list[str]:
+    """Directories whose executables are accepted as stdio backend commands.
+
+    Defaults to the gateway venv's bin dir (where installed add-on console
+    scripts live — install.sh registers ``command=<venv>/bin/<entry-point>``)
+    plus ``$SIFT_MCPS_ROOT`` when set. Operators may extend the set via
+    ``SIFT_ADDON_COMMAND_ALLOWLIST_DIRS`` (os.pathsep-separated).
+    """
+    dirs: list[str] = []
+    for raw in os.environ.get("SIFT_ADDON_COMMAND_ALLOWLIST_DIRS", "").split(os.pathsep):
+        raw = raw.strip()
+        if raw:
+            dirs.append(os.path.realpath(raw))
+    try:
+        # The venv bin dir holding installed console scripts. Use abspath (NOT
+        # realpath) on sys.executable so we do NOT follow the venv python's
+        # symlink out to the system interpreter dir (e.g. /usr/bin) — that would
+        # wrongly allowlist /usr/bin/* (incl. /bin/sh). The dir itself is then
+        # realpath'd for a stable containment comparison.
+        venv_bin = os.path.dirname(os.path.abspath(sys.executable))
+        if venv_bin:
+            dirs.append(os.path.realpath(venv_bin))
+        prefix_bin = os.path.join(sys.prefix, "bin")
+        dirs.append(os.path.realpath(prefix_bin))
+    except Exception:  # pragma: no cover - defensive
+        pass
+    mcps_root = os.environ.get("SIFT_MCPS_ROOT")
+    if mcps_root:
+        dirs.append(os.path.realpath(mcps_root))
+    return dirs
+
+
+def _addon_command_explicit_allowlist() -> set[str]:
+    raw = os.environ.get("SIFT_ADDON_COMMAND_ALLOWLIST", "")
+    return {os.path.realpath(p.strip()) for p in raw.split(os.pathsep) if p.strip()}
+
+
+def _path_within(path: str, directory: str) -> bool:
+    try:
+        return os.path.commonpath([path, directory]) == directory
+    except ValueError:
+        # Different drives / relative-vs-absolute mix — not contained.
+        return False
+
+
+def assert_stdio_command_allowlisted(command: Any) -> None:
+    """Reject a stdio backend command that is not an installed/allowlisted launcher.
+
+    SEC-4 / decision #3: a registered stdio backend is launched as the gateway
+    account, so its ``command`` must be a known installed add-on launcher — not
+    an arbitrary interpreter or binary (``/bin/sh``, ``/usr/bin/python3``,
+    ``nc``, a dropped ``/tmp`` payload). The command must be an ABSOLUTE path
+    that either:
+
+      (a) is listed verbatim in ``SIFT_ADDON_COMMAND_ALLOWLIST``, or
+      (b) resolves (realpath) inside an allowlisted directory — by default the
+          gateway venv's bin dir (where install.sh registers console scripts)
+          and ``$SIFT_MCPS_ROOT``, extensible via
+          ``SIFT_ADDON_COMMAND_ALLOWLIST_DIRS``.
+
+    Relative / bare commands (``sh``, ``bash``, ``python``) are rejected:
+    installed launchers are always registered as absolute paths. Raises
+    :class:`BackendRegistryError` (http_status 400/403) on violation. (Deep
+    per-binary verification — signing, argv inspection — is the larger
+    register-time verifier tracked as XYE-25; this is the catalog-containment
+    gate.)
+    """
+    if not isinstance(command, str) or not command.strip():
+        raise BackendRegistryError("stdio backend requires a command")
+    cmd = command.strip()
+    if not os.path.isabs(cmd):
+        raise BackendRegistryError(
+            "stdio backend command must be an absolute path to an installed add-on launcher",
+            http_status=400,
+        )
+    real = os.path.realpath(cmd)
+    if real in _addon_command_explicit_allowlist():
+        return
+    for directory in _addon_command_allowlist_dirs():
+        if _path_within(real, directory):
+            return
+    raise BackendRegistryError(
+        "stdio backend command is not an installed/allowlisted add-on launcher",
+        http_status=403,
+    )
+
+
 class McpBackendRegistry:
     def __init__(self, dsn: str, *, audit: Any | None = None) -> None:
         self._dsn = dsn
@@ -435,6 +565,7 @@ class McpBackendRegistry:
         manifest: dict[str, Any],
         actor: Any | None,
     ) -> BackendRegistryRecord:
+        assert_actor_may_mutate_control_plane(actor)  # SEC-1 defense-in-depth
         connection = normalize_connection_config(config)
         # The REST registration path loads manifests through
         # load_and_validate_manifest(), which resolves local instructions_path
@@ -525,6 +656,7 @@ class McpBackendRegistry:
         return record
 
     def set_enabled(self, name: str, enabled: bool, *, actor: Any | None = None) -> BackendRegistryRecord:
+        assert_actor_may_mutate_control_plane(actor)  # SEC-1 defense-in-depth
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -559,6 +691,7 @@ class McpBackendRegistry:
         return record
 
     def unregister(self, name: str, *, actor: Any | None = None) -> None:
+        assert_actor_may_mutate_control_plane(actor)  # SEC-1 defense-in-depth
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("delete from app.mcp_backends where name = %s", (name,))

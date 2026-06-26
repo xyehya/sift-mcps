@@ -25,6 +25,86 @@ _STOP_TIMEOUT = 15
 _INITIALIZE_TIMEOUT = 30
 
 
+# SEC-4 (DSS-CAN-020): a registered stdio backend launches as the gateway
+# account. Starting it from ``dict(os.environ)`` leaked every gateway secret
+# (SIFT_CONTROL_PLANE_DSN, SIFT_AUDIT_WRITER_DSN, Supabase service keys, other
+# backends' bearer tokens) into the add-on subprocess — a direct violation of
+# the "add-on backend has NO DB creds by design" invariant. The child env is
+# now built DENY-BY-DEFAULT from a minimal allowlist + the explicitly approved
+# ``env_refs`` overlay. Never copy the whole process environment (a denylist of
+# known-secret vars would fail open for any newly-added secret — the exact bug
+# class we are closing).
+#
+# OS/runtime basics every subprocess legitimately needs.
+_BASE_ENV_ALLOWLIST = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "PWD",
+        "LANG",
+        "LANGUAGE",
+        "TZ",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "TERM",
+    }
+)
+# Non-secret SIFT case/runtime context the Backend Contract promises the add-on
+# (the gateway sets these on case activation). NO *_DSN / token / key / secret
+# var appears here — those reach an add-on ONLY via an explicitly-approved
+# env_ref overlay, never by inheritance.
+_SIFT_CASE_CONTEXT_ALLOWLIST = frozenset(
+    {
+        "SIFT_CASE_DIR",
+        "SIFT_CASE_ROOT",
+        "SIFT_CASES_ROOT",
+        "SIFT_CASE_UUID",
+        "SIFT_DB_ACTIVE",
+        "SIFT_EXAMINER",
+        "SIFT_MCPS_ROOT",
+        "SIFT_STATE_DIR",
+    }
+)
+
+
+def _build_minimal_backend_env(
+    base_environ: dict, configured_env: dict
+) -> dict[str, str]:
+    """Build a stdio child env deny-by-default: minimal allowlist + approved overlay.
+
+    Copies only the OS basics and non-secret SIFT case context from
+    ``base_environ`` (the gateway process env), then overlays the explicitly
+    approved ``configured_env`` (the resolved ``env_refs`` — the sole channel
+    through which an add-on legitimately receives anything beyond the minimal
+    base, e.g. a knowledge add-on's approved ``SIFT_CONTROL_PLANE_DSN`` ref for
+    its read-only corpus). Secrets in the gateway env that are NOT in an env_ref
+    (DSNs, service keys, other backends' tokens) are absent by construction.
+    """
+    env: dict[str, str] = {}
+    for key in _BASE_ENV_ALLOWLIST:
+        value = base_environ.get(key)
+        if value:
+            env[key] = value
+    for key in _SIFT_CASE_CONTEXT_ALLOWLIST:
+        value = base_environ.get(key)
+        if value:
+            env[key] = value
+    # Locale LC_* family (non-secret).
+    for key, value in base_environ.items():
+        if key.startswith("LC_") and value:
+            env[key] = value
+    # Explicitly-approved per-backend overlay (resolved env_refs / configured
+    # env). This is the ONLY path beyond the minimal base.
+    if configured_env:
+        for key, value in configured_env.items():
+            env[key] = value
+    return env
+
+
 class StdioMCPBackend(MCPBackend):
     """Backend that manages a subprocess MCP server via stdio transport."""
 
@@ -85,8 +165,10 @@ class StdioMCPBackend(MCPBackend):
         command = self.config.get("command", "python")
         args = self.config.get("args", [])
         configured_env = self.config.get("env") or {}
-        env = dict(os.environ)
-        env.update(configured_env)
+        # SEC-4: deny-by-default minimal base env + approved env_refs overlay.
+        # Do NOT inherit the full gateway environment (it holds the control-plane
+        # / audit DSNs, Supabase service keys, and other backends' tokens).
+        env = _build_minimal_backend_env(os.environ, configured_env)
         # Remove empty values from unset ${VAR} interpolation.
         env = {k: v for k, v in env.items() if v}
         if "SIFT_CASE_DIR" not in env:
