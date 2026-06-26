@@ -958,10 +958,15 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         # (resp_data = exec_result) — an inconsistent, branch-dependent signal.
         partial_failure = exec_result.get("partial_failure")
         partial_failure_note = exec_result.get("partial_failure_note")
+        # SEC-11: the applied isolation posture rides up from executor/worker on
+        # the exec_result root. Capture it BEFORE the _internal pop so it lands on
+        # the response root (agent-facing surface) and the DB audit detail rather
+        # than leaking into the inline data block.
+        isolation = exec_result.get("isolation")
         for _internal in ("stages", "_output_format", "executor", "runtime_user",
                           "output_file", "output_sha256",
                           "stderr_file", "stderr_sha256",
-                          "partial_failure", "partial_failure_note"):
+                          "partial_failure", "partial_failure_note", "isolation"):
             exec_result.pop(_internal, None)
         # Context efficiency: for a single-stage command the structured
         # command echo pure-duplicates the response-level command string —
@@ -1057,6 +1062,12 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             response["partial_failure"] = True
             if partial_failure_note:
                 response["partial_failure_note"] = partial_failure_note
+        # SEC-11: report the actual applied isolation posture on the response
+        # root so the agent (and any reviewer of the audit trail) can see whether
+        # the cgroup scope, restricted runtime user, seccomp filter, and Landlock
+        # were really in force for this command.
+        if isinstance(isolation, dict):
+            response["isolation"] = isolation
         if output_file_ref:
             # full_output_ref is the canonical output path key (case-relative,
             # never absolute). full_output_path was an alias — dropped to avoid
@@ -1104,6 +1115,10 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             extra_audit["privilege_events"] = exec_result["privilege_events"]
         if raw_stages:
             extra_audit["stages"] = raw_stages
+        # SEC-11: persist the applied isolation posture into app.audit_events
+        # details (DB-authority path) — the third surfacing layer.
+        if isinstance(isolation, dict):
+            extra_audit["isolation"] = isolation
 
         if (
             audit.log(

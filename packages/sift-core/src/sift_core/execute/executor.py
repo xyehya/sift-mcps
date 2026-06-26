@@ -53,8 +53,12 @@ def _systemd_scope_mode() -> str:
     value = raw.strip().lower()
     if value in {"", "0", "false", "no", "off"}:
         return "off"
-    if value == "auto":
-        return "auto"
+    # SEC-11: the legacy "auto" mode silently fell back to the *direct* worker
+    # (no IPAddressDeny=any, no cgroup caps) when systemd-run was missing — a
+    # silent isolation downgrade. It is removed: any non-off value now means the
+    # cgroup scope is REQUIRED and a missing systemd-run fails closed
+    # (ExecutionError in _systemd_scope_command). Local dev that genuinely cannot
+    # run systemd-run must opt out explicitly with SIFT_EXECUTE_SYSTEMD_SCOPE=0.
     return "required"
 
 
@@ -93,10 +97,17 @@ def _systemd_scope_command(
     timeout: int,
     memory_limit_bytes: int,
     runtime_user: str = "",
-) -> tuple[list[str], bool]:
+) -> tuple[list[str], bool, bool]:
+    """Wrap ``worker_cmd`` in a transient systemd cgroup scope when requested.
+
+    Returns ``(cmd, runtime_user_already_applied, scope_applied)``. ``scope_applied``
+    is True only when the worker is actually wrapped in a cgroup scope (or the
+    privileged helper) — never on the silent-downgrade paths, which no longer
+    exist for a Linux deployment (SEC-11: a missing systemd-run fails closed).
+    """
     mode = _systemd_scope_mode()
     if mode == "off" or os.name != "posix":
-        return worker_cmd, False
+        return worker_cmd, False, False
 
     systemd_run = shutil.which("systemd-run")
     if not systemd_run:
@@ -104,9 +115,8 @@ def _systemd_scope_command(
         if candidate.exists():
             systemd_run = str(candidate)
     if not systemd_run:
-        if mode == "auto":
-            logger.warning("systemd-run requested in auto mode but not found; using direct worker")
-            return worker_cmd, False
+        # SEC-11: fail closed — never silently run the direct worker without
+        # IPAddressDeny=any / cgroup caps. Local dev opts out with SCOPE=0.
         raise ExecutionError(
             "SIFT run_command cgroup isolation was requested, but systemd-run "
             "was not found. Install systemd-run or disable only for local dev "
@@ -155,7 +165,7 @@ def _systemd_scope_command(
             "--",
             *worker_cmd,
         ]
-        return helper_cmd, True
+        return helper_cmd, True, True
 
     scope_cmd = [
         systemd_run,
@@ -174,7 +184,7 @@ def _systemd_scope_command(
         runtime_user_applied = True
     for prop in props:
         scope_cmd.extend(["-p", prop])
-    return [*scope_cmd, "--", *worker_cmd], runtime_user_applied
+    return [*scope_cmd, "--", *worker_cmd], runtime_user_applied, True
 
 
 def _launcher_requested(runtime_user: str) -> bool:
@@ -224,7 +234,7 @@ def _run_isolated_worker(
         payload["cmd"] = cmd_list
         cmd_str = " ".join(cmd_list)
 
-    worker_cmd, runtime_user_already_applied = _systemd_scope_command(
+    worker_cmd, runtime_user_already_applied, systemd_scope_applied = _systemd_scope_command(
         [sys.executable, "-m", "sift_core.execute.worker"],
         timeout=timeout,
         memory_limit_bytes=memory_limit_bytes,
@@ -272,6 +282,16 @@ def _run_isolated_worker(
         raise PermissionError(msg)
     if error_type:
         raise OSError(result.get("message") or f"executor worker error: {error_type}")
+
+    # SEC-11: surface the ACTUAL applied isolation posture. The worker reports
+    # the per-tool launcher/seccomp/landlock/runtime-user facts (it builds the
+    # stage argv); the systemd cgroup scope is decided here, so merge it in. This
+    # rides the agent-facing surface via execute() -> run_command response.
+    isolation = result.get("isolation")
+    isolation = dict(isolation) if isinstance(isolation, dict) else {}
+    isolation["systemd_scope_applied"] = systemd_scope_applied
+    isolation["systemd_scope_mode"] = _systemd_scope_mode()
+    result["isolation"] = isolation
     return result
 
 
@@ -400,6 +420,11 @@ def execute(
             response["truncated"] = True
         if worker_result.get("stages"):
             response["stages"] = worker_result["stages"]
+        # SEC-11: carry the applied isolation posture up the surfacing chain
+        # (run_command response root + DB audit detail).
+        isolation = worker_result.get("isolation")
+        if isinstance(isolation, dict):
+            response["isolation"] = isolation
 
         # AUT2-B7: binary stdout is useless (and costly) inline — switch to a
         # saved-file-first default: persist the bytes, suppress the inline blob.

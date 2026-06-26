@@ -185,7 +185,12 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     processes = []
     prev_stdout = None
-    
+    # SEC-11: track whether the kernel-constrained dfir-exec-launcher actually
+    # wrapped any stage. When it does NOT (dev same-user path with no launcher),
+    # seccomp/landlock are not installed, so the surfaced posture must say "off"
+    # rather than imply a filter that was never applied.
+    launcher_applied = False
+
     try:
         for _i, stage in enumerate(stages):
             original_argv = list(stage["argv"])
@@ -211,6 +216,8 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 service_gid=service_gid,
                 vol_symbols_dir=vol_symbols_dir,
             )
+            if launch_argv is not original_argv:
+                launcher_applied = True
             argv = _argv_for_runtime_user(
                 launch_argv,
                 "" if stage_user_already_applied else stage_runtime_user,
@@ -434,6 +441,20 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
         result["runtime_user"] = runtime_user
     if truncated:
         result["truncated"] = True
+    # SEC-11: the per-tool isolation posture the worker actually applied. The
+    # executor merges the systemd cgroup-scope facts on top before this reaches
+    # the agent-facing run_command response. seccomp_mode / landlock are only
+    # meaningful when the launcher wrapped the stage — otherwise report "off".
+    result["isolation"] = {
+        "launcher_applied": launcher_applied,
+        "runtime_user_applied": bool(runtime_user),
+        "seccomp_mode": seccomp_mode if launcher_applied else "off",
+        "landlock": (
+            ("required" if require_landlock else "best_effort")
+            if launcher_applied
+            else "off"
+        ),
+    }
     return result
 
 

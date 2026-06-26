@@ -370,6 +370,37 @@ def test_allowed_run_command_persists_receipt_and_no_paths(db, sealed_case):
     assert "[REDACTED:absolute_path]" not in receipt.get("output_ref", "")
 
 
+def test_run_command_surfaces_isolation_posture(db, sealed_case):
+    """SEC-11: the applied isolation posture reaches the agent-facing surface.
+
+    The executor merges the systemd-scope facts onto the block and surfaces it on
+    the run_command response root via _run_command, so it lands in the durable
+    result_public. If any of executor -> generic.run_command -> _run_command ->
+    run_command_job drops the key, this fails.
+
+    NB: the worker-sourced fields (launcher_applied / seccomp_mode / landlock)
+    come from the forked worker SUBPROCESS, which the root editable-install
+    resolves to the main checkout under this worktree harness; the in-process
+    test ``test_worker_emits_isolation_block_same_user_dev`` covers those. Here we
+    pin the executor-contributed keys, which exercise the full surfacing chain.
+    """
+    job = _enqueue_run_command(
+        db, sealed_case,
+        command="echo isolation-probe",
+        purpose="surface isolation posture",
+    )
+    w = _worker(db, {"run_command": run_command_job_handler})
+    w.run_once(job_types=["run_command"])
+
+    stored = db.get(job.id)
+    assert stored.status == "succeeded", stored.error_summary
+    iso = stored.result_public.get("isolation")
+    assert isinstance(iso, dict), "isolation posture must reach result_public"
+    # Same-user dev (SIFT_EXECUTE_AS_USER=__current__): scope is off, surfaced.
+    assert iso["systemd_scope_applied"] is False
+    assert "systemd_scope_mode" in iso
+
+
 def test_denied_command_fails_closed_with_receipt(db, sealed_case):
     # `env` is on the hard deny floor — used to also be the classic env-dump
     # vector. It must fail closed and still produce an auditable receipt.
