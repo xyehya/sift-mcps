@@ -30,11 +30,18 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
+LIB_DIR = REPO_ROOT / "lib"
 
 
 @pytest.fixture(scope="module")
 def install_src() -> str:
-    return INSTALL_SH.read_text(encoding="utf-8")
+    """The full installer source. Since #18 (I-PS4) the monolith is a thin
+    install.sh entrypoint that sources lib/*.sh, so static assertions about the
+    installer (SHA ledger vars, no pipe-to-shell, etc.) must scan the entrypoint
+    AND every sourced module — that is the installer's source today."""
+    parts = [INSTALL_SH.read_text(encoding="utf-8")]
+    parts += [p.read_text(encoding="utf-8") for p in sorted(LIB_DIR.glob("*.sh"))]
+    return "\n".join(parts)
 
 
 def _run_bash(script: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -287,9 +294,11 @@ echo "RC=$rc"
 
 
 def test_install_sh_syntax_ok() -> None:
-    """A broken installer is worse than the bug it fixes."""
-    res = subprocess.run(["bash", "-n", str(INSTALL_SH)], capture_output=True, text=True)
-    assert res.returncode == 0, f"bash -n install.sh failed:\n{res.stderr}"
+    """A broken installer is worse than the bug it fixes. Since #18 the installer
+    is install.sh + lib/*.sh, so parse-check every unit."""
+    targets = [str(INSTALL_SH)] + [str(p) for p in sorted(LIB_DIR.glob("*.sh"))]
+    res = subprocess.run(["bash", "-n", *targets], capture_output=True, text=True)
+    assert res.returncode == 0, f"bash -n on installer units failed:\n{res.stderr}"
 
 
 if __name__ == "__main__":  # pragma: no cover
