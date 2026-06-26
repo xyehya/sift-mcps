@@ -73,6 +73,9 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
@@ -105,6 +108,9 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
@@ -141,6 +147,9 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
@@ -167,7 +176,10 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": []
+      "safe_case_argument_names": [],
+      "case_bound_argument_names": [
+        "index"
+      ]
     },
     {
       "name": "opensearch_timeline",
@@ -204,6 +216,9 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
@@ -240,6 +255,9 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
@@ -498,7 +516,7 @@
       "required_scopes": [
         "enrichment:intel"
       ],
-      "scope_enforcement": "gateway_primary_env_fallback",
+      "scope_enforcement": "gateway_authoritative",
       "enrichment_policy": {
         "derived_state_only": true,
         "audit_required": true,

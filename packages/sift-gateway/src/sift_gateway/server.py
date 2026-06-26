@@ -526,6 +526,19 @@ class Gateway:
                     else:
                         _scans_value = None
 
+                    # SEC-2: case_bound_argument_names — free-form args (e.g. the
+                    # OpenSearch ``index``) the Gateway must validate stay within
+                    # the DB active-case prefix. Unlike safe_case_argument_names
+                    # these are VALIDATED, not overwritten: the agent may narrow
+                    # to an artifact family within its own case but cannot target
+                    # another case. None/absent => no such args to constrain.
+                    _raw_bound = t_decl.get("case_bound_argument_names")
+                    _bound_value: list[str] | None = (
+                        [str(s) for s in _raw_bound]
+                        if isinstance(_raw_bound, list)
+                        else None
+                    )
+
                     manifest_meta[t_meta_name] = {
                         "backend": name,
                         # K1: read-only marker for the DB-first audit envelope so
@@ -548,6 +561,9 @@ class Gateway:
                         "authority_contract": authority_contract,
                         # OS2: None means absent/unknown; [] means declared-empty.
                         "safe_case_argument_names": _scans_value,
+                        # SEC-2: None means none declared; a list names args the
+                        # Gateway validates against the active-case prefix.
+                        "case_bound_argument_names": _bound_value,
                     }
 
             if backend.started:
@@ -927,6 +943,43 @@ class Gateway:
         # an answer — the middleware must deny fail-closed in that case.
         return found if found else None
 
+    def case_bound_argument_names(self, tool_name: str) -> set[str]:
+        """Return argument names whose value must stay within the active case.
+
+        SEC-2: these are free-form, agent-settable args (e.g. the OpenSearch
+        ``index``) that must be VALIDATED against the DB active-case prefix but
+        not overwritten (unlike ``safe_case_argument_names``). Declared per-tool
+        in the manifest via ``case_bound_argument_names``. Empty set when none
+        are declared (the common case — no extra constraint).
+        """
+        meta = self._tool_surface.manifest_meta.get(tool_name)
+        if meta:
+            names = meta.get("case_bound_argument_names")
+            if names:
+                return {str(n) for n in names}
+        return set()
+
+    @staticmethod
+    def _active_case_index_prefix(active_case) -> str:
+        """The authoritative OpenSearch index prefix for the active case.
+
+        SEC-2: mirrors ``opensearch_mcp.paths.build_index_pattern(key, tail="")``
+        — ``case-{key}-`` where ``key`` is the case directory basename
+        (``artifact_path``), which is exactly what the OpenSearch backend resolves
+        the active case from (``Path(case_dir).name.lower()``). Replicated here
+        (rather than importing the add-on package, which the gateway does not
+        depend on) so the boundary check agrees with the backend resolver; a unit
+        test pins the two in lock-step.
+        """
+        import re
+        from pathlib import Path
+
+        base = Path(active_case.artifact_path or "").name.lower()
+        key = re.sub(r"[^a-z0-9._-]", "-", base)
+        if key.startswith("case-"):
+            key = key[len("case-"):]
+        return f"case-{key}-"
+
     def addon_authority_for_tool(self, tool_name: str) -> dict | None:
         """Return the H1 add-on authority enforcement profile for a tool.
 
@@ -1133,6 +1186,40 @@ class Gateway:
                     if supplied and str(supplied) != expected:
                         raise RuntimeError(f"client-supplied {key} does not match DB active case")
                     arguments[key] = expected
+
+            # SEC-2: validate free-form, case-bound args (the OpenSearch
+            # ``index``) stay within the DB-active case. Unlike case_id/case_dir
+            # these are NOT overwritten — the agent may narrow to an artifact
+            # family within its OWN case (e.g. case-<key>-evtx-*) but a value
+            # naming another case (case-*, case-OTHER-*, an exact other-case
+            # index) is rejected exactly as a mismatching case_id is. This is the
+            # policy-boundary half of the both-layers fix; the OpenSearch backend
+            # also binds ``index`` to the active case (defense in depth) and is
+            # the sole authority for tools the Gateway cannot inject case_dir into
+            # (opensearch_get_event). This runs regardless of safe_args (read-only
+            # check, no mutation of arguments).
+            bound_args = self.case_bound_argument_names(name)
+            if bound_args:
+                prefix = self._active_case_index_prefix(active_case)
+                for key in bound_args:
+                    supplied = arguments.get(key)
+                    if not supplied:
+                        continue
+                    for segment in str(supplied).split(","):
+                        segment = segment.strip()
+                        if not segment:
+                            # Fail closed: a blank comma segment is rejected, not
+                            # skipped, so a value can't pass on its other segments
+                            # alone (SEC-2 hardening).
+                            raise RuntimeError(
+                                f"client-supplied {key} contains an empty segment "
+                                "(cross-case access denied)"
+                            )
+                        if not segment.startswith(prefix):
+                            raise RuntimeError(
+                                f"client-supplied {key} segment '{segment}' is "
+                                "outside the DB active case (cross-case access denied)"
+                            )
 
         # Lazy recovery — restart backend if it crashed
         if not backend.started:

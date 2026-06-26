@@ -1587,6 +1587,11 @@ class TestCaseDirKwargNoRaiseLive:
     Mirrors test_count_uses_injected_case_dir_basename_as_key but pins the
     no-raise / parity invariant across the easily-mockable query tools. The
     fixed tool (opensearch_count) is the lead case; the rest guard regressions.
+
+    SEC-2 note: the supplied ``index`` must stay WITHIN the injected case (the
+    gateway injects case_dir = the active case, and the index narrows within it).
+    Each pair therefore uses an index matching its case_dir; a deliberately
+    cross-case index is covered by the denial tests in test_security.py.
     """
 
     @pytest.fixture(autouse=True)
@@ -1607,16 +1612,17 @@ class TestCaseDirKwargNoRaiseLive:
         case_dir.mkdir()
         mock_client.count.return_value = {"count": 11}
 
-        plain = opensearch_count(query="event.code:4624", index="case-x-*")
+        idx = "case-rocba-case-06132304-*"  # within case_dir's case
+        plain = opensearch_count(query="event.code:4624", index=idx)
         injected = opensearch_count(
-            query="event.code:4624", index="case-x-*", case_dir=str(case_dir)
+            query="event.code:4624", index=idx, case_dir=str(case_dir)
         )
         assert plain["count"] == injected["count"] == 11
 
     def test_search_with_case_dir_matches_without(self, mock_client):
         mock_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
-        plain = opensearch_search(query="*", index="case-x-*")
-        injected = opensearch_search(query="*", index="case-x-*", case_dir="/cases/c1")
+        plain = opensearch_search(query="*", index="case-c1-*")
+        injected = opensearch_search(query="*", index="case-c1-*", case_dir="/cases/c1")
         assert plain["total"] == injected["total"] == 0
 
     def test_aggregate_with_case_dir_matches_without(self, mock_client):
@@ -1624,9 +1630,9 @@ class TestCaseDirKwargNoRaiseLive:
             "hits": {"total": {"value": 0}},
             "aggregations": {"agg": {"buckets": []}},
         }
-        plain = opensearch_aggregate(field="host.name", index="case-x-*")
+        plain = opensearch_aggregate(field="host.name", index="case-c1-*")
         injected = opensearch_aggregate(
-            field="host.name", index="case-x-*", case_dir="/cases/c1"
+            field="host.name", index="case-c1-*", case_dir="/cases/c1"
         )
         assert plain["buckets"] == injected["buckets"] == []
 
@@ -1635,9 +1641,9 @@ class TestCaseDirKwargNoRaiseLive:
             "hits": {"total": {"value": 0}},
             "aggregations": {"timeline": {"buckets": []}},
         }
-        plain = opensearch_timeline(query="*", index="case-x-*", interval="1h")
+        plain = opensearch_timeline(query="*", index="case-c1-*", interval="1h")
         injected = opensearch_timeline(
-            query="*", index="case-x-*", interval="1h", case_dir="/cases/c1"
+            query="*", index="case-c1-*", interval="1h", case_dir="/cases/c1"
         )
         assert plain.get("buckets") == injected.get("buckets")
         assert "error" not in plain and "error" not in injected
@@ -1646,9 +1652,9 @@ class TestCaseDirKwargNoRaiseLive:
         mock_client.search.return_value = {
             "aggregations": {"values": {"buckets": []}},
         }
-        plain = opensearch_field_values(field="user.name", index="case-x-*")
+        plain = opensearch_field_values(field="user.name", index="case-c1-*")
         injected = opensearch_field_values(
-            field="user.name", index="case-x-*", case_dir="/cases/c1"
+            field="user.name", index="case-c1-*", case_dir="/cases/c1"
         )
         assert plain["values"] == injected["values"] == []
 

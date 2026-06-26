@@ -141,13 +141,60 @@ def _case_relative_ref(path: str | os.PathLike[str] | None) -> str | None:
     return sanitize_path_value(str(path), case_dir=active_case_dir() or None)
 
 
+def _active_index_prefix() -> str | None:
+    """Authoritative active-case index prefix (``case-{key}-``), or None.
+
+    Mirrors :func:`opensearch_mcp.paths.build_index_pattern` with an empty tail.
+    The key is the DB-active case derived from the Gateway-injected ``case_dir``
+    (the only authority the backend holds — see :func:`_get_active_case`). Returns
+    None when no active case is resolvable in this call's context (standalone CLI
+    with no active case, or a tool the Gateway does not inject ``case_dir`` into).
+    """
+    active = _get_active_case()
+    if not active:
+        return None
+    return build_index_pattern(active, tail="")
+
+
 def _validate_index(index: str) -> str | None:
-    """Validate all index segments start with 'case-'. Returns error or None."""
+    """Bind every index segment to the DB-active case. Returns error or None.
+
+    SEC-2 / DSS-CAN-010: a caller-supplied ``index`` must stay within the active
+    case. When an active case is resolvable, every comma-separated segment MUST
+    start with the active-case prefix ``case-{key}-`` (which a concrete index
+    name, a ``case-{key}-*`` pattern, and an intra-case artifact-family pattern
+    like ``case-{key}-evtx-*`` all satisfy). This denies the cross-case read
+    primitive: ``case-*`` (all cases), another case's pattern, and an exact
+    other-case index name are all rejected. The active-case prefix already starts
+    with ``case-`` so system/`.`-indices remain blocked.
+
+    When NO active case is resolvable in this context (standalone CLI without an
+    active case, or ``opensearch_get_event`` under the Gateway — which carries no
+    injected ``case_dir``), this falls back to the legacy system-index guard
+    (``case-`` prefix). Active-case binding for those paths is enforced at the
+    Gateway policy boundary, which holds the authoritative ``case_key`` and
+    validates ``index`` there too (defense in depth, both layers).
+    """
     if not index or not index.strip():
         return "Index parameter must not be empty"
+    active_prefix = _active_index_prefix()
     for segment in index.split(","):
         segment = segment.strip()
         if not segment:
+            # Fail closed: a blank comma segment (e.g. trailing/leading/double
+            # comma) is rejected rather than skipped, so a value cannot pass on
+            # the strength of its other segments alone (SEC-2 hardening).
+            return (
+                "Index contains an empty segment "
+                "(remove stray/leading/trailing commas)"
+            )
+        if active_prefix is not None:
+            if not segment.startswith(active_prefix):
+                return (
+                    f"Index segment '{segment}' is outside the active case "
+                    "(security: cross-case access denied; allowed prefix "
+                    f"'{active_prefix}')"
+                )
             continue
         if not segment.startswith("case-"):
             return (
@@ -660,6 +707,13 @@ def _resolve_index(index: str, case_id: str) -> str:
     ``case_id`` that is the opaque DB UUID (which the Gateway uses internally
     and would otherwise build a ``case-<uuid>-*`` pattern that matches nothing)
     is ignored in favour of the active-case directory basename. See B1.
+
+    SEC-2: a caller-supplied ``index`` is returned as the query target (to keep
+    legitimate intra-case artifact-family narrowing, e.g. ``case-{key}-evtx-*``)
+    but is NOT trusted blindly — every handler runs :func:`_validate_index`
+    immediately after, which rejects any segment outside the DB-active case. The
+    short-circuit below therefore no longer overrides isolation: the active case
+    is the authority and a cross-case ``index`` is denied at validation.
     """
     if index:
         return index
@@ -3315,11 +3369,11 @@ def opensearch_enrich_intel(
 
     No LLM tokens consumed — all lookups are programmatic.
 
-    Scope requirement: the caller must hold `enrichment:intel` scope
-    (SIFT_ENRICHMENT_SCOPE env contains "enrichment:intel" or "*").
-    In deploy mode this is enforced by the Gateway; in direct-MCP mode
-    it falls back to the env check. Missing scope returns a typed error
-    rather than silently running or silently denying.
+    Scope requirement: the caller must hold the `enrichment:intel` scope.
+    This is enforced AUTHORITATIVELY at the Gateway policy boundary
+    (AddonAuthorityMiddleware required_scopes); a caller lacking the scope is
+    denied before this tool runs. There is no in-process env gate (the former
+    SIFT_ENRICHMENT_SCOPE check was inert/fail-open dead code — see SEC-12).
 
     Args:
         case_id: Case to enrich (default: active case).
@@ -3342,26 +3396,19 @@ def opensearch_enrich_intel(
     from opensearch_mcp.threat_intel import extract_unique_iocs
 
     _INJECTED_CASE_DIR.set((case_dir or "").strip())
-    # BATCH-OS5: scope gate for enrichment mutation.
-    # Dry-run IOC extraction is allowed without scope (read-only path).
-    # Actual enrichment (dry_run=False) requires enrichment:intel scope.
-    if not dry_run:
-        _scope_env = os.environ.get("SIFT_ENRICHMENT_SCOPE", "")
-        if _scope_env and _scope_env != "*" and "enrichment:intel" not in _scope_env:
-            return {
-                "status": "scope_denied",
-                "error": (
-                    "Enrichment mutation requires 'enrichment:intel' scope. "
-                    "The caller does not hold this scope on the current session."
-                ),
-                "required_scope": "enrichment:intel",
-                "guidance": (
-                    "Request the enrichment:intel scope from the operator or "
-                    "use the Examiner Portal to initiate threat-intel enrichment."
-                ),
-                "dry_run_available": True,
-                "isError": True,
-            }
+    # SEC-2 / SEC-12 / DSS-CAN-012: the enrichment:intel scope gate is enforced
+    # AUTHORITATIVELY at the Gateway by AddonAuthorityMiddleware
+    # (required_scopes=["enrichment:intel"], policy_middleware.py) BEFORE this
+    # tool is dispatched. The former in-process SIFT_ENRICHMENT_SCOPE env check
+    # here was inert dead code — SIFT_ENRICHMENT_SCOPE is never set in any real
+    # deployment (no systemd unit / install / gateway-spawn sets it), so it only
+    # ever failed OPEN. It was removed rather than fail-closed: the
+    # gateway-spawned backend subprocess (and the pre-authorized worker job at
+    # ingest_job.py) run with the env unset and the gateway does not propagate
+    # per-call scope into the subprocess, so a fail-closed in-process gate would
+    # deny every legitimate gateway-authorized enrich. If a standalone-CLI
+    # defense-in-depth gate is wanted, it belongs at the CLI entrypoint (where the
+    # operator identity/scope is actually present), fail-closed — not here.
 
     cid = case_id or _get_active_case()
     if not cid:
