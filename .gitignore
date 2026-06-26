@@ -5,7 +5,6 @@
 **/*.pyc
 *.egg-info/
 .venv/
-uv.lock
 .pytest_cache/
 .ruff_cache/
 dist/
@@ -49,3 +48,9 @@ skills-lock.json
 # design source, operating model). Repo carries code + contracts only.
 packages/case-dashboard/frontend/design/
 /security_report/
+
+# Local design-review screenshots + agent session artifacts — personal/local,
+# not shared. (Root-level loose PNGs are also ignored via .git/info/exclude.)
+/design-captures/
+.claude/agent-memory/
+ide-rules-codex.zip
