@@ -89,12 +89,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         cfg = self.auth_config
         return bool(self.resolver is not None and cfg is not None and getattr(cfg, "enabled", False))
 
-    def _legacy_token_fallback(self) -> bool:
-        cfg = self.auth_config
-        if cfg is None:
-            return True  # no PR03 config => legacy-only deployment
-        return bool(getattr(cfg, "legacy_token_fallback_enabled", True))
-
     def _anonymous_examiner_allowed(self) -> bool:
         cfg = self.auth_config
         if cfg is None:
@@ -192,49 +186,46 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         token = auth_header[7:].strip()
 
-        # 1) Supabase JWT first when enabled.
+        # SEC-6 (DSS-CAN-015): Supabase/PR03A is the SOLE credential authority.
+        # The legacy PR02 token-registry / gateway.yaml api-key fallback has been
+        # removed entirely — a legacy token NEVER authenticates here.
         if self._supabase_enabled():
             identity, deny_status = await self._resolve_supabase(token, source_ip)
             if identity is not None:
                 self._stamp(request, identity)
                 return await call_next(request)
             # A valid-looking JWT that the resolver mapped to no/disabled principal
-            # yields 403; invalid/expired yields 401. If Supabase rejected it as an
-            # unknown token (401) we still allow the legacy fallback below.
+            # yields 403.
             if deny_status == 403:
                 logger.warning("AuthMiddleware: Supabase principal denied (403)")
                 return JSONResponse({"error": "Forbidden"}, status_code=403)
-            # B9(b): a 5xx is an auth-backend OUTAGE, not a bad token. Always log
-            # it. When legacy fallback is disabled there is no other authority, so
-            # fail closed as 503 rather than masquerading as a 401/403. When
-            # legacy fallback is enabled the bridge below may still authenticate.
+            # A 5xx is an auth-backend OUTAGE, not a bad token. With no legacy
+            # fallback there is no other authority — FAIL CLOSED (503) rather than
+            # masquerading as a 401/403 or falling through to an unauthenticated
+            # request. Never fail open on a Supabase outage.
             if deny_status is not None and deny_status >= 500:
                 logger.warning(
-                    "AuthMiddleware: Supabase auth backend unavailable (status=%s)",
+                    "AuthMiddleware: Supabase auth backend unavailable "
+                    "(status=%s); failing closed",
                     deny_status,
                 )
-                if not self._legacy_token_fallback():
-                    return JSONResponse(
-                        {"error": "Authentication service unavailable"},
-                        status_code=503,
-                    )
-
-        # 2) PR02 token-registry / legacy api_keys fallback only when enabled.
-        if self._legacy_token_fallback() and (self.api_keys or self.token_registry is not None):
-            from sift_gateway.identity import resolve_identity
-            identity = resolve_identity(
-                token,
-                self.api_keys,
-                source_ip=source_ip,
-                auth_surface="rest",
-                token_registry=self.token_registry,
+                return JSONResponse(
+                    {"error": "Authentication service unavailable"},
+                    status_code=503,
+                )
+            # Invalid / expired / unknown token (401).
+            logger.warning("AuthMiddleware: rejected invalid or expired token")
+            return JSONResponse(
+                {"error": "Invalid or expired token"}, status_code=401
             )
-            if identity is not None:
-                self._stamp(request, identity)
-                return await call_next(request)
 
-        logger.warning("AuthMiddleware: rejected invalid or expired token")
-        return JSONResponse({"error": "Invalid API key"}, status_code=403)
+        # Supabase is not the active authority and anonymous single-user mode did
+        # not apply above: no credential authority remains. Deny (fail closed).
+        logger.warning(
+            "AuthMiddleware: no credential authority configured; denying %s",
+            path,
+        )
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
 
     def _stamp(self, request: Request, identity) -> None:
         request.state.identity = identity

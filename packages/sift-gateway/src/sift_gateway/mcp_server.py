@@ -367,12 +367,13 @@ def create_gateway_mcp_server(
     token_registry: Any | None = None,
     base_url: str | None = None,
     resolver: Any | None = None,
-    legacy_fallback_enabled: bool = True,
 ) -> FastMCP:
     """Create the aggregate FastMCP server for the gateway."""
     verifier = None
-    # A verifier is needed whenever any credential authority exists: a Supabase
-    # resolver, the PR02 registry, or legacy api_keys.
+    # A verifier is needed whenever any credential authority exists. SEC-6: the
+    # Supabase resolver is the sole authenticator; api_keys / token_registry no
+    # longer authenticate but their presence still gates the verifier so that a
+    # misconfigured deployment fails closed rather than running open.
     auth_enabled = bool(resolver is not None or api_keys or token_registry is not None)
     if auth_enabled:
         verifier = SiftTokenVerifier(
@@ -380,7 +381,6 @@ def create_gateway_mcp_server(
             token_registry=token_registry,
             base_url=base_url,
             resolver=resolver,
-            legacy_fallback_enabled=legacy_fallback_enabled,
         )
     # B6: when auth is configured, tool authorization fails closed on a missing
     # identity. In anonymous single-user mode (no verifier) the catalog is open.

@@ -198,8 +198,8 @@ class SupabaseAuthConfig:
     principal_cache_ttl_seconds: int = _DEFAULT_CACHE_TTL
     # AUT2-B0: agent sessions below this TTL fail issuance (0 disables check).
     min_agent_token_ttl_seconds: int = _DEFAULT_MIN_AGENT_TOKEN_TTL
-    # legacy flags
-    legacy_token_fallback_enabled: bool = True
+    # SEC-6: the legacy PR02 token fallback was removed entirely; only the
+    # pre-PR03 anonymous single-user mode remains as an opt-in.
     legacy_anonymous_examiner_enabled: bool = False
 
     @property
@@ -211,7 +211,6 @@ class SupabaseAuthConfig:
         return (
             "SupabaseAuthConfig(enabled=%r, url=%r, anon_key=%s, "
             "service_role_key=%s, validation=%r, ttl=%r, min_agent_ttl=%r, "
-            "legacy_token_fallback=%r, "
             "legacy_anonymous_examiner=%r)"
             % (
                 self.enabled,
@@ -221,7 +220,6 @@ class SupabaseAuthConfig:
                 self.validation,
                 self.principal_cache_ttl_seconds,
                 self.min_agent_token_ttl_seconds,
-                self.legacy_token_fallback_enabled,
                 self.legacy_anonymous_examiner_enabled,
             )
         )
@@ -287,7 +285,6 @@ def load_supabase_auth_config(config: dict[str, Any]) -> SupabaseAuthConfig:
         validation=str(sb.get("validation") or "user_api"),
         principal_cache_ttl_seconds=ttl,
         min_agent_token_ttl_seconds=min_agent_ttl,
-        legacy_token_fallback_enabled=_as_bool(legacy.get("token_fallback_enabled"), True),
         legacy_anonymous_examiner_enabled=_as_bool(
             legacy.get("anonymous_examiner_enabled"), False
         ),
@@ -1773,8 +1770,3 @@ def is_scope_satisfied(identity: Identity | None, required_scope: str) -> bool:
     if required_scope.startswith("tool:"):
         return is_tool_allowed(identity, required_scope[len("tool:"):])
     return False
-
-
-def legacy_default_scopes() -> frozenset[str]:
-    """The compatibility default for legacy PR02 tokens (mcp:* equivalent)."""
-    return frozenset({"mcp:*"})

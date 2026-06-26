@@ -1378,7 +1378,6 @@ class Gateway:
             token_registry=token_registry,
             base_url=f"{gateway_base_url}/mcp",
             resolver=resolver,
-            legacy_fallback_enabled=auth_config.legacy_token_fallback_enabled,
         )
         mcp_app = gateway_mcp.http_app(path="/")
         # B-14: when a FastMCP verifier owns identity (Supabase resolver and/or
