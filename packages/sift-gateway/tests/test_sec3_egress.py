@@ -112,6 +112,40 @@ def test_validate_env_allowlist_cidr(monkeypatch):
     assert target.pinned_ips == ("10.20.30.40",)
 
 
+# SEC3-F1: non-global address space that `ipaddress` does NOT mark private/
+# reserved (CGNAT 100.64.0.0/10, benchmarking 198.18.0.0/15) must still be
+# blocked — the `not is_global` primary gate, not an enumerated denylist.
+@pytest.mark.parametrize("ip", ["100.64.0.1", "100.127.255.254", "198.18.0.5", "198.19.255.1"])
+def test_validate_blocks_cgnat_and_non_global_literals(ip):
+    with pytest.raises(ValueError, match="blocked private/link-local"):
+        validate_egress_url(f"https://{ip}:9000/mcp", label="t")
+
+
+@pytest.mark.parametrize("ip", ["100.64.0.1", "198.18.0.5", "::ffff:100.64.0.1"])
+def test_validate_blocks_cgnat_via_dns(monkeypatch, ip):
+    monkeypatch.setattr(egress.socket, "getaddrinfo", lambda *a, **k: _addr(ip))
+    with pytest.raises(ValueError, match="blocked private/link-local"):
+        validate_egress_url("https://nat.example/mcp", label="t")
+
+
+def test_cgnat_escape_hatch_via_allowed_hosts(monkeypatch):
+    monkeypatch.setattr(egress.socket, "getaddrinfo", lambda *a, **k: _addr("100.64.0.9"))
+    # Default fail-closed: blocked even though ipaddress calls it non-private.
+    with pytest.raises(ValueError, match="blocked private/link-local"):
+        validate_egress_url("https://cgnat.box/mcp", label="t")
+    # Operator opt-in unblocks exactly this host (escape hatch intact).
+    monkeypatch.setenv("SIFT_EGRESS_ALLOWED_HOSTS", "cgnat.box")
+    target = validate_egress_url("https://cgnat.box/mcp", label="t")
+    assert target.pinned_ips == ("100.64.0.9",)
+
+
+def test_cgnat_escape_hatch_via_allowed_cidr(monkeypatch):
+    monkeypatch.setattr(egress.socket, "getaddrinfo", lambda *a, **k: _addr("100.64.5.5"))
+    monkeypatch.setenv("SIFT_EGRESS_ALLOWED_CIDRS", "100.64.0.0/10")
+    target = validate_egress_url("https://cgnat2.box/mcp", label="t")
+    assert target.pinned_ips == ("100.64.5.5",)
+
+
 # --------------------------------------------------------------------------- #
 # Pinning transport: dials the pinned IP, keeps TLS hostname (SNI) + Host
 # --------------------------------------------------------------------------- #

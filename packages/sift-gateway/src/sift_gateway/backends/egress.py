@@ -75,30 +75,42 @@ class EgressTarget:
 
 
 def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """True when ``ip`` is a non-routable / internal address the gateway must not dial.
+    """True when ``ip`` is not a globally-routable destination the gateway may dial.
 
-    Covers IPv4 and IPv6. IPv4-mapped IPv6 (``::ffff:a.b.c.d``) is unwrapped and
-    classified as its embedded IPv4 so an attacker cannot smuggle a private v4
-    target inside a v6 literal. ``0.0.0.0`` / ``::`` are caught by
-    ``is_unspecified``; IPv6 ULA (``fc00::/7``) and deprecated site-local
-    (``fec0::/10``) by ``is_private`` / ``is_site_local``.
+    Covers IPv4 and IPv6. IPv4-mapped IPv6 (``::ffff:a.b.c.d``) is unwrapped FIRST
+    and classified as its embedded IPv4 so an attacker cannot smuggle a non-global
+    v4 target inside a v6 literal.
+
+    PRIMARY gate (SEC3-F1): ``not ip.is_global``. This blocks the whole
+    non-internet-routable class rather than an enumerated denylist — crucially
+    including CGNAT / shared address space ``100.64.0.0/10`` and benchmarking
+    ``198.18.0.0/15``, which ``ipaddress`` reports as is_private=False /
+    is_reserved=False (so the old enumerated check let them through). Any
+    legitimately public MCP backend has ``is_global=True``; an *intentional*
+    internal host (e.g. the wintools LAN box) is permitted via the operator
+    allowlist in :func:`_permitted`, which is evaluated ABOVE this function, so
+    tightening here does not close the escape hatch.
+
+    The explicit private/loopback/link-local/multicast/reserved/unspecified +
+    IPv6 ULA/site-local terms are kept as belt-and-suspenders/clarity (all are
+    already implied by ``not is_global``, but they keep the policy readable and
+    correct even if a future Python adjusts ``is_global`` semantics). ``0.0.0.0``
+    / ``::`` are caught by ``is_unspecified``; IPv6 ULA (``fc00::/7``) by
+    ``is_private`` and deprecated site-local (``fec0::/10``) by ``is_site_local``.
     """
     mapped = getattr(ip, "ipv4_mapped", None)
     if mapped is not None:
         ip = mapped
-    if (
-        ip.is_private
+    return (
+        not ip.is_global
+        or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
-    ):
-        return True
-    # is_site_local exists only on IPv6Address (deprecated fec0::/10).
-    if getattr(ip, "is_site_local", False):
-        return True
-    return False
+        or bool(getattr(ip, "is_site_local", False))  # IPv6 fec0::/10 only
+    )
 
 
 def _parse_allowlist_env() -> tuple[frozenset[str], tuple[ipaddress._BaseNetwork, ...]]:
@@ -264,7 +276,8 @@ class _PinnedEgressTransport(httpx.AsyncBaseTransport):
         self._inner = httpx.AsyncHTTPTransport(verify=verify, retries=0)
 
     async def handle_async_request(self, request):
-        if request.url.host != self._target.hostname:
+        # Explicit case-insensitive compare (don't rely on httpx lowercasing).
+        if request.url.host.lower() != self._target.hostname.lower():
             raise httpx.RequestError(
                 f"egress pin rejects host {request.url.host!r}; "
                 f"only {self._target.hostname!r} is permitted",
@@ -291,7 +304,8 @@ class _PinnedEgressTransportSync(httpx.BaseTransport):
         self._inner = httpx.HTTPTransport(verify=verify, retries=0)
 
     def handle_request(self, request):
-        if request.url.host != self._target.hostname:
+        # Explicit case-insensitive compare (don't rely on httpx lowercasing).
+        if request.url.host.lower() != self._target.hostname.lower():
             raise httpx.RequestError(
                 f"egress pin rejects host {request.url.host!r}; "
                 f"only {self._target.hostname!r} is permitted",
